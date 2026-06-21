@@ -385,6 +385,7 @@ package final class InspectorSession {
     @ObservationIgnored private var protocolEventDispatchers: ProtocolDomainEventDispatcherRegistry
     @ObservationIgnored private var isDetaching: Bool
     @ObservationIgnored private var detachWaiters: [CheckedContinuation<Void, Never>]
+    @ObservationIgnored private var attachRequestGeneration: UInt64 = 0
 
     private var connection: InspectorConnection? {
         connectionPhase.activeConnection
@@ -494,8 +495,11 @@ package final class InspectorSession {
     }
 
     package func attach(to webView: WKWebView) async throws {
-        await detach()
+        let attachRequestGeneration = beginAttachRequest()
         let resolvedSymbols = try await NativeInspectorBackendFactory.resolvedSymbolsDetached()
+        try ensureCurrentAttachRequest(attachRequestGeneration)
+        await detach(invalidatingPendingAttachRequests: false)
+        try ensureCurrentAttachRequest(attachRequestGeneration)
         let receiver = TransportReceiver()
         let originalInspectability = Self.prepareInspectability(for: webView)
         var transport: TransportSession?
@@ -525,11 +529,14 @@ package final class InspectorSession {
                 transport: createdTransport,
                 receiver: receiver,
                 webView: webView,
-                originalInspectability: originalInspectability
+                originalInspectability: originalInspectability,
+                attachRequestGeneration: attachRequestGeneration
             )
         } catch {
             receiver.close()
-            Self.restoreInspectabilityIfNeeded(on: webView, originalValue: originalInspectability)
+            if isCurrentAttachRequest(attachRequestGeneration) {
+                Self.restoreInspectabilityIfNeeded(on: webView, originalValue: originalInspectability)
+            }
             await transport?.detach()
             throw error
         }
@@ -543,9 +550,13 @@ package final class InspectorSession {
         transport: TransportSession,
         receiver: TransportReceiver? = nil,
         webView: WKWebView?,
-        originalInspectability: Bool?
+        originalInspectability: Bool?,
+        attachRequestGeneration: UInt64? = nil
     ) async throws {
-        await detach()
+        await detach(invalidatingPendingAttachRequests: attachRequestGeneration == nil)
+        if let attachRequestGeneration {
+            try ensureCurrentAttachRequest(attachRequestGeneration)
+        }
         let nextConnection = InspectorConnection(
             transport: transport,
             receiver: receiver,
@@ -597,6 +608,13 @@ package final class InspectorSession {
     }
 
     package func detach() async {
+        await detach(invalidatingPendingAttachRequests: true)
+    }
+
+    private func detach(invalidatingPendingAttachRequests: Bool) async {
+        if invalidatingPendingAttachRequests {
+            invalidateAttachRequests()
+        }
         if isDetaching {
             await waitUntilDetachCompletes()
             return
@@ -612,6 +630,25 @@ package final class InspectorSession {
         }
 
         await AttachmentTeardownCoordinator(connection: previousConnection).detach(session: self)
+    }
+
+    private func beginAttachRequest() -> UInt64 {
+        attachRequestGeneration &+= 1
+        return attachRequestGeneration
+    }
+
+    private func invalidateAttachRequests() {
+        attachRequestGeneration &+= 1
+    }
+
+    private func isCurrentAttachRequest(_ generation: UInt64) -> Bool {
+        attachRequestGeneration == generation
+    }
+
+    private func ensureCurrentAttachRequest(_ generation: UInt64) throws {
+        guard isCurrentAttachRequest(generation) else {
+            throw CancellationError()
+        }
     }
 
     package func retireBackendInteractionForPresentationEnd() async {
