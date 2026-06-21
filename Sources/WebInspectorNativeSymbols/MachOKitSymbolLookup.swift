@@ -12,6 +12,10 @@ import MachOKit
         DyldCache.host
     }
 
+    static var hostFullSharedCache: FullDyldCache? {
+        FullDyldCache.host
+    }
+
     static var hostSharedCachePath: String? {
         unsafe hostSharedCache?.url.path
     }

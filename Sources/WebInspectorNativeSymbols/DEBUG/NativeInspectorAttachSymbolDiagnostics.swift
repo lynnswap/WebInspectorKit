@@ -54,10 +54,13 @@ extension NativeInspectorSymbolResolverCore {
         loadedWebKitImage: MachOImage,
         loadedWebKitText: SegmentCommand64,
         loadedWebKitHeaderAddress: UInt,
+        loadedJavaScriptCoreImage: LoadedNativeInspectorImage,
         loadedWebCoreImage: MachOImage?,
         loadedWebCoreText: SegmentCommand64?,
         loadedWebCoreHeaderAddress: UInt?,
-        imagePathSuffixes: [String]
+        imagePathSuffixes: [String],
+        javaScriptCorePathSuffixes: [String],
+        webCorePathSuffixes: [String]
     ) {
         let missingAttachFunctions = result.missingFunctions.filter {
             $0 == "connectFrontend" || $0 == "disconnectFrontend"
@@ -102,9 +105,12 @@ extension NativeInspectorSymbolResolverCore {
         }
 
         scans.append(contentsOf: unsafe debugSimilarSharedCacheAttachSymbols(
-            loadedWebKitHeaderAddress: loadedWebKitHeaderAddress,
-            loadedWebCoreHeaderAddress: loadedWebCoreHeaderAddress,
-            imagePathSuffixes: imagePathSuffixes
+            loadedWebKitImage: LoadedNativeInspectorImage(headerAddress: loadedWebKitHeaderAddress),
+            imagePathSuffixes: imagePathSuffixes,
+            loadedJavaScriptCoreImage: loadedJavaScriptCoreImage,
+            javaScriptCorePathSuffixes: javaScriptCorePathSuffixes,
+            loadedWebCoreImage: loadedWebCoreHeaderAddress.map { LoadedNativeInspectorImage(headerAddress: $0) },
+            webCorePathSuffixes: webCorePathSuffixes
         ))
 
         let candidates = scans.flatMap(\.candidates)

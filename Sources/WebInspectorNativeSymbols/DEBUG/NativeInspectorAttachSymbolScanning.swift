@@ -76,105 +76,236 @@ extension NativeInspectorSymbolResolverCore {
     }
 
     @unsafe static func debugSimilarSharedCacheAttachSymbols(
-        loadedWebKitHeaderAddress: UInt,
-        loadedWebCoreHeaderAddress: UInt?,
-        imagePathSuffixes: [String]
+        loadedWebKitImage: LoadedNativeInspectorImage,
+        imagePathSuffixes: [String],
+        loadedJavaScriptCoreImage: LoadedNativeInspectorImage,
+        javaScriptCorePathSuffixes: [String],
+        loadedWebCoreImage: LoadedNativeInspectorImage?,
+        webCorePathSuffixes: [String]
     ) -> [NativeInspectorAttachSymbolScan] {
-        guard let cache = unsafe MachOKitSymbolLookup.currentSharedCache,
-              let slide = cache.slide,
-              slide >= 0,
-              let webKitImage = cache.machOImages().first(where: { imagePathMatches($0.path, suffixes: imagePathSuffixes) }),
-              webKitImage.is64Bit,
-              let webKitText = textSegment(in: webKitImage) else {
-            return []
-        }
-
         var scans = [NativeInspectorAttachSymbolScan]()
-        let unsignedSlide = UInt64(slide)
-        let webKitTextRange = UInt64(loadedWebKitHeaderAddress) ..< UInt64(loadedWebKitHeaderAddress) + UInt64(webKitText.virtualMemorySize)
-        let webKitDylibOffset = UInt64(webKitText.virtualMemoryAddress) - cache.mainCacheHeader.sharedRegionStart
-
-        let webCoreImage = cache.machOImages().first(where: { imagePathMatches($0.path, suffixes: webCoreImagePathSuffixes) })
-        let webCoreText = webCoreImage.flatMap { $0.is64Bit ? textSegment(in: $0) : nil }
-        let webCoreContext: (image: MachOImage, text: SegmentCommand64, textRange: Range<UInt64>, dylibOffset: UInt64)?
-        if let webCoreImage,
-           let webCoreText,
-           let loadedWebCoreHeaderAddress {
-            webCoreContext = (
-                image: webCoreImage,
-                text: webCoreText,
-                textRange: UInt64(loadedWebCoreHeaderAddress) ..< UInt64(loadedWebCoreHeaderAddress) + UInt64(webCoreText.virtualMemorySize),
-                dylibOffset: UInt64(webCoreText.virtualMemoryAddress) - cache.mainCacheHeader.sharedRegionStart
-            )
-        } else {
-            webCoreContext = nil
-        }
-
-        if let localSymbolsInfo = cache.localSymbolsInfo,
-           let symbols64 = localSymbolsInfo.symbols64(in: cache) {
-            let entries = localSymbolsInfo.entries(in: cache)
-            if let entry = entries.first(where: { UInt64($0.dylibOffset) == webKitDylibOffset }) {
-                let symbolRange = entry.nlistStartIndex ..< entry.nlistStartIndex + entry.nlistCount
-                if symbolRange.lowerBound >= 0, symbolRange.upperBound <= symbols64.count {
-                    scans.append(debugSimilarSharedCacheAttachSymbols(
-                        source: "shared-cache",
-                        imageName: "WebKit",
-                        symbols: symbols64,
-                        symbolRange: symbolRange,
-                        textVMAddress: UInt64(webKitText.virtualMemoryAddress),
-                        textRange: webKitTextRange,
-                        slide: unsignedSlide
-                    ))
-                }
-            }
-            if let webCoreContext,
-               let entry = entries.first(where: { UInt64($0.dylibOffset) == webCoreContext.dylibOffset }) {
-                let symbolRange = entry.nlistStartIndex ..< entry.nlistStartIndex + entry.nlistCount
-                if symbolRange.lowerBound >= 0, symbolRange.upperBound <= symbols64.count {
-                    scans.append(debugSimilarSharedCacheAttachSymbols(
-                        source: "shared-cache",
-                        imageName: "WebCore",
-                        symbols: symbols64,
-                        symbolRange: symbolRange,
-                        textVMAddress: UInt64(webCoreContext.text.virtualMemoryAddress),
-                        textRange: webCoreContext.textRange,
-                        slide: unsignedSlide
-                    ))
-                }
-            }
-        }
-
-        if let fileBackedSymbols = try? fileBackedLocalSymbols(
-            mainCacheHeader: cache.mainCacheHeader,
-            dylibOffset: webKitDylibOffset
+        if let context = unsafe loadedSharedCacheContext(
+            loadedImage: loadedWebKitImage,
+            imagePathSuffixes: imagePathSuffixes,
+            loadedJavaScriptCoreImage: loadedJavaScriptCoreImage,
+            javaScriptCorePathSuffixes: javaScriptCorePathSuffixes,
+            loadedWebCoreImage: loadedWebCoreImage,
+            webCorePathSuffixes: webCorePathSuffixes
         ) {
-            scans.append(debugSimilarSharedCacheAttachSymbols(
-                source: "shared-cache-file",
-                imageName: "WebKit",
-                symbols: fileBackedSymbols.symbols,
-                symbolRange: fileBackedSymbols.symbolRange,
-                textVMAddress: UInt64(webKitText.virtualMemoryAddress),
-                textRange: webKitTextRange,
-                slide: unsignedSlide
-            ))
+            appendDebugSharedCacheAttachScans(
+                webKit: context.webKit,
+                webCore: context.webCore,
+                symbols64: context.localSymbols,
+                entries: context.localSymbolEntries,
+                source: "shared-cache",
+                scans: &scans
+            )
+            if let fileBackedContexts = try? fileBackedLocalSymbolContexts(
+                mainCacheHeader: context.cache.mainCacheHeader
+            ) {
+                appendDebugFileBackedSharedCacheAttachScans(
+                    webKit: context.webKit,
+                    webCore: context.webCore,
+                    fileBackedContexts: fileBackedContexts,
+                    source: "shared-cache-file",
+                    scans: &scans
+                )
+            }
         }
-        if let webCoreContext,
-           let fileBackedSymbols = try? fileBackedLocalSymbols(
-                mainCacheHeader: cache.mainCacheHeader,
-                dylibOffset: webCoreContext.dylibOffset
-           ) {
-            scans.append(debugSimilarSharedCacheAttachSymbols(
-                source: "shared-cache-file",
-                imageName: "WebCore",
-                symbols: fileBackedSymbols.symbols,
-                symbolRange: fileBackedSymbols.symbolRange,
-                textVMAddress: UInt64(webCoreContext.text.virtualMemoryAddress),
-                textRange: webCoreContext.textRange,
-                slide: unsignedSlide
-            ))
+
+        if let context = unsafe fullSharedCacheContext(
+            loadedImage: loadedWebKitImage,
+            imagePathSuffixes: imagePathSuffixes,
+            loadedJavaScriptCoreImage: loadedJavaScriptCoreImage,
+            javaScriptCorePathSuffixes: javaScriptCorePathSuffixes,
+            loadedWebCoreImage: loadedWebCoreImage,
+            webCorePathSuffixes: webCorePathSuffixes
+        ) {
+            appendDebugSharedCacheAttachScans(
+                webKit: context.webKit,
+                webCore: context.webCore,
+                symbols64: context.localSymbols,
+                entries: context.localSymbolEntries,
+                source: "full-cache",
+                scans: &scans
+            )
+            if let fileBackedContexts = try? fileBackedLocalSymbolContexts(
+                mainCacheHeader: context.cache.mainCacheHeader
+            ) {
+                appendDebugFileBackedSharedCacheAttachScans(
+                    webKit: context.webKit,
+                    webCore: context.webCore,
+                    fileBackedContexts: fileBackedContexts,
+                    source: "full-cache-file",
+                    scans: &scans
+                )
+            }
         }
 
         return scans
+    }
+
+    static func appendDebugSharedCacheAttachScans(
+        webKit: NativeInspectorSharedCacheImageContext<MachOImage>,
+        webCore: NativeInspectorSharedCacheImageContext<MachOImage>?,
+        symbols64: MachOImage.Symbols64?,
+        entries: [any DyldCacheLocalSymbolsEntryProtocol],
+        source: String,
+        scans: inout [NativeInspectorAttachSymbolScan]
+    ) {
+        guard let symbols64 else {
+            return
+        }
+        appendDebugSharedCacheAttachScan(
+            context: webKit,
+            imageName: "WebKit",
+            symbols: symbols64,
+            entries: entries,
+            source: source,
+            scans: &scans
+        )
+        if let webCore {
+            appendDebugSharedCacheAttachScan(
+                context: webCore,
+                imageName: "WebCore",
+                symbols: symbols64,
+                entries: entries,
+                source: source,
+                scans: &scans
+            )
+        }
+    }
+
+    static func appendDebugSharedCacheAttachScans(
+        webKit: NativeInspectorSharedCacheImageContext<MachOFile>,
+        webCore: NativeInspectorSharedCacheImageContext<MachOFile>?,
+        symbols64: MachOFile.Symbols64?,
+        entries: [any DyldCacheLocalSymbolsEntryProtocol],
+        source: String,
+        scans: inout [NativeInspectorAttachSymbolScan]
+    ) {
+        guard let symbols64 else {
+            return
+        }
+        appendDebugSharedCacheAttachScan(
+            context: webKit,
+            imageName: "WebKit",
+            symbols: symbols64,
+            entries: entries,
+            source: source,
+            scans: &scans
+        )
+        if let webCore {
+            appendDebugSharedCacheAttachScan(
+                context: webCore,
+                imageName: "WebCore",
+                symbols: symbols64,
+                entries: entries,
+                source: source,
+                scans: &scans
+            )
+        }
+    }
+
+    static func appendDebugSharedCacheAttachScan(
+        context: NativeInspectorSharedCacheImageContext<MachOImage>,
+        imageName: String,
+        symbols: MachOImage.Symbols64,
+        entries: [any DyldCacheLocalSymbolsEntryProtocol],
+        source: String,
+        scans: inout [NativeInspectorAttachSymbolScan]
+    ) {
+        guard let symbolRange = localSymbolRange(
+            for: context.dylibOffset,
+            entries: entries,
+            symbolCount: symbols.count
+        ) else {
+            return
+        }
+        scans.append(debugSimilarSharedCacheAttachSymbols(
+            source: source,
+            imageName: imageName,
+            symbols: symbols,
+            symbolRange: symbolRange,
+            textVMAddress: UInt64(context.text.virtualMemoryAddress),
+            textRange: context.textRange,
+            slide: context.slide
+        ))
+    }
+
+    static func appendDebugSharedCacheAttachScan(
+        context: NativeInspectorSharedCacheImageContext<MachOFile>,
+        imageName: String,
+        symbols: MachOFile.Symbols64,
+        entries: [any DyldCacheLocalSymbolsEntryProtocol],
+        source: String,
+        scans: inout [NativeInspectorAttachSymbolScan]
+    ) {
+        guard let symbolRange = localSymbolRange(
+            for: context.dylibOffset,
+            entries: entries,
+            symbolCount: symbols.count
+        ) else {
+            return
+        }
+        scans.append(debugSimilarSharedCacheAttachSymbols(
+            source: source,
+            imageName: imageName,
+            symbols: symbols,
+            symbolRange: symbolRange,
+            textVMAddress: UInt64(context.text.virtualMemoryAddress),
+            textRange: context.textRange,
+            slide: context.slide
+        ))
+    }
+
+    static func appendDebugFileBackedSharedCacheAttachScans<Image>(
+        webKit: NativeInspectorSharedCacheImageContext<Image>,
+        webCore: NativeInspectorSharedCacheImageContext<Image>?,
+        fileBackedContexts: [NativeInspectorFileBackedLocalSymbolContext],
+        source: String,
+        scans: inout [NativeInspectorAttachSymbolScan]
+    ) {
+        appendDebugFileBackedSharedCacheAttachScan(
+            context: webKit,
+            imageName: "WebKit",
+            fileBackedContexts: fileBackedContexts,
+            source: source,
+            scans: &scans
+        )
+        if let webCore {
+            appendDebugFileBackedSharedCacheAttachScan(
+                context: webCore,
+                imageName: "WebCore",
+                fileBackedContexts: fileBackedContexts,
+                source: source,
+                scans: &scans
+            )
+        }
+    }
+
+    static func appendDebugFileBackedSharedCacheAttachScan<Image>(
+        context: NativeInspectorSharedCacheImageContext<Image>,
+        imageName: String,
+        fileBackedContexts: [NativeInspectorFileBackedLocalSymbolContext],
+        source: String,
+        scans: inout [NativeInspectorAttachSymbolScan]
+    ) {
+        guard let fileBackedSymbols = try? fileBackedLocalSymbols(
+            in: fileBackedContexts,
+            dylibOffset: context.dylibOffset
+        ) else {
+            return
+        }
+        scans.append(debugSimilarSharedCacheAttachSymbols(
+            source: source,
+            imageName: imageName,
+            symbols: fileBackedSymbols.symbols,
+            symbolRange: fileBackedSymbols.symbolRange,
+            textVMAddress: UInt64(context.text.virtualMemoryAddress),
+            textRange: context.textRange,
+            slide: context.slide
+        ))
     }
 
     static func debugSimilarSharedCacheAttachSymbols(

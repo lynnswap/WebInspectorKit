@@ -55,10 +55,10 @@ extension NativeInspectorSymbolResolverCore {
         }
 
         if activeSharedCachePath.hasSuffix(".symbols") {
-            return URL(fileURLWithPath: activeSharedCachePath)
+            return URL(fileURLWithPath: activeSharedCachePath, isDirectory: false)
         }
 
-        return URL(fileURLWithPath: activeSharedCachePath + ".symbols")
+        return URL(fileURLWithPath: activeSharedCachePath + ".symbols", isDirectory: false)
     }
 
     static func sharedCacheSortKey(for fileName: String) -> Int {
@@ -75,6 +75,15 @@ extension NativeInspectorSymbolResolverCore {
         mainCacheHeader: DyldCacheHeader,
         dylibOffset: UInt64
     ) throws -> MachOKitFileBackedLocalSymbols {
+        try fileBackedLocalSymbols(
+            in: fileBackedLocalSymbolContexts(mainCacheHeader: mainCacheHeader),
+            dylibOffset: dylibOffset
+        )
+    }
+
+    static func fileBackedLocalSymbolContexts(
+        mainCacheHeader: DyldCacheHeader
+    ) throws -> [NativeInspectorFileBackedLocalSymbolContext] {
         let symbolCacheURLs = sharedCacheSymbolFileURLs()
         guard !symbolCacheURLs.isEmpty else {
             throw NativeInspectorSymbolLookupFailure(
@@ -84,6 +93,7 @@ extension NativeInspectorSymbolResolverCore {
         }
 
         var lastFailure: NativeInspectorSymbolLookupFailure?
+        var contexts = [NativeInspectorFileBackedLocalSymbolContext]()
 
         for symbolCacheURL in symbolCacheURLs {
             do {
@@ -98,13 +108,6 @@ extension NativeInspectorSymbolResolverCore {
                     )
                     continue
                 }
-                guard let entry = localSymbolsInfo.entries(in: symbolCache).first(where: { UInt64($0.dylibOffset) == dylibOffset }) else {
-                    lastFailure = NativeInspectorSymbolLookupFailure(
-                        kind: .localSymbolEntryMissing,
-                        detail: nil
-                    )
-                    continue
-                }
                 guard let symbols = localSymbolsInfo.symbols64(in: symbolCache) else {
                     lastFailure = NativeInspectorSymbolLookupFailure(
                         kind: .localSymbolsUnavailable,
@@ -113,9 +116,12 @@ extension NativeInspectorSymbolResolverCore {
                     continue
                 }
 
-                return MachOKitFileBackedLocalSymbols(
-                    symbols: symbols,
-                    symbolRange: entry.nlistRange
+                contexts.append(
+                    NativeInspectorFileBackedLocalSymbolContext(
+                        cache: symbolCache,
+                        symbols: symbols,
+                        entries: Array(localSymbolsInfo.entries(in: symbolCache))
+                    )
                 )
             } catch {
                 lastFailure = NativeInspectorSymbolLookupFailure(
@@ -125,8 +131,37 @@ extension NativeInspectorSymbolResolverCore {
             }
         }
 
+        if !contexts.isEmpty {
+            return contexts
+        }
         throw lastFailure ?? NativeInspectorSymbolLookupFailure(
             kind: .localSymbolsUnavailable,
+            detail: nil
+        )
+    }
+
+    static func fileBackedLocalSymbols(
+        in contexts: [NativeInspectorFileBackedLocalSymbolContext],
+        dylibOffset: UInt64
+    ) throws -> MachOKitFileBackedLocalSymbols {
+        var sawSymbolContext = false
+        for context in contexts {
+            sawSymbolContext = true
+            guard let symbolRange = localSymbolRange(
+                for: dylibOffset,
+                entries: context.entries,
+                symbolCount: context.symbols.count
+            ) else {
+                continue
+            }
+            return MachOKitFileBackedLocalSymbols(
+                symbols: context.symbols,
+                symbolRange: symbolRange
+            )
+        }
+
+        throw NativeInspectorSymbolLookupFailure(
+            kind: sawSymbolContext ? .localSymbolEntryMissing : .localSymbolsUnavailable,
             detail: nil
         )
     }

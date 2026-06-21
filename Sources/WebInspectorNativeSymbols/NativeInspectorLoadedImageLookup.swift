@@ -25,6 +25,10 @@ extension NativeInspectorSymbolResolverCore {
         image.segments64.first(where: { $0.segmentName == "__TEXT" })
     }
 
+    static func textSegment(in image: MachOFile) -> SegmentCommand64? {
+        image.segments64.first(where: { $0.segmentName == "__TEXT" })
+    }
+
     static func resolveLoadedImageSymbol(
         named symbolName: String,
         in image: MachOImage,
