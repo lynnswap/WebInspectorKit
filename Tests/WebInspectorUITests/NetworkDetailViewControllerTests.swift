@@ -398,6 +398,74 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func requestPreviewRoleSurvivesResponseOnlySelection() async throws {
+        let network = NetworkSession()
+        let requestAndResponse = try #require(
+            applyRequest(
+                to: network,
+                requestID: "both",
+                url: "https://example.com/both.json",
+                requestHeaders: ["content-type": "application/x-www-form-urlencoded"],
+                postData: "name=Jane+Doe",
+                responseHeaders: ["content-type": "text/plain"],
+                responseMimeType: "text/plain"
+            )
+        )
+        let responseOnlyRequest = try #require(
+            applyRequest(
+                to: network,
+                requestID: "response-only",
+                url: "https://example.com/response.txt",
+                responseHeaders: ["content-type": "text/plain"],
+                responseMimeType: "text/plain"
+            )
+        )
+        responseOnlyRequest.applyResponseBody(
+            NetworkBody.Payload(body: "response only body", base64Encoded: false)
+        )
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(requestAndResponse)
+        let viewController = NetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
+
+        let didRenderBoth = await waitUntilRendered(in: viewController) {
+            viewController.currentModeForTesting == .preview
+                && viewController.isPreviewRoleControlHiddenForTesting == false
+        }
+        #expect(didRenderBoth)
+
+        viewController.selectPreviewRoleForTesting(.request)
+
+        let didRenderRequestPreview = await waitUntilRendered(in: viewController) {
+            viewController.currentPreviewRoleForTesting == .request
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe"
+        }
+        #expect(didRenderRequestPreview)
+
+        model.selectRequest(responseOnlyRequest)
+
+        let didRenderResponseOnly = await waitUntilRendered(in: viewController) {
+            viewController.currentPreviewRoleForTesting == .response
+                && viewController.logicalPreviewRoleForTesting == .request
+                && viewController.isPreviewRoleControlHiddenForTesting
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "response only body"
+        }
+        #expect(didRenderResponseOnly)
+
+        model.selectRequest(requestAndResponse)
+
+        let didRestoreRequestPreview = await waitUntilRendered(in: viewController) {
+            viewController.currentPreviewRoleForTesting == .request
+                && viewController.logicalPreviewRoleForTesting == .request
+                && viewController.isPreviewRoleControlHiddenForTesting == false
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe"
+        }
+        #expect(didRestoreRequestPreview)
+    }
+
+    @Test
     func previewRequestWithoutBodyRendersPlaceholderWhenBodySurfaceResumes() async throws {
         let network = NetworkSession()
         let request = try #require(

@@ -454,9 +454,6 @@ package final class NetworkDetailViewController: UIViewController {
     private func renderPreview(selectedRequest request: NetworkRequest) {
         let roles = availablePreviewRoles(in: request)
         let selectedRole = selectedPreviewRole(from: roles)
-        if let selectedRole, selectedRole != previewRole {
-            previewRole = selectedRole
-        }
         renderPreviewRoleControl(roles: roles, selectedRole: selectedRole)
 
         guard let role = selectedRole else {
@@ -620,6 +617,10 @@ extension NetworkDetailViewController {
     }
 
     var currentPreviewRoleForTesting: NetworkBody.Role {
+        selectedPreviewRole(from: previewRoles) ?? previewRole
+    }
+
+    var logicalPreviewRoleForTesting: NetworkBody.Role {
         previewRole
     }
 
