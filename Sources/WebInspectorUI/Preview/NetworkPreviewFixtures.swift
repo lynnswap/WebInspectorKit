@@ -7,13 +7,24 @@ enum NetworkPreviewFixtures {
         case root
         case rootLongTitle
         case detail
+        case detailResponseOnlyShort
+        case detailRequestAndResponseShort
+        case detailResponseOnlyLong
+        case detailRequestAndResponseLong
     }
 
     static func makePanelModel(mode: Mode) -> NetworkPanelModel {
         let network = makeNetworkSession(mode: mode)
         let model = NetworkPanelModel(network: network)
-        if mode == .detail {
+        switch mode {
+        case .detail,
+             .detailResponseOnlyShort,
+             .detailRequestAndResponseShort,
+             .detailResponseOnlyLong,
+             .detailRequestAndResponseLong:
             model.selectRequest(model.displayRequests.first)
+        case .root, .rootLongTitle:
+            break
         }
         return model
     }
@@ -25,6 +36,75 @@ enum NetworkPreviewFixtures {
     }
 
     static func applySampleData(to network: NetworkSession, mode: Mode) {
+        switch mode {
+        case .detailResponseOnlyShort:
+            applyRequest(
+                to: network,
+                requestID: "1001",
+                url: "https://api.example.com/v1/status.json",
+                method: "GET",
+                resourceType: .xhr,
+                responseMimeType: "application/json",
+                status: 200,
+                statusText: "OK",
+                timestamp: 1.0,
+                encodedBodyLength: 64,
+                responseBody: shortPreviewJSONBody(kind: "response-only")
+            )
+            return
+        case .detailRequestAndResponseShort:
+            applyRequest(
+                to: network,
+                requestID: "1001",
+                url: "https://telemetry.example/log.json",
+                method: "POST",
+                resourceType: .xhr,
+                responseMimeType: "application/json",
+                status: 200,
+                statusText: "OK",
+                timestamp: 1.0,
+                encodedBodyLength: 64,
+                requestHeaders: ["content-type": "application/json"],
+                postData: shortPreviewJSONBody(kind: "request"),
+                responseBody: shortPreviewJSONBody(kind: "response")
+            )
+            return
+        case .detailResponseOnlyLong:
+            applyRequest(
+                to: network,
+                requestID: "1001",
+                url: "https://api.example.com/v1/status.json",
+                method: "GET",
+                resourceType: .xhr,
+                responseMimeType: "application/json",
+                status: 200,
+                statusText: "OK",
+                timestamp: 1.0,
+                encodedBodyLength: 1_024,
+                responseBody: longPreviewJSONBody(kind: "response-only")
+            )
+            return
+        case .detailRequestAndResponseLong:
+            applyRequest(
+                to: network,
+                requestID: "1001",
+                url: "https://telemetry.example/log.json",
+                method: "POST",
+                resourceType: .xhr,
+                responseMimeType: "application/json",
+                status: 200,
+                statusText: "OK",
+                timestamp: 1.0,
+                encodedBodyLength: 1_024,
+                requestHeaders: ["content-type": "application/json"],
+                postData: longPreviewJSONBody(kind: "request"),
+                responseBody: longPreviewJSONBody(kind: "response")
+            )
+            return
+        case .root, .rootLongTitle, .detail:
+            break
+        }
+
         applyRequest(
             to: network,
             requestID: "1001",
@@ -75,10 +155,16 @@ enum NetworkPreviewFixtures {
         status: Int,
         statusText: String,
         timestamp: Double,
-        encodedBodyLength: Int
+        encodedBodyLength: Int,
+        requestHeaders: [String: String]? = nil,
+        postData: String? = nil,
+        responseBody: String? = nil
     ) -> NetworkRequest.ID {
         let targetID = ProtocolTarget.ID("preview-page")
         let requestID = NetworkRequest.ProtocolID(requestID)
+        let resolvedPostData = postData ?? (method == "POST" ? "sample=true&source=wi-preview" : nil)
+        let resolvedRequestHeaders = requestHeaders
+            ?? (resolvedPostData == nil ? [:] : ["content-type": "application/x-www-form-urlencoded"])
         let key = network.applyRequestWillBeSent(
             targetID: targetID,
             requestID: requestID,
@@ -88,8 +174,8 @@ enum NetworkPreviewFixtures {
             request: NetworkRequest.Payload(
                 url: url,
                 method: method,
-                headers: method == "POST" ? ["content-type": "application/x-www-form-urlencoded"] : [:],
-                postData: method == "POST" ? "sample=true&source=wi-preview" : nil
+                headers: resolvedRequestHeaders,
+                postData: resolvedPostData
             ),
             resourceType: resourceType,
             timestamp: timestamp,
@@ -126,11 +212,23 @@ enum NetworkPreviewFixtures {
         if responseMimeType == "application/json" {
             network.request(for: key)?.applyResponseBody(
                 NetworkBody.Payload(
-                    body: #"{"result":"ok","items":[1,2,3],"source":"preview"}"#,
+                    body: responseBody ?? #"{"result":"ok","items":[1,2,3],"source":"preview"}"#,
                     base64Encoded: false
                 )
             )
         }
         return key
+    }
+
+    private static func shortPreviewJSONBody(kind: String) -> String {
+        #"{"kind":"\#(kind)","result":"ok","source":"preview"}"#
+    }
+
+    private static func longPreviewJSONBody(kind: String) -> String {
+        let items = (1...24).map { index in
+            let enabled = index.isMultiple(of: 2) ? "true" : "false"
+            return #"{"id":\#(index),"name":"\#(kind)-item-\#(index)","enabled":\#(enabled)}"#
+        }.joined(separator: ",")
+        return #"{"kind":"\#(kind)","result":"ok","items":[\#(items)],"metadata":{"source":"preview","count":24}}"#
     }
 }

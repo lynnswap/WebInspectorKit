@@ -80,13 +80,6 @@ package final class NetworkDetailViewController: UIViewController {
     private var modelObservationDelivery: PortableObservationTracking.Token?
     private var selectedRequestRenderObservationDelivery: PortableObservationTracking.Token?
 #endif
-    private lazy var previewContainerView: UIView = {
-        let view = UIView()
-        view.translatesAutoresizingMaskIntoConstraints = false
-        view.isHidden = true
-        view.accessibilityIdentifier = "WebInspector.Network.DetailPreview"
-        return view
-    }()
     private lazy var headersTextView: NetworkHeadersTextView = {
         let view = NetworkHeadersTextView()
         view.translatesAutoresizingMaskIntoConstraints = false
@@ -210,7 +203,7 @@ package final class NetworkDetailViewController: UIViewController {
     }
 
     private func updateBodyRenderingActiveForCurrentSurface() {
-        setBodyRenderingActive(isRenderingActive && previewContainerView.isHidden == false)
+        setBodyRenderingActive(isRenderingActive && bodyViewController.view.isHidden == false)
     }
 
     private func applyBackgroundFromTraits() {
@@ -222,16 +215,17 @@ package final class NetworkDetailViewController: UIViewController {
 
     private func installContentViews() {
         addChild(bodyViewController)
-        view.addSubview(previewContainerView)
+        view.addSubview(bodyViewController.view)
+        view.addSubview(previewRoleControlController.containerView)
         view.addSubview(headersTextView)
         bodyViewController.view.translatesAutoresizingMaskIntoConstraints = false
+        bodyViewController.view.isHidden = true
+        bodyViewController.view.accessibilityIdentifier = "WebInspector.Network.DetailPreview"
         previewRoleControlController.containerView.translatesAutoresizingMaskIntoConstraints = false
-        previewContainerView.addSubview(bodyViewController.view)
-        previewContainerView.addSubview(previewRoleControlController.containerView)
         bodyViewController.didMove(toParent: self)
 
         let bodyTopToPreviewContainerConstraint = bodyViewController.view.topAnchor.constraint(
-            equalTo: previewContainerView.topAnchor
+            equalTo: view.topAnchor
         )
         let bodyTopToPreviewRoleControlConstraint = bodyViewController.view.topAnchor.constraint(
             equalTo: previewRoleControlController.containerView.bottomAnchor
@@ -241,16 +235,18 @@ package final class NetworkDetailViewController: UIViewController {
         bodyTopToPreviewContainerConstraint.isActive = true
 
         NSLayoutConstraint.activate([
-            previewContainerView.topAnchor.constraint(equalTo: view.topAnchor),
-            previewContainerView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
-            previewContainerView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
-            previewContainerView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            bodyViewController.view.leadingAnchor.constraint(equalTo: previewContainerView.leadingAnchor),
-            bodyViewController.view.trailingAnchor.constraint(equalTo: previewContainerView.trailingAnchor),
-            bodyViewController.view.bottomAnchor.constraint(equalTo: previewContainerView.bottomAnchor),
-            previewRoleControlController.containerView.topAnchor.constraint(equalTo: previewContainerView.safeAreaLayoutGuide.topAnchor),
-            previewRoleControlController.containerView.leadingAnchor.constraint(equalTo: previewContainerView.leadingAnchor),
-            previewRoleControlController.containerView.trailingAnchor.constraint(equalTo: previewContainerView.trailingAnchor),
+            bodyViewController.view.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            bodyViewController.view.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
+            bodyViewController.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            previewRoleControlController.containerView.topAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.topAnchor
+            ),
+            previewRoleControlController.containerView.leadingAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.leadingAnchor
+            ),
+            previewRoleControlController.containerView.trailingAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.trailingAnchor
+            ),
             headersTextView.topAnchor.constraint(equalTo: view.topAnchor),
             headersTextView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
             headersTextView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
@@ -262,7 +258,18 @@ package final class NetworkDetailViewController: UIViewController {
         if #available(iOS 26.0, *) {
             bodyTopToPreviewRoleControlConstraint?.isActive = false
             bodyTopToPreviewContainerConstraint?.isActive = true
+            let topInset = isVisible
+                ? previewRoleControlController.containerView.systemLayoutSizeFitting(
+                    UIView.layoutFittingCompressedSize
+                ).height
+                : 0
+            if bodyViewController.additionalSafeAreaInsets.top != topInset {
+                bodyViewController.additionalSafeAreaInsets.top = topInset
+            }
         } else {
+            if bodyViewController.additionalSafeAreaInsets.top != 0 {
+                bodyViewController.additionalSafeAreaInsets.top = 0
+            }
             bodyTopToPreviewContainerConstraint?.isActive = isVisible == false
             bodyTopToPreviewRoleControlConstraint?.isActive = isVisible
         }
@@ -411,7 +418,8 @@ package final class NetworkDetailViewController: UIViewController {
     private func showEmptySelection(bodySurface: NetworkBodyViewController.Surface) {
         bodyViewController.setSurface(bodySurface)
         setBodyRenderingActive(false)
-        previewContainerView.isHidden = true
+        bodyViewController.view.isHidden = true
+        previewRoleControlController.containerView.isHidden = true
         headersTextView.isHidden = true
         headersTextView.clear()
         renderPreviewRoleControl(roles: [], selectedRole: nil)
@@ -429,12 +437,14 @@ package final class NetworkDetailViewController: UIViewController {
 
     private func showPreview() {
         headersTextView.isHidden = true
-        previewContainerView.isHidden = false
+        bodyViewController.view.isHidden = false
     }
 
     private func showHeaders() {
         setBodyRenderingActive(false)
-        previewContainerView.isHidden = true
+        bodyViewController.view.isHidden = true
+        previewRoleControlController.containerView.isHidden = true
+        updatePreviewRoleControlLayout(isVisible: false)
         scrollEdgeController.isPreviewRoleControlVisible = false
         bodyViewController.setSurface(.none)
         headersTextView.isHidden = false
@@ -483,7 +493,7 @@ package final class NetworkDetailViewController: UIViewController {
     ) {
         previewRoles = roles
         let isControlVisible = roles.count >= 2
-        let isVisibleInPreview = isControlVisible && previewContainerView.isHidden == false
+        let isVisibleInPreview = isControlVisible && bodyViewController.view.isHidden == false
         previewRoleControlController.render(
             roles: roles,
             selectedRole: selectedRole,
@@ -590,7 +600,7 @@ package final class NetworkDetailViewController: UIViewController {
 #if DEBUG
 extension NetworkDetailViewController {
     var previewViewForTesting: UIView {
-        previewContainerView
+        bodyViewController.view
     }
 
     var previewRoleControlContainerViewForTesting: UIView {
@@ -660,6 +670,42 @@ extension NetworkDetailViewController {
     UINavigationController(
         rootViewController: NetworkDetailViewController(
             model: NetworkPreviewFixtures.makePanelModel(mode: .detail)
+        )
+    )
+}
+
+#Preview("Network Detail Preview Response Only Short") {
+    UINavigationController(
+        rootViewController: NetworkDetailViewController(
+            model: NetworkPreviewFixtures.makePanelModel(mode: .detailResponseOnlyShort),
+            initialMode: .preview
+        )
+    )
+}
+
+#Preview("Network Detail Preview Request and Response Short") {
+    UINavigationController(
+        rootViewController: NetworkDetailViewController(
+            model: NetworkPreviewFixtures.makePanelModel(mode: .detailRequestAndResponseShort),
+            initialMode: .preview
+        )
+    )
+}
+
+#Preview("Network Detail Preview Response Only Long") {
+    UINavigationController(
+        rootViewController: NetworkDetailViewController(
+            model: NetworkPreviewFixtures.makePanelModel(mode: .detailResponseOnlyLong),
+            initialMode: .preview
+        )
+    )
+}
+
+#Preview("Network Detail Preview Request and Response Long") {
+    UINavigationController(
+        rootViewController: NetworkDetailViewController(
+            model: NetworkPreviewFixtures.makePanelModel(mode: .detailRequestAndResponseLong),
+            initialMode: .preview
         )
     )
 }

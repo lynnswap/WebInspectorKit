@@ -1,5 +1,5 @@
 {
-  "originHash" : "70daad6b0cd9195f1ad27ad59df43d555bd4f6abe1b6810074d621dee33bd334",
+  "originHash" : "d5b9ed3942c704ade9fa89630b68f66d00f5cf002163dced79fb239fffddc42a",
   "pins" : [
     {
       "identity" : "machokit",
@@ -87,8 +87,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/SyntaxEditorUI.git",
       "state" : {
-        "revision" : "a1d9165499617e1a1decbf3568569cc185ed5866",
-        "version" : "0.16.0"
+        "revision" : "1429341f756fc2d7ce59e5b5a61d6adc5f291f12",
+        "version" : "0.16.1"
       }
     },
     {
