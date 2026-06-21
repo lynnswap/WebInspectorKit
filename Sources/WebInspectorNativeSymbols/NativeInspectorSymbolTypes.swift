@@ -86,6 +86,13 @@ enum ResolvedNativeInspectorAddress {
     case missing
     case outsideText(UInt64)
     case ambiguous
+
+    var isFound: Bool {
+        if case .found = self {
+            return true
+        }
+        return false
+    }
 }
 
 struct NativeInspectorSymbolLookupResult: Sendable {
@@ -131,11 +138,21 @@ struct NativeInspectorRequiredSymbol: Sendable {
     }
 
     func matches(variants: NativeInspectorSymbolName.Variants) -> Bool {
-        return queries.contains { $0.matches(variants: variants) }
+        for query in queries {
+            if query.matches(variants: variants) {
+                return true
+            }
+        }
+        return false
     }
 
     @unsafe func matches(cStringVariants: NativeInspectorSymbolName.CStringVariants) -> Bool {
-        return queries.contains { unsafe $0.matches(cStringVariants: cStringVariants) }
+        for query in queries {
+            if unsafe query.matches(cStringVariants: cStringVariants) {
+                return true
+            }
+        }
+        return false
     }
 }
 
@@ -156,13 +173,31 @@ struct NativeInspectorSymbolQuery: Sendable {
     }
 
     func matches(variants: NativeInspectorSymbolName.Variants) -> Bool {
-        requiredNameParts.allSatisfy { variants.contains($0) }
-            && !forbiddenNameParts.contains { variants.contains($0) }
+        for requiredNamePart in requiredNameParts {
+            guard variants.contains(requiredNamePart) else {
+                return false
+            }
+        }
+        for forbiddenNamePart in forbiddenNameParts {
+            if variants.contains(forbiddenNamePart) {
+                return false
+            }
+        }
+        return true
     }
 
     @unsafe func matches(cStringVariants: NativeInspectorSymbolName.CStringVariants) -> Bool {
-        requiredNameParts.allSatisfy { unsafe cStringVariants.contains($0) }
-            && !forbiddenNameParts.contains { unsafe cStringVariants.contains($0) }
+        for requiredNamePart in requiredNameParts {
+            guard unsafe cStringVariants.contains(requiredNamePart) else {
+                return false
+            }
+        }
+        for forbiddenNamePart in forbiddenNameParts {
+            if unsafe cStringVariants.contains(forbiddenNamePart) {
+                return false
+            }
+        }
+        return true
     }
 }
 
@@ -184,6 +219,25 @@ struct NativeInspectorResolvedSymbolSet {
     let stringImplToNSString: ResolvedNativeInspectorAddress
     let destroyStringImpl: ResolvedNativeInspectorAddress
     let backendDispatcherDispatch: ResolvedNativeInspectorAddress
+
+    func address(for role: NativeInspectorSymbolRole) -> ResolvedNativeInspectorAddress {
+        switch role {
+        case .connectFrontend:
+            connectFrontend
+        case .disconnectFrontend:
+            disconnectFrontend
+        case .stringFromUTF8:
+            stringFromUTF8
+        case .stringImplToNSString:
+            stringImplToNSString
+        case .destroyStringImpl:
+            destroyStringImpl
+        case .backendDispatcherDispatch:
+            backendDispatcherDispatch
+        case .inspectorControllerConnectTarget, .inspectorControllerDisconnectTarget:
+            .missing
+        }
+    }
 }
 
 struct NativeInspectorAttachEntryPointFallbackResult {

@@ -15,14 +15,18 @@ enum NativeInspectorSymbolName {
     struct Part: Sendable {
         let sourceName: String
         let sourceNameUTF8: [UInt8]
+        let sourceNameCString: [CChar]
         let itaniumEncodedNamePartUTF8s: [[UInt8]]
+        let itaniumEncodedNamePartCStrings: [[CChar]]
 
         init(sourceName: String) {
             self.sourceName = sourceName
             self.sourceNameUTF8 = Array(sourceName.utf8)
-            self.itaniumEncodedNamePartUTF8s = NativeInspectorSymbolName
+            self.sourceNameCString = Array(sourceName.utf8CString)
+            let itaniumEncodedNamePartAlternatives = NativeInspectorSymbolName
                 .itaniumEncodedNamePartAlternatives(for: sourceName)
-                .map { Array($0.utf8) }
+            self.itaniumEncodedNamePartUTF8s = itaniumEncodedNamePartAlternatives.map { Array($0.utf8) }
+            self.itaniumEncodedNamePartCStrings = itaniumEncodedNamePartAlternatives.map { Array($0.utf8CString) }
         }
     }
 
@@ -38,12 +42,17 @@ enum NativeInspectorSymbolName {
         let directSearchNameUTF8s: [[UInt8]]
 
         func contains(_ namePart: Part) -> Bool {
-            directSearchNameUTF8s.contains { directSearchNameUTF8 in
-                NativeInspectorSymbolName.bytes(directSearchNameUTF8, contain: namePart.sourceNameUTF8)
-            }
-                || namePart.itaniumEncodedNamePartUTF8s.contains { encodedNamePartUTF8 in
-                    NativeInspectorSymbolName.bytes(rawNameUTF8, contain: encodedNamePartUTF8)
+            for directSearchNameUTF8 in directSearchNameUTF8s {
+                if NativeInspectorSymbolName.bytes(directSearchNameUTF8, contain: namePart.sourceNameUTF8) {
+                    return true
                 }
+            }
+            for encodedNamePartUTF8 in namePart.itaniumEncodedNamePartUTF8s {
+                if NativeInspectorSymbolName.bytes(rawNameUTF8, contain: encodedNamePartUTF8) {
+                    return true
+                }
+            }
+            return false
         }
     }
 
@@ -54,17 +63,20 @@ enum NativeInspectorSymbolName {
 
         @unsafe func contains(_ namePart: Part) -> Bool {
             if unsafe shouldSearchRawNameDirectly,
-               unsafe NativeInspectorSymbolName.cString(rawName, contains: namePart.sourceNameUTF8) {
+               unsafe NativeInspectorSymbolName.cString(rawName, contains: namePart.sourceNameCString) {
                 return true
             }
-            if unsafe directSearchNameUTF8s.contains(where: { directSearchNameUTF8 in
-                NativeInspectorSymbolName.bytes(directSearchNameUTF8, contain: namePart.sourceNameUTF8)
-            }) {
-                return true
+            for directSearchNameUTF8 in unsafe directSearchNameUTF8s {
+                if NativeInspectorSymbolName.bytes(directSearchNameUTF8, contain: namePart.sourceNameUTF8) {
+                    return true
+                }
             }
-            return namePart.itaniumEncodedNamePartUTF8s.contains { encodedNamePartUTF8 in
-                unsafe NativeInspectorSymbolName.cString(rawName, contains: encodedNamePartUTF8)
+            for encodedNamePartCString in namePart.itaniumEncodedNamePartCStrings {
+                if unsafe NativeInspectorSymbolName.cString(rawName, contains: encodedNamePartCString) {
+                    return true
+                }
             }
+            return false
         }
     }
 
@@ -265,32 +277,17 @@ enum NativeInspectorSymbolName {
         return false
     }
 
-    private static func cString(_ haystack: UnsafePointer<CChar>, contains needle: [UInt8]) -> Bool {
-        guard !needle.isEmpty else {
+    @unsafe private static func cString(_ haystack: UnsafePointer<CChar>, contains needle: [CChar]) -> Bool {
+        guard needle.count > 1 else {
             return true
         }
 
-        let haystackStart = unsafe UnsafeRawPointer(haystack).assumingMemoryBound(to: UInt8.self)
-        let firstByte = needle[0]
-        var cursor = unsafe haystackStart
-
-        while unsafe cursor.pointee != 0 {
-            if unsafe cursor.pointee == firstByte {
-                var needleIndex = 1
-                while needleIndex < needle.count {
-                    let haystackByte = unsafe cursor.advanced(by: needleIndex).pointee
-                    if haystackByte == 0 || haystackByte != needle[needleIndex] {
-                        break
-                    }
-                    needleIndex += 1
-                }
-                if needleIndex == needle.count {
-                    return true
-                }
+        return unsafe needle.withUnsafeBufferPointer { needleBuffer in
+            guard let needleBaseAddress = needleBuffer.baseAddress else {
+                return true
             }
-            unsafe cursor = cursor.advanced(by: 1)
+            return unsafe strstr(haystack, needleBaseAddress) != nil
         }
-        return false
     }
 }
 #endif

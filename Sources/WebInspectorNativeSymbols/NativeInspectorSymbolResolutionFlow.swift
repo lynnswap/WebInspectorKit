@@ -30,15 +30,34 @@ extension NativeInspectorSymbolResolverCore {
         let webCoreImage = loadedWebCoreImage.map { unsafe MachOImage(ptr: $0.header) }
         let webCoreText = webCoreImage.flatMap { $0.is64Bit ? textSegment(in: $0) : nil }
 
+        let loadedWebKitResults = resolveLoadedImageSymbols(
+            matching: [
+                NativeInspectorSymbolMatchTarget(role: .connectFrontend, symbol: symbols.connectFrontend),
+                NativeInspectorSymbolMatchTarget(role: .disconnectFrontend, symbol: symbols.disconnectFrontend),
+                NativeInspectorSymbolMatchTarget(role: .backendDispatcherDispatch, symbol: symbols.backendDispatcherDispatch),
+            ],
+            in: image,
+            text: text
+        )
+        let loadedJavaScriptCoreResults = resolveLoadedImageSymbols(
+            matching: [
+                NativeInspectorSymbolMatchTarget(role: .stringFromUTF8, symbol: symbols.stringFromUTF8),
+                NativeInspectorSymbolMatchTarget(role: .stringImplToNSString, symbol: symbols.stringImplToNSString),
+                NativeInspectorSymbolMatchTarget(role: .destroyStringImpl, symbol: symbols.destroyStringImpl),
+                NativeInspectorSymbolMatchTarget(role: .backendDispatcherDispatch, symbol: symbols.backendDispatcherDispatch),
+            ],
+            in: javaScriptCoreImage,
+            text: javaScriptCoreText
+        )
         let loadedImageResults = NativeInspectorResolvedSymbolSet(
-            connectFrontend: resolveLoadedImageSymbol(matching: symbols.connectFrontend, in: image, text: text),
-            disconnectFrontend: resolveLoadedImageSymbol(matching: symbols.disconnectFrontend, in: image, text: text),
-            stringFromUTF8: resolveLoadedImageSymbol(matching: symbols.stringFromUTF8, in: javaScriptCoreImage, text: javaScriptCoreText),
-            stringImplToNSString: resolveLoadedImageSymbol(matching: symbols.stringImplToNSString, in: javaScriptCoreImage, text: javaScriptCoreText),
-            destroyStringImpl: resolveLoadedImageSymbol(matching: symbols.destroyStringImpl, in: javaScriptCoreImage, text: javaScriptCoreText),
+            connectFrontend: loadedWebKitResults[.connectFrontend] ?? .missing,
+            disconnectFrontend: loadedWebKitResults[.disconnectFrontend] ?? .missing,
+            stringFromUTF8: loadedJavaScriptCoreResults[.stringFromUTF8] ?? .missing,
+            stringImplToNSString: loadedJavaScriptCoreResults[.stringImplToNSString] ?? .missing,
+            destroyStringImpl: loadedJavaScriptCoreResults[.destroyStringImpl] ?? .missing,
             backendDispatcherDispatch: preferredResolvedAddress(
-                resolveLoadedImageSymbol(matching: symbols.backendDispatcherDispatch, in: image, text: text),
-                fallback: resolveLoadedImageSymbol(matching: symbols.backendDispatcherDispatch, in: javaScriptCoreImage, text: javaScriptCoreText)
+                loadedWebKitResults[.backendDispatcherDispatch] ?? .missing,
+                fallback: loadedJavaScriptCoreResults[.backendDispatcherDispatch] ?? .missing
             )
         )
         let loadedImageResolution = successfulResolutionIfComplete(

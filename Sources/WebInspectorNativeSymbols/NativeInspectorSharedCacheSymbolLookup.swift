@@ -8,23 +8,40 @@ struct NativeInspectorSymbolMatchTarget {
     let symbol: NativeInspectorRequiredSymbol
 }
 
-private struct NativeInspectorResolvedSymbolBucket {
-    var candidates = Set<UInt64>()
+struct NativeInspectorResolvedSymbolBucket {
+    private var candidate: UInt64?
+    private var hasMultipleCandidates = false
     var outsideTextAddress: UInt64?
 
     var isAmbiguous: Bool {
-        candidates.count > 1
+        hasMultipleCandidates
     }
 
     var resolvedAddress: ResolvedNativeInspectorAddress {
-        NativeInspectorSymbolResolverCore.resolvedAddress(
-            from: candidates,
-            outsideTextAddress: outsideTextAddress
-        )
+        if hasMultipleCandidates {
+            return .ambiguous
+        }
+        if let candidate {
+            return .found(candidate)
+        }
+        if let outsideTextAddress {
+            return .outsideText(outsideTextAddress)
+        }
+        return .missing
     }
 
     var needsOutsideTextScan: Bool {
-        candidates.isEmpty && outsideTextAddress == nil
+        candidate == nil && outsideTextAddress == nil
+    }
+
+    mutating func insertCandidate(_ address: UInt64) {
+        guard let candidate else {
+            self.candidate = address
+            return
+        }
+        if candidate != address {
+            hasMultipleCandidates = true
+        }
     }
 }
 
@@ -307,9 +324,7 @@ extension NativeInspectorSymbolResolverCore {
                       unsafe targets[targetIndex].symbol.matches(cStringVariants: variants) else {
                     continue
                 }
-                var bucket = buckets[targetIndex]
-                bucket.candidates.insert(address)
-                buckets[targetIndex] = bucket
+                buckets[targetIndex].insertCandidate(address)
             }
         }
 
@@ -369,16 +384,16 @@ extension NativeInspectorSymbolResolverCore {
                 continue
             }
 
-            let variants = NativeInspectorSymbolName.variants(for: symbol.name)
+            unsafe symbol.name.withCString { symbolNameC in
+                let variants = unsafe NativeInspectorSymbolName.variants(for: symbolNameC)
 
-            for targetIndex in targets.indices {
-                guard !buckets[targetIndex].isAmbiguous,
-                      targets[targetIndex].symbol.matches(variants: variants) else {
-                    continue
+                for targetIndex in targets.indices {
+                    guard !buckets[targetIndex].isAmbiguous,
+                          unsafe targets[targetIndex].symbol.matches(cStringVariants: variants) else {
+                        continue
+                    }
+                    buckets[targetIndex].insertCandidate(address)
                 }
-                var bucket = buckets[targetIndex]
-                bucket.candidates.insert(address)
-                buckets[targetIndex] = bucket
             }
         }
 
@@ -393,16 +408,16 @@ extension NativeInspectorSymbolResolverCore {
                 continue
             }
 
-            let variants = NativeInspectorSymbolName.variants(for: symbol.name)
+            unsafe symbol.name.withCString { symbolNameC in
+                let variants = unsafe NativeInspectorSymbolName.variants(for: symbolNameC)
 
-            for targetIndex in targets.indices {
-                guard buckets[targetIndex].needsOutsideTextScan,
-                      targets[targetIndex].symbol.matches(variants: variants) else {
-                    continue
+                for targetIndex in targets.indices {
+                    guard buckets[targetIndex].needsOutsideTextScan,
+                          unsafe targets[targetIndex].symbol.matches(cStringVariants: variants) else {
+                        continue
+                    }
+                    buckets[targetIndex].outsideTextAddress = address
                 }
-                var bucket = buckets[targetIndex]
-                bucket.outsideTextAddress = address
-                buckets[targetIndex] = bucket
             }
         }
 
