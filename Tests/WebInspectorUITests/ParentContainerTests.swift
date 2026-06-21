@@ -300,6 +300,11 @@ struct ParentContainerTests {
         )
         #expect(Set(displayItemIDs).count == displayItemIDs.count)
 
+        let initiallySelectedCustomSession = WebInspectorSession(tabs: [customTab, .dom])
+        #expect(initiallySelectedCustomSession.interface.selectedItemID == customDisplayID)
+        #expect(initiallySelectedCustomSession.interface.resolvedSelection(for: .compact) == .customTab(customTab.id))
+        #expect(initiallySelectedCustomSession.interface.selectedTab == customTab)
+
         session.interface.selectItem(withID: customDisplayID)
 
         #expect(session.interface.resolvedSelection(for: .compact) == .customTab(customTab.id))

@@ -113,7 +113,7 @@ package final class InterfaceModel {
     package init(tabs: [WebInspectorTab] = [.dom, .network]) {
         let uniqueTabs = Self.uniqueTabs(tabs)
         self.tabs = uniqueTabs
-        selectedItemID = uniqueTabs.first?.id
+        selectedItemID = uniqueTabs.first.map { Self.displayItem(for: $0).id }
     }
 
     package func displayItems(for hostLayout: WebInspectorTab.HostLayout) -> [WebInspectorTab.DisplayItem] {
@@ -136,7 +136,7 @@ package final class InterfaceModel {
         guard tabs.contains(tab) else {
             return
         }
-        selectItem(displayItem(for: tab))
+        selectItem(Self.displayItem(for: tab))
     }
 
     package func selectTab(withID tabID: WebInspectorTab.ID) {
@@ -168,7 +168,7 @@ package final class InterfaceModel {
         pruneContentCache(retaining: reachableContentKeys(for: uniqueTabs))
         guard let selectedItemID,
               isValidItemID(selectedItemID) else {
-            self.selectedItemID = uniqueTabs.first.map { displayItem(for: $0).id }
+            self.selectedItemID = uniqueTabs.first.map { Self.displayItem(for: $0).id }
             return
         }
     }
@@ -238,7 +238,7 @@ package final class InterfaceModel {
             && tabs.contains(where: { $0.builtIn == .dom })
     }
 
-    private func displayItem(for tab: WebInspectorTab) -> WebInspectorTab.DisplayItem {
+    private static func displayItem(for tab: WebInspectorTab) -> WebInspectorTab.DisplayItem {
         if tab.builtIn != nil {
             return .tab(tab.id)
         }
