@@ -141,6 +141,10 @@ package final class DOMElementStylePresentationState {
         visibleSections.map(\.id)
     }
 
+    package var displayedNodeStylesID: CSSNodeStyles.ID? {
+        displayedNodeStyles?.id
+    }
+
     package func render(_ nodeStyles: CSSNodeStyles) -> RenderResult {
         switch nodeStyles.phase {
         case .loaded:

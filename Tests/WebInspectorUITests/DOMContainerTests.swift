@@ -253,6 +253,40 @@ struct DOMContainerTests {
     }
 
     @Test
+    func elementViewControllerAnimatesStructuralStyleChangesForSameSelectedNode() async throws {
+        let dom = makeDOMSession(capabilities: .pageDefault)
+        let body = try #require(firstElement(named: "body", in: dom))
+        dom.selectNode(body.id)
+
+        let css = dom.elementStyles
+        try applyBodyStyles(to: css, in: dom)
+
+        let viewController = makeElementViewController(dom: dom)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didRenderBodyRows = await waitUntilRendered(in: viewController) {
+            viewController.collectionView.numberOfSections == 1
+                && stylePropertyViews(in: viewController)
+                    .map(\.declarationTextForTesting)
+                    .contains("margin: 0;")
+        }
+        #expect(didRenderBodyRows)
+
+        try applyInheritedVariableStyles(to: css, in: dom)
+
+        let didRenderUpdatedSections = await waitUntilRendered(in: viewController) {
+            viewController.collectionView.numberOfSections == 2
+                && stylePropertyViews(in: viewController)
+                    .map(\.declarationTextForTesting)
+                    .contains("color: var(--foreground);")
+        }
+
+        #expect(didRenderUpdatedSections)
+        #expect(viewController.lastSnapshotAnimatedForTesting)
+    }
+
+    @Test
     func elementViewControllerKeepsCurrentRowsWhileNewSelectionStylesAreHydrating() async throws {
         let dom = makeDOMSession(capabilities: .pageDefault)
         let body = try #require(firstElement(named: "body", in: dom))
@@ -311,6 +345,7 @@ struct DOMContainerTests {
 
         #expect(didRenderInputRows)
         #expect(viewController.collectionView.isHidden == false)
+        #expect(!viewController.lastSnapshotAnimatedForTesting)
     }
 
     @Test

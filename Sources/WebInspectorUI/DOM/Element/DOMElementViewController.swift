@@ -219,17 +219,24 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
     private func render(_ nodeStyles: CSSNodeStyles) {
-        render(stylePresentationState.render(nodeStyles))
+        let animatesDifferences = stylePresentationState.displayedNodeStylesID == nodeStyles.id
+        render(
+            stylePresentationState.render(nodeStyles),
+            animatingDifferences: animatesDifferences
+        )
     }
 
     private func render(_ state: CSSNodeStyles.Phase) {
         render(stylePresentationState.render(state))
     }
 
-    private func render(_ result: DOMElementStylePresentationState.RenderResult) {
+    private func render(
+        _ result: DOMElementStylePresentationState.RenderResult,
+        animatingDifferences: Bool = false
+    ) {
         switch result {
         case let .loaded(render):
-            renderStyles(render)
+            renderStyles(render, animatingDifferences: animatingDifferences)
         case .pending:
             renderPendingStyles()
         case .unavailable:
@@ -260,14 +267,16 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
     private func renderStyles(
-        _ render: DOMElementStylePresentationRender
+        _ render: DOMElementStylePresentationRender,
+        animatingDifferences: Bool = false
     ) {
         if contentUnavailableConfiguration != nil {
             contentUnavailableConfiguration = nil
         }
         applySnapshot(
             render.snapshot,
-            reconfiguredItemIdentifiers: render.reconfiguredItemIdentifiers
+            reconfiguredItemIdentifiers: render.reconfiguredItemIdentifiers,
+            animatingDifferences: animatingDifferences
         )
     }
 
@@ -278,8 +287,9 @@ package final class DOMElementViewController: UICollectionViewController {
         >()
 #if DEBUG
         styleSnapshotApplyCountForTesting += 1
+        lastSnapshotAnimatedForTesting = false
 #endif
-        dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
+        applySnapshotToDataSource(snapshot, animatingDifferences: false) { [weak self] in
 #if DEBUG
             self?.finishStyleRenderForTesting()
 #endif
@@ -295,11 +305,12 @@ package final class DOMElementViewController: UICollectionViewController {
         animatingDifferences: Bool = false
     ) {
         let currentSnapshot = dataSource.snapshot()
+        let hasStructuralChanges = currentSnapshot.sectionIdentifiers != snapshot.sectionIdentifiers
+            || currentSnapshot.itemIdentifiers != snapshot.itemIdentifiers
 #if DEBUG
-        lastSnapshotAnimatedForTesting = animatingDifferences
+        lastSnapshotAnimatedForTesting = animatingDifferences && hasStructuralChanges
 #endif
-        guard currentSnapshot.sectionIdentifiers != snapshot.sectionIdentifiers
-            || currentSnapshot.itemIdentifiers != snapshot.itemIdentifiers else {
+        guard hasStructuralChanges else {
             let reconfiguredItemIdentifiers = reconfiguredItemIdentifiers.filter { item in
                 snapshot.indexOfItem(item) != nil
             }
@@ -314,7 +325,7 @@ package final class DOMElementViewController: UICollectionViewController {
 #if DEBUG
             styleSnapshotApplyCountForTesting += 1
 #endif
-            dataSource.apply(reconfiguredSnapshot, animatingDifferences: false) { [weak self] in
+            applySnapshotToDataSource(reconfiguredSnapshot, animatingDifferences: false) { [weak self] in
 #if DEBUG
                 self?.finishStyleRenderForTesting()
 #endif
@@ -329,10 +340,29 @@ package final class DOMElementViewController: UICollectionViewController {
 #if DEBUG
         styleSnapshotApplyCountForTesting += 1
 #endif
-        dataSource.apply(snapshot, animatingDifferences: shouldAnimateSnapshot) { [weak self] in
+        applySnapshotToDataSource(snapshot, animatingDifferences: shouldAnimateSnapshot) { [weak self] in
 #if DEBUG
             self?.finishStyleRenderForTesting()
 #endif
+        }
+    }
+
+    private func applySnapshotToDataSource(
+        _ snapshot: NSDiffableDataSourceSnapshot<
+            CSSStyle.Section.ID,
+            DOMElementStylePresentationItemIdentifier
+        >,
+        animatingDifferences: Bool,
+        completion: @escaping () -> Void
+    ) {
+        guard !animatingDifferences else {
+            dataSource.apply(snapshot, animatingDifferences: true, completion: completion)
+            return
+        }
+
+        UIView.performWithoutAnimation {
+            dataSource.apply(snapshot, animatingDifferences: false, completion: completion)
+            collectionView.layoutIfNeeded()
         }
     }
 
