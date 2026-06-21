@@ -295,8 +295,11 @@ enum NativeInspectorSymbolName {
             return next == 115 || next == 83
         case 95:
             let dollar = unsafe bytes.advanced(by: 1).pointee
+            guard dollar == 36 else {
+                return false
+            }
             let marker = unsafe bytes.advanced(by: 2).pointee
-            return dollar == 36 && (marker == 115 || marker == 83)
+            return marker == 115 || marker == 83
         default:
             return false
         }

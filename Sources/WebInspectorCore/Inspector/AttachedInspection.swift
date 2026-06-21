@@ -579,6 +579,9 @@ package final class InspectorSession {
             seedRuntimeState(from: await transport.snapshot())
             syncTargets(for: nextConnection)
             try await bootstrap(mainTargetID: mainTarget.targetID, connection: nextConnection)
+            if let attachRequestGeneration {
+                try ensureCurrentAttachRequest(attachRequestGeneration)
+            }
             try ensureCurrentConnection(nextConnection)
             connectionPhase = .active(nextConnection)
             dom.recordCommandAvailabilityMutation()

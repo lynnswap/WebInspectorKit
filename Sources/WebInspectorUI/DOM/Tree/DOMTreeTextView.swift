@@ -2820,7 +2820,7 @@ extension DOMTreeTextView {
         )
     }
 }
-#endif
+#endif // DEBUG
 
 @MainActor
 private final class DOMTreeTextViewportLayoutDelegate: NSObject, @preconcurrency NSTextViewportLayoutControllerDelegate {
@@ -2919,4 +2919,4 @@ private final class DOMTreeTextSelectionRect: UITextSelectionRect {
     }
 }
 
-#endif
+#endif // canImport(UIKit)

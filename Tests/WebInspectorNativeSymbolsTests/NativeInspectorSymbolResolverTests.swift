@@ -113,6 +113,23 @@ struct NativeInspectorSymbolResolverTests {
     }
 
     @Test
+    func cStringSwiftMangledNameDetectionRejectsShortNames() {
+        for symbolName in ["", "_", "_$", "$"] {
+            let isLikelySwiftMangled = unsafe symbolName.withCString { symbolNameC in
+                unsafe NativeInspectorSymbolName.isLikelySwiftMangledName(symbolNameC)
+            }
+
+            #expect(!isLikelySwiftMangled)
+        }
+
+        let isLikelySwiftMangled = unsafe "_$s".withCString { symbolNameC in
+            unsafe NativeInspectorSymbolName.isLikelySwiftMangledName(symbolNameC)
+        }
+
+        #expect(isLikelySwiftMangled)
+    }
+
+    @Test
     func sharedCacheSymbolFileURLsKeepDirectoryFallbackAfterPreferredCandidate() {
         let preferredPath = "/tmp/nonexistent/dyld_shared_cache_test"
         let fallbackPaths = NativeInspectorSymbolResolver.sharedCacheSymbolFileURLsForTesting(
