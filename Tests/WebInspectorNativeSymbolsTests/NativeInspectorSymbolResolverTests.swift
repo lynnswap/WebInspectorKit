@@ -83,10 +83,10 @@ struct NativeInspectorSymbolResolverTests {
         let fixture = try nativeSymbolFixture()
         let symbols = NativeInspectorSymbolResolverCore.currentSymbolQueries()
             .replacing(
-                connectFrontend: requiredSymbol(
-                    role: .connectFrontend,
-                    ownerImage: .webKit,
-                    requiredNameParts: ["connectFrontend", "FrontendChannel"],
+                stringFromUTF8: requiredSymbol(
+                    role: .stringFromUTF8,
+                    ownerImage: .javaScriptCore,
+                    requiredNameParts: ["WTF::String", "span", "char8_t"],
                     resolutionPolicy: .requiredTextSymbol
                 )
             )
@@ -100,22 +100,16 @@ struct NativeInspectorSymbolResolverTests {
         #expect(resolution.addresses == .zero)
         #expect(resolution.failureKind == NativeInspectorSymbolFailure.ambiguousSymbolMatch.message)
         #expect(resolution.failureReason?.contains("symbol lookup ambiguous") == true)
-        #expect(resolution.missingFunctions.contains("connectFrontend"))
+        #expect(resolution.missingFunctions.contains("stringFromUTF8"))
     }
 
     @Test
-    func semanticQueryUsesItaniumComponentBoundaries() {
-        let query = NativeInspectorSymbolQuery(
-            requiredNameParts: [
-                "WTF::String::fromUTF8",
-                "span",
-                "char8_t",
-            ]
-        )
+    func fixtureResolutionSelectsUsableStringFromUTF8EntryPoint() throws {
+        let fixture = try nativeSymbolFixture()
+        let resolution = try NativeInspectorSymbolResolver.resolveUsingFixture(fixture)
 
-        #expect(query.matches(symbolName: "__ZN3WTF6String8fromUTF8ENSt3__14spanIKDuLm18446744073709551615EEE"))
-        #expect(!query.matches(symbolName: "__ZN3WTF6String33fromUTF8ReplacingInvalidSequencesENSt3__14spanIKDuLm18446744073709551615EEE"))
-        #expect(!query.matches(symbolName: "__ZN3WTF6String26fromUTF8WithLatin1FallbackENSt3__14spanIKDuLm18446744073709551615EEE"))
+        #expect(resolution.isSupported)
+        #expect(resolution.stringFromUTF8Address == UInt64(WebInspectorNativeSymbolFixtureWTFStringFromUTF8Address()))
     }
 
     @Test
