@@ -12,18 +12,30 @@ private func _nativeInspectorSwiftDemangle(
 ) -> UnsafeMutablePointer<CChar>?
 
 enum NativeInspectorSymbolName {
+    struct Part: Sendable {
+        let sourceName: String
+        let itaniumEncodedNameParts: [String]
+
+        init(sourceName: String) {
+            self.sourceName = sourceName
+            self.itaniumEncodedNameParts = NativeInspectorSymbolName.itaniumEncodedNamePartAlternatives(for: sourceName)
+        }
+    }
+
     private static func decodedString(_ encodedBytes: [UInt8]) -> String {
         let key: UInt8 = 0xA7
         return String(decoding: encodedBytes.map { $0 ^ key }, as: UTF8.self)
     }
 
+    private static let char8TName = decodedString([0xC4, 0xCF, 0xC6, 0xD5, 0x9F, 0xF8, 0xD3])
+
     struct Variants {
         let rawName: String
         let directSearchNames: [String]
 
-        func contains(_ namePart: String) -> Bool {
-            directSearchNames.contains { $0.contains(namePart) }
-                || NativeInspectorSymbolName.itaniumEncodedNamePartAlternatives(for: namePart).contains { encodedNamePart in
+        func contains(_ namePart: Part) -> Bool {
+            directSearchNames.contains { $0.contains(namePart.sourceName) }
+                || namePart.itaniumEncodedNameParts.contains { encodedNamePart in
                     rawName.contains(encodedNamePart)
                 }
         }
@@ -64,7 +76,7 @@ enum NativeInspectorSymbolName {
         }
     }
 
-    private static func itaniumEncodedNamePartAlternatives(for namePart: String) -> [String] {
+    static func itaniumEncodedNamePartAlternatives(for namePart: String) -> [String] {
         if let operatorRange = namePart.range(of: "::operator ") {
             let ownerName = String(namePart[..<operatorRange.lowerBound])
             let targetName = String(namePart[operatorRange.upperBound...])
@@ -114,7 +126,7 @@ enum NativeInspectorSymbolName {
 
     private static func itaniumEncodedTypeAlternatives(for namePart: String) -> [String] {
         // char8_t
-        if namePart == decodedString([0xC4, 0xCF, 0xC6, 0xD5, 0x9F, 0xF8, 0xD3]) {
+        if namePart == char8TName {
             return ["Du"]
         }
         guard !namePart.contains("::"), !namePart.isEmpty else {

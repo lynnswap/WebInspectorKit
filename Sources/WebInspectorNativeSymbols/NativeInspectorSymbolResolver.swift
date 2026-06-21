@@ -6,6 +6,12 @@ package enum NativeInspectorSymbolResolver {
         makeAttachResolution(from: NativeInspectorSymbolResolverCore.resolveCurrentWebKitAttachSymbols())
     }
 
+    package static func resolveCurrentDetached() async -> NativeInspectorSymbolResolution {
+        await Task.detached(priority: .userInitiated) {
+            resolveCurrent()
+        }.value
+    }
+
     static func resolveForTesting(
         imagePathSuffixes: [String] = NativeInspectorSymbolResolverCore.webKitImagePathSuffixes,
         javaScriptCorePathSuffixes: [String] = NativeInspectorSymbolResolverCore.javaScriptCoreImagePathSuffixes,
@@ -111,6 +117,10 @@ package enum NativeInspectorSymbolResolver {
             source: nil,
             usedConnectDisconnectFallback: false
         )
+    }
+
+    package static func resolveCurrentDetached() async -> NativeInspectorSymbolResolution {
+        resolveCurrent()
     }
 
     static func resolveForTesting(

@@ -495,13 +495,15 @@ package final class InspectorSession {
 
     package func attach(to webView: WKWebView) async throws {
         await detach()
+        let resolvedSymbols = try await NativeInspectorBackendFactory.resolvedSymbolsDetached()
         let receiver = TransportReceiver()
         let originalInspectability = Self.prepareInspectability(for: webView)
         var transport: TransportSession?
 
         do {
-            let backend = try NativeInspectorBackendFactory.make(
+            let backend = NativeInspectorBackendFactory.make(
                 webView: webView,
+                resolvedSymbols: resolvedSymbols,
                 messageHandler: { message in
                     receiver.receive(message)
                 },

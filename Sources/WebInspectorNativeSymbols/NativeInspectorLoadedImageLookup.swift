@@ -46,6 +46,9 @@ extension NativeInspectorSymbolResolverCore {
                 candidates: &candidates,
                 outsideTextAddress: &outsideTextAddress
             )
+            if candidates.count > 1 {
+                return .ambiguous
+            }
         }
 
         for symbol in image.exportedSymbols where requiredSymbol.matches(symbolName: symbol.name) {
@@ -59,6 +62,9 @@ extension NativeInspectorSymbolResolverCore {
                 candidates: &candidates,
                 outsideTextAddress: &outsideTextAddress
             )
+            if candidates.count > 1 {
+                return .ambiguous
+            }
         }
 
         return resolvedAddress(from: candidates, outsideTextAddress: outsideTextAddress)

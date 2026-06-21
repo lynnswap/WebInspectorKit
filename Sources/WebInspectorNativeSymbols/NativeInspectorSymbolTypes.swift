@@ -98,7 +98,7 @@ struct NativeInspectorSymbolLookupResult: Sendable {
     let usedConnectDisconnectFallback: Bool
 }
 
-enum NativeInspectorSymbolRole: String, Sendable {
+enum NativeInspectorSymbolRole: String, Hashable, Sendable {
     case connectFrontend
     case disconnectFrontend
     case stringFromUTF8
@@ -127,25 +127,32 @@ struct NativeInspectorRequiredSymbol: Sendable {
     let resolutionPolicy: NativeInspectorSymbolResolutionPolicy
 
     func matches(symbolName: String) -> Bool {
-        queries.contains { $0.matches(symbolName: symbolName) }
+        matches(variants: NativeInspectorSymbolName.variants(for: symbolName))
+    }
+
+    func matches(variants: NativeInspectorSymbolName.Variants) -> Bool {
+        return queries.contains { $0.matches(variants: variants) }
     }
 }
 
 struct NativeInspectorSymbolQuery: Sendable {
-    let requiredNameParts: [String]
-    let forbiddenNameParts: [String]
+    private let requiredNameParts: [NativeInspectorSymbolName.Part]
+    private let forbiddenNameParts: [NativeInspectorSymbolName.Part]
 
     init(
         requiredNameParts: [String],
         forbiddenNameParts: [String] = []
     ) {
-        self.requiredNameParts = requiredNameParts
-        self.forbiddenNameParts = forbiddenNameParts
+        self.requiredNameParts = requiredNameParts.map(NativeInspectorSymbolName.Part.init(sourceName:))
+        self.forbiddenNameParts = forbiddenNameParts.map(NativeInspectorSymbolName.Part.init(sourceName:))
     }
 
     func matches(symbolName: String) -> Bool {
-        let variants = NativeInspectorSymbolName.variants(for: symbolName)
-        return requiredNameParts.allSatisfy { variants.contains($0) }
+        matches(variants: NativeInspectorSymbolName.variants(for: symbolName))
+    }
+
+    func matches(variants: NativeInspectorSymbolName.Variants) -> Bool {
+        requiredNameParts.allSatisfy { variants.contains($0) }
             && !forbiddenNameParts.contains { variants.contains($0) }
     }
 }
