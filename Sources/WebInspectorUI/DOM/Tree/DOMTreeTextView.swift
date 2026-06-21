@@ -2820,6 +2820,7 @@ extension DOMTreeTextView {
         )
     }
 }
+#endif
 
 @MainActor
 private final class DOMTreeTextViewportLayoutDelegate: NSObject, @preconcurrency NSTextViewportLayoutControllerDelegate {
@@ -2854,7 +2855,6 @@ private final class DOMTreeTextViewportLayoutDelegate: NSObject, @preconcurrency
         textView?.textViewportLayoutControllerDidLayout(textViewportLayoutController)
     }
 }
-#endif
 
 private final class DOMTreeTextPosition: UITextPosition {
     let offset: Int
