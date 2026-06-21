@@ -386,6 +386,7 @@ package final class InspectorSession {
     @ObservationIgnored private var isDetaching: Bool
     @ObservationIgnored private var detachWaiters: [CheckedContinuation<Void, Never>]
     @ObservationIgnored private var attachRequestGeneration: UInt64 = 0
+    @ObservationIgnored private var preparedInspectability: PreparedInspectability?
 
     private var connection: InspectorConnection? {
         connectionPhase.activeConnection
@@ -501,7 +502,13 @@ package final class InspectorSession {
         await detach(invalidatingPendingAttachRequests: false)
         try ensureCurrentAttachRequest(attachRequestGeneration)
         let receiver = TransportReceiver()
+        restorePreparedInspectabilityIfNeeded()
         let originalInspectability = Self.prepareInspectability(for: webView)
+        preparedInspectability = PreparedInspectability(
+            webView: webView,
+            generation: attachRequestGeneration,
+            originalValue: originalInspectability
+        )
         var transport: TransportSession?
 
         do {
@@ -530,13 +537,14 @@ package final class InspectorSession {
                 receiver: receiver,
                 webView: webView,
                 originalInspectability: originalInspectability,
-                attachRequestGeneration: attachRequestGeneration
+                attachRequestGeneration: attachRequestGeneration,
+                connectionInstalled: {
+                    self.clearPreparedInspectability(ifOwnedBy: attachRequestGeneration)
+                }
             )
         } catch {
             receiver.close()
-            if isCurrentAttachRequest(attachRequestGeneration) {
-                Self.restoreInspectabilityIfNeeded(on: webView, originalValue: originalInspectability)
-            }
+            restorePreparedInspectabilityIfNeeded(ifOwnedBy: attachRequestGeneration)
             await transport?.detach()
             throw error
         }
@@ -551,7 +559,8 @@ package final class InspectorSession {
         receiver: TransportReceiver? = nil,
         webView: WKWebView?,
         originalInspectability: Bool?,
-        attachRequestGeneration: UInt64? = nil
+        attachRequestGeneration: UInt64? = nil,
+        connectionInstalled: (() -> Void)? = nil
     ) async throws {
         await detach(invalidatingPendingAttachRequests: attachRequestGeneration == nil)
         if let attachRequestGeneration {
@@ -564,6 +573,7 @@ package final class InspectorSession {
             originalInspectability: originalInspectability
         )
         connectionPhase = .pending(nextConnection)
+        connectionInstalled?()
         bindProtocolChannel(for: nextConnection)
         lastError = nil
         await startPumps(connection: nextConnection)
@@ -654,6 +664,34 @@ package final class InspectorSession {
         }
     }
 
+    private func clearPreparedInspectability(ifOwnedBy generation: UInt64) {
+        guard preparedInspectability?.generation == generation else {
+            return
+        }
+        preparedInspectability = nil
+    }
+
+    private func restorePreparedInspectabilityIfNeeded(ifOwnedBy generation: UInt64) {
+        guard preparedInspectability?.generation == generation else {
+            return
+        }
+        restorePreparedInspectabilityIfNeeded()
+    }
+
+    private func restorePreparedInspectabilityIfNeeded() {
+        guard let preparedInspectability else {
+            return
+        }
+        self.preparedInspectability = nil
+        guard let webView = preparedInspectability.webView else {
+            return
+        }
+        Self.restoreInspectabilityIfNeeded(
+            on: webView,
+            originalValue: preparedInspectability.originalValue
+        )
+    }
+
     package func retireBackendInteractionForPresentationEnd() async {
         guard hasActiveConnection else {
             return
@@ -667,6 +705,12 @@ package final class InspectorSession {
         func detach(session: InspectorSession) async {
             await session.performAttachmentTeardown(connection: connection)
         }
+    }
+
+    private struct PreparedInspectability {
+        weak var webView: WKWebView?
+        var generation: UInt64
+        var originalValue: Bool
     }
 
     private func performAttachmentTeardown(connection previousConnection: InspectorConnection) async {
