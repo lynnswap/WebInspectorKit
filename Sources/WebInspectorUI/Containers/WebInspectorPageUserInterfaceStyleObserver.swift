@@ -35,6 +35,12 @@ package enum WebInspectorPageUserInterfaceStyle {
 }
 
 @MainActor
+package protocol WebInspectorPageUserInterfaceStyleObserving: AnyObject {
+    func start()
+    func invalidate()
+}
+
+@MainActor
 package final class WebInspectorPageUserInterfaceStyleObserver {
     private weak var webView: WKWebView?
     private let apply: @MainActor (UIUserInterfaceStyle) -> Void
@@ -119,6 +125,8 @@ package final class WebInspectorPageUserInterfaceStyleObserver {
         )
     }
 }
+
+extension WebInspectorPageUserInterfaceStyleObserver: WebInspectorPageUserInterfaceStyleObserving {}
 
 private final class WebInspectorPageUserInterfaceStyleObserverGeneration: Sendable {
     private let storage = Mutex<UInt64>(0)

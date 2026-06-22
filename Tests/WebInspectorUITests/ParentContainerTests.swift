@@ -75,21 +75,23 @@ struct ParentContainerTests {
 
     @Test
     func sessionClearsPageUserInterfaceStyleAndStopsObservingOnDetach() async throws {
-        let session = makeSessionWithNoOpAttachment()
+        let observerRecorder = PageUserInterfaceStyleObserverRecorder(styleOnStart: .dark)
+        let session = makeSessionWithNoOpAttachment(
+            makePageUserInterfaceStyleObserver: observerRecorder.makeObserver
+        )
         let webView = WKWebView(frame: .zero)
 
         try await session.attach(to: webView)
-        let styleObservation = await observePageUserInterfaceStyle(in: session)
-        defer { styleObservation.cancel() }
-
-        webView.underPageBackgroundColor = .black
-        #expect(await styleObservation.values.waitUntilValue(UIUserInterfaceStyle.dark.rawValue))
+        let observer = try #require(observerRecorder.observers.first)
+        #expect(observer.isStarted)
+        #expect(session.pageUserInterfaceStyle == .dark)
 
         await session.detach()
 
+        #expect(observer.isInvalidated)
         #expect(session.hasPageUserInterfaceStyleObserverForTesting == false)
         #expect(session.pageUserInterfaceStyle == .unspecified)
-        webView.underPageBackgroundColor = .white
+        observer.publish(.light)
         #expect(session.pageUserInterfaceStyle == .unspecified)
     }
 
@@ -97,18 +99,20 @@ struct ParentContainerTests {
     func sessionClearsPageUserInterfaceStyleAndStopsObservingWhenAttachFails() async throws {
         let observedWebView = WKWebView(frame: .zero)
         let observedWebViewID = ObjectIdentifier(observedWebView)
-        let session = makeSessionWithNoOpAttachment { _, webView in
-            if ObjectIdentifier(webView) != observedWebViewID {
-                throw AttachmentFailure()
-            }
-        }
+        let observerRecorder = PageUserInterfaceStyleObserverRecorder(styleOnStart: .dark)
+        let session = makeSessionWithNoOpAttachment(
+            attachAction: { _, webView in
+                if ObjectIdentifier(webView) != observedWebViewID {
+                    throw AttachmentFailure()
+                }
+            },
+            makePageUserInterfaceStyleObserver: observerRecorder.makeObserver
+        )
 
         try await session.attach(to: observedWebView)
-        let styleObservation = await observePageUserInterfaceStyle(in: session)
-        defer { styleObservation.cancel() }
-
-        observedWebView.underPageBackgroundColor = .black
-        #expect(await styleObservation.values.waitUntilValue(UIUserInterfaceStyle.dark.rawValue))
+        let observer = try #require(observerRecorder.observers.first)
+        #expect(observer.isStarted)
+        #expect(session.pageUserInterfaceStyle == .dark)
 
         do {
             try await session.attach(to: WKWebView(frame: .zero))
@@ -117,27 +121,28 @@ struct ParentContainerTests {
             #expect(error is AttachmentFailure)
         }
 
+        #expect(observerRecorder.observers.count == 1)
+        #expect(observer.isInvalidated)
         #expect(session.hasPageUserInterfaceStyleObserverForTesting == false)
         #expect(session.pageUserInterfaceStyle == .unspecified)
-        observedWebView.underPageBackgroundColor = .white
+        observer.publish(.light)
         #expect(session.pageUserInterfaceStyle == .unspecified)
     }
 
     @Test
     func viewControllerDoesNotApplyPageUserInterfaceStyle() async throws {
-        let session = makeSessionWithNoOpAttachment()
+        let observerRecorder = PageUserInterfaceStyleObserverRecorder(styleOnStart: .dark)
+        let session = makeSessionWithNoOpAttachment(
+            makePageUserInterfaceStyleObserver: observerRecorder.makeObserver
+        )
         let viewController = WebInspectorViewController(session: session)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         let webView = WKWebView(frame: .zero)
 
         try await session.attach(to: webView)
-        let styleObservation = await observePageUserInterfaceStyle(in: session)
-        defer { styleObservation.cancel() }
 
-        webView.underPageBackgroundColor = .black
-
-        #expect(await styleObservation.values.waitUntilValue(UIUserInterfaceStyle.dark.rawValue))
+        #expect(session.pageUserInterfaceStyle == .dark)
         #expect(viewController.overrideUserInterfaceStyle == .unspecified)
     }
 
@@ -829,13 +834,77 @@ struct ParentContainerTests {
 
     private func makeSessionWithNoOpAttachment(
         attachAction: @escaping @MainActor (InspectorSession, WKWebView) async throws -> Void = { _, _ in },
-        detachAction: @escaping @MainActor (InspectorSession) async -> Void = { _ in }
+        detachAction: @escaping @MainActor (InspectorSession) async -> Void = { _ in },
+        makePageUserInterfaceStyleObserver: @escaping @MainActor (
+            WKWebView,
+            @escaping @MainActor (UIUserInterfaceStyle) -> Void
+        ) -> any WebInspectorPageUserInterfaceStyleObserving = { webView, apply in
+            WebInspectorPageUserInterfaceStyleObserver(webView: webView, apply: apply)
+        }
     ) -> WebInspectorSession {
         WebInspectorSession(
             inspector: InspectorSession(),
             attachAction: attachAction,
-            detachAction: detachAction
+            detachAction: detachAction,
+            makePageUserInterfaceStyleObserver: makePageUserInterfaceStyleObserver
         )
+    }
+
+    @MainActor
+    private final class PageUserInterfaceStyleObserverRecorder {
+        private let styleOnStart: UIUserInterfaceStyle
+        private(set) var observers: [PageUserInterfaceStyleObserverDouble] = []
+
+        init(styleOnStart: UIUserInterfaceStyle) {
+            self.styleOnStart = styleOnStart
+        }
+
+        func makeObserver(
+            webView: WKWebView,
+            apply: @escaping @MainActor (UIUserInterfaceStyle) -> Void
+        ) -> any WebInspectorPageUserInterfaceStyleObserving {
+            let observer = PageUserInterfaceStyleObserverDouble(
+                styleOnStart: styleOnStart,
+                apply: apply
+            )
+            observers.append(observer)
+            return observer
+        }
+    }
+
+    @MainActor
+    private final class PageUserInterfaceStyleObserverDouble: WebInspectorPageUserInterfaceStyleObserving {
+        private let styleOnStart: UIUserInterfaceStyle
+        private let apply: @MainActor (UIUserInterfaceStyle) -> Void
+        private(set) var isStarted = false
+        private(set) var isInvalidated = false
+
+        init(
+            styleOnStart: UIUserInterfaceStyle,
+            apply: @escaping @MainActor (UIUserInterfaceStyle) -> Void
+        ) {
+            self.styleOnStart = styleOnStart
+            self.apply = apply
+        }
+
+        func start() {
+            guard isInvalidated == false else {
+                return
+            }
+            isStarted = true
+            publish(styleOnStart)
+        }
+
+        func invalidate() {
+            isInvalidated = true
+        }
+
+        func publish(_ style: UIUserInterfaceStyle) {
+            guard isInvalidated == false else {
+                return
+            }
+            apply(style)
+        }
     }
 
     private final class DetachRecorder {

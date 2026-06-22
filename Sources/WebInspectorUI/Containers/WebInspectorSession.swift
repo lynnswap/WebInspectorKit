@@ -15,7 +15,11 @@ public final class WebInspectorSession {
     public private(set) var pageUserInterfaceStyle: UIUserInterfaceStyle = .unspecified
     @ObservationIgnored private let attachAction: @MainActor (InspectorSession, WKWebView) async throws -> Void
     @ObservationIgnored private let detachAction: @MainActor (InspectorSession) async -> Void
-    @ObservationIgnored private var pageUserInterfaceStyleObserver: WebInspectorPageUserInterfaceStyleObserver?
+    @ObservationIgnored private let makePageUserInterfaceStyleObserver: @MainActor (
+        WKWebView,
+        @escaping @MainActor (UIUserInterfaceStyle) -> Void
+    ) -> any WebInspectorPageUserInterfaceStyleObserving
+    @ObservationIgnored private var pageUserInterfaceStyleObserver: (any WebInspectorPageUserInterfaceStyleObserving)?
 
     public convenience init(tabs: [WebInspectorTab] = [.dom, .network]) {
         self.init(inspector: InspectorSession(), tabs: tabs)
@@ -29,12 +33,19 @@ public final class WebInspectorSession {
         },
         detachAction: @escaping @MainActor (InspectorSession) async -> Void = { inspector in
             await inspector.detach()
+        },
+        makePageUserInterfaceStyleObserver: @escaping @MainActor (
+            WKWebView,
+            @escaping @MainActor (UIUserInterfaceStyle) -> Void
+        ) -> any WebInspectorPageUserInterfaceStyleObserving = { webView, apply in
+            WebInspectorPageUserInterfaceStyleObserver(webView: webView, apply: apply)
         }
     ) {
         self.inspector = inspector
         self.interface = InterfaceModel(tabs: tabs)
         self.attachAction = attachAction
         self.detachAction = detachAction
+        self.makePageUserInterfaceStyleObserver = makePageUserInterfaceStyleObserver
     }
 
     isolated deinit {
@@ -72,7 +83,7 @@ public final class WebInspectorSession {
     }
 
     private func startPageUserInterfaceStyleObservation(for webView: WKWebView) {
-        let observer = WebInspectorPageUserInterfaceStyleObserver(webView: webView) { [weak self] style in
+        let observer = makePageUserInterfaceStyleObserver(webView) { [weak self] style in
             self?.setPageUserInterfaceStyle(style)
         }
         pageUserInterfaceStyleObserver = observer
