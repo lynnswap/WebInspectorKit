@@ -3,6 +3,8 @@ import Observation
 import UIKit
 import WebKit
 import WebInspectorCore
+import WebInspectorUIBase
+import WebInspectorUINetwork
 
 @MainActor
 @Observable
@@ -13,7 +15,6 @@ public final class WebInspectorSession {
     ///
     /// The value is `.unspecified` until the page style is known or when no useful style can be inferred.
     public private(set) var pageUserInterfaceStyle: UIUserInterfaceStyle = .unspecified
-    @ObservationIgnored private let attachAction: @MainActor (InspectorSession, WKWebView) async throws -> Void
     @ObservationIgnored private let detachAction: @MainActor (InspectorSession) async -> Void
     @ObservationIgnored private let makePageUserInterfaceStyleObserver: @MainActor (
         WKWebView,
@@ -28,9 +29,6 @@ public final class WebInspectorSession {
     package init(
         inspector: InspectorSession,
         tabs: [WebInspectorTab] = [.dom, .network],
-        attachAction: @escaping @MainActor (InspectorSession, WKWebView) async throws -> Void = { inspector, webView in
-            try await inspector.attach(to: webView)
-        },
         detachAction: @escaping @MainActor (InspectorSession) async -> Void = { inspector in
             await inspector.detach()
         },
@@ -43,7 +41,6 @@ public final class WebInspectorSession {
     ) {
         self.inspector = inspector
         self.interface = InterfaceModel(tabs: tabs)
-        self.attachAction = attachAction
         self.detachAction = detachAction
         self.makePageUserInterfaceStyleObserver = makePageUserInterfaceStyleObserver
     }
@@ -57,10 +54,20 @@ public final class WebInspectorSession {
         inspector.attachment
     }
 
+    @_disfavoredOverload
     public func attach(to webView: WKWebView) async throws {
+        try await attachPresentation(to: webView) { _, _ in
+            throw AttachmentUnavailableError()
+        }
+    }
+
+    package func attachPresentation(
+        to webView: WKWebView,
+        perform attach: @MainActor (InspectorSession, WKWebView) async throws -> Void
+    ) async throws {
         stopPageUserInterfaceStyleObservation()
         do {
-            try await attachAction(inspector, webView)
+            try await attach(inspector, webView)
             startPageUserInterfaceStyleObservation(for: webView)
         } catch {
             stopPageUserInterfaceStyleObservation()
@@ -101,6 +108,12 @@ public final class WebInspectorSession {
             return
         }
         pageUserInterfaceStyle = style
+    }
+
+    private struct AttachmentUnavailableError: Error, CustomStringConvertible {
+        var description: String {
+            "Native WKWebView attachment is provided by WebInspectorKit."
+        }
     }
 }
 

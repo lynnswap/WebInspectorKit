@@ -52,7 +52,7 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/lynnswap/SyntaxEditorUI.git",
-            exact: "0.16.2"
+            exact: "0.16.3"
         ),
         .package(
             url: "https://github.com/p-x9/MachOKit.git",
@@ -63,10 +63,51 @@ let package = Package(
         .target(
             name: "WebInspectorCore",
             dependencies: [
+                "WebInspectorCoreSupport",
+                "WebInspectorCoreRuntime",
+                "WebInspectorCoreDOMCSS",
+                "WebInspectorCoreConsoleNetwork",
                 "WebInspectorTransport",
                 .product(name: "ObservationBridge", package: "ObservationBridge")
             ],
             exclude: ["README.md", "Docs"],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebInspectorCoreSupport",
+            dependencies: [
+                "WebInspectorTransport"
+            ],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebInspectorCoreRuntime",
+            dependencies: [
+                "WebInspectorCoreSupport",
+                "WebInspectorTransport",
+                .product(name: "ObservationBridge", package: "ObservationBridge")
+            ],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebInspectorCoreDOMCSS",
+            dependencies: [
+                "WebInspectorCoreSupport",
+                "WebInspectorCoreRuntime",
+                "WebInspectorTransport",
+                .product(name: "ObservationBridge", package: "ObservationBridge")
+            ],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebInspectorCoreConsoleNetwork",
+            dependencies: [
+                "WebInspectorCoreSupport",
+                "WebInspectorCoreRuntime",
+                "WebInspectorCoreDOMCSS",
+                "WebInspectorTransport",
+                .product(name: "ObservationBridge", package: "ObservationBridge")
+            ],
             swiftSettings: strictSwiftSettings
         ),
         .target(
@@ -88,9 +129,57 @@ let package = Package(
         ),
         .target(
             name: "WebInspectorTransport",
+            dependencies: [],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebInspectorNativeTransport",
             dependencies: [
+                "WebInspectorCore",
+                "WebInspectorTransport",
                 "WebInspectorNativeBridge",
                 "WebInspectorNativeSymbols"
+            ],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebInspectorUIBase",
+            dependencies: [],
+            resources: [
+                .process("Localizable.xcstrings")
+            ],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebInspectorUIDOM",
+            dependencies: [
+                "WebInspectorCore",
+                "WebInspectorTransport",
+                "WebInspectorUIBase",
+                .product(name: "ObservationBridge", package: "ObservationBridge"),
+                .product(name: "UIHostingMenu", package: "UIHostingMenu", condition: .when(platforms: [.iOS]))
+            ],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebInspectorUINetwork",
+            dependencies: [
+                "WebInspectorCore",
+                "WebInspectorTransport",
+                "WebInspectorUIBase",
+                .product(name: "ObservationBridge", package: "ObservationBridge"),
+                .product(name: "UIHostingMenu", package: "UIHostingMenu", condition: .when(platforms: [.iOS]))
+            ],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebInspectorUISyntaxBody",
+            dependencies: [
+                "WebInspectorCore",
+                "WebInspectorUIBase",
+                "WebInspectorUINetwork",
+                .product(name: "ObservationBridge", package: "ObservationBridge"),
+                .product(name: "SyntaxEditorUI", package: "SyntaxEditorUI", condition: .when(platforms: [.iOS]))
             ],
             swiftSettings: strictSwiftSettings
         ),
@@ -99,21 +188,21 @@ let package = Package(
             dependencies: [
                 "WebInspectorCore",
                 "WebInspectorTransport",
-                .product(name: "ObservationBridge", package: "ObservationBridge"),
-                .product(name: "UIHostingMenu", package: "UIHostingMenu", condition: .when(platforms: [.iOS])),
-                .product(name: "SyntaxEditorUI", package: "SyntaxEditorUI", condition: .when(platforms: [.iOS]))
+                "WebInspectorUIBase",
+                "WebInspectorUIDOM",
+                "WebInspectorUINetwork",
+                "WebInspectorUISyntaxBody",
+                .product(name: "ObservationBridge", package: "ObservationBridge")
             ],
             exclude: [
                 "Docs"
-            ],
-            resources: [
-                .process("Localizable.xcstrings")
             ],
             swiftSettings: strictSwiftSettings
         ),
         .target(
             name: "WebInspectorKit",
             dependencies: [
+                "WebInspectorNativeTransport",
                 "WebInspectorUI"
             ],
             swiftSettings: strictSwiftSettings
@@ -122,6 +211,10 @@ let package = Package(
             name: "WebInspectorCoreTests",
             dependencies: [
                 "WebInspectorCore",
+                "WebInspectorCoreSupport",
+                "WebInspectorCoreRuntime",
+                "WebInspectorCoreDOMCSS",
+                "WebInspectorCoreConsoleNetwork",
                 "WebInspectorTransport",
                 "WebInspectorTestSupport"
             ],
@@ -132,6 +225,10 @@ let package = Package(
             name: "WebInspectorTransportTests",
             dependencies: [
                 "WebInspectorCore",
+                "WebInspectorCoreSupport",
+                "WebInspectorCoreRuntime",
+                "WebInspectorCoreDOMCSS",
+                "WebInspectorCoreConsoleNetwork",
                 "WebInspectorTransport",
                 "WebInspectorTestSupport"
             ],
@@ -169,12 +266,25 @@ let package = Package(
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(
+            name: "WebInspectorNativeTransportTests",
+            dependencies: [
+                "WebInspectorNativeTransport"
+            ],
+            path: "Tests/WebInspectorNativeTransportTests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
             name: "WebInspectorUITests",
             dependencies: [
                 "WebInspectorCore",
                 "WebInspectorTransport",
+                "WebInspectorUIBase",
+                "WebInspectorUIDOM",
+                "WebInspectorUINetwork",
+                "WebInspectorUISyntaxBody",
                 "WebInspectorUI",
-                "WebInspectorTestSupport"
+                "WebInspectorTestSupport",
+                .product(name: "SyntaxEditorUI", package: "SyntaxEditorUI", condition: .when(platforms: [.iOS]))
             ],
             path: "Tests/WebInspectorUITests",
             swiftSettings: strictSwiftSettings

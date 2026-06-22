@@ -39,7 +39,8 @@ package extension ProtocolFrame {
 }
 
 extension RuntimeContext {
-    package struct ID: RawRepresentable, Hashable, Codable, Sendable {        package let rawValue: Int
+    package struct ID: RawRepresentable, Hashable, Codable, Sendable {
+        package let rawValue: Int
 
         package init(_ rawValue: Int) {
             self.rawValue = rawValue

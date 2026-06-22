@@ -1,5 +1,6 @@
 extension RuntimeContext {
-    package struct Key: Hashable, Sendable {        package var runtimeAgentTargetID: ProtocolTarget.ID
+    package struct Key: Hashable, Sendable {
+        package var runtimeAgentTargetID: ProtocolTarget.ID
         package var contextID: RuntimeContext.ID
 
         package init(runtimeAgentTargetID: ProtocolTarget.ID, contextID: RuntimeContext.ID) {
@@ -10,7 +11,8 @@ extension RuntimeContext {
 }
 
 extension RuntimeContext {
-    package struct Kind: RawRepresentable, Hashable, Codable, Sendable {        package let rawValue: String
+    package struct Kind: RawRepresentable, Hashable, Codable, Sendable {
+        package let rawValue: String
 
         package init(_ rawValue: String) {
             self.rawValue = rawValue
@@ -27,7 +29,8 @@ extension RuntimeContext {
 }
 
 extension RuntimeContext {
-    package struct Record: Equatable, Sendable {        package var id: RuntimeContext.ID
+    package struct Record: Equatable, Sendable {
+        package var id: RuntimeContext.ID
         package var targetID: ProtocolTarget.ID
         package var runtimeAgentTargetID: ProtocolTarget.ID
         package var type: RuntimeContext.Kind

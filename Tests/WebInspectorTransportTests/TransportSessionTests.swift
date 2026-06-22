@@ -2,6 +2,10 @@ import Foundation
 import Testing
 import WebInspectorTestSupport
 @testable import WebInspectorCore
+@testable import WebInspectorCoreConsoleNetwork
+@testable import WebInspectorCoreDOMCSS
+@testable import WebInspectorCoreRuntime
+@testable import WebInspectorCoreSupport
 @testable import WebInspectorTransport
 
 private let testResponseTimeout: Duration = .milliseconds(750)

@@ -2,6 +2,10 @@ import Foundation
 import Testing
 import WebInspectorTransport
 @testable import WebInspectorCore
+@testable import WebInspectorCoreConsoleNetwork
+@testable import WebInspectorCoreDOMCSS
+@testable import WebInspectorCoreRuntime
+@testable import WebInspectorCoreSupport
 
 @Test
 func networkRequestIdentityIsScopedByTargetAndRequestID() async throws {

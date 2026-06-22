@@ -3,8 +3,11 @@ import ObservationBridge
 import Testing
 import WebInspectorTestSupport
 import WebInspectorTransport
-import WebKit
 @testable import WebInspectorCore
+@testable import WebInspectorCoreConsoleNetwork
+@testable import WebInspectorCoreDOMCSS
+@testable import WebInspectorCoreRuntime
+@testable import WebInspectorCoreSupport
 
 @Test
 func connectBootstrapsMainPageDocumentInOrder() async throws {
@@ -6018,7 +6021,7 @@ func domNavigationCopyDeleteAndReloadUseRuntimeAPIs() async throws {
     let transport = testTransport(backend)
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
-    #expect(await session.hasInspectablePageWebView == false)
+    #expect(await session.canReloadPage == false)
     let htmlID = try #require(await session.attachment.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(2))])
     await session.attachment.dom.selectNode(htmlID)
 
@@ -6068,6 +6071,145 @@ func domNavigationCopyDeleteAndReloadUseRuntimeAPIs() async throws {
 
     let reloadedBody = await session.attachment.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(4))]
     #expect(reloadedBody != nil)
+}
+
+@MainActor
+@Test
+func cancelledPageReloadDoesNotClearInspectionModels() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = InspectorSession(configuration: .test)
+    let receiver = TransportReceiver()
+    receiver.setTransport(transport)
+    await transport.receiveRootMessage(
+        cssCapablePageTargetCreatedMessage(targetID: "page-main", frameID: "main-frame", isProvisional: false)
+    )
+
+    var didEnterReloadAction = false
+    var didRequestPageReload = false
+    var resumeReloadAction: CheckedContinuation<Void, Never>?
+    let attachRequestGeneration = session.beginAttachmentRequest()
+    let connectTask = Task { @MainActor in
+        try await session.connectAttachment(
+            transport: transport,
+            receiver: receiver,
+            pageReloadAction: {
+                didEnterReloadAction = true
+                await withCheckedContinuation { continuation in
+                    resumeReloadAction = continuation
+                }
+                try Task.checkCancellation()
+                didRequestPageReload = true
+            },
+            connectionCleanup: nil,
+            attachRequestGeneration: attachRequestGeneration
+        )
+    }
+
+    do {
+        try await completeBootstrap(transport: transport, backend: backend)
+    } catch {
+        connectTask.cancel()
+        _ = try? await connectTask.value
+        throw error
+    }
+    try await connectTask.value
+    #expect(session.canReloadPage)
+
+    await receiveAndApplyTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-1","frameId":"main-frame","request":{"url":"https://example.com/app.js"},"timestamp":1}}"#,
+        in: session
+    )
+    await receiveAndApplyRuntimeContextCreated(transport, contextID: 7, in: session)
+    await receiveAndApplyTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Console.messageAdded","params":{"message":{"source":"console-api","level":"warning","text":"hello","type":"log","networkRequestId":"request-1"}}}"#,
+        in: session
+    )
+
+    let domSnapshot = session.attachment.dom.snapshot()
+    let networkSnapshot = session.attachment.network.snapshot()
+    let runtimeSnapshot = session.attachment.runtime.snapshot()
+    let consoleSnapshot = session.attachment.console.snapshot()
+    #expect(domSnapshot.documentsByID.isEmpty == false)
+    #expect(networkSnapshot.orderedRequestIDs.isEmpty == false)
+    #expect(runtimeSnapshot.executionContextsByKey.isEmpty == false)
+    #expect(consoleSnapshot.orderedMessageIDs.isEmpty == false)
+
+    let reloadTask = Task { @MainActor in
+        try await session.reloadPage()
+    }
+    while didEnterReloadAction == false {
+        await Task.yield()
+    }
+    reloadTask.cancel()
+    resumeReloadAction?.resume()
+
+    do {
+        try await reloadTask.value
+        Issue.record("Expected cancelled reload to throw CancellationError.")
+    } catch is CancellationError {
+    } catch {
+        Issue.record("Expected CancellationError, got \(error).")
+    }
+
+    #expect(didRequestPageReload == false)
+    #expect(session.attachment.dom.snapshot() == domSnapshot)
+    #expect(session.attachment.network.snapshot() == networkSnapshot)
+    #expect(session.attachment.runtime.snapshot() == runtimeSnapshot)
+    #expect(session.attachment.console.snapshot() == consoleSnapshot)
+}
+
+@MainActor
+@Test
+func unavailablePageReloadActionDisablesPageReloadCapability() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = InspectorSession(configuration: .test)
+    let receiver = TransportReceiver()
+    receiver.setTransport(transport)
+    await transport.receiveRootMessage(
+        cssCapablePageTargetCreatedMessage(targetID: "page-main", frameID: "main-frame", isProvisional: false)
+    )
+
+    var isReloadAvailable = true
+    var didRequestPageReload = false
+    let attachRequestGeneration = session.beginAttachmentRequest()
+    let connectTask = Task { @MainActor in
+        try await session.connectAttachment(
+            transport: transport,
+            receiver: receiver,
+            pageReloadAction: {
+                didRequestPageReload = true
+            },
+            pageReloadAvailability: {
+                isReloadAvailable
+            },
+            connectionCleanup: nil,
+            attachRequestGeneration: attachRequestGeneration
+        )
+    }
+
+    do {
+        try await completeBootstrap(transport: transport, backend: backend)
+    } catch {
+        connectTask.cancel()
+        _ = try? await connectTask.value
+        throw error
+    }
+    try await connectTask.value
+    #expect(session.canReloadPage)
+
+    isReloadAvailable = false
+
+    #expect(session.canReloadPage == false)
+    await #expect(throws: InspectorSession.Error("Inspector session does not have an available page reload action.")) {
+        try await session.reloadPage()
+    }
+    #expect(didRequestPageReload == false)
 }
 
 @Test
@@ -7407,22 +7549,6 @@ func domActionAvailabilityObservationFiresWhenBootstrapAttaches() async throws {
     #expect(await renderedAvailability.waitUntilValue(true))
 }
 
-@MainActor
-@Test
-func attachInspectabilityPreparationRestoresOriginalValue() throws {
-    let webView = TestInspectableWebView(isInspectable: false)
-    webView.isInspectable = false
-
-    let originalValue = InspectorSession.prepareInspectability(for: webView)
-
-    #expect(originalValue == false)
-    #expect(webView.isInspectable == true)
-
-    InspectorSession.restoreInspectabilityIfNeeded(on: webView, originalValue: originalValue)
-
-    #expect(webView.isInspectable == false)
-}
-
 private func connect(
     _ session: InspectorSession,
     transport: TransportSession,
@@ -7677,14 +7803,6 @@ private let newDocumentWithBodyNodeFourResult = ##"{"root":{"nodeId":1,"nodeType
 private let newDocumentWithHeadChildCountResult = ##"{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document","children":[{"nodeId":2,"nodeType":1,"nodeName":"HTML","localName":"html","children":[{"nodeId":3,"nodeType":1,"nodeName":"HEAD","localName":"head","childNodeCount":2},{"nodeId":4,"nodeType":1,"nodeName":"BODY","localName":"body"}]}]}}"##
 private let firstLazyFrameDocumentResult = ##"{"root":{"nodeId":101,"nodeType":9,"nodeName":"#document","documentURL":"https://frame.example/ad","baseURL":"https://frame.example/ad","children":[{"nodeId":102,"nodeType":1,"nodeName":"HTML","localName":"html","children":[{"nodeId":103,"nodeType":1,"nodeName":"BODY","localName":"body","children":[{"nodeId":104,"nodeType":1,"nodeName":"CANVAS","localName":"canvas"}]}]}]}}"##
 private let secondLazyFrameDocumentResult = ##"{"root":{"nodeId":201,"nodeType":9,"nodeName":"#document","documentURL":"https://frame.example/ad","baseURL":"https://frame.example/ad","children":[{"nodeId":202,"nodeType":1,"nodeName":"HTML","localName":"html","children":[{"nodeId":203,"nodeType":1,"nodeName":"BODY","localName":"body","children":[{"nodeId":204,"nodeType":1,"nodeName":"VIDEO","localName":"video"}]}]}]}}"##
-
-private final class TestInspectableWebView: InspectorSession.InspectableWebView {
-    var isInspectable: Bool
-
-    init(isInspectable: Bool) {
-        self.isInspectable = isInspectable
-    }
-}
 
 private func targetMessageMethods(_ backend: FakeTransportBackend) async -> [String?] {
     await backend.sentTargetMessages().map { try? messageMethod($0.message) }
