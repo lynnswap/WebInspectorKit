@@ -6073,6 +6073,96 @@ func domNavigationCopyDeleteAndReloadUseRuntimeAPIs() async throws {
     #expect(reloadedBody != nil)
 }
 
+@MainActor
+@Test
+func cancelledPageReloadDoesNotClearInspectionModels() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = InspectorSession(configuration: .test)
+    let receiver = TransportReceiver()
+    receiver.setTransport(transport)
+    await transport.receiveRootMessage(
+        cssCapablePageTargetCreatedMessage(targetID: "page-main", frameID: "main-frame", isProvisional: false)
+    )
+
+    var didEnterReloadAction = false
+    var didRequestPageReload = false
+    var resumeReloadAction: CheckedContinuation<Void, Never>?
+    let attachRequestGeneration = session.beginAttachmentRequest()
+    let connectTask = Task { @MainActor in
+        try await session.connectAttachment(
+            transport: transport,
+            receiver: receiver,
+            pageReloadAction: {
+                didEnterReloadAction = true
+                await withCheckedContinuation { continuation in
+                    resumeReloadAction = continuation
+                }
+                try Task.checkCancellation()
+                didRequestPageReload = true
+            },
+            connectionCleanup: nil,
+            attachRequestGeneration: attachRequestGeneration
+        )
+    }
+
+    do {
+        try await completeBootstrap(transport: transport, backend: backend)
+    } catch {
+        connectTask.cancel()
+        _ = try? await connectTask.value
+        throw error
+    }
+    try await connectTask.value
+    #expect(session.canReloadPage)
+
+    await receiveAndApplyTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-1","frameId":"main-frame","request":{"url":"https://example.com/app.js"},"timestamp":1}}"#,
+        in: session
+    )
+    await receiveAndApplyRuntimeContextCreated(transport, contextID: 7, in: session)
+    await receiveAndApplyTargetDispatch(
+        transport,
+        targetID: .pageMain,
+        message: #"{"method":"Console.messageAdded","params":{"message":{"source":"console-api","level":"warning","text":"hello","type":"log","networkRequestId":"request-1"}}}"#,
+        in: session
+    )
+
+    let domSnapshot = session.attachment.dom.snapshot()
+    let networkSnapshot = session.attachment.network.snapshot()
+    let runtimeSnapshot = session.attachment.runtime.snapshot()
+    let consoleSnapshot = session.attachment.console.snapshot()
+    #expect(domSnapshot.documentsByID.isEmpty == false)
+    #expect(networkSnapshot.orderedRequestIDs.isEmpty == false)
+    #expect(runtimeSnapshot.executionContextsByKey.isEmpty == false)
+    #expect(consoleSnapshot.orderedMessageIDs.isEmpty == false)
+
+    let reloadTask = Task { @MainActor in
+        try await session.reloadPage()
+    }
+    while didEnterReloadAction == false {
+        await Task.yield()
+    }
+    reloadTask.cancel()
+    resumeReloadAction?.resume()
+
+    do {
+        try await reloadTask.value
+        Issue.record("Expected cancelled reload to throw CancellationError.")
+    } catch is CancellationError {
+    } catch {
+        Issue.record("Expected CancellationError, got \(error).")
+    }
+
+    #expect(didRequestPageReload == false)
+    #expect(session.attachment.dom.snapshot() == domSnapshot)
+    #expect(session.attachment.network.snapshot() == networkSnapshot)
+    #expect(session.attachment.runtime.snapshot() == runtimeSnapshot)
+    #expect(session.attachment.console.snapshot() == consoleSnapshot)
+}
+
 @Test
 func deletingDOMNodeClearsExistingSelectionEvenWhenDeletingAnotherNode() async throws {
     let backend = FakeTransportBackend()

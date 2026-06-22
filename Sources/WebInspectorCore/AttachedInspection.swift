@@ -708,6 +708,7 @@ package final class InspectorSession {
         guard let reload = connection?.pageReloadAction else {
             throw InspectorSession.Error("Inspector session does not have a page reload action.")
         }
+        try await reload()
         await dom.prepareForPageReload()
         dom.reset()
         network.reset()
@@ -718,7 +719,6 @@ package final class InspectorSession {
             seedRuntimeState(from: await connection.transport.snapshot())
             syncTargets(for: connection)
         }
-        try await reload()
     }
 
     package func waitUntilProtocolEventApplied(_ sequence: UInt64) async -> Bool {
