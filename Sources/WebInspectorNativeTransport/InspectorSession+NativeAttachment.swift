@@ -41,6 +41,9 @@ package extension InspectorSession {
                     try Task.checkCancellation()
                     try page.reload()
                 },
+                pageReloadAvailability: { [page] in
+                    page.canReload
+                },
                 connectionCleanup: { [page] in
                     page.restoreInspectabilityIfNeeded()
                 },
@@ -66,6 +69,10 @@ package final class NativeInspectablePage {
             webView: webView,
             owner: inspectabilityOwner
         )
+    }
+
+    package var canReload: Bool {
+        webView != nil
     }
 
     package func reload() throws {

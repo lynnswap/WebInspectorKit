@@ -23,6 +23,7 @@ package extension InspectorSession {
     }
 
     typealias PageReloadAction = @MainActor () async throws -> Void
+    typealias PageReloadAvailability = @MainActor () -> Bool
     typealias ConnectionCleanup = @MainActor () -> Void
 }
 
@@ -238,6 +239,7 @@ private final class InspectorConnection {
     let transport: TransportSession
     let receiver: TransportReceiver?
     let pageReloadAction: InspectorSession.PageReloadAction?
+    let pageReloadAvailability: InspectorSession.PageReloadAvailability?
     let connectionCleanup: InspectorSession.ConnectionCleanup?
     var eventPump: DomainEventPump?
     let targets: InspectorTargetRegistry
@@ -246,11 +248,13 @@ private final class InspectorConnection {
         transport: TransportSession,
         receiver: TransportReceiver? = nil,
         pageReloadAction: InspectorSession.PageReloadAction? = nil,
+        pageReloadAvailability: InspectorSession.PageReloadAvailability? = nil,
         connectionCleanup: InspectorSession.ConnectionCleanup? = nil
     ) {
         self.transport = transport
         self.receiver = receiver
         self.pageReloadAction = pageReloadAction
+        self.pageReloadAvailability = pageReloadAvailability
         self.connectionCleanup = connectionCleanup
         eventPump = nil
         targets = InspectorTargetRegistry()
@@ -506,6 +510,7 @@ package final class InspectorSession {
         transport: TransportSession,
         receiver: TransportReceiver,
         pageReloadAction: InspectorSession.PageReloadAction?,
+        pageReloadAvailability: InspectorSession.PageReloadAvailability? = nil,
         connectionCleanup: InspectorSession.ConnectionCleanup?,
         attachRequestGeneration: UInt64
     ) async throws {
@@ -513,6 +518,7 @@ package final class InspectorSession {
             transport: transport,
             receiver: receiver,
             pageReloadAction: pageReloadAction,
+            pageReloadAvailability: pageReloadAvailability,
             connectionCleanup: connectionCleanup,
             attachRequestGeneration: attachRequestGeneration
         )
@@ -522,6 +528,7 @@ package final class InspectorSession {
         try await connect(
             transport: transport,
             pageReloadAction: nil,
+            pageReloadAvailability: nil,
             connectionCleanup: nil
         )
     }
@@ -530,6 +537,7 @@ package final class InspectorSession {
         transport: TransportSession,
         receiver: TransportReceiver? = nil,
         pageReloadAction: InspectorSession.PageReloadAction?,
+        pageReloadAvailability: InspectorSession.PageReloadAvailability?,
         connectionCleanup: InspectorSession.ConnectionCleanup?,
         attachRequestGeneration: UInt64? = nil,
         connectionInstalled: (() -> Void)? = nil
@@ -542,6 +550,7 @@ package final class InspectorSession {
             transport: transport,
             receiver: receiver,
             pageReloadAction: pageReloadAction,
+            pageReloadAvailability: pageReloadAvailability,
             connectionCleanup: connectionCleanup
         )
         connectionPhase = .pending(nextConnection)
@@ -701,12 +710,20 @@ package final class InspectorSession {
     }
 
     package var canReloadPage: Bool {
-        connection?.pageReloadAction != nil
+        guard let connection,
+              connection.pageReloadAction != nil else {
+            return false
+        }
+        return connection.pageReloadAvailability?() ?? true
     }
 
     package func reloadPage() async throws {
-        guard let reload = connection?.pageReloadAction else {
+        guard let connection,
+              let reload = connection.pageReloadAction else {
             throw InspectorSession.Error("Inspector session does not have a page reload action.")
+        }
+        guard connection.pageReloadAvailability?() ?? true else {
+            throw InspectorSession.Error("Inspector session does not have an available page reload action.")
         }
         try await reload()
         await dom.prepareForPageReload()
@@ -714,11 +731,9 @@ package final class InspectorSession {
         network.reset()
         runtime.reset()
         console.reset()
-        if let connection {
-            seedDOMSession(from: await connection.transport.snapshot())
-            seedRuntimeState(from: await connection.transport.snapshot())
-            syncTargets(for: connection)
-        }
+        seedDOMSession(from: await connection.transport.snapshot())
+        seedRuntimeState(from: await connection.transport.snapshot())
+        syncTargets(for: connection)
     }
 
     package func waitUntilProtocolEventApplied(_ sequence: UInt64) async -> Bool {

@@ -6163,6 +6163,55 @@ func cancelledPageReloadDoesNotClearInspectionModels() async throws {
     #expect(session.attachment.console.snapshot() == consoleSnapshot)
 }
 
+@MainActor
+@Test
+func unavailablePageReloadActionDisablesPageReloadCapability() async throws {
+    let backend = FakeTransportBackend()
+    let transport = testTransport(backend)
+    let session = InspectorSession(configuration: .test)
+    let receiver = TransportReceiver()
+    receiver.setTransport(transport)
+    await transport.receiveRootMessage(
+        cssCapablePageTargetCreatedMessage(targetID: "page-main", frameID: "main-frame", isProvisional: false)
+    )
+
+    var isReloadAvailable = true
+    var didRequestPageReload = false
+    let attachRequestGeneration = session.beginAttachmentRequest()
+    let connectTask = Task { @MainActor in
+        try await session.connectAttachment(
+            transport: transport,
+            receiver: receiver,
+            pageReloadAction: {
+                didRequestPageReload = true
+            },
+            pageReloadAvailability: {
+                isReloadAvailable
+            },
+            connectionCleanup: nil,
+            attachRequestGeneration: attachRequestGeneration
+        )
+    }
+
+    do {
+        try await completeBootstrap(transport: transport, backend: backend)
+    } catch {
+        connectTask.cancel()
+        _ = try? await connectTask.value
+        throw error
+    }
+    try await connectTask.value
+    #expect(session.canReloadPage)
+
+    isReloadAvailable = false
+
+    #expect(session.canReloadPage == false)
+    await #expect(throws: InspectorSession.Error("Inspector session does not have an available page reload action.")) {
+        try await session.reloadPage()
+    }
+    #expect(didRequestPageReload == false)
+}
+
 @Test
 func deletingDOMNodeClearsExistingSelectionEvenWhenDeletingAnotherNode() async throws {
     let backend = FakeTransportBackend()

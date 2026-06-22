@@ -48,6 +48,7 @@ func overlappingNativeInspectablePagesRestoreOnlyAfterLastOwner() {
 func nativeInspectablePageReloadFailsWhenWebViewIsUnavailable() {
     let page = NativeInspectablePage(missingWebViewForTesting: ())
 
+    #expect(page.canReload == false)
     do {
         try page.reload()
         Issue.record("Expected reload to fail when the inspected WKWebView is unavailable.")
