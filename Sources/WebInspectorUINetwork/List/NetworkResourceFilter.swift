@@ -69,12 +69,16 @@ extension NetworkRequest.Display {
         }
 
         init(resourceType: NetworkRequest.ResourceType) {
+            if resourceType.rawValue == "Media" {
+                self = .media
+                return
+            }
             switch resourceType {
             case .document:
                 self = .document
             case .styleSheet:
                 self = .stylesheet
-            case .image, .media:
+            case .image:
                 self = .media
             case .font:
                 self = .font

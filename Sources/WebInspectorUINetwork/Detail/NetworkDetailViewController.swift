@@ -73,6 +73,7 @@ package final class NetworkDetailViewController: UIViewController {
     }()
     private var previewRoles: [NetworkBody.Role] = []
     private var hasBoundSelectedRequest = false
+    private var observedEntryID: NetworkDisplayEntry.ID?
     private weak var observedRequest: NetworkRequest?
     private var bodyTopToPreviewContainerConstraint: NSLayoutConstraint?
     private var bodyTopToPreviewRoleControlConstraint: NSLayoutConstraint?
@@ -154,8 +155,8 @@ package final class NetworkDetailViewController: UIViewController {
         modelObservation?.cancel()
         let token = withPortableContinuousObservation { [weak self] _ in
             guard let self else { return }
-            bindSelectedRequest(
-                model.selectedRequest,
+            bindSelectedEntry(
+                model.selectedEntry,
                 force: selectedRequestRenderObservation == nil
             )
         }
@@ -167,12 +168,12 @@ package final class NetworkDetailViewController: UIViewController {
 
     private func resumeRendering() {
         guard isRenderingActive == false else {
-            bindSelectedRequest(model.selectedRequest, force: selectedRequestRenderObservation == nil)
+            bindSelectedEntry(model.selectedEntry, force: selectedRequestRenderObservation == nil)
             updateBodyRenderingActiveForCurrentSurface()
             return
         }
         isRenderingActive = true
-        bindSelectedRequest(model.selectedRequest, force: true)
+        bindSelectedEntry(model.selectedEntry, force: true)
         startObservingModel()
         updateBodyRenderingActiveForCurrentSurface()
     }
@@ -281,19 +282,23 @@ package final class NetworkDetailViewController: UIViewController {
 
     private func installModeTitleView() {
         navigationItem.titleView = modeControlController.view
-        renderModeControl()
+        renderModeControlForCurrentSelection()
     }
 
     private func bindSelectedRequest(_ request: NetworkRequest?, force: Bool = false) {
+        bindSelectedEntry(request.map { .resource($0) }, force: force)
+    }
+
+    private func bindSelectedEntry(_ entry: NetworkPanelModel.SelectedEntry?, force: Bool = false) {
         guard isRenderingActive else {
             return
         }
-        guard force || hasBoundSelectedRequest == false || observedRequest !== request else {
-            renderModeControl(selectedRequest: request)
+        guard force || hasBoundSelectedRequest == false || observedEntryID != entry?.id else {
+            renderModeControl(selectedEntry: entry)
             return
         }
 
-        guard let request else {
+        guard let entry else {
             clearSelectedRequestPresentation(bodySurface: .none)
             return
         }
@@ -302,7 +307,8 @@ package final class NetworkDetailViewController: UIViewController {
         selectedRequestRenderObservation?.cancel()
         selectedRequestRenderObservation = nil
         unbindResponseBodyFetchObservation()
-        observedRequest = request
+        observedEntryID = entry.id
+        observedRequest = entry.resource
 #if DEBUG
         selectedRequestRenderObservationDelivery = nil
 #endif
@@ -310,8 +316,11 @@ package final class NetworkDetailViewController: UIViewController {
         if contentUnavailableConfiguration != nil {
             contentUnavailableConfiguration = nil
         }
-        renderModeControl(selectedRequest: request)
-        bindSelectedRequestRendering(request)
+        if mode == .preview, entry.supportsPreview == false {
+            mode = .headers
+        }
+        renderModeControl(selectedEntry: entry)
+        bindSelectedEntryRendering(entry.id)
     }
 
     private func rebindSelectedRequestRendering() {
@@ -324,22 +333,28 @@ package final class NetworkDetailViewController: UIViewController {
         guard isRenderingActive else {
             return
         }
-        guard let observedRequest else {
+        guard let observedEntryID else {
             return
         }
-        bindSelectedRequestRendering(observedRequest)
+        bindSelectedEntryRendering(observedEntryID)
     }
 
     private func bindSelectedRequestRendering(_ request: NetworkRequest) {
+        bindSelectedEntryRendering(.resource(request.id))
+    }
+
+    private func bindSelectedEntryRendering(_ entryID: NetworkDisplayEntry.ID) {
         guard isRenderingActive else {
             return
         }
-        let token = withPortableContinuousObservation { [weak self, weak request] _ in
-            guard let request,
-                  self?.observedRequest === request else {
+        let token = withPortableContinuousObservation { [weak self] _ in
+            guard let self,
+                  self.observedEntryID == entryID,
+                  let entry = model.selectedEntry,
+                  entry.id == entryID else {
                 return
             }
-            self?.renderSelectedRequest(request)
+            renderSelectedEntry(entry)
         }
         selectedRequestRenderObservation = token
 #if DEBUG
@@ -348,14 +363,26 @@ package final class NetworkDetailViewController: UIViewController {
     }
 
     private func renderSelectedRequest(_ request: NetworkRequest) {
+        renderSelectedEntry(.resource(request))
+    }
+
+    private func renderSelectedEntry(_ entry: NetworkPanelModel.SelectedEntry) {
         guard isRenderingActive else {
             return
         }
+        if mode == .preview, entry.supportsPreview == false {
+            mode = .headers
+            renderModeControl(selectedEntry: entry)
+        }
         switch mode {
         case .preview:
+            guard case .resource(let request) = entry else {
+                renderHeadersSurface(selectedEntry: entry)
+                return
+            }
             renderPreviewSurface(selectedRequest: request)
         case .headers:
-            renderHeadersSurface(selectedRequest: request)
+            renderHeadersSurface(selectedEntry: entry)
         }
     }
 
@@ -372,16 +399,32 @@ package final class NetworkDetailViewController: UIViewController {
         headersTextView.render(request: request)
     }
 
+    private func renderHeadersSurface(selectedEntry entry: NetworkPanelModel.SelectedEntry) {
+        showHeaders()
+        switch entry {
+        case .resource(let request):
+            title = request.displayName
+            headersTextView.render(request: request)
+        case .redirect(let parent, let hop):
+            title = "Redirect"
+            headersTextView.render(parent: parent, redirect: hop)
+        case .domNodeGroup(let group):
+            let groupTitle = model.nodeDisplayName(for: group.id)
+            title = groupTitle
+            headersTextView.render(group: group, title: groupTitle)
+        }
+    }
+
     private func setMode(_ nextMode: NetworkDetailViewController.Mode) {
         guard mode != nextMode else {
-            renderModeControl()
+            renderModeControlForCurrentSelection()
             return
         }
         mode = nextMode
         guard isRenderingActive else {
             return
         }
-        renderModeControl()
+        renderModeControlForCurrentSelection()
         rebindSelectedRequestRendering()
     }
 
@@ -400,9 +443,28 @@ package final class NetworkDetailViewController: UIViewController {
         rebindSelectedRequestRendering()
     }
 
-    private func renderModeControl(selectedRequest request: NetworkRequest? = nil) {
-        let request = request ?? observedRequest
-        modeControlController.render(mode: mode, isEnabled: request != nil)
+    private func renderModeControlForCurrentSelection() {
+        if let observedEntryID,
+           let entry = model.selectedEntry,
+           entry.id == observedEntryID {
+            renderModeControl(selectedEntry: entry)
+        } else {
+            renderModeControl(selectedEntry: nil)
+        }
+    }
+
+    private func renderModeControl(selectedEntry entry: NetworkPanelModel.SelectedEntry?) {
+        let enabledModes: Set<NetworkDetailViewController.Mode>
+        if entry?.supportsPreview == true {
+            enabledModes = Set(NetworkDetailViewController.Mode.allCases)
+        } else {
+            enabledModes = [.headers]
+        }
+        modeControlController.render(
+            mode: mode,
+            isEnabled: entry != nil,
+            enabledModes: enabledModes
+        )
     }
 
     private func clearSelectedRequestPresentation(bodySurface: NetworkBodySurface) {
@@ -410,13 +472,14 @@ package final class NetworkDetailViewController: UIViewController {
         selectedRequestRenderObservation?.cancel()
         selectedRequestRenderObservation = nil
         unbindResponseBodyFetchObservation()
+        observedEntryID = nil
         observedRequest = nil
 #if DEBUG
         selectedRequestRenderObservationDelivery = nil
 #endif
         title = nil
         showEmptySelection(bodySurface: bodySurface)
-        renderModeControl(selectedRequest: nil)
+        renderModeControl(selectedEntry: nil)
     }
 
     private func showEmptySelection(bodySurface: NetworkBodySurface) {

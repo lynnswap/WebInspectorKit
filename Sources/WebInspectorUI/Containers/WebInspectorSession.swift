@@ -210,7 +210,7 @@ package final class InterfaceModel {
             return networkPanelModel
         }
 
-        let model = NetworkPanelModel(network: inspection.network) { [weak inspection] id in
+        let model = NetworkPanelModel(network: inspection.network, domNodeResolver: inspection.dom) { [weak inspection] id in
             await inspection?.network.fetchResponseBody(for: id)
         }
         networkPanelModel = model

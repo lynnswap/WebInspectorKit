@@ -1,16 +1,30 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
 import WebInspectorCore
-import ObservationBridge
 import UIKit
 
 @MainActor
 package final class NetworkListCell: UICollectionViewListCell {
+    private struct AccessorySignature: Equatable {
+        var indentLevel: Int
+        var isExpandable: Bool
+    }
+
+    private static let indentationStepWidth: CGFloat = 24
+
+    private let expansionButton = UIButton(type: .system)
+    private let indentationView = UIView(frame: .zero)
     private let statusIndicatorView = UIView(frame: CGRect(origin: .zero, size: CGSize(width: 8, height: 8)))
     private let fileTypeLabel = UILabel()
-    private var requestObservation: PortableObservationTracking.Token?
-    private weak var observedRequest: NetworkRequest?
+    private var boundEntryID: NetworkDisplayEntry.ID?
+    private var boundPresentation: NetworkDisplayEntryPresentation?
+    private var expansionAction: (@MainActor (NetworkDisplayEntry.ID) -> Void)?
     private var isRenderingActive = true
+    private var accessorySignature: AccessorySignature?
+#if DEBUG
+    private var renderedIndentationWidthForTestingStorage: CGFloat = 0
+    private var hasExpansionButtonAccessoryForTestingStorage = false
+#endif
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -22,71 +36,53 @@ package final class NetworkListCell: UICollectionViewListCell {
         nil
     }
 
-    isolated deinit {
-        requestObservation?.cancel()
-    }
-
     override package func prepareForReuse() {
         super.prepareForReuse()
         unbind()
     }
 
-    package func bind(request: NetworkRequest, renderingActive: Bool) {
-        if observedRequest !== request {
-            cancelRequestObservation()
-            observedRequest = request
-        }
+    package func bind(
+        entryID: NetworkDisplayEntry.ID,
+        presentation: NetworkDisplayEntryPresentation,
+        renderingActive: Bool,
+        expansionAction: @escaping @MainActor (NetworkDisplayEntry.ID) -> Void
+    ) {
+        boundEntryID = entryID
+        boundPresentation = presentation
+        self.expansionAction = expansionAction
         setRenderingActive(renderingActive)
     }
 
     package func setRenderingActive(_ isActive: Bool) {
-        guard isRenderingActive != isActive else {
-            if isActive {
-                renderObservedRequest()
-                startRequestObservationIfNeeded()
-            }
+        isRenderingActive = isActive
+        guard isActive, let boundPresentation else {
             return
         }
-
-        isRenderingActive = isActive
-        if isActive {
-            renderObservedRequest()
-            startRequestObservationIfNeeded()
-        } else {
-            cancelRequestObservation()
-        }
+        render(presentation: boundPresentation)
     }
 
     package func unbind() {
-        cancelRequestObservation()
-        observedRequest = nil
-        render(displayName: "", statusSeverity: .neutral, fileTypeLabel: "")
-    }
-
-    private func startRequestObservationIfNeeded() {
-        guard requestObservation == nil,
-              let observedRequest else {
-            return
-        }
-        requestObservation = withPortableContinuousObservation { [weak self, weak observedRequest] _ in
-            guard let self,
-                  let observedRequest,
-                  self.isRenderingActive,
-                  self.observedRequest === observedRequest else {
-                return
-            }
-            render(request: observedRequest)
-        }
-    }
-
-    private func renderObservedRequest() {
-        guard let observedRequest else {
-            return
-        }
-        render(request: observedRequest)
+        boundEntryID = nil
+        boundPresentation = nil
+        expansionAction = nil
+        render(
+            presentation: NetworkDisplayEntryPresentation(
+                displayName: "",
+                statusSeverity: .neutral,
+                fileTypeLabel: "",
+                style: .resource
+            )
+        )
     }
 
     private func configureStaticViews() {
+        expansionButton.accessibilityIdentifier = "WebInspector.Network.List.ExpansionButton"
+        expansionButton.tintColor = .secondaryLabel
+        expansionButton.addTarget(self, action: #selector(expansionButtonTapped(_:)), for: .touchUpInside)
+
+        indentationView.isUserInteractionEnabled = false
+        indentationView.backgroundColor = .clear
+
         statusIndicatorView.accessibilityIdentifier = "WebInspector.Network.List.StatusIndicator"
         statusIndicatorView.layer.cornerRadius = 4
 
@@ -96,7 +92,89 @@ package final class NetworkListCell: UICollectionViewListCell {
         fileTypeLabel.adjustsFontForContentSizeCategory = true
 
         contentConfiguration = Self.makeContentConfiguration()
-        accessories = [
+    }
+
+    @objc private func expansionButtonTapped(_ sender: UIButton) {
+        guard let boundEntryID else {
+            return
+        }
+        expansionAction?(boundEntryID)
+    }
+
+    private func render(presentation: NetworkDisplayEntryPresentation) {
+        renderText(presentation)
+        renderAccessories(presentation)
+    }
+
+    private func renderText(_ presentation: NetworkDisplayEntryPresentation) {
+        var content = (contentConfiguration as? UIListContentConfiguration) ?? Self.makeContentConfiguration()
+        let displayName = presentation.displayName
+        let secondaryText = presentation.secondaryText
+        guard content.text != displayName || content.secondaryText != secondaryText else {
+            return
+        }
+        content.text = displayName
+        content.secondaryText = secondaryText
+        contentConfiguration = content
+    }
+
+    private func renderAccessories(_ presentation: NetworkDisplayEntryPresentation) {
+        let color = presentation.statusSeverity.color
+        if statusIndicatorView.backgroundColor?.isEqual(color) != true {
+            statusIndicatorView.backgroundColor = color
+        }
+        if self.fileTypeLabel.text != presentation.fileTypeLabel {
+            self.fileTypeLabel.text = presentation.fileTypeLabel
+        }
+        let imageName = presentation.isExpanded ? "chevron.down" : "chevron.right"
+        let currentImage = expansionButton.image(for: .normal)
+        if currentImage == nil || expansionButton.accessibilityLabel != imageName {
+            expansionButton.setImage(UIImage(systemName: imageName), for: .normal)
+            expansionButton.accessibilityLabel = imageName
+        }
+
+        let signature = AccessorySignature(
+            indentLevel: presentation.indentLevel,
+            isExpandable: presentation.isExpandable
+        )
+        guard accessorySignature != signature else {
+            return
+        }
+        accessorySignature = signature
+        accessories = makeAccessories(for: presentation)
+    }
+
+    private func makeAccessories(for presentation: NetworkDisplayEntryPresentation) -> [UICellAccessory] {
+        var accessories: [UICellAccessory] = []
+
+        let indentationWidth = CGFloat(max(0, presentation.indentLevel)) * Self.indentationStepWidth
+        if indentationWidth > 0 {
+            accessories.append(
+                .customView(
+                    configuration: .init(
+                        customView: indentationView,
+                        placement: .leading(),
+                        reservedLayoutWidth: .custom(indentationWidth),
+                        maintainsFixedSize: true
+                    )
+                )
+            )
+        }
+
+        if presentation.isExpandable {
+            accessories.append(
+                .customView(
+                    configuration: .init(
+                        customView: expansionButton,
+                        placement: .leading(),
+                        reservedLayoutWidth: .custom(Self.indentationStepWidth),
+                        maintainsFixedSize: true
+                    )
+                )
+            )
+        }
+
+        accessories.append(
             .customView(
                 configuration: .init(
                     customView: statusIndicatorView,
@@ -104,7 +182,9 @@ package final class NetworkListCell: UICollectionViewListCell {
                     reservedLayoutWidth: .custom(8),
                     maintainsFixedSize: true
                 )
-            ),
+            )
+        )
+        accessories.append(
             .customView(
                 configuration: .init(
                     customView: fileTypeLabel,
@@ -112,53 +192,15 @@ package final class NetworkListCell: UICollectionViewListCell {
                     reservedLayoutWidth: .actual,
                     maintainsFixedSize: false
                 )
-            ),
-            .disclosureIndicator(),
-        ]
-    }
-
-    private func render(
-        displayName: String,
-        statusSeverity: NetworkRequest.Display.StatusSeverity,
-        fileTypeLabel: String
-    ) {
-        render(displayName: displayName)
-        renderAccessories(statusSeverity: statusSeverity, fileTypeLabel: fileTypeLabel)
-    }
-
-    private func render(request: NetworkRequest) {
-        render(
-            displayName: request.displayName,
-            statusSeverity: request.statusSeverity,
-            fileTypeLabel: request.fileTypeLabel
+            )
         )
-    }
+        accessories.append(.disclosureIndicator())
 
-    private func render(displayName: String) {
-        var content = (contentConfiguration as? UIListContentConfiguration) ?? Self.makeContentConfiguration()
-        guard content.text != displayName else {
-            return
-        }
-        content.text = displayName
-        contentConfiguration = content
-    }
-
-    private func renderAccessories(
-        statusSeverity: NetworkRequest.Display.StatusSeverity,
-        fileTypeLabel: String
-    ) {
-        let color = statusSeverity.color
-        if statusIndicatorView.backgroundColor?.isEqual(color) != true {
-            statusIndicatorView.backgroundColor = color
-        }
-        if self.fileTypeLabel.text != fileTypeLabel {
-            self.fileTypeLabel.text = fileTypeLabel
-        }
-    }
-
-    private func cancelRequestObservation() {
-        requestObservation?.cancel()
-        requestObservation = nil
+#if DEBUG
+        renderedIndentationWidthForTestingStorage = indentationWidth
+        hasExpansionButtonAccessoryForTestingStorage = presentation.isExpandable
+#endif
+        return accessories
     }
 
     private static func makeContentConfiguration() -> UIListContentConfiguration {
@@ -172,6 +214,8 @@ package final class NetworkListCell: UICollectionViewListCell {
                 weight: .semibold
             )
         )
+        content.secondaryTextProperties.numberOfLines = 1
+        content.secondaryTextProperties.lineBreakMode = .byTruncatingMiddle
         return content
     }
 }
@@ -186,8 +230,20 @@ extension NetworkListCell {
         fileTypeLabel.text
     }
 
+    package var statusIndicatorColorForTesting: UIColor? {
+        statusIndicatorView.backgroundColor
+    }
+
     package var hasActiveRequestObservationForTesting: Bool {
-        requestObservation != nil
+        false
+    }
+
+    package var renderedIndentationWidthForTesting: CGFloat {
+        renderedIndentationWidthForTestingStorage
+    }
+
+    package var hasExpansionButtonAccessoryForTesting: Bool {
+        hasExpansionButtonAccessoryForTestingStorage
     }
 }
 #endif

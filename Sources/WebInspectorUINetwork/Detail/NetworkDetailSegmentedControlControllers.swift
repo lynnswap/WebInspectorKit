@@ -18,14 +18,18 @@ final class NetworkDetailModeControlController {
         view.addTarget(self, action: #selector(valueChanged(_:)), for: .valueChanged)
     }
 
-    func render(mode: NetworkDetailViewController.Mode, isEnabled: Bool) {
+    func render(
+        mode: NetworkDetailViewController.Mode,
+        isEnabled: Bool,
+        enabledModes: Set<NetworkDetailViewController.Mode> = Set(NetworkDetailViewController.Mode.allCases)
+    ) {
         self.mode = mode
         self.isEnabled = isEnabled
         view.isEnabled = isEnabled
         view.selectedSegmentIndex = Self.index(for: mode)
         view.accessibilityLabel = mode.title
-        for index in NetworkDetailViewController.Mode.allCases.indices {
-            view.setEnabled(isEnabled, forSegmentAt: index)
+        for (index, mode) in NetworkDetailViewController.Mode.allCases.enumerated() {
+            view.setEnabled(isEnabled && enabledModes.contains(mode), forSegmentAt: index)
         }
     }
 

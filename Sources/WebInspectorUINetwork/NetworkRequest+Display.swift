@@ -72,6 +72,9 @@ extension NetworkRequest {
         mediaPreviewClassifier: NetworkRequest.Display.MediaPreviewClassifier
     ) -> NetworkRequest.Display.ResourceFilter {
         let requestURLSummary = NetworkRequest.Display.URLSummary(url: request.url)
+        if requestedByteRange != nil {
+            return .media
+        }
         guard let response else {
             if let resourceType {
                 return NetworkRequest.Display.ResourceFilter(resourceType: resourceType)
@@ -100,7 +103,7 @@ extension NetworkRequest {
         case .previewable:
             return .media
         case .notPreviewable:
-            if resourceType == .image || resourceType == .media {
+            if resourceType == .image {
                 return .media
             }
             return NetworkRequest.Display.ResourceFilter.inferred(
@@ -121,7 +124,7 @@ extension NetworkRequest {
         )
     }
 
-    private var displaySearchTokens: [String] {
+    package var displaySearchTokens: [String] {
         let requestURLSummary = NetworkRequest.Display.URLSummary(url: request.url)
         let responseURLSummary = response.map { NetworkRequest.Display.URLSummary(url: $0.url) }
         let statusCodeLabel = response.map { String($0.status) } ?? ""
@@ -205,7 +208,7 @@ extension NetworkRequest.Display {
 
     fileprivate static func shouldKeepResourceTypeForURLInferredMedia(_ resourceType: NetworkRequest.ResourceType) -> Bool {
         switch resourceType {
-        case .image, .media, .xhr, .fetch, .other:
+        case .image, .xhr, .fetch, .other:
             return false
         default:
             return true
@@ -221,7 +224,7 @@ extension NetworkRequest.Display {
         return result
     }
 
-    private static func headerValue(named name: String, in headers: [String: String]) -> String? {
+    package static func headerValue(named name: String, in headers: [String: String]) -> String? {
         if let value = headers[name] {
             return value
         }
@@ -238,8 +241,6 @@ extension NetworkRequest.ResourceType {
             "stylesheet"
         case .image:
             "image"
-        case .media:
-            "media"
         case .font:
             "font"
         case .script:

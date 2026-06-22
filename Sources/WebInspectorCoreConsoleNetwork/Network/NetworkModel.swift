@@ -459,6 +459,8 @@ package final class NetworkSession {
     package private(set) var requestTopologyRevision: Int
     package private(set) var requestContentRevision: Int
     package private(set) var requestDisplayRevision: Int
+    package private(set) var requestPresentationRevision: Int
+    @ObservationIgnored private var requestDisplayRevisionsByID: [NetworkRequest.ID: Int]
     @ObservationIgnored private var commandChannel: ProtocolCommandChannel?
     @ObservationIgnored private let protocolCommands: NetworkProtocolCommands
     @ObservationIgnored private var recordError: ((InspectorError?) -> Void)?
@@ -468,6 +470,8 @@ package final class NetworkSession {
         requestTopologyRevision = 0
         requestContentRevision = 0
         requestDisplayRevision = 0
+        requestPresentationRevision = 0
+        requestDisplayRevisionsByID = [:]
         commandChannel = nil
         protocolCommands = NetworkProtocolCommands()
         recordError = nil
@@ -485,8 +489,13 @@ package final class NetworkSession {
         requestStore.request(for: id)
     }
 
+    package func requestDisplayRevision(for id: NetworkRequest.ID) -> Int {
+        requestDisplayRevisionsByID[id] ?? 0
+    }
+
     package func reset() {
         requestStore.removeAll()
+        requestDisplayRevisionsByID.removeAll()
         recordRequestTopologyChange()
     }
 
@@ -591,7 +600,7 @@ package final class NetworkSession {
                 existing.backendResourceIdentifier = backendResourceIdentifier ?? existing.backendResourceIdentifier
             }
             requestStore.markActive(key)
-            recordRequestDisplayChange()
+            recordRequestDisplayChange(for: key)
             return key
         }
 
@@ -611,7 +620,7 @@ package final class NetworkSession {
             )
         )
         requestStore.markActive(key)
-        recordRequestTopologyChange()
+        recordRequestTopologyChange(for: key)
         return key
     }
 
@@ -638,7 +647,7 @@ package final class NetworkSession {
         request.ensureResponseBody()
         request.responseReceivedTimestamp = timestamp
         request.state = .responded
-        recordRequestDisplayChange()
+        recordRequestDisplayChange(for: request.id)
     }
 
     package func applyDataReceived(
@@ -670,13 +679,18 @@ package final class NetworkSession {
         if let sourceMapURL {
             request.sourceMapURL = sourceMapURL
         }
+        let updatesDisplayFacts = metrics?.requestHeaders != nil
         if let metrics {
             request.applyMetrics(metrics)
         }
         request.finishedOrFailedTimestamp = timestamp
         request.state = .finished
         requestStore.closeActive(.init(targetID: targetID, requestID: requestID))
-        recordRequestContentChange()
+        if updatesDisplayFacts {
+            recordRequestDisplayChange(for: request.id)
+        } else {
+            recordRequestPresentationChange()
+        }
     }
 
     package func applyLoadingFailed(
@@ -692,7 +706,7 @@ package final class NetworkSession {
         request.finishedOrFailedTimestamp = timestamp
         request.state = .failed(errorText: errorText, canceled: canceled)
         requestStore.closeActive(.init(targetID: targetID, requestID: requestID))
-        recordRequestContentChange()
+        recordRequestPresentationChange()
     }
 
     @discardableResult
@@ -743,9 +757,9 @@ package final class NetworkSession {
         networkRequest.finishedOrFailedTimestamp = timestamp
         networkRequest.state = .finished
         if didExist {
-            recordRequestDisplayChange()
+            recordRequestDisplayChange(for: key)
         } else {
-            recordRequestTopologyChange()
+            recordRequestTopologyChange(for: key)
         }
         return key
     }
@@ -761,7 +775,7 @@ package final class NetworkSession {
             existing.request.url = url
             existing.resourceType = .webSocket
             existing.webSocketReadyState = .connecting
-            recordRequestDisplayChange()
+            recordRequestDisplayChange(for: key)
             return key
         }
 
@@ -781,7 +795,7 @@ package final class NetworkSession {
         networkRequest.webSocketReadyState = .connecting
         requestStore.insert(networkRequest)
         requestStore.markActive(key)
-        recordRequestTopologyChange()
+        recordRequestTopologyChange(for: key)
         return key
     }
 
@@ -826,7 +840,7 @@ package final class NetworkSession {
         networkRequest.responseReceivedTimestamp = timestamp
         networkRequest.webSocketReadyState = .open
         networkRequest.state = .responded
-        recordRequestDisplayChange()
+        recordRequestDisplayChange(for: key)
     }
 
     package func applyWebSocketFrameReceived(
@@ -929,13 +943,21 @@ package final class NetworkSession {
         return commandChannel
     }
 
-    private func recordRequestTopologyChange() {
+    private func recordRequestTopologyChange(for id: NetworkRequest.ID? = nil) {
         requestTopologyRevision &+= 1
-        recordRequestDisplayChange()
+        recordRequestDisplayChange(for: id)
     }
 
-    private func recordRequestDisplayChange() {
+    private func recordRequestDisplayChange(for id: NetworkRequest.ID? = nil) {
         requestDisplayRevision &+= 1
+        if let id {
+            requestDisplayRevisionsByID[id] = requestDisplayRevision
+        }
+        recordRequestPresentationChange()
+    }
+
+    private func recordRequestPresentationChange() {
+        requestPresentationRevision &+= 1
         recordRequestContentChange()
     }
 

@@ -113,6 +113,67 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func networkListCellRendersHierarchyWithAccessoriesNotTextPadding() {
+        let requestID = NetworkRequest.ID(
+            targetID: ProtocolTarget.ID("page"),
+            requestID: NetworkRequest.ProtocolID("1")
+        )
+        let cell = NetworkListCell(frame: .zero)
+
+        cell.bind(
+            entryID: .resource(requestID),
+            presentation: NetworkDisplayEntryPresentation(
+                displayName: "clip.mp4",
+                statusSeverity: .success,
+                fileTypeLabel: "mp4",
+                indentLevel: 0,
+                isExpandable: false,
+                style: .resource
+            ),
+            renderingActive: true,
+            expansionAction: { _ in }
+        )
+        #expect(cell.displayNameForTesting == "clip.mp4")
+        #expect(cell.renderedIndentationWidthForTesting == 0)
+        #expect(cell.hasExpansionButtonAccessoryForTesting == false)
+
+        cell.bind(
+            entryID: .resource(requestID),
+            presentation: NetworkDisplayEntryPresentation(
+                displayName: "clip.mp4",
+                statusSeverity: .success,
+                fileTypeLabel: "mp4",
+                indentLevel: 1,
+                isExpandable: false,
+                style: .resource
+            ),
+            renderingActive: true,
+            expansionAction: { _ in }
+        )
+        #expect(cell.displayNameForTesting == "clip.mp4")
+        #expect(cell.renderedIndentationWidthForTesting == 24)
+        #expect(cell.hasExpansionButtonAccessoryForTesting == false)
+
+        cell.bind(
+            entryID: .resource(requestID),
+            presentation: NetworkDisplayEntryPresentation(
+                displayName: "clip.mp4",
+                statusSeverity: .success,
+                fileTypeLabel: "mp4",
+                indentLevel: 0,
+                isExpandable: true,
+                isExpanded: true,
+                style: .resource
+            ),
+            renderingActive: true,
+            expansionAction: { _ in }
+        )
+        #expect(cell.displayNameForTesting == "clip.mp4")
+        #expect(cell.renderedIndentationWidthForTesting == 0)
+        #expect(cell.hasExpansionButtonAccessoryForTesting)
+    }
+
+    @Test
     func listLoadDoesNotEvaluateDisplayRequestsUntilAppearing() async throws {
         let network = NetworkSession()
         _ = try #require(applyRequest(
@@ -141,6 +202,51 @@ struct NetworkDetailViewControllerTests {
 
         #expect(viewController.displayedRequestIDsForTesting == model.displayRequestIDs)
         #expect(viewController.displayRequestIDsEvaluationCountForTesting == 1)
+    }
+
+    @Test
+    func listAppliesPresentationOnlyUpdatesWithoutSnapshotReload() async throws {
+        let network = NetworkSession()
+        let request = try #require(applyRequest(
+            to: network,
+            requestID: "1",
+            url: "https://media.example.test/clip.mp4",
+            responseHeaders: ["content-type": "video/mp4"],
+            responseMimeType: "video/mp4"
+        ))
+        let model = NetworkPanelModel(network: network)
+        let viewController = NetworkListViewController(model: model)
+        let window = showInWindow(viewController, makeVisible: true)
+        defer { window.isHidden = true }
+
+        await viewController.flushPendingSnapshotUpdateForTesting()
+        viewController.collectionViewForTesting.layoutIfNeeded()
+        let cell = try #require(viewController.networkListCellForTesting(at: IndexPath(item: 0, section: 0)))
+        let initialColor = try #require(cell.statusIndicatorColorForTesting)
+        #expect(initialColor.isEqual(NetworkRequest.Display.StatusSeverity.success.color))
+
+        let evaluationCountBeforeUpdate = viewController.displayRequestIDsEvaluationCountForTesting
+        let snapshotApplyCountBeforeUpdate = viewController.snapshotApplyCountForTesting
+        let observation = try #require(viewController.displayRowsPresentationObservationDeliveryForTesting)
+        let renderedColor = await observation.values {
+            cell.statusIndicatorColorForTesting
+        }
+
+        network.applyLoadingFailed(
+            targetID: request.id.targetID,
+            requestID: request.id.requestID,
+            timestamp: 4,
+            errorText: "Cancelled",
+            canceled: true
+        )
+
+        #expect(await renderedColor.waitUntil {
+            $0?.isEqual(NetworkRequest.Display.StatusSeverity.error.color) == true
+        } != nil)
+        #expect(viewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeUpdate + 1)
+        #expect(viewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeUpdate)
+        #expect(viewController.displayedRequestIDsForTesting == [request.id])
+        #expect(viewController.hasScheduledDisplayRowsReloadForTesting == false)
     }
 
     @Test
@@ -557,6 +663,146 @@ struct NetworkDetailViewControllerTests {
             viewController.headersTextViewForTesting.renderedTextForTesting.contains("content-type: application/json")
         }
         #expect(didRenderResponseHeaders)
+    }
+
+    @Test
+    func resourceHeadersIncludeRedirectHistoryBeforeFinalHeaders() async throws {
+        let network = NetworkSession()
+        let targetID = ProtocolTarget.ID("page")
+        let requestID = NetworkRequest.ProtocolID("redirect-detail")
+        let key = network.applyRequestWillBeSent(
+            targetID: targetID,
+            requestID: requestID,
+            frameID: DOMFrame.ID("main"),
+            loaderID: "loader",
+            documentURL: "https://example.test/",
+            request: NetworkRequest.Payload(
+                url: "https://redirect.example.test/start",
+                headers: ["x-start": "one"]
+            ),
+            resourceType: .document,
+            timestamp: 1
+        )
+        _ = network.applyRequestWillBeSent(
+            targetID: targetID,
+            requestID: requestID,
+            frameID: DOMFrame.ID("main"),
+            loaderID: "loader",
+            documentURL: "https://example.test/",
+            request: NetworkRequest.Payload(
+                url: "https://example.test/final",
+                headers: ["x-final": "yes"]
+            ),
+            resourceType: .document,
+            redirectResponse: NetworkRequest.Response.Payload(
+                url: "https://redirect.example.test/start",
+                status: 302,
+                statusText: "Found",
+                headers: ["location": "https://example.test/final"]
+            ),
+            timestamp: 2
+        )
+        network.applyResponseReceived(
+            targetID: targetID,
+            requestID: requestID,
+            resourceType: .document,
+            response: NetworkRequest.Response.Payload(
+                url: "https://example.test/final",
+                status: 200,
+                statusText: "OK",
+                headers: ["content-type": "text/html"],
+                mimeType: "text/html"
+            ),
+            timestamp: 3
+        )
+        let request = try #require(network.request(for: key))
+        let model = NetworkPanelModel(network: network)
+        model.selectRequest(request)
+        let viewController = makeNetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didRender = await waitUntilRendered(in: viewController) {
+            let text = viewController.headersTextViewForTesting.renderedTextForTesting
+            return text.contains("Redirect 1: https://redirect.example.test/start -> https://example.test/final")
+                && text.contains("Redirect 1 Request")
+                && text.contains("x-start: one")
+                && text.contains("Redirect 1 Response")
+                && text.contains("location: https://example.test/final")
+                && text.contains("Request")
+                && text.contains("x-final: yes")
+                && text.contains("Response")
+                && text.contains("content-type: text/html")
+        }
+        #expect(didRender)
+    }
+
+    @Test
+    func redirectSelectionShowsHeadersOnlyAndDoesNotFetchResponseBody() async throws {
+        let network = NetworkSession()
+        let targetID = ProtocolTarget.ID("page")
+        let requestID = NetworkRequest.ProtocolID("redirect-entry-detail")
+        let key = network.applyRequestWillBeSent(
+            targetID: targetID,
+            requestID: requestID,
+            frameID: DOMFrame.ID("main"),
+            loaderID: "loader",
+            documentURL: "https://example.test/",
+            request: NetworkRequest.Payload(url: "https://redirect.example.test/start"),
+            resourceType: .document,
+            timestamp: 1
+        )
+        _ = network.applyRequestWillBeSent(
+            targetID: targetID,
+            requestID: requestID,
+            frameID: DOMFrame.ID("main"),
+            loaderID: "loader",
+            documentURL: "https://example.test/",
+            request: NetworkRequest.Payload(url: "https://example.test/final"),
+            resourceType: .document,
+            redirectResponse: NetworkRequest.Response.Payload(
+                url: "https://redirect.example.test/start",
+                status: 301,
+                statusText: "Moved",
+                headers: ["location": "https://example.test/final"]
+            ),
+            timestamp: 2
+        )
+        network.applyResponseReceived(
+            targetID: targetID,
+            requestID: requestID,
+            resourceType: .document,
+            response: NetworkRequest.Response.Payload(
+                url: "https://example.test/final",
+                status: 200,
+                headers: ["content-type": "text/html"],
+                mimeType: "text/html"
+            ),
+            timestamp: 3
+        )
+        network.applyLoadingFinished(targetID: targetID, requestID: requestID, timestamp: 4)
+        let request = try #require(network.request(for: key))
+        let redirect = try #require(request.redirects.first)
+        var fetchedIDs: [NetworkRequest.ID] = []
+        let model = NetworkPanelModel(network: network) { id in
+            fetchedIDs.append(id)
+        }
+        model.selectEntry(.redirect(redirect.id))
+        let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didRender = await waitUntilRendered(in: viewController) {
+            let text = viewController.headersTextViewForTesting.renderedTextForTesting
+            return viewController.currentModeForTesting == .headers
+                && viewController.previewViewForTesting.isHidden
+                && viewController.headersTextViewForTesting.isHidden == false
+                && viewController.isDetailModeEnabledForTesting(.preview) == false
+                && text.contains("301 Moved")
+                && text.contains("location: https://example.test/final")
+        }
+        #expect(didRender)
+        #expect(fetchedIDs.isEmpty)
     }
 
     @Test
@@ -2318,13 +2564,14 @@ struct NetworkDetailViewControllerTests {
         #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeHiddenUpdate)
         #expect(listViewController.displayedRequestIDsForTesting == [request.id])
         #expect(listViewController.hasScheduledDisplayRowsReloadForTesting)
-        #expect(cell.fileTypeLabelForTesting == "png")
+        #expect(cell.fileTypeLabelForTesting == "mp4")
 
         await listViewController.flushThrottledDisplayRowsReloadForTesting()
 
         #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate + 1)
         #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeHiddenUpdate)
         #expect(listViewController.displayedRequestIDsForTesting == [request.id])
+        #expect(cell.fileTypeLabelForTesting == "png")
     }
 
     @Test
@@ -2347,8 +2594,15 @@ struct NetworkDetailViewControllerTests {
         let indexPath = IndexPath(item: 0, section: 0)
         let cell = try #require(listViewController.networkListCellForTesting(at: indexPath))
         #expect(cell.fileTypeLabelForTesting == "mp4")
-        #expect(cell.hasActiveRequestObservationForTesting)
+        #expect(cell.hasActiveRequestObservationForTesting == false)
         let snapshotApplyCountBeforeHiddenContentUpdate = listViewController.snapshotApplyCountForTesting
+        let observation = try #require(listViewController.displayRowsObservationDeliveryForTesting)
+        let observedInvalidations = await observation.values {
+            model.displayRowsInvalidationRevision
+        }
+        defer {
+            observedInvalidations.cancel()
+        }
 
         listViewController.beginAppearanceTransition(false, animated: false)
         listViewController.endAppearanceTransition()
@@ -2368,14 +2622,21 @@ struct NetworkDetailViewControllerTests {
             timestamp: 4
         )
 
+        let hiddenInvalidationRevision = model.displayRowsInvalidationRevision
+        #expect(await observedInvalidations.waitUntil { $0 == hiddenInvalidationRevision } != nil)
         #expect(cell.fileTypeLabelForTesting == "mp4")
 
         listViewController.beginAppearanceTransition(true, animated: false)
         listViewController.endAppearanceTransition()
 
-        #expect(cell.hasActiveRequestObservationForTesting)
+        #expect(cell.hasActiveRequestObservationForTesting == false)
+        #expect(cell.fileTypeLabelForTesting == "mp4")
+        #expect(listViewController.hasScheduledDisplayRowsReloadForTesting)
+        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeHiddenContentUpdate)
+
+        await listViewController.flushThrottledDisplayRowsReloadForTesting()
+
         #expect(cell.fileTypeLabelForTesting == "css")
-        #expect(listViewController.hasScheduledDisplayRowsReloadForTesting == false)
         #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeHiddenContentUpdate)
     }
 
