@@ -88,7 +88,14 @@ let package = Package(
         ),
         .target(
             name: "WebInspectorTransport",
+            dependencies: [],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebInspectorNativeTransport",
             dependencies: [
+                "WebInspectorCore",
+                "WebInspectorTransport",
                 "WebInspectorNativeBridge",
                 "WebInspectorNativeSymbols"
             ],
@@ -114,6 +121,7 @@ let package = Package(
         .target(
             name: "WebInspectorKit",
             dependencies: [
+                "WebInspectorNativeTransport",
                 "WebInspectorUI"
             ],
             swiftSettings: strictSwiftSettings
@@ -166,6 +174,14 @@ let package = Package(
                 "WebInspectorNativeBridge"
             ],
             path: "Tests/WebInspectorNativeBridgeTests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "WebInspectorNativeTransportTests",
+            dependencies: [
+                "WebInspectorNativeTransport"
+            ],
+            path: "Tests/WebInspectorNativeTransportTests",
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(

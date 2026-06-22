@@ -1,6 +1,7 @@
 import WebKit
-import WebInspectorNativeSymbols
 import WebInspectorNativeBridge
+import WebInspectorNativeSymbols
+import WebInspectorTransport
 
 package enum NativeInspectorBackendFactory {
     @MainActor

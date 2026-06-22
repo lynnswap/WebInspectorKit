@@ -61,7 +61,7 @@ struct ParentContainerTests {
         let session = makeSessionWithNoOpAttachment()
         let webView = WKWebView(frame: .zero)
 
-        try await session.attach(to: webView)
+        try await attach(session, to: webView)
         let styleObservation = await observePageUserInterfaceStyle(in: session)
         defer { styleObservation.cancel() }
 
@@ -81,7 +81,7 @@ struct ParentContainerTests {
         )
         let webView = WKWebView(frame: .zero)
 
-        try await session.attach(to: webView)
+        try await attach(session, to: webView)
         let observer = try #require(observerRecorder.observers.first)
         #expect(observer.isStarted)
         #expect(session.pageUserInterfaceStyle == .dark)
@@ -100,22 +100,22 @@ struct ParentContainerTests {
         let observedWebView = WKWebView(frame: .zero)
         let observedWebViewID = ObjectIdentifier(observedWebView)
         let observerRecorder = PageUserInterfaceStyleObserverRecorder(styleOnStart: .dark)
+        let attachAction: @MainActor (InspectorSession, WKWebView) async throws -> Void = { _, webView in
+            if ObjectIdentifier(webView) != observedWebViewID {
+                throw AttachmentFailure()
+            }
+        }
         let session = makeSessionWithNoOpAttachment(
-            attachAction: { _, webView in
-                if ObjectIdentifier(webView) != observedWebViewID {
-                    throw AttachmentFailure()
-                }
-            },
             makePageUserInterfaceStyleObserver: observerRecorder.makeObserver
         )
 
-        try await session.attach(to: observedWebView)
+        try await attach(session, to: observedWebView, perform: attachAction)
         let observer = try #require(observerRecorder.observers.first)
         #expect(observer.isStarted)
         #expect(session.pageUserInterfaceStyle == .dark)
 
         do {
-            try await session.attach(to: WKWebView(frame: .zero))
+            try await attach(session, to: WKWebView(frame: .zero), perform: attachAction)
             Issue.record("Expected attach to fail")
         } catch {
             #expect(error is AttachmentFailure)
@@ -140,7 +140,7 @@ struct ParentContainerTests {
         defer { window.isHidden = true }
         let webView = WKWebView(frame: .zero)
 
-        try await session.attach(to: webView)
+        try await attach(session, to: webView)
 
         #expect(session.pageUserInterfaceStyle == .dark)
         #expect(viewController.overrideUserInterfaceStyle == .unspecified)
@@ -832,8 +832,15 @@ struct ParentContainerTests {
         return window
     }
 
+    private func attach(
+        _ session: WebInspectorSession,
+        to webView: WKWebView,
+        perform attachAction: @escaping @MainActor (InspectorSession, WKWebView) async throws -> Void = { _, _ in }
+    ) async throws {
+        try await session.attachPresentation(to: webView, perform: attachAction)
+    }
+
     private func makeSessionWithNoOpAttachment(
-        attachAction: @escaping @MainActor (InspectorSession, WKWebView) async throws -> Void = { _, _ in },
         detachAction: @escaping @MainActor (InspectorSession) async -> Void = { _ in },
         makePageUserInterfaceStyleObserver: @escaping @MainActor (
             WKWebView,
@@ -844,7 +851,6 @@ struct ParentContainerTests {
     ) -> WebInspectorSession {
         WebInspectorSession(
             inspector: InspectorSession(),
-            attachAction: attachAction,
             detachAction: detachAction,
             makePageUserInterfaceStyleObserver: makePageUserInterfaceStyleObserver
         )

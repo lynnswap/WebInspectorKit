@@ -1,6 +1,5 @@
 import Foundation
 import Observation
-import WebKit
 import WebInspectorTransport
 
 package extension InspectorSession {
@@ -28,6 +27,9 @@ package extension InspectorSession {
             self.bootstrapTimeout = bootstrapTimeout
         }
     }
+
+    typealias PageReloadAction = @MainActor () async throws -> Void
+    typealias ConnectionCleanup = @MainActor () -> Void
 }
 
 @MainActor
@@ -237,34 +239,25 @@ private final class InspectorTargetRegistry {
     }
 }
 
-package extension InspectorSession {
-    @MainActor
-    protocol InspectableWebView: AnyObject {
-        var isInspectable: Bool { get set }
-    }
-}
-
-extension WKWebView: InspectorSession.InspectableWebView {}
-
 @MainActor
 private final class InspectorConnection {
     let transport: TransportSession
     let receiver: TransportReceiver?
-    weak var webView: WKWebView?
-    let originalInspectability: Bool?
+    let pageReloadAction: InspectorSession.PageReloadAction?
+    let connectionCleanup: InspectorSession.ConnectionCleanup?
     var eventPump: DomainEventPump?
     let targets: InspectorTargetRegistry
 
     init(
         transport: TransportSession,
         receiver: TransportReceiver? = nil,
-        webView: WKWebView? = nil,
-        originalInspectability: Bool? = nil
+        pageReloadAction: InspectorSession.PageReloadAction? = nil,
+        connectionCleanup: InspectorSession.ConnectionCleanup? = nil
     ) {
         self.transport = transport
         self.receiver = receiver
-        self.webView = webView
-        self.originalInspectability = originalInspectability
+        self.pageReloadAction = pageReloadAction
+        self.connectionCleanup = connectionCleanup
         eventPump = nil
         targets = InspectorTargetRegistry()
     }
@@ -386,7 +379,6 @@ package final class InspectorSession {
     @ObservationIgnored private var isDetaching: Bool
     @ObservationIgnored private var detachWaiters: [CheckedContinuation<Void, Never>]
     @ObservationIgnored private var attachRequestGeneration: UInt64 = 0
-    @ObservationIgnored private var preparedInspectability: PreparedInspectability?
 
     private var connection: InspectorConnection? {
         connectionPhase.activeConnection
@@ -495,70 +487,56 @@ package final class InspectorSession {
         ])
     }
 
-    package func attach(to webView: WKWebView) async throws {
-        let attachRequestGeneration = beginAttachRequest()
-        let resolvedSymbols = try await NativeInspectorBackendFactory.resolvedSymbolsDetached()
-        try ensureCurrentAttachRequest(attachRequestGeneration)
+    package func beginAttachmentRequest() -> UInt64 {
+        beginAttachRequest()
+    }
+
+    package func ensureCurrentAttachmentRequest(_ generation: UInt64) throws {
+        try ensureCurrentAttachRequest(generation)
+    }
+
+    package func detachForAttachmentRequest(_ generation: UInt64) async throws {
         await detach(invalidatingPendingAttachRequests: false)
-        try ensureCurrentAttachRequest(attachRequestGeneration)
-        let receiver = TransportReceiver()
-        restorePreparedInspectabilityIfNeeded()
-        let originalInspectability = Self.prepareInspectability(for: webView)
-        preparedInspectability = PreparedInspectability(
-            webView: webView,
-            generation: attachRequestGeneration,
-            originalValue: originalInspectability
+        try ensureCurrentAttachRequest(generation)
+    }
+
+    package func makeTransportSession(backend: any TransportBackend) -> TransportSession {
+        TransportSession(backend: backend, responseTimeout: configuration.responseTimeout)
+    }
+
+    package func recordAttachmentError(_ error: InspectorSession.Error?) {
+        lastError = error
+    }
+
+    package func connectAttachment(
+        transport: TransportSession,
+        receiver: TransportReceiver,
+        pageReloadAction: InspectorSession.PageReloadAction?,
+        connectionCleanup: InspectorSession.ConnectionCleanup?,
+        attachRequestGeneration: UInt64
+    ) async throws {
+        try await connect(
+            transport: transport,
+            receiver: receiver,
+            pageReloadAction: pageReloadAction,
+            connectionCleanup: connectionCleanup,
+            attachRequestGeneration: attachRequestGeneration
         )
-        var transport: TransportSession?
-
-        do {
-            let backend = NativeInspectorBackendFactory.make(
-                webView: webView,
-                resolvedSymbols: resolvedSymbols,
-                messageHandler: { message in
-                    receiver.receive(message)
-                },
-                fatalFailureHandler: { [weak self] message in
-                    Task { @MainActor in
-                        self?.lastError = InspectorSession.Error(message)
-                    }
-                }
-            )
-            let createdTransport = TransportSession(
-                backend: backend,
-                responseTimeout: configuration.responseTimeout
-            )
-            transport = createdTransport
-            receiver.setTransport(createdTransport)
-
-            try backend.attach()
-            try await connect(
-                transport: createdTransport,
-                receiver: receiver,
-                webView: webView,
-                originalInspectability: originalInspectability,
-                attachRequestGeneration: attachRequestGeneration,
-                connectionInstalled: {
-                    self.clearPreparedInspectability(ifOwnedBy: attachRequestGeneration)
-                }
-            )
-        } catch {
-            receiver.close()
-            restorePreparedInspectabilityIfNeeded(ifOwnedBy: attachRequestGeneration)
-            await transport?.detach()
-            throw error
-        }
     }
 
     package func connect(transport: TransportSession) async throws {
-        try await connect(transport: transport, webView: nil, originalInspectability: nil)
+        try await connect(
+            transport: transport,
+            pageReloadAction: nil,
+            connectionCleanup: nil
+        )
     }
 
     private func connect(
         transport: TransportSession,
         receiver: TransportReceiver? = nil,
-        webView: WKWebView?,
-        originalInspectability: Bool?,
+        pageReloadAction: InspectorSession.PageReloadAction?,
+        connectionCleanup: InspectorSession.ConnectionCleanup?,
         attachRequestGeneration: UInt64? = nil,
         connectionInstalled: (() -> Void)? = nil
     ) async throws {
@@ -569,8 +547,8 @@ package final class InspectorSession {
         let nextConnection = InspectorConnection(
             transport: transport,
             receiver: receiver,
-            webView: webView,
-            originalInspectability: originalInspectability
+            pageReloadAction: pageReloadAction,
+            connectionCleanup: connectionCleanup
         )
         connectionPhase = .pending(nextConnection)
         connectionInstalled?()
@@ -608,7 +586,7 @@ package final class InspectorSession {
             connectionPhase = .idle
             dom.recordCommandAvailabilityMutation()
             await transport.detach()
-            restoreInspectabilityIfNeeded(for: nextConnection)
+            runConnectionCleanup(for: nextConnection)
             unbindProtocolChannel()
             dom.reset()
             network.reset()
@@ -664,34 +642,6 @@ package final class InspectorSession {
         }
     }
 
-    private func clearPreparedInspectability(ifOwnedBy generation: UInt64) {
-        guard preparedInspectability?.generation == generation else {
-            return
-        }
-        preparedInspectability = nil
-    }
-
-    private func restorePreparedInspectabilityIfNeeded(ifOwnedBy generation: UInt64) {
-        guard preparedInspectability?.generation == generation else {
-            return
-        }
-        restorePreparedInspectabilityIfNeeded()
-    }
-
-    private func restorePreparedInspectabilityIfNeeded() {
-        guard let preparedInspectability else {
-            return
-        }
-        self.preparedInspectability = nil
-        guard let webView = preparedInspectability.webView else {
-            return
-        }
-        Self.restoreInspectabilityIfNeeded(
-            on: webView,
-            originalValue: preparedInspectability.originalValue
-        )
-    }
-
     package func retireBackendInteractionForPresentationEnd() async {
         guard hasActiveConnection else {
             return
@@ -707,12 +657,6 @@ package final class InspectorSession {
         }
     }
 
-    private struct PreparedInspectability {
-        weak var webView: WKWebView?
-        var generation: UInt64
-        var originalValue: Bool
-    }
-
     private func performAttachmentTeardown(connection previousConnection: InspectorConnection) async {
         connectionPhase = .retiring(previousConnection)
         dom.recordCommandAvailabilityMutation()
@@ -724,7 +668,7 @@ package final class InspectorSession {
         previousConnection.receiver?.close()
         stopPumps(previousConnection)
         await previousConnection.transport.detach()
-        restoreInspectabilityIfNeeded(for: previousConnection)
+        runConnectionCleanup(for: previousConnection)
 
         if connectionPhase.isCurrent(previousConnection) {
             connectionPhase = .idle
@@ -762,12 +706,14 @@ package final class InspectorSession {
         console.reset()
     }
 
-    package var hasInspectablePageWebView: Bool {
-        connection?.webView != nil
+    package var canReloadPage: Bool {
+        connection?.pageReloadAction != nil
     }
 
     package func reloadPage() async throws {
-        let webView = try requireInspectableWebView()
+        guard let reload = connection?.pageReloadAction else {
+            throw InspectorSession.Error("Inspector session does not have a page reload action.")
+        }
         await dom.prepareForPageReload()
         dom.reset()
         network.reset()
@@ -778,7 +724,7 @@ package final class InspectorSession {
             seedRuntimeState(from: await connection.transport.snapshot())
             syncTargets(for: connection)
         }
-        webView.reload()
+        try await reload()
     }
 
     package func waitUntilProtocolEventApplied(_ sequence: UInt64) async -> Bool {
@@ -1035,13 +981,6 @@ package final class InspectorSession {
         connection.targets.removeTarget(targetID)
     }
 
-    private func requireInspectableWebView() throws -> WKWebView {
-        guard let webView = connection?.webView else {
-            throw InspectorSession.Error("Inspector session is not attached to a WKWebView.")
-        }
-        return webView
-    }
-
     private func seedDOMSession(from snapshot: TransportSession.Snapshot) {
         for record in snapshot.targetsByID.values.sorted(by: { $0.id.rawValue < $1.id.rawValue }) {
             dom.applyTargetCreated(
@@ -1124,26 +1063,7 @@ package final class InspectorSession {
         connectionPhase.isCurrent(candidate)
     }
 
-    package static func prepareInspectability<WebView: InspectorSession.InspectableWebView>(for webView: WebView) -> Bool {
-        let originalValue = webView.isInspectable
-        webView.isInspectable = true
-        return originalValue
-    }
-
-    package static func restoreInspectabilityIfNeeded<WebView: InspectorSession.InspectableWebView>(
-        on webView: WebView,
-        originalValue: Bool?
-    ) {
-        guard let originalValue else {
-            return
-        }
-        webView.isInspectable = originalValue
-    }
-
-    private func restoreInspectabilityIfNeeded(for connection: InspectorConnection) {
-        guard let webView = connection.webView else {
-            return
-        }
-        Self.restoreInspectabilityIfNeeded(on: webView, originalValue: connection.originalInspectability)
+    private func runConnectionCleanup(for connection: InspectorConnection) {
+        connection.connectionCleanup?()
     }
 }

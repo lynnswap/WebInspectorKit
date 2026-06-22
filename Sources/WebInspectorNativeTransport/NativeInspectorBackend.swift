@@ -1,6 +1,7 @@
 import Foundation
 import WebKit
 import WebInspectorNativeBridge
+import WebInspectorTransport
 
 @MainActor
 package final class NativeInspectorBackend: TransportBackend {

@@ -3,7 +3,6 @@ import ObservationBridge
 import Testing
 import WebInspectorTestSupport
 import WebInspectorTransport
-import WebKit
 @testable import WebInspectorCore
 
 @Test
@@ -6018,7 +6017,7 @@ func domNavigationCopyDeleteAndReloadUseRuntimeAPIs() async throws {
     let transport = testTransport(backend)
     let session = await InspectorSession(configuration: .test)
     try await connect(session, transport: transport, backend: backend)
-    #expect(await session.hasInspectablePageWebView == false)
+    #expect(await session.canReloadPage == false)
     let htmlID = try #require(await session.attachment.dom.snapshot().currentNodeIDByKey[.init(targetID: .pageMain, nodeID: .init(2))])
     await session.attachment.dom.selectNode(htmlID)
 
@@ -7407,22 +7406,6 @@ func domActionAvailabilityObservationFiresWhenBootstrapAttaches() async throws {
     #expect(await renderedAvailability.waitUntilValue(true))
 }
 
-@MainActor
-@Test
-func attachInspectabilityPreparationRestoresOriginalValue() throws {
-    let webView = TestInspectableWebView(isInspectable: false)
-    webView.isInspectable = false
-
-    let originalValue = InspectorSession.prepareInspectability(for: webView)
-
-    #expect(originalValue == false)
-    #expect(webView.isInspectable == true)
-
-    InspectorSession.restoreInspectabilityIfNeeded(on: webView, originalValue: originalValue)
-
-    #expect(webView.isInspectable == false)
-}
-
 private func connect(
     _ session: InspectorSession,
     transport: TransportSession,
@@ -7677,14 +7660,6 @@ private let newDocumentWithBodyNodeFourResult = ##"{"root":{"nodeId":1,"nodeType
 private let newDocumentWithHeadChildCountResult = ##"{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document","children":[{"nodeId":2,"nodeType":1,"nodeName":"HTML","localName":"html","children":[{"nodeId":3,"nodeType":1,"nodeName":"HEAD","localName":"head","childNodeCount":2},{"nodeId":4,"nodeType":1,"nodeName":"BODY","localName":"body"}]}]}}"##
 private let firstLazyFrameDocumentResult = ##"{"root":{"nodeId":101,"nodeType":9,"nodeName":"#document","documentURL":"https://frame.example/ad","baseURL":"https://frame.example/ad","children":[{"nodeId":102,"nodeType":1,"nodeName":"HTML","localName":"html","children":[{"nodeId":103,"nodeType":1,"nodeName":"BODY","localName":"body","children":[{"nodeId":104,"nodeType":1,"nodeName":"CANVAS","localName":"canvas"}]}]}]}}"##
 private let secondLazyFrameDocumentResult = ##"{"root":{"nodeId":201,"nodeType":9,"nodeName":"#document","documentURL":"https://frame.example/ad","baseURL":"https://frame.example/ad","children":[{"nodeId":202,"nodeType":1,"nodeName":"HTML","localName":"html","children":[{"nodeId":203,"nodeType":1,"nodeName":"BODY","localName":"body","children":[{"nodeId":204,"nodeType":1,"nodeName":"VIDEO","localName":"video"}]}]}]}}"##
-
-private final class TestInspectableWebView: InspectorSession.InspectableWebView {
-    var isInspectable: Bool
-
-    init(isInspectable: Bool) {
-        self.isInspectable = isInspectable
-    }
-}
 
 private func targetMessageMethods(_ backend: FakeTransportBackend) async -> [String?] {
     await backend.sentTargetMessages().map { try? messageMethod($0.message) }

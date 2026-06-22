@@ -118,13 +118,13 @@ package final class DOMNavigationItems: NSObject {
         UIAction(
             title: String(localized: "reload", bundle: .module),
             image: UIImage(systemName: "arrow.clockwise"),
-            attributes: (inspector.hasInspectablePageWebView || inspector.attachment.dom.canReloadDocument) ? [] : [.disabled]
+            attributes: (inspector.canReloadPage || inspector.attachment.dom.canReloadDocument) ? [] : [.disabled]
         ) { [weak inspector] _ in
             Task { @MainActor in
                 guard let inspector else {
                     return
                 }
-                if inspector.hasInspectablePageWebView {
+                if inspector.canReloadPage {
                     try? await inspector.reloadPage()
                 } else {
                     try? await inspector.attachment.dom.reloadDocument()
