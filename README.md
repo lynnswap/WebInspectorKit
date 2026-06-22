@@ -58,7 +58,22 @@ let inspector = WebInspectorViewController(
 )
 ```
 
-The current public tab surface exposes the built-in DOM and Network tabs.
+The built-in tab surface exposes DOM and Network tabs. Apps can also add UIKit
+tabs with a `UIViewController` factory:
+
+```swift
+let consoleTab = WebInspectorTab(
+    id: "app_console",
+    title: "Console",
+    systemImage: "terminal"
+) { session in
+    ConsoleViewController(inspectorSession: session)
+}
+
+let inspector = WebInspectorViewController(
+    tabs: [.dom, .network, consoleTab]
+)
+```
 
 ## Documentation
 

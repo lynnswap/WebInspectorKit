@@ -13,9 +13,14 @@ extension WebInspectorTab {
         package typealias ID = String
 
         case tab(WebInspectorTab.ID)
+        case customTab(WebInspectorTab.ID)
         case domElement(parent: WebInspectorTab.ID)
 
         package static let domElementID: ID = domElementID(parent: "webinspector_dom")
+
+        package static func customTabID(_ tabID: WebInspectorTab.ID) -> ID {
+            "webinspector_custom.\(tabID)"
+        }
 
         package static func domElementID(parent: WebInspectorTab.ID) -> ID {
             "\(parent).element"
@@ -25,6 +30,8 @@ extension WebInspectorTab {
             switch self {
             case let .tab(tabID):
                 tabID
+            case let .customTab(tabID):
+                Self.customTabID(tabID)
             case let .domElement(parent):
                 Self.domElementID(parent: parent)
             }
@@ -32,7 +39,7 @@ extension WebInspectorTab {
 
         package var sourceTabID: WebInspectorTab.ID {
             switch self {
-            case let .tab(tabID), let .domElement(parent: tabID):
+            case let .tab(tabID), let .customTab(tabID), let .domElement(parent: tabID):
                 tabID
             }
         }
@@ -113,8 +120,11 @@ extension WebInspectorTab {
             for hostLayout: WebInspectorTab.HostLayout,
             tabs: [WebInspectorTab]
         ) -> [WebInspectorTab.DisplayItem] {
-            tabs.flatMap { tab in
-                catalog.controller(for: tab).displayItems(for: hostLayout)
+            tabs.flatMap { tab -> [WebInspectorTab.DisplayItem] in
+                guard let controller = catalog.controller(for: tab) else {
+                    return [.customTab(tab.id)]
+                }
+                return controller.displayItems(for: hostLayout)
             }
         }
 
@@ -147,7 +157,22 @@ extension WebInspectorTab {
                 guard let tab = tabs.first(where: { $0.id == tabID }) else {
                     return nil
                 }
-                return catalog.controller(for: tab).descriptor(for: displayItem)
+                guard let controller = catalog.controller(for: tab) else {
+                    return WebInspectorTab.DisplayDescriptor(
+                        title: tab.title,
+                        image: tab.image
+                    )
+                }
+                return controller.descriptor(for: displayItem)
+            case let .customTab(tabID):
+                guard let tab = tabs.first(where: { $0.id == tabID }),
+                      tab.builtIn == nil else {
+                    return nil
+                }
+                return WebInspectorTab.DisplayDescriptor(
+                    title: tab.title,
+                    image: tab.image
+                )
             case .domElement:
                 return catalog.controller(for: WebInspectorTab.BuiltIn.dom).descriptor(for: displayItem)
             }

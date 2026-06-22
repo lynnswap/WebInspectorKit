@@ -67,7 +67,7 @@ Snapshot depth, subtree depth, and DOM auto-update debounce are no longer public
 configuration. Remove app-side tuning for those values; the native DOM runtime
 owns those policies.
 
-## 4. Remove custom tab builders
+## 4. Replace custom tab builders
 
 The `v0.1.5` SwiftUI tab builder API was removed.
 
@@ -76,7 +76,7 @@ The `v0.1.5` SwiftUI tab builder API was removed.
 | `WITab.dom()` | `.dom` |
 | `WITab.element()` | included inside the DOM UI |
 | `WITab.network()` | `.network` |
-| custom `WITab(...)` content | no current app-facing replacement |
+| custom `WITab(...)` content | `WebInspectorTab(id:title:image:makeViewController:)` or `WebInspectorTab(id:title:systemImage:makeViewController:)` |
 
 Use the built-in tabs exposed by `WebInspectorViewController`:
 
@@ -86,7 +86,21 @@ let controller = WebInspectorViewController(
 )
 ```
 
-Custom tabs are not part of the current public surface.
+Custom tabs now use UIKit view controllers:
+
+```swift
+let consoleTab = WebInspectorTab(
+    id: "app_console",
+    title: "Console",
+    systemImage: "terminal"
+) { session in
+    ConsoleViewController(inspectorSession: session)
+}
+
+let controller = WebInspectorViewController(
+    tabs: [.dom, .network, consoleTab]
+)
+```
 
 ## 5. Remove old DOM and Network model usage
 

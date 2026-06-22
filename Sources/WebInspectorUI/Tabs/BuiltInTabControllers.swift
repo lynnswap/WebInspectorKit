@@ -49,8 +49,11 @@ extension WebInspectorTab {
 
         package init() {}
 
-        package func controller(for tab: WebInspectorTab) -> any WebInspectorTab.BuiltInController {
-            controller(for: tab.builtIn)
+        package func controller(for tab: WebInspectorTab) -> (any WebInspectorTab.BuiltInController)? {
+            guard let builtIn = tab.builtIn else {
+                return nil
+            }
+            return controller(for: builtIn)
         }
 
         package func controller(for builtIn: WebInspectorTab.BuiltIn) -> any WebInspectorTab.BuiltInController {
@@ -109,12 +112,36 @@ extension WebInspectorTab {
                 )
             }
 
-            guard case let .tab(tabID) = displayItem,
-                  let tab = tabs.first(where: { $0.id == tabID }) else {
+            let tabID: WebInspectorTab.ID
+            switch displayItem {
+            case let .tab(id), let .customTab(id):
+                tabID = id
+            case .domElement:
                 return UIViewController()
             }
 
-            return catalog.controller(for: tab).makeViewController(
+            guard let tab = tabs.first(where: { $0.id == tabID }) else {
+                return UIViewController()
+            }
+
+            if case let .custom(content) = tab.content {
+                let viewController = session.interface.viewController(for: customContentKey(for: tab)) {
+                    content.makeViewController(session)
+                }
+                switch hostLayout {
+                case .compact:
+                    viewController.webInspectorDetachFromContainerForReuse()
+                    return viewController
+                case .regular:
+                    return RegularSplitRootViewController(contentViewController: viewController)
+                }
+            }
+
+            guard let controller = catalog.controller(for: tab) else {
+                return UIViewController()
+            }
+
+            return controller.makeViewController(
                 for: displayItem,
                 session: session,
                 layout: hostLayout
@@ -133,15 +160,30 @@ extension WebInspectorTab {
                 )
             }
 
-            guard case let .tab(tabID) = displayItem,
-                  let tab = tabs.first(where: { $0.id == tabID }) else {
+            let tabID: WebInspectorTab.ID
+            switch displayItem {
+            case let .tab(id), let .customTab(id):
+                tabID = id
+            case .domElement:
                 return []
             }
 
-            return catalog.controller(for: tab).contentKeys(
+            guard let tab = tabs.first(where: { $0.id == tabID }) else {
+                return []
+            }
+
+            guard let controller = catalog.controller(for: tab) else {
+                return [customContentKey(for: tab)]
+            }
+
+            return controller.contentKeys(
                 for: hostLayout,
                 displayItem: displayItem
             )
+        }
+
+        private static func customContentKey(for tab: WebInspectorTab) -> WebInspectorTab.ContentKey {
+            WebInspectorTab.ContentKey(tabID: tab.id, contentID: "root")
         }
     }
 }

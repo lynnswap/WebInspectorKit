@@ -15,7 +15,11 @@ public final class WebInspectorSession {
     public private(set) var pageUserInterfaceStyle: UIUserInterfaceStyle = .unspecified
     @ObservationIgnored private let attachAction: @MainActor (InspectorSession, WKWebView) async throws -> Void
     @ObservationIgnored private let detachAction: @MainActor (InspectorSession) async -> Void
-    @ObservationIgnored private var pageUserInterfaceStyleObserver: WebInspectorPageUserInterfaceStyleObserver?
+    @ObservationIgnored private let makePageUserInterfaceStyleObserver: @MainActor (
+        WKWebView,
+        @escaping @MainActor (UIUserInterfaceStyle) -> Void
+    ) -> any WebInspectorPageUserInterfaceStyleObserving
+    @ObservationIgnored private var pageUserInterfaceStyleObserver: (any WebInspectorPageUserInterfaceStyleObserving)?
 
     public convenience init(tabs: [WebInspectorTab] = [.dom, .network]) {
         self.init(inspector: InspectorSession(), tabs: tabs)
@@ -29,12 +33,19 @@ public final class WebInspectorSession {
         },
         detachAction: @escaping @MainActor (InspectorSession) async -> Void = { inspector in
             await inspector.detach()
+        },
+        makePageUserInterfaceStyleObserver: @escaping @MainActor (
+            WKWebView,
+            @escaping @MainActor (UIUserInterfaceStyle) -> Void
+        ) -> any WebInspectorPageUserInterfaceStyleObserving = { webView, apply in
+            WebInspectorPageUserInterfaceStyleObserver(webView: webView, apply: apply)
         }
     ) {
         self.inspector = inspector
         self.interface = InterfaceModel(tabs: tabs)
         self.attachAction = attachAction
         self.detachAction = detachAction
+        self.makePageUserInterfaceStyleObserver = makePageUserInterfaceStyleObserver
     }
 
     isolated deinit {
@@ -72,7 +83,7 @@ public final class WebInspectorSession {
     }
 
     private func startPageUserInterfaceStyleObservation(for webView: WKWebView) {
-        let observer = WebInspectorPageUserInterfaceStyleObserver(webView: webView) { [weak self] style in
+        let observer = makePageUserInterfaceStyleObserver(webView) { [weak self] style in
             self?.setPageUserInterfaceStyle(style)
         }
         pageUserInterfaceStyleObserver = observer
@@ -113,7 +124,7 @@ package final class InterfaceModel {
     package init(tabs: [WebInspectorTab] = [.dom, .network]) {
         let uniqueTabs = Self.uniqueTabs(tabs)
         self.tabs = uniqueTabs
-        selectedItemID = uniqueTabs.first?.id
+        selectedItemID = uniqueTabs.first.map { Self.displayItem(for: $0).id }
     }
 
     package func displayItems(for hostLayout: WebInspectorTab.HostLayout) -> [WebInspectorTab.DisplayItem] {
@@ -136,11 +147,14 @@ package final class InterfaceModel {
         guard tabs.contains(tab) else {
             return
         }
-        selectItem(.tab(tab.id))
+        selectItem(Self.displayItem(for: tab))
     }
 
     package func selectTab(withID tabID: WebInspectorTab.ID) {
-        selectItem(.tab(tabID))
+        guard let tab = tabs.first(where: { $0.id == tabID }) else {
+            return
+        }
+        selectTab(tab)
     }
 
     package func selectItem(_ displayItem: WebInspectorTab.DisplayItem) {
@@ -165,7 +179,7 @@ package final class InterfaceModel {
         pruneContentCache(retaining: reachableContentKeys(for: uniqueTabs))
         guard let selectedItemID,
               isValidItemID(selectedItemID) else {
-            self.selectedItemID = uniqueTabs.first?.id
+            self.selectedItemID = uniqueTabs.first.map { Self.displayItem(for: $0).id }
             return
         }
     }
@@ -211,15 +225,35 @@ package final class InterfaceModel {
         let selectedSourceTabID = selectedItemID == WebInspectorTab.DisplayItem.domElementID
             ? WebInspectorTab.dom.id
             : selectedItemID
+        if let customTab = tabs.first(where: { tab in
+            tab.builtIn == nil
+                && WebInspectorTab.DisplayItem.customTabID(tab.id) == selectedItemID
+        }) {
+            return customTab
+        }
         return tabs.first { $0.id == selectedSourceTabID }
     }
 
     private func isValidItemID(_ displayItemID: WebInspectorTab.DisplayItem.ID) -> Bool {
-        if tabs.contains(where: { $0.id == displayItemID }) {
+        if tabs.contains(where: { tab in
+            tab.builtIn != nil && tab.id == displayItemID
+        }) {
+            return true
+        }
+        if tabs.contains(where: { tab in
+            tab.builtIn == nil && WebInspectorTab.DisplayItem.customTabID(tab.id) == displayItemID
+        }) {
             return true
         }
         return displayItemID == WebInspectorTab.DisplayItem.domElementID
             && tabs.contains(where: { $0.builtIn == .dom })
+    }
+
+    private static func displayItem(for tab: WebInspectorTab) -> WebInspectorTab.DisplayItem {
+        if tab.builtIn != nil {
+            return .tab(tab.id)
+        }
+        return .customTab(tab.id)
     }
 
     private func reachableContentKeys(for tabs: [WebInspectorTab]) -> Set<WebInspectorTab.ContentKey> {

@@ -75,21 +75,23 @@ struct ParentContainerTests {
 
     @Test
     func sessionClearsPageUserInterfaceStyleAndStopsObservingOnDetach() async throws {
-        let session = makeSessionWithNoOpAttachment()
+        let observerRecorder = PageUserInterfaceStyleObserverRecorder(styleOnStart: .dark)
+        let session = makeSessionWithNoOpAttachment(
+            makePageUserInterfaceStyleObserver: observerRecorder.makeObserver
+        )
         let webView = WKWebView(frame: .zero)
 
         try await session.attach(to: webView)
-        let styleObservation = await observePageUserInterfaceStyle(in: session)
-        defer { styleObservation.cancel() }
-
-        webView.underPageBackgroundColor = .black
-        #expect(await styleObservation.values.waitUntilValue(UIUserInterfaceStyle.dark.rawValue))
+        let observer = try #require(observerRecorder.observers.first)
+        #expect(observer.isStarted)
+        #expect(session.pageUserInterfaceStyle == .dark)
 
         await session.detach()
 
+        #expect(observer.isInvalidated)
         #expect(session.hasPageUserInterfaceStyleObserverForTesting == false)
         #expect(session.pageUserInterfaceStyle == .unspecified)
-        webView.underPageBackgroundColor = .white
+        observer.publish(.light)
         #expect(session.pageUserInterfaceStyle == .unspecified)
     }
 
@@ -97,18 +99,20 @@ struct ParentContainerTests {
     func sessionClearsPageUserInterfaceStyleAndStopsObservingWhenAttachFails() async throws {
         let observedWebView = WKWebView(frame: .zero)
         let observedWebViewID = ObjectIdentifier(observedWebView)
-        let session = makeSessionWithNoOpAttachment { _, webView in
-            if ObjectIdentifier(webView) != observedWebViewID {
-                throw AttachmentFailure()
-            }
-        }
+        let observerRecorder = PageUserInterfaceStyleObserverRecorder(styleOnStart: .dark)
+        let session = makeSessionWithNoOpAttachment(
+            attachAction: { _, webView in
+                if ObjectIdentifier(webView) != observedWebViewID {
+                    throw AttachmentFailure()
+                }
+            },
+            makePageUserInterfaceStyleObserver: observerRecorder.makeObserver
+        )
 
         try await session.attach(to: observedWebView)
-        let styleObservation = await observePageUserInterfaceStyle(in: session)
-        defer { styleObservation.cancel() }
-
-        observedWebView.underPageBackgroundColor = .black
-        #expect(await styleObservation.values.waitUntilValue(UIUserInterfaceStyle.dark.rawValue))
+        let observer = try #require(observerRecorder.observers.first)
+        #expect(observer.isStarted)
+        #expect(session.pageUserInterfaceStyle == .dark)
 
         do {
             try await session.attach(to: WKWebView(frame: .zero))
@@ -117,27 +121,28 @@ struct ParentContainerTests {
             #expect(error is AttachmentFailure)
         }
 
+        #expect(observerRecorder.observers.count == 1)
+        #expect(observer.isInvalidated)
         #expect(session.hasPageUserInterfaceStyleObserverForTesting == false)
         #expect(session.pageUserInterfaceStyle == .unspecified)
-        observedWebView.underPageBackgroundColor = .white
+        observer.publish(.light)
         #expect(session.pageUserInterfaceStyle == .unspecified)
     }
 
     @Test
     func viewControllerDoesNotApplyPageUserInterfaceStyle() async throws {
-        let session = makeSessionWithNoOpAttachment()
+        let observerRecorder = PageUserInterfaceStyleObserverRecorder(styleOnStart: .dark)
+        let session = makeSessionWithNoOpAttachment(
+            makePageUserInterfaceStyleObserver: observerRecorder.makeObserver
+        )
         let viewController = WebInspectorViewController(session: session)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         let webView = WKWebView(frame: .zero)
 
         try await session.attach(to: webView)
-        let styleObservation = await observePageUserInterfaceStyle(in: session)
-        defer { styleObservation.cancel() }
 
-        webView.underPageBackgroundColor = .black
-
-        #expect(await styleObservation.values.waitUntilValue(UIUserInterfaceStyle.dark.rawValue))
+        #expect(session.pageUserInterfaceStyle == .dark)
         #expect(viewController.overrideUserInterfaceStyle == .unspecified)
     }
 
@@ -202,6 +207,174 @@ struct ParentContainerTests {
             projection.displayItems(for: .regular, tabs: tabs).map(\.id)
                 == [WebInspectorTab.dom.id, WebInspectorTab.network.id]
         )
+    }
+
+    @Test
+    func customTabUsesPublicDescriptorAndCachedViewControllerFactory() throws {
+        let customViewController = UIViewController()
+        var factoryCallCount = 0
+        var factorySession: WebInspectorSession?
+        let customTab = WebInspectorTab(
+            id: "webinspector_custom_console",
+            title: "Console",
+            systemImage: "terminal"
+        ) { session in
+            factoryCallCount += 1
+            factorySession = session
+            return customViewController
+        }
+        let session = WebInspectorSession(tabs: [.dom, customTab, .network])
+        let projection = WebInspectorTab.DisplayProjection()
+
+        #expect(
+            projection.displayItems(for: .compact, tabs: session.interface.tabs).map(\.id)
+                == [
+                    WebInspectorTab.dom.id,
+                    WebInspectorTab.DisplayItem.domElementID,
+                    WebInspectorTab.DisplayItem.customTabID(customTab.id),
+                    WebInspectorTab.network.id,
+                ]
+        )
+        #expect(
+            projection.displayItems(for: .regular, tabs: session.interface.tabs).map(\.id)
+                == [
+                    WebInspectorTab.dom.id,
+                    WebInspectorTab.DisplayItem.customTabID(customTab.id),
+                    WebInspectorTab.network.id,
+                ]
+        )
+        #expect(
+            projection.descriptor(
+                for: .customTab(customTab.id),
+                tabs: session.interface.tabs
+            )?.title == "Console"
+        )
+
+        let compactContent = WebInspectorTab.ContentFactory.makeViewController(
+            for: .customTab(customTab.id),
+            session: session,
+            hostLayout: .compact,
+            tabs: session.interface.tabs
+        )
+        let regularContent = WebInspectorTab.ContentFactory.makeViewController(
+            for: .customTab(customTab.id),
+            session: session,
+            hostLayout: .regular,
+            tabs: session.interface.tabs
+        )
+        regularContent.loadViewIfNeeded()
+        #expect(regularContent !== customViewController)
+        #expect(customViewController.parent === regularContent)
+
+        let reparentedContent = WebInspectorTab.ContentFactory.makeViewController(
+            for: .customTab(customTab.id),
+            session: session,
+            hostLayout: .compact,
+            tabs: session.interface.tabs
+        )
+
+        #expect(compactContent === customViewController)
+        #expect(reparentedContent === customViewController)
+        #expect(reparentedContent.parent == nil)
+        #expect(factorySession === session)
+        #expect(factoryCallCount == 1)
+    }
+
+    @Test
+    func customTabDisplayItemDoesNotCollideWithInternalDOMElementIdentifier() throws {
+        let customViewController = UIViewController()
+        let customTab = WebInspectorTab(
+            id: WebInspectorTab.DisplayItem.domElementID,
+            title: "Custom Element",
+            image: nil
+        ) { _ in
+            customViewController
+        }
+        let session = WebInspectorSession(tabs: [.dom, customTab])
+        let projection = WebInspectorTab.DisplayProjection()
+        let compactDisplayItems = projection.displayItems(for: .compact, tabs: session.interface.tabs)
+        let displayItemIDs = compactDisplayItems.map(\.id)
+        let customDisplayID = WebInspectorTab.DisplayItem.customTabID(customTab.id)
+
+        #expect(
+            displayItemIDs == [
+                WebInspectorTab.dom.id,
+                WebInspectorTab.DisplayItem.domElementID,
+                customDisplayID,
+            ]
+        )
+        #expect(Set(displayItemIDs).count == displayItemIDs.count)
+
+        let initiallySelectedCustomSession = WebInspectorSession(tabs: [customTab, .dom])
+        #expect(initiallySelectedCustomSession.interface.selectedItemID == customDisplayID)
+        #expect(initiallySelectedCustomSession.interface.resolvedSelection(for: .compact) == .customTab(customTab.id))
+        #expect(initiallySelectedCustomSession.interface.selectedTab == customTab)
+
+        session.interface.selectItem(withID: customDisplayID)
+
+        #expect(session.interface.resolvedSelection(for: .compact) == .customTab(customTab.id))
+        #expect(session.interface.selectedTab == customTab)
+
+        let customContent = WebInspectorTab.ContentFactory.makeViewController(
+            for: .customTab(customTab.id),
+            session: session,
+            hostLayout: .compact,
+            tabs: session.interface.tabs
+        )
+        #expect(customContent === customViewController)
+    }
+
+    @Test
+    func regularCustomTabWrapsNavigationControllerContent() throws {
+        let customRootViewController = UIViewController()
+        let customNavigationController = UINavigationController(rootViewController: customRootViewController)
+        let customTab = WebInspectorTab(
+            id: "webinspector_custom_navigation",
+            title: "Custom",
+            image: nil
+        ) { _ in
+            customNavigationController
+        }
+        let session = WebInspectorSession(tabs: [customTab])
+        let host = RegularTabContentViewController(session: session)
+
+        host.loadViewIfNeeded()
+
+        let installedRoot = try #require(host.viewControllers.first)
+        installedRoot.loadViewIfNeeded()
+        #expect(installedRoot !== customNavigationController)
+        #expect(installedRoot is UINavigationController == false)
+        #expect(customNavigationController.parent === installedRoot)
+    }
+
+    @Test
+    func compactAndRegularHostsDisplayCustomTabs() throws {
+        let customTab = WebInspectorTab(
+            id: "webinspector_custom_console",
+            title: "Console",
+            systemImage: "terminal"
+        ) { _ in
+            UIViewController()
+        }
+        let session = WebInspectorSession(tabs: [.dom, customTab])
+
+        let compactHost = CompactTabBarController(session: session)
+        #expect(
+            compactHost.displayedTabIdentifiersForTesting
+                == [
+                    WebInspectorTab.dom.id,
+                    WebInspectorTab.DisplayItem.domElementID,
+                    WebInspectorTab.DisplayItem.customTabID(customTab.id),
+                ]
+        )
+
+        let regularHost = RegularTabContentViewController(session: session)
+        regularHost.loadViewIfNeeded()
+        let segmentedControl = regularHost.segmentedControlForTesting
+
+        #expect(segmentedControl.numberOfSegments == 2)
+        #expect(segmentedControl.titleForSegment(at: 0) == "DOM")
+        #expect(segmentedControl.titleForSegment(at: 1) == "Console")
     }
 
     @Test
@@ -661,13 +834,77 @@ struct ParentContainerTests {
 
     private func makeSessionWithNoOpAttachment(
         attachAction: @escaping @MainActor (InspectorSession, WKWebView) async throws -> Void = { _, _ in },
-        detachAction: @escaping @MainActor (InspectorSession) async -> Void = { _ in }
+        detachAction: @escaping @MainActor (InspectorSession) async -> Void = { _ in },
+        makePageUserInterfaceStyleObserver: @escaping @MainActor (
+            WKWebView,
+            @escaping @MainActor (UIUserInterfaceStyle) -> Void
+        ) -> any WebInspectorPageUserInterfaceStyleObserving = { webView, apply in
+            WebInspectorPageUserInterfaceStyleObserver(webView: webView, apply: apply)
+        }
     ) -> WebInspectorSession {
         WebInspectorSession(
             inspector: InspectorSession(),
             attachAction: attachAction,
-            detachAction: detachAction
+            detachAction: detachAction,
+            makePageUserInterfaceStyleObserver: makePageUserInterfaceStyleObserver
         )
+    }
+
+    @MainActor
+    private final class PageUserInterfaceStyleObserverRecorder {
+        private let styleOnStart: UIUserInterfaceStyle
+        private(set) var observers: [PageUserInterfaceStyleObserverDouble] = []
+
+        init(styleOnStart: UIUserInterfaceStyle) {
+            self.styleOnStart = styleOnStart
+        }
+
+        func makeObserver(
+            webView: WKWebView,
+            apply: @escaping @MainActor (UIUserInterfaceStyle) -> Void
+        ) -> any WebInspectorPageUserInterfaceStyleObserving {
+            let observer = PageUserInterfaceStyleObserverDouble(
+                styleOnStart: styleOnStart,
+                apply: apply
+            )
+            observers.append(observer)
+            return observer
+        }
+    }
+
+    @MainActor
+    private final class PageUserInterfaceStyleObserverDouble: WebInspectorPageUserInterfaceStyleObserving {
+        private let styleOnStart: UIUserInterfaceStyle
+        private let apply: @MainActor (UIUserInterfaceStyle) -> Void
+        private(set) var isStarted = false
+        private(set) var isInvalidated = false
+
+        init(
+            styleOnStart: UIUserInterfaceStyle,
+            apply: @escaping @MainActor (UIUserInterfaceStyle) -> Void
+        ) {
+            self.styleOnStart = styleOnStart
+            self.apply = apply
+        }
+
+        func start() {
+            guard isInvalidated == false else {
+                return
+            }
+            isStarted = true
+            publish(styleOnStart)
+        }
+
+        func invalidate() {
+            isInvalidated = true
+        }
+
+        func publish(_ style: UIUserInterfaceStyle) {
+            guard isInvalidated == false else {
+                return
+            }
+            apply(style)
+        }
     }
 
     private final class DetachRecorder {
