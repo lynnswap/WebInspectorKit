@@ -1214,6 +1214,113 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func partialMediaResponsePreviewCoordinatorUsesRemoteURLInsteadOfFragmentBody() throws {
+        let mediaURL = "https://media.example.test/video/clip.mp4?token=test"
+        let body = NetworkBody(
+            role: .response,
+            kind: .binary,
+            full: "AA==",
+            isBase64Encoded: true,
+            sourceSyntaxKind: .plainText,
+            phase: .loaded
+        )
+        let coordinator = NetworkMediaPreviewCoordinator()
+
+        let action = coordinator.preparePreview(
+            for: body,
+            metadata: NetworkMediaPreviewMetadata(
+                mimeType: "video/mp4",
+                url: mediaURL,
+                isPartialContent: true
+            )
+        ) { _ in
+            Issue.record("Partial media responses should use the remote URL instead of preparing fragment body bytes")
+        }
+
+        guard case .remoteMovie(let url) = action else {
+            Issue.record("Expected partial media preview to use the remote media URL")
+            return
+        }
+        #expect(url.absoluteString == mediaURL)
+    }
+
+    @Test
+    func partialMediaResponsePreviewCoordinatorRejectsFragmentBodyWithoutRemoteURL() throws {
+        let body = NetworkBody(
+            role: .response,
+            kind: .binary,
+            full: "AA==",
+            isBase64Encoded: true,
+            sourceSyntaxKind: .plainText,
+            phase: .loaded
+        )
+        let coordinator = NetworkMediaPreviewCoordinator()
+
+        let action = coordinator.preparePreview(
+            for: body,
+            metadata: NetworkMediaPreviewMetadata(
+                mimeType: "video/mp4",
+                url: "blob:https://media.example.test/video",
+                isPartialContent: true
+            )
+        ) { _ in
+            Issue.record("Unplayable partial media URLs should not prepare fragment body bytes")
+        }
+
+        guard case .unavailable = action else {
+            Issue.record("Expected partial media fragment bodies without a remote URL to stay unavailable")
+            return
+        }
+    }
+
+    @Test
+    func partialMediaResponsePreviewUsesFinalResponseURLInsteadOfFragmentBody() async throws {
+        let finalMediaURL = "https://cdn.example.test/video/clip.mp4?token=test"
+        let network = NetworkSession()
+        let request = try #require(
+            applyRequest(
+                to: network,
+                requestID: "range-1",
+                url: "https://origin.example.test/video",
+                requestHeaders: ["Range": "bytes=0-1"],
+                responseHeaders: [
+                    "content-type": "video/mp4",
+                    "Content-Range": "bytes 0-1/2048",
+                ],
+                responseMimeType: "video/mp4",
+                responseURL: finalMediaURL,
+                responseStatus: 206,
+                responseStatusText: "Partial Content"
+            )
+        )
+        var fetchedIDs: [NetworkRequest.ID] = []
+        let model = NetworkPanelModel(network: network) { id in
+            fetchedIDs.append(id)
+            request.markResponseBodyFetching()
+        }
+        model.selectRequest(request)
+        let viewController = makeNetworkDetailViewController(model: model)
+        let playerFactory = MoviePreviewPlayerFactorySpy()
+        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
+            playerFactory.makePlayer(for:)
+        )
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        viewController.setModeForTesting(.preview)
+        let didRenderRemoteMediaPreview = await waitUntilRendered(in: viewController) {
+            viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting?.absoluteString == finalMediaURL
+                && fetchedIDs.isEmpty
+        }
+
+        #expect(didRenderRemoteMediaPreview)
+        let previewURL = try #require(viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting)
+        #expect(previewURL.isFileURL == false)
+        #expect(playerFactory.requestedURLs == [previewURL])
+        #expect(fetchedIDs.isEmpty)
+    }
+
+    @Test
     func mediaResponsePreviewReleasesPlayerAndTemporaryFileWhenShowingHeaders() async throws {
         let network = NetworkSession()
         let request = try #require(
@@ -2668,6 +2775,9 @@ struct NetworkDetailViewControllerTests {
         postData: String? = nil,
         responseHeaders: [String: String] = ["content-type": "text/javascript"],
         responseMimeType: String = "text/javascript",
+        responseURL: String? = nil,
+        responseStatus: Int = 200,
+        responseStatusText: String = "OK",
         finishes: Bool = true
     ) -> NetworkRequest? {
         let targetID = ProtocolTarget.ID("page")
@@ -2692,9 +2802,9 @@ struct NetworkDetailViewControllerTests {
             requestID: requestID,
             resourceType: .script,
             response: NetworkRequest.Response.Payload(
-                url: url,
-                status: 200,
-                statusText: "OK",
+                url: responseURL ?? url,
+                status: responseStatus,
+                statusText: responseStatusText,
                 headers: responseHeaders,
                 mimeType: responseMimeType
             ),

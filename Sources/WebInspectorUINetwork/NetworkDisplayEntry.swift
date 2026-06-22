@@ -217,4 +217,17 @@ extension NetworkRequest {
     package var hasRequestedByteRangeHeader: Bool {
         NetworkByteRange.hasByteRangeHeader(request.headers)
     }
+
+    package var hasResponseContentRangeHeader: Bool {
+        guard let response else {
+            return false
+        }
+        return NetworkRequest.Display.headerValue(named: "content-range", in: response.headers) != nil
+    }
+
+    package var hasPartialResponseContent: Bool {
+        hasRequestedByteRangeHeader
+            || response?.status == 206
+            || hasResponseContentRangeHeader
+    }
 }

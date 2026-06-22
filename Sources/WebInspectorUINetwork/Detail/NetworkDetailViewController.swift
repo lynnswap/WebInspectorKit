@@ -596,7 +596,14 @@ package final class NetworkDetailViewController: UIViewController {
               request.canFetchResponseBody else {
             return
         }
+        guard shouldFetchResponseBodyForVisibleResponsePreview(request) else {
+            return
+        }
         model.fetchResponseBodyIfNeeded(for: request)
+    }
+
+    private func shouldFetchResponseBodyForVisibleResponsePreview(_ request: NetworkRequest) -> Bool {
+        previewMetadata(in: request, for: .response).bodylessResponseMediaPreviewURL == nil
     }
 
     private func body(in request: NetworkRequest, for role: NetworkBody.Role) -> NetworkBody? {
@@ -629,12 +636,14 @@ package final class NetworkDetailViewController: UIViewController {
         case .request:
             return NetworkMediaPreviewMetadata(
                 mimeType: mimeType(from: nil, headers: request.request.headers),
-                url: request.request.url
+                url: request.request.url,
+                isPartialContent: request.hasRequestedByteRangeHeader
             )
         case .response:
             return NetworkMediaPreviewMetadata(
                 mimeType: mimeType(from: request.response?.mimeType, headers: request.response?.headers ?? [:]),
-                url: request.response?.url ?? request.request.url
+                url: request.response?.url ?? request.request.url,
+                isPartialContent: request.hasPartialResponseContent
             )
         }
     }

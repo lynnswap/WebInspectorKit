@@ -7,10 +7,36 @@ import WebInspectorCore
 package struct NetworkMediaPreviewMetadata: Equatable, Sendable {
     package var mimeType: String?
     package var url: String?
+    package var isPartialContent: Bool
 
-    package init(mimeType: String?, url: String?) {
+    package init(
+        mimeType: String?,
+        url: String?,
+        isPartialContent: Bool = false
+    ) {
         self.mimeType = mimeType
         self.url = url
+        self.isPartialContent = isPartialContent
+    }
+}
+
+extension NetworkMediaPreviewMetadata {
+    package var bodylessResponseMediaPreviewURL: URL? {
+        guard let previewKind = NetworkRequest.Display.MediaPreviewSupport.previewKind(
+            mimeType: mimeType,
+            url: url
+        ) else {
+            return nil
+        }
+
+        switch previewKind {
+        case .hlsPlaylist:
+            return playableRemoteMediaURL(url)
+        case .movie:
+            return isPartialContent ? playableRemoteMediaURL(url) : nil
+        case .image:
+            return nil
+        }
     }
 }
 
@@ -99,11 +125,16 @@ package final class NetworkMediaPreviewCoordinator {
             return nil
         }
 
+        if body.role == .response,
+           let remoteURL = metadata?.bodylessResponseMediaPreviewURL {
+            return .remoteMovie(remoteURL)
+        }
+
+        if metadata?.isPartialContent == true {
+            return nil
+        }
+
         if previewKind == .hlsPlaylist {
-            if body.role == .response,
-               let remoteURL = playableRemoteMediaURL(metadata?.url) {
-                return .remoteMovie(remoteURL)
-            }
             if body.role == .request {
                 return nil
             }
