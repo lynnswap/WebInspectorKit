@@ -4,6 +4,10 @@ import Testing
 import WebInspectorTestSupport
 import WebInspectorTransport
 @testable import WebInspectorCore
+@testable import WebInspectorCoreConsoleNetwork
+@testable import WebInspectorCoreDOMCSS
+@testable import WebInspectorCoreRuntime
+@testable import WebInspectorCoreSupport
 
 @Test
 func connectBootstrapsMainPageDocumentInOrder() async throws {

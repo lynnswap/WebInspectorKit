@@ -1,6 +1,7 @@
 #if canImport(UIKit)
 import ObservationBridge
 import UIKit
+import WebInspectorUIBase
 
 @MainActor
 package final class RegularTabContentViewController: UINavigationController {

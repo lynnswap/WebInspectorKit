@@ -2,6 +2,7 @@
 import UIKit
 import WebKit
 import WebInspectorCore
+import WebInspectorUIBase
 
 @MainActor
 private final class WebInspectorRootPresentationLifecycleCoordinator {

@@ -3,6 +3,8 @@ import Observation
 import UIKit
 import WebKit
 import WebInspectorCore
+import WebInspectorUIBase
+import WebInspectorUINetwork
 
 @MainActor
 @Observable

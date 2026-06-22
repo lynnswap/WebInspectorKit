@@ -1,6 +1,9 @@
 #if canImport(UIKit)
 import WebInspectorCore
 import UIKit
+import WebInspectorUIBase
+import WebInspectorUIDOM
+import WebInspectorUINetwork
 
 @MainActor
 enum WebInspectorViewControllerPreviewFixtures {

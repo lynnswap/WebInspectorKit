@@ -5,7 +5,15 @@ import WebInspectorTransport
 import UIKit
 import WebKit
 @testable import WebInspectorCore
+@testable import WebInspectorCoreConsoleNetwork
+@testable import WebInspectorCoreDOMCSS
+@testable import WebInspectorCoreRuntime
+@testable import WebInspectorCoreSupport
 @testable import WebInspectorUI
+@testable import WebInspectorUISyntaxBody
+@testable import WebInspectorUINetwork
+@testable import WebInspectorUIDOM
+@testable import WebInspectorUIBase
 
 extension WebInspectorUIRenderingTests {
 @MainActor
@@ -982,8 +990,8 @@ struct ParentContainerTests {
                     viewController.modelObservationDeliveryForTesting,
                     viewController.selectedRequestRenderObservationDeliveryForTesting,
                     viewController.responseBodyFetchObservationDeliveryForTesting,
-                    viewController.bodyViewControllerForTesting.bodyObservationDeliveryForTesting,
-                    viewController.bodyViewControllerForTesting.previewRenderObservationDeliveryForTesting,
+                    viewController.syntaxBodyViewControllerForTesting.bodyObservationDeliveryForTesting,
+                    viewController.syntaxBodyViewControllerForTesting.previewRenderObservationDeliveryForTesting,
                 ].compactMap { $0 }
             },
             sample: {
@@ -993,5 +1001,15 @@ struct ParentContainerTests {
         )
     }
 }
+}
+
+@MainActor
+private extension NetworkDetailViewController {
+    var syntaxBodyViewControllerForTesting: NetworkBodyViewController {
+        guard let viewController = bodyViewControllerForTesting as? NetworkBodyViewController else {
+            preconditionFailure("Expected NetworkDetailViewController to use NetworkBodyViewController in tests.")
+        }
+        return viewController
+    }
 }
 #endif

@@ -2,7 +2,15 @@ import Testing
 import Synchronization
 import WebInspectorTransport
 @testable import WebInspectorCore
+@testable import WebInspectorCoreConsoleNetwork
+@testable import WebInspectorCoreDOMCSS
+@testable import WebInspectorCoreRuntime
+@testable import WebInspectorCoreSupport
 @testable import WebInspectorUI
+@testable import WebInspectorUISyntaxBody
+@testable import WebInspectorUINetwork
+@testable import WebInspectorUIDOM
+@testable import WebInspectorUIBase
 
 @Suite
 struct NetworkPanelModelTests {
