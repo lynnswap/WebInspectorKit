@@ -39,7 +39,7 @@ package extension InspectorSession {
                 receiver: receiver,
                 pageReloadAction: { [page] in
                     try Task.checkCancellation()
-                    page.reload()
+                    try page.reload()
                 },
                 connectionCleanup: { [page] in
                     page.restoreInspectabilityIfNeeded()
@@ -68,8 +68,11 @@ package final class NativeInspectablePage {
         )
     }
 
-    package func reload() {
-        webView?.reload()
+    package func reload() throws {
+        guard let webView else {
+            throw InspectorSession.Error("Inspected WKWebView is no longer available.")
+        }
+        webView.reload()
     }
 
     package func restoreInspectabilityIfNeeded() {
@@ -81,6 +84,10 @@ package final class NativeInspectablePage {
             owner: inspectabilityOwner
         )
     }
+
+    #if DEBUG
+    package init(missingWebViewForTesting: Void) {}
+    #endif
 }
 
 @MainActor
