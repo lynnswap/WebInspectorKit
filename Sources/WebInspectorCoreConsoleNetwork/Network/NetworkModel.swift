@@ -322,6 +322,22 @@ extension NetworkSession {
         package var orderedRequestIDs: [NetworkRequest.ID]
         package var requestsByID: [NetworkRequest.ID: NetworkRequest.Snapshot]
     }
+
+    package struct DisplayChanges: Equatable, Sendable {
+        package var revision: Int
+        package var changedRequestIDs: Set<NetworkRequest.ID>
+        package var requiresFullReconcile: Bool
+
+        package init(
+            revision: Int,
+            changedRequestIDs: Set<NetworkRequest.ID>,
+            requiresFullReconcile: Bool
+        ) {
+            self.revision = revision
+            self.changedRequestIDs = changedRequestIDs
+            self.requiresFullReconcile = requiresFullReconcile
+        }
+    }
 }
 
 @MainActor
@@ -452,15 +468,22 @@ private struct NetworkRequestStore {
     }
 }
 
+private struct NetworkRequestDisplayChange {
+    var revision: Int
+    var requestID: NetworkRequest.ID?
+    var requiresFullReconcile: Bool
+}
+
 @MainActor
 @Observable
 package final class NetworkSession {
+    private static let requestDisplayChangeHistoryLimit = 2_048
+
     private var requestStore: NetworkRequestStore
     package private(set) var requestTopologyRevision: Int
     package private(set) var requestContentRevision: Int
     package private(set) var requestDisplayRevision: Int
-    package private(set) var requestPresentationRevision: Int
-    @ObservationIgnored private var requestDisplayRevisionsByID: [NetworkRequest.ID: Int]
+    @ObservationIgnored private var requestDisplayChangeHistory: [NetworkRequestDisplayChange]
     @ObservationIgnored private var commandChannel: ProtocolCommandChannel?
     @ObservationIgnored private let protocolCommands: NetworkProtocolCommands
     @ObservationIgnored private var recordError: ((InspectorError?) -> Void)?
@@ -470,8 +493,7 @@ package final class NetworkSession {
         requestTopologyRevision = 0
         requestContentRevision = 0
         requestDisplayRevision = 0
-        requestPresentationRevision = 0
-        requestDisplayRevisionsByID = [:]
+        requestDisplayChangeHistory = []
         commandChannel = nil
         protocolCommands = NetworkProtocolCommands()
         recordError = nil
@@ -489,14 +511,51 @@ package final class NetworkSession {
         requestStore.request(for: id)
     }
 
-    package func requestDisplayRevision(for id: NetworkRequest.ID) -> Int {
-        requestDisplayRevisionsByID[id] ?? 0
-    }
-
     package func reset() {
         requestStore.removeAll()
-        requestDisplayRevisionsByID.removeAll()
-        recordRequestTopologyChange()
+        recordRequestTopologyChange(requiresDisplayFullReconcile: true)
+    }
+
+    package func requestDisplayChanges(after revision: Int) -> NetworkSession.DisplayChanges {
+        let currentRevision = requestDisplayRevision
+        guard revision < currentRevision else {
+            return NetworkSession.DisplayChanges(
+                revision: currentRevision,
+                changedRequestIDs: [],
+                requiresFullReconcile: false
+            )
+        }
+        guard revision >= 0 else {
+            return NetworkSession.DisplayChanges(
+                revision: currentRevision,
+                changedRequestIDs: [],
+                requiresFullReconcile: true
+            )
+        }
+
+        let pendingChanges = requestDisplayChangeHistory.filter { $0.revision > revision }
+        guard let firstPendingChange = pendingChanges.first,
+              firstPendingChange.revision == revision &+ 1 else {
+            return NetworkSession.DisplayChanges(
+                revision: currentRevision,
+                changedRequestIDs: [],
+                requiresFullReconcile: true
+            )
+        }
+
+        var changedRequestIDs: Set<NetworkRequest.ID> = []
+        var requiresFullReconcile = false
+        for change in pendingChanges {
+            if let requestID = change.requestID {
+                changedRequestIDs.insert(requestID)
+            }
+            requiresFullReconcile = requiresFullReconcile || change.requiresFullReconcile
+        }
+        return NetworkSession.DisplayChanges(
+            revision: currentRevision,
+            changedRequestIDs: changedRequestIDs,
+            requiresFullReconcile: requiresFullReconcile
+        )
     }
 
     package func bindProtocolChannel(
@@ -600,7 +659,7 @@ package final class NetworkSession {
                 existing.backendResourceIdentifier = backendResourceIdentifier ?? existing.backendResourceIdentifier
             }
             requestStore.markActive(key)
-            recordRequestDisplayChange(for: key)
+            recordRequestDisplayChange(requestID: key)
             return key
         }
 
@@ -620,7 +679,7 @@ package final class NetworkSession {
             )
         )
         requestStore.markActive(key)
-        recordRequestTopologyChange(for: key)
+        recordRequestTopologyChange(displayRequestID: key)
         return key
     }
 
@@ -633,7 +692,8 @@ package final class NetworkSession {
         response: NetworkRequest.Response.Payload,
         timestamp: Double
     ) {
-        guard let request = requestStore.request(for: .init(targetID: targetID, requestID: requestID)) else {
+        let key = NetworkRequest.ID(targetID: targetID, requestID: requestID)
+        guard let request = requestStore.request(for: key) else {
             return
         }
         request.frameID = frameID ?? request.frameID
@@ -647,7 +707,7 @@ package final class NetworkSession {
         request.ensureResponseBody()
         request.responseReceivedTimestamp = timestamp
         request.state = .responded
-        recordRequestDisplayChange(for: request.id)
+        recordRequestDisplayChange(requestID: key)
     }
 
     package func applyDataReceived(
@@ -673,23 +733,27 @@ package final class NetworkSession {
         sourceMapURL: String? = nil,
         metrics: NetworkRequest.Metrics.Payload? = nil
     ) {
-        guard let request = requestStore.request(for: .init(targetID: targetID, requestID: requestID)) else {
+        let key = NetworkRequest.ID(targetID: targetID, requestID: requestID)
+        guard let request = requestStore.request(for: key) else {
             return
         }
+        var didChangeDisplayFacts = false
         if let sourceMapURL {
             request.sourceMapURL = sourceMapURL
         }
-        let updatesDisplayFacts = metrics?.requestHeaders != nil
         if let metrics {
+            let previousRequestHeaders = request.request.headers
             request.applyMetrics(metrics)
+            didChangeDisplayFacts = metrics.requestHeaders != nil
+                && request.request.headers != previousRequestHeaders
         }
         request.finishedOrFailedTimestamp = timestamp
         request.state = .finished
-        requestStore.closeActive(.init(targetID: targetID, requestID: requestID))
-        if updatesDisplayFacts {
-            recordRequestDisplayChange(for: request.id)
+        requestStore.closeActive(key)
+        if didChangeDisplayFacts {
+            recordRequestDisplayChange(requestID: key)
         } else {
-            recordRequestPresentationChange()
+            recordRequestContentChange()
         }
     }
 
@@ -706,7 +770,7 @@ package final class NetworkSession {
         request.finishedOrFailedTimestamp = timestamp
         request.state = .failed(errorText: errorText, canceled: canceled)
         requestStore.closeActive(.init(targetID: targetID, requestID: requestID))
-        recordRequestPresentationChange()
+        recordRequestContentChange()
     }
 
     @discardableResult
@@ -757,9 +821,9 @@ package final class NetworkSession {
         networkRequest.finishedOrFailedTimestamp = timestamp
         networkRequest.state = .finished
         if didExist {
-            recordRequestDisplayChange(for: key)
+            recordRequestDisplayChange(requestID: key)
         } else {
-            recordRequestTopologyChange(for: key)
+            recordRequestTopologyChange(displayRequestID: key)
         }
         return key
     }
@@ -775,7 +839,7 @@ package final class NetworkSession {
             existing.request.url = url
             existing.resourceType = .webSocket
             existing.webSocketReadyState = .connecting
-            recordRequestDisplayChange(for: key)
+            recordRequestDisplayChange(requestID: key)
             return key
         }
 
@@ -795,7 +859,7 @@ package final class NetworkSession {
         networkRequest.webSocketReadyState = .connecting
         requestStore.insert(networkRequest)
         requestStore.markActive(key)
-        recordRequestTopologyChange(for: key)
+        recordRequestTopologyChange(displayRequestID: key)
         return key
     }
 
@@ -840,7 +904,7 @@ package final class NetworkSession {
         networkRequest.responseReceivedTimestamp = timestamp
         networkRequest.webSocketReadyState = .open
         networkRequest.state = .responded
-        recordRequestDisplayChange(for: key)
+        recordRequestDisplayChange(requestID: key)
     }
 
     package func applyWebSocketFrameReceived(
@@ -943,21 +1007,29 @@ package final class NetworkSession {
         return commandChannel
     }
 
-    private func recordRequestTopologyChange(for id: NetworkRequest.ID? = nil) {
+    private func recordRequestTopologyChange(
+        displayRequestID: NetworkRequest.ID? = nil,
+        requiresDisplayFullReconcile: Bool = false
+    ) {
         requestTopologyRevision &+= 1
-        recordRequestDisplayChange(for: id)
+        recordRequestDisplayChange(requestID: displayRequestID, requiresFullReconcile: requiresDisplayFullReconcile)
     }
 
-    private func recordRequestDisplayChange(for id: NetworkRequest.ID? = nil) {
+    private func recordRequestDisplayChange(
+        requestID: NetworkRequest.ID? = nil,
+        requiresFullReconcile: Bool = false
+    ) {
         requestDisplayRevision &+= 1
-        if let id {
-            requestDisplayRevisionsByID[id] = requestDisplayRevision
+        requestDisplayChangeHistory.append(
+            NetworkRequestDisplayChange(
+                revision: requestDisplayRevision,
+                requestID: requestID,
+                requiresFullReconcile: requiresFullReconcile
+            )
+        )
+        if requestDisplayChangeHistory.count > Self.requestDisplayChangeHistoryLimit {
+            requestDisplayChangeHistory.removeFirst(requestDisplayChangeHistory.count - Self.requestDisplayChangeHistoryLimit)
         }
-        recordRequestPresentationChange()
-    }
-
-    private func recordRequestPresentationChange() {
-        requestPresentationRevision &+= 1
         recordRequestContentChange()
     }
 

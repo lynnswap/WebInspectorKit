@@ -56,8 +56,8 @@ package final class NetworkPanelModel {
     @ObservationIgnored private let responseBodyFetchCoordinator: NetworkResponseBodyFetchCoordinator
     @ObservationIgnored private let mediaPreviewClassifier: NetworkRequest.Display.MediaPreviewClassifier
     @ObservationIgnored private weak var domNodeResolver: (any NetworkDOMNodeResolving)?
-    @ObservationIgnored private var projectionCache = NetworkDisplayProjectionCache()
-    @ObservationIgnored private var displayFactsByRequestID: [NetworkRequest.ID: NetworkRequestDisplayFacts] = [:]
+    @ObservationIgnored private var displayIndex: NetworkPanelDisplayIndex
+    @ObservationIgnored private var rowProjectionCache = NetworkDisplayProjectionCache()
     @ObservationIgnored private var displayProjectionBuildCountStorageForTesting = 0
     private var expandedRedirectResourceIDs: Set<NetworkRequest.ID> = []
     private var collapsedDOMNodeGroupIDs: Set<NetworkDOMNodeGroup.ID> = []
@@ -74,6 +74,7 @@ package final class NetworkPanelModel {
         self.domNodeResolver = domNodeResolver
         self.responseBodyFetchCoordinator = NetworkResponseBodyFetchCoordinator(action: responseBodyFetchAction)
         self.mediaPreviewClassifier = mediaPreviewClassifier
+        self.displayIndex = NetworkPanelDisplayIndex()
     }
 
     package var selectedRequestID: NetworkRequest.ID? {
@@ -118,13 +119,9 @@ package final class NetworkPanelModel {
 
     package var displayRowsPresentationRevision: DisplayRowsPresentationRevision {
         DisplayRowsPresentationRevision(
-            requestPresentationRevision: network.requestPresentationRevision,
+            contentRevision: network.requestContentRevision,
             domRevision: domNodeResolver?.networkDOMRevision
         )
-    }
-
-    package var displayProjectionBuildCountForTesting: Int {
-        displayProjectionBuildCountStorageForTesting
     }
 
     package var selectedRequest: NetworkRequest? {
@@ -197,6 +194,10 @@ package final class NetworkPanelModel {
         }
     }
 
+    package func isRedirectsExpanded(for requestID: NetworkRequest.ID) -> Bool {
+        expandedRedirectResourceIDs.contains(requestID)
+    }
+
     package func setDOMNodeGroupExpanded(_ isExpanded: Bool, for groupID: NetworkDOMNodeGroup.ID) {
         if isExpanded {
             collapsedDOMNodeGroupIDs.remove(groupID)
@@ -206,10 +207,6 @@ package final class NetworkPanelModel {
                 selectedEntryID = .domNodeGroup(groupID)
             }
         }
-    }
-
-    package func isRedirectsExpanded(for requestID: NetworkRequest.ID) -> Bool {
-        expandedRedirectResourceIDs.contains(requestID)
     }
 
     package func isDOMNodeGroupExpanded(for groupID: NetworkDOMNodeGroup.ID) -> Bool {
@@ -256,8 +253,8 @@ package final class NetworkPanelModel {
         selectedEntryID = nil
         expandedRedirectResourceIDs.removeAll()
         collapsedDOMNodeGroupIDs.removeAll()
-        projectionCache = NetworkDisplayProjectionCache()
-        displayFactsByRequestID.removeAll()
+        rowProjectionCache = NetworkDisplayProjectionCache()
+        displayIndex = NetworkPanelDisplayIndex()
         network.reset()
     }
 
@@ -272,23 +269,24 @@ package final class NetworkPanelModel {
     private func ensureProjection() -> NetworkDisplayProjection {
         let topologyKey = makeTopologyKey()
         let presentationRevision = NetworkDisplayPresentationRevision(
-            requestPresentationRevision: network.requestPresentationRevision,
+            contentRevision: network.requestContentRevision,
             domRevision: domNodeResolver?.networkDOMRevision
         )
-        if var projection = projectionCache.projection,
+        if var projection = rowProjectionCache.projection,
            projection.topologyKey == topologyKey {
             if projection.presentationRevision != presentationRevision {
                 refreshPresentations(in: &projection, presentationRevision: presentationRevision)
-                projectionCache.projection = projection
+                rowProjectionCache.projection = projection
             }
             return projection
         }
 
         let projection = makeProjection(
             topologyKey: topologyKey,
-            presentationRevision: presentationRevision
+            presentationRevision: presentationRevision,
+            filteredRequestIDs: filteredRequestIDs(for: topologyKey)
         )
-        projectionCache.projection = projection
+        rowProjectionCache.projection = projection
         displayProjectionBuildCountStorageForTesting += 1
         return projection
     }
@@ -296,63 +294,63 @@ package final class NetworkPanelModel {
     private func makeTopologyKey() -> DisplayRowsInvalidationRevision {
         let query = normalizedSearchText
         let resourceFilters = effectiveResourceFilters
-        let topologyDependsOnDisplayFacts = query.isEmpty == false
+        let criteriaRequiresDisplayFacts = query.isEmpty == false
             || resourceFilters.isEmpty == false
             || groupMediaRequestsByDOMNode
             || expandedRedirectResourceIDs.isEmpty == false
         return DisplayRowsInvalidationRevision(
             searchText: query,
             resourceFilters: resourceFilters,
-            requestOrderRevision: network.requestTopologyRevision,
-            requestFactsRevision: topologyDependsOnDisplayFacts ? network.requestDisplayRevision : nil,
+            topologyRevision: network.requestTopologyRevision,
+            displayRevision: criteriaRequiresDisplayFacts ? network.requestDisplayRevision : nil,
             groupMediaRequestsByDOMNode: groupMediaRequestsByDOMNode,
             redirectExpansion: expandedRedirectResourceIDs,
             collapsedDOMNodeGroups: collapsedDOMNodeGroupIDs
         )
     }
 
+    private func filteredRequestIDs(for topologyKey: DisplayRowsInvalidationRevision) -> [NetworkRequest.ID] {
+        let criteria = NetworkPanelDisplayCriteria(
+            searchText: topologyKey.searchText,
+            resourceFilters: topologyKey.resourceFilters
+        )
+        return displayIndex.reconcile(
+            network: network,
+            orderedRequestIDs: network.orderedRequestIDs,
+            criteria: criteria,
+            topologyRevision: network.requestTopologyRevision,
+            displayRevision: criteria.requiresEntries ? network.requestDisplayRevision : nil,
+            mediaPreviewClassifier: mediaPreviewClassifier
+        )
+    }
+
     private func makeProjection(
         topologyKey: DisplayRowsInvalidationRevision,
-        presentationRevision: NetworkDisplayPresentationRevision
+        presentationRevision: NetworkDisplayPresentationRevision,
+        filteredRequestIDs: [NetworkRequest.ID]
     ) -> NetworkDisplayProjection {
-        let query = topologyKey.searchText
-        let resourceFilters = topologyKey.resourceFilters
-        let needsResourceFilter = resourceFilters.isEmpty == false
+        let needsResourceFilter = topologyKey.resourceFilters.isEmpty == false
         let allowsMediaGrouping = groupMediaRequestsByDOMNode
-            && (needsResourceFilter == false || resourceFilters.contains(.media))
-        var filteredIDs: [NetworkRequest.ID] = []
+            && (needsResourceFilter == false || topologyKey.resourceFilters.contains(.media))
         var groupCandidatesByID: [NetworkDOMNodeGroup.ID: [NetworkRequest.ID]] = [:]
-        filteredIDs.reserveCapacity(network.orderedRequestIDs.count)
 
-        for requestID in network.orderedRequestIDs {
-            guard let request = network.request(for: requestID) else {
-                continue
-            }
-            let facts = displayFacts(for: request, requiresResourceFilter: needsResourceFilter)
-            if needsResourceFilter,
-               let resourceFilter = facts.resourceFilter,
-               resourceFilters.contains(resourceFilter) == false {
-                continue
-            }
-            guard facts.matchesSearch(query) else {
-                continue
-            }
-
-            filteredIDs.append(requestID)
-            guard allowsMediaGrouping,
-                  let groupID = facts.domNodeGroupID else {
-                continue
-            }
-            let isGroupCandidate = needsResourceFilter && resourceFilters.contains(.media)
-                ? facts.resourceFilter == .media
-                : facts.isCheapMediaGroupingCandidate
-            if isGroupCandidate {
+        if allowsMediaGrouping {
+            for requestID in filteredRequestIDs {
+                guard let request = network.request(for: requestID),
+                      let groupID = domNodeGroupID(for: request),
+                      isMediaGroupingCandidate(
+                          request,
+                          needsResourceFilter: needsResourceFilter,
+                          resourceFilters: topologyKey.resourceFilters
+                      ) else {
+                    continue
+                }
                 groupCandidatesByID[groupID, default: []].append(requestID)
             }
         }
 
         let mediaGroups = NetworkMediaRequestGroups(groupedRequestIDsByGroupID: groupCandidatesByID)
-        let rows = makeRows(filteredRequestIDs: filteredIDs, mediaGroups: mediaGroups)
+        let rows = makeRows(filteredRequestIDs: filteredRequestIDs, mediaGroups: mediaGroups)
         return NetworkDisplayProjection(
             topologyKey: topologyKey,
             presentationRevision: presentationRevision,
@@ -366,18 +364,17 @@ package final class NetworkPanelModel {
         filteredRequestIDs: [NetworkRequest.ID],
         mediaGroups: NetworkMediaRequestGroups
     ) -> [NetworkDisplayRow] {
-        let requestIDs = Array(filteredRequestIDs.reversed())
         var emittedGroupIDs: Set<NetworkDOMNodeGroup.ID> = []
         var emittedGroupedRequestIDs: Set<NetworkRequest.ID> = []
         var rows: [NetworkDisplayRow] = []
-        rows.reserveCapacity(requestIDs.count)
+        rows.reserveCapacity(filteredRequestIDs.count)
 
-        for requestID in requestIDs {
+        for requestID in filteredRequestIDs {
             if emittedGroupedRequestIDs.contains(requestID) {
                 continue
             }
             if let groupID = mediaGroups.groupIDByRequestID[requestID] {
-                let groupRequestIDs = Array((mediaGroups.requestIDsByGroupID[groupID] ?? []).reversed())
+                let groupRequestIDs = mediaGroups.requestIDsByGroupID[groupID] ?? []
                 emittedGroupedRequestIDs.formUnion(groupRequestIDs)
                 if emittedGroupIDs.insert(groupID).inserted {
                     let group = NetworkDOMNodeGroup(
@@ -468,12 +465,14 @@ package final class NetworkPanelModel {
         for request: NetworkRequest,
         indentLevel: Int
     ) -> NetworkDisplayEntryPresentation {
-        let facts = displayFacts(for: request, requiresResourceFilter: false)
+        let projection = request.displayProjection()
+        let byteRangeDisplayLabel = request.requestedByteRange?.displayLabel
+        let fileTypeLabel = request.hasRequestedByteRangeHeader ? "range" : projection.fileTypeLabel
         return NetworkDisplayEntryPresentation(
-            displayName: facts.displayName,
-            secondaryText: facts.byteRangeDisplayLabel,
+            displayName: projection.requestURLSummary.displayName,
+            secondaryText: byteRangeDisplayLabel,
             statusSeverity: request.statusSeverity,
-            fileTypeLabel: facts.byteRangeDisplayLabel == nil ? facts.fileTypeLabel : "range",
+            fileTypeLabel: fileTypeLabel,
             indentLevel: indentLevel,
             isExpandable: request.redirects.isEmpty == false,
             isExpanded: expandedRedirectResourceIDs.contains(request.id),
@@ -524,28 +523,9 @@ package final class NetworkPanelModel {
             NetworkDOMNodeGroup(
                 id: groupID,
                 nodeID: resolvedNodeID(for: groupID),
-                requestIDs: Array($0.reversed())
+                requestIDs: $0
             )
         }
-    }
-
-    private func displayFacts(
-        for request: NetworkRequest,
-        requiresResourceFilter: Bool
-    ) -> NetworkRequestDisplayFacts {
-        let revision = network.requestDisplayRevision(for: request.id)
-        var facts: NetworkRequestDisplayFacts
-        if let cached = displayFactsByRequestID[request.id],
-           cached.requestDisplayRevision == revision {
-            facts = cached
-        } else {
-            facts = NetworkRequestDisplayFacts(request: request, requestDisplayRevision: revision)
-        }
-        if requiresResourceFilter && facts.resourceFilter == nil {
-            facts.resourceFilter = request.displayResourceFilter(mediaPreviewClassifier: mediaPreviewClassifier)
-        }
-        displayFactsByRequestID[request.id] = facts
-        return facts
     }
 
     private func resolvedNodeID(for groupID: NetworkDOMNodeGroup.ID) -> DOMNode.ID? {
@@ -553,6 +533,75 @@ package final class NetworkPanelModel {
             targetID: groupID.targetID,
             rawNodeID: groupID.rawNodeID
         )
+    }
+
+    private func domNodeGroupID(for request: NetworkRequest) -> NetworkDOMNodeGroup.ID? {
+        request.initiator?.nodeID.map {
+            NetworkDOMNodeGroup.ID(
+                targetID: request.id.targetID,
+                rawNodeID: $0
+            )
+        }
+    }
+
+    private func isMediaGroupingCandidate(
+        _ request: NetworkRequest,
+        needsResourceFilter: Bool,
+        resourceFilters: Set<NetworkRequest.Display.ResourceFilter>
+    ) -> Bool {
+        if needsResourceFilter && resourceFilters.contains(.media) {
+            return displayIndex.resourceFilter(
+                for: request.id,
+                network: network,
+                mediaPreviewClassifier: mediaPreviewClassifier
+            ) == .media
+        }
+        return Self.isCheapMediaGroupingCandidate(request)
+    }
+
+    private static func isCheapMediaGroupingCandidate(_ request: NetworkRequest) -> Bool {
+        if request.hasRequestedByteRangeHeader {
+            return true
+        }
+        if request.resourceType?.rawValue == "Media" || request.resourceType == .image {
+            return true
+        }
+        let requestMIMEType = NetworkRequest.Display.displayMIMEType(
+            mimeType: nil,
+            headers: request.request.headers
+        )
+        let responseMIMEType = request.response.map {
+            NetworkRequest.Display.displayMIMEType(mimeType: $0.mimeType, headers: $0.headers)
+        } ?? nil
+        if isCheapMediaMIMEType(requestMIMEType) || isCheapMediaMIMEType(responseMIMEType) {
+            return true
+        }
+        let requestURLSummary = NetworkRequest.Display.URLSummary(url: request.request.url)
+        let responseURLSummary = request.response.map { NetworkRequest.Display.URLSummary(url: $0.url) }
+        return isCheapMediaPathExtension(requestURLSummary.pathExtension)
+            || isCheapMediaPathExtension(responseURLSummary?.pathExtension)
+    }
+
+    private static func isCheapMediaMIMEType(_ mimeType: String?) -> Bool {
+        guard let mimeType = mimeType?.lowercased() else {
+            return false
+        }
+        return mimeType.hasPrefix("audio/")
+            || mimeType.hasPrefix("video/")
+            || mimeType.hasPrefix("image/")
+            || mimeType == "application/vnd.apple.mpegurl"
+            || mimeType == "application/x-mpegurl"
+            || mimeType == "audio/mpegurl"
+    }
+
+    private static func isCheapMediaPathExtension(_ pathExtension: String?) -> Bool {
+        guard let pathExtension = pathExtension?.lowercased() else {
+            return false
+        }
+        return [
+            "aac", "apng", "avif", "gif", "jpg", "jpeg", "m3u8", "m4a", "m4v",
+            "mov", "mp3", "mp4", "ogg", "png", "wav", "webm", "webp",
+        ].contains(pathExtension)
     }
 
     private func selectedEntryBelongsToDOMNodeGroup(_ groupID: NetworkDOMNodeGroup.ID) -> Bool {
@@ -652,6 +701,34 @@ package final class NetworkPanelModel {
     }
 }
 
+#if DEBUG
+extension NetworkPanelModel {
+    package var displayProjectionBuildCountForTesting: Int {
+        displayProjectionBuildCountStorageForTesting
+    }
+
+    package var displayEntryBuildCountForTesting: Int {
+        displayIndex.displayEntryBuildCount
+    }
+
+    package var rebuiltDisplayRequestIDsForTesting: [NetworkRequest.ID] {
+        displayIndex.rebuiltDisplayRequestIDs
+    }
+
+    package var displayEntryCacheCountForTesting: Int {
+        displayIndex.displayEntryCacheCount
+    }
+
+    package var fullMembershipEvaluationCountForTesting: Int {
+        displayIndex.fullMembershipEvaluationCount
+    }
+
+    package func resetDisplayIndexTestingCounters() {
+        displayIndex.resetTestingCounters()
+    }
+}
+#endif
+
 extension NetworkPanelModel {
     package enum SelectedEntry {
         case resource(NetworkRequest)
@@ -694,22 +771,21 @@ extension NetworkPanelModel {
     package struct DisplayRowsInvalidationRevision: Equatable {
         package var searchText: String
         package var resourceFilters: Set<NetworkRequest.Display.ResourceFilter>
-        package var requestOrderRevision: Int
-        // This is included only when filters/search/grouping/expanded redirects can change row IDs.
-        package var requestFactsRevision: Int?
+        package var topologyRevision: Int
+        package var displayRevision: Int?
         package var groupMediaRequestsByDOMNode: Bool
         package var redirectExpansion: Set<NetworkRequest.ID>
         package var collapsedDOMNodeGroups: Set<NetworkDOMNodeGroup.ID>
     }
 
     package struct DisplayRowsPresentationRevision: Equatable {
-        package var requestPresentationRevision: Int
+        package var contentRevision: Int
         package var domRevision: UInt64?
     }
 }
 
 private struct NetworkDisplayPresentationRevision: Equatable {
-    var requestPresentationRevision: Int
+    var contentRevision: Int
     var domRevision: UInt64?
 }
 
@@ -755,92 +831,5 @@ private struct NetworkMediaRequestGroups {
             }
         }
         self.groupIDByRequestID = groupIDByRequestID
-    }
-}
-
-private struct NetworkRequestDisplayFacts {
-    var requestID: NetworkRequest.ID
-    var requestDisplayRevision: Int
-    var displayName: String
-    var searchTokens: [String]
-    var fileTypeLabel: String
-    var statusSeverity: NetworkRequest.Display.StatusSeverity
-    var byteRangeDisplayLabel: String?
-    var domNodeGroupID: NetworkDOMNodeGroup.ID?
-    var isCheapMediaGroupingCandidate: Bool
-    var resourceFilter: NetworkRequest.Display.ResourceFilter?
-
-    @MainActor
-    init(request: NetworkRequest, requestDisplayRevision: Int) {
-        self.requestID = request.id
-        self.requestDisplayRevision = requestDisplayRevision
-        self.displayName = request.displayName
-        self.searchTokens = request.displaySearchTokens
-        self.fileTypeLabel = request.fileTypeLabel
-        self.statusSeverity = request.statusSeverity
-        self.byteRangeDisplayLabel = request.requestedByteRange?.displayLabel
-        if let rawNodeID = request.initiator?.nodeID {
-            self.domNodeGroupID = NetworkDOMNodeGroup.ID(
-                targetID: request.id.targetID,
-                rawNodeID: rawNodeID
-            )
-        } else {
-            self.domNodeGroupID = nil
-        }
-        self.isCheapMediaGroupingCandidate = NetworkRequestDisplayFacts.isCheapMediaGroupingCandidate(request)
-        self.resourceFilter = nil
-    }
-
-    func matchesSearch(_ query: String) -> Bool {
-        guard query.isEmpty == false else {
-            return true
-        }
-        return searchTokens.contains { $0.localizedStandardContains(query) }
-    }
-
-    @MainActor
-    private static func isCheapMediaGroupingCandidate(_ request: NetworkRequest) -> Bool {
-        if request.hasRequestedByteRangeHeader {
-            return true
-        }
-        if request.resourceType?.rawValue == "Media" || request.resourceType == .image {
-            return true
-        }
-        let requestMIMEType = NetworkRequest.Display.displayMIMEType(
-            mimeType: nil,
-            headers: request.request.headers
-        )
-        let responseMIMEType = request.response.map {
-            NetworkRequest.Display.displayMIMEType(mimeType: $0.mimeType, headers: $0.headers)
-        } ?? nil
-        if isCheapMediaMIMEType(requestMIMEType) || isCheapMediaMIMEType(responseMIMEType) {
-            return true
-        }
-        let requestURLSummary = NetworkRequest.Display.URLSummary(url: request.request.url)
-        let responseURLSummary = request.response.map { NetworkRequest.Display.URLSummary(url: $0.url) }
-        return isCheapMediaPathExtension(requestURLSummary.pathExtension)
-            || isCheapMediaPathExtension(responseURLSummary?.pathExtension)
-    }
-
-    private static func isCheapMediaMIMEType(_ mimeType: String?) -> Bool {
-        guard let mimeType = mimeType?.lowercased() else {
-            return false
-        }
-        return mimeType.hasPrefix("audio/")
-            || mimeType.hasPrefix("video/")
-            || mimeType.hasPrefix("image/")
-            || mimeType == "application/vnd.apple.mpegurl"
-            || mimeType == "application/x-mpegurl"
-            || mimeType == "audio/mpegurl"
-    }
-
-    private static func isCheapMediaPathExtension(_ pathExtension: String?) -> Bool {
-        guard let pathExtension = pathExtension?.lowercased() else {
-            return false
-        }
-        return [
-            "aac", "apng", "avif", "gif", "jpg", "jpeg", "m3u8", "m4a", "m4v",
-            "mov", "mp3", "mp4", "ogg", "png", "wav", "webm", "webp",
-        ].contains(pathExtension)
     }
 }
