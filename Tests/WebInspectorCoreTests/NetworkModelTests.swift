@@ -73,6 +73,84 @@ func networkRequestIdentityDoesNotIncludeRedirectIndex() async throws {
 }
 
 @Test
+@MainActor
+func requestDisplayChangesTrackOnlyDisplayAffectingRequestIDs() throws {
+    let session = NetworkSession()
+    let targetID = ProtocolTarget.ID("page")
+    let requestID = NetworkRequest.ProtocolID("0.display")
+    let key = session.applyRequestWillBeSent(
+        targetID: targetID,
+        requestID: requestID,
+        frameID: .init("main-frame"),
+        loaderID: "loader",
+        documentURL: "https://example.com",
+        request: .init(url: "https://example.com/data.json"),
+        resourceType: .xhr,
+        timestamp: 1
+    )
+
+    var displayChanges = session.requestDisplayChanges(after: 0)
+    #expect(displayChanges.revision == session.requestDisplayRevision)
+    #expect(displayChanges.changedRequestIDs == [key])
+    #expect(displayChanges.requiresFullReconcile == false)
+
+    let displayRevisionAfterRequest = session.requestDisplayRevision
+    session.applyDataReceived(
+        targetID: targetID,
+        requestID: requestID,
+        dataLength: 1024,
+        encodedDataLength: 512,
+        timestamp: 2
+    )
+    session.applyLoadingFinished(targetID: targetID, requestID: requestID, timestamp: 3)
+    #expect(session.requestDisplayRevision == displayRevisionAfterRequest)
+    displayChanges = session.requestDisplayChanges(after: displayRevisionAfterRequest)
+    #expect(displayChanges.changedRequestIDs.isEmpty)
+    #expect(displayChanges.requiresFullReconcile == false)
+
+    session.applyResponseReceived(
+        targetID: targetID,
+        requestID: requestID,
+        resourceType: .fetch,
+        response: .init(
+            url: "https://example.com/data-v2.json",
+            status: 200,
+            mimeType: "application/json"
+        ),
+        timestamp: 4
+    )
+    displayChanges = session.requestDisplayChanges(after: displayRevisionAfterRequest)
+    #expect(displayChanges.changedRequestIDs == [key])
+    #expect(displayChanges.requiresFullReconcile == false)
+}
+
+@Test
+@MainActor
+func requestDisplayChangesRequireFullReconcileAfterReset() throws {
+    let session = NetworkSession()
+    let targetID = ProtocolTarget.ID("page")
+    let requestID = NetworkRequest.ProtocolID("0.reset")
+    session.applyRequestWillBeSent(
+        targetID: targetID,
+        requestID: requestID,
+        frameID: .init("main-frame"),
+        loaderID: "loader",
+        documentURL: "https://example.com",
+        request: .init(url: "https://example.com/app.js"),
+        resourceType: .script,
+        timestamp: 1
+    )
+    let revisionBeforeReset = session.requestDisplayRevision
+
+    session.reset()
+
+    let displayChanges = session.requestDisplayChanges(after: revisionBeforeReset)
+    #expect(displayChanges.revision == session.requestDisplayRevision)
+    #expect(displayChanges.changedRequestIDs.isEmpty)
+    #expect(displayChanges.requiresFullReconcile)
+}
+
+@Test
 func requestKeepsEnvelopeTargetOriginatingTargetAndBackendResourceIdentitySeparate() async throws {
     let session = await NetworkSession()
     let pageProxyTargetID = ProtocolTarget.ID("page-proxy")

@@ -513,7 +513,7 @@ func requestFileTypeAndSearchUpdateWhenRawMIMETypeAppears() async throws {
 
 @Test
 @MainActor
-func displayResourceFilteringClassifiesEachFilteredEvaluation() async throws {
+func displayResourceFilteringCachesDisplayEntriesAcrossRepeatedReads() async throws {
     let network = NetworkSession()
     let requestID = applyRequest(
         to: network,
@@ -535,12 +535,15 @@ func displayResourceFilteringClassifiesEachFilteredEvaluation() async throws {
 
     #expect(model.displayRequestIDs == [requestID])
     #expect(classificationCount.withLock { $0 } == 1)
+    #expect(model.displayEntryBuildCountForTesting == 1)
 
+    model.resetDisplayIndexTestingCounters()
     #expect(model.displayRequestIDs == [requestID])
-    #expect(classificationCount.withLock { $0 } == 2)
+    #expect(classificationCount.withLock { $0 } == 1)
+    #expect(model.displayEntryBuildCountForTesting == 0)
 
     #expect(model.displayRequests.map(\.id) == [requestID])
-    #expect(classificationCount.withLock { $0 } == 3)
+    #expect(classificationCount.withLock { $0 } == 1)
 
     network.applyDataReceived(
         targetID: requestID.targetID,
@@ -550,7 +553,152 @@ func displayResourceFilteringClassifiesEachFilteredEvaluation() async throws {
         timestamp: 2
     )
     #expect(model.displayRequestIDs == [requestID])
-    #expect(classificationCount.withLock { $0 } == 4)
+    #expect(classificationCount.withLock { $0 } == 1)
+    #expect(model.displayEntryBuildCountForTesting == 0)
+}
+
+@Test
+@MainActor
+func displayIndexRebuildsOnlyDirtyRequestDisplayEntry() async throws {
+    let network = NetworkSession()
+    let firstID = applyRequest(
+        to: network,
+        requestID: "1",
+        url: "https://cdn.example.com/app.js",
+        resourceType: .script,
+        mimeType: "text/javascript",
+        timestamp: 1
+    )
+    let secondID = applyRequest(
+        to: network,
+        requestID: "2",
+        url: "https://cdn.example.com/data.json",
+        resourceType: .xhr,
+        mimeType: "application/json",
+        timestamp: 2
+    )
+    let thirdID = applyRequest(
+        to: network,
+        requestID: "3",
+        url: "https://cdn.example.com/photo.png",
+        resourceType: .image,
+        mimeType: "image/png",
+        timestamp: 3
+    )
+    let model = NetworkPanelModel(network: network)
+    model.setSearchText("cdn")
+
+    #expect(model.displayRequestIDs == [thirdID, secondID, firstID])
+    model.resetDisplayIndexTestingCounters()
+
+    network.applyResponseReceived(
+        targetID: secondID.targetID,
+        requestID: secondID.requestID,
+        resourceType: .xhr,
+        response: NetworkRequest.Response.Payload(
+            url: "https://api.example.com/data-v2.json",
+            status: 200,
+            mimeType: "application/json"
+        ),
+        timestamp: 4
+    )
+
+    #expect(model.displayRequestIDs == [thirdID, secondID, firstID])
+    #expect(model.displayEntryBuildCountForTesting == 1)
+    #expect(model.rebuiltDisplayRequestIDsForTesting == [secondID])
+}
+
+@Test
+@MainActor
+func displayIndexIgnoresContentOnlyUpdatesDuringActiveFiltering() async throws {
+    let network = NetworkSession()
+    let requestID = applyRequest(
+        to: network,
+        requestID: "1",
+        url: "https://media.example.com/clip.mp4",
+        resourceType: .fetch,
+        mimeType: "application/octet-stream",
+        timestamp: 1
+    )
+    let model = NetworkPanelModel(network: network)
+    model.setSearchText("clip")
+    model.setResourceFilter(.media, enabled: true)
+
+    #expect(model.displayRequestIDs == [requestID])
+    model.resetDisplayIndexTestingCounters()
+
+    network.applyDataReceived(
+        targetID: requestID.targetID,
+        requestID: requestID.requestID,
+        dataLength: 1024,
+        encodedDataLength: 512,
+        timestamp: 2
+    )
+    network.applyLoadingFinished(
+        targetID: requestID.targetID,
+        requestID: requestID.requestID,
+        timestamp: 3
+    )
+
+    #expect(model.displayRequestIDs == [requestID])
+    #expect(model.displayEntryBuildCountForTesting == 0)
+    #expect(model.rebuiltDisplayRequestIDsForTesting.isEmpty)
+}
+
+@Test
+@MainActor
+func displayIndexReusesEntriesWhenCriteriaChanges() async throws {
+    let network = NetworkSession()
+    let scriptID = applyRequest(
+        to: network,
+        requestID: "1",
+        url: "https://cdn.example.com/app.js",
+        resourceType: .script,
+        mimeType: "text/javascript",
+        timestamp: 1
+    )
+    applyRequest(
+        to: network,
+        requestID: "2",
+        url: "https://cdn.example.com/photo.png",
+        resourceType: .image,
+        mimeType: "image/png",
+        timestamp: 2
+    )
+    let model = NetworkPanelModel(network: network)
+    model.setSearchText("cdn")
+
+    #expect(model.displayRequestIDs.count == 2)
+    model.resetDisplayIndexTestingCounters()
+
+    model.setResourceFilter(.script, enabled: true)
+    #expect(model.displayRequestIDs == [scriptID])
+    #expect(model.displayEntryBuildCountForTesting == 0)
+    #expect(model.fullMembershipEvaluationCountForTesting == 1)
+}
+
+@Test
+@MainActor
+func displayIndexClearsStaleCacheAfterReset() async throws {
+    let network = NetworkSession()
+    applyRequest(
+        to: network,
+        requestID: "1",
+        url: "https://cdn.example.com/app.js",
+        resourceType: .script,
+        mimeType: "text/javascript",
+        timestamp: 1
+    )
+    let model = NetworkPanelModel(network: network)
+    model.setSearchText("cdn")
+
+    #expect(model.displayRequestIDs.count == 1)
+    #expect(model.displayEntryCacheCountForTesting == 1)
+
+    network.reset()
+
+    #expect(model.displayRequestIDs.isEmpty)
+    #expect(model.displayEntryCacheCountForTesting == 0)
 }
 
 @Test

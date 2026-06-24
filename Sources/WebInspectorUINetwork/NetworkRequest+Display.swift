@@ -8,6 +8,25 @@ extension NetworkRequest {
 
 extension NetworkRequest.Display {
     package typealias MediaPreviewClassifier = @Sendable (String?, String?) -> NetworkRequest.Display.MediaPreviewClassification
+
+    package struct Projection {
+        package var requestURLSummary: NetworkRequest.Display.URLSummary
+        package var responseURLSummary: NetworkRequest.Display.URLSummary?
+        package var fileTypeLabel: String
+        package var searchTokens: [String]
+
+        package init(
+            requestURLSummary: NetworkRequest.Display.URLSummary,
+            responseURLSummary: NetworkRequest.Display.URLSummary?,
+            fileTypeLabel: String,
+            searchTokens: [String]
+        ) {
+            self.requestURLSummary = requestURLSummary
+            self.responseURLSummary = responseURLSummary
+            self.fileTypeLabel = fileTypeLabel
+            self.searchTokens = searchTokens
+        }
+    }
 }
 
 extension NetworkRequest {
@@ -65,75 +84,44 @@ extension NetworkRequest {
         guard query.isEmpty == false else {
             return true
         }
-        return displaySearchTokens.contains { $0.localizedStandardContains(query) }
+        return displayProjection().searchTokens.contains { $0.localizedStandardContains(query) }
     }
 
     package func displayResourceFilter(
         mediaPreviewClassifier: NetworkRequest.Display.MediaPreviewClassifier
     ) -> NetworkRequest.Display.ResourceFilter {
         let requestURLSummary = NetworkRequest.Display.URLSummary(url: request.url)
-        guard let response else {
-            if let resourceType {
-                return NetworkRequest.Display.ResourceFilter(resourceType: resourceType)
-            }
-            return NetworkRequest.Display.ResourceFilter.inferred(
-                mimeType: nil,
-                pathExtension: requestURLSummary.pathExtension,
-                mediaPreviewClassification: mediaPreviewClassifier(nil, requestURLSummary.rawURL)
-            )
-        }
-
-        let responseMIMEType = NetworkRequest.Display.displayMIMEType(
-            mimeType: response.mimeType,
-            headers: response.headers
-        )
-        if let resourceType,
-           NetworkRequest.Display.shouldKeepResourceTypeForURLInferredMedia(resourceType) {
-            if case .previewable = mediaPreviewClassifier(responseMIMEType, nil) {
-                return .media
-            }
-            return NetworkRequest.Display.ResourceFilter(resourceType: resourceType)
-        }
-
-        let responseURLSummary = NetworkRequest.Display.URLSummary(url: response.url)
-        switch mediaPreviewClassifier(responseMIMEType, responseURLSummary.rawURL) {
-        case .previewable:
-            return .media
-        case .notPreviewable:
-            if resourceType == .image || resourceType == .media {
-                return .media
-            }
-            return NetworkRequest.Display.ResourceFilter.inferred(
-                mimeType: responseMIMEType,
-                pathExtension: responseURLSummary.pathExtension,
-                mediaPreviewClassification: mediaPreviewClassifier(responseMIMEType, responseURLSummary.rawURL)
-            )
-        case .unknown:
-            break
-        }
-        if let resourceType {
-            return NetworkRequest.Display.ResourceFilter(resourceType: resourceType)
-        }
-        return NetworkRequest.Display.ResourceFilter.inferred(
-            mimeType: responseMIMEType,
-            pathExtension: responseURLSummary.pathExtension,
-            mediaPreviewClassification: mediaPreviewClassifier(responseMIMEType, responseURLSummary.rawURL)
+        let responseURLSummary = response.map { NetworkRequest.Display.URLSummary(url: $0.url) }
+        return NetworkRequest.Display.resourceFilter(
+            resourceType: resourceType,
+            response: response,
+            requestURLSummary: requestURLSummary,
+            responseURLSummary: responseURLSummary,
+            mediaPreviewClassifier: mediaPreviewClassifier
         )
     }
 
-    private var displaySearchTokens: [String] {
+    package func displayProjection() -> NetworkRequest.Display.Projection {
         let requestURLSummary = NetworkRequest.Display.URLSummary(url: request.url)
         let responseURLSummary = response.map { NetworkRequest.Display.URLSummary(url: $0.url) }
+        let fileTypeLabel = NetworkRequest.Display.fileTypeLabel(
+            mimeType: response?.mimeType,
+            resourceType: resourceType,
+            urlSummary: requestURLSummary
+        )
         let statusCodeLabel = response.map { String($0.status) } ?? ""
-        return NetworkRequest.Display.uniqueNonEmpty(
-            requestURLSummary.searchTokens
-            + (responseURLSummary?.searchTokens ?? [])
-            + [
-                request.method,
-                statusCodeLabel,
-                response?.statusText ?? "",
-                fileTypeLabel,
-            ]
+        return NetworkRequest.Display.Projection(
+            requestURLSummary: requestURLSummary,
+            responseURLSummary: responseURLSummary,
+            fileTypeLabel: fileTypeLabel,
+            searchTokens: NetworkRequest.Display.searchTokens(
+                requestURLSummary: requestURLSummary,
+                responseURLSummary: responseURLSummary,
+                requestMethod: request.method,
+                statusCodeLabel: statusCodeLabel,
+                statusText: response?.statusText ?? "",
+                fileTypeLabel: fileTypeLabel
+            )
         )
     }
 
@@ -166,6 +154,62 @@ extension NetworkRequest {
 }
 
 extension NetworkRequest.Display {
+    package static func resourceFilter(
+        resourceType: NetworkRequest.ResourceType?,
+        response: NetworkRequest.Response.Payload?,
+        requestURLSummary: NetworkRequest.Display.URLSummary,
+        responseURLSummary: NetworkRequest.Display.URLSummary?,
+        mediaPreviewClassifier: NetworkRequest.Display.MediaPreviewClassifier
+    ) -> NetworkRequest.Display.ResourceFilter {
+        guard let response else {
+            if let resourceType {
+                return NetworkRequest.Display.ResourceFilter(resourceType: resourceType)
+            }
+            return NetworkRequest.Display.ResourceFilter.inferred(
+                mimeType: nil,
+                pathExtension: requestURLSummary.pathExtension,
+                mediaPreviewClassification: mediaPreviewClassifier(nil, requestURLSummary.rawURL)
+            )
+        }
+
+        let responseMIMEType = NetworkRequest.Display.displayMIMEType(
+            mimeType: response.mimeType,
+            headers: response.headers
+        )
+        if let resourceType,
+           NetworkRequest.Display.shouldKeepResourceTypeForURLInferredMedia(resourceType) {
+            if case .previewable = mediaPreviewClassifier(responseMIMEType, nil) {
+                return .media
+            }
+            return NetworkRequest.Display.ResourceFilter(resourceType: resourceType)
+        }
+
+        let responseURLSummary = responseURLSummary ?? NetworkRequest.Display.URLSummary(url: response.url)
+        switch mediaPreviewClassifier(responseMIMEType, responseURLSummary.rawURL) {
+        case .previewable:
+            return .media
+        case .notPreviewable:
+            if resourceType == .image || resourceType == .media {
+                return .media
+            }
+            return NetworkRequest.Display.ResourceFilter.inferred(
+                mimeType: responseMIMEType,
+                pathExtension: responseURLSummary.pathExtension,
+                mediaPreviewClassification: mediaPreviewClassifier(responseMIMEType, responseURLSummary.rawURL)
+            )
+        case .unknown:
+            break
+        }
+        if let resourceType {
+            return NetworkRequest.Display.ResourceFilter(resourceType: resourceType)
+        }
+        return NetworkRequest.Display.ResourceFilter.inferred(
+            mimeType: responseMIMEType,
+            pathExtension: responseURLSummary.pathExtension,
+            mediaPreviewClassification: mediaPreviewClassifier(responseMIMEType, responseURLSummary.rawURL)
+        )
+    }
+
     package static func fileTypeLabel(
         mimeType: String?,
         resourceType: NetworkRequest.ResourceType?,
@@ -201,6 +245,26 @@ extension NetworkRequest.Display {
             return nil
         }
         return mimeType
+    }
+
+    package static func searchTokens(
+        requestURLSummary: NetworkRequest.Display.URLSummary,
+        responseURLSummary: NetworkRequest.Display.URLSummary?,
+        requestMethod: String,
+        statusCodeLabel: String,
+        statusText: String,
+        fileTypeLabel: String
+    ) -> [String] {
+        uniqueNonEmpty(
+            requestURLSummary.searchTokens
+            + (responseURLSummary?.searchTokens ?? [])
+            + [
+                requestMethod,
+                statusCodeLabel,
+                statusText,
+                fileTypeLabel,
+            ]
+        )
     }
 
     fileprivate static func shouldKeepResourceTypeForURLInferredMedia(_ resourceType: NetworkRequest.ResourceType) -> Bool {
