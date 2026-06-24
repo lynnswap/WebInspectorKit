@@ -47,6 +47,7 @@ package final class NetworkPanelModel {
     package private(set) var effectiveResourceFilters: Set<NetworkRequest.Display.ResourceFilter> = []
     @ObservationIgnored private let responseBodyFetchCoordinator: NetworkResponseBodyFetchCoordinator
     @ObservationIgnored private let mediaPreviewClassifier: NetworkRequest.Display.MediaPreviewClassifier
+    @ObservationIgnored private var displayIndex: NetworkPanelDisplayIndex
 
     package init(
         network: NetworkSession,
@@ -58,32 +59,23 @@ package final class NetworkPanelModel {
         self.network = network
         self.responseBodyFetchCoordinator = NetworkResponseBodyFetchCoordinator(action: responseBodyFetchAction)
         self.mediaPreviewClassifier = mediaPreviewClassifier
+        self.displayIndex = NetworkPanelDisplayIndex()
     }
 
     package var displayRequestIDs: [NetworkRequest.ID] {
         let requestIDs = network.orderedRequestIDs
-        let query = normalizedSearchText
-        let resourceFilters = effectiveResourceFilters
-        guard query.isEmpty == false || resourceFilters.isEmpty == false else {
-            return Array(requestIDs.reversed())
-        }
-
-        var filteredIDs: [NetworkRequest.ID] = []
-        filteredIDs.reserveCapacity(requestIDs.count)
-        for requestID in requestIDs {
-            guard let request = network.request(for: requestID) else {
-                continue
-            }
-            if resourceFilters.isEmpty == false,
-               resourceFilters.contains(request.displayResourceFilter(mediaPreviewClassifier: mediaPreviewClassifier)) == false {
-                continue
-            }
-            guard request.matchesDisplaySearchText(query) else {
-                continue
-            }
-            filteredIDs.append(requestID)
-        }
-        return Array(filteredIDs.reversed())
+        let criteria = NetworkPanelDisplayCriteria(
+            searchText: normalizedSearchText,
+            resourceFilters: effectiveResourceFilters
+        )
+        return displayIndex.reconcile(
+            network: network,
+            orderedRequestIDs: requestIDs,
+            criteria: criteria,
+            topologyRevision: network.requestTopologyRevision,
+            displayRevision: criteria.requiresEntries ? network.requestDisplayRevision : nil,
+            mediaPreviewClassifier: mediaPreviewClassifier
+        )
     }
 
     package var displayRequests: [NetworkRequest] {
@@ -161,6 +153,30 @@ package final class NetworkPanelModel {
         searchText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
+
+#if DEBUG
+extension NetworkPanelModel {
+    package var displayEntryBuildCountForTesting: Int {
+        displayIndex.displayEntryBuildCount
+    }
+
+    package var rebuiltDisplayRequestIDsForTesting: [NetworkRequest.ID] {
+        displayIndex.rebuiltDisplayRequestIDs
+    }
+
+    package var displayEntryCacheCountForTesting: Int {
+        displayIndex.displayEntryCacheCount
+    }
+
+    package var fullMembershipEvaluationCountForTesting: Int {
+        displayIndex.fullMembershipEvaluationCount
+    }
+
+    package func resetDisplayIndexTestingCounters() {
+        displayIndex.resetTestingCounters()
+    }
+}
+#endif
 
 extension NetworkPanelModel {
     package struct DisplayRowsInvalidationRevision: Equatable {
