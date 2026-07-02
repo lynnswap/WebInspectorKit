@@ -13,7 +13,8 @@ dependency claims below were corrected against code at baseline `45c6d880`.
 
 For the superseded v1 direction, this document was the design contract: workers
 implemented it as written; any deviation was an escalation, not a judgment call.
-The active design contract candidate is now 05 after owner sign-off.
+The active design contract candidate is now 05 after the implementation
+coverage tables and contract-test plan are filled.
 
 Signature notation:
 - `(existing)` — the current declaration keeps its shape; only access level,

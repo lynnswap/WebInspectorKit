@@ -11,13 +11,15 @@ Do not use this file as an implementation prompt.
 
 Use [05-two-layer-sdk-design.md](05-two-layer-sdk-design.md) as the current
 interface sketch instead. The implementation prompt should be regenerated after
-owner sign-off on the remaining naming choices in 05 §10 and after the event /
-model coverage table is filled.
+the gate checklist in
+[06-implementation-gate.md](06-implementation-gate.md) is filled from the
+current code.
 
 Minimum read order for a future regenerated prompt:
 
 1. [01-scope-contract.md](01-scope-contract.md)
 2. [02-findings.md](02-findings.md)
 3. [05-two-layer-sdk-design.md](05-two-layer-sdk-design.md)
-4. [measurements/](measurements/)
-5. Repo-local instructions and validation docs
+4. [06-implementation-gate.md](06-implementation-gate.md)
+5. [measurements/](measurements/)
+6. Repo-local instructions and validation docs

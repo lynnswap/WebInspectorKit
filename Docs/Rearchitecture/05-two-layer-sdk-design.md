@@ -26,8 +26,8 @@ Naming decisions (owner-confirmed 2026-07-02):
 | In-memory test runtime | **`WebViewProxyKitTesting`** | `CodexAppServerKitTesting` |
 | Drop-in UIKit inspector UI | **`WebInspectorKit`** (existing product, re-based onto `WebViewDataKit`) | — |
 
-Two remaining naming choices are collected in §10; they do not block the
-interfaces below.
+Owner naming choices are recorded in §10; they do not block the interfaces
+below.
 
 Signature notation: every `swift` block is the **binding interface sketch** —
 it compiles conceptually, is written before implementation (api-design norm),
@@ -344,6 +344,10 @@ public enum DOM {
     public enum Event: Sendable {
         case documentUpdated                                   // all node IDs invalid
         case setChildNodes(parent: Node.ID, nodes: [Node])
+        /// WebKit can send `setChildNodes` with parent id 0 for a detached root.
+        /// DataKit stores it in a private detached-root registry; it is not part
+        /// of `rootNode` unless later selected or linked by a command result.
+        case detachedRoot(Node)
         case childNodeInserted(parent: Node.ID, previous: Node.ID?, node: Node)
         case childNodeRemoved(parent: Node.ID, node: Node.ID)
         case childNodeCountUpdated(Node.ID, count: Int)
@@ -386,13 +390,18 @@ public enum Runtime {
         public struct ID: Hashable, Sendable { /* opaque; runtime-agent scoped */ }
         public let id: ID?                    // nil for by-value primitives
         public let kind: Kind                 // typed once at decode from type/subtype
+        public let subtype: Subtype?
         public let className: String?
         public let description: String?
         public let value: JSONValue?          // returnByValue primitives
+        public let size: Int?
         public let preview: ObjectPreview?
     }
     public enum Kind: Sendable { case object, function, string, number, boolean, symbol,
         bigint, undefined, null, array, error /* … mapped at decode */ }
+    /// OPEN wire enum preserving unknown WebKit subtype strings.
+    public struct Subtype: RawRepresentable, Hashable, Sendable { public let rawValue: String }
+    public enum JSONValue: Sendable { /* string, number, bool, null, array, object */ }
 
     public struct EvaluationResult: Sendable {
         public let object: RemoteObject
@@ -416,10 +425,8 @@ public enum Runtime {
 
     public enum Event: Sendable {
         case executionContextCreated(ExecutionContext)
-        // NOTE: WebKit emits no executionContextDestroyed/Cleared on the wire
-        // (WebKit research §5). Context death is INFERRED by the data kit from
-        // frameDetached / documentUpdated / target destruction — it is NOT a
-        // synthesized proxy event, so we do not fabricate one here.
+        case executionContextDestroyed(ExecutionContext.ID)
+        case executionContextsCleared(target: WebViewTarget.ID)
         case unknown(RawEvent)
     }
     public struct EventStream: AsyncSequence, Sendable { public typealias Element = Event /* … */ }
@@ -447,6 +454,8 @@ public enum Network {
         public let method: String
         public let headers: [String: String]
         public let postData: String?
+        public let referrerPolicy: ReferrerPolicy?
+        public let integrity: String?
     }
     public struct Response: Sendable {
         public let url: String?
@@ -454,8 +463,14 @@ public enum Network {
         public let statusText: String?
         public let mimeType: String?
         public let headers: [String: String]
+        public let source: Source?
+        public let requestHeaders: [String: String]?
         // … timing/security stay package inside the value type (F-29 doctrine).
     }
+    public struct ReferrerPolicy: RawRepresentable, Hashable, Sendable { public let rawValue: String }
+    public struct Source: RawRepresentable, Hashable, Sendable { public let rawValue: String }
+    public struct Metrics: Sendable { /* timestamps, durations, encoded/decoded sizes */ }
+    public struct Initiator: Sendable { /* type, stackTrace, url/line/column, nodeID */ }
     public struct Body: Sendable {
         public let data: String
         public let base64Encoded: Bool
@@ -505,11 +520,16 @@ public enum Console {
         public let url: String?, line: Int?, column: Int?
         public let repeatCount: Int
         public let parameters: [Runtime.RemoteObject]
+        public let stackTrace: StackTrace?
         public let networkRequestID: Network.Request.ID?   // cross-link
         public let timestamp: Double?
     }
+    public struct StackTrace: Sendable { /* callFrames, parentStackTrace */ }
+    public struct CallFrame: Sendable { /* functionName, url, line, column */ }
     public enum Event: Sendable {
         case messageAdded(Message)
+        /// Updates the most recent message for the target. DataKit owns the
+        /// private "last message per target" index used to find that model.
         case messageRepeatCountUpdated(count: Int, timestamp: Double?)
         case messagesCleared(reason: ClearReason)          // faithful wire event; the data-kit
                                                            // context RESPONDS by issuing
@@ -530,27 +550,67 @@ public enum CSS {
     public struct Style: Identifiable, Sendable {
         public struct ID: Hashable, Sendable {/*opaque*/}
         public var properties: [Property]          // the reachable declaration list
+        public var shorthandEntries: [ShorthandEntry]
         public var cssText: String
+        public var range: SourceRange?
+        public var width: String?
+        public var height: String?
         public var isEditable: Bool
+        public struct SourceRange: Sendable { /* startLine/startColumn/endLine/endColumn */ }
+        public struct ShorthandEntry: Sendable { /* name/value/priority */ }
     }
     public struct Rule: Sendable {
+        public var id: ID?
+        public struct ID: Hashable, Sendable {/*opaque*/}
+        public var selectorList: SelectorList
+        public var sourceURL: String?
+        public var sourceLine: Int?
+        public var sourceLocation: Style.SourceRange?
+        public var origin: Origin
         public var style: Style                    // sections[].style.properties[].id is reachable
-        /* selectors, origin, sourceURL/line */
+        public var groupings: [Grouping]
+        public var isImplicitlyNested: Bool
+        public struct SelectorList: Sendable { /* selectors + text */ }
+        public struct Grouping: Sendable { /* group rule metadata */ }
     }
     public struct Property: Identifiable, Sendable {
         public struct ID: Hashable, Sendable {/*opaque*/}
         public let id: ID
         public let name: String
         public let value: String
+        public let priority: String?
+        public let text: String?
+        public let parsedOk: Bool
         public let status: Status                  // active / inactive / disabled
+        public let implicit: Bool
+        public let range: Style.SourceRange?
         public let isEditable: Bool
+        public let isModifiedByInspector: Bool
     }
     public enum Status: Sendable { case active, inactive, disabled }
+    public struct Origin: RawRepresentable, Hashable, Sendable { public let rawValue: String }
     public struct ComputedProperty: Sendable { public let name: String; public let value: String }
+    public struct StyleSheetHeader: Sendable {
+        public let styleSheetID: StyleSheet.ID
+        public let frameID: FrameID?
+        public let sourceURL: String?
+        public let origin: Origin
+        public let title: String?
+        public let disabled: Bool
+        public let isInline: Bool
+        public let startLine: Int
+        public let startColumn: Int
+    }
+    public enum StyleSheet { public struct ID: Hashable, Sendable {/*opaque*/} }
     public enum Event: Sendable {
-        case styleSheetChanged(Style.ID)
+        /// Target-wide stylesheet invalidation. WebKit's current event does not
+        /// carry a style or stylesheet identifier, so this must not pretend to
+        /// be `Style.ID`-scoped.
+        case styleSheetChanged
         case styleSheetAdded(StyleSheetHeader)
         case styleSheetRemoved(StyleSheet.ID)
+        case mediaQueryResultChanged
+        case nodeLayoutFlagsChanged(DOM.Node.ID)
         case unknown(RawEvent)
     }
 }
@@ -558,18 +618,15 @@ public enum CSS {
 public enum Page {
     public struct Client: Sendable {
         public func reload(ignoringCache: Bool = false) async throws
-        public var events: EventStream { get }
     }
-    public enum Event: Sendable {
-        case frameNavigated(Frame)          // frame associated with new loader
-        case frameDetached(FrameID)
-        case loadEventFired(timestamp: Double)
-        case domContentEventFired(timestamp: Double)
-        case unknown(RawEvent)
-    }
-    public struct Frame: Identifiable, Sendable { /* id, parentId?, url, loaderId, securityOrigin */ }
 }
 ```
+
+`Page` is command-only in the initial surface. The current implementation has no
+registered Page event dispatcher, so publishing `frameNavigated` /
+`frameDetached` / load events here would be protocol coverage expansion. Frame
+projection needed by DataKit is currently owned by target and DOM/Network
+coordinators.
 
 ### 3.4 Forward compatibility and the raw escape
 
@@ -720,6 +777,9 @@ where ID: Hashable & Sendable {
 public final class DOMNode: WebViewPersistentModel {
     public struct ID: Hashable, Sendable { /* opaque; wraps proxy DOM.Node.ID */ }
     public let id: ID
+    public private(set) var frameID: FrameID?
+    public private(set) var documentURL: String?
+    public private(set) var baseURL: String?
     public private(set) var nodeName: String
     public private(set) var localName: String
     public private(set) var nodeValue: String
@@ -729,8 +789,12 @@ public final class DOMNode: WebViewPersistentModel {
     /// Children with an explicit loading state (the current ChildrenState).
     public enum Children: Sendable { case unrequested(count: Int); case loaded([DOMNode]) }
     public private(set) var children: Children
+    public private(set) var contentDocument: DOMNode?
     public private(set) var shadowRoots: [DOMNode]
     public private(set) var templateContent: DOMNode?
+    public private(set) var beforePseudoElement: DOMNode?
+    public private(set) var otherPseudoElements: [DOMNode]
+    public private(set) var afterPseudoElement: DOMNode?
     public var elementStyles: CSSStyles? { get }          // selection-driven, see §4.5
 
     // Write-back (delegates to context → currentPage.dom):
@@ -752,8 +816,21 @@ public final class NetworkRequest: WebViewPersistentModel, WebViewFetchableModel
     public private(set) var status: Int?
     public private(set) var mimeType: String?
     public private(set) var frameID: FrameID?
+    public private(set) var documentURL: String?
+    public private(set) var sourceMapURL: String?
     public private(set) var requestHeaders: [String: String]
     public private(set) var responseHeaders: [String: String]
+    public private(set) var requestSentTimestamp: Double?
+    public private(set) var requestSentWalltime: Double?
+    public private(set) var responseReceivedTimestamp: Double?
+    public private(set) var lastDataReceivedTimestamp: Double?
+    public private(set) var finishedOrFailedTimestamp: Double?
+    public private(set) var encodedDataLength: Int
+    public private(set) var decodedDataLength: Int
+    public private(set) var cachedResourceBodySize: Int?
+    public private(set) var responseSource: Network.Source?
+    public private(set) var metrics: Network.Metrics?
+    public private(set) var initiator: Network.Initiator?
     public private(set) var requestBody: NetworkBody?
     public private(set) var responseBody: NetworkBody?
     public var canFetchResponseBody: Bool { get }
@@ -775,18 +852,26 @@ public struct RedirectHop: Sendable { /* request: Network.Request, response: Net
 public final class WebSocketState {
     public enum ReadyState: Sendable { case connecting, open, closed }
     public private(set) var readyState: ReadyState
+    public private(set) var handshakeRequest: Network.Request?
+    public private(set) var handshakeResponse: Network.Response?
     public private(set) var frames: [Frame]
-    public struct Frame: Sendable { /* direction, opcode, payloadText/size, timestamp */ }
+    public struct Frame: Sendable { /* direction, opcode, mask, payloadData/text/size, errorMessage?, timestamp */ }
 }
 
 @MainActor @Observable
 public final class NetworkBody: Sendable {
     public enum Phase: Sendable { case available, fetching, loaded, failed(String) }
+    public enum Role: Sendable { case request, response }
+    public enum Kind: Sendable { case text, binary, image, unknown }
     public private(set) var phase: Phase
+    public private(set) var role: Role
+    public private(set) var kind: Kind
     public private(set) var text: String?
     public private(set) var size: Int
     public private(set) var isBase64Encoded: Bool
     public private(set) var isTruncated: Bool
+    public private(set) var sourceSyntaxKind: String?
+    public private(set) var textRepresentationSyntaxKind: String?
 }
 
 @MainActor @Observable
@@ -795,9 +880,14 @@ public final class ConsoleMessage: WebViewPersistentModel, WebViewFetchableModel
     public let id: ID
     public private(set) var source: Console.Source
     public private(set) var level: Console.Level
+    public private(set) var kind: Console.Kind?
     public private(set) var text: String
+    public private(set) var url: String?
+    public private(set) var line: Int?
+    public private(set) var column: Int?
     public private(set) var repeatCount: Int
     public private(set) var parameters: [RuntimeObject]
+    public private(set) var stackTrace: Console.StackTrace?
     public private(set) var networkRequestID: NetworkRequest.ID?    // cross-link
     public private(set) var timestamp: Double?
 }
@@ -806,12 +896,20 @@ public final class ConsoleMessage: WebViewPersistentModel, WebViewFetchableModel
 
 @MainActor @Observable
 public final class RuntimeObject: WebViewPersistentModel {
+    /// Opaque DataKit identity. If WebKit provides a remote object ID this wraps
+    /// that ID; by-value primitives receive a context-owned synthetic ID so
+    /// evaluation results and console parameters still have stable model
+    /// identity.
     public struct ID: Hashable, Sendable { /* opaque */ }
     public let id: ID
     public private(set) var kind: Runtime.Kind
+    public private(set) var subtype: Runtime.Subtype?
     public private(set) var className: String?
+    public private(set) var value: Runtime.JSONValue?
     public private(set) var description: String?
+    public private(set) var size: Int?
     public private(set) var preview: Runtime.ObjectPreview?
+    public var canRequestProperties: Bool { get }
     /// Expand: returns live child objects (nil `object` for primitives), so
     /// expansion recurses without any public ID resolver (F-29).
     public func properties() async throws -> [Property]
@@ -1191,19 +1289,19 @@ alias target left behind.
 
 ---
 
-## 10. Open forks (owner naming decision, non-blocking for the interface)
+## 10. Owner-decided naming choices
 
-- **a. Umbrella product.** CodexKit ships a `CodexKit` umbrella that
-  `@_exported import`s both kits. Do we want a `WebViewKit` (or reuse
-  `WebInspectorKit`) umbrella for non-UI consumers, or make them import the two
-  modules explicitly? *Recommendation: no umbrella* — two imports is honest and
-  avoids re-coupling the layers; the UIKit `WebInspectorKit` already gives
-  batteries-included apps one import.
-- **b. Model name prefixing.** Domain models are sketched unprefixed
-  (`DOMNode`, `NetworkRequest`). CodexDataKit prefixes everything (`CodexChat`).
-  Unprefixed reads better but risks collisions in apps with their own
-  `NetworkRequest`. *Recommendation: keep unprefixed* (module namespace
-  disambiguates, SwiftData precedent); revisit if a real collision appears.
+- **a. No non-UI umbrella product.** Owner decision (2026-07-03): consumers
+  import `WebViewProxyKit` and/or `WebViewDataKit` explicitly. Do not add a
+  `WebViewKit` umbrella and do not reuse the UIKit `WebInspectorKit` product as
+  a non-UI umbrella. Two imports keep the layer boundary visible and avoid
+  reintroducing `@_exported` coupling.
+- **b. Unprefixed domain model names.** Owner decision (2026-07-03): keep domain
+  models unprefixed within `WebViewDataKit` (`DOMNode`, `NetworkRequest`,
+  `ConsoleMessage`, etc.). The module namespace is the collision boundary.
+  SwiftData-style machinery remains `WebView`-prefixed
+  (`WebViewModelContext`, `WebViewFetchDescriptor`) to avoid collisions with
+  consumer imports.
 
 Resolved during review:
 
@@ -1227,10 +1325,10 @@ Resolved during review:
 | Migration cost | Lower (promote + rename) | Higher (rewrite the domain-model layer) — justified by the two-outcome unlock and by removing the god-model defect at the root (F-25/F-29/F-32) |
 
 Next step (per the `rearchitect` workflow): this is an interface sketch, not a
-gate-approved contract. Before delegating implementation, it needs (1) owner
-sign-off on the naming forks in §10, (2) the full field lists filled from the measured
-payload structs, (3) consumer stories A/A2/B/C compiled as a proxy-consumer
-contract-test package (as 03 §8 planned), and (4) a **coverage audit**: every
+gate-approved contract. Before delegating implementation, it needs (1) the full
+field lists filled from the measured payload structs, (2) consumer stories
+A/A2/B/C compiled as a proxy-consumer contract-test package (as 03 §8 planned),
+and (3) a **coverage audit**: every
 proxy `*.Event` case must have a data-kit model destination (e.g. each
 `Network.Event` case — including `webSocket(_:)` and `redirectResponse` — lands
 on a `NetworkRequest`/`WebSocketState` field), and every write-back command must
