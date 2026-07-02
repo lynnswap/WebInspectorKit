@@ -170,6 +170,44 @@ too. The production call site to change is session creation in
 sheet/window presentation and attach/detach lifecycle keep sharing the same
 `WebInspectorSession`.
 
+## W3 DataKit Preflight
+
+The current semantic owners are the `WebInspectorCore*` session/store types.
+W3 must not publish those types as-is; it should relocate their apply logic into
+`WebViewModelContext`-owned DataKit models and controllers.
+
+| Domain | Current owner evidence | W3 destination |
+| --- | --- | --- |
+| DOM tree | `DOMSession`, `DOMDocumentStore`, `TargetGraph`, `DOMDocument.NodeStore` in `Sources/WebInspectorCoreDOMCSS/DOM` own tree identity, current-page document projection, mutation apply, and selection | `WebViewModelContext` DOM coordinator, `DOMNode`, node identity map, `DOMTreeController` transactions |
+| CSS styles | `CSSSession` and `CSSNodeStyleStore` in `Sources/WebInspectorCoreDOMCSS/CSS` own selected-node style refresh, matched styles, computed styles, stylesheet headers | DataKit CSS coordinator tied to DOM selection; style phases and stylesheet registry stay model-side |
+| Network requests/body | `NetworkSession`, private `NetworkRequestStore`, `NetworkRequest`, and `NetworkBody` in `Sources/WebInspectorCoreConsoleNetwork/Network` own request order, state, metrics, and body fetch phase | DataKit network coordinator, fetched request results, request identity/order, body availability/failure |
+| Console messages | `ConsoleSession`, `ConsoleTargetRegistry`, and `TargetState` in `Sources/WebInspectorCoreConsoleNetwork/Console` own per-target message order and aggregation | DataKit console coordinator with target-aware message order and runtime/network cross-links |
+| Runtime objects/contexts | `RuntimeState` and `RuntimeState.AgentState` in `Sources/WebInspectorCoreRuntime/Runtime` own contexts, selected context, and remote-object identity map | DataKit runtime coordinator, `RuntimeContext`, `RuntimeObject`, object-group lifecycle, context selection |
+
+UI-owned artifacts must stay outside the first DataKit move:
+
+- `Sources/WebInspectorUI/**`, `Sources/WebInspectorUIDOM/**`,
+  `Sources/WebInspectorUINetwork/**`, and `Sources/WebInspectorUISyntaxBody/**`
+  keep UIKit/TextKit/view-controller, tab, selection UI, display filtering, row
+  rendering, and syntax rendering responsibilities.
+- `DOMNode.domTreeRenderSnapshot`, `DOMSession` row/render invalidation deltas,
+  and `NetworkSession.requestDisplayChanges(after:)` are migration warning
+  signs. W3 should expose model/controller transactions, not TextKit rows or UI
+  display caches.
+- Preview fixtures that call production `apply*` paths directly should move to
+  the same fake-proxy data flow as tests once `WebViewProxyKitTesting` supports
+  target-scoped event streams.
+
+Minimum W3 contract tests after W2 lands:
+
+| Contract | Required proof |
+| --- | --- |
+| DOM identity + tree transaction | Fake proxy emits document and child mutations; `rootNode`, `node(for:)`, and `DOMTreeController` transactions keep stable semantic node identity across updates |
+| Network request/body lifecycle | `requestWillBeSent` → `responseReceived` → `dataReceived` → terminal event → `fetchResponseBody()` produces one ordered request and expected body phase |
+| Console + Runtime linking | Runtime context plus console message parameters register `RuntimeObject` values; console messages with `networkRequestID` resolve to the matching request |
+| Provisional target commit stability | Provisional target commit preserves current-page semantic identity and correctly retargets DOM/CSS invalidation, Runtime cleanup, Console order, and Network ownership |
+| CSS selection refresh | Selecting a DOM node then receiving matched/computed style results transitions selected styles from loading to loaded; stylesheet changes mark affected styles stale |
+
 ## Worker Split
 
 Workers must not change the architecture contract. If a worker discovers that a
