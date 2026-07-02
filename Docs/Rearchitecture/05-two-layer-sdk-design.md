@@ -1,0 +1,1194 @@
+# Design Doc — Two-Layer SDK Surface (WebViewProxyKit + WebViewDataKit)
+
+Status: proposal (2026-07-02). This document supersedes the **public-surface
+direction** of [03-design-doc.md](03-design-doc.md). It keeps the scope
+outcomes of [01-scope-contract.md](01-scope-contract.md) and the measured
+findings of [02-findings.md](02-findings.md) as inputs, but it answers the
+newer owner requirement — *"stop publishing the Observable god-model; split the
+SDK into a low-level stream/command kit and a SwiftData/CoreData-style data
+kit"* — which 03 did not attempt.
+
+The style reference is `CodexKit` (`/Users/kn/Dev/CodexKit`): a low-level comm
+kit (`CodexAppServerKit`) that hides JSON-RPC behind typed domain verbs and
+typed event streams, and a data kit (`CodexDataKit`) that turns those streams
+into `@Observable` SwiftData-style models with fetch descriptors and fetched
+results controllers. We reproduce that two-layer split for the WebKit Web
+Inspector protocol.
+
+Naming decisions (owner-confirmed 2026-07-02):
+
+| Layer | Module | CodexKit analog |
+| --- | --- | --- |
+| Low-level comm / stream kit | **`WebViewProxyKit`** | `CodexAppServerKit` |
+| SwiftData/CoreData-style data kit | **`WebViewDataKit`** | `CodexDataKit` |
+| In-memory test runtime | **`WebViewProxyKitTesting`** | `CodexAppServerKitTesting` |
+| Drop-in UIKit inspector UI | **`WebInspectorKit`** (existing product, re-based onto `WebViewDataKit`) | — |
+
+Two remaining owner forks (naming and shape) are collected in §10; they do not
+block the interfaces below.
+
+Signature notation: every `swift` block is the **binding interface sketch** —
+it compiles conceptually, is written before implementation (api-design norm),
+and the member list is the contract. Field ellipses (`// … full set = …`) point
+to the measured source where the full field list already exists.
+
+---
+
+## 1. Layer split and package graph
+
+### 1.1 Responsibility of each layer (one sentence each)
+
+- **`WebViewProxyKit`** — attaches to a `WKWebView`, hides the native-symbol
+  bridge and the `Target.sendMessageToTarget` multiplexing, and exposes each
+  inspector protocol domain as typed async commands plus a typed event stream,
+  scoped per target. **It does not accumulate semantic state** (no DOM tree, no
+  request list) — it is the wire, typed.
+- **`WebViewDataKit`** — consumes the proxy's event streams and turns them into
+  `@Observable` models with stable identity, fetch descriptors, fetched-results
+  controllers, and live observation, the way `SwiftData`/CoreData turn a store
+  into models. **It is the only layer that accumulates and diffs.**
+
+The current architecture's core defect (F-25, F-29, F-32) is that a single
+`@Observable` class does *both* jobs — receives protocol events *and*
+accumulates state *and* serves render-diff snapshots to the built-in UI. The
+split gives each job a layer.
+
+### 1.2 Products, dependency direction, client story
+
+```mermaid
+flowchart TD
+    UI["WebInspectorKit (UIKit drop-in UI, iOS)<br/>= today's WebInspectorUI* folded in"]
+    Data["WebViewDataKit (@Observable models + fetch, iOS+macOS)"]
+    Proxy["WebViewProxyKit (typed commands + event streams, iOS+macOS)"]
+    Testing["WebViewProxyKitTesting (fake backend runtime)"]
+    NT["(internal) native attach: symbols + ObjC++ bridge + backend"]
+    T["(internal) TransportSession: framing, target mux, reply correlation"]
+
+    UI --> Data
+    Data --> Proxy
+    Testing --> Proxy
+    Proxy --> T
+    Proxy --> NT
+    NT --> T
+```
+
+| Product | Platforms | Client story |
+| --- | --- | --- |
+| `WebViewProxyKit` | iOS 18+, macOS 15+ | A tool that wants a typed, streaming connection to a `WKWebView`'s inspector backend — e.g. a headless network logger, a test harness, or the data kit. |
+| `WebViewDataKit` | iOS 18+, macOS 15+ | An app or UI that wants to *render and command* inspector state (DOM tree, request list, console, evaluation) as observable models without touching the wire — the second app, a future AppKit UI, custom tabs. |
+| `WebViewProxyKitTesting` | iOS 18+, macOS 15+ | Tests that drive either kit deterministically over an in-memory backend with no `WKWebView` and no private symbols. |
+| `WebInspectorKit` | iOS 18+ (UIKit) | Apps wanting the built-in drop-in inspector container (Monocly). |
+
+The **entire** current `WebInspectorTransport` + `WebInspectorNativeTransport`
++ `WebInspectorNativeBridge` + `WebInspectorNativeSymbols` stack becomes
+**internal to `WebViewProxyKit`** — none of it is a public product (resolves
+F-02/F-10: the empty products disappear because their content is now the
+private engine of one designed product). This is the same move CodexKit makes
+with `JSONRPC`/`AppServerAPI`/`AppServerProcessTransport` (all `package`).
+
+### 1.3 What moves where (from the current 16 targets)
+
+- `WebInspectorTransport`, `WebInspectorNativeTransport`, `WebInspectorNativeBridge`,
+  `WebInspectorNativeSymbols`, `WebInspectorCoreSupport` → **internal targets of
+  `WebViewProxyKit`** (the typed public surface sits on top). `TransportSession`,
+  `ProtocolCommand/Event`, `ProtocolCommandChannel`, `TransportReceiver`,
+  `NativeInspectorBackend`, symbol resolution — all stay `package`/internal.
+- The domain `@Observable` classes (`DOMSession`, `NetworkSession`,
+  `ConsoleSession`, `RuntimeState`, `CSSSession`) and their `apply*` pipelines
+  (`WebInspectorCore*`) → **rewritten as `WebViewDataKit` models + a private
+  event-application layer.** Their *accumulation logic* is reused; their
+  *dual role* (also being the public API and the render-diff source) is dropped.
+- `WebInspectorUI*` + today's `WebInspectorKit` → **folded into the
+  `WebInspectorKit` UIKit product** as a `WebViewDataKit` consumer (F-03/F-04
+  `@_exported`/`@_disfavoredOverload` deletions carry over unchanged).
+
+---
+
+## 2. Variation axes and absorption points
+
+| Axis | Absorption point | Variant-addition test |
+| --- | --- | --- |
+| UI toolkit / platform | Product boundary: both kits are toolkit-free (Foundation + WebKit only) | Add an AppKit UI: new module importing `WebViewDataKit`. **0 files edited in either kit.** |
+| Inspected target kind (page / frame / worker / service-worker) | The **`WebViewTarget`** object — each target owns its own routing and domain clients (owner answer: per-target sessions) | Add a worker inspector view: consume `proxy.targets` filtered by `.kind == .worker`. No `targetID`-matching added anywhere. |
+| Protocol domain | One typed domain client per domain on `WebViewTarget`; one `apply` handler per domain in the data kit | Add a `Page`-domain consumer: 1 new client accessor + 1 event enum. No other domain touched. |
+| Transport backend (native / test fake) | `package protocol TransportBackend` inside `WebViewProxyKit` + the `WebViewProxy` composition root (unchanged from today, now internal) | 1 conformer + 1 root branch. Documented as internal. |
+| Run environment (live / preview / test) | Backend fake in `WebViewProxyKitTesting`, never a model-level branch | Production `WebViewProxy` / `WebViewModelContainer` run unmodified over the fake. |
+| List kind (network / console) | `WebViewFetchDescriptor<Model>` + a per-model known-key-path table | Add a "storage" list later: 1 model + 1 descriptor extension. |
+
+The **target axis** is the one the current code leaks worst (F-30: every
+public ID embeds `ProtocolTarget.ID`; targetID demux scattered across domains).
+Making `WebViewTarget` the absorption point means a consumer receives a target
+session and calls `target.dom.getDocument()` — the routing target is baked into
+the handle, never a parameter, and IDs it hands back are opaque.
+
+---
+
+## 3. WebViewProxyKit — public API
+
+Apple analog: `NWConnection` / `URLSession` (a client actor with an async
+lifecycle) whose sub-scopes (`WebViewTarget`) are `Sendable` value handles like
+`CodexThread`. Everything public is `Sendable`.
+
+### 3.1 The connection — `WebViewProxy`
+
+```swift
+// WebViewProxyKit
+public actor WebViewProxy {
+    public struct Configuration: Sendable {
+        /// Per-command reply timeout (existing default .seconds(5)).
+        public var responseTimeout: Duration
+        /// Bootstrap wait for the first page target.
+        public var bootstrapTimeout: Duration
+        public init(responseTimeout: Duration = .seconds(5),
+                    bootstrapTimeout: Duration = .seconds(5))
+    }
+
+    /// Attach to a live WKWebView. Resolves private symbols off-main, tears down
+    /// any prior connection, installs the ObjC++ frontend channel, runs the
+    /// Inspector/Target bootstrap, then returns once the first page target is
+    /// current. Creation IS connection (CodexAppServer idiom).
+    ///
+    /// - Throws: `WebViewProxyError.unsupported` when the private WebKit symbols
+    ///   cannot be resolved on this OS build; `CancellationError` if a newer
+    ///   attach superseded this one; other `WebViewProxyError` on bridge failure.
+    @MainActor
+    public init(attachingTo webView: WKWebView,
+                configuration: Configuration = .init()) async throws
+
+    /// The current main page target. Survives cross-process navigation: on a
+    /// provisional-target commit the underlying targetId is swapped internally
+    /// and THIS handle keeps identity (retargeting is invisible to callers).
+    public var currentPage: WebViewTarget? { get async }
+
+    /// Await the current page target (used right after init by consumers that
+    /// want a non-optional handle).
+    public func waitForCurrentPage() async throws -> WebViewTarget
+
+    /// Live target lifecycle. A fresh independent stream per access.
+    /// Replays the current target set, then yields changes.
+    public nonisolated var targets: WebViewTargetChanges { get }
+
+    /// Page-level reload (existing canReloadPage / reloadPage, promoted).
+    public var canReload: Bool { get async }
+    public func reload() async throws
+
+    /// Idempotent CLEAN teardown: disconnect the frontend channel, restore
+    /// isInspectable, finish all event streams normally, fail in-flight commands
+    /// with `.closed`.
+    public func close() async
+
+    /// Returns normally when the connection is torn down cleanly (`close()` or
+    /// the web view going away); throws `.disconnected` on a fatal mid-session
+    /// failure (controller invalidated). This is the single terminal signal the
+    /// data kit reads to choose `.detached` vs `.failed` (§4.1) — clean close and
+    /// fatal failure are NOT collapsed into one indistinguishable signal.
+    public func waitUntilClosed() async throws
+}
+
+public enum WebViewTargetChange: Sendable {
+    case created(WebViewTarget)
+    /// Provisional target committed: `old` is retired, `new` is now current.
+    /// A page-role commit reuses the same WebViewTarget identity, so consumers
+    /// that hold `currentPage` need not react; frame/worker commits are distinct.
+    case committed(old: WebViewTarget.ID, new: WebViewTarget)
+    case destroyed(WebViewTarget.ID)
+}
+
+/// AsyncSequence wrapper (CodexThreadEventSequence idiom): package init, fresh
+/// stream per `WebViewProxy.targets` access.
+public struct WebViewTargetChanges: AsyncSequence, Sendable {
+    public typealias Element = WebViewTargetChange
+    public func makeAsyncIterator() -> AsyncStream<WebViewTargetChange>.Iterator
+}
+```
+
+Rationale for keeping the connection deliberately thin:
+
+- **No public `state` enum.** Re-attach = make a new `WebViewProxy`. A dead
+  connection surfaces as every event stream finishing plus `waitUntilClosed()`
+  returning (clean) or throwing `.disconnected` (fatal); commands after teardown
+  throw `.closed` or `.disconnected` respectively. The *observable* lifecycle
+  state lives one layer up, on
+  `WebViewModelContext.state` (§4.1), because that is where a UI reads it —
+  api-design: one owner per semantic state, and the data kit is the
+  `@Observable` layer. (This corrects the current design where the connection
+  object is itself the observable state, F-34.)
+- **Attach ordering is load-bearing and stays internal** (transport research §3e):
+  symbol resolution must fail before teardown; bridge attach must run after the
+  old connection is detached. The two-stage native factory that guarantees this
+  is `package` inside `WebViewProxyKit` (unchanged from today's
+  `NativeAttachment` two-stage shape).
+
+### 3.2 The per-target session — `WebViewTarget`
+
+A `Sendable` value handle holding a `package` reference to the `WebViewProxy`
+actor (CodexThread idiom). All behavior is on the domain-client accessors.
+
+```swift
+public struct WebViewTarget: Identifiable, Sendable {
+    public struct ID: Hashable, Sendable { /* opaque; wraps ProtocolTarget.ID */ }
+    public enum Kind: Sendable { case page, frame, worker, serviceWorker }
+
+    public let id: ID
+    public let kind: Kind
+    /// Frame this target renders, when known (page/frame targets).
+    public var frameID: FrameID? { get }
+    public var isProvisional: Bool { get }
+
+    package let proxy: WebViewProxy
+
+    // Typed domain clients — routing target is baked in; no targetID parameters.
+    public var dom: DOM.Client { get }
+    public var css: CSS.Client { get }
+    public var network: Network.Client { get }
+    public var console: Console.Client { get }
+    public var runtime: Runtime.Client { get }
+    public var page: Page.Client { get }
+}
+
+public struct FrameID: Hashable, Sendable { /* opaque, wraps ProtocolFrame.ID */ }
+```
+
+Domain enabling is automatic and lazy: a domain is `enable`d on the first
+command or first `.events` subscription for that domain on that target (CSS
+stays lazily enabled for the WebKit-compatibility reason baked into today's
+`StyleRefreshCoordinator`). `DOM` has no `enable`; `getDocument()` primes the
+node-event stream for the **root**, but WebKit only ever emits node mutation
+events for nodes it has already pushed to this frontend — so deeper subtrees
+emit full `childNodeInserted/Removed`/`attributeModified` only after
+`requestChildNodes` materializes them (an un-expanded parent still gets
+`childNodeCountUpdated` live). The `Inspector`/`Target` bootstrap and the
+`DOM.enable` transport-local synthetic-result short-circuit (transport research)
+stay inside the engine — never surfaced.
+
+Each domain's decoded events are **multicast** to all live `.events` iterators
+for that target (the data kit's internal subscriber and any raw-proxy consumer
+each receive every event — a source-side subscriber fan-out, the
+`CodexAppServerNotificationRouter` equivalent, not a private per-iterator
+stream). Streams are live-only (no replay); a late DOM subscriber's reseed is
+owned by the data kit (§4.4), not synthesized by the proxy.
+
+### 3.3 Typed domain surfaces
+
+Each domain is a caseless-enum **namespace** carrying (a) a `Client` handle with
+async commands and an `events` stream, (b) decoded value DTOs, (c) an `Event`
+enum. Only the commands/events **currently exercised** are typed (scope
+contract: no protocol coverage expansion); the full field lists reuse the
+existing payload structs verbatim, minus the `Data`/method-string leaks (F-29).
+
+Value DTOs are decoded value types; the `{id, method, params}` envelope, the
+`Target.sendMessageToTarget` wrapper, and every `resultData: Data` stay
+`package`.
+
+#### DOM
+
+```swift
+public enum DOM {
+    public struct Client: Sendable {
+        /// Primes DOM events and returns the document root for this target.
+        public func getDocument() async throws -> Node
+        public func requestChildNodes(_ id: Node.ID, depth: Int = 1) async throws
+        public func requestNode(forRemoteObject objectID: Runtime.RemoteObject.ID) async throws -> Node.ID
+        public func outerHTML(of id: Node.ID) async throws -> String
+        public func removeNode(_ id: Node.ID) async throws
+        public func highlightNode(_ id: Node.ID) async throws
+        public func hideHighlight() async throws
+        public func setInspectMode(enabled: Bool) async throws
+        public func undo() async throws
+        public func redo() async throws
+        /// Fresh independent stream; DOM node events only flow after getDocument().
+        public var events: EventStream { get }
+    }
+
+    public struct Node: Identifiable, Sendable {
+        public struct ID: Hashable, Sendable { /* opaque; target+document scoped */ }
+        public let id: ID
+        public let nodeType: Int
+        public let nodeName: String
+        public let localName: String
+        public let nodeValue: String
+        public var attributes: [String: String]
+        public var childNodeCount: Int
+        public var children: [Node]?           // present only when eagerly delivered
+        public var contentDocument: Node?       // same-target iframe doc
+        public var shadowRoots: [Node]
+        public var templateContent: Node?
+        public var pseudoType: PseudoType?
+        public var shadowRootType: ShadowRootType?
+        // … full set = DOM.json Node shape / current DOMNode.Payload fields.
+    }
+    public enum PseudoType: Sendable { case before, after, /* … */ }
+    public enum ShadowRootType: Sendable { case open, closed, userAgent }
+
+    public enum Event: Sendable {
+        case documentUpdated                                   // all node IDs invalid
+        case setChildNodes(parent: Node.ID, nodes: [Node])
+        case childNodeInserted(parent: Node.ID, previous: Node.ID?, node: Node)
+        case childNodeRemoved(parent: Node.ID, node: Node.ID)
+        case childNodeCountUpdated(Node.ID, count: Int)
+        case attributeModified(Node.ID, name: String, value: String)
+        case attributeRemoved(Node.ID, name: String)
+        case characterDataModified(Node.ID, value: String)
+        case shadowRootPushed(host: Node.ID, root: Node)
+        case shadowRootPopped(host: Node.ID, root: Node.ID)
+        case pseudoElementAdded(parent: Node.ID, element: Node)
+        case pseudoElementRemoved(parent: Node.ID, element: Node.ID)
+        case inspect(Node.ID)                                  // element-picker hit
+        case unknown(RawEvent)                                 // forward-compat
+    }
+    public struct EventStream: AsyncSequence, Sendable { public typealias Element = Event /* … */ }
+}
+```
+
+#### Runtime
+
+```swift
+public enum Runtime {
+    public struct Client: Sendable {
+        /// `in` nil = the target's default execution context.
+        /// JS exceptions are DATA (`EvaluationResult.wasThrown`), not Swift errors;
+        /// `throws` is reserved for protocol/transport failure (F-29). The console
+        /// evaluation policy (command-line API, `.console` object group, saveResult,
+        /// user-gesture emulation) is a documented baked-in policy of this method.
+        public func evaluate(_ expression: String,
+                             in context: ExecutionContext.ID? = nil) async throws -> EvaluationResult
+        public func properties(of object: RemoteObject.ID,
+                               ownProperties: Bool = true) async throws -> [PropertyDescriptor]
+        public func preview(of object: RemoteObject.ID) async throws -> ObjectPreview
+        public func collectionEntries(of object: RemoteObject.ID) async throws -> [CollectionEntry]
+        public func releaseObject(_ id: RemoteObject.ID) async throws
+        public func releaseObjectGroup(_ group: ObjectGroup) async throws
+        public var events: EventStream { get }
+    }
+
+    public struct RemoteObject: Identifiable, Sendable {
+        public struct ID: Hashable, Sendable { /* opaque; runtime-agent scoped */ }
+        public let id: ID?                    // nil for by-value primitives
+        public let kind: Kind                 // typed once at decode from type/subtype
+        public let className: String?
+        public let description: String?
+        public let value: JSONValue?          // returnByValue primitives
+        public let preview: ObjectPreview?
+    }
+    public enum Kind: Sendable { case object, function, string, number, boolean, symbol,
+        bigint, undefined, null, array, error /* … mapped at decode */ }
+
+    public struct EvaluationResult: Sendable {
+        public let object: RemoteObject
+        public let wasThrown: Bool
+        public let savedResultIndex: Int?
+    }
+    public struct ExecutionContext: Identifiable, Sendable {
+        public struct ID: Hashable, Sendable { /* opaque; runtime-agent scoped */ }
+        public let id: ID
+        public let name: String
+        public let frameID: FrameID?
+        public let kind: ContextKind          // normal / user / internal
+    }
+    public enum ObjectGroup: Sendable { case console, other(String) }
+    public struct PropertyDescriptor: Sendable {
+        public let name: String
+        public let value: RemoteObject?
+    }
+    public struct ObjectPreview: Sendable { /* text, overflow, [Entry] */ }
+    public struct CollectionEntry: Sendable { /* key?, value: RemoteObject */ }
+
+    public enum Event: Sendable {
+        case executionContextCreated(ExecutionContext)
+        // NOTE: WebKit emits no executionContextDestroyed/Cleared on the wire
+        // (WebKit research §5). Context death is INFERRED by the data kit from
+        // frameDetached / documentUpdated / target destruction — it is NOT a
+        // synthesized proxy event, so we do not fabricate one here.
+        case unknown(RawEvent)
+    }
+    public struct EventStream: AsyncSequence, Sendable { public typealias Element = Event /* … */ }
+}
+```
+
+#### Network
+
+```swift
+public enum Network {
+    public struct Client: Sendable {
+        /// WebKit `Network.getResponseBody` (async on the wire). An unavailable
+        /// or failed body is a wire ServerError, so this THROWS `.commandFailed`
+        /// — there is no "empty body" success. The data kit catches the throw and
+        /// maps it to `NetworkBody.Phase.failed` (§4.2); "not fetched yet" is the
+        /// data kit's `Phase.available`, owned above this layer.
+        public func responseBody(for id: Request.ID) async throws -> Body
+        public var events: EventStream { get }
+    }
+
+    public struct Request: Identifiable, Sendable {
+        public struct ID: Hashable, Sendable { /* opaque; target scoped */ }
+        public let id: ID
+        public let url: String
+        public let method: String
+        public let headers: [String: String]
+        public let postData: String?
+    }
+    public struct Response: Sendable {
+        public let url: String?
+        public let status: Int?
+        public let statusText: String?
+        public let mimeType: String?
+        public let headers: [String: String]
+        // … timing/security stay package inside the value type (F-29 doctrine).
+    }
+    public struct Body: Sendable {
+        public let data: String
+        public let base64Encoded: Bool
+    }
+    /// OPEN wire enum: unknown / feature-gated WebKit values decode into a valid
+    /// instance preserving the raw string (mirrors the current RawRepresentable
+    /// struct at NetworkProtocol.swift:276). The §3.4 forward-compat doctrine
+    /// applies at the FIELD level, not only the event-method level — the same
+    /// open-struct treatment is used for every enum decoded from a WebKit
+    /// protocol string (Runtime.Kind, Console.Source/Level, CSS origin).
+    public struct ResourceType: RawRepresentable, Hashable, Sendable {
+        public let rawValue: String
+        public init(rawValue: String)
+        public static let document, stylesheet, image, font, script, xhr, fetch,
+            ping, beacon, webSocket, eventSource, media, other: ResourceType
+    }
+
+    public enum Event: Sendable {
+        case requestWillBeSent(id: Request.ID, request: Request, resourceType: ResourceType?,
+                               redirectResponse: Response?, timestamp: Double)
+        case responseReceived(id: Request.ID, response: Response, resourceType: ResourceType, timestamp: Double)
+        case dataReceived(id: Request.ID, dataLength: Int, timestamp: Double)
+        case loadingFinished(id: Request.ID, timestamp: Double)
+        case loadingFailed(id: Request.ID, errorText: String, canceled: Bool, timestamp: Double)
+        case requestServedFromMemoryCache(id: Request.ID, response: Response, timestamp: Double)
+        // WebSocket family stays but is folded into one associated case set:
+        case webSocket(WebSocketEvent)
+        case unknown(RawEvent)
+    }
+    public enum WebSocketEvent: Sendable { /* created/closed/frameSent/frameReceived/… */ }
+    public struct EventStream: AsyncSequence, Sendable { public typealias Element = Event /* … */ }
+}
+```
+
+#### Console, CSS, Page (abbreviated — same pattern)
+
+```swift
+public enum Console {
+    public struct Client: Sendable {
+        public func clearMessages() async throws
+        public func setLoggingChannelLevel(_ source: ChannelSource, level: ChannelLevel) async throws
+        public var events: EventStream { get }
+    }
+    public struct Message: Sendable {
+        public let source: Source, level: Level, type: Kind?
+        public let text: String
+        public let url: String?, line: Int?, column: Int?
+        public let repeatCount: Int
+        public let parameters: [Runtime.RemoteObject]
+        public let networkRequestID: Network.Request.ID?   // cross-link
+        public let timestamp: Double?
+    }
+    public enum Event: Sendable {
+        case messageAdded(Message)
+        case messageRepeatCountUpdated(count: Int, timestamp: Double?)
+        case messagesCleared(reason: ClearReason)          // faithful wire event; the data-kit
+                                                           // context RESPONDS by issuing
+                                                           // Runtime.releaseObjectGroup(.console)
+        case unknown(RawEvent)
+    }
+    // Source/Level/Kind/ClearReason: existing string enums, promoted.
+}
+
+public enum CSS {
+    public struct Client: Sendable {
+        public func matchedStyles(for node: DOM.Node.ID) async throws -> MatchedStyles
+        public func computedStyle(for node: DOM.Node.ID) async throws -> [ComputedProperty]
+        public func setStyleText(_ id: Style.ID, text: String) async throws -> Style
+        public var events: EventStream { get }
+    }
+    public struct MatchedStyles: Sendable { /* sections, rules, inherited, pseudo */ }
+    public struct Style: Identifiable, Sendable {
+        public struct ID: Hashable, Sendable {/*opaque*/}
+        public var properties: [Property]          // the reachable declaration list
+        public var cssText: String
+        public var isEditable: Bool
+    }
+    public struct Rule: Sendable {
+        public var style: Style                    // sections[].style.properties[].id is reachable
+        /* selectors, origin, sourceURL/line */
+    }
+    public struct Property: Identifiable, Sendable {
+        public struct ID: Hashable, Sendable {/*opaque*/}
+        public let id: ID
+        public let name: String
+        public let value: String
+        public let status: Status                  // active / inactive / disabled
+        public let isEditable: Bool
+    }
+    public enum Status: Sendable { case active, inactive, disabled }
+    public struct ComputedProperty: Sendable { public let name: String; public let value: String }
+    public enum Event: Sendable {
+        case styleSheetChanged(Style.ID)
+        case styleSheetAdded(StyleSheetHeader)
+        case styleSheetRemoved(StyleSheet.ID)
+        case unknown(RawEvent)
+    }
+}
+
+public enum Page {
+    public struct Client: Sendable {
+        public func reload(ignoringCache: Bool = false) async throws
+        public var events: EventStream { get }
+    }
+    public enum Event: Sendable {
+        case frameNavigated(Frame)          // frame associated with new loader
+        case frameDetached(FrameID)
+        case loadEventFired(timestamp: Double)
+        case domContentEventFired(timestamp: Double)
+        case unknown(RawEvent)
+    }
+    public struct Frame: Identifiable, Sendable { /* id, parentId?, url, loaderId, securityOrigin */ }
+}
+```
+
+### 3.4 Forward compatibility and the raw escape
+
+Every `Event` enum ends in `case unknown(RawEvent)`; unknown domains/methods
+never crash a stream (CodexKit `case unknown(CodexRawNotification)` idiom).
+
+```swift
+public struct RawEvent: Sendable {
+    public let domain: String
+    public let method: String
+    public let params: Data            // the ONE place Data is public, and only inbound
+    public func decode<T: Decodable>(_ type: T.Type = T.self) throws -> T
+}
+```
+
+No public **raw send**. If a consumer needs an un-modeled command, that is a
+scope escalation (add the typed command), not a reason to expose the envelope —
+matching CodexKit's "public users should not need to call JSON-RPC" boundary.
+
+### 3.5 Error model and isolation
+
+```swift
+public enum WebViewProxyError: Error, Sendable, Equatable {
+    case unsupported([String])           // required private symbols missing on this OS build
+    case attachFailed(String)            // ObjC++ bridge could not attach
+    case closed                          // clean teardown (close() / web view gone)
+    case disconnected(String)            // fatal mid-session failure (controller invalidated)
+    case commandFailed(domain: String, method: String, message: String)   // remote protocol error
+    case timeout(domain: String, method: String)
+}
+```
+
+- Commands are fail-fast (`throws`). A remote protocol error → `.commandFailed`;
+  a dead connection → `.closed` (clean) or `.disconnected` (fatal); a superseded
+  attach → `CancellationError`.
+- JS evaluation exceptions are **data**, not Swift errors
+  (`EvaluationResult.wasThrown`). A network body fetch failure is a thrown
+  `.commandFailed` — there is no wire "empty body" success (§3.3); the data kit
+  turns that throw into observable `NetworkBody.Phase.failed` (§4.2).
+- Isolation: `WebViewProxy` is an `actor` (serializes wire state exactly as
+  today's `TransportSession`). `WebViewTarget` and every DTO are `Sendable`
+  value types. `init(attachingTo:)` is `@MainActor` (touches `WKWebView`). Event
+  streams are unbounded `AsyncStream`s, fresh per `.events` access.
+
+---
+
+## 4. WebViewDataKit — public API
+
+Apple analog: SwiftData `ModelContainer` / `ModelContext` + CoreData
+`NSFetchedResultsController`. The data kit **owns** the accumulation logic that
+today's `@Observable` domain classes carry (DOM tree building, request-list
+ordering, console merge/repeat, runtime object lifetime) — but as private
+`apply*` handlers feeding public models, not as the public API itself.
+
+Naming: the SwiftData-analog machinery is `WebView`-prefixed (to avoid
+colliding with a consumer's own `SwiftData` import — `FetchDescriptor`, `@Query`
+would clash otherwise). Domain models are unprefixed within the module (§10
+fork b).
+
+### 4.1 Container and context
+
+```swift
+// WebViewDataKit
+public final class WebViewModelContainer: @unchecked Sendable {
+    public let proxy: WebViewProxy
+    @MainActor public var mainContext: WebViewModelContext { get }
+
+    /// Receive an existing proxy (DI / test path).
+    public init(proxy: WebViewProxy)
+    /// Or own one: attach and build the container in one call.
+    @MainActor
+    public convenience init(attachingTo webView: WKWebView,
+                            configuration: WebViewProxy.Configuration = .init()) async throws
+
+    /// Clean teardown: closes the proxy; the context observes the clean
+    /// termination and moves to `.detached` (vs `.failed` for a fatal drop). This
+    /// is the seam that makes the clean `.detached` state reachable.
+    public func close() async
+}
+
+@MainActor
+@Observable
+public final class WebViewModelContext {
+    public private(set) weak var container: WebViewModelContainer?
+    public let proxy: WebViewProxy
+
+    /// The observable connection lifecycle state lives HERE (single owner).
+    public enum State: Sendable, Equatable { case attaching, attached, detached, failed(WebViewProxyError) }
+    public private(set) var state: State
+
+    // DOM — a tree, not a list: direct observable accessors (CodexChat.items idiom).
+    public private(set) var rootNode: DOMNode?
+    public func node(for id: DOMNode.ID) -> DOMNode?
+    public private(set) var selectedNode: DOMNode?
+    public func select(_ node: DOMNode?)
+
+    // Runtime — contexts + evaluation.
+    public private(set) var executionContexts: [RuntimeContext]
+    public private(set) var selectedContext: RuntimeContext?
+    public func selectContext(_ context: RuntimeContext?)
+    public func evaluate(_ expression: String,
+                         in context: RuntimeContext? = nil) async throws -> RuntimeEvaluation
+
+    // Lists — fetched results (network / console).
+    public func fetchedResults<Model: WebViewFetchableModel>(
+        for descriptor: WebViewFetchDescriptor<Model>) -> WebViewFetchedResults<Model>
+    public func fetchedResultsController<Model: WebViewFetchableModel>(
+        for descriptor: WebViewFetchDescriptor<Model>) -> WebViewFetchedResultsController<Model>
+
+    // Identity map (CodexModelContext.model(for:) idiom).
+    public func registeredRequest(for id: NetworkRequest.ID) -> NetworkRequest?
+    public func registeredMessage(for id: ConsoleMessage.ID) -> ConsoleMessage?
+
+    public init(_ container: WebViewModelContainer)
+}
+```
+
+The context subscribes to `proxy.targets` and each target's per-domain event
+streams, and drives the `apply*` handlers on the MainActor (transport research
+§3g: events already arrive main-hopped). Cross-target semantics the current code
+owns — frame-document projection, console merge/retarget on provisional commit,
+runtime object-group release — move **here**, into private context coordinators,
+not into the proxy (which stays per-target and faithful).
+
+### 4.2 Models
+
+`@Observable final class`, `WebViewPersistentModel` protocol, `package`
+init/mutators (only the context creates/mutates), `public private(set)` state,
+weak `modelContext`, `===` identity, in-place identity-preserving updates
+(CodexDataKit model idiom).
+
+```swift
+public protocol WebViewPersistentModel: AnyObject, Observable, Identifiable, Hashable, SendableMetatype
+where ID: Hashable & Sendable {
+    nonisolated var id: ID { get }
+    @MainActor var modelContext: WebViewModelContext? { get }
+}
+// `Hashable` is satisfied by a nonisolated extension (=== identity /
+// ObjectIdentifier hashing), so a @MainActor model meets the nonisolated
+// requirements. `SendableMetatype` + `ID: Sendable` let WebViewFetchDescriptor /
+// WebViewSortDescriptor and the fetched-results transaction snapshots cross the
+// proxy actor / background-pump boundary (CodexPersistentModel carries the same
+// bounds). Keeping models @MainActor is a deliberate divergence from CodexKit's
+// nonisolated models — justified here because mutation is already MainActor-owned.
+
+@MainActor @Observable
+public final class DOMNode: WebViewPersistentModel {
+    public struct ID: Hashable, Sendable { /* opaque; wraps proxy DOM.Node.ID */ }
+    public let id: ID
+    public private(set) var nodeName: String
+    public private(set) var localName: String
+    public private(set) var nodeValue: String
+    public private(set) var attributes: [String: String]
+    public private(set) var nodeType: Int
+    public private(set) var pseudoType: DOM.PseudoType?
+    /// Children with an explicit loading state (the current ChildrenState).
+    public enum Children: Sendable { case unrequested(count: Int); case loaded([DOMNode]) }
+    public private(set) var children: Children
+    public private(set) var shadowRoots: [DOMNode]
+    public private(set) var templateContent: DOMNode?
+    public var elementStyles: CSSStyles? { get }          // selection-driven, see §4.5
+
+    // Write-back (delegates to context → currentPage.dom):
+    public func requestChildren(depth: Int = 1) async
+    public func highlight() async
+    public func remove(undoManager: UndoManager? = nil) async throws
+    public func outerHTML() async throws -> String
+}
+
+@MainActor @Observable
+public final class NetworkRequest: WebViewPersistentModel, WebViewFetchableModel {
+    public struct ID: Hashable, Sendable { /* opaque */ }
+    public let id: ID
+    public private(set) var url: String
+    public private(set) var method: String
+    public private(set) var resourceType: Network.ResourceType?
+    public enum State: Sendable { case pending, responded, finished, failed(errorText: String, canceled: Bool) }
+    public private(set) var state: State
+    public private(set) var status: Int?
+    public private(set) var mimeType: String?
+    public private(set) var frameID: FrameID?
+    public private(set) var requestHeaders: [String: String]
+    public private(set) var responseHeaders: [String: String]
+    public private(set) var requestBody: NetworkBody?
+    public private(set) var responseBody: NetworkBody?
+    public var canFetchResponseBody: Bool { get }
+    /// Redirect chain — each hop keeps its own request/response. The proxy's
+    /// `requestWillBeSent(redirectResponse:)` lands here.
+    public private(set) var redirects: [RedirectHop]
+    /// Present only for WebSocket rows (resourceType == .webSocket); the proxy's
+    /// `Network.WebSocketEvent` family lands here.
+    public private(set) var webSocket: WebSocketState?
+
+    /// Fetch-on-demand; result lands in the observable `responseBody` (phase
+    /// available→fetching→loaded/failed). Returns Void by design (current shape).
+    public func fetchResponseBody() async
+}
+
+public struct RedirectHop: Sendable { /* request: Network.Request, response: Network.Response, timestamp: Double */ }
+
+@MainActor @Observable
+public final class WebSocketState {
+    public enum ReadyState: Sendable { case connecting, open, closed }
+    public private(set) var readyState: ReadyState
+    public private(set) var frames: [Frame]
+    public struct Frame: Sendable { /* direction, opcode, payloadText/size, timestamp */ }
+}
+
+@MainActor @Observable
+public final class NetworkBody: Sendable {
+    public enum Phase: Sendable { case available, fetching, loaded, failed(String) }
+    public private(set) var phase: Phase
+    public private(set) var text: String?
+    public private(set) var size: Int
+    public private(set) var isBase64Encoded: Bool
+    public private(set) var isTruncated: Bool
+}
+
+@MainActor @Observable
+public final class ConsoleMessage: WebViewPersistentModel, WebViewFetchableModel {
+    public struct ID: Hashable, Comparable, Sendable { /* opaque; ordinal-ordered */ }
+    public let id: ID
+    public private(set) var source: Console.Source
+    public private(set) var level: Console.Level
+    public private(set) var text: String
+    public private(set) var repeatCount: Int
+    public private(set) var parameters: [RuntimeObject]
+    public private(set) var networkRequestID: NetworkRequest.ID?    // cross-link
+    public private(set) var timestamp: Double?
+}
+
+@MainActor @Observable public final class RuntimeContext: WebViewPersistentModel { /* id, name, frameID */ }
+
+@MainActor @Observable
+public final class RuntimeObject: WebViewPersistentModel {
+    public struct ID: Hashable, Sendable { /* opaque */ }
+    public let id: ID
+    public private(set) var kind: Runtime.Kind
+    public private(set) var className: String?
+    public private(set) var description: String?
+    public private(set) var preview: Runtime.ObjectPreview?
+    /// Expand: returns live child objects (nil `object` for primitives), so
+    /// expansion recurses without any public ID resolver (F-29).
+    public func properties() async throws -> [Property]
+    /// Live key→value entries for map/set/weakmap/iterator objects (WebKit
+    /// Runtime.getCollectionEntries; distinct from `properties()`, which returns
+    /// JS/own properties). Story B's Console tab needs this for Map/Set expansion;
+    /// entries carry live child objects, so no public ID resolver is exposed.
+    public func collectionEntries() async throws -> [Entry]
+    public struct Property: Sendable { public let name: String; public let value: String?; public let object: RuntimeObject? }
+    public struct Entry: Sendable { public let key: RuntimeObject?; public let value: RuntimeObject? }
+}
+
+@MainActor @Observable
+public final class CSSStyles: WebViewPersistentModel {
+    public struct ID: Hashable, Sendable { /* opaque */ }
+    public let id: ID
+    public enum Phase: Sendable { case loading, loaded, needsRefresh, unavailable, failed(String) }
+    public private(set) var phase: Phase
+    public private(set) var sections: [CSS.Rule]
+    public private(set) var computedProperties: [CSS.ComputedProperty]
+    /// The one CSS mutation (comment-out / re-enable a declaration). The ID is
+    /// reachable via `sections[].style.properties[].id`.
+    public func setProperty(_ property: CSS.Property.ID, enabled: Bool) async throws
+}
+
+public struct RuntimeEvaluation: Sendable {
+    public let object: RuntimeObject
+    public let isException: Bool
+}
+```
+
+### 4.3 Fetch, fetched results, controller, query
+
+The current network/console lists (append-only, growing) map exactly onto the
+CoreData/CodexDataKit fetch machinery. The DOM tree does **not** (it is a tree,
+served through `context.rootNode` + observation). This split mirrors CodexDataKit
+(chats fetched, a chat's items observed).
+
+```swift
+public protocol WebViewFetchableModel: WebViewPersistentModel {}
+// conformers: NetworkRequest, ConsoleMessage.
+
+public enum WebViewSortOrder: Sendable { case forward, reverse }
+public struct WebViewSortDescriptor<Model: WebViewFetchableModel>: Sendable, Hashable {
+    // Key paths validated against a closed known-key table; preconditionFailure on
+    // unsupported paths (CodexSortDescriptor idiom — fail fast, no silent guesses).
+    public init<Value: Comparable>(_ keyPath: KeyPath<Model, Value>, order: WebViewSortOrder = .forward)
+}
+
+/// Fixed-field predicate per model (CodexFetchPredicate idiom), not NSPredicate.
+public struct WebViewFetchPredicate<Model: WebViewFetchableModel>: Sendable, Hashable {
+    // NetworkRequest: resourceTypes, urlContains, statusRange, stateFilter …
+    // ConsoleMessage: levels, sources, textContains …
+}
+
+public struct WebViewFetchDescriptor<Model: WebViewFetchableModel>: Sendable, Hashable {
+    public var predicate: WebViewFetchPredicate<Model>?
+    public var sortBy: [WebViewSortDescriptor<Model>]
+    /// Retention cap — the data kit OWNS bounded growth here, fixing the current
+    /// unbounded request/console accumulation (domain research §7). nil = unbounded.
+    public var retentionLimit: Int?
+    public init(predicate: WebViewFetchPredicate<Model>? = nil,
+                sortBy: [WebViewSortDescriptor<Model>] = [],
+                retentionLimit: Int? = nil)
+}
+
+// Canned descriptors as constrained statics (CodexFetchDescriptor.recentChats idiom):
+extension WebViewFetchDescriptor where Model == NetworkRequest { public static var allRequests: Self { get } }
+extension WebViewFetchDescriptor where Model == ConsoleMessage { public static var allMessages: Self { get } }
+
+@MainActor @Observable
+public final class WebViewFetchedResults<Model: WebViewFetchableModel> {
+    public private(set) var items: [Model]
+    public private(set) var phase: WebViewDataPhase
+    // Live: as network/console events arrive, items mutate in place (identity-preserving).
+}
+
+@MainActor
+public final class WebViewFetchedResultsController<Model: WebViewFetchableModel> {
+    public let fetchedResults: WebViewFetchedResults<Model>   // forwarded current value, no 2nd copy
+    /// Ordered insert/delete/move/update transactions — the public replacement for
+    /// the internal requestDisplayChanges/rowDeltas render-diff plumbing (F-32).
+    /// Convert to UICollectionView/diffable data source in the UI layer.
+    public var transactions: AsyncStream<Transaction> { get }
+    public struct Transaction: Sendable { /* oldSnapshot, newSnapshot, itemChanges */ }
+}
+
+public enum WebViewDataPhase: Sendable, Equatable { case idle, loading, loaded, failed(String) }
+```
+
+SwiftUI:
+
+```swift
+@MainActor @propertyWrapper
+public struct WebViewQuery<Model: WebViewFetchableModel>: DynamicProperty {
+    public init(_ descriptor: WebViewFetchDescriptor<Model> = .init())
+    public var wrappedValue: WebViewQueryResults<Model> { get }   // RandomAccessCollection
+}
+extension EnvironmentValues { @Entry public var webViewModelContext: WebViewModelContext? }
+extension View { public func webViewModelContainer(_ container: WebViewModelContainer) -> some View }
+```
+
+### 4.4 Live observation
+
+```swift
+extension WebViewModelContext {
+    /// Observe a DOM subtree. The seed calls `requestChildNodes` for the observed
+    /// subtree (`.unrequested` → `.loaded`) BEFORE relying on child-mutation
+    /// events — WebKit only emits `childNodeInserted/Removed`/`attributeModified`
+    /// for nodes it has already pushed to this frontend. It then applies live DOM
+    /// events to the same context-owned nodes; `updates` is an invalidation-hint
+    /// stream that does not replay (CodexChatObservation idiom).
+    public func observe(_ node: DOMNode) async throws -> DOMObservation
+}
+public final class DOMObservation {
+    public let node: DOMNode
+    public typealias Updates = any AsyncSequence<DOMUpdate, Never>
+    public let updates: Updates
+    public func cancel()
+}
+public enum DOMUpdate: Sendable {
+    case childrenChanged(DOMNode.ID)
+    case attributesChanged(DOMNode.ID)
+    case characterDataChanged(DOMNode.ID)
+    case subtreeInvalidated
+}
+```
+
+The doctrine (CodexDataKit): the **observable model is the data**; `updates` are
+hints. UI reads `node.children` and uses updates only to invalidate. No UI-owned
+mirror of the tree.
+
+### 4.5 Write-back and cross-domain wiring (all through the context)
+
+- DOM selection → CSS: selecting a node (`context.select(_:)`) drives the CSS
+  fetch and populates `node.elementStyles` (the current DOM↔CSS coordinator,
+  now a private context coordinator).
+- Console → Runtime: `ConsoleMessage.parameters` are live `RuntimeObject`s;
+  expansion uses `RuntimeObject.properties()`. Console clear releases the
+  `.console` object group.
+- Console → Network: `ConsoleMessage.networkRequestID` resolves via
+  `context.registeredRequest(for:)`.
+- Runtime evaluation echo: `context.evaluate(...)` result object is registered;
+  page-visible side effects arrive as normal console events.
+
+---
+
+## 5. WebViewProxyKitTesting
+
+Mirror of `CodexAppServerKitTesting`: a `TestRuntime` facade + an actor fake
+implementing the `package TransportBackend`, with domain-typed enqueue helpers
+that build **package wire-reply types** (the `AppServerAPI.*.Response` analog),
+taking public DTOs only as *inputs*, plus deterministic gates (no sleeps).
+`WebViewProxyKitTesting` is a **same-package peer target** of `WebViewProxyKit`
+(like `CodexAppServerKitTesting`) — a separate library product, but a
+same-package peer, which is what grants it `package` visibility of the backend
+seam and the wire-reply types; it is *not* a downstream public-only consumer.
+Production `WebViewProxy` / `WebViewModelContainer` run unmodified over the fake
+— the same data flow, no test branches in production (api-design: fake at the
+lowest seam).
+
+```swift
+public struct WebViewProxyTestRuntime: Sendable {
+    public var proxy: WebViewProxy
+    public var backend: WebViewTestBackend
+    public static func start() async throws -> WebViewProxyTestRuntime
+}
+public actor WebViewTestBackend {
+    // Enqueue typed command replies and emit typed events. `result` is a package
+    // wire-reply value (public DOM.Node/Network.Response are decode-only, §9).
+    public func enqueue(_ result: some Encodable, for domain: String, method: String) async
+    public func emit(_ event: Network.Event, target: WebViewTarget.ID) async
+    public func emit(_ event: DOM.Event, target: WebViewTarget.ID) async
+    // … per-domain overloads; targetCreated/committed/destroyed helpers.
+    public func recordedCommands() async -> [RecordedCommand]
+    public func hold(domain: String, method: String, gate: WebViewTestGate) async
+}
+public actor WebViewTestGate { public func wait() async; public func open() async }
+```
+
+`WebViewDataKitTests` depend on `WebViewProxyKitTesting` (the data kit is tested
+through the proxy's fake backend, exactly like `CodexDataKitTests`).
+
+---
+
+## 6. Consumer usage stories
+
+### Story A — headless second app, iOS **and** macOS (no UI import)
+
+```swift
+import WebViewDataKit
+
+let container = try await WebViewModelContainer(attachingTo: webView)
+let context = container.mainContext        // observe context.state for lifecycle
+
+// DOM tree
+if let root = context.rootNode {
+    await root.requestChildren(depth: 1)
+    if case .loaded(let kids) = root.children { context.select(kids.first) }
+}
+// styles of the selected node
+let styles = context.selectedNode?.elementStyles
+
+// Network list (bounded, live)
+let requests = context.fetchedResults(for: .allRequests)   // observe requests.items
+if let last = requests.items.last { await last.fetchResponseBody() /* read last.responseBody?.text */ }
+
+// Evaluate
+let result = try await context.evaluate("document.title")
+print(result.isException ? "⚠️ \(result.object.description ?? "")" : result.object.description ?? "")
+```
+
+Before: impossible outside the package (F-05/F-21/F-22). Compiles on macOS
+because no UIKit type is in the surface.
+
+### Story A2 — low-level only (no data kit)
+
+```swift
+import WebViewProxyKit
+
+let proxy = try await WebViewProxy(attachingTo: webView)
+let page = try await proxy.waitForCurrentPage()
+Task { for await event in page.network.events {
+    if case .responseReceived(let id, let response, _, _) = event {
+        log("\(response.status ?? 0) \(page.network) \(id)")
+    }
+} }
+```
+
+A network logger that never builds a model graph — the proxy is useful alone.
+
+### Story B — custom Console tab in the built-in UI (the README example, made real)
+
+```swift
+import WebInspectorKit
+import WebViewDataKit
+
+let consoleTab = WebInspectorTab(id: "app_console", title: "Console", systemImage: "terminal") { context in
+    ConsoleTabViewController(context: context)     // receives the WebViewModelContext
+}
+final class ConsoleTabViewController: UIViewController {
+    let messages: WebViewFetchedResultsController<ConsoleMessage>   // .transactions → diffable data source
+    // input: let r = try await context.evaluate(text); render r.object.description / properties()
+}
+```
+
+Before: impossible (F-05).
+
+### Story C — drop-in UIKit (external contract preserved)
+
+```swift
+let vc = WebInspectorViewController(webView: webView)   // builds container+context internally
+present(vc, animated: true)
+```
+
+`WebInspectorViewController` / `WebInspectorTab` public shapes are preserved
+(F-07); internally they now own a `WebViewModelContainer`. MIGRATION.md documents
+the mechanical change for the current `WebInspectorSession`-based call site.
+
+---
+
+## 7. Where the existing UIKit UI sits
+
+`WebInspectorKit` (the product) becomes a **consumer of `WebViewDataKit`**:
+
+- Its view controllers render from the context's `@Observable` models and drive
+  lists from `WebViewFetchedResultsController.transactions`. Note the boundary:
+  `transactions` is a **data-kit public contract** (the `NSFetchedResultsController`
+  analog — ordered insert/delete/move/update over an entity list), *not* a UIKit
+  type and not behind the UI boundary. What it **replaces** is the internal
+  `rowDeltas`/`requestDisplayChanges`/render-snapshot plumbing (F-32) that today
+  leaks into the "public" model; any further render optimization the UI layers on
+  top of the transactions (cell reuse, coalescing) stays behind the UI boundary.
+  The DOM tree view renders from `context.rootNode` + `DOMObservation`.
+- Today's `WebInspectorUI*` internal targets fold in (F-03 `@_exported`
+  deletions carry over); `WebInspectorNativeAttachment.swift` and the
+  `@_disfavoredOverload` attach decoys are deleted (F-04) — attach now goes
+  through `WebViewModelContainer(attachingTo:)`.
+- The UI keeps whatever internal render-diff optimization it needs, but that is
+  now **behind the UI boundary**, not a data-kit contract.
+
+`WebInspectorKit` stays iOS/UIKit-only (non-goal: no AppKit UI). A future AppKit
+UI is a new module over `WebViewDataKit`, edits neither kit (§2 target test).
+
+---
+
+## 8. Apple analogs
+
+| Type | Analog | Shape borrowed |
+| --- | --- | --- |
+| `WebViewProxy` | `NWConnection` / `URLSession` | actor client; async attach = connect; `close()` |
+| `WebViewTarget` | (loose) a CDP session / `URLSessionTask` scope | `Sendable` handle; per-scope typed verbs + events |
+| `*.Client.events` | `URLSession.bytes` / any `AsyncSequence` | fresh typed stream per access, `.unknown` tail |
+| `WebViewModelContainer` / `WebViewModelContext` | `SwiftData.ModelContainer` / `ModelContext` | container owns connection, `@MainActor mainContext`, identity map |
+| `WebViewFetchDescriptor` / `WebViewFetchedResults` | `FetchDescriptor` / `@Query` results | value descriptor + observable results |
+| `WebViewFetchedResultsController` | `NSFetchedResultsController` | forwarded current value + ordered transactions |
+| `@WebViewQuery` | `@Query` | SwiftUI `DynamicProperty` |
+| models (`DOMNode`, `NetworkRequest`, …) | SwiftData `@Model` classes | `@Observable`, identity, in-place update, weak context |
+
+Verify signatures against Xcode DocumentationSearch / Apple docs at
+implementation time (api-design norm), especially `NSFetchedResultsController`
+change types and `@Query` init shapes.
+
+---
+
+## 9. Boundary doctrines
+
+- **Opaque IDs.** Every public ID (`DOM.Node.ID`, `NetworkRequest.ID`,
+  `RuntimeObject.ID`, `RuntimeContext.ID`, `CSSStyles.ID`, `WebViewTarget.ID`,
+  `FrameID`) is a `Hashable & Sendable` struct wrapping the target-scoped
+  transport identity with **package** storage. Consumers receive, hold, pass —
+  never construct or decompose (F-30). **Exception:** `ConsoleMessage.ID` is
+  session-global **ordinal**-scoped (commit-stable), not target-scoped — a
+  page-role provisional commit is identity-preserving for models and their IDs
+  (in-place update, no new ID minted), so a held `ConsoleMessage.ID` keeps
+  resolving via `registeredMessage(for:)` across the commit. The data-kit
+  retarget coordinator (§4.1) remaps internal routing without re-minting IDs.
+- **No raw envelopes outbound.** `{id,method,params}`, `Target.sendMessageToTarget`,
+  `resultData: Data`, method strings, `perform(_:)` never appear in public API.
+  The one inbound `Data` is `RawEvent.params` (forward-compat only).
+- **No public mutators.** No `apply*`, no `bindProtocolChannel`, no `reset()`.
+  Proxy state changes through commands and inbound events; model state changes
+  only through the context's private `apply*`. Previews/tests inject at the
+  backend seam.
+- **Transitive closure is the contract.** Every type reachable from a public
+  member is either sketched here or an escalation — no silent publication.
+- **Two layers, one direction.** `WebViewDataKit` depends on `WebViewProxyKit`;
+  the proxy knows nothing of models. No `@_exported` re-export of the proxy from
+  the data kit — a proxy-only consumer imports one module, a model consumer
+  imports the other (they compose, they do not merge).
+
+Avoided shapes (concrete): no `@_disfavoredOverload` attach trap-door; no
+capability flags on `WebViewProxy` (platform/target differences live on
+`WebViewTarget.kind` and the product boundary); no public wrapper mirroring
+model state; no enum smuggling a transport type in an associated value (the CSS
+`Phase`/target-payload reshape from 03 §2.6 still applies); no `WebInspectorUI`
+alias target left behind.
+
+---
+
+## 10. Open forks (owner decision, non-blocking for the interface)
+
+- **a. Umbrella product.** CodexKit ships a `CodexKit` umbrella that
+  `@_exported import`s both kits. Do we want a `WebViewKit` (or reuse
+  `WebInspectorKit`) umbrella for non-UI consumers, or make them import the two
+  modules explicitly? *Recommendation: no umbrella* — two imports is honest and
+  avoids re-coupling the layers; the UIKit `WebInspectorKit` already gives
+  batteries-included apps one import.
+- **b. Model name prefixing.** Domain models are sketched unprefixed
+  (`DOMNode`, `NetworkRequest`). CodexDataKit prefixes everything (`CodexChat`).
+  Unprefixed reads better but risks collisions in apps with their own
+  `NetworkRequest`. *Recommendation: keep unprefixed* (module namespace
+  disambiguates, SwiftData precedent); revisit if a real collision appears.
+- **c. DOM tree change feed.** The list domains publish
+  `WebViewFetchedResultsController.transactions` because they are flat ordered
+  collections with a direct Apple analog (`NSFetchedResultsController`); the DOM
+  is a tree with no such analog, so it starts as `rootNode` + `DOMObservation`
+  only. This asymmetry is grounded in **data shape + Apple precedent**, not a
+  measurement claim (both `rowDeltas` and `requestDisplayChanges` exist today, so
+  measurement does not privilege the list). Open question: if the UIKit tree
+  view needs ordered row transactions (it does today), do we add a
+  `DOMTreeController` with a tree-shaped transaction feed as a data-kit contract,
+  or let the UI compute row diffs from the observable tree behind its boundary?
+  *Recommendation: start with observation only*; add a `DOMTreeController` only
+  if the UI cannot meet its perf bar — and if added, it is a data-kit contract
+  like `WebViewFetchedResultsController`, not UI-internal plumbing.
+- **d. Provisional-commit identity of `currentPage`.** §3.1 keeps the same
+  `WebViewTarget` handle across a page-role commit. Confirm this is the desired
+  ergonomics vs. surfacing every commit as a new target the consumer must adopt.
+
+---
+
+## 11. Relationship to the prior design (03) and next step
+
+03 and this doc share phases 0–1 (scope, findings) but diverge at phase 2:
+
+| Question | 03 (previous) | 05 (this doc) |
+| --- | --- | --- |
+| Public shape | Promote the `@Observable` god-model classes to public | Two kits: typed streams + SwiftData-style models |
+| Products | 2 (`WebInspectorCore` engine + `WebInspectorKit` UI) | 3 (`WebViewProxyKit` + `WebViewDataKit` + `WebInspectorKit` UI) + Testing |
+| Accumulation vs wire | Same class does both | Split across the two layers |
+| Render-diff plumbing | Stays package on the public class | Replaced by `FetchedResultsController.transactions`, behind the UI boundary |
+| Migration cost | Lower (promote + rename) | Higher (rewrite the domain-model layer) — justified by the two-outcome unlock and by removing the god-model defect at the root (F-25/F-29/F-32) |
+
+Next step (per the `rearchitect` workflow): this is an interface sketch, not a
+gate-approved contract. Before delegating implementation, it needs (1) owner
+sign-off on the forks in §10, (2) the full field lists filled from the measured
+payload structs, (3) consumer stories A/A2/B/C compiled as a proxy-consumer
+contract-test package (as 03 §8 planned), and (4) a **coverage audit**: every
+proxy `*.Event` case must have a data-kit model destination (e.g. each
+`Network.Event` case — including `webSocket(_:)` and `redirectResponse` — lands
+on a `NetworkRequest`/`WebSocketState` field), and every write-back command must
+have an `apply*`/echo owner. Only then does it become the binding design
+contract.
+
+This design was adversarially reviewed (2026-07-02) from three lenses —
+CodexKit-idiom fidelity, WebKit-protocol correctness, and api-design axis
+leaks — and the confirmed defects (terminal clean-vs-fatal signal, network
+body-fetch error model, open `ResourceType`, reachable `CSS.Property.ID`,
+`RuntimeObject.collectionEntries`, WebSocket/redirect model state,
+`SendableMetatype` bound, `ConsoleMessage.ID` commit-stability, testing
+peer-target seam) are folded into the sections above.

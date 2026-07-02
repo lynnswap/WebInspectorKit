@@ -8,8 +8,9 @@ delegated to Codex; these documents are the design contract.
 | --- | --- |
 | [01-scope-contract.md](01-scope-contract.md) | Phase 0 — outcomes, compatibility policy, consumers, non-goals, resolved design forks |
 | [02-findings.md](02-findings.md) | Phase 1 — numbered measured findings F-01…F-39 (baselines for acceptance re-measurement) |
-| [03-design-doc.md](03-design-doc.md) | Phase 2 — design gate document: target graph, public API sketch, consumer stories, access plan, deletion list, Avoided Shapes, test plan, finding-response table |
-| [04-codex-prompt.md](04-codex-prompt.md) | Delegation prompt — copy into the Codex task as-is |
+| [03-design-doc.md](03-design-doc.md) | Phase 2 (v1) — promote the `@Observable` god-model to a 2-product public surface. **Superseded on the public-surface question by 05.** |
+| [04-codex-prompt.md](04-codex-prompt.md) | Delegation prompt for the 03 direction |
+| [05-two-layer-sdk-design.md](05-two-layer-sdk-design.md) | Phase 2 (v2) — the current direction: split into `WebViewProxyKit` (typed streams/commands) + `WebViewDataKit` (SwiftData/CoreData-style models), CodexKit-style. Keeps 01/02 as inputs. |
 | [measurements/](measurements/) | Raw measurement reports (10) with evidence tables and re-measure commands |
 
 Headline: the package currently exposes **3 public types (32 declarations)
