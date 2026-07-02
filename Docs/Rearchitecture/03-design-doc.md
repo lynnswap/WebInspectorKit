@@ -1,13 +1,19 @@
 # Design Doc — WebInspectorKit Public SDK Surface
 
+Status: superseded for public-surface implementation by
+[05-two-layer-sdk-design.md](05-two-layer-sdk-design.md). Keep this document as
+historical evidence for the v1 direction only; do not delegate new
+implementation work from it.
+
 Target state for the rearchitecture defined by
 [01-scope-contract.md](01-scope-contract.md), grounded in the numbered
 findings of [02-findings.md](02-findings.md). Revision 2 — the first revision
 was adversarially reviewed against the actual sources; all signature and
 dependency claims below were corrected against code at baseline `45c6d880`.
 
-This document is the design contract: workers implement it as written; any
-deviation is an escalation, not a judgment call.
+For the superseded v1 direction, this document was the design contract: workers
+implemented it as written; any deviation was an escalation, not a judgment call.
+The active design contract candidate is now 05 after owner sign-off.
 
 Signature notation:
 - `(existing)` — the current declaration keeps its shape; only access level,

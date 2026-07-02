@@ -11,9 +11,10 @@ escalations, not judgment calls.
    through public API — the README Quick Start example becomes actually
    implementable.
 2. **A second app can consume the inspector core without the built-in UI.**
-   A planned (not yet started) second app can `import WebInspectorCore` and
-   attach / observe / command an inspected `WKWebView` with its own
-   presentation, without importing `WebInspectorUI`.
+   A planned (not yet started) second app can import `WebViewDataKit` (or
+   `WebViewProxyKit` for a low-level-only tool) and attach / observe / command
+   an inspected `WKWebView` with its own presentation, without importing the
+   UIKit `WebInspectorKit` UI product.
 3. **The public products stop being empty modules.** Every library product
    either ships a designed public surface reachable from a consumer story, or
    is demoted to an internal target (removed from `products:`).
@@ -61,35 +62,39 @@ outcomes above or to a numbered finding in
 - **Protocol coverage expansion.** No new Web Inspector protocol domains or
   features. Same capabilities, redesigned ownership and surface.
 
-## Resolved design forks (proposed 2026-07-02 — review at design gate)
+## Resolved design forks (proposed 2026-07-02 — updated by 05)
 
 These three forks were resolved by the analysis with the rationale below. They
 are design-gate review points: overriding any of them invalidates the matching
-sections of [03-design-doc.md](03-design-doc.md).
+sections of the active design document.
 
-1. **Core sub-target split → merge into a single `WebInspectorCore` target.**
+1. **Core sub-target split → no public 4-way Core taxonomy.**
    Measured: the 4-way split has zero import-boundary meaning (43 consumer
    files import the umbrella, 0 import a sub-target; `@_exported` erases the
    boundary — finding F-03) and the domains are type-entangled anyway
    (F-29, F-30). Cost: loses intra-Core build parallelism from commit
-   `0118f24b` (the larger Core-vs-UI split survives — UI targets stay
-   separate). Alternative (rejected): keep 4 sub-targets and design 4 public
-   surfaces — forces consumers to learn an internal taxonomy and either
-   re-introduces `@_exported` or multiplies import statements.
+   `0118f24b` (the UI-vs-non-UI split survives — UIKit UI stays separate).
+   03 resolved this as one `WebInspectorCore` product; 05 supersedes the product
+   shape with two non-UI public layers: `WebViewProxyKit` and `WebViewDataKit`.
+   Alternative (rejected): keep 4 sub-targets and design 4 public surfaces —
+   forces consumers to learn an internal taxonomy and either re-introduces
+   `@_exported` or multiplies import statements.
 2. **Transport stays package-internal; no public transport axis.** No second
    transport consumer exists or is planned (scope contract), so publishing
    `TransportBackend` + envelope types would be speculative generalization.
-   The empty products are demoted instead (design doc §1). The half-duplex
-   seam asymmetry (F-37) is recorded, not redesigned.
+   The raw transport stack stays package-internal inside `WebViewProxyKit`; the
+   public low-level surface is typed proxy commands/events, not raw envelopes.
+   The empty products are demoted instead (05 §1). The half-duplex seam
+   asymmetry (F-37) is recorded, not redesigned.
 3. **Decomposition depth: access-boundary + shared-owner extraction only.**
    The public/package split, the channel-binding owner (F-26), and the
    attachment-precondition owner (F-14) are in scope because they sit on the
    new surface. Full internal decomposition of DOMSession (F-25) /
-   TransportSession / the lifecycle owner's internals (F-39 —
-   `InspectorSession`→`WebInspector`) and the remaining axis leaks (F-12,
-   F-13, F-16, F-19) are deferred with tracked follow-ups (design doc §9) —
-   they do not block the three outcomes. The design doc's facade discipline
-   (§2.1 internal-owner note) prevents the deferral from making F-39 worse.
+   TransportSession / the lifecycle owner's internals (F-39) and the remaining
+   axis leaks (F-12, F-13, F-16, F-19) are deferred with tracked follow-ups
+   (05 §11) — they do not block the three outcomes. 05's facade discipline
+   keeps `WebInspectorSession` as the UIKit compatibility owner while moving
+   attach/data ownership below it, so the deferral must not make F-39 worse.
 
 ## Degraded-mode declarations (per rearchitect skill)
 
@@ -104,5 +109,4 @@ sections of [03-design-doc.md](03-design-doc.md).
   mid-file platform branches, total gate count not increased, and the one
   measured mid-file smell (F-23, `NetworkStatusSeverity.swift`) resolved.
   The `WebInspectorKit` product remaining an empty module on macOS is an
-  accepted residual (SwiftPM cannot scope products per platform — design doc
-  §1).
+  accepted residual (SwiftPM cannot scope products per platform — 05 §1).

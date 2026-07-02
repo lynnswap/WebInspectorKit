@@ -1,9 +1,9 @@
 # Phase 1 Findings — Measured Current State
 
-Numbered findings list. Every design element in
-[03-design-doc.md](03-design-doc.md) must trace back to one of these findings
-(or to a scope-contract outcome); the finding-response table in the design doc
-references these IDs. Raw measurement reports with full evidence tables live in
+Numbered findings list. Every design element in the active design document
+([05-two-layer-sdk-design.md](05-two-layer-sdk-design.md); 03 is archived for
+history) must trace back to one of these findings or to a scope-contract
+outcome. Raw measurement reports with full evidence tables live in
 [measurements/](measurements/).
 
 Baseline date: 2026-07-02, commit `45c6d880`.
