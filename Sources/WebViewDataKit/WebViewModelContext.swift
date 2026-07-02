@@ -727,8 +727,9 @@ extension WebViewModelContext {
                 return
             }
             request.fail(errorText: errorText, canceled: canceled)
+        case let .webSocket(event):
+            apply(event)
         case .requestServedFromMemoryCache,
-             .webSocket,
              .unknown:
             break
         }
@@ -761,6 +762,71 @@ extension WebViewModelContext {
             orderedRequestIDs.append(id)
         }
         refreshAllRequests()
+    }
+
+    private func apply(_ event: Network.WebSocketEvent) {
+        switch event {
+        case let .created(id, url):
+            applyWebSocketCreated(id: id, url: url)
+        case let .handshakeRequest(id, request, _):
+            guard let networkRequest = networkRequest(forWebSocketEvent: id, method: "webSocketWillSendHandshakeRequest") else {
+                return
+            }
+            networkRequest.applyWebSocketHandshakeRequest(request)
+        case let .handshakeResponse(id, response, _):
+            guard let networkRequest = networkRequest(forWebSocketEvent: id, method: "webSocketHandshakeResponseReceived") else {
+                return
+            }
+            networkRequest.applyWebSocketHandshakeResponse(response)
+        case let .frameSent(id, frame, timestamp):
+            guard let networkRequest = networkRequest(forWebSocketEvent: id, method: "webSocketFrameSent") else {
+                return
+            }
+            networkRequest.appendWebSocketFrame(frame, direction: .sent, timestamp: timestamp)
+        case let .frameReceived(id, frame, timestamp):
+            guard let networkRequest = networkRequest(forWebSocketEvent: id, method: "webSocketFrameReceived") else {
+                return
+            }
+            networkRequest.appendWebSocketFrame(frame, direction: .received, timestamp: timestamp)
+        case let .error(id, message, timestamp):
+            guard let networkRequest = networkRequest(forWebSocketEvent: id, method: "webSocketFrameError") else {
+                return
+            }
+            networkRequest.appendWebSocketError(message, timestamp: timestamp)
+        case let .closed(id, _):
+            guard let networkRequest = networkRequest(forWebSocketEvent: id, method: "webSocketClosed") else {
+                return
+            }
+            networkRequest.closeWebSocket()
+        case .other:
+            break
+        }
+    }
+
+    private func applyWebSocketCreated(id proxyID: Network.Request.ID, url: String) {
+        let id = NetworkRequest.ID(proxyID)
+        let request: NetworkRequest
+        if let existing = requestsByID[id] {
+            request = existing
+        } else {
+            let payload = Network.Request(id: proxyID, url: url, method: "GET")
+            request = NetworkRequest(request: payload, resourceType: .webSocket, modelContext: self)
+            requestsByID[id] = request
+            orderedRequestIDs.append(id)
+        }
+        request.applyWebSocketCreated(url: url)
+        refreshAllRequests()
+    }
+
+    private func networkRequest(
+        forWebSocketEvent proxyID: Network.Request.ID,
+        method: String
+    ) -> NetworkRequest? {
+        guard let request = requestsByID[NetworkRequest.ID(proxyID)] else {
+            fail(.disconnected("Network.\(method) referenced an unknown request."))
+            return nil
+        }
+        return request
     }
 
     private func refreshAllRequests() {

@@ -893,6 +893,11 @@ public final class WebSocketState {
     public struct Frame: Sendable { /* direction, opcode, mask, payloadData/text/size, errorMessage?, timestamp */ }
 }
 
+/// `Network.webSocketCreated` is the row-creation owner. Later WebSocket
+/// events (`handshake*`, `frame*`, `closed`) must reference a registered
+/// `NetworkRequest`; otherwise DataKit fails the context as a broken protocol
+/// sequence. Forward-compatible raw WebSocket events (`.other`) stay no-op,
+/// same as domain-level `.unknown`.
 @MainActor @Observable
 public final class NetworkBody: Sendable {
     public enum Phase: Sendable { case available, fetching, loaded, failed(String) }

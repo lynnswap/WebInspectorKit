@@ -1002,6 +1002,173 @@ func completedRequestDoesNotTreatLaterRequestWillBeSentAsRedirect() async throws
 
 @MainActor
 @Test
+func webSocketCreatedCreatesRequestWithConnectingState() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let requestID = Network.Request.ID("websocket-created")
+
+    await runtime.backend.emit(
+        .webSocket(.created(id: requestID, url: "wss://example.com/socket")),
+        target: target
+    )
+
+    let results: WebViewFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
+    try await waitUntil { results.items.count == 1 }
+    let request = try #require(results.items.first)
+    #expect(request.url == "wss://example.com/socket")
+    #expect(request.method == "GET")
+    #expect(request.resourceType == .webSocket)
+    #expect(request.state == .pending)
+    #expect(request.webSocket?.readyState == .connecting)
+    #expect(context.registeredRequest(for: request.id) === request)
+}
+
+@MainActor
+@Test
+func webSocketLifecycleStoresHandshakeFramesErrorAndClosedState() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let requestID = Network.Request.ID("websocket-lifecycle")
+
+    await runtime.backend.emit(
+        .webSocket(.created(id: requestID, url: "wss://example.com/socket")),
+        target: target
+    )
+    let results: WebViewFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
+    try await waitUntil { results.items.count == 1 }
+    let request = try #require(results.items.first)
+
+    await runtime.backend.emit(
+        .webSocket(.handshakeRequest(
+            id: requestID,
+            request: Network.Request(
+                id: requestID,
+                url: "wss://example.com/socket",
+                method: "GET",
+                headers: ["Upgrade": "websocket"]
+            ),
+            timestamp: 1
+        )),
+        target: target
+    )
+    try await waitUntil {
+        request.webSocket?.handshakeRequest?.headers["Upgrade"] == "websocket"
+    }
+    #expect(request.requestHeaders["Upgrade"] == "websocket")
+    #expect(request.webSocket?.readyState == .connecting)
+    #expect(request.state == .pending)
+
+    await runtime.backend.emit(
+        .webSocket(.handshakeResponse(
+            id: requestID,
+            response: Network.Response(
+                status: 101,
+                statusText: "Switching Protocols",
+                headers: ["Upgrade": "websocket"],
+                requestHeaders: ["Upgrade": "websocket"]
+            ),
+            timestamp: 2
+        )),
+        target: target
+    )
+    try await waitUntil {
+        request.webSocket?.readyState == .open && request.state == .responded
+    }
+    #expect(request.webSocket?.handshakeResponse?.status == 101)
+    #expect(request.status == 101)
+    #expect(request.responseHeaders["Upgrade"] == "websocket")
+    #expect(request.requestHeaders["Upgrade"] == "websocket")
+
+    await runtime.backend.emit(
+        .webSocket(.frameSent(
+            id: requestID,
+            frame: Network.WebSocketFrame(opcode: 1, mask: true, payloadData: "hello", payloadLength: 5),
+            timestamp: 3
+        )),
+        target: target
+    )
+    await runtime.backend.emit(
+        .webSocket(.frameReceived(
+            id: requestID,
+            frame: Network.WebSocketFrame(opcode: 1, mask: false, payloadData: "world", payloadLength: 5),
+            timestamp: 4
+        )),
+        target: target
+    )
+    await runtime.backend.emit(
+        .webSocket(.error(id: requestID, message: "boom", timestamp: 5)),
+        target: target
+    )
+    try await waitUntil { request.webSocket?.frames.count == 3 }
+    let webSocket = try #require(request.webSocket)
+    #expect(webSocket.frames.map(\.direction) == [.sent, .received, .error("boom")])
+    #expect(webSocket.frames[0].opcode == 1)
+    #expect(webSocket.frames[0].mask == true)
+    #expect(webSocket.frames[0].payloadData == "hello")
+    #expect(webSocket.frames[0].payloadLength == 5)
+    #expect(webSocket.frames[1].payloadData == "world")
+    #expect(webSocket.frames[2].errorMessage == "boom")
+    #expect(webSocket.frames.map(\.timestamp) == [3, 4, 5])
+
+    await runtime.backend.emit(
+        .webSocket(.closed(id: requestID, timestamp: 6)),
+        target: target
+    )
+    try await waitUntil {
+        request.webSocket?.readyState == .closed && request.state == .finished
+    }
+}
+
+@MainActor
+@Test
+func webSocketEventForUnknownRequestFailsContext() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let requestID = Network.Request.ID("missing-websocket")
+
+    await runtime.backend.emit(
+        .webSocket(.handshakeResponse(
+            id: requestID,
+            response: Network.Response(status: 101),
+            timestamp: 1
+        )),
+        target: target
+    )
+
+    try await waitUntil {
+        guard case .failed = context.state else {
+            return false
+        }
+        return true
+    }
+    guard case let .failed(error) = context.state else {
+        Issue.record("Expected failed context state.")
+        return
+    }
+    #expect(error == .disconnected("Network.webSocketHandshakeResponseReceived referenced an unknown request."))
+}
+
+@MainActor
+@Test
+func webSocketOtherEventDoesNotMutateRequests() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let results: WebViewFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
+
+    await runtime.backend.emit(
+        .webSocket(.other(RawEvent(domain: "Network", method: "webSocketFutureEvent"))),
+        target: target
+    )
+    for _ in 0..<10 {
+        await Task.yield()
+    }
+
+    #expect(results.items.isEmpty)
+    #expect(context.state == .attached)
+}
+
+@MainActor
+@Test
 func fetchResponseBodyStoresLoadedAndFailedPhases() async throws {
     let runtime = try await WebViewProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)

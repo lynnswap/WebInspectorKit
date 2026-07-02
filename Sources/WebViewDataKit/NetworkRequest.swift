@@ -18,6 +18,107 @@ public struct RedirectHop: Sendable {
 
 @MainActor
 @Observable
+public final class WebSocketState {
+    public enum ReadyState: Equatable, Sendable {
+        case connecting
+        case open
+        case closed
+    }
+
+    public enum FrameDirection: Equatable, Sendable {
+        case sent
+        case received
+        case error(String)
+    }
+
+    public struct Frame: Equatable, Sendable {
+        public let direction: FrameDirection
+        public let opcode: Int?
+        public let mask: Bool?
+        public let payloadData: String?
+        public let payloadLength: Int?
+        public let errorMessage: String?
+        public let timestamp: Double
+
+        public init(
+            direction: FrameDirection,
+            opcode: Int? = nil,
+            mask: Bool? = nil,
+            payloadData: String? = nil,
+            payloadLength: Int? = nil,
+            errorMessage: String? = nil,
+            timestamp: Double
+        ) {
+            self.direction = direction
+            self.opcode = opcode
+            self.mask = mask
+            self.payloadData = payloadData
+            self.payloadLength = payloadLength
+            self.errorMessage = errorMessage
+            self.timestamp = timestamp
+        }
+    }
+
+    public private(set) var readyState: ReadyState
+    public private(set) var handshakeRequest: Network.Request?
+    public private(set) var handshakeResponse: Network.Response?
+    public private(set) var frames: [Frame]
+
+    package init(readyState: ReadyState = .connecting) {
+        self.readyState = readyState
+        handshakeRequest = nil
+        handshakeResponse = nil
+        frames = []
+    }
+
+    package func markConnecting() {
+        readyState = .connecting
+    }
+
+    package func markOpen() {
+        readyState = .open
+    }
+
+    package func markClosed() {
+        readyState = .closed
+    }
+
+    package func applyHandshakeRequest(_ request: Network.Request) {
+        handshakeRequest = request
+        readyState = .connecting
+    }
+
+    package func applyHandshakeResponse(_ response: Network.Response) {
+        handshakeResponse = response
+        readyState = .open
+    }
+
+    package func appendFrame(
+        _ frame: Network.WebSocketFrame,
+        direction: FrameDirection,
+        timestamp: Double
+    ) {
+        frames.append(Frame(
+            direction: direction,
+            opcode: frame.opcode,
+            mask: frame.mask,
+            payloadData: frame.payloadData,
+            payloadLength: frame.payloadLength,
+            timestamp: timestamp
+        ))
+    }
+
+    package func appendError(_ message: String, timestamp: Double) {
+        frames.append(Frame(
+            direction: .error(message),
+            errorMessage: message,
+            timestamp: timestamp
+        ))
+    }
+}
+
+@MainActor
+@Observable
 public final class NetworkBody {
     public enum Phase: Equatable, Sendable {
         case available
@@ -79,6 +180,7 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
     public private(set) var requestHeaders: [String: String]
     public private(set) var responseHeaders: [String: String]
     public private(set) var redirects: [RedirectHop]
+    public private(set) var webSocket: WebSocketState?
     public private(set) var responseBody: NetworkBody
 
     @ObservationIgnored package weak var modelContext: WebViewModelContext?
@@ -114,6 +216,7 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         requestHeaders = request.headers
         responseHeaders = [:]
         redirects = []
+        webSocket = resourceType == .webSocket ? WebSocketState() : nil
         responseBody = NetworkBody()
         self.modelContext = modelContext
         currentRequest = request
@@ -141,6 +244,7 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         mimeType = nil
         responseHeaders = [:]
         redirects = []
+        webSocket = resourceType == .webSocket ? WebSocketState() : nil
         responseBody = NetworkBody()
         state = .pending
     }
@@ -159,7 +263,9 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         currentRequest = request
         url = request.url
         method = request.method
-        self.resourceType = resourceType ?? self.resourceType
+        let resolvedResourceType = resourceType ?? self.resourceType
+        self.resourceType = resolvedResourceType
+        webSocket = resolvedResourceType == .webSocket ? webSocket ?? WebSocketState() : nil
         requestHeaders = request.headers
         status = nil
         mimeType = nil
@@ -173,6 +279,11 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         resourceType: Network.ResourceType
     ) {
         self.resourceType = resourceType
+        if resourceType == .webSocket {
+            _ = ensureWebSocketState()
+        } else {
+            webSocket = nil
+        }
         status = response.status
         mimeType = response.mimeType
         responseHeaders = response.headers
@@ -204,5 +315,62 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         case let .failure(error):
             responseBody.fail(error)
         }
+    }
+
+    package func applyWebSocketCreated(url: String) {
+        let request = Network.Request(id: proxyID, url: url, method: "GET")
+        currentRequest = request
+        self.url = url
+        method = request.method
+        resourceType = .webSocket
+        requestHeaders = request.headers
+        status = nil
+        mimeType = nil
+        responseHeaders = [:]
+        redirects = []
+        webSocket = WebSocketState()
+        responseBody = NetworkBody()
+        state = .pending
+    }
+
+    package func applyWebSocketHandshakeRequest(_ request: Network.Request) {
+        currentRequest = request
+        url = request.url
+        method = request.method
+        resourceType = .webSocket
+        requestHeaders = request.headers
+        state = .pending
+        ensureWebSocketState().applyHandshakeRequest(request)
+    }
+
+    package func applyWebSocketHandshakeResponse(_ response: Network.Response) {
+        applyResponse(response, resourceType: .webSocket)
+        ensureWebSocketState().applyHandshakeResponse(response)
+    }
+
+    package func appendWebSocketFrame(
+        _ frame: Network.WebSocketFrame,
+        direction: WebSocketState.FrameDirection,
+        timestamp: Double
+    ) {
+        ensureWebSocketState().appendFrame(frame, direction: direction, timestamp: timestamp)
+    }
+
+    package func appendWebSocketError(_ message: String, timestamp: Double) {
+        ensureWebSocketState().appendError(message, timestamp: timestamp)
+    }
+
+    package func closeWebSocket() {
+        ensureWebSocketState().markClosed()
+        state = .finished
+    }
+
+    private func ensureWebSocketState() -> WebSocketState {
+        if let webSocket {
+            return webSocket
+        }
+        let webSocket = WebSocketState()
+        self.webSocket = webSocket
+        return webSocket
     }
 }
