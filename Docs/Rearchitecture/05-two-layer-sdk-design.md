@@ -386,7 +386,7 @@ public enum Runtime {
         public var events: EventStream { get }
     }
 
-    public struct RemoteObject: Identifiable, Sendable {
+    public struct RemoteObject: Sendable {
         public struct ID: Hashable, Sendable { /* opaque; runtime-agent scoped */ }
         public let id: ID?                    // nil for by-value primitives
         public let kind: Kind                 // typed once at decode from type/subtype
