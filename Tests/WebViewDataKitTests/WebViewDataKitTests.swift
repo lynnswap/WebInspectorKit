@@ -88,6 +88,41 @@ func domEventsPopulateRootAndPreserveChildIdentity() async throws {
 
 @MainActor
 @Test
+func requestChildrenDispatchesDOMCommandAndMaterializesSetChildNodes() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let document = try #require(context.rootNode)
+    let childID = DOM.Node.ID("requested-child")
+
+    await runtime.backend.enqueue((), for: "DOM", method: "requestChildNodes")
+
+    await document.requestChildren(depth: 2)
+
+    let commands = await runtime.backend.recordedCommands()
+    let command = try #require(commands.first {
+        $0.domain == "DOM" && $0.method == "requestChildNodes"
+    })
+    let payload = try #require(command.payload.cast(as: DOM.RequestChildNodesPayload.self))
+    #expect(payload.id == document.id.proxyID)
+    #expect(payload.depth == 2)
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(id: childID, nodeType: 1, nodeName: "DIV", localName: "div")
+        ]),
+        target: target
+    )
+
+    try await waitUntil {
+        guard case let .loaded(children) = document.children else {
+            return false
+        }
+        return children.first?.id == DOMNode.ID(childID)
+    }
+}
+
+@MainActor
+@Test
 func startupEnablesTrackedDomainsBeforeInitialDocumentSnapshot() async throws {
     let runtime = try await WebViewProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()

@@ -28,7 +28,9 @@ public final class DOMNode: Identifiable {
     public private(set) var children: Children
     public private(set) var elementStyles: CSSStyles?
 
-    package init(node: DOM.Node) {
+    @ObservationIgnored package weak var modelContext: WebViewModelContext?
+
+    package init(node: DOM.Node, modelContext: WebViewModelContext) {
         id = ID(node.id)
         nodeName = node.nodeName
         localName = node.localName
@@ -38,6 +40,14 @@ public final class DOMNode: Identifiable {
         childNodeCount = node.childNodeCount
         children = .unrequested(count: node.childNodeCount)
         elementStyles = nil
+        self.modelContext = modelContext
+    }
+
+    public func requestChildren(depth: Int = 1) async {
+        guard let modelContext else {
+            preconditionFailure("DOMNode is not registered in a WebViewModelContext.")
+        }
+        await modelContext.requestChildren(for: self, depth: depth)
     }
 
     package func update(from node: DOM.Node) {

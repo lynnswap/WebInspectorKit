@@ -170,6 +170,29 @@ public final class WebViewModelContext {
         }
     }
 
+    package func requestChildren(for node: DOMNode, depth: Int) async {
+        guard nodesByID[node.id] === node else {
+            fail(.disconnected("DOMNode is not registered in this WebViewModelContext."))
+            return
+        }
+        guard let currentPage else {
+            fail(.disconnected("WebViewDataKit has no current page target."))
+            return
+        }
+
+        do {
+            try await currentPage.dom.requestChildNodes(node.id.proxyID, depth: depth)
+        } catch let error as WebViewProxyError {
+            fail(error)
+        } catch {
+            fail(.commandFailed(
+                domain: "DOM",
+                method: "requestChildNodes",
+                message: String(describing: error)
+            ))
+        }
+    }
+
     package func detach() async {
         startupTask?.cancel()
         startupTask = nil
@@ -562,9 +585,10 @@ extension WebViewModelContext {
         let node: DOMNode
         if let existing = nodesByID[id] {
             existing.update(from: payload)
+            existing.modelContext = self
             node = existing
         } else {
-            node = DOMNode(node: payload)
+            node = DOMNode(node: payload, modelContext: self)
             nodesByID[id] = node
         }
 
