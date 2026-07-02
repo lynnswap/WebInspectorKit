@@ -163,29 +163,74 @@ public enum Runtime {
     public struct PropertyDescriptor: Sendable {
         public let name: String
         public let value: RemoteObject?
+        public let writable: Bool?
+        public let get: RemoteObject?
+        public let set: RemoteObject?
+        public let wasThrown: Bool?
+        public let configurable: Bool?
+        public let enumerable: Bool?
+        public let isOwn: Bool?
+        public let symbol: RemoteObject?
+        public let isPrivate: Bool?
+        public let nativeGetter: Bool?
 
-        public init(name: String, value: RemoteObject? = nil) {
+        public init(
+            name: String,
+            value: RemoteObject? = nil,
+            writable: Bool? = nil,
+            get: RemoteObject? = nil,
+            set: RemoteObject? = nil,
+            wasThrown: Bool? = nil,
+            configurable: Bool? = nil,
+            enumerable: Bool? = nil,
+            isOwn: Bool? = nil,
+            symbol: RemoteObject? = nil,
+            isPrivate: Bool? = nil,
+            nativeGetter: Bool? = nil
+        ) {
             self.name = name
             self.value = value
+            self.writable = writable
+            self.get = get
+            self.set = set
+            self.wasThrown = wasThrown
+            self.configurable = configurable
+            self.enumerable = enumerable
+            self.isOwn = isOwn
+            self.symbol = symbol
+            self.isPrivate = isPrivate
+            self.nativeGetter = nativeGetter
         }
     }
 
     public struct ObjectPreview: Sendable {
+        public let kind: Kind?
+        public let subtype: Subtype?
         public let description: String?
+        public let lossless: Bool
         public let overflow: Bool
         public let properties: [PropertyPreview]
         public let entries: [EntryPreview]
+        public let size: Int?
 
         public init(
+            kind: Kind? = nil,
+            subtype: Subtype? = nil,
             description: String? = nil,
+            lossless: Bool = false,
             overflow: Bool = false,
             properties: [PropertyPreview] = [],
-            entries: [EntryPreview] = []
+            entries: [EntryPreview] = [],
+            size: Int? = nil
         ) {
+            self.kind = kind
+            self.subtype = subtype
             self.description = description
+            self.lossless = lossless
             self.overflow = overflow
             self.properties = properties
             self.entries = entries
+            self.size = size
         }
     }
 

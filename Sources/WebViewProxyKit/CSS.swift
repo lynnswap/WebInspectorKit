@@ -28,17 +28,20 @@ public enum CSS {
     public struct MatchedStyles: Sendable {
         public let matchedRules: [Rule]
         public let inherited: [Rule]
+        public let pseudoElements: [Rule]
         public let inlineStyle: Style?
         public let attributesStyle: Style?
 
         public init(
             matchedRules: [Rule] = [],
             inherited: [Rule] = [],
+            pseudoElements: [Rule] = [],
             inlineStyle: Style? = nil,
             attributesStyle: Style? = nil
         ) {
             self.matchedRules = matchedRules
             self.inherited = inherited
+            self.pseudoElements = pseudoElements
             self.inlineStyle = inlineStyle
             self.attributesStyle = attributesStyle
         }

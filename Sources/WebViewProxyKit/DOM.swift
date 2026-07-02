@@ -67,12 +67,23 @@ public enum DOM {
         public let nodeName: String
         public let localName: String
         public let nodeValue: String
+        public let frameID: FrameID?
+        public let documentURL: String?
+        public let baseURL: String?
         public var attributes: [String: String]
         public var childNodeCount: Int
         public var children: [Node]?
+        public var contentDocument: Node? { recursiveFields.contentDocument }
         public var shadowRoots: [Node]
+        public var templateContent: Node? { recursiveFields.templateContent }
+        public var beforePseudoElement: Node? { recursiveFields.beforePseudoElement }
+        public var otherPseudoElements: [Node] { recursiveFields.otherPseudoElements }
+        public var afterPseudoElement: Node? { recursiveFields.afterPseudoElement }
         public var pseudoType: PseudoType?
         public var shadowRootType: ShadowRootType?
+
+        // Keeps recursive Node references out of direct value-type storage.
+        private let recursiveFields: RecursiveFields
 
         public init(
             id: ID,
@@ -80,10 +91,18 @@ public enum DOM {
             nodeName: String,
             localName: String = "",
             nodeValue: String = "",
+            frameID: FrameID? = nil,
+            documentURL: String? = nil,
+            baseURL: String? = nil,
             attributes: [String: String] = [:],
             childNodeCount: Int = 0,
             children: [Node]? = nil,
+            contentDocument: Node? = nil,
             shadowRoots: [Node] = [],
+            templateContent: Node? = nil,
+            beforePseudoElement: Node? = nil,
+            otherPseudoElements: [Node] = [],
+            afterPseudoElement: Node? = nil,
             pseudoType: PseudoType? = nil,
             shadowRootType: ShadowRootType? = nil
         ) {
@@ -92,12 +111,44 @@ public enum DOM {
             self.nodeName = nodeName
             self.localName = localName
             self.nodeValue = nodeValue
+            self.frameID = frameID
+            self.documentURL = documentURL
+            self.baseURL = baseURL
             self.attributes = attributes
             self.childNodeCount = childNodeCount
             self.children = children
             self.shadowRoots = shadowRoots
             self.pseudoType = pseudoType
             self.shadowRootType = shadowRootType
+            recursiveFields = RecursiveFields(
+                contentDocument: contentDocument,
+                templateContent: templateContent,
+                beforePseudoElement: beforePseudoElement,
+                otherPseudoElements: otherPseudoElements,
+                afterPseudoElement: afterPseudoElement
+            )
+        }
+
+        private final class RecursiveFields: Sendable {
+            let contentDocument: Node?
+            let templateContent: Node?
+            let beforePseudoElement: Node?
+            let otherPseudoElements: [Node]
+            let afterPseudoElement: Node?
+
+            init(
+                contentDocument: Node?,
+                templateContent: Node?,
+                beforePseudoElement: Node?,
+                otherPseudoElements: [Node],
+                afterPseudoElement: Node?
+            ) {
+                self.contentDocument = contentDocument
+                self.templateContent = templateContent
+                self.beforePseudoElement = beforePseudoElement
+                self.otherPseudoElements = otherPseudoElements
+                self.afterPseudoElement = afterPseudoElement
+            }
         }
     }
 

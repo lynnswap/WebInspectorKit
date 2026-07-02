@@ -178,6 +178,8 @@ public enum Network {
 
     public enum WebSocketEvent: Sendable {
         case created(id: Request.ID, url: String)
+        case handshakeRequest(id: Request.ID, request: Request, timestamp: Double?)
+        case handshakeResponse(id: Request.ID, response: Response, timestamp: Double?)
         case closed(id: Request.ID, timestamp: Double)
         case frameSent(id: Request.ID, frame: WebSocketFrame, timestamp: Double)
         case frameReceived(id: Request.ID, frame: WebSocketFrame, timestamp: Double)
