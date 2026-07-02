@@ -859,6 +859,7 @@ func networkEventsPopulateAllRequestsInOrder() async throws {
     #expect(request.mimeType == "application/json")
     #expect(request.requestHeaders["Accept"] == "application/json")
     #expect(request.responseHeaders["Content-Type"] == "application/json")
+    #expect(context.registeredRequest(for: request.id) === request)
 }
 
 @MainActor
@@ -996,6 +997,7 @@ func consoleEventsPopulateRepeatAndClearFetchedMessages() async throws {
     #expect(message.repeatCount == 1)
     #expect(message.networkRequestID == NetworkRequest.ID(requestID))
     #expect(message.timestamp == 1)
+    #expect(context.registeredMessage(for: message.id) === message)
 
     await runtime.backend.emit(
         .messageRepeatCountUpdated(count: 3, timestamp: 2),
@@ -1021,6 +1023,7 @@ func consoleEventsPopulateRepeatAndClearFetchedMessages() async throws {
         target: target
     )
     try await waitUntil { results.items.isEmpty }
+    #expect(context.registeredMessage(for: message.id) == nil)
 }
 
 @MainActor

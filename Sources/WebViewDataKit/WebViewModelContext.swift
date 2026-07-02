@@ -101,6 +101,14 @@ public final class WebViewModelContext {
         nodesByID[id]
     }
 
+    public func registeredRequest(for id: NetworkRequest.ID) -> NetworkRequest? {
+        requestsByID[id]
+    }
+
+    public func registeredMessage(for id: ConsoleMessage.ID) -> ConsoleMessage? {
+        consoleMessagesByID[id]
+    }
+
     public func select(_ node: DOMNode?) {
         selectedNode = node
         refreshSelectedStyles()
