@@ -17,6 +17,8 @@ public final class WebViewModelContext {
     public private(set) var teardownError: WebViewProxyError?
     public private(set) var rootNode: DOMNode?
     public private(set) var selectedNode: DOMNode?
+    public private(set) var executionContexts: [RuntimeContext]
+    public private(set) var selectedContext: RuntimeContext?
 
     @ObservationIgnored private var currentPage: WebViewTarget?
     @ObservationIgnored private var startupTask: Task<Void, Never>?
@@ -27,6 +29,13 @@ public final class WebViewModelContext {
     @ObservationIgnored private var requestsByID: [NetworkRequest.ID: NetworkRequest]
     @ObservationIgnored private var orderedRequestIDs: [NetworkRequest.ID]
     @ObservationIgnored private let allNetworkRequests: WebViewFetchedResults<NetworkRequest>
+    @ObservationIgnored private var consoleMessagesByID: [ConsoleMessage.ID: ConsoleMessage]
+    @ObservationIgnored private var orderedConsoleMessageIDs: [ConsoleMessage.ID]
+    @ObservationIgnored private var lastConsoleMessageID: ConsoleMessage.ID?
+    @ObservationIgnored private var nextConsoleMessageOrdinal: Int
+    @ObservationIgnored private let allConsoleMessages: WebViewFetchedResults<ConsoleMessage>
+    @ObservationIgnored private var runtimeContextsByID: [RuntimeContext.ID: RuntimeContext]
+    @ObservationIgnored private var orderedRuntimeContextIDs: [RuntimeContext.ID]
 
     public init(proxy: WebViewProxy) {
         self.proxy = proxy
@@ -34,6 +43,8 @@ public final class WebViewModelContext {
         teardownError = nil
         rootNode = nil
         selectedNode = nil
+        executionContexts = []
+        selectedContext = nil
         currentPage = nil
         startupTask = nil
         documentReloadTask = nil
@@ -43,6 +54,13 @@ public final class WebViewModelContext {
         requestsByID = [:]
         orderedRequestIDs = []
         allNetworkRequests = WebViewFetchedResults()
+        consoleMessagesByID = [:]
+        orderedConsoleMessageIDs = []
+        lastConsoleMessageID = nil
+        nextConsoleMessageOrdinal = 0
+        allConsoleMessages = WebViewFetchedResults()
+        runtimeContextsByID = [:]
+        orderedRuntimeContextIDs = []
     }
 
     deinit {
@@ -78,6 +96,17 @@ public final class WebViewModelContext {
         selectedNode = node
     }
 
+    public func selectContext(_ context: RuntimeContext?) {
+        guard let context else {
+            selectedContext = nil
+            return
+        }
+        guard runtimeContextsByID[context.id] === context else {
+            preconditionFailure("RuntimeContext is not registered in this WebViewModelContext.")
+        }
+        selectedContext = context
+    }
+
     public func fetchedResults<Model: WebViewFetchableModel>(
         for descriptor: WebViewFetchDescriptor<Model>
     ) -> WebViewFetchedResults<Model> {
@@ -85,6 +114,11 @@ public final class WebViewModelContext {
         case .allRequests:
             guard let results = allNetworkRequests as? WebViewFetchedResults<Model> else {
                 preconditionFailure("The .allRequests descriptor can only fetch NetworkRequest models.")
+            }
+            return results
+        case .allConsoleMessages:
+            guard let results = allConsoleMessages as? WebViewFetchedResults<Model> else {
+                preconditionFailure("The .allConsoleMessages descriptor can only fetch ConsoleMessage models.")
             }
             return results
         }
@@ -270,6 +304,16 @@ public final class WebViewModelContext {
             Task { [weak self] in
                 for await event in target.network.events {
                     self?.apply(event)
+                }
+            },
+            Task { [weak self] in
+                for await event in target.console.events {
+                    self?.apply(event)
+                }
+            },
+            Task { [weak self, targetID = target.id] in
+                for await event in target.runtime.events {
+                    self?.apply(event, targetID: targetID)
                 }
             }
         ]
@@ -507,5 +551,104 @@ extension WebViewModelContext {
 
     private func refreshAllRequests() {
         allNetworkRequests.setItems(orderedRequestIDs.compactMap { requestsByID[$0] })
+    }
+}
+
+extension WebViewModelContext {
+    package func apply(_ event: Console.Event) {
+        switch event {
+        case let .messageAdded(message):
+            applyMessageAdded(message)
+        case let .messageRepeatCountUpdated(count, timestamp):
+            guard let lastConsoleMessageID,
+                  let message = consoleMessagesByID[lastConsoleMessageID] else {
+                fail(.disconnected("Console.messageRepeatCountUpdated referenced no current message."))
+                return
+            }
+            message.updateRepeatCount(count, timestamp: timestamp)
+        case .messagesCleared:
+            consoleMessagesByID = [:]
+            orderedConsoleMessageIDs = []
+            lastConsoleMessageID = nil
+            refreshAllConsoleMessages()
+        case .unknown:
+            break
+        }
+    }
+
+    private func applyMessageAdded(_ payload: Console.Message) {
+        let id = ConsoleMessage.ID(nextConsoleMessageOrdinal)
+        nextConsoleMessageOrdinal += 1
+        let message = ConsoleMessage(id: id, message: payload)
+        consoleMessagesByID[id] = message
+        orderedConsoleMessageIDs.append(id)
+        lastConsoleMessageID = id
+        refreshAllConsoleMessages()
+    }
+
+    private func refreshAllConsoleMessages() {
+        allConsoleMessages.setItems(orderedConsoleMessageIDs.compactMap { consoleMessagesByID[$0] })
+    }
+}
+
+extension WebViewModelContext {
+    package func apply(_ event: Runtime.Event, targetID: WebViewTarget.ID? = nil) {
+        switch event {
+        case let .executionContextCreated(context):
+            applyExecutionContextCreated(context)
+        case let .executionContextDestroyed(id):
+            applyExecutionContextDestroyed(id)
+        case let .executionContextsCleared(eventTargetID):
+            if let targetID, eventTargetID != targetID {
+                fail(.disconnected("Runtime.executionContextsCleared referenced a mismatched target."))
+                return
+            }
+            clearExecutionContexts()
+        case .unknown:
+            break
+        }
+    }
+
+    private func applyExecutionContextCreated(_ payload: Runtime.ExecutionContext) {
+        let id = RuntimeContext.ID(payload.id)
+        if let context = runtimeContextsByID[id] {
+            context.update(from: payload)
+        } else {
+            let context = RuntimeContext(context: payload)
+            runtimeContextsByID[id] = context
+            orderedRuntimeContextIDs.append(id)
+        }
+        refreshExecutionContexts()
+        if selectedContext == nil {
+            selectedContext = runtimeContextsByID[id]
+        }
+    }
+
+    private func applyExecutionContextDestroyed(_ proxyID: Runtime.ExecutionContext.ID) {
+        let id = RuntimeContext.ID(proxyID)
+        guard let removed = runtimeContextsByID.removeValue(forKey: id) else {
+            fail(.disconnected("Runtime.executionContextDestroyed referenced an unknown context."))
+            return
+        }
+        orderedRuntimeContextIDs.removeAll { $0 == id }
+        if selectedContext === removed {
+            selectedContext = firstRuntimeContext()
+        }
+        refreshExecutionContexts()
+    }
+
+    private func clearExecutionContexts() {
+        runtimeContextsByID = [:]
+        orderedRuntimeContextIDs = []
+        executionContexts = []
+        selectedContext = nil
+    }
+
+    private func refreshExecutionContexts() {
+        executionContexts = orderedRuntimeContextIDs.compactMap { runtimeContextsByID[$0] }
+    }
+
+    private func firstRuntimeContext() -> RuntimeContext? {
+        orderedRuntimeContextIDs.compactMap { runtimeContextsByID[$0] }.first
     }
 }

@@ -4,6 +4,7 @@ import Observation
 public struct WebViewFetchDescriptor<Model: WebViewFetchableModel>: Hashable, Sendable {
     package enum Kind: Hashable, Sendable {
         case allRequests
+        case allConsoleMessages
     }
 
     package let kind: Kind
@@ -16,6 +17,12 @@ public struct WebViewFetchDescriptor<Model: WebViewFetchableModel>: Hashable, Se
 extension WebViewFetchDescriptor where Model == NetworkRequest {
     public static var allRequests: Self {
         Self(kind: .allRequests)
+    }
+}
+
+extension WebViewFetchDescriptor where Model == ConsoleMessage {
+    public static var allConsoleMessages: Self {
+        Self(kind: .allConsoleMessages)
     }
 }
 

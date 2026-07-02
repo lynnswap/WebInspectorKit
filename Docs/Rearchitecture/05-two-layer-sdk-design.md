@@ -986,7 +986,7 @@ public struct WebViewFetchDescriptor<Model: WebViewFetchableModel>: Sendable, Ha
 
 // Canned descriptors as constrained statics (CodexFetchDescriptor.recentChats idiom):
 extension WebViewFetchDescriptor where Model == NetworkRequest { public static var allRequests: Self { get } }
-extension WebViewFetchDescriptor where Model == ConsoleMessage { public static var allMessages: Self { get } }
+extension WebViewFetchDescriptor where Model == ConsoleMessage { public static var allConsoleMessages: Self { get } }
 
 @MainActor @Observable
 public final class WebViewFetchedResults<Model: WebViewFetchableModel> {

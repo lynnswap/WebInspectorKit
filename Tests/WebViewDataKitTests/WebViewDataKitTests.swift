@@ -613,6 +613,135 @@ func fetchResponseBodyStoresLoadedAndFailedPhases() async throws {
 }
 
 @MainActor
+@Test
+func consoleEventsPopulateRepeatAndClearFetchedMessages() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let requestID = Network.Request.ID("request-1")
+
+    let results: WebViewFetchedResults<ConsoleMessage> = context.fetchedResults(for: .allConsoleMessages)
+    await runtime.backend.emit(
+        .messageAdded(Console.Message(
+            source: Console.Source(rawValue: "console-api"),
+            level: Console.Level(rawValue: "warning"),
+            type: Console.Kind(rawValue: "log"),
+            text: "hello",
+            url: "https://example.com/app.js",
+            line: 12,
+            column: 4,
+            repeatCount: 1,
+            networkRequestID: requestID,
+            timestamp: 1
+        )),
+        target: target
+    )
+
+    try await waitUntil { results.items.count == 1 }
+    let message = try #require(results.items.first)
+    #expect(message.source == Console.Source(rawValue: "console-api"))
+    #expect(message.level == Console.Level(rawValue: "warning"))
+    #expect(message.kind == Console.Kind(rawValue: "log"))
+    #expect(message.text == "hello")
+    #expect(message.url == "https://example.com/app.js")
+    #expect(message.line == 12)
+    #expect(message.column == 4)
+    #expect(message.repeatCount == 1)
+    #expect(message.networkRequestID == NetworkRequest.ID(requestID))
+    #expect(message.timestamp == 1)
+
+    await runtime.backend.emit(
+        .messageRepeatCountUpdated(count: 3, timestamp: 2),
+        target: target
+    )
+    try await waitUntil { message.repeatCount == 3 }
+    #expect(results.items.first === message)
+    #expect(message.timestamp == 2)
+
+    await runtime.backend.emit(
+        .messageAdded(Console.Message(
+            source: Console.Source(rawValue: "javascript"),
+            level: Console.Level(rawValue: "error"),
+            text: "second"
+        )),
+        target: target
+    )
+    try await waitUntil { results.items.count == 2 }
+    #expect(results.items.map(\.text) == ["hello", "second"])
+
+    await runtime.backend.emit(
+        .messagesCleared(reason: Console.ClearReason(rawValue: "console-api")),
+        target: target
+    )
+    try await waitUntil { results.items.isEmpty }
+}
+
+@MainActor
+@Test
+func runtimeEventsPopulateContextsAndFallbackSelection() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let mainID = Runtime.ExecutionContext.ID("main")
+    let utilityID = Runtime.ExecutionContext.ID("utility")
+
+    await runtime.backend.emit(
+        .executionContextCreated(Runtime.ExecutionContext(
+            id: mainID,
+            name: "Main",
+            kind: .normal
+        )),
+        target: target
+    )
+    try await waitUntil { context.executionContexts.count == 1 }
+    let mainContext = try #require(context.executionContexts.first)
+    #expect(context.selectedContext === mainContext)
+    #expect(mainContext.name == "Main")
+    #expect(mainContext.kind == .normal)
+
+    await runtime.backend.emit(
+        .executionContextCreated(Runtime.ExecutionContext(
+            id: mainID,
+            name: "Main Updated",
+            kind: .normal
+        )),
+        target: target
+    )
+    try await waitUntil { mainContext.name == "Main Updated" }
+    #expect(context.executionContexts.first === mainContext)
+
+    await runtime.backend.emit(
+        .executionContextCreated(Runtime.ExecutionContext(
+            id: utilityID,
+            name: "Utility",
+            kind: .user
+        )),
+        target: target
+    )
+    try await waitUntil { context.executionContexts.count == 2 }
+    let utilityContext = try #require(context.executionContexts.first { $0.id == RuntimeContext.ID(utilityID) })
+    #expect(context.selectedContext === mainContext)
+
+    context.selectContext(utilityContext)
+    #expect(context.selectedContext === utilityContext)
+
+    await runtime.backend.emit(
+        .executionContextDestroyed(utilityID),
+        target: target
+    )
+    try await waitUntil {
+        context.executionContexts.count == 1 && context.selectedContext === mainContext
+    }
+    #expect(context.executionContexts.first === mainContext)
+
+    await runtime.backend.emit(
+        .executionContextsCleared(target: target.id),
+        target: target
+    )
+    try await waitUntil {
+        context.executionContexts.isEmpty && context.selectedContext == nil
+    }
+}
+
+@MainActor
 private func startContext(
     runtime: WebViewProxyTestRuntime
 ) async throws -> (WebViewTarget, WebViewModelContext) {
@@ -628,6 +757,8 @@ private func startContext(
     let context = container.mainContext
     try await runtime.backend.waitForSubscribers(domain: "DOM", target: target, count: 1)
     try await runtime.backend.waitForSubscribers(domain: "Network", target: target, count: 1)
+    try await runtime.backend.waitForSubscribers(domain: "Console", target: target, count: 1)
+    try await runtime.backend.waitForSubscribers(domain: "Runtime", target: target, count: 1)
     try await waitUntil { context.state == .attached }
     return (target, context)
 }
