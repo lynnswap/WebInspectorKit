@@ -9,7 +9,19 @@ public enum Page {
         }
 
         public func reload(ignoringCache: Bool = false) async throws {
-            throw unimplementedCommand(domain: "Page", method: "reload")
+            try await context.dispatchVoid(
+                domain: .page,
+                method: "reload",
+                payload: ReloadPayload(ignoringCache: ignoringCache)
+            )
+        }
+    }
+
+    package struct ReloadPayload: Sendable {
+        package let ignoringCache: Bool
+
+        package init(ignoringCache: Bool) {
+            self.ignoringCache = ignoringCache
         }
     }
 }

@@ -294,6 +294,15 @@ let package = Package(
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(
+            name: "WebViewProxyKitTests",
+            dependencies: [
+                "WebViewProxyKit",
+                "WebViewProxyKitTesting"
+            ],
+            path: "Tests/WebViewProxyKitTests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
             name: "WebInspectorUITests",
             dependencies: [
                 "WebInspectorCore",

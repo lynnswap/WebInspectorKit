@@ -9,48 +9,159 @@ public enum DOM {
         }
 
         public func getDocument() async throws -> Node {
-            throw unimplementedCommand(domain: "DOM", method: "getDocument")
+            try await context.dispatch(
+                domain: .dom,
+                method: "getDocument",
+                payload: GetDocumentPayload(),
+                returning: Node.self
+            )
         }
 
         public func requestChildNodes(_ id: Node.ID, depth: Int = 1) async throws {
-            throw unimplementedCommand(domain: "DOM", method: "requestChildNodes")
+            try await context.dispatchVoid(
+                domain: .dom,
+                method: "requestChildNodes",
+                payload: RequestChildNodesPayload(id: id, depth: depth)
+            )
         }
 
         public func requestNode(forRemoteObject objectID: Runtime.RemoteObject.ID) async throws -> Node.ID {
-            throw unimplementedCommand(domain: "DOM", method: "requestNode")
+            try await context.dispatch(
+                domain: .dom,
+                method: "requestNode",
+                payload: RequestNodePayload(objectID: objectID),
+                returning: Node.ID.self
+            )
         }
 
         public func outerHTML(of id: Node.ID) async throws -> String {
-            throw unimplementedCommand(domain: "DOM", method: "getOuterHTML")
+            try await context.dispatch(
+                domain: .dom,
+                method: "getOuterHTML",
+                payload: GetOuterHTMLPayload(id: id),
+                returning: String.self
+            )
         }
 
         public func removeNode(_ id: Node.ID) async throws {
-            throw unimplementedCommand(domain: "DOM", method: "removeNode")
+            try await context.dispatchVoid(
+                domain: .dom,
+                method: "removeNode",
+                payload: RemoveNodePayload(id: id)
+            )
         }
 
         public func highlightNode(_ id: Node.ID) async throws {
-            throw unimplementedCommand(domain: "DOM", method: "highlightNode")
+            try await context.dispatchVoid(
+                domain: .dom,
+                method: "highlightNode",
+                payload: HighlightNodePayload(id: id)
+            )
         }
 
         public func hideHighlight() async throws {
-            throw unimplementedCommand(domain: "DOM", method: "hideHighlight")
+            try await context.dispatchVoid(
+                domain: .dom,
+                method: "hideHighlight",
+                payload: HideHighlightPayload()
+            )
         }
 
         public func setInspectMode(enabled: Bool) async throws {
-            throw unimplementedCommand(domain: "DOM", method: "setInspectModeEnabled")
+            try await context.dispatchVoid(
+                domain: .dom,
+                method: "setInspectModeEnabled",
+                payload: SetInspectModeEnabledPayload(enabled: enabled)
+            )
         }
 
         public func undo() async throws {
-            throw unimplementedCommand(domain: "DOM", method: "undo")
+            try await context.dispatchVoid(
+                domain: .dom,
+                method: "undo",
+                payload: UndoPayload()
+            )
         }
 
         public func redo() async throws {
-            throw unimplementedCommand(domain: "DOM", method: "redo")
+            try await context.dispatchVoid(
+                domain: .dom,
+                method: "redo",
+                payload: RedoPayload()
+            )
         }
 
         public var events: EventStream {
-            EventStream()
+            EventStream {
+                context.domEvents()
+            }
         }
+    }
+
+    package struct GetDocumentPayload: Sendable {
+        package init() {}
+    }
+
+    package struct RequestChildNodesPayload: Sendable {
+        package let id: Node.ID
+        package let depth: Int
+
+        package init(id: Node.ID, depth: Int) {
+            self.id = id
+            self.depth = depth
+        }
+    }
+
+    package struct RequestNodePayload: Sendable {
+        package let objectID: Runtime.RemoteObject.ID
+
+        package init(objectID: Runtime.RemoteObject.ID) {
+            self.objectID = objectID
+        }
+    }
+
+    package struct GetOuterHTMLPayload: Sendable {
+        package let id: Node.ID
+
+        package init(id: Node.ID) {
+            self.id = id
+        }
+    }
+
+    package struct RemoveNodePayload: Sendable {
+        package let id: Node.ID
+
+        package init(id: Node.ID) {
+            self.id = id
+        }
+    }
+
+    package struct HighlightNodePayload: Sendable {
+        package let id: Node.ID
+
+        package init(id: Node.ID) {
+            self.id = id
+        }
+    }
+
+    package struct HideHighlightPayload: Sendable {
+        package init() {}
+    }
+
+    package struct SetInspectModeEnabledPayload: Sendable {
+        package let enabled: Bool
+
+        package init(enabled: Bool) {
+            self.enabled = enabled
+        }
+    }
+
+    package struct UndoPayload: Sendable {
+        package init() {}
+    }
+
+    package struct RedoPayload: Sendable {
+        package init() {}
     }
 
     public struct Node: Identifiable, Sendable {

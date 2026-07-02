@@ -12,34 +12,116 @@ public enum Runtime {
             _ expression: String,
             in context: ExecutionContext.ID? = nil
         ) async throws -> EvaluationResult {
-            throw unimplementedCommand(domain: "Runtime", method: "evaluate")
+            try await self.context.dispatch(
+                domain: .runtime,
+                method: "evaluate",
+                payload: EvaluatePayload(expression: expression, context: context),
+                returning: EvaluationResult.self
+            )
         }
 
         public func properties(
             of object: RemoteObject.ID,
             ownProperties: Bool = true
         ) async throws -> [PropertyDescriptor] {
-            throw unimplementedCommand(domain: "Runtime", method: "getProperties")
+            try await context.dispatch(
+                domain: .runtime,
+                method: "getProperties",
+                payload: GetPropertiesPayload(object: object, ownProperties: ownProperties),
+                returning: [PropertyDescriptor].self
+            )
         }
 
         public func preview(of object: RemoteObject.ID) async throws -> ObjectPreview {
-            throw unimplementedCommand(domain: "Runtime", method: "getPreview")
+            try await context.dispatch(
+                domain: .runtime,
+                method: "getPreview",
+                payload: GetPreviewPayload(object: object),
+                returning: ObjectPreview.self
+            )
         }
 
         public func collectionEntries(of object: RemoteObject.ID) async throws -> [CollectionEntry] {
-            throw unimplementedCommand(domain: "Runtime", method: "getCollectionEntries")
+            try await context.dispatch(
+                domain: .runtime,
+                method: "getCollectionEntries",
+                payload: GetCollectionEntriesPayload(object: object),
+                returning: [CollectionEntry].self
+            )
         }
 
         public func releaseObject(_ id: RemoteObject.ID) async throws {
-            throw unimplementedCommand(domain: "Runtime", method: "releaseObject")
+            try await context.dispatchVoid(
+                domain: .runtime,
+                method: "releaseObject",
+                payload: ReleaseObjectPayload(id: id)
+            )
         }
 
         public func releaseObjectGroup(_ group: ObjectGroup) async throws {
-            throw unimplementedCommand(domain: "Runtime", method: "releaseObjectGroup")
+            try await context.dispatchVoid(
+                domain: .runtime,
+                method: "releaseObjectGroup",
+                payload: ReleaseObjectGroupPayload(group: group)
+            )
         }
 
         public var events: EventStream {
-            EventStream()
+            EventStream {
+                context.runtimeEvents()
+            }
+        }
+    }
+
+    package struct EvaluatePayload: Sendable {
+        package let expression: String
+        package let context: ExecutionContext.ID?
+
+        package init(expression: String, context: ExecutionContext.ID?) {
+            self.expression = expression
+            self.context = context
+        }
+    }
+
+    package struct GetPropertiesPayload: Sendable {
+        package let object: RemoteObject.ID
+        package let ownProperties: Bool
+
+        package init(object: RemoteObject.ID, ownProperties: Bool) {
+            self.object = object
+            self.ownProperties = ownProperties
+        }
+    }
+
+    package struct GetPreviewPayload: Sendable {
+        package let object: RemoteObject.ID
+
+        package init(object: RemoteObject.ID) {
+            self.object = object
+        }
+    }
+
+    package struct GetCollectionEntriesPayload: Sendable {
+        package let object: RemoteObject.ID
+
+        package init(object: RemoteObject.ID) {
+            self.object = object
+        }
+    }
+
+    package struct ReleaseObjectPayload: Sendable {
+        package let id: RemoteObject.ID
+
+        package init(id: RemoteObject.ID) {
+            self.id = id
+        }
+    }
+
+    package struct ReleaseObjectGroupPayload: Sendable {
+        package let group: ObjectGroup
+
+        package init(group: ObjectGroup) {
+            self.group = group
         }
     }
 

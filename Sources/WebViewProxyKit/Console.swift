@@ -9,15 +9,39 @@ public enum Console {
         }
 
         public func clearMessages() async throws {
-            throw unimplementedCommand(domain: "Console", method: "clearMessages")
+            try await context.dispatchVoid(
+                domain: .console,
+                method: "clearMessages",
+                payload: ClearMessagesPayload()
+            )
         }
 
         public func setLoggingChannelLevel(_ source: ChannelSource, level: ChannelLevel) async throws {
-            throw unimplementedCommand(domain: "Console", method: "setLoggingChannelLevel")
+            try await context.dispatchVoid(
+                domain: .console,
+                method: "setLoggingChannelLevel",
+                payload: SetLoggingChannelLevelPayload(source: source, level: level)
+            )
         }
 
         public var events: EventStream {
-            EventStream()
+            EventStream {
+                context.consoleEvents()
+            }
+        }
+    }
+
+    package struct ClearMessagesPayload: Sendable {
+        package init() {}
+    }
+
+    package struct SetLoggingChannelLevelPayload: Sendable {
+        package let source: ChannelSource
+        package let level: ChannelLevel
+
+        package init(source: ChannelSource, level: ChannelLevel) {
+            self.source = source
+            self.level = level
         }
     }
 

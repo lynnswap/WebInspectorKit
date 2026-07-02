@@ -9,11 +9,26 @@ public enum Network {
         }
 
         public func responseBody(for id: Request.ID) async throws -> Body {
-            throw unimplementedCommand(domain: "Network", method: "getResponseBody")
+            try await context.dispatch(
+                domain: .network,
+                method: "getResponseBody",
+                payload: GetResponseBodyPayload(id: id),
+                returning: Body.self
+            )
         }
 
         public var events: EventStream {
-            EventStream()
+            EventStream {
+                context.networkEvents()
+            }
+        }
+    }
+
+    package struct GetResponseBodyPayload: Sendable {
+        package let id: Request.ID
+
+        package init(id: Request.ID) {
+            self.id = id
         }
     }
 

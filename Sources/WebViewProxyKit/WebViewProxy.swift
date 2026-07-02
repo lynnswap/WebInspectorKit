@@ -70,7 +70,7 @@ public actor WebViewProxy {
     }
 
     public var canReload: Bool {
-        false
+        pageTarget != nil && closed == false
     }
 
     public func waitForCurrentPage() async throws -> WebViewTarget {
@@ -81,7 +81,16 @@ public actor WebViewProxy {
     }
 
     public func reload() async throws {
-        throw unimplementedCommand(domain: "Page", method: "reload")
+        guard let pageTarget else {
+            throw WebViewProxyError.disconnected("WebViewProxyKit shell has no current page target.")
+        }
+        let _: Void = try await dispatchCommand(
+            targetID: pageTarget.id,
+            route: pageTarget.route,
+            domain: .page,
+            method: "reload",
+            payload: Page.ReloadPayload(ignoringCache: false)
+        )
     }
 
     public func close() async {
@@ -120,5 +129,113 @@ public actor WebViewProxy {
 
     private func currentTargetsSnapshot() -> [WebViewTarget] {
         Array(targetsByID.values)
+    }
+
+    package func dispatchCommand<Payload: Sendable, Result: Sendable>(
+        targetID: WebViewTarget.ID,
+        route: RoutingTargetID,
+        domain: WebViewProxyDomain,
+        method: String,
+        payload: Payload
+    ) async throws -> Result {
+        guard closed == false else {
+            throw WebViewProxyError.closed
+        }
+        guard let backend else {
+            throw unimplementedCommand(domain: domain.rawValue, method: method)
+        }
+        let command = WebViewProxyCommand<Payload, Result>(
+            targetID: targetID,
+            route: route,
+            domain: domain,
+            method: method,
+            payload: payload
+        )
+        return try await backend.dispatchCommand(command)
+    }
+
+    package nonisolated func domEvents(
+        targetID: WebViewTarget.ID,
+        route: RoutingTargetID
+    ) -> AsyncStream<DOM.Event> {
+        eventStream(targetID: targetID, route: route, domain: .dom) { event in
+            guard case let .dom(value) = event else {
+                return nil
+            }
+            return value
+        }
+    }
+
+    package nonisolated func cssEvents(
+        targetID: WebViewTarget.ID,
+        route: RoutingTargetID
+    ) -> AsyncStream<CSS.Event> {
+        eventStream(targetID: targetID, route: route, domain: .css) { event in
+            guard case let .css(value) = event else {
+                return nil
+            }
+            return value
+        }
+    }
+
+    package nonisolated func networkEvents(
+        targetID: WebViewTarget.ID,
+        route: RoutingTargetID
+    ) -> AsyncStream<Network.Event> {
+        eventStream(targetID: targetID, route: route, domain: .network) { event in
+            guard case let .network(value) = event else {
+                return nil
+            }
+            return value
+        }
+    }
+
+    package nonisolated func consoleEvents(
+        targetID: WebViewTarget.ID,
+        route: RoutingTargetID
+    ) -> AsyncStream<Console.Event> {
+        eventStream(targetID: targetID, route: route, domain: .console) { event in
+            guard case let .console(value) = event else {
+                return nil
+            }
+            return value
+        }
+    }
+
+    package nonisolated func runtimeEvents(
+        targetID: WebViewTarget.ID,
+        route: RoutingTargetID
+    ) -> AsyncStream<Runtime.Event> {
+        eventStream(targetID: targetID, route: route, domain: .runtime) { event in
+            guard case let .runtime(value) = event else {
+                return nil
+            }
+            return value
+        }
+    }
+
+    private nonisolated func eventStream<Element: Sendable>(
+        targetID: WebViewTarget.ID,
+        route: RoutingTargetID,
+        domain: WebViewProxyEventDomain,
+        extract: @escaping @Sendable (WebViewProxyEvent) -> Element?
+    ) -> AsyncStream<Element> {
+        guard let backend else {
+            preconditionFailure("WebViewProxy has no backend for \(domain.rawValue) events.")
+        }
+        return AsyncStream<Element> { continuation in
+            let task = Task {
+                for await event in backend.events(route: route, targetID: targetID, domain: domain) {
+                    guard let value = extract(event) else {
+                        preconditionFailure("Backend emitted a mismatched event for \(domain.rawValue).")
+                    }
+                    continuation.yield(value)
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
+        }
     }
 }

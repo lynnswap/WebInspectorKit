@@ -9,19 +9,62 @@ public enum CSS {
         }
 
         public func matchedStyles(for node: DOM.Node.ID) async throws -> MatchedStyles {
-            throw unimplementedCommand(domain: "CSS", method: "getMatchedStylesForNode")
+            try await context.dispatch(
+                domain: .css,
+                method: "getMatchedStylesForNode",
+                payload: GetMatchedStylesForNodePayload(node: node),
+                returning: MatchedStyles.self
+            )
         }
 
         public func computedStyle(for node: DOM.Node.ID) async throws -> [ComputedProperty] {
-            throw unimplementedCommand(domain: "CSS", method: "getComputedStyleForNode")
+            try await context.dispatch(
+                domain: .css,
+                method: "getComputedStyleForNode",
+                payload: GetComputedStyleForNodePayload(node: node),
+                returning: [ComputedProperty].self
+            )
         }
 
         public func setStyleText(_ id: Style.ID, text: String) async throws -> Style {
-            throw unimplementedCommand(domain: "CSS", method: "setStyleText")
+            try await context.dispatch(
+                domain: .css,
+                method: "setStyleText",
+                payload: SetStyleTextPayload(id: id, text: text),
+                returning: Style.self
+            )
         }
 
         public var events: EventStream {
-            EventStream()
+            EventStream {
+                context.cssEvents()
+            }
+        }
+    }
+
+    package struct GetMatchedStylesForNodePayload: Sendable {
+        package let node: DOM.Node.ID
+
+        package init(node: DOM.Node.ID) {
+            self.node = node
+        }
+    }
+
+    package struct GetComputedStyleForNodePayload: Sendable {
+        package let node: DOM.Node.ID
+
+        package init(node: DOM.Node.ID) {
+            self.node = node
+        }
+    }
+
+    package struct SetStyleTextPayload: Sendable {
+        package let id: Style.ID
+        package let text: String
+
+        package init(id: Style.ID, text: String) {
+            self.id = id
+            self.text = text
         }
     }
 
