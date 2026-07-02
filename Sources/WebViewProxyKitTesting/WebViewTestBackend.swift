@@ -326,6 +326,20 @@ extension WebViewTestBackend: WebViewProxyBackend {
         return result
     }
 
+    package func waitForEventSubscription(
+        route: RoutingTargetID,
+        targetID: WebViewTarget.ID,
+        domain: WebViewProxyEventDomain
+    ) async {
+        let key = EventSubscriptionKey(route: route, targetID: targetID, domain: domain)
+        while subscriberCount(for: key) < 1 {
+            guard Task.isCancelled == false else {
+                return
+            }
+            await Task.yield()
+        }
+    }
+
     package nonisolated func events(
         route: RoutingTargetID,
         targetID: WebViewTarget.ID,

@@ -12,17 +12,14 @@ func domEventsPopulateRootAndPreserveChildIdentity() async throws {
     let childID = DOM.Node.ID("child")
     let grandchildID = DOM.Node.ID("grandchild")
 
-    await runtime.backend.enqueue((), for: "Network", method: "enable")
-    await runtime.backend.enqueue(
-        DOM.Node(id: documentID, nodeType: 9, nodeName: "#document", childNodeCount: 1),
-        for: "DOM",
-        method: "getDocument"
+    await enqueueStartupReplies(
+        on: runtime.backend,
+        document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document", childNodeCount: 1)
     )
 
     let container = WebViewModelContainer(proxy: runtime.proxy)
     let context = container.mainContext
-    try await runtime.backend.waitForSubscribers(domain: "DOM", target: target, count: 1)
-    try await runtime.backend.waitForSubscribers(domain: "Network", target: target, count: 1)
+    try await waitForStartupSubscribers(runtime: runtime, target: target)
     try await waitUntil { context.rootNode != nil }
 
     await runtime.backend.emit(
@@ -91,28 +88,19 @@ func domEventsPopulateRootAndPreserveChildIdentity() async throws {
 
 @MainActor
 @Test
-func startupEnablesNetworkBeforeInitialDocumentSnapshot() async throws {
+func startupEnablesTrackedDomainsBeforeInitialDocumentSnapshot() async throws {
     let runtime = try await WebViewProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
 
-    await runtime.backend.enqueue((), for: "Network", method: "enable")
-    await runtime.backend.enqueue(
-        DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document"),
-        for: "DOM",
-        method: "getDocument"
-    )
+    await enqueueStartupReplies(on: runtime.backend)
 
     let container = WebViewModelContainer(proxy: runtime.proxy)
     let context = container.mainContext
-    try await runtime.backend.waitForSubscribers(domain: "DOM", target: target, count: 1)
-    try await runtime.backend.waitForSubscribers(domain: "Network", target: target, count: 1)
+    try await waitForStartupSubscribers(runtime: runtime, target: target)
     try await waitUntil { context.state == .attached }
 
     let commands = await runtime.backend.recordedCommands()
-    #expect(commands.prefix(2) == [
-        RecordedCommand(domain: "Network", method: "enable"),
-        RecordedCommand(domain: "DOM", method: "getDocument"),
-    ])
+    #expect(commands.prefix(startupCommands.count) == startupCommands[...])
 }
 
 @MainActor
@@ -121,16 +109,12 @@ func networkEnableFailureFailsStartupBeforeDocumentFetch() async throws {
     let runtime = try await WebViewProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
 
-    await runtime.backend.enqueue(
-        DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document"),
-        for: "DOM",
-        method: "getDocument"
-    )
+    await runtime.backend.enqueue((), for: "Runtime", method: "enable")
+    await runtime.backend.enqueue((), for: "Runtime", method: "disable")
 
     let container = WebViewModelContainer(proxy: runtime.proxy)
     let context = container.mainContext
-    try await runtime.backend.waitForSubscribers(domain: "DOM", target: target, count: 1)
-    try await runtime.backend.waitForSubscribers(domain: "Network", target: target, count: 1)
+    try await waitForStartupSubscribers(runtime: runtime, target: target)
     try await waitUntil {
         guard case .failed = context.state else {
             return false
@@ -149,39 +133,110 @@ func networkEnableFailureFailsStartupBeforeDocumentFetch() async throws {
 
     let commands = await runtime.backend.recordedCommands()
     #expect(commands == [
-        RecordedCommand(domain: "Network", method: "enable")
+        RecordedCommand(domain: "Runtime", method: "enable"),
+        RecordedCommand(domain: "Network", method: "enable"),
+        RecordedCommand(domain: "Runtime", method: "disable"),
     ])
     #expect(context.rootNode == nil)
 }
 
 @MainActor
 @Test
-func closeAfterAttachedDisablesNetworkTracking() async throws {
+func consoleEnableFailureFailsStartupBeforeAttachingDocument() async throws {
     let runtime = try await WebViewProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
 
+    await runtime.backend.enqueue((), for: "Runtime", method: "enable")
     await runtime.backend.enqueue((), for: "Network", method: "enable")
     await runtime.backend.enqueue(
         DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document"),
         for: "DOM",
         method: "getDocument"
     )
+    await runtime.backend.enqueue((), for: "Runtime", method: "disable")
     await runtime.backend.enqueue((), for: "Network", method: "disable")
 
     let container = WebViewModelContainer(proxy: runtime.proxy)
     let context = container.mainContext
-    try await runtime.backend.waitForSubscribers(domain: "DOM", target: target, count: 1)
-    try await runtime.backend.waitForSubscribers(domain: "Network", target: target, count: 1)
+    try await waitForStartupSubscribers(runtime: runtime, target: target)
+    try await waitUntil {
+        guard case .failed = context.state else {
+            return false
+        }
+        return true
+    }
+
+    guard case let .failed(error) = context.state else {
+        Issue.record("Expected failed context state.")
+        return
+    }
+    guard case .commandFailed(domain: "Console", method: "enable", message: _) = error else {
+        Issue.record("Expected Console.enable command failure.")
+        return
+    }
+
+    let commands = await runtime.backend.recordedCommands()
+    #expect(commands == [
+        RecordedCommand(domain: "Runtime", method: "enable"),
+        RecordedCommand(domain: "Network", method: "enable"),
+        RecordedCommand(domain: "DOM", method: "getDocument"),
+        RecordedCommand(domain: "Console", method: "enable"),
+        RecordedCommand(domain: "Runtime", method: "disable"),
+        RecordedCommand(domain: "Network", method: "disable"),
+    ])
+    #expect(context.rootNode == nil)
+}
+
+@MainActor
+@Test
+func runtimeEnableFailureFailsStartupBeforeConsoleNetworkAndDocumentFetch() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+
+    let container = WebViewModelContainer(proxy: runtime.proxy)
+    let context = container.mainContext
+    try await waitForStartupSubscribers(runtime: runtime, target: target)
+    try await waitUntil {
+        guard case .failed = context.state else {
+            return false
+        }
+        return true
+    }
+
+    guard case let .failed(error) = context.state else {
+        Issue.record("Expected failed context state.")
+        return
+    }
+    guard case .commandFailed(domain: "Runtime", method: "enable", message: _) = error else {
+        Issue.record("Expected Runtime.enable command failure.")
+        return
+    }
+
+    let commands = await runtime.backend.recordedCommands()
+    #expect(commands == [
+        RecordedCommand(domain: "Runtime", method: "enable"),
+    ])
+    #expect(context.rootNode == nil)
+}
+
+@MainActor
+@Test
+func closeAfterAttachedDisablesEnabledDomains() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+
+    await enqueueStartupReplies(on: runtime.backend)
+    await enqueueDomainDisableReplies(on: runtime.backend)
+
+    let container = WebViewModelContainer(proxy: runtime.proxy)
+    let context = container.mainContext
+    try await waitForStartupSubscribers(runtime: runtime, target: target)
     try await waitUntil { context.state == .attached }
 
     await container.close()
 
     let commands = await runtime.backend.recordedCommands()
-    #expect(commands == [
-        RecordedCommand(domain: "Network", method: "enable"),
-        RecordedCommand(domain: "DOM", method: "getDocument"),
-        RecordedCommand(domain: "Network", method: "disable"),
-    ])
+    #expect(commands == startupCommands + shutdownCommands)
     #expect(context.state == .detached)
     #expect(context.teardownError == nil)
 }
@@ -192,17 +247,13 @@ func closeRecordsNetworkDisableFailureAndDetachesContext() async throws {
     let runtime = try await WebViewProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
 
-    await runtime.backend.enqueue((), for: "Network", method: "enable")
-    await runtime.backend.enqueue(
-        DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document"),
-        for: "DOM",
-        method: "getDocument"
-    )
+    await enqueueStartupReplies(on: runtime.backend)
+    await runtime.backend.enqueue((), for: "Console", method: "disable")
+    await runtime.backend.enqueue((), for: "Runtime", method: "disable")
 
     let container = WebViewModelContainer(proxy: runtime.proxy)
     let context = container.mainContext
-    try await runtime.backend.waitForSubscribers(domain: "DOM", target: target, count: 1)
-    try await runtime.backend.waitForSubscribers(domain: "Network", target: target, count: 1)
+    try await waitForStartupSubscribers(runtime: runtime, target: target)
     try await waitUntil { context.state == .attached }
 
     await container.close()
@@ -216,29 +267,24 @@ func closeRecordsNetworkDisableFailureAndDetachesContext() async throws {
 
 @MainActor
 @Test
-func restartDisablesPreviousNetworkTrackingBeforeReenable() async throws {
+func restartDisablesPreviousDomainTrackingBeforeReenable() async throws {
     let runtime = try await WebViewProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
 
-    await runtime.backend.enqueue((), for: "Network", method: "enable")
-    await runtime.backend.enqueue(
-        DOM.Node(id: DOM.Node.ID("document-1"), nodeType: 9, nodeName: "#document"),
-        for: "DOM",
-        method: "getDocument"
+    await enqueueStartupReplies(
+        on: runtime.backend,
+        document: DOM.Node(id: DOM.Node.ID("document-1"), nodeType: 9, nodeName: "#document")
     )
 
     let container = WebViewModelContainer(proxy: runtime.proxy)
     let context = container.mainContext
-    try await runtime.backend.waitForSubscribers(domain: "DOM", target: target, count: 1)
-    try await runtime.backend.waitForSubscribers(domain: "Network", target: target, count: 1)
+    try await waitForStartupSubscribers(runtime: runtime, target: target)
     try await waitUntil { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("document-1")) }
 
-    await runtime.backend.enqueue((), for: "Network", method: "disable")
-    await runtime.backend.enqueue((), for: "Network", method: "enable")
-    await runtime.backend.enqueue(
-        DOM.Node(id: DOM.Node.ID("document-2"), nodeType: 9, nodeName: "#document"),
-        for: "DOM",
-        method: "getDocument"
+    await enqueueDomainDisableReplies(on: runtime.backend)
+    await enqueueStartupReplies(
+        on: runtime.backend,
+        document: DOM.Node(id: DOM.Node.ID("document-2"), nodeType: 9, nodeName: "#document")
     )
 
     context.start()
@@ -246,13 +292,7 @@ func restartDisablesPreviousNetworkTrackingBeforeReenable() async throws {
     try await waitUntil { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("document-2")) }
 
     let commands = await runtime.backend.recordedCommands()
-    #expect(commands == [
-        RecordedCommand(domain: "Network", method: "enable"),
-        RecordedCommand(domain: "DOM", method: "getDocument"),
-        RecordedCommand(domain: "Network", method: "disable"),
-        RecordedCommand(domain: "Network", method: "enable"),
-        RecordedCommand(domain: "DOM", method: "getDocument"),
-    ])
+    #expect(commands == startupCommands + shutdownCommands + startupCommands)
 }
 
 @MainActor
@@ -263,24 +303,22 @@ func restartWaitsForPreviousStartupCleanupBeforeReenable() async throws {
     let enableGate = WebViewTestGate()
 
     await runtime.backend.hold(domain: "Network", method: "enable", gate: enableGate)
-    await runtime.backend.enqueue((), for: "Network", method: "enable")
+    await enqueueDomainEnableReplies(on: runtime.backend)
 
     let container = WebViewModelContainer(proxy: runtime.proxy)
     let context = container.mainContext
-    try await runtime.backend.waitForSubscribers(domain: "DOM", target: target, count: 1)
-    try await runtime.backend.waitForSubscribers(domain: "Network", target: target, count: 1)
+    try await waitForStartupSubscribers(runtime: runtime, target: target)
     try await waitUntil {
         await runtime.backend.recordedCommands() == [
-            RecordedCommand(domain: "Network", method: "enable")
+            RecordedCommand(domain: "Runtime", method: "enable"),
+            RecordedCommand(domain: "Network", method: "enable"),
         ]
     }
 
-    await runtime.backend.enqueue((), for: "Network", method: "disable")
-    await runtime.backend.enqueue((), for: "Network", method: "enable")
-    await runtime.backend.enqueue(
-        DOM.Node(id: DOM.Node.ID("restarted-document"), nodeType: 9, nodeName: "#document"),
-        for: "DOM",
-        method: "getDocument"
+    await enqueueDomainDisableReplies(on: runtime.backend)
+    await enqueueStartupReplies(
+        on: runtime.backend,
+        document: DOM.Node(id: DOM.Node.ID("restarted-document"), nodeType: 9, nodeName: "#document")
     )
 
     context.start()
@@ -288,6 +326,7 @@ func restartWaitsForPreviousStartupCleanupBeforeReenable() async throws {
         await Task.yield()
     }
     #expect(await runtime.backend.recordedCommands() == [
+        RecordedCommand(domain: "Runtime", method: "enable"),
         RecordedCommand(domain: "Network", method: "enable")
     ])
 
@@ -295,12 +334,166 @@ func restartWaitsForPreviousStartupCleanupBeforeReenable() async throws {
     try await waitUntil { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("restarted-document")) }
 
     let commands = await runtime.backend.recordedCommands()
-    #expect(commands == [
-        RecordedCommand(domain: "Network", method: "enable"),
+    #expect(commands == Array(startupCommands.prefix(2)) + [
+        RecordedCommand(domain: "Runtime", method: "disable"),
         RecordedCommand(domain: "Network", method: "disable"),
-        RecordedCommand(domain: "Network", method: "enable"),
-        RecordedCommand(domain: "DOM", method: "getDocument"),
-    ])
+    ] + startupCommands)
+}
+
+@MainActor
+@Test
+func runtimeEnableReplayIsCapturedBeforeCommandReturns() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+    let enableGate = WebViewTestGate()
+    let contextID = Runtime.ExecutionContext.ID("main")
+
+    await runtime.backend.hold(domain: "Runtime", method: "enable", gate: enableGate)
+    await enqueueStartupReplies(on: runtime.backend)
+
+    let container = WebViewModelContainer(proxy: runtime.proxy)
+    let context = container.mainContext
+    try await waitUntil {
+        await runtime.backend.recordedCommands() == [
+            RecordedCommand(domain: "Runtime", method: "enable")
+        ]
+    }
+
+    await runtime.backend.emit(
+        .executionContextCreated(Runtime.ExecutionContext(id: contextID, name: "Main", kind: .normal)),
+        target: target
+    )
+    try await waitUntil {
+        context.executionContexts.first?.id == RuntimeContext.ID(contextID)
+    }
+
+    await enableGate.open()
+    try await waitUntil { context.state == .attached }
+    #expect(context.selectedContext?.id == RuntimeContext.ID(contextID))
+}
+
+@MainActor
+@Test
+func consoleEnableReplayIsCapturedBeforeCommandReturns() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+    let enableGate = WebViewTestGate()
+
+    await runtime.backend.hold(domain: "Console", method: "enable", gate: enableGate)
+    await enqueueStartupReplies(on: runtime.backend)
+
+    let container = WebViewModelContainer(proxy: runtime.proxy)
+    let context = container.mainContext
+    let results: WebViewFetchedResults<ConsoleMessage> = context.fetchedResults(for: .allConsoleMessages)
+    try await waitUntil {
+        await runtime.backend.recordedCommands() == startupCommands
+    }
+
+    await runtime.backend.emit(
+        .messageAdded(Console.Message(
+            source: Console.Source(rawValue: "console-api"),
+            level: Console.Level(rawValue: "warning"),
+            text: "replayed"
+        )),
+        target: target
+    )
+    try await waitUntil { results.items.map(\.text) == ["replayed"] }
+
+    await enableGate.open()
+    try await waitUntil { context.state == .attached }
+    #expect(results.items.map(\.text) == ["replayed"])
+}
+
+@MainActor
+@Test
+func restartClearsRuntimeContextsBeforeEnableReplay() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let staleID = Runtime.ExecutionContext.ID("stale")
+    let replayID = Runtime.ExecutionContext.ID("replayed")
+    let enableGate = WebViewTestGate()
+
+    await runtime.backend.emit(
+        .executionContextCreated(Runtime.ExecutionContext(id: staleID, name: "Stale", kind: .normal)),
+        target: target
+    )
+    try await waitUntil {
+        context.executionContexts.first?.id == RuntimeContext.ID(staleID)
+    }
+
+    await runtime.backend.hold(domain: "Runtime", method: "enable", gate: enableGate)
+    await enqueueDomainDisableReplies(on: runtime.backend)
+    await enqueueStartupReplies(
+        on: runtime.backend,
+        document: DOM.Node(id: DOM.Node.ID("restarted-document"), nodeType: 9, nodeName: "#document")
+    )
+
+    context.start()
+    try await waitUntil {
+        await runtime.backend.recordedCommands() == startupCommands + shutdownCommands + [
+            RecordedCommand(domain: "Runtime", method: "enable")
+        ]
+    }
+    #expect(context.executionContexts.isEmpty)
+    #expect(context.selectedContext == nil)
+
+    await runtime.backend.emit(
+        .executionContextCreated(Runtime.ExecutionContext(id: replayID, name: "Replayed", kind: .normal)),
+        target: target
+    )
+    try await waitUntil {
+        context.executionContexts.map(\.id) == [RuntimeContext.ID(replayID)]
+    }
+
+    await enableGate.open()
+    try await waitUntil { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("restarted-document")) }
+    #expect(context.selectedContext?.id == RuntimeContext.ID(replayID))
+}
+
+@MainActor
+@Test
+func restartClearsConsoleMessagesBeforeConsoleReplay() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let results: WebViewFetchedResults<ConsoleMessage> = context.fetchedResults(for: .allConsoleMessages)
+    let enableGate = WebViewTestGate()
+
+    await runtime.backend.emit(
+        .messageAdded(Console.Message(
+            source: Console.Source(rawValue: "console-api"),
+            level: Console.Level(rawValue: "warning"),
+            text: "old"
+        )),
+        target: target
+    )
+    try await waitUntil { results.items.map(\.text) == ["old"] }
+
+    await runtime.backend.hold(domain: "Console", method: "enable", gate: enableGate)
+    await enqueueDomainDisableReplies(on: runtime.backend)
+    await enqueueStartupReplies(
+        on: runtime.backend,
+        document: DOM.Node(id: DOM.Node.ID("restarted-document"), nodeType: 9, nodeName: "#document")
+    )
+
+    context.start()
+    try await waitUntil {
+        await runtime.backend.recordedCommands() == startupCommands + shutdownCommands + startupCommands
+    }
+    #expect(results.items.isEmpty)
+
+    await runtime.backend.emit(
+        .messageAdded(Console.Message(
+            source: Console.Source(rawValue: "console-api"),
+            level: Console.Level(rawValue: "warning"),
+            text: "old"
+        )),
+        target: target
+    )
+    try await waitUntil { results.items.map(\.text) == ["old"] }
+
+    await enableGate.open()
+    try await waitUntil { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("restarted-document")) }
+    #expect(results.items.count == 1)
 }
 
 @MainActor
@@ -365,16 +558,14 @@ func removingLoadedChildPurgesDescendantsFromIdentityMap() async throws {
     let childID = DOM.Node.ID("child")
     let grandchildID = DOM.Node.ID("grandchild")
 
-    await runtime.backend.enqueue((), for: "Network", method: "enable")
-    await runtime.backend.enqueue(
-        DOM.Node(id: documentID, nodeType: 9, nodeName: "#document"),
-        for: "DOM",
-        method: "getDocument"
+    await enqueueStartupReplies(
+        on: runtime.backend,
+        document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document")
     )
 
     let container = WebViewModelContainer(proxy: runtime.proxy)
     let context = container.mainContext
-    try await runtime.backend.waitForSubscribers(domain: "DOM", target: target, count: 1)
+    try await waitForStartupSubscribers(runtime: runtime, target: target)
     try await waitUntil { context.rootNode != nil }
 
     await runtime.backend.emit(
@@ -421,13 +612,11 @@ func closeDuringStartupKeepsContextDetached() async throws {
     let documentID = DOM.Node.ID("document")
 
     await runtime.backend.hold(domain: "DOM", method: "getDocument", gate: gate)
-    await runtime.backend.enqueue((), for: "Network", method: "enable")
-    await runtime.backend.enqueue(
-        DOM.Node(id: documentID, nodeType: 9, nodeName: "#document"),
-        for: "DOM",
-        method: "getDocument"
+    await enqueueStartupReplies(
+        on: runtime.backend,
+        document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document")
     )
-    await runtime.backend.enqueue((), for: "Network", method: "disable")
+    await enqueueDomainDisableReplies(on: runtime.backend)
 
     let container = WebViewModelContainer(proxy: runtime.proxy)
     let context = container.mainContext
@@ -448,9 +637,8 @@ func closeDuringStartupKeepsContextDetached() async throws {
     #expect(context.rootNode == nil)
 
     let commands = await runtime.backend.recordedCommands()
-    #expect(commands == [
-        RecordedCommand(domain: "Network", method: "enable"),
-        RecordedCommand(domain: "DOM", method: "getDocument"),
+    #expect(commands == Array(startupCommands.prefix(3)) + [
+        RecordedCommand(domain: "Runtime", method: "disable"),
         RecordedCommand(domain: "Network", method: "disable"),
     ])
 }
@@ -746,21 +934,61 @@ private func startContext(
     runtime: WebViewProxyTestRuntime
 ) async throws -> (WebViewTarget, WebViewModelContext) {
     let target = try await runtime.proxy.waitForCurrentPage()
-    await runtime.backend.enqueue((), for: "Network", method: "enable")
-    await runtime.backend.enqueue(
-        DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document"),
-        for: "DOM",
-        method: "getDocument"
-    )
+    await enqueueStartupReplies(on: runtime.backend)
 
     let container = WebViewModelContainer(proxy: runtime.proxy)
     let context = container.mainContext
+    try await waitForStartupSubscribers(runtime: runtime, target: target)
+    try await waitUntil { context.state == .attached }
+    return (target, context)
+}
+
+private var startupCommands: [RecordedCommand] {
+    [
+        RecordedCommand(domain: "Runtime", method: "enable"),
+        RecordedCommand(domain: "Network", method: "enable"),
+        RecordedCommand(domain: "DOM", method: "getDocument"),
+        RecordedCommand(domain: "Console", method: "enable"),
+    ]
+}
+
+private var shutdownCommands: [RecordedCommand] {
+    [
+        RecordedCommand(domain: "Console", method: "disable"),
+        RecordedCommand(domain: "Runtime", method: "disable"),
+        RecordedCommand(domain: "Network", method: "disable"),
+    ]
+}
+
+private func enqueueStartupReplies(
+    on backend: WebViewTestBackend,
+    document: DOM.Node = DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document")
+) async {
+    await enqueueDomainEnableReplies(on: backend)
+    await backend.enqueue(document, for: "DOM", method: "getDocument")
+}
+
+private func enqueueDomainEnableReplies(on backend: WebViewTestBackend) async {
+    await backend.enqueue((), for: "Runtime", method: "enable")
+    await backend.enqueue((), for: "Network", method: "enable")
+    await backend.enqueue((), for: "Console", method: "enable")
+}
+
+private func enqueueDomainDisableReplies(on backend: WebViewTestBackend) async {
+    await backend.enqueue((), for: "Console", method: "disable")
+    await backend.enqueue((), for: "Runtime", method: "disable")
+    await backend.enqueue((), for: "Network", method: "disable")
+}
+
+@MainActor
+private func waitForStartupSubscribers(
+    runtime: WebViewProxyTestRuntime,
+    target: WebViewTarget
+) async throws {
     try await runtime.backend.waitForSubscribers(domain: "DOM", target: target, count: 1)
     try await runtime.backend.waitForSubscribers(domain: "Network", target: target, count: 1)
     try await runtime.backend.waitForSubscribers(domain: "Console", target: target, count: 1)
     try await runtime.backend.waitForSubscribers(domain: "Runtime", target: target, count: 1)
-    try await waitUntil { context.state == .attached }
-    return (target, context)
 }
 
 private func emitFinishedRequest(

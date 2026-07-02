@@ -8,6 +8,22 @@ public enum Runtime {
             self.context = context
         }
 
+        public func enable() async throws {
+            try await context.dispatchVoid(
+                domain: .runtime,
+                method: "enable",
+                payload: EnablePayload()
+            )
+        }
+
+        public func disable() async throws {
+            try await context.dispatchVoid(
+                domain: .runtime,
+                method: "disable",
+                payload: DisablePayload()
+            )
+        }
+
         public func evaluate(
             _ expression: String,
             in context: ExecutionContext.ID? = nil
@@ -71,6 +87,14 @@ public enum Runtime {
                 context.runtimeEvents()
             }
         }
+    }
+
+    package struct EnablePayload: Sendable {
+        package init() {}
+    }
+
+    package struct DisablePayload: Sendable {
+        package init() {}
     }
 
     package struct EvaluatePayload: Sendable {

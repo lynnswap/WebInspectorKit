@@ -79,6 +79,12 @@ public struct WebViewTarget: Identifiable, Sendable {
     public var page: Page.Client {
         Page.Client(context: DomainClientContext(proxy: proxy, targetID: id, route: route))
     }
+
+    package func waitForModelEventSubscriptions() async {
+        for domain in [WebViewProxyEventDomain.dom, .network, .console, .runtime] {
+            await proxy.waitForEventSubscription(targetID: id, route: route, domain: domain)
+        }
+    }
 }
 
 package struct DomainClientContext: Sendable {
@@ -140,4 +146,5 @@ package struct DomainClientContext: Sendable {
     package func runtimeEvents() -> AsyncStream<Runtime.Event> {
         proxy.runtimeEvents(targetID: targetID, route: route)
     }
+
 }

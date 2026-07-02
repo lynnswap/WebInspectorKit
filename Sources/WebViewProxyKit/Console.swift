@@ -8,6 +8,22 @@ public enum Console {
             self.context = context
         }
 
+        public func enable() async throws {
+            try await context.dispatchVoid(
+                domain: .console,
+                method: "enable",
+                payload: EnablePayload()
+            )
+        }
+
+        public func disable() async throws {
+            try await context.dispatchVoid(
+                domain: .console,
+                method: "disable",
+                payload: DisablePayload()
+            )
+        }
+
         public func clearMessages() async throws {
             try await context.dispatchVoid(
                 domain: .console,
@@ -29,6 +45,14 @@ public enum Console {
                 context.consoleEvents()
             }
         }
+    }
+
+    package struct EnablePayload: Sendable {
+        package init() {}
+    }
+
+    package struct DisablePayload: Sendable {
+        package init() {}
     }
 
     package struct ClearMessagesPayload: Sendable {

@@ -264,16 +264,28 @@ public struct FrameID: Hashable, Sendable { /* opaque, wraps ProtocolFrame.ID */
 ```
 
 Domain enabling is automatic where the protocol requires a tracked domain.
-`DOM` has no real `enable`; `getDocument()` returns the document subtree WebKit
-chooses to send (currently initial depth 2), and `requestChildNodes` materializes
-deeper subtrees. WebKit only emits full DOM mutation events for nodes it has
-already pushed to this frontend; unmaterialized parents may still surface
-`childNodeCountUpdated`, but removal only updates that count when WebKit's
-`hasChildren` state changes. CSS one-shot read commands (`matchedStyles`,
-`computedStyle`) can run without `CSS.enable`; CSS event streams and DataKit
-flows that depend on stylesheet lifecycle events enable CSS first. The
-`Inspector`/`Target` bootstrap and the transport-local synthetic-result
-short-circuit stay inside the engine — never surfaced.
+DataKit subscribes to target event streams and waits until those subscriptions
+are active before enabling domains, then starts its live model with
+`Runtime.enable`, `Network.enable`, `DOM.getDocument`, and finally
+`Console.enable`, matching WebKit's delayed console activation. DataKit resets
+replay-backed Runtime/Console models before each re-enable boundary;
+`Runtime.enable` can report existing execution contexts and `Console.enable` can
+replay buffered messages, so the active subscription barrier and DataKit-owned
+boundary are load-bearing. Teardown disables the enabled domains in the
+live-model dependency order: Console, Runtime, then Network. `Console.disable`
+is only a lifecycle command; console clear and `.console` object-group release
+remain the `Console.clearMessages` response path (§4.5). `DOM` has no real
+`enable`;
+`getDocument()` returns the document subtree WebKit chooses to send (currently
+initial depth 2), and `requestChildNodes` materializes deeper subtrees. WebKit
+only emits full DOM mutation events for nodes it has already pushed to this
+frontend; unmaterialized parents may still surface `childNodeCountUpdated`, but
+removal only updates that count when WebKit's `hasChildren` state changes. CSS
+one-shot read commands (`matchedStyles`, `computedStyle`) can run without
+`CSS.enable`; CSS event streams and DataKit flows that depend on stylesheet
+lifecycle events enable CSS first. The `Inspector`/`Target` bootstrap and the
+transport-local synthetic-result short-circuit stay inside the engine — never
+surfaced.
 
 Each domain's decoded events are **multicast** to all live `.events` iterators
 for that target (the data kit's internal subscriber and any raw-proxy consumer
@@ -370,6 +382,10 @@ public enum DOM {
 ```swift
 public enum Runtime {
     public struct Client: Sendable {
+        /// WebKit `Runtime.enable` / `Runtime.disable`. DataKit calls these as
+        /// lifecycle commands before it depends on execution-context events.
+        public func enable() async throws
+        public func disable() async throws
         /// `in` nil = the target's default execution context.
         /// JS exceptions are DATA (`EvaluationResult.wasThrown`), not Swift errors;
         /// `throws` is reserved for protocol/transport failure (F-29). The console
@@ -514,6 +530,10 @@ public enum Network {
 ```swift
 public enum Console {
     public struct Client: Sendable {
+        /// WebKit `Console.enable` / `Console.disable`. DataKit calls these as
+        /// lifecycle commands before it depends on console replay/live events.
+        public func enable() async throws
+        public func disable() async throws
         public func clearMessages() async throws
         public func setLoggingChannelLevel(_ source: ChannelSource, level: ChannelLevel) async throws
         public var events: EventStream { get }

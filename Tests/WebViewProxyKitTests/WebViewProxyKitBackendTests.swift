@@ -189,6 +189,60 @@ func networkEnableAndDisableDispatchToTargetRoute() async throws {
     #expect(disable.payload.cast(as: Network.DisablePayload.self) != nil)
 }
 
+@Test
+func consoleEnableAndDisableDispatchToTargetRoute() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+
+    await runtime.backend.enqueue((), for: "Console", method: "enable")
+    await runtime.backend.enqueue((), for: "Console", method: "disable")
+
+    try await target.console.enable()
+    try await target.console.disable()
+
+    let commands = await runtime.backend.recordedCommands()
+    let enable = try #require(commands.first)
+    #expect(enable.targetID == target.id)
+    #expect(enable.route == target.route)
+    #expect(enable.domain == "Console")
+    #expect(enable.method == "enable")
+    #expect(enable.payload.cast(as: Console.EnablePayload.self) != nil)
+
+    let disable = try #require(commands.dropFirst().first)
+    #expect(disable.targetID == target.id)
+    #expect(disable.route == target.route)
+    #expect(disable.domain == "Console")
+    #expect(disable.method == "disable")
+    #expect(disable.payload.cast(as: Console.DisablePayload.self) != nil)
+}
+
+@Test
+func runtimeEnableAndDisableDispatchToTargetRoute() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+
+    await runtime.backend.enqueue((), for: "Runtime", method: "enable")
+    await runtime.backend.enqueue((), for: "Runtime", method: "disable")
+
+    try await target.runtime.enable()
+    try await target.runtime.disable()
+
+    let commands = await runtime.backend.recordedCommands()
+    let enable = try #require(commands.first)
+    #expect(enable.targetID == target.id)
+    #expect(enable.route == target.route)
+    #expect(enable.domain == "Runtime")
+    #expect(enable.method == "enable")
+    #expect(enable.payload.cast(as: Runtime.EnablePayload.self) != nil)
+
+    let disable = try #require(commands.dropFirst().first)
+    #expect(disable.targetID == target.id)
+    #expect(disable.route == target.route)
+    #expect(disable.domain == "Runtime")
+    #expect(disable.method == "disable")
+    #expect(disable.payload.cast(as: Runtime.DisablePayload.self) != nil)
+}
+
 private struct TimedOut: Error {}
 
 private func value<T: Sendable>(

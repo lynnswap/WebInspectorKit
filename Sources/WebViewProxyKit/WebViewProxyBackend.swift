@@ -57,4 +57,10 @@ package protocol WebViewProxyBackend: Sendable {
         targetID: WebViewTarget.ID,
         domain: WebViewProxyEventDomain
     ) -> AsyncStream<WebViewProxyEvent>
+
+    func waitForEventSubscription(
+        route: RoutingTargetID,
+        targetID: WebViewTarget.ID,
+        domain: WebViewProxyEventDomain
+    ) async
 }

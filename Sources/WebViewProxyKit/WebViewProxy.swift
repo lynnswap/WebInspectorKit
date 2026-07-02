@@ -214,6 +214,17 @@ public actor WebViewProxy {
         }
     }
 
+    package nonisolated func waitForEventSubscription(
+        targetID: WebViewTarget.ID,
+        route: RoutingTargetID,
+        domain: WebViewProxyEventDomain
+    ) async {
+        guard let backend else {
+            preconditionFailure("WebViewProxy has no backend for \(domain.rawValue) events.")
+        }
+        await backend.waitForEventSubscription(route: route, targetID: targetID, domain: domain)
+    }
+
     private nonisolated func eventStream<Element: Sendable>(
         targetID: WebViewTarget.ID,
         route: RoutingTargetID,
