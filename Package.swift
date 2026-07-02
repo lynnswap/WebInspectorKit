@@ -25,6 +25,10 @@ let package = Package(
             targets: ["WebViewProxyKitTesting"]
         ),
         .library(
+            name: "WebViewDataKit",
+            targets: ["WebViewDataKit"]
+        ),
+        .library(
             name: "WebInspectorCore",
             targets: ["WebInspectorCore"]
         ),
@@ -75,6 +79,13 @@ let package = Package(
         ),
         .target(
             name: "WebViewProxyKitTesting",
+            dependencies: [
+                "WebViewProxyKit"
+            ],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebViewDataKit",
             dependencies: [
                 "WebViewProxyKit"
             ],
@@ -300,6 +311,15 @@ let package = Package(
                 "WebViewProxyKitTesting"
             ],
             path: "Tests/WebViewProxyKitTests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "WebViewDataKitTests",
+            dependencies: [
+                "WebViewDataKit",
+                "WebViewProxyKitTesting"
+            ],
+            path: "Tests/WebViewDataKitTests",
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(
