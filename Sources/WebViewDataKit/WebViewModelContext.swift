@@ -40,6 +40,9 @@ public final class WebViewModelContext {
     @ObservationIgnored private let allConsoleMessages: WebViewFetchedResults<ConsoleMessage>
     @ObservationIgnored private var runtimeContextsByID: [RuntimeContext.ID: RuntimeContext]
     @ObservationIgnored private var orderedRuntimeContextIDs: [RuntimeContext.ID]
+    @ObservationIgnored private var runtimeObjectsByID: [RuntimeObject.ID: RuntimeObject]
+    @ObservationIgnored private var runtimeObjectIDsByProxyID: [Runtime.RemoteObject.ID: RuntimeObject.ID]
+    @ObservationIgnored private var nextRuntimeObjectOrdinal: Int
 
     public init(proxy: WebViewProxy) {
         self.proxy = proxy
@@ -69,6 +72,9 @@ public final class WebViewModelContext {
         allConsoleMessages = WebViewFetchedResults()
         runtimeContextsByID = [:]
         orderedRuntimeContextIDs = []
+        runtimeObjectsByID = [:]
+        runtimeObjectIDsByProxyID = [:]
+        nextRuntimeObjectOrdinal = 0
     }
 
     deinit {
@@ -123,6 +129,26 @@ public final class WebViewModelContext {
             preconditionFailure("RuntimeContext is not registered in this WebViewModelContext.")
         }
         selectedContext = context
+    }
+
+    public func evaluate(
+        _ expression: String,
+        in context: RuntimeContext? = nil
+    ) async throws -> RuntimeEvaluation {
+        if let context, runtimeContextsByID[context.id] !== context {
+            let error = WebViewProxyError.disconnected("RuntimeContext is not registered in this WebViewModelContext.")
+            throw error
+        }
+        guard let currentPage else {
+            throw WebViewProxyError.disconnected("WebViewDataKit has no current page target.")
+        }
+
+        let executionContext = context ?? selectedContext
+        let result = try await currentPage.runtime.evaluate(expression, in: executionContext?.id.proxyID)
+        return RuntimeEvaluation(
+            object: registerRuntimeObject(result.object),
+            isException: result.wasThrown
+        )
     }
 
     public func fetchedResults<Model: WebViewFetchableModel>(
@@ -190,6 +216,106 @@ public final class WebViewModelContext {
                 method: "requestChildNodes",
                 message: String(describing: error)
             ))
+        }
+    }
+
+    package func properties(for object: RuntimeObject) async throws -> [RuntimeObject.Property] {
+        try registeredRuntimeObject(object)
+        guard let proxyID = object.proxyID else {
+            return []
+        }
+        guard let currentPage else {
+            throw WebViewProxyError.disconnected("WebViewDataKit has no current page target.")
+        }
+
+        let descriptors = try await currentPage.runtime.properties(of: proxyID)
+        return descriptors.map { descriptor in
+            let remoteValue = descriptor.value
+            let childObject = remoteValue.flatMap { value in
+                value.id == nil ? nil : registerRuntimeObject(value)
+            }
+            return RuntimeObject.Property(
+                name: descriptor.name,
+                value: remoteValue.flatMap { runtimeValueText(for: $0) },
+                object: childObject
+            )
+        }
+    }
+
+    package func collectionEntries(for object: RuntimeObject) async throws -> [RuntimeObject.Entry] {
+        try registeredRuntimeObject(object)
+        guard let proxyID = object.proxyID else {
+            return []
+        }
+        guard let currentPage else {
+            throw WebViewProxyError.disconnected("WebViewDataKit has no current page target.")
+        }
+
+        let entries = try await currentPage.runtime.collectionEntries(of: proxyID)
+        return entries.map { entry in
+            RuntimeObject.Entry(
+                key: entry.key.map(registerRuntimeObject),
+                value: registerRuntimeObject(entry.value)
+            )
+        }
+    }
+
+    @discardableResult
+    private func registeredRuntimeObject(_ object: RuntimeObject) throws -> RuntimeObject {
+        guard runtimeObjectsByID[object.id] === object else {
+            let error = WebViewProxyError.disconnected("RuntimeObject is not registered in this WebViewModelContext.")
+            throw error
+        }
+        return object
+    }
+
+    private func registerRuntimeObject(_ payload: Runtime.RemoteObject) -> RuntimeObject {
+        if let proxyID = payload.id,
+           let id = runtimeObjectIDsByProxyID[proxyID],
+           let object = runtimeObjectsByID[id] {
+            object.update(from: payload)
+            return object
+        }
+
+        let id: RuntimeObject.ID
+        if let proxyID = payload.id {
+            id = RuntimeObject.ID(remote: proxyID)
+            runtimeObjectIDsByProxyID[proxyID] = id
+        } else {
+            id = RuntimeObject.ID(synthetic: nextRuntimeObjectOrdinal)
+            nextRuntimeObjectOrdinal += 1
+        }
+
+        let object = RuntimeObject(id: id, remoteObject: payload, modelContext: self)
+        runtimeObjectsByID[id] = object
+        return object
+    }
+
+    private func clearRuntimeObjects() {
+        runtimeObjectsByID = [:]
+        runtimeObjectIDsByProxyID = [:]
+        nextRuntimeObjectOrdinal = 0
+    }
+
+    private func runtimeValueText(for object: Runtime.RemoteObject) -> String? {
+        if let description = object.description {
+            return description
+        }
+        guard let value = object.value else {
+            return nil
+        }
+        switch value {
+        case let .string(value):
+            return value
+        case let .number(value):
+            return String(value)
+        case let .bool(value):
+            return String(value)
+        case .null:
+            return "null"
+        case .array,
+             .object:
+            return nil
         }
     }
 
@@ -859,7 +985,8 @@ extension WebViewModelContext {
     private func applyMessageAdded(_ payload: Console.Message) {
         let id = ConsoleMessage.ID(nextConsoleMessageOrdinal)
         nextConsoleMessageOrdinal += 1
-        let message = ConsoleMessage(id: id, message: payload)
+        let parameters = payload.parameters.map(registerRuntimeObject)
+        let message = ConsoleMessage(id: id, message: payload, parameters: parameters)
         consoleMessagesByID[id] = message
         orderedConsoleMessageIDs.append(id)
         lastConsoleMessageID = id
@@ -922,6 +1049,7 @@ extension WebViewModelContext {
         orderedRuntimeContextIDs = []
         executionContexts = []
         selectedContext = nil
+        clearRuntimeObjects()
     }
 
     private func refreshExecutionContexts() {

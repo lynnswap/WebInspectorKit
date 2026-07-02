@@ -1275,6 +1275,200 @@ func consoleEventsPopulateRepeatAndClearFetchedMessages() async throws {
 
 @MainActor
 @Test
+func consoleMessageParametersRegisterRuntimeObjects() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let objectID = Runtime.RemoteObject.ID("console-object")
+    let results: WebViewFetchedResults<ConsoleMessage> = context.fetchedResults(for: .allConsoleMessages)
+
+    await runtime.backend.emit(
+        .messageAdded(Console.Message(
+            source: Console.Source(rawValue: "console-api"),
+            level: Console.Level(rawValue: "log"),
+            text: "first",
+            parameters: [
+                Runtime.RemoteObject(id: objectID, kind: .object, description: "before")
+            ]
+        )),
+        target: target
+    )
+    try await waitUntil { results.items.count == 1 }
+    let firstMessage = try #require(results.items.first)
+    let firstParameter = try #require(firstMessage.parameters.first)
+    #expect(firstParameter.description == "before")
+
+    await runtime.backend.emit(
+        .messageAdded(Console.Message(
+            source: Console.Source(rawValue: "console-api"),
+            level: Console.Level(rawValue: "log"),
+            text: "second",
+            parameters: [
+                Runtime.RemoteObject(id: objectID, kind: .object, description: "after")
+            ]
+        )),
+        target: target
+    )
+    try await waitUntil { results.items.count == 2 }
+    let secondMessage = try #require(results.items.last)
+    let secondParameter = try #require(secondMessage.parameters.first)
+
+    #expect(firstParameter === secondParameter)
+    #expect(firstParameter.description == "after")
+}
+
+@MainActor
+@Test
+func evaluateRegistersRuntimeObjectInSelectedContext() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let contextID = Runtime.ExecutionContext.ID("main")
+    let objectID = Runtime.RemoteObject.ID("evaluation-result")
+
+    await runtime.backend.emit(
+        .executionContextCreated(Runtime.ExecutionContext(
+            id: contextID,
+            name: "Main",
+            kind: .normal
+        )),
+        target: target
+    )
+    try await waitUntil { context.executionContexts.count == 1 }
+    let runtimeContext = try #require(context.executionContexts.first)
+    context.selectContext(runtimeContext)
+
+    await runtime.backend.enqueue(
+        Runtime.EvaluationResult(
+            object: Runtime.RemoteObject(
+                id: objectID,
+                kind: .string,
+                description: "hello",
+                value: .string("hello")
+            ),
+            wasThrown: true,
+            savedResultIndex: 7
+        ),
+        for: "Runtime",
+        method: "evaluate"
+    )
+
+    let result = try await context.evaluate("throw 'hello'", in: runtimeContext)
+    #expect(result.isException)
+    #expect(result.object.kind == .string)
+    #expect(result.object.value == .string("hello"))
+    #expect(result.object.description == "hello")
+
+    let commands = await runtime.backend.recordedCommands()
+    let command = try #require(commands.last { $0.domain == "Runtime" && $0.method == "evaluate" })
+    let payload = try #require(command.payload.cast(as: Runtime.EvaluatePayload.self))
+    #expect(payload.expression == "throw 'hello'")
+    #expect(payload.context == contextID)
+}
+
+@MainActor
+@Test
+func runtimeObjectPropertiesAndCollectionEntriesUseRuntimeCommands() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let (_, context) = try await startContext(runtime: runtime)
+    let objectID = Runtime.RemoteObject.ID("root-object")
+    let childID = Runtime.RemoteObject.ID("child-object")
+    let entryValueID = Runtime.RemoteObject.ID("entry-value")
+
+    await runtime.backend.enqueue(
+        Runtime.EvaluationResult(
+            object: Runtime.RemoteObject(id: objectID, kind: .object, description: "root")
+        ),
+        for: "Runtime",
+        method: "evaluate"
+    )
+    let evaluation = try await context.evaluate("window")
+
+    await runtime.backend.enqueue(
+        [
+            Runtime.PropertyDescriptor(
+                name: "answer",
+                value: Runtime.RemoteObject(id: nil, kind: .number, description: "42", value: .number(42))
+            ),
+            Runtime.PropertyDescriptor(
+                name: "child",
+                value: Runtime.RemoteObject(id: childID, kind: .object, description: "child")
+            ),
+        ],
+        for: "Runtime",
+        method: "getProperties"
+    )
+
+    let properties = try await evaluation.object.properties()
+    #expect(properties.count == 2)
+    #expect(properties[0].name == "answer")
+    #expect(properties[0].value == "42")
+    #expect(properties[0].object == nil)
+    let child = try #require(properties[1].object)
+    #expect(child.description == "child")
+
+    await runtime.backend.enqueue(
+        [
+            Runtime.CollectionEntry(
+                key: Runtime.RemoteObject(id: nil, kind: .string, description: "key", value: .string("key")),
+                value: Runtime.RemoteObject(id: entryValueID, kind: .object, description: "entry value")
+            )
+        ],
+        for: "Runtime",
+        method: "getCollectionEntries"
+    )
+
+    let entries = try await evaluation.object.collectionEntries()
+    #expect(entries.count == 1)
+    #expect(entries[0].key?.value == .string("key"))
+    #expect(entries[0].value?.description == "entry value")
+
+    let commands = await runtime.backend.recordedCommands()
+    #expect(commands.contains(RecordedCommand(domain: "Runtime", method: "getProperties")))
+    #expect(commands.contains(RecordedCommand(domain: "Runtime", method: "getCollectionEntries")))
+}
+
+@MainActor
+@Test
+func staleRuntimeObjectThrowsWithoutFailingContext() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let contextID = Runtime.ExecutionContext.ID("main")
+    let objectID = Runtime.RemoteObject.ID("stale-object")
+
+    await runtime.backend.emit(
+        .executionContextCreated(Runtime.ExecutionContext(
+            id: contextID,
+            name: "Main",
+            kind: .normal
+        )),
+        target: target
+    )
+    try await waitUntil { context.executionContexts.count == 1 }
+
+    await runtime.backend.enqueue(
+        Runtime.EvaluationResult(
+            object: Runtime.RemoteObject(id: objectID, kind: .object, description: "stale")
+        ),
+        for: "Runtime",
+        method: "evaluate"
+    )
+    let evaluation = try await context.evaluate("window")
+
+    await runtime.backend.emit(.executionContextsCleared(target: target.id), target: target)
+    try await waitUntil {
+        context.executionContexts.isEmpty && context.selectedContext == nil
+    }
+
+    do {
+        _ = try await evaluation.object.properties()
+        Issue.record("Expected stale runtime object to throw.")
+    } catch let error as WebViewProxyError {
+        #expect(error == .disconnected("RuntimeObject is not registered in this WebViewModelContext."))
+    }
+    #expect(context.state == .attached)
+}
+
+@MainActor
+@Test
 func runtimeEventsPopulateContextsAndFallbackSelection() async throws {
     let runtime = try await WebViewProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)

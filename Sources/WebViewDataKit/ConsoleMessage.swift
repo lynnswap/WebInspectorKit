@@ -26,12 +26,12 @@ public final class ConsoleMessage: Identifiable, WebViewFetchableModel {
     public private(set) var line: Int?
     public private(set) var column: Int?
     public private(set) var repeatCount: Int
-    public private(set) var parameters: [Runtime.RemoteObject]
+    public private(set) var parameters: [RuntimeObject]
     public private(set) var stackTrace: Console.StackTrace?
     public private(set) var networkRequestID: NetworkRequest.ID?
     public private(set) var timestamp: Double?
 
-    package init(id: ID, message: Console.Message) {
+    package init(id: ID, message: Console.Message, parameters: [RuntimeObject]) {
         self.id = id
         source = message.source
         level = message.level
@@ -41,7 +41,7 @@ public final class ConsoleMessage: Identifiable, WebViewFetchableModel {
         line = message.line
         column = message.column
         repeatCount = message.repeatCount
-        parameters = message.parameters
+        self.parameters = parameters
         stackTrace = message.stackTrace
         networkRequestID = message.networkRequestID.map(NetworkRequest.ID.init)
         timestamp = message.timestamp
