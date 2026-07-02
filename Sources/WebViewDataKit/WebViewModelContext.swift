@@ -14,6 +14,7 @@ public final class WebViewModelContext {
 
     public let proxy: WebViewProxy
     public private(set) var state: State
+    public private(set) var teardownError: WebViewProxyError?
     public private(set) var rootNode: DOMNode?
     public private(set) var selectedNode: DOMNode?
 
@@ -21,6 +22,7 @@ public final class WebViewModelContext {
     @ObservationIgnored private var startupTask: Task<Void, Never>?
     @ObservationIgnored private var documentReloadTask: Task<Void, Never>?
     @ObservationIgnored private var eventTasks: [Task<Void, Never>]
+    @ObservationIgnored private var networkTrackingTarget: WebViewTarget?
     @ObservationIgnored private var nodesByID: [DOMNode.ID: DOMNode]
     @ObservationIgnored private var requestsByID: [NetworkRequest.ID: NetworkRequest]
     @ObservationIgnored private var orderedRequestIDs: [NetworkRequest.ID]
@@ -29,12 +31,14 @@ public final class WebViewModelContext {
     public init(proxy: WebViewProxy) {
         self.proxy = proxy
         state = .attaching
+        teardownError = nil
         rootNode = nil
         selectedNode = nil
         currentPage = nil
         startupTask = nil
         documentReloadTask = nil
         eventTasks = []
+        networkTrackingTarget = nil
         nodesByID = [:]
         requestsByID = [:]
         orderedRequestIDs = []
@@ -50,9 +54,15 @@ public final class WebViewModelContext {
     }
 
     public func start() {
-        startupTask?.cancel()
+        let previousStartupTask = startupTask
+        previousStartupTask?.cancel()
         state = .attaching
-        startupTask = Task { [weak self] in
+        teardownError = nil
+        startupTask = Task { [weak self, previousStartupTask] in
+            await previousStartupTask?.value
+            guard Task.isCancelled == false else {
+                return
+            }
             guard let self else {
                 return
             }
@@ -108,7 +118,7 @@ public final class WebViewModelContext {
         }
     }
 
-    package func detach() {
+    package func detach() async {
         startupTask?.cancel()
         startupTask = nil
         documentReloadTask?.cancel()
@@ -118,32 +128,132 @@ public final class WebViewModelContext {
         }
         eventTasks = []
         currentPage = nil
+        teardownError = nil
+        do {
+            try await disableNetworkTracking()
+        } catch let error as WebViewProxyError {
+            teardownError = error
+        } catch {
+            teardownError = .commandFailed(
+                domain: "Network",
+                method: "disable",
+                message: String(describing: error)
+            )
+        }
         state = .detached
     }
 
     private func startup() async {
+        if let teardownError = await disableNetworkTrackingBeforeRestart() {
+            fail(teardownError)
+            return
+        }
+
         do {
             let target = try await proxy.waitForCurrentPage()
             currentPage = target
             subscribe(to: target)
+            try await enableNetworkTracking(on: target)
+            guard Task.isCancelled == false else {
+                await disableNetworkTrackingAfterCancellation()
+                return
+            }
             let document = try await target.dom.getDocument()
             guard Task.isCancelled == false else {
+                await disableNetworkTrackingAfterCancellation()
                 return
             }
             applyDocument(document)
             state = .attached
         } catch is CancellationError {
+            await disableNetworkTrackingAfterCancellation()
             return
         } catch let error as WebViewProxyError {
             guard Task.isCancelled == false else {
+                await disableNetworkTrackingAfterCancellation()
                 return
             }
-            fail(error)
+            fail(await disableNetworkTrackingAfterStartupFailure() ?? error)
         } catch {
             guard Task.isCancelled == false else {
+                await disableNetworkTrackingAfterCancellation()
                 return
             }
-            fail(.attachFailed(String(describing: error)))
+            fail(await disableNetworkTrackingAfterStartupFailure() ?? .attachFailed(String(describing: error)))
+        }
+    }
+
+    private func disableNetworkTrackingBeforeRestart() async -> WebViewProxyError? {
+        do {
+            try await disableNetworkTracking()
+            return nil
+        } catch let error as WebViewProxyError {
+            return error
+        } catch {
+            return .commandFailed(
+                domain: "Network",
+                method: "disable",
+                message: String(describing: error)
+            )
+        }
+    }
+
+    private func enableNetworkTracking(on target: WebViewTarget) async throws {
+        try await target.network.enable()
+        networkTrackingTarget = target
+    }
+
+    private func disableNetworkTracking() async throws {
+        guard let target = networkTrackingTarget else {
+            return
+        }
+        networkTrackingTarget = nil
+        do {
+            try await target.network.disable()
+        } catch WebViewProxyError.closed {
+            return
+        } catch WebViewProxyError.disconnected(_) {
+            return
+        } catch let error as WebViewProxyError {
+            fail(error)
+            throw error
+        } catch {
+            let proxyError = WebViewProxyError.commandFailed(
+                domain: "Network",
+                method: "disable",
+                message: String(describing: error)
+            )
+            fail(proxyError)
+            throw proxyError
+        }
+    }
+
+    private func disableNetworkTrackingAfterCancellation() async {
+        do {
+            try await disableNetworkTracking()
+        } catch let error as WebViewProxyError {
+            fail(error)
+        } catch {
+            fail(.commandFailed(
+                domain: "Network",
+                method: "disable",
+                message: String(describing: error)
+            ))
+        }
+    }
+
+    private func disableNetworkTrackingAfterStartupFailure() async -> WebViewProxyError? {
+        do {
+            try await disableNetworkTracking()
+            return nil
+        } catch let error as WebViewProxyError {
+            return error
+        } catch {
+            return .commandFailed(
+                domain: "Network",
+                method: "disable",
+                message: String(describing: error)
+            )
         }
     }
 

@@ -438,6 +438,10 @@ public enum Runtime {
 ```swift
 public enum Network {
     public struct Client: Sendable {
+        /// WebKit `Network.enable` / `Network.disable`. DataKit calls these as
+        /// lifecycle commands; proxy-only consumers may opt in explicitly.
+        public func enable() async throws
+        public func disable() async throws
         /// WebKit `Network.getResponseBody` (async on the wire). An unavailable
         /// or failed body is a wire ServerError, so this THROWS `.commandFailed`
         /// — there is no "empty body" success. The data kit catches the throw and
@@ -717,6 +721,9 @@ public final class WebViewModelContext {
     /// The observable connection lifecycle state lives HERE (single owner).
     public enum State: Sendable, Equatable { case attaching, attached, detached, failed(WebViewProxyError) }
     public private(set) var state: State
+    /// Non-fatal cleanup error from explicit close/detach. The context still
+    /// moves to `.detached`; startup/active failures use `state.failed`.
+    public private(set) var teardownError: WebViewProxyError?
 
     // DOM — a tree, not a list: direct observable accessors (CodexChat.items idiom).
     public private(set) var rootNode: DOMNode?

@@ -162,6 +162,33 @@ func pageReloadDispatchesToTargetRoute() async throws {
     #expect(payload.ignoringCache == false)
 }
 
+@Test
+func networkEnableAndDisableDispatchToTargetRoute() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+
+    await runtime.backend.enqueue((), for: "Network", method: "enable")
+    await runtime.backend.enqueue((), for: "Network", method: "disable")
+
+    try await target.network.enable()
+    try await target.network.disable()
+
+    let commands = await runtime.backend.recordedCommands()
+    let enable = try #require(commands.first)
+    #expect(enable.targetID == target.id)
+    #expect(enable.route == target.route)
+    #expect(enable.domain == "Network")
+    #expect(enable.method == "enable")
+    #expect(enable.payload.cast(as: Network.EnablePayload.self) != nil)
+
+    let disable = try #require(commands.dropFirst().first)
+    #expect(disable.targetID == target.id)
+    #expect(disable.route == target.route)
+    #expect(disable.domain == "Network")
+    #expect(disable.method == "disable")
+    #expect(disable.payload.cast(as: Network.DisablePayload.self) != nil)
+}
+
 private struct TimedOut: Error {}
 
 private func value<T: Sendable>(

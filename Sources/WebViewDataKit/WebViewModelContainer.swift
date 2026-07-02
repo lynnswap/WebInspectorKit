@@ -28,9 +28,7 @@ public final class WebViewModelContainer: @unchecked Sendable {
     }
 
     public func close() async {
-        await MainActor.run {
-            context.detach()
-        }
+        await context.detach()
         await proxy.close()
     }
 }

@@ -8,6 +8,22 @@ public enum Network {
             self.context = context
         }
 
+        public func enable() async throws {
+            try await context.dispatchVoid(
+                domain: .network,
+                method: "enable",
+                payload: EnablePayload()
+            )
+        }
+
+        public func disable() async throws {
+            try await context.dispatchVoid(
+                domain: .network,
+                method: "disable",
+                payload: DisablePayload()
+            )
+        }
+
         public func responseBody(for id: Request.ID) async throws -> Body {
             try await context.dispatch(
                 domain: .network,
@@ -22,6 +38,14 @@ public enum Network {
                 context.networkEvents()
             }
         }
+    }
+
+    package struct EnablePayload: Sendable {
+        package init() {}
+    }
+
+    package struct DisablePayload: Sendable {
+        package init() {}
     }
 
     package struct GetResponseBodyPayload: Sendable {
