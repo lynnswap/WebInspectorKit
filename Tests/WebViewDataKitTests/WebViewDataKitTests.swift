@@ -551,6 +551,166 @@ func childInsertIntoUnrequestedParentDoesNotMarkChildrenLoaded() async throws {
 
 @MainActor
 @Test
+func selectingDOMNodeLoadsCSSStylesAndComputedProperties() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let document = try #require(context.rootNode)
+    let elementID = DOM.Node.ID("styled-node")
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(
+                id: elementID,
+                nodeType: 1,
+                nodeName: "DIV",
+                localName: "div",
+                childNodeCount: 0
+            )
+        ]),
+        target: target
+    )
+    let element = try await waitForChild(in: context)
+
+    await enqueueCSSStyleReplies(on: runtime.backend)
+
+    context.select(element)
+
+    let styles = try #require(element.elementStyles)
+    #expect(styles.phase == .loading)
+    try await waitUntil { styles.phase == .loaded }
+    #expect(styles.sections.map(\.selectorList.text) == [".card"])
+    #expect(styles.computedProperties.map(\.name) == ["display"])
+
+    let commands = await runtime.backend.recordedCommands()
+    #expect(commands.contains(RecordedCommand(domain: "CSS", method: "enable")) == false)
+    #expect(commands.contains(RecordedCommand(domain: "CSS", method: "getMatchedStylesForNode")))
+    #expect(commands.contains(RecordedCommand(domain: "CSS", method: "getComputedStyleForNode")))
+}
+
+@MainActor
+@Test
+func selectingNonElementDOMNodeDoesNotRequestCSSStyles() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let (_, context) = try await startContext(runtime: runtime)
+    let document = try #require(context.rootNode)
+
+    context.select(document)
+    for _ in 0..<10 {
+        await Task.yield()
+    }
+
+    #expect(document.elementStyles == nil)
+    let commands = await runtime.backend.recordedCommands()
+    #expect(commands.contains(RecordedCommand(domain: "CSS", method: "getMatchedStylesForNode")) == false)
+    #expect(commands.contains(RecordedCommand(domain: "CSS", method: "getComputedStyleForNode")) == false)
+}
+
+@MainActor
+@Test
+func cssEventsAndSelectedDOMMutationsMarkSelectedStylesStale() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let document = try #require(context.rootNode)
+    let selectedID = DOM.Node.ID("selected")
+    let otherID = DOM.Node.ID("other")
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(id: selectedID, nodeType: 1, nodeName: "DIV", localName: "div"),
+            DOM.Node(id: otherID, nodeType: 1, nodeName: "SPAN", localName: "span"),
+        ]),
+        target: target
+    )
+    try await waitUntil {
+        guard case let .loaded(children) = document.children else {
+            return false
+        }
+        return children.count == 2
+    }
+    guard case let .loaded(children) = document.children else {
+        Issue.record("Expected loaded document children.")
+        return
+    }
+    let selected = try #require(children.first { $0.id == DOMNode.ID(selectedID) })
+
+    await enqueueCSSStyleReplies(on: runtime.backend)
+    context.select(selected)
+    let styles = try #require(selected.elementStyles)
+    try await waitUntil { styles.phase == .loaded }
+
+    await runtime.backend.emit(.styleSheetChanged, target: target)
+    try await waitUntil { styles.phase == .needsRefresh }
+
+    await enqueueCSSStyleReplies(on: runtime.backend)
+    context.select(selected)
+    try await waitUntil { styles.phase == .loaded }
+
+    await runtime.backend.emit(.attributeModified(otherID, name: "class", value: "ignored"), target: target)
+    for _ in 0..<10 {
+        await Task.yield()
+    }
+    #expect(styles.phase == .loaded)
+
+    await runtime.backend.emit(.attributeModified(selectedID, name: "class", value: "changed"), target: target)
+    try await waitUntil { styles.phase == .needsRefresh }
+}
+
+@MainActor
+@Test
+func cssInvalidationDuringStyleFetchIsNotOverwrittenByStaleResult() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let document = try #require(context.rootNode)
+    let elementID = DOM.Node.ID("styled-node")
+    let computedGate = WebViewTestGate()
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
+        ]),
+        target: target
+    )
+    let element = try await waitForChild(in: context)
+
+    await runtime.backend.enqueue(
+        CSS.MatchedStyles(matchedRules: [
+            CSS.Rule(
+                selectorList: CSS.Rule.SelectorList(selectors: [".card"], text: ".card"),
+                origin: CSS.Origin(rawValue: "regular"),
+                style: CSS.Style(id: CSS.Style.ID("style-1"))
+            )
+        ]),
+        for: "CSS",
+        method: "getMatchedStylesForNode"
+    )
+    await runtime.backend.hold(domain: "CSS", method: "getComputedStyleForNode", gate: computedGate)
+    await runtime.backend.enqueue(
+        [CSS.ComputedProperty(name: "display", value: "grid")],
+        for: "CSS",
+        method: "getComputedStyleForNode"
+    )
+
+    context.select(element)
+    let styles = try #require(element.elementStyles)
+    try await waitUntil {
+        await runtime.backend.recordedCommands().contains(
+            RecordedCommand(domain: "CSS", method: "getComputedStyleForNode")
+        )
+    }
+
+    await runtime.backend.emit(.styleSheetChanged, target: target)
+    try await waitUntil { styles.phase == .needsRefresh }
+
+    await computedGate.open()
+    for _ in 0..<10 {
+        await Task.yield()
+    }
+    #expect(styles.phase == .needsRefresh)
+    #expect(styles.computedProperties.isEmpty)
+}
+
+@MainActor
+@Test
 func removingLoadedChildPurgesDescendantsFromIdentityMap() async throws {
     let runtime = try await WebViewProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
@@ -980,12 +1140,47 @@ private func enqueueDomainDisableReplies(on backend: WebViewTestBackend) async {
     await backend.enqueue((), for: "Network", method: "disable")
 }
 
+private func enqueueCSSStyleReplies(on backend: WebViewTestBackend) async {
+    await backend.enqueue(
+        CSS.MatchedStyles(matchedRules: [
+            CSS.Rule(
+                selectorList: CSS.Rule.SelectorList(selectors: [".card"], text: ".card"),
+                origin: CSS.Origin(rawValue: "regular"),
+                style: CSS.Style(
+                    id: CSS.Style.ID("style-1"),
+                    properties: [
+                        CSS.Property(
+                            id: CSS.Property.ID("property-1"),
+                            name: "display",
+                            value: "grid",
+                            text: "display: grid;",
+                            isEditable: true
+                        )
+                    ],
+                    cssText: "display: grid;",
+                    isEditable: true
+                )
+            )
+        ]),
+        for: "CSS",
+        method: "getMatchedStylesForNode"
+    )
+    await backend.enqueue(
+        [
+            CSS.ComputedProperty(name: "display", value: "grid")
+        ],
+        for: "CSS",
+        method: "getComputedStyleForNode"
+    )
+}
+
 @MainActor
 private func waitForStartupSubscribers(
     runtime: WebViewProxyTestRuntime,
     target: WebViewTarget
 ) async throws {
     try await runtime.backend.waitForSubscribers(domain: "DOM", target: target, count: 1)
+    try await runtime.backend.waitForSubscribers(domain: "CSS", target: target, count: 1)
     try await runtime.backend.waitForSubscribers(domain: "Network", target: target, count: 1)
     try await runtime.backend.waitForSubscribers(domain: "Console", target: target, count: 1)
     try await runtime.backend.waitForSubscribers(domain: "Runtime", target: target, count: 1)

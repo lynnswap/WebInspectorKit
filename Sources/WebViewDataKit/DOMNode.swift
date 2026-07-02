@@ -26,6 +26,7 @@ public final class DOMNode: Identifiable {
     public private(set) var attributes: [String: String]
     public private(set) var childNodeCount: Int
     public private(set) var children: Children
+    public private(set) var elementStyles: CSSStyles?
 
     package init(node: DOM.Node) {
         id = ID(node.id)
@@ -36,6 +37,7 @@ public final class DOMNode: Identifiable {
         attributes = node.attributes
         childNodeCount = node.childNodeCount
         children = .unrequested(count: node.childNodeCount)
+        elementStyles = nil
     }
 
     package func update(from node: DOM.Node) {
@@ -69,5 +71,9 @@ public final class DOMNode: Identifiable {
 
     package func setNodeValue(_ value: String) {
         nodeValue = value
+    }
+
+    package func setElementStyles(_ styles: CSSStyles?) {
+        elementStyles = styles
     }
 }

@@ -243,6 +243,33 @@ func runtimeEnableAndDisableDispatchToTargetRoute() async throws {
     #expect(disable.payload.cast(as: Runtime.DisablePayload.self) != nil)
 }
 
+@Test
+func cssEnableAndDisableDispatchToTargetRoute() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+
+    await runtime.backend.enqueue((), for: "CSS", method: "enable")
+    await runtime.backend.enqueue((), for: "CSS", method: "disable")
+
+    try await target.css.enable()
+    try await target.css.disable()
+
+    let commands = await runtime.backend.recordedCommands()
+    let enable = try #require(commands.first)
+    #expect(enable.targetID == target.id)
+    #expect(enable.route == target.route)
+    #expect(enable.domain == "CSS")
+    #expect(enable.method == "enable")
+    #expect(enable.payload.cast(as: CSS.EnablePayload.self) != nil)
+
+    let disable = try #require(commands.dropFirst().first)
+    #expect(disable.targetID == target.id)
+    #expect(disable.route == target.route)
+    #expect(disable.domain == "CSS")
+    #expect(disable.method == "disable")
+    #expect(disable.payload.cast(as: CSS.DisablePayload.self) != nil)
+}
+
 private struct TimedOut: Error {}
 
 private func value<T: Sendable>(

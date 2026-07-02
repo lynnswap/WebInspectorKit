@@ -280,12 +280,15 @@ remain the `Console.clearMessages` response path (§4.5). `DOM` has no real
 initial depth 2), and `requestChildNodes` materializes deeper subtrees. WebKit
 only emits full DOM mutation events for nodes it has already pushed to this
 frontend; unmaterialized parents may still surface `childNodeCountUpdated`, but
-removal only updates that count when WebKit's `hasChildren` state changes. CSS
-one-shot read commands (`matchedStyles`, `computedStyle`) can run without
-`CSS.enable`; CSS event streams and DataKit flows that depend on stylesheet
-lifecycle events enable CSS first. The `Inspector`/`Target` bootstrap and the
-transport-local synthetic-result short-circuit stay inside the engine — never
-surfaced.
+removal only updates that count when WebKit's `hasChildren` state changes.
+DataKit CSS style reads are demand-driven selection queries and do not
+proactively call `CSS.enable` during attach; current WebKit can crash WebContent
+when `CSS.enable` synchronizes stylesheet headers during page load, while
+`matchedStyles` and `computedStyle` work as one-shot read commands without it.
+CSS events are handled passively when a backend or compatibility layer delivers
+them; the decision to opt into `CSS.enable` remains outside DataKit's startup
+lifecycle. The `Inspector`/`Target` bootstrap and the transport-local
+synthetic-result short-circuit stay inside the engine — never surfaced.
 
 Each domain's decoded events are **multicast** to all live `.events` iterators
 for that target (the data kit's internal subscriber and any raw-proxy consumer
@@ -565,6 +568,11 @@ public enum Console {
 
 public enum CSS {
     public struct Client: Sendable {
+        /// Explicit low-level WebKit `CSS.enable` / `CSS.disable`. DataKit does
+        /// not call these during attach; selection style reads use one-shot
+        /// commands and handle CSS events only when delivered by the backend.
+        public func enable() async throws
+        public func disable() async throws
         public func matchedStyles(for node: DOM.Node.ID) async throws -> MatchedStyles
         public func computedStyle(for node: DOM.Node.ID) async throws -> [ComputedProperty]
         public func setStyleText(_ id: Style.ID, text: String) async throws -> Style

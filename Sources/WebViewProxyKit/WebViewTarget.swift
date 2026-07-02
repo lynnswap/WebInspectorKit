@@ -81,7 +81,7 @@ public struct WebViewTarget: Identifiable, Sendable {
     }
 
     package func waitForModelEventSubscriptions() async {
-        for domain in [WebViewProxyEventDomain.dom, .network, .console, .runtime] {
+        for domain in [WebViewProxyEventDomain.dom, .css, .network, .console, .runtime] {
             await proxy.waitForEventSubscription(targetID: id, route: route, domain: domain)
         }
     }

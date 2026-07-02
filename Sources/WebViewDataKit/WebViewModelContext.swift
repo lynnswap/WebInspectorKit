@@ -23,6 +23,8 @@ public final class WebViewModelContext {
     @ObservationIgnored private var currentPage: WebViewTarget?
     @ObservationIgnored private var startupTask: Task<Void, Never>?
     @ObservationIgnored private var documentReloadTask: Task<Void, Never>?
+    @ObservationIgnored private var styleRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var styleRefreshGeneration: Int
     @ObservationIgnored private var eventTasks: [Task<Void, Never>]
     @ObservationIgnored private var networkTrackingTarget: WebViewTarget?
     @ObservationIgnored private var runtimeTrackingTarget: WebViewTarget?
@@ -50,6 +52,8 @@ public final class WebViewModelContext {
         currentPage = nil
         startupTask = nil
         documentReloadTask = nil
+        styleRefreshTask = nil
+        styleRefreshGeneration = 0
         eventTasks = []
         networkTrackingTarget = nil
         runtimeTrackingTarget = nil
@@ -70,6 +74,7 @@ public final class WebViewModelContext {
     deinit {
         startupTask?.cancel()
         documentReloadTask?.cancel()
+        styleRefreshTask?.cancel()
         for task in eventTasks {
             task.cancel()
         }
@@ -98,6 +103,7 @@ public final class WebViewModelContext {
 
     public func select(_ node: DOMNode?) {
         selectedNode = node
+        refreshSelectedStyles()
     }
 
     public func selectContext(_ context: RuntimeContext?) {
@@ -161,6 +167,9 @@ public final class WebViewModelContext {
         startupTask = nil
         documentReloadTask?.cancel()
         documentReloadTask = nil
+        styleRefreshTask?.cancel()
+        styleRefreshTask = nil
+        styleRefreshGeneration += 1
         for task in eventTasks {
             task.cancel()
         }
@@ -356,6 +365,11 @@ public final class WebViewModelContext {
                 }
             },
             Task { [weak self] in
+                for await event in target.css.events {
+                    self?.apply(event)
+                }
+            },
+            Task { [weak self] in
                 for await event in target.console.events {
                     self?.apply(event)
                 }
@@ -425,18 +439,21 @@ extension WebViewModelContext {
                 return
             }
             node.setAttribute(name: name, value: value)
+            markSelectedStylesNeedsRefresh(for: DOMNode.ID(id))
         case let .attributeRemoved(id, name):
             guard let node = nodesByID[DOMNode.ID(id)] else {
                 fail(.disconnected("DOM.attributeRemoved referenced an unknown node."))
                 return
             }
             node.removeAttribute(name: name)
+            markSelectedStylesNeedsRefresh(for: DOMNode.ID(id))
         case let .characterDataModified(id, value):
             guard let node = nodesByID[DOMNode.ID(id)] else {
                 fail(.disconnected("DOM.characterDataModified referenced an unknown node."))
                 return
             }
             node.setNodeValue(value)
+            markSelectedStylesNeedsRefresh(for: DOMNode.ID(id))
         case .detachedRoot,
              .shadowRootPushed,
              .shadowRootPopped,
@@ -453,6 +470,9 @@ extension WebViewModelContext {
     }
 
     private func resetDOM() {
+        styleRefreshTask?.cancel()
+        styleRefreshTask = nil
+        styleRefreshGeneration += 1
         rootNode = nil
         selectedNode = nil
         nodesByID = [:]
@@ -512,6 +532,9 @@ extension WebViewModelContext {
             nodesByID[id] = nil
         }
         if let selectedNode, removedIDs.contains(selectedNode.id) {
+            styleRefreshTask?.cancel()
+            styleRefreshTask = nil
+            styleRefreshGeneration += 1
             self.selectedNode = nil
         }
     }
@@ -541,6 +564,99 @@ extension WebViewModelContext {
             node.setChildren(children.map { model(for: $0) })
         }
         return node
+    }
+}
+
+extension WebViewModelContext {
+    package func apply(_ event: CSS.Event) {
+        switch event {
+        case .styleSheetChanged,
+             .styleSheetAdded,
+             .styleSheetRemoved,
+             .mediaQueryResultChanged:
+            markSelectedStylesNeedsRefresh()
+        case let .nodeLayoutFlagsChanged(id):
+            markSelectedStylesNeedsRefresh(for: DOMNode.ID(id))
+        case .unknown:
+            break
+        }
+    }
+
+    private func refreshSelectedStyles() {
+        styleRefreshTask?.cancel()
+        styleRefreshTask = nil
+
+        guard let selectedNode else {
+            return
+        }
+        guard selectedNode.nodeType == 1 else {
+            selectedNode.setElementStyles(nil)
+            return
+        }
+
+        let styles = selectedNode.elementStyles ?? CSSStyles(nodeID: selectedNode.id)
+        selectedNode.setElementStyles(styles)
+        styles.markLoading()
+        styleRefreshGeneration += 1
+        let generation = styleRefreshGeneration
+        styleRefreshTask = Task { @MainActor [weak self, weak selectedNode, styles] in
+            guard let self, let selectedNode else {
+                return
+            }
+            await self.loadStyles(for: selectedNode, into: styles, generation: generation)
+        }
+    }
+
+    private func loadStyles(for node: DOMNode, into styles: CSSStyles, generation: Int) async {
+        guard isCurrentStyleRefresh(node: node, generation: generation) else {
+            return
+        }
+        guard let currentPage else {
+            styles.markUnavailable()
+            return
+        }
+
+        do {
+            let matchedStyles = try await currentPage.css.matchedStyles(for: node.id.proxyID)
+            guard isCurrentStyleRefresh(node: node, generation: generation) else {
+                return
+            }
+            let computedProperties = try await currentPage.css.computedStyle(for: node.id.proxyID)
+            guard isCurrentStyleRefresh(node: node, generation: generation) else {
+                return
+            }
+            styles.load(matchedStyles: matchedStyles, computedProperties: computedProperties)
+        } catch let error as WebViewProxyError {
+            guard isCurrentStyleRefresh(node: node, generation: generation) else {
+                return
+            }
+            styles.fail(error)
+        } catch {
+            guard isCurrentStyleRefresh(node: node, generation: generation) else {
+                return
+            }
+            styles.fail(.commandFailed(
+                domain: "CSS",
+                method: "getMatchedStylesForNode/getComputedStyleForNode",
+                message: String(describing: error)
+            ))
+        }
+    }
+
+    private func isCurrentStyleRefresh(node: DOMNode, generation: Int) -> Bool {
+        Task.isCancelled == false && selectedNode === node && styleRefreshGeneration == generation
+    }
+
+    private func markSelectedStylesNeedsRefresh(for nodeID: DOMNode.ID) {
+        guard selectedNode?.id == nodeID else {
+            return
+        }
+        markSelectedStylesNeedsRefresh()
+    }
+
+    private func markSelectedStylesNeedsRefresh() {
+        styleRefreshGeneration += 1
+        selectedNode?.elementStyles?.markNeedsRefresh()
     }
 }
 

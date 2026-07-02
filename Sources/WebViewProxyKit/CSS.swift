@@ -8,6 +8,22 @@ public enum CSS {
             self.context = context
         }
 
+        public func enable() async throws {
+            try await context.dispatchVoid(
+                domain: .css,
+                method: "enable",
+                payload: EnablePayload()
+            )
+        }
+
+        public func disable() async throws {
+            try await context.dispatchVoid(
+                domain: .css,
+                method: "disable",
+                payload: DisablePayload()
+            )
+        }
+
         public func matchedStyles(for node: DOM.Node.ID) async throws -> MatchedStyles {
             try await context.dispatch(
                 domain: .css,
@@ -40,6 +56,14 @@ public enum CSS {
                 context.cssEvents()
             }
         }
+    }
+
+    package struct EnablePayload: Sendable {
+        package init() {}
+    }
+
+    package struct DisablePayload: Sendable {
+        package init() {}
     }
 
     package struct GetMatchedStylesForNodePayload: Sendable {
