@@ -199,6 +199,39 @@ func removingLoadedChildPurgesDescendantsFromIdentityMap() async throws {
 
 @MainActor
 @Test
+func closeDuringStartupKeepsContextDetached() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let gate = WebViewTestGate()
+    let documentID = DOM.Node.ID("document")
+
+    await runtime.backend.hold(domain: "DOM", method: "getDocument", gate: gate)
+    await runtime.backend.enqueue(
+        DOM.Node(id: documentID, nodeType: 9, nodeName: "#document"),
+        for: "DOM",
+        method: "getDocument"
+    )
+
+    let container = WebViewModelContainer(proxy: runtime.proxy)
+    let context = container.mainContext
+    try await waitUntil {
+        await runtime.backend.recordedCommands()
+            .contains(RecordedCommand(domain: "DOM", method: "getDocument"))
+    }
+
+    await container.close()
+    #expect(context.state == .detached)
+
+    await gate.open()
+    for _ in 0..<10 {
+        await Task.yield()
+    }
+
+    #expect(context.state == .detached)
+    #expect(context.rootNode == nil)
+}
+
+@MainActor
+@Test
 func networkEventsPopulateAllRequestsInOrder() async throws {
     let runtime = try await WebViewProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
@@ -431,6 +464,21 @@ private func waitUntil(
     let clock = ContinuousClock()
     let deadline = clock.now + timeout
     while condition() == false {
+        if clock.now >= deadline {
+            throw TimedOut()
+        }
+        await Task.yield()
+    }
+}
+
+@MainActor
+private func waitUntil(
+    timeout: Duration = .seconds(1),
+    condition: @escaping @MainActor @Sendable () async -> Bool
+) async throws {
+    let clock = ContinuousClock()
+    let deadline = clock.now + timeout
+    while await condition() == false {
         if clock.now >= deadline {
             throw TimedOut()
         }

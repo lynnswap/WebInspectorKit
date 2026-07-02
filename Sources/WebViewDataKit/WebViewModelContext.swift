@@ -127,11 +127,22 @@ public final class WebViewModelContext {
             currentPage = target
             subscribe(to: target)
             let document = try await target.dom.getDocument()
+            guard Task.isCancelled == false else {
+                return
+            }
             applyDocument(document)
             state = .attached
+        } catch is CancellationError {
+            return
         } catch let error as WebViewProxyError {
+            guard Task.isCancelled == false else {
+                return
+            }
             fail(error)
         } catch {
+            guard Task.isCancelled == false else {
+                return
+            }
             fail(.attachFailed(String(describing: error)))
         }
     }
