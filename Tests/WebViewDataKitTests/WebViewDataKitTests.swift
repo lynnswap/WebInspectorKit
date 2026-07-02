@@ -918,6 +918,51 @@ func repeatedRequestWillBeSentClearsStaleResponseFields() async throws {
     #expect(request.responseHeaders.isEmpty)
     #expect(request.responseBody.phase == .available)
     #expect(request.responseBody.text == nil)
+    #expect(request.redirects.count == 1)
+    #expect(request.redirects.first?.request.url == "https://example.com/redirect")
+    #expect(request.redirects.first?.response.status == 302)
+    #expect(request.redirects.first?.timestamp == 3)
+}
+
+@MainActor
+@Test
+func completedRequestDoesNotTreatLaterRequestWillBeSentAsRedirect() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let requestID = Network.Request.ID("reused-request")
+
+    await runtime.backend.emit(
+        .requestWillBeSent(
+            id: requestID,
+            request: Network.Request(id: requestID, url: "https://example.com/first", method: "GET"),
+            resourceType: .document,
+            redirectResponse: nil,
+            timestamp: 1
+        ),
+        target: target
+    )
+    await runtime.backend.emit(.loadingFinished(id: requestID, timestamp: 2), target: target)
+
+    let results: WebViewFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
+    try await waitUntil { results.items.first?.state == .finished }
+    let request = try #require(results.items.first)
+
+    await runtime.backend.emit(
+        .requestWillBeSent(
+            id: requestID,
+            request: Network.Request(id: requestID, url: "https://example.com/second", method: "GET"),
+            resourceType: .document,
+            redirectResponse: Network.Response(status: 302),
+            timestamp: 3
+        ),
+        target: target
+    )
+
+    try await waitUntil {
+        request.url == "https://example.com/second" && request.state == .pending
+    }
+    #expect(results.items.first === request)
+    #expect(request.redirects.isEmpty)
 }
 
 @MainActor

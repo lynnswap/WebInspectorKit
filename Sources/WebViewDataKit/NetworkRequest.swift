@@ -4,6 +4,18 @@ import WebViewProxyKit
 
 public protocol WebViewFetchableModel: AnyObject {}
 
+public struct RedirectHop: Sendable {
+    public let request: Network.Request
+    public let response: Network.Response
+    public let timestamp: Double
+
+    public init(request: Network.Request, response: Network.Response, timestamp: Double) {
+        self.request = request
+        self.response = response
+        self.timestamp = timestamp
+    }
+}
+
 @MainActor
 @Observable
 public final class NetworkBody {
@@ -66,12 +78,25 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
     public private(set) var mimeType: String?
     public private(set) var requestHeaders: [String: String]
     public private(set) var responseHeaders: [String: String]
+    public private(set) var redirects: [RedirectHop]
     public private(set) var responseBody: NetworkBody
 
     @ObservationIgnored package weak var modelContext: WebViewModelContext?
+    @ObservationIgnored private var currentRequest: Network.Request
 
     package var proxyID: Network.Request.ID {
         id.proxyID
+    }
+
+    package var isActive: Bool {
+        switch state {
+        case .pending,
+             .responded:
+            return true
+        case .finished,
+             .failed:
+            return false
+        }
     }
 
     package init(
@@ -88,8 +113,10 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         mimeType = nil
         requestHeaders = request.headers
         responseHeaders = [:]
+        redirects = []
         responseBody = NetworkBody()
         self.modelContext = modelContext
+        currentRequest = request
     }
 
     public func fetchResponseBody() async {
@@ -105,9 +132,34 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         request: Network.Request,
         resourceType: Network.ResourceType?
     ) {
+        currentRequest = request
         url = request.url
         method = request.method
         self.resourceType = resourceType
+        requestHeaders = request.headers
+        status = nil
+        mimeType = nil
+        responseHeaders = [:]
+        redirects = []
+        responseBody = NetworkBody()
+        state = .pending
+    }
+
+    package func applyRedirect(
+        to request: Network.Request,
+        redirectResponse: Network.Response,
+        timestamp: Double,
+        resourceType: Network.ResourceType?
+    ) {
+        redirects.append(RedirectHop(
+            request: currentRequest,
+            response: redirectResponse,
+            timestamp: timestamp
+        ))
+        currentRequest = request
+        url = request.url
+        method = request.method
+        self.resourceType = resourceType ?? self.resourceType
         requestHeaders = request.headers
         status = nil
         mimeType = nil

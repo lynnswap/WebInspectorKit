@@ -671,8 +671,14 @@ extension WebViewModelContext {
 extension WebViewModelContext {
     package func apply(_ event: Network.Event) {
         switch event {
-        case let .requestWillBeSent(id, request, resourceType, _, _):
-            applyRequestWillBeSent(id: id, request: request, resourceType: resourceType)
+        case let .requestWillBeSent(id, request, resourceType, redirectResponse, timestamp):
+            applyRequestWillBeSent(
+                id: id,
+                request: request,
+                resourceType: resourceType,
+                redirectResponse: redirectResponse,
+                timestamp: timestamp
+            )
         case let .responseReceived(id, response, resourceType, _):
             guard let request = requestsByID[NetworkRequest.ID(id)] else {
                 fail(.disconnected("Network.responseReceived referenced an unknown request."))
@@ -707,13 +713,24 @@ extension WebViewModelContext {
     private func applyRequestWillBeSent(
         id proxyID: Network.Request.ID,
         request payload: Network.Request,
-        resourceType: Network.ResourceType?
+        resourceType: Network.ResourceType?,
+        redirectResponse: Network.Response?,
+        timestamp: Double
     ) {
         let id = NetworkRequest.ID(proxyID)
         let request: NetworkRequest
         if let existing = requestsByID[id] {
             request = existing
-            request.applyRequestWillBeSent(request: payload, resourceType: resourceType)
+            if let redirectResponse, existing.isActive {
+                request.applyRedirect(
+                    to: payload,
+                    redirectResponse: redirectResponse,
+                    timestamp: timestamp,
+                    resourceType: resourceType
+                )
+            } else if existing.isActive == false {
+                request.applyRequestWillBeSent(request: payload, resourceType: resourceType)
+            }
         } else {
             request = NetworkRequest(request: payload, resourceType: resourceType, modelContext: self)
             requestsByID[id] = request
