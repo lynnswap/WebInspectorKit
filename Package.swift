@@ -54,7 +54,9 @@ let package = Package(
     targets: [
         .target(
             name: "WebInspectorProxyKit",
-            dependencies: [],
+            dependencies: [
+                "WebInspectorTransport"
+            ],
             swiftSettings: strictSwiftSettings
         ),
         .target(
@@ -288,7 +290,9 @@ let package = Package(
             name: "WebInspectorProxyKitTests",
             dependencies: [
                 "WebInspectorProxyKit",
-                "WebInspectorProxyKitTesting"
+                "WebInspectorProxyKitTesting",
+                "WebInspectorTransport",
+                "WebInspectorTestSupport"
             ],
             path: "Tests/WebInspectorProxyKitTests",
             swiftSettings: strictSwiftSettings
