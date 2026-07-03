@@ -31,7 +31,7 @@ Implementation can be delegated only after these rows are complete.
 | --- | --- | --- |
 | G1 | DTO / model field lists filled from current payload structs and model types | Drafted; Page events/frames are out of initial public surface |
 | G2 | Every typed Proxy event has exactly one DataKit destination or an explicit no-op owner | Partially implemented; current DOM/CSS/Network/Console/Runtime DataKit subset is bound, while detached roots, shadow/pseudo nodes, Inspector alias, Target, and Page remain explicit scope items |
-| G3 | Story A/A2/B/C contract-test package shape is defined with validation commands | Drafted; B/C runtime behavior is covered by WebInspectorKit tests, not by adding public test-only DI |
+| G3 | Story A/A2/B/C contract-test package shape is defined with validation commands | Implemented as standalone `ContractTests/` package over public products; Story B custom tabs compile against `WebInspectorSession`, while direct `session.modelContext` access remains a public API gap |
 | G4 | Worker branches are split by owner boundary and write set, with no overlapping primary files | Drafted below |
 
 ## Event Coverage Table
@@ -126,9 +126,9 @@ Contract tests must import public products only and must not use `@testable`.
 
 | Story | Product imports | Contract style | Fake/backend need | Validation |
 | --- | --- | --- | --- | --- |
-| A — DataKit consumer app | `WebViewDataKit` only | Compile on iOS and macOS without UIKit: `WebViewModelContainer(attachingTo:)`, `mainContext`, `rootNode`, `DOMNode.Children.loaded`, `.allRequests`, `fetchResponseBody()`, `evaluate()` | Runtime contract uses `WebViewModelContainer(proxy:)` over `WebViewProxyKitTesting`: DOM seed, network list, body fetch loaded/failed, runtime evaluation reflect into context/models | `cd ContractTests && swift test`; iOS xcodebuild once package products exist |
-| A2 — Proxy-only consumer | `WebViewProxyKit` only | Compile without DataKit/UI: `WebViewProxy`, `waitForCurrentPage()`, `page.network.events`, `Network.Event.responseReceived` | Fake backend validates target replay, per-target event stream, event multicast, `close()` / `waitUntilClosed()` clean-vs-fatal behavior | `cd ContractTests && swift test`; targeted proxy fake tests |
-| B — custom UIKit Console tab | `WebInspectorKit` + `WebViewDataKit` on iOS | Compile: `WebInspectorTab` factory still receives `WebInspectorSession`; custom tab reaches `session.modelContext`, `WebViewFetchedResultsController<ConsoleMessage>`, `context.evaluate`, `RuntimeObject.properties()` | No public fake-backed session initializer. Runtime behavior is covered inside WebInspectorKit tests using package/internal composition seams, because a public test-only DI initializer would bloat the product surface. | `cd ContractTests && xcodebuild test -scheme WebInspectorContractTests -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest'`; WebInspectorKit workspace tests |
+| A — DataKit consumer app | `WebViewDataKit`; fake-backed runtime tests also import `WebViewProxyKitTesting` | Compile on iOS and macOS without UIKit: `WebViewModelContainer(proxy:)`, `mainContext`, `rootNode`, `DOMNode.Children.loaded`, `.allRequests`, `fetchResponseBody()`, `evaluate()` | Runtime contract uses `WebViewModelContainer(proxy:)` over `WebViewProxyKitTesting`: DOM seed, network list, body fetch loaded, runtime evaluation reflected into context/models | `cd ContractTests && swift test`; targeted DataKit package tests |
+| A2 — Proxy-only consumer | `WebViewProxyKit`; fake-backed runtime tests also import `WebViewProxyKitTesting` | Compile without DataKit/UI: `WebViewProxy`, `waitForCurrentPage()`, `target.network.events`, `Network.Event.responseReceived` | Fake backend validates event multicast and `close()` / `waitUntilClosed()` lifecycle. Extra per-target creation remains package-only, so target live stream/per-target expansion stays out of this slice. | `cd ContractTests && swift test`; targeted ProxyKit package tests |
+| B — custom UIKit Console tab | `WebInspectorKit` on iOS | Compile: `WebInspectorTab` factory still receives `WebInspectorSession`, and `WebInspectorViewController(tabs:)` / `WebInspectorViewController(session:)` remain app-constructible. Direct `session.modelContext` access is not public yet and remains a gap, not an implemented contract. | No public fake-backed session initializer. Runtime behavior is covered inside WebInspectorKit tests using package/internal composition seams, because a public test-only DI initializer would bloat the product surface. | `cd ContractTests && swift test` on macOS compiles UIKit stories behind `#if canImport(UIKit)`; workspace UIKit tests cover runtime behavior |
 | C — drop-in UIKit compatibility | `WebInspectorKit` on iOS | Compile existing facade: `WebInspectorSession()`, `WebInspectorViewController(session:)`, `session.attach(to:)`, `WebInspectorViewController.attach(to:)`, `WebInspectorTab` factory shape | Runtime attach/detach/context lifecycle is covered by WebInspectorKit tests and the default workspace validation. ContractTests only assert the public UIKit shape from outside the package. | WebInspectorKit workspace tests; Monocly build/test after custom tab is added |
 
 Minimum standalone package shape:
@@ -137,19 +137,19 @@ Minimum standalone package shape:
 ContractTests/
   Package.swift
   Tests/WebInspectorConsumerContractTests/
+    ContractTestSupport.swift
     StoryADataKitCompileContract.swift
-    StoryA2ProxyKitCompileContract.swift
     StoryBConsoleTabCompileContract.swift
     StoryCUIKitCompatibilityCompileContract.swift
     StoryADataKitFakeBackendTests.swift
-    StoryA2ProxyKitFakeBackendTests.swift
+    StoryA2ProxyKitContractTests.swift
 ```
 
 `Package.swift` uses `.package(path: "..")` and depends on
 `WebViewProxyKit`, `WebViewDataKit`, `WebViewProxyKitTesting`, plus the iOS-only
-`WebInspectorKit` product. The current root package does not yet expose the
-three `WebView*` products, so this contract package is expected to fail until
-the product graph migration lands.
+`WebInspectorKit` product. `Sources/WebViewProxyKitTesting` owns the public
+string-based fixture factory for package-only protocol IDs used by external
+contract tests.
 
 Local validation commands:
 
@@ -160,9 +160,8 @@ xcodebuild test \
   -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest'
 
 cd ContractTests && swift test
-cd ContractTests && xcodebuild test \
-  -scheme WebInspectorContractTests \
-  -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest'
+swift test --filter WebViewProxyKitTests
+swift test --filter WebViewDataKitTests
 ```
 
 If Monocly gains the custom Console tab in this series, validate the app target
