@@ -1,5 +1,4 @@
 import Synchronization
-import WebInspectorTransport
 
 package final class TransportReceiver: Sendable {
     private struct State: Sendable {
