@@ -738,12 +738,13 @@ Binding tiers:
 - **Initial binding contract (M3):** container/context ownership, actor-isolated
   context creation, persistent model identity, hidden raw proxy/context internals,
   DOM root/selection/readback, DOM current snapshot/transaction stream,
-  network/console fetched results, request body fetch, runtime
+  network/console fetched results current snapshots and transaction streams,
+  request body fetch, runtime
   evaluation/object expansion, and non-MainActor fake-backed contract tests.
 - **Planned surface:** DOM editing/highlight/outerHTML, CSS mutation,
-  fetched-results transactions/phases, `WebInspectorFetchedResultsController`,
-  sort/predicate descriptors, detached-root/shadow/pseudo DOM expansion, full
-  target-lifecycle handling, and any dedicated model-actor/executor convenience.
+  fetched-results phases, sort/predicate descriptors, detached-root/shadow/pseudo
+  DOM expansion, full target-lifecycle handling, and any dedicated
+  model-actor/executor convenience.
   These must not be shipped as compatibility stubs; each moves into the initial
   contract only when its owner, event coverage, and consumer contract tests are
   added.
@@ -796,8 +797,17 @@ public final class WebInspectorContext {
 
     // Lists — fetched results (network / console).
     public func fetchedResults<Model: WebInspectorFetchableModel>(
-        for descriptor: WebInspectorFetchDescriptor<Model>,
+        for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
+        sectionBy: WebInspectorSectionDescriptor<Model>? = nil,
         isolation: isolated (any Actor) = #isolation) -> WebInspectorFetchedResults<Model>
+    public func fetchedResults<Model: WebInspectorFetchableModel>(
+        for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
+        sectionBy keyPath: KeyPath<Model, String>,
+        isolation: isolated (any Actor) = #isolation) -> WebInspectorFetchedResults<Model>
+    public func fetchedResultsController<Model: WebInspectorFetchableModel>(
+        for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
+        sectionBy: WebInspectorSectionDescriptor<Model>? = nil,
+        isolation: isolated (any Actor) = #isolation) -> WebInspectorFetchedResultsController<Model>
 
     // Identity map (CodexModelContext.model(for:) idiom).
     public func registeredRequest(for id: NetworkRequest.ID,
@@ -1041,10 +1051,10 @@ Planned model extensions (not M3/M4 public API): `DOMNode.frameID`,
 `documentURL`, `baseURL`, shadow/pseudo/content-document projections,
 `DOMNode.highlight/remove/outerHTML`, request body storage, network wall-time,
 cached body size/type, response source, initiator, richer `NetworkBody`
-metadata, CSS property mutation, fetched-results transactions, and richer DOM
-transaction coverage for detached roots, shadow roots, pseudo elements, and
-content documents. Each extension must add its own owner, event-coverage row,
-and contract test before it becomes binding public surface.
+metadata, CSS property mutation, fetched-results phases/query mutation, and
+richer DOM transaction coverage for detached roots, shadow roots, pseudo
+elements, and content documents. Each extension must add its own owner,
+event-coverage row, and contract test before it becomes binding public surface.
 
 ### 4.3 Fetch, fetched results, tree controller
 
@@ -1061,20 +1071,85 @@ public protocol WebInspectorFetchableModel: WebInspectorPersistentModel {}
 // conformers: NetworkRequest, ConsoleMessage.
 
 public struct WebInspectorFetchDescriptor<Model: WebInspectorFetchableModel>: Sendable, Hashable {
-    // Initial contract is a closed descriptor kind. Consumers use canned
-    // descriptors; arbitrary sort/predicate/retention is planned, not M3/M4.
+    // Initial contract is a generic descriptor over a supported model type.
+    // Arbitrary sort/predicate/retention is planned, not M3/M4.
+    public init()
 }
 
-// Canned descriptors as constrained statics (CodexFetchDescriptor.recentChats idiom):
-extension WebInspectorFetchDescriptor where Model == NetworkRequest { public static var allRequests: Self { get } }
-extension WebInspectorFetchDescriptor where Model == ConsoleMessage { public static var allConsoleMessages: Self { get } }
+public struct WebInspectorSectionDescriptor<Model: WebInspectorFetchableModel>: Sendable, Hashable {
+    public init(_ keyPath: KeyPath<Model, String>)
+    public init(_ keyPath: KeyPath<Model, String?>)
+    public init<Value: RawRepresentable & Hashable & Sendable>(_ keyPath: KeyPath<Model, Value>) where Value.RawValue == String
+    public init<Value: RawRepresentable & Hashable & Sendable>(_ keyPath: KeyPath<Model, Value?>) where Value.RawValue == String
+}
+
+public struct WebInspectorFetchSection<Model: WebInspectorFetchableModel>: Identifiable {
+    public var id: WebInspectorFetchSectionID
+    public var title: String?
+    public var items: [Model]
+}
 
 @Observable
 public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel> {
+    public private(set) var fetchDescriptor: WebInspectorFetchDescriptor<Model>
+    public private(set) var sectionBy: WebInspectorSectionDescriptor<Model>?
     public private(set) var items: [Model]
+    public private(set) var sections: [WebInspectorFetchSection<Model>]
     // Live: as network/console events arrive, items mutate in place (identity-preserving).
 }
+
+public struct WebInspectorFetchedResultsIndexPath: Sendable, Hashable {
+    public var section: Int
+    public var item: Int
+}
+
+public struct WebInspectorFetchedResultsSnapshot<ItemID: Hashable & Sendable>: Sendable, Hashable {
+    public struct Section: Identifiable, Sendable, Hashable {
+        public let id: WebInspectorFetchSectionID
+        public let title: String?
+        public let itemIDs: [ItemID]
+    }
+    public let sections: [Section]
+    public var itemIDs: [ItemID] { get }
+}
+
+public enum WebInspectorFetchedResultsSectionChange: Sendable, Hashable {
+    case insert(sectionID: WebInspectorFetchSectionID, index: Int)
+    case delete(sectionID: WebInspectorFetchSectionID, index: Int)
+    case move(sectionID: WebInspectorFetchSectionID, from: Int, to: Int)
+    case update(sectionID: WebInspectorFetchSectionID, index: Int)
+}
+
+public enum WebInspectorFetchedResultsItemChange<ItemID: Hashable & Sendable>: Sendable, Hashable {
+    case insert(itemID: ItemID, indexPath: WebInspectorFetchedResultsIndexPath)
+    case delete(itemID: ItemID, indexPath: WebInspectorFetchedResultsIndexPath)
+    case move(itemID: ItemID, from: WebInspectorFetchedResultsIndexPath, to: WebInspectorFetchedResultsIndexPath)
+    case update(itemID: ItemID, indexPath: WebInspectorFetchedResultsIndexPath)
+}
+
+public struct WebInspectorFetchedResultsTransaction<Model: WebInspectorFetchableModel>: Sendable, Hashable {
+    public let oldSnapshot: WebInspectorFetchedResultsSnapshot<Model.ID>
+    public let newSnapshot: WebInspectorFetchedResultsSnapshot<Model.ID>
+    public let sectionChanges: [WebInspectorFetchedResultsSectionChange]
+    public let itemChanges: [WebInspectorFetchedResultsItemChange<Model.ID>]
+}
+
+public final class WebInspectorFetchedResultsController<Model: WebInspectorFetchableModel> {
+    public let fetchedResults: WebInspectorFetchedResults<Model>   // forwarded current value, no 2nd copy
+    /// Ordered insert/delete/move/update transactions — the public replacement for
+    /// the internal requestDisplayChanges/rowDeltas render-diff plumbing (F-32).
+    /// Convert to UICollectionView/diffable data source in the UI layer.
+    public var snapshot: WebInspectorFetchedResultsSnapshot<Model.ID> { get }
+    public var transactions: AsyncStream<WebInspectorFetchedResultsTransaction<Model>> { get }
+}
 ```
+
+The shipped controller owns no query state of its own: membership/order remain in
+`WebInspectorContext` and the controller forwards the current
+`WebInspectorFetchedResults` value plus section and item-ID transactions.
+Sectioning is a SwiftData-style KeyPath surface (`sectionBy: \.method`,
+`sectionBy: \.level`, etc.) backed by a closed known-key table. It has no
+sort/predicate, pagination, refresh, or loading phase until those owners exist.
 
 Planned descriptor/controller surface:
 
@@ -1098,23 +1173,14 @@ extension WebInspectorFetchDescriptor {
                 retentionLimit: Int? = nil)
 }
 
-public final class WebInspectorFetchedResultsController<Model: WebInspectorFetchableModel> {
-    public let fetchedResults: WebInspectorFetchedResults<Model>   // forwarded current value, no 2nd copy
-    /// Ordered insert/delete/move/update transactions — the public replacement for
-    /// the internal requestDisplayChanges/rowDeltas render-diff plumbing (F-32).
-    /// Convert to UICollectionView/diffable data source in the UI layer.
-    public var transactions: AsyncStream<Transaction> { get }
-    public struct Transaction: Sendable { /* oldSnapshot, newSnapshot, itemChanges */ }
-}
-
 public enum WebInspectorDataPhase: Sendable, Equatable { case idle, loading, loaded, failed(String) }
 ```
 
 `WebInspectorSortOrder`, `WebInspectorSortDescriptor`,
-`WebInspectorFetchPredicate`, `WebInspectorFetchedResultsController`,
-`transactions`, `phase`, refresh, arbitrary sort/predicate, and retention APIs
-are not M3/M4. They become public only with a real query/transaction owner and
-contract tests; do not add wrappers that merely forward `items`.
+`WebInspectorFetchPredicate`, `phase`, refresh, arbitrary sort/predicate, and
+retention APIs are not M3/M4. They become public only with a real query owner
+and contract tests; do not add compatibility stubs that merely parse options and
+fall back to the default model descriptor.
 
 DOM tree controller:
 
@@ -1302,7 +1368,9 @@ actor InspectorStore {
         }
 
         let requests: WebInspectorFetchedResults<NetworkRequest> =
-            context.fetchedResults(for: .allRequests)
+            context.fetchedResults()
+        let requestsByMethod: WebInspectorFetchedResults<NetworkRequest> =
+            context.fetchedResults(sectionBy: \.method)
         await requests.items.last?.fetchResponseBody()
 
         let result = try await context.evaluate("document.title")
@@ -1381,11 +1449,10 @@ the legacy internal UI/Core targets, while the new DataKit contract is proven by
 `ContractTests` and package tests.
 
 - Its view controllers render from the context-owned `@Observable` models and
-  drive initial lists from `WebInspectorFetchedResults.items`. DOM views use
-  `DOMTreeController.snapshot` / `transactions` for semantic tree invalidation,
-  then keep expansion and row projection in the UI layer. Ordered fetched-results
-  transactions remain planned until `WebInspectorFetchedResultsController` has a
-  real transaction owner and contract tests.
+  drive lists from `WebInspectorFetchedResults.items` and
+  `WebInspectorFetchedResultsController.snapshot` / `transactions`. DOM views
+  use `DOMTreeController.snapshot` / `transactions` for semantic tree
+  invalidation, then keep expansion and row projection in the UI layer.
 - Today's `WebInspectorUI*` internal targets fold in (F-03 `@_exported`
   deletions carry over); `WebInspectorNativeAttachment.swift` and the
   `@_disfavoredOverload` attach decoys are deleted (F-04) — attach now goes
@@ -1407,7 +1474,7 @@ UI is a new module over `WebInspectorDataKit`, edits neither kit (§2 target tes
 | `*.Client.events` | `URLSession.bytes` / any `AsyncSequence` | fresh typed stream per access, `.unknown` tail |
 | `WebInspectorContainer` / `WebInspectorContext` | `SwiftData.ModelContainer` / `ModelContext` | container owns connection; context is actor-confined; `mainContext` is a MainActor convenience |
 | `WebInspectorFetchDescriptor` / `WebInspectorFetchedResults` | `FetchDescriptor` / `@Query` results | value descriptor + observable results |
-| planned `WebInspectorFetchedResultsController` | `NSFetchedResultsController` | forwarded current value + ordered transactions |
+| `WebInspectorFetchedResultsController` | `NSFetchedResultsController` | forwarded current value + ordered item transactions |
 | `DOMTreeController` | `NSFetchedResultsController` adapted to tree shape | forwarded current tree snapshot + semantic tree transactions |
 | models (`DOMNode`, `NetworkRequest`, …) | SwiftData `@Model` classes | `@Observable`, identity, in-place update, weak context |
 
@@ -1495,7 +1562,7 @@ Resolved during review:
 | Public shape | Promote the `@Observable` god-model classes to public | Two kits: typed streams + SwiftData-style models |
 | Products | 2 (`WebInspectorCore` engine + `WebInspectorKit` UI) | 3 (`WebInspectorProxyKit` + `WebInspectorDataKit` + `WebInspectorKit` UI) + Testing |
 | Accumulation vs wire | Same class does both | Split across the two layers |
-| Render-diff plumbing | Stays package on the public class | Planned replacement by DataKit `WebInspectorFetchedResultsController.transactions` / `DOMTreeController.transactions`, with UIKit-specific rendering behind the UI boundary |
+| Render-diff plumbing | Stays package on the public class | Replaced by DataKit `WebInspectorFetchedResultsController.transactions` / `DOMTreeController.transactions`, with UIKit-specific rendering behind the UI boundary |
 | Migration cost | Lower (promote + rename) | Higher (rewrite the domain-model layer) — justified by the two-outcome unlock and by removing the god-model defect at the root (F-25/F-29/F-32) |
 
 This is now the binding design contract. [06-implementation-gate.md](06-implementation-gate.md)

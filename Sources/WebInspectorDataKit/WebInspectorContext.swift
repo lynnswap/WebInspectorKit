@@ -39,12 +39,12 @@ public final class WebInspectorContext {
     private var treeStates: [WeakDOMTreeState]
     private var requestsByID: [NetworkRequest.ID: NetworkRequest]
     private var orderedRequestIDs: [NetworkRequest.ID]
-    private let allNetworkRequests: WebInspectorFetchedResults<NetworkRequest>
+    private var networkFetchedResults: [WeakWebInspectorFetchedResults<NetworkRequest>]
     private var consoleMessagesByID: [ConsoleMessage.ID: ConsoleMessage]
     private var orderedConsoleMessageIDs: [ConsoleMessage.ID]
     private var lastConsoleMessageID: ConsoleMessage.ID?
     private var nextConsoleMessageOrdinal: Int
-    private let allConsoleMessages: WebInspectorFetchedResults<ConsoleMessage>
+    private var consoleFetchedResults: [WeakWebInspectorFetchedResults<ConsoleMessage>]
     private var runtimeContextsByID: [RuntimeContext.ID: RuntimeContext]
     private var orderedRuntimeContextIDs: [RuntimeContext.ID]
     private var runtimeObjectsByID: [RuntimeObject.ID: RuntimeObject]
@@ -79,12 +79,12 @@ public final class WebInspectorContext {
         treeStates = []
         requestsByID = [:]
         orderedRequestIDs = []
-        allNetworkRequests = WebInspectorFetchedResults()
+        networkFetchedResults = []
         consoleMessagesByID = [:]
         orderedConsoleMessageIDs = []
         lastConsoleMessageID = nil
         nextConsoleMessageOrdinal = 0
-        allConsoleMessages = WebInspectorFetchedResults()
+        consoleFetchedResults = []
         runtimeContextsByID = [:]
         orderedRuntimeContextIDs = []
         runtimeObjectsByID = [:]
@@ -208,22 +208,138 @@ public final class WebInspectorContext {
     }
 
     public func fetchedResults<Model: WebInspectorFetchableModel>(
-        for descriptor: WebInspectorFetchDescriptor<Model>,
+        for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
+        sectionBy: WebInspectorSectionDescriptor<Model>? = nil,
         isolation: isolated (any Actor) = #isolation
     ) -> WebInspectorFetchedResults<Model> {
         requireOwner(isolation)
+        let results = WebInspectorFetchedResults(fetchDescriptor: descriptor, sectionBy: sectionBy)
         switch descriptor.kind {
-        case .allRequests:
-            guard let results = allNetworkRequests as? WebInspectorFetchedResults<Model> else {
-                preconditionFailure("The .allRequests descriptor can only fetch NetworkRequest models.")
+        case .networkRequests:
+            guard let networkResults = results as? WebInspectorFetchedResults<NetworkRequest> else {
+                preconditionFailure("NetworkRequest descriptors can only fetch NetworkRequest models.")
             }
-            return results
-        case .allConsoleMessages:
-            guard let results = allConsoleMessages as? WebInspectorFetchedResults<Model> else {
-                preconditionFailure("The .allConsoleMessages descriptor can only fetch ConsoleMessage models.")
+            networkResults.setItems(currentNetworkRequests())
+            networkFetchedResults.append(WeakWebInspectorFetchedResults(networkResults))
+        case .consoleMessages:
+            guard let consoleResults = results as? WebInspectorFetchedResults<ConsoleMessage> else {
+                preconditionFailure("ConsoleMessage descriptors can only fetch ConsoleMessage models.")
             }
-            return results
+            consoleResults.setItems(currentConsoleMessages())
+            consoleFetchedResults.append(WeakWebInspectorFetchedResults(consoleResults))
         }
+        return results
+    }
+
+    public func fetchedResults<Model: WebInspectorFetchableModel>(
+        for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
+        sectionBy keyPath: KeyPath<Model, String>,
+        isolation: isolated (any Actor) = #isolation
+    ) -> WebInspectorFetchedResults<Model> {
+        fetchedResults(
+            for: descriptor,
+            sectionBy: WebInspectorSectionDescriptor(keyPath),
+            isolation: isolation
+        )
+    }
+
+    public func fetchedResults<Model: WebInspectorFetchableModel>(
+        for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
+        sectionBy keyPath: KeyPath<Model, String?>,
+        isolation: isolated (any Actor) = #isolation
+    ) -> WebInspectorFetchedResults<Model> {
+        fetchedResults(
+            for: descriptor,
+            sectionBy: WebInspectorSectionDescriptor(keyPath),
+            isolation: isolation
+        )
+    }
+
+    public func fetchedResults<
+        Model: WebInspectorFetchableModel,
+        Value: RawRepresentable & Hashable & Sendable
+    >(
+        for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
+        sectionBy keyPath: KeyPath<Model, Value>,
+        isolation: isolated (any Actor) = #isolation
+    ) -> WebInspectorFetchedResults<Model> where Value.RawValue == String {
+        fetchedResults(
+            for: descriptor,
+            sectionBy: WebInspectorSectionDescriptor(keyPath),
+            isolation: isolation
+        )
+    }
+
+    public func fetchedResults<
+        Model: WebInspectorFetchableModel,
+        Value: RawRepresentable & Hashable & Sendable
+    >(
+        for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
+        sectionBy keyPath: KeyPath<Model, Value?>,
+        isolation: isolated (any Actor) = #isolation
+    ) -> WebInspectorFetchedResults<Model> where Value.RawValue == String {
+        fetchedResults(
+            for: descriptor,
+            sectionBy: WebInspectorSectionDescriptor(keyPath),
+            isolation: isolation
+        )
+    }
+
+    public func fetchedResultsController<Model: WebInspectorFetchableModel>(
+        for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
+        sectionBy: WebInspectorSectionDescriptor<Model>? = nil,
+        isolation: isolated (any Actor) = #isolation
+    ) -> WebInspectorFetchedResultsController<Model> {
+        requireOwner(isolation)
+        return WebInspectorFetchedResultsController(
+            fetchedResults: fetchedResults(for: descriptor, sectionBy: sectionBy, isolation: isolation)
+        )
+    }
+
+    public func fetchedResultsController<Model: WebInspectorFetchableModel>(
+        for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
+        sectionBy keyPath: KeyPath<Model, String>,
+        isolation: isolated (any Actor) = #isolation
+    ) -> WebInspectorFetchedResultsController<Model> {
+        WebInspectorFetchedResultsController(
+            fetchedResults: fetchedResults(for: descriptor, sectionBy: keyPath, isolation: isolation)
+        )
+    }
+
+    public func fetchedResultsController<Model: WebInspectorFetchableModel>(
+        for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
+        sectionBy keyPath: KeyPath<Model, String?>,
+        isolation: isolated (any Actor) = #isolation
+    ) -> WebInspectorFetchedResultsController<Model> {
+        WebInspectorFetchedResultsController(
+            fetchedResults: fetchedResults(for: descriptor, sectionBy: keyPath, isolation: isolation)
+        )
+    }
+
+    public func fetchedResultsController<
+        Model: WebInspectorFetchableModel,
+        Value: RawRepresentable & Hashable & Sendable
+    >(
+        for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
+        sectionBy keyPath: KeyPath<Model, Value>,
+        isolation: isolated (any Actor) = #isolation
+    ) -> WebInspectorFetchedResultsController<Model> where Value.RawValue == String {
+        WebInspectorFetchedResultsController(
+            fetchedResults: fetchedResults(for: descriptor, sectionBy: keyPath, isolation: isolation)
+        )
+    }
+
+    public func fetchedResultsController<
+        Model: WebInspectorFetchableModel,
+        Value: RawRepresentable & Hashable & Sendable
+    >(
+        for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
+        sectionBy keyPath: KeyPath<Model, Value?>,
+        isolation: isolated (any Actor) = #isolation
+    ) -> WebInspectorFetchedResultsController<Model> where Value.RawValue == String {
+        WebInspectorFetchedResultsController(
+            fetchedResults: fetchedResults(for: descriptor, sectionBy: keyPath, isolation: isolation)
+        )
     }
 
     func fetchResponseBody(
@@ -1100,6 +1216,7 @@ extension WebInspectorContext {
                 return
             }
             request.applyResponse(response, resourceType: resourceType, timestamp: timestamp)
+            refreshAllRequests(updatedItemIDs: [request.id])
         case let .dataReceived(id, dataLength, encodedDataLength, timestamp):
             guard let request = requestsByID[NetworkRequest.ID(id)] else {
                 fail(.disconnected("Network.dataReceived referenced an unknown request."))
@@ -1110,18 +1227,21 @@ extension WebInspectorContext {
                 encodedDataLength: encodedDataLength,
                 timestamp: timestamp
             )
+            refreshAllRequests(updatedItemIDs: [request.id])
         case let .loadingFinished(id, timestamp, sourceMapURL, metrics):
             guard let request = requestsByID[NetworkRequest.ID(id)] else {
                 fail(.disconnected("Network.loadingFinished referenced an unknown request."))
                 return
             }
             request.finish(timestamp: timestamp, sourceMapURL: sourceMapURL, metrics: metrics)
+            refreshAllRequests(updatedItemIDs: [request.id])
         case let .loadingFailed(id, errorText, canceled, timestamp):
             guard let request = requestsByID[NetworkRequest.ID(id)] else {
                 fail(.disconnected("Network.loadingFailed referenced an unknown request."))
                 return
             }
             request.fail(errorText: errorText, canceled: canceled, timestamp: timestamp)
+            refreshAllRequests(updatedItemIDs: [request.id])
         case let .webSocket(event):
             apply(event)
         case let .requestServedFromMemoryCache(id, response, timestamp):
@@ -1140,6 +1260,7 @@ extension WebInspectorContext {
     ) {
         let id = NetworkRequest.ID(proxyID)
         let request: NetworkRequest
+        var updatedItemIDs = Set<NetworkRequest.ID>()
         if let existing = requestsByID[id] {
             request = existing
             if let redirectResponse, existing.isActive {
@@ -1149,15 +1270,17 @@ extension WebInspectorContext {
                     timestamp: timestamp,
                     resourceType: resourceType
                 )
+                updatedItemIDs.insert(id)
             } else if existing.isActive == false {
                 request.applyRequestWillBeSent(request: payload, resourceType: resourceType, timestamp: timestamp)
+                updatedItemIDs.insert(id)
             }
         } else {
             request = NetworkRequest(request: payload, resourceType: resourceType, timestamp: timestamp, modelContext: self)
             requestsByID[id] = request
             orderedRequestIDs.append(id)
         }
-        refreshAllRequests()
+        refreshAllRequests(updatedItemIDs: updatedItemIDs)
     }
 
     private func applyRequestServedFromMemoryCache(
@@ -1185,7 +1308,7 @@ extension WebInspectorContext {
             orderedRequestIDs.append(id)
         }
         request.applyMemoryCache(response: response, timestamp: timestamp)
-        refreshAllRequests()
+        refreshAllRequests(updatedItemIDs: [id])
     }
 
     private func apply(_ event: Network.WebSocketEvent) {
@@ -1197,31 +1320,37 @@ extension WebInspectorContext {
                 return
             }
             networkRequest.applyWebSocketHandshakeRequest(request, timestamp: timestamp)
+            refreshAllRequests(updatedItemIDs: [networkRequest.id])
         case let .handshakeResponse(id, response, timestamp):
             guard let networkRequest = networkRequest(forWebSocketEvent: id, method: "webSocketHandshakeResponseReceived") else {
                 return
             }
             networkRequest.applyWebSocketHandshakeResponse(response, timestamp: timestamp)
+            refreshAllRequests(updatedItemIDs: [networkRequest.id])
         case let .frameSent(id, frame, timestamp):
             guard let networkRequest = networkRequest(forWebSocketEvent: id, method: "webSocketFrameSent") else {
                 return
             }
             networkRequest.appendWebSocketFrame(frame, direction: .sent, timestamp: timestamp)
+            refreshAllRequests(updatedItemIDs: [networkRequest.id])
         case let .frameReceived(id, frame, timestamp):
             guard let networkRequest = networkRequest(forWebSocketEvent: id, method: "webSocketFrameReceived") else {
                 return
             }
             networkRequest.appendWebSocketFrame(frame, direction: .received, timestamp: timestamp)
+            refreshAllRequests(updatedItemIDs: [networkRequest.id])
         case let .error(id, message, timestamp):
             guard let networkRequest = networkRequest(forWebSocketEvent: id, method: "webSocketFrameError") else {
                 return
             }
             networkRequest.appendWebSocketError(message, timestamp: timestamp)
+            refreshAllRequests(updatedItemIDs: [networkRequest.id])
         case let .closed(id, timestamp):
             guard let networkRequest = networkRequest(forWebSocketEvent: id, method: "webSocketClosed") else {
                 return
             }
             networkRequest.closeWebSocket(timestamp: timestamp)
+            refreshAllRequests(updatedItemIDs: [networkRequest.id])
         case .other:
             break
         }
@@ -1239,7 +1368,7 @@ extension WebInspectorContext {
             orderedRequestIDs.append(id)
         }
         request.applyWebSocketCreated(url: url)
-        refreshAllRequests()
+        refreshAllRequests(updatedItemIDs: [id])
     }
 
     private func networkRequest(
@@ -1253,8 +1382,16 @@ extension WebInspectorContext {
         return request
     }
 
-    private func refreshAllRequests() {
-        allNetworkRequests.setItems(orderedRequestIDs.compactMap { requestsByID[$0] })
+    private func currentNetworkRequests() -> [NetworkRequest] {
+        orderedRequestIDs.compactMap { requestsByID[$0] }
+    }
+
+    private func refreshAllRequests(updatedItemIDs: Set<NetworkRequest.ID> = []) {
+        networkFetchedResults.removeAll { $0.value == nil }
+        let items = currentNetworkRequests()
+        for registration in networkFetchedResults {
+            registration.value?.setItems(items, updatedItemIDs: updatedItemIDs)
+        }
     }
 }
 
@@ -1271,6 +1408,7 @@ extension WebInspectorContext {
                 return
             }
             message.updateRepeatCount(count, timestamp: timestamp)
+            refreshAllConsoleMessages(updatedItemIDs: [message.id])
         case .messagesCleared:
             clearConsoleMessages()
             releaseConsoleRuntimeObjectGroup(isolation: isolation)
@@ -1320,8 +1458,16 @@ extension WebInspectorContext {
         refreshAllConsoleMessages()
     }
 
-    private func refreshAllConsoleMessages() {
-        allConsoleMessages.setItems(orderedConsoleMessageIDs.compactMap { consoleMessagesByID[$0] })
+    private func currentConsoleMessages() -> [ConsoleMessage] {
+        orderedConsoleMessageIDs.compactMap { consoleMessagesByID[$0] }
+    }
+
+    private func refreshAllConsoleMessages(updatedItemIDs: Set<ConsoleMessage.ID> = []) {
+        consoleFetchedResults.removeAll { $0.value == nil }
+        let items = currentConsoleMessages()
+        for registration in consoleFetchedResults {
+            registration.value?.setItems(items, updatedItemIDs: updatedItemIDs)
+        }
     }
 }
 

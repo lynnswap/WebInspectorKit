@@ -8,8 +8,16 @@ func webInspectorDataKitBaseSurfaceDoesNotRequireProxyKitImport() {
 
 private actor DataKitImportOnlyActor {
     func consume(_ context: WebInspectorContext) async throws {
-        let requests: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
-        let messages: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults(for: .allConsoleMessages)
+        let requests: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+        let messages: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
+        let requestsByMethod: WebInspectorFetchedResults<NetworkRequest> =
+            context.fetchedResults(sectionBy: \.method)
+        let messagesByLevel: WebInspectorFetchedResults<ConsoleMessage> =
+            context.fetchedResults(sectionBy: \.level)
+        let requestController: WebInspectorFetchedResultsController<NetworkRequest> =
+            context.fetchedResultsController()
+        let messageController: WebInspectorFetchedResultsController<ConsoleMessage> =
+            context.fetchedResultsController()
 
         _ = context.state
         _ = context.rootNode?.children
@@ -21,8 +29,21 @@ private actor DataKitImportOnlyActor {
         _ = requests.items.first?.url
         _ = requests.items.first?.state
         _ = requests.items.first?.metrics
+        _ = requestsByMethod.sections.first?.title
+        let requestSnapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID> =
+            requestController.snapshot
+        let requestTransaction = WebInspectorFetchedResultsTransaction<NetworkRequest>(
+            oldSnapshot: requestSnapshot,
+            newSnapshot: requestSnapshot,
+            itemChanges: []
+        )
+        _ = requestController.transactions
+        _ = requestTransaction.hasChanges
         _ = messages.items.first?.text
         _ = messages.items.first?.parameters.first?.description
+        _ = messagesByLevel.sections.first?.id
+        _ = messageController.snapshot
+        _ = messageController.transactions
         _ = try await context.evaluate("1 + 1").object.description
 
         let request = NetworkRequestSnapshot(url: "https://example.com", method: "GET")
