@@ -338,6 +338,24 @@ W4 cutover sub-split:
 | W4d — custom tab handoff contract | `WebInspectorSession` exposes the same session-owned DataKit context to app tabs | `Sources/WebInspectorUI/Tabs/**`; `Sources/WebInspectorUI/Containers/WebInspectorSession.swift`; `ContractTests/**`; UIKit tests | Public handoff is added only after W4b/W4c remove the parallel legacy source. Tests prove a custom tab and built-in tabs observe the same context instance. |
 | W4e — legacy UI scaffolding deletion | `AttachedInspection` / `InspectorSession` no longer back the UIKit product | `Package.swift`; `Sources/WebInspectorUI/**`; `Sources/WebInspectorKit/**`; obsolete UI/Core tests/docs | Core-named session/model targets are deleted from the package graph after characterization coverage moves to the owning DataKit/ProxyKit/UI tests. Any reusable implementation must be moved into its real owner first; no `WebInspectorCore*` target remains as a non-UI internals layer. |
 
+Legacy Core has no product or architecture owner after this cutover. It exists
+only because the current built-in DOM/Network UI still reads `AttachedInspection`
+and `WebInspectorCore*` models. W4 must therefore not start by publishing a
+`session.context`, adding a second DataKit attachment beside Core, or renaming
+Core into a private "internal engine" layer. Those shapes keep two semantic
+sources of truth alive and make Core deletion optional. The first W4 patches
+must either move a built-in UI read path to DataKit or add a missing DataKit /
+ProxyKit contract that a concrete built-in UI read path needs.
+
+Current W4 blocking contracts:
+
+| Area | Required owner before Core deletion | Current gap to close before/inside W4 |
+| --- | --- | --- |
+| Session attach | `WebInspectorSession` owns one `WebInspectorContainer` and its MainActor `WebInspectorContext`; native attachment uses one `NativeInspectorConnection` / `TransportSession` | The existing `WebInspectorSession` still stores `InspectorSession` and exposes `attachment` package-internally; adding a parallel DataKit container before DOM/Network UI cutover is prohibited |
+| Network UI | DataKit `NetworkRequest` / `NetworkBody`, `WebInspectorFetchedResultsController`, and UI-owned filtering/projection own the list/detail state | Existing Network UI consumes Core-only `NetworkSession.orderedRequestIDs`, `requestTopologyRevision`, `requestDisplayRevision`, `requestDisplayChanges(after:)`, `reset()`, request/response body roles, `requestBody`, `responseBody?`, and `canFetchResponseBody`; DataKit must supply equivalent semantic fields/transactions or the UI must be rewritten to its fetched-results contract without losing request body/response preview behavior |
+| DOM UI | DataKit `DOMNode`, `CSSStyles`, and `DOMTreeController` own semantic tree/style state; UI owns expansion, selection presentation, and TextKit/render diff only | Existing DOM UI consumes Core-only command/availability surface: page-vs-document reload decision, picker lifecycle, highlight/hide, outerHTML/copy/delete, CSS property mutation, selector/xPath helpers, and rich row DTO fields. DataKit/ProxyKit must own these commands or the UI must drop the behavior explicitly, which is not an acceptable compatibility cutover |
+| Fixtures/tests | ProxyKitTesting/DataKit fake backends own preview/test data flow | Existing DOM/Network previews build Core sessions through `apply*` and `bindProtocolChannel` backdoors. W4 must replace those with sanctioned fake-backed DataKit fixtures, not keep Core solely for previews |
+
 Integration order for remaining work: route W4 and every planned expansion
 through the same owner chain, but do not replay completed W1/W2/W3/W5 slices as
 fresh prerequisites. New work still flows ProxyKit typed surface → DataKit owner
