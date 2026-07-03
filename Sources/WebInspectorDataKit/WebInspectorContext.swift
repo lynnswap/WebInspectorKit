@@ -1,8 +1,6 @@
 import Foundation
-import Observation
 import WebInspectorProxyKit
 
-@Observable
 public final class WebInspectorContext {
     private enum RuntimeObjectOwner: Hashable {
         case client
@@ -16,10 +14,10 @@ public final class WebInspectorContext {
         case failed(WebInspectorProxyError)
     }
 
-    @ObservationIgnored private(set) weak var container: WebInspectorContainer?
-    @ObservationIgnored private let proxy: WebInspectorProxy
-    @ObservationIgnored private let domainEnablement: WebInspectorDomainEnablementRegistry
-    @ObservationIgnored private let owner: any Actor
+    private(set) weak var container: WebInspectorContainer?
+    private let proxy: WebInspectorProxy
+    private let domainEnablement: WebInspectorDomainEnablementRegistry
+    private let owner: any Actor
     public private(set) var state: State
     public private(set) var teardownError: WebInspectorProxyError?
     public private(set) var rootNode: DOMNode?
@@ -27,33 +25,34 @@ public final class WebInspectorContext {
     public private(set) var executionContexts: [RuntimeContext]
     public private(set) var selectedContext: RuntimeContext?
 
-    @ObservationIgnored private var currentPage: WebInspectorTarget?
-    @ObservationIgnored private var startupTask: Task<Void, Never>?
-    @ObservationIgnored private var documentReloadTask: Task<Void, Never>?
-    @ObservationIgnored private var inspectResolutionTask: Task<Void, Never>?
-    @ObservationIgnored private var styleRefreshTask: Task<Void, Never>?
-    @ObservationIgnored private var styleRefreshGeneration: Int
-    @ObservationIgnored private var eventPumps: [WebInspectorEventPump]
-    @ObservationIgnored private var networkTrackingTarget: WebInspectorTarget?
-    @ObservationIgnored private var runtimeTrackingTarget: WebInspectorTarget?
-    @ObservationIgnored private var consoleTrackingTarget: WebInspectorTarget?
-    @ObservationIgnored private var nodesByID: [DOMNode.ID: DOMNode]
-    @ObservationIgnored private var requestsByID: [NetworkRequest.ID: NetworkRequest]
-    @ObservationIgnored private var orderedRequestIDs: [NetworkRequest.ID]
-    @ObservationIgnored private let allNetworkRequests: WebInspectorFetchedResults<NetworkRequest>
-    @ObservationIgnored private var consoleMessagesByID: [ConsoleMessage.ID: ConsoleMessage]
-    @ObservationIgnored private var orderedConsoleMessageIDs: [ConsoleMessage.ID]
-    @ObservationIgnored private var lastConsoleMessageID: ConsoleMessage.ID?
-    @ObservationIgnored private var nextConsoleMessageOrdinal: Int
-    @ObservationIgnored private let allConsoleMessages: WebInspectorFetchedResults<ConsoleMessage>
-    @ObservationIgnored private var runtimeContextsByID: [RuntimeContext.ID: RuntimeContext]
-    @ObservationIgnored private var orderedRuntimeContextIDs: [RuntimeContext.ID]
-    @ObservationIgnored private var runtimeObjectsByID: [RuntimeObject.ID: RuntimeObject]
-    @ObservationIgnored private var runtimeObjectIDsByProxyID: [Runtime.RemoteObject.ID: RuntimeObject.ID]
-    @ObservationIgnored private var runtimeObjectOwnersByID: [RuntimeObject.ID: Set<RuntimeObjectOwner>]
-    @ObservationIgnored private var nextRuntimeObjectOrdinal: Int
-    @ObservationIgnored private var pendingInspectedNodeID: DOMNode.ID?
-    @ObservationIgnored private var consoleObjectGroupReleaseTask: Task<Void, Never>?
+    private var currentPage: WebInspectorTarget?
+    private var startupTask: Task<Void, Never>?
+    private var documentReloadTask: Task<Void, Never>?
+    private var inspectResolutionTask: Task<Void, Never>?
+    private var styleRefreshTask: Task<Void, Never>?
+    private var styleRefreshGeneration: Int
+    private var eventPumps: [WebInspectorEventPump]
+    private var networkTrackingTarget: WebInspectorTarget?
+    private var runtimeTrackingTarget: WebInspectorTarget?
+    private var consoleTrackingTarget: WebInspectorTarget?
+    private var nodesByID: [DOMNode.ID: DOMNode]
+    private var treeStates: [WeakDOMTreeState]
+    private var requestsByID: [NetworkRequest.ID: NetworkRequest]
+    private var orderedRequestIDs: [NetworkRequest.ID]
+    private let allNetworkRequests: WebInspectorFetchedResults<NetworkRequest>
+    private var consoleMessagesByID: [ConsoleMessage.ID: ConsoleMessage]
+    private var orderedConsoleMessageIDs: [ConsoleMessage.ID]
+    private var lastConsoleMessageID: ConsoleMessage.ID?
+    private var nextConsoleMessageOrdinal: Int
+    private let allConsoleMessages: WebInspectorFetchedResults<ConsoleMessage>
+    private var runtimeContextsByID: [RuntimeContext.ID: RuntimeContext]
+    private var orderedRuntimeContextIDs: [RuntimeContext.ID]
+    private var runtimeObjectsByID: [RuntimeObject.ID: RuntimeObject]
+    private var runtimeObjectIDsByProxyID: [Runtime.RemoteObject.ID: RuntimeObject.ID]
+    private var runtimeObjectOwnersByID: [RuntimeObject.ID: Set<RuntimeObjectOwner>]
+    private var nextRuntimeObjectOrdinal: Int
+    private var pendingInspectedNodeID: DOMNode.ID?
+    private var consoleObjectGroupReleaseTask: Task<Void, Never>?
 
     public init(_ container: WebInspectorContainer, isolation: isolated (any Actor)) {
         self.container = container
@@ -77,6 +76,7 @@ public final class WebInspectorContext {
         runtimeTrackingTarget = nil
         consoleTrackingTarget = nil
         nodesByID = [:]
+        treeStates = []
         requestsByID = [:]
         orderedRequestIDs = []
         allNetworkRequests = WebInspectorFetchedResults()
@@ -151,7 +151,26 @@ public final class WebInspectorContext {
         inspectResolutionTask?.cancel()
         inspectResolutionTask = nil
         selectedNode = node
+        notifyDOMTreeSelectionChanged(node, isolation: isolation)
         refreshSelectedStyles(isolation: isolation)
+    }
+
+    public func treeController(
+        root requestedRoot: DOMNode? = nil,
+        isolation: isolated (any Actor) = #isolation
+    ) async throws -> DOMTreeController {
+        requireOwner(isolation)
+        guard let root = requestedRoot ?? rootNode else {
+            throw WebInspectorProxyError.disconnected("WebInspectorDataKit has no DOM root node.")
+        }
+        guard nodesByID[root.id] === root else {
+            preconditionFailure("DOMTreeController root is not registered in this WebInspectorContext.")
+        }
+
+        let tree = DOMTreeState(rootNode: root, selectedNode: selectedNode)
+        treeStates.append(WeakDOMTreeState(tree))
+        pruneReleasedTreeStates()
+        return DOMTreeController(tree: tree)
     }
 
     public func selectContext(_ context: RuntimeContext?, isolation: isolated (any Actor) = #isolation) {
@@ -605,6 +624,28 @@ public final class WebInspectorContext {
         eventPumps = []
     }
 
+    private func notifyDOMTreeControllers(
+        changes: [DOMTreeTransaction.Change],
+        isolation: isolated (any Actor)
+    ) {
+        _ = isolation
+        pruneReleasedTreeStates()
+        for reference in treeStates {
+            reference.tree?.apply(changes: changes, rootNode: rootNode, selectedNode: selectedNode)
+        }
+    }
+
+    private func notifyDOMTreeSelectionChanged(
+        _ node: DOMNode?,
+        isolation: isolated (any Actor)
+    ) {
+        notifyDOMTreeControllers(changes: [.selectionChanged(nodeID: node?.id)], isolation: isolation)
+    }
+
+    private func pruneReleasedTreeStates() {
+        treeStates.removeAll { $0.tree == nil }
+    }
+
     private func fail(_ error: WebInspectorProxyError) {
         transition(to: .failed(error))
     }
@@ -682,20 +723,21 @@ extension WebInspectorContext {
         requireOwner(isolation)
         switch event {
         case .documentUpdated:
-            resetDOM()
+            resetDOM(isolation: isolation)
             reloadDocument(isolation: isolation)
         case let .setChildNodes(parent, nodes):
             applySetChildNodes(parent: parent, nodes: nodes, isolation: isolation)
         case let .childNodeInserted(parent, previous, node):
             applyChildNodeInserted(parent: parent, previous: previous, node: node, isolation: isolation)
         case let .childNodeRemoved(parent, node):
-            applyChildNodeRemoved(parent: parent, node: node)
+            applyChildNodeRemoved(parent: parent, node: node, isolation: isolation)
         case let .childNodeCountUpdated(id, count):
             guard let node = nodesByID[DOMNode.ID(id)] else {
                 fail(.disconnected("DOM.childNodeCountUpdated referenced an unknown node."))
                 return
             }
             node.updateChildNodeCount(count)
+            notifyDOMTreeControllers(changes: [.childCountChanged(nodeID: DOMNode.ID(id))], isolation: isolation)
         case let .attributeModified(id, name, value):
             guard let node = nodesByID[DOMNode.ID(id)] else {
                 fail(.disconnected("DOM.attributeModified referenced an unknown node."))
@@ -703,6 +745,7 @@ extension WebInspectorContext {
             }
             node.setAttribute(name: name, value: value)
             markSelectedStylesNeedsRefresh(for: DOMNode.ID(id))
+            notifyDOMTreeControllers(changes: [.nodeChanged(nodeID: DOMNode.ID(id))], isolation: isolation)
         case let .attributeRemoved(id, name):
             guard let node = nodesByID[DOMNode.ID(id)] else {
                 fail(.disconnected("DOM.attributeRemoved referenced an unknown node."))
@@ -710,6 +753,7 @@ extension WebInspectorContext {
             }
             node.removeAttribute(name: name)
             markSelectedStylesNeedsRefresh(for: DOMNode.ID(id))
+            notifyDOMTreeControllers(changes: [.nodeChanged(nodeID: DOMNode.ID(id))], isolation: isolation)
         case let .characterDataModified(id, value):
             guard let node = nodesByID[DOMNode.ID(id)] else {
                 fail(.disconnected("DOM.characterDataModified referenced an unknown node."))
@@ -717,6 +761,7 @@ extension WebInspectorContext {
             }
             node.setNodeValue(value)
             markSelectedStylesNeedsRefresh(for: DOMNode.ID(id))
+            notifyDOMTreeControllers(changes: [.nodeChanged(nodeID: DOMNode.ID(id))], isolation: isolation)
         case let .inspect(id):
             let inspectedNodeID = DOMNode.ID(id)
             guard let node = nodesByID[inspectedNodeID] else {
@@ -743,10 +788,11 @@ extension WebInspectorContext {
         var materializedPayloadIDs = Set<DOMNode.ID>()
         collectMaterializedPayloadIDs(node, into: &materializedPayloadIDs)
         rootNode = model(for: node, preserving: materializedPayloadIDs)
+        notifyDOMTreeControllers(changes: [.rootChanged(rootNodeID: rootNode?.id)], isolation: isolation)
         resolvePendingInspectedNode(requestSubtreeIfNeeded: true, isolation: isolation)
     }
 
-    private func resetDOM() {
+    private func resetDOM(isolation: isolated (any Actor)) {
         inspectResolutionTask?.cancel()
         inspectResolutionTask = nil
         styleRefreshTask?.cancel()
@@ -756,6 +802,7 @@ extension WebInspectorContext {
         selectedNode = nil
         pendingInspectedNodeID = nil
         nodesByID = [:]
+        notifyDOMTreeControllers(changes: [.rootChanged(rootNodeID: nil)], isolation: isolation)
     }
 
     private func applySetChildNodes(
@@ -783,6 +830,7 @@ extension WebInspectorContext {
             removeSubtreeFromIndex(previousChild, preserving: newSubtreeIDs)
         }
         parentNode.setChildren(newChildren)
+        notifyDOMTreeControllers(changes: [.childrenReplaced(parentID: parentNode.id)], isolation: isolation)
         resolvePendingInspectedNode(requestSubtreeIfNeeded: false, isolation: isolation)
     }
 
@@ -799,6 +847,7 @@ extension WebInspectorContext {
 
         guard case var .loaded(children) = parentNode.children else {
             parentNode.updateChildNodeCount(parentNode.childNodeCount + 1)
+            notifyDOMTreeControllers(changes: [.childCountChanged(nodeID: parentNode.id)], isolation: isolation)
             return
         }
         var materializedPayloadIDs = Set<DOMNode.ID>()
@@ -810,10 +859,15 @@ extension WebInspectorContext {
             children.insert(inserted, at: 0)
         }
         parentNode.setChildren(children)
+        notifyDOMTreeControllers(changes: [.childInserted(parentID: parentNode.id)], isolation: isolation)
         resolvePendingInspectedNode(requestSubtreeIfNeeded: false, isolation: isolation)
     }
 
-    private func applyChildNodeRemoved(parent: DOM.Node.ID, node: DOM.Node.ID) {
+    private func applyChildNodeRemoved(
+        parent: DOM.Node.ID,
+        node: DOM.Node.ID,
+        isolation: isolated (any Actor)
+    ) {
         guard let parentNode = nodesByID[DOMNode.ID(parent)] else {
             fail(.disconnected("DOM.childNodeRemoved referenced an unknown parent node."))
             return
@@ -828,9 +882,11 @@ extension WebInspectorContext {
 
         guard case let .loaded(children) = parentNode.children else {
             parentNode.updateChildNodeCount(max(0, parentNode.childNodeCount - 1))
+            notifyDOMTreeControllers(changes: [.childCountChanged(nodeID: parentNode.id)], isolation: isolation)
             return
         }
         parentNode.setChildren(children.filter { $0.id != removedID })
+        notifyDOMTreeControllers(changes: [.childRemoved(parentID: parentNode.id)], isolation: isolation)
     }
 
     private func removeSubtreeFromIndex(_ root: DOMNode, preserving preservedIDs: Set<DOMNode.ID> = []) {

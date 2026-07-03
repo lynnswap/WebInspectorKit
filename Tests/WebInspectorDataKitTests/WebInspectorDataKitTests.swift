@@ -829,6 +829,100 @@ func childInsertIntoUnrequestedParentDoesNotMarkChildrenLoaded() async throws {
 
 @MainActor
 @Test
+func domTreeControllerPublishesCurrentSnapshotAndChildTransactions() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(
+        runtime: runtime,
+        document: DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document", childNodeCount: 1)
+    )
+    let document = try #require(context.rootNode)
+    let controller = try await context.treeController()
+    let recorder = DOMTreeTransactionRecorder(stream: controller.transactions)
+    defer { recorder.cancel() }
+    try await recorder.waitUntilStarted()
+
+    #expect(controller.snapshot.rootNodeID == document.id)
+    #expect(Set(controller.snapshot.nodesByID.keys) == Set([document.id]))
+    #expect(controller.snapshot.node(for: document.id)?.children == .unrequested(count: 1))
+
+    let childID = DOM.Node.ID("child")
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(id: childID, nodeType: 1, nodeName: "DIV", localName: "div")
+        ]),
+        target: target
+    )
+
+    try await recorder.waitForTransactionCount(1)
+    let childrenChanged = try #require(recorder.transactions.last)
+    #expect(childrenChanged.changes == [.childrenReplaced(parentID: document.id)])
+    #expect(childrenChanged.oldSnapshot.node(for: document.id)?.children == .unrequested(count: 1))
+    #expect(childrenChanged.newSnapshot.children(of: document.id) == [DOMNode.ID(childID)])
+    #expect(childrenChanged.newSnapshot.parent(of: DOMNode.ID(childID)) == document.id)
+    #expect(controller.snapshot.children(of: document.id) == [DOMNode.ID(childID)])
+}
+
+@MainActor
+@Test
+func domTreeControllerPublishesSelectionTransactionsWithoutOwningExpansion() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(
+        runtime: runtime,
+        document: DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document")
+    )
+    let document = try #require(context.rootNode)
+    let parentID = DOM.Node.ID("parent")
+    let childID = DOM.Node.ID("child")
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(
+                id: parentID,
+                nodeType: 1,
+                nodeName: "SECTION",
+                localName: "section",
+                children: [
+                    DOM.Node(id: childID, nodeType: 1, nodeName: "SPAN", localName: "span")
+                ]
+            )
+        ]),
+        target: target
+    )
+
+    try await waitUntil { context.node(for: DOMNode.ID(childID)) != nil }
+    let parent = try #require(context.node(for: DOMNode.ID(parentID)))
+    let child = try #require(context.node(for: DOMNode.ID(childID)))
+    let controller = try await context.treeController()
+    let recorder = DOMTreeTransactionRecorder(stream: controller.transactions)
+    defer { recorder.cancel() }
+    try await recorder.waitUntilStarted()
+
+    #expect(controller.snapshot.children(of: document.id) == [parent.id])
+    #expect(controller.snapshot.children(of: parent.id) == [child.id])
+    #expect(controller.snapshot.ancestorNodeIDs(of: child.id) == [parent.id, document.id])
+
+    await enqueueCSSStyleReplies(on: runtime.backend)
+    context.select(child)
+
+    try await recorder.waitForTransactionCount(1)
+    let selection = try #require(recorder.transactions.last)
+    #expect(selection.changes == [.selectionChanged(nodeID: child.id)])
+    #expect(selection.oldSnapshot.selectedNodeID == nil)
+    #expect(selection.newSnapshot.selectedNodeID == child.id)
+    #expect(controller.snapshot.selectedNodeID == child.id)
+
+    context.select(nil)
+
+    try await recorder.waitForTransactionCount(2)
+    let selectionCleared = try #require(recorder.transactions.last)
+    #expect(selectionCleared.changes == [.selectionChanged(nodeID: nil)])
+    #expect(selectionCleared.oldSnapshot.selectedNodeID == child.id)
+    #expect(selectionCleared.newSnapshot.selectedNodeID == nil)
+    #expect(controller.snapshot.selectedNodeID == nil)
+}
+
+@MainActor
+@Test
 func selectingDOMNodeLoadsCSSStylesAndComputedProperties() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
@@ -2391,10 +2485,11 @@ func runtimeEventsPopulateContextsAndFallbackSelection() async throws {
 
 @MainActor
 private func startContext(
-    runtime: WebInspectorProxyTestRuntime
+    runtime: WebInspectorProxyTestRuntime,
+    document: DOM.Node = DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document")
 ) async throws -> (WebInspectorTarget, WebInspectorContext) {
     let target = try await runtime.proxy.waitForCurrentPage()
-    await enqueueStartupReplies(on: runtime.backend)
+    await enqueueStartupReplies(on: runtime.backend, document: document)
 
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
@@ -2598,6 +2693,40 @@ private func transportMessageID(_ message: String) throws -> UInt64 {
 private func transportMessageObject(_ message: String) throws -> [String: Any] {
     let data = try #require(message.data(using: .utf8))
     return try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+}
+
+@MainActor
+private final class DOMTreeTransactionRecorder {
+    private(set) var transactions: [DOMTreeTransaction] = []
+
+    private var task: Task<Void, Never>?
+    private var hasStarted = false
+
+    init(stream: AsyncStream<DOMTreeTransaction>) {
+        task = Task { @MainActor [weak self] in
+            self?.hasStarted = true
+            for await transaction in stream {
+                self?.transactions.append(transaction)
+            }
+        }
+    }
+
+    func waitUntilStarted() async throws {
+        try await waitUntil { self.hasStarted }
+    }
+
+    func waitForTransactionCount(_ count: Int) async throws {
+        try await waitUntil { self.transactions.count >= count }
+    }
+
+    func cancel() {
+        task?.cancel()
+        task = nil
+    }
+
+    deinit {
+        task?.cancel()
+    }
 }
 
 @MainActor

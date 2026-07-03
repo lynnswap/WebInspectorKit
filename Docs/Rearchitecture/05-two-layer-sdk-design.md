@@ -697,8 +697,9 @@ public enum WebInspectorProxyError: Error, Sendable, Equatable {
 
 Apple analog: SwiftData `ModelContainer` / `ModelContext` + CoreData
 `NSFetchedResultsController`. The data kit **owns** the accumulation logic that
-today's `@Observable` domain classes carry (DOM tree building, request-list
-ordering, console merge/repeat, runtime object lifetime) — but as private
+today's `@Observable` domain classes carry (DOM node identity and child
+relationships, request-list ordering, console merge/repeat, runtime object
+lifetime) — but as private
 `apply*` handlers feeding public models, not as the public API itself.
 
 Naming: the SwiftData-analog machinery is `WebInspector`-prefixed (to avoid
@@ -736,15 +737,16 @@ Binding tiers:
 
 - **Initial binding contract (M3):** container/context ownership, actor-isolated
   context creation, persistent model identity, hidden raw proxy/context internals,
-  DOM root/selection/readback, network/console fetched results, request body
-  fetch, runtime evaluation/object expansion, and non-MainActor fake-backed
-  contract tests.
+  DOM root/selection/readback, DOM current snapshot/transaction stream,
+  network/console fetched results, request body fetch, runtime
+  evaluation/object expansion, and non-MainActor fake-backed contract tests.
 - **Planned surface:** DOM editing/highlight/outerHTML, CSS mutation,
   fetched-results transactions/phases, `WebInspectorFetchedResultsController`,
-  `DOMTreeController`, sort/predicate descriptors, full target-lifecycle
-  handling, and any dedicated model-actor/executor convenience. These must not be
-  shipped as compatibility stubs; each moves into the initial contract only when
-  its owner, event coverage, and consumer contract tests are added.
+  sort/predicate descriptors, detached-root/shadow/pseudo DOM expansion, full
+  target-lifecycle handling, and any dedicated model-actor/executor convenience.
+  These must not be shipped as compatibility stubs; each moves into the initial
+  contract only when its owner, event coverage, and consumer contract tests are
+  added.
 
 ### 4.1 Container and context
 
@@ -767,9 +769,9 @@ public final class WebInspectorContainer: @unchecked Sendable {
     public func close() async
 }
 
-@Observable
 public final class WebInspectorContext {
-    /// The observable connection lifecycle state lives HERE (single owner).
+    /// Actor-confined connection lifecycle state. The context is the
+    /// ModelContext-style handle, not an observable view model.
     public enum State: Sendable, Equatable { case attaching, attached, detached, failed(WebInspectorProxyError) }
     public private(set) var state: State
     /// Non-fatal cleanup error from explicit close/detach. The context still
@@ -781,6 +783,8 @@ public final class WebInspectorContext {
     public func node(for id: DOMNode.ID, isolation: isolated (any Actor) = #isolation) -> DOMNode?
     public private(set) var selectedNode: DOMNode?
     public func select(_ node: DOMNode?, isolation: isolated (any Actor) = #isolation)
+    public func treeController(root: DOMNode? = nil,
+                               isolation: isolated (any Actor) = #isolation) async throws -> DOMTreeController
 
     // Runtime — contexts + evaluation.
     public private(set) var executionContexts: [RuntimeContext]
@@ -817,7 +821,7 @@ if the context is private state inside a consumer actor, that actor is the
 owner. The owner actor is fixed at init and public/package entry points must
 fail fast when called from a different actor. This fail-fast check applies to
 methods and command/query entry points that accept `isolation:`. Public
-observable stored-property reads are not wrapped in runtime owner checks; the
+stored-property reads are not wrapped in runtime owner checks; the
 contract is that `WebInspectorContext` and its models are non-`Sendable`,
 actor-private references, and consumers read them on the actor that owns the
 context. Cross-target semantics
@@ -1037,9 +1041,10 @@ Planned model extensions (not M3/M4 public API): `DOMNode.frameID`,
 `documentURL`, `baseURL`, shadow/pseudo/content-document projections,
 `DOMNode.highlight/remove/outerHTML`, request body storage, network wall-time,
 cached body size/type, response source, initiator, richer `NetworkBody`
-metadata, CSS property mutation, and any row/tree transaction models. Each
-extension must add its own owner, event-coverage row, and contract test before
-it becomes binding public surface.
+metadata, CSS property mutation, fetched-results transactions, and richer DOM
+transaction coverage for detached roots, shadow roots, pseudo elements, and
+content documents. Each extension must add its own owner, event-coverage row,
+and contract test before it becomes binding public surface.
 
 ### 4.3 Fetch, fetched results, tree controller
 
@@ -1114,19 +1119,49 @@ contract tests; do not add wrappers that merely forward `items`.
 DOM tree controller:
 
 ```swift
-public final class DOMTreeController {
-    public let root: DOMNode
-    /// Ordered tree transactions — the public replacement for today's
-    /// DOMTreeRenderSnapshot / requestDisplayChanges / rowDeltas path. It is
-    /// not UIKit-specific; UIKit converts this to outline or collection-view
-    /// diffs behind the UI boundary.
-    public var transactions: AsyncStream<Transaction> { get }
-    public struct Transaction: Sendable { /* expandedIDs, oldRows, newRows, nodeChanges */ }
+public struct DOMTreeSnapshot: Sendable, Hashable {
+    public let revision: UInt64
+    public let rootNodeID: DOMNode.ID?
+    public let selectedNodeID: DOMNode.ID?
+    public let nodesByID: [DOMNode.ID: Node]
+    public let parentByNodeID: [DOMNode.ID: DOMNode.ID]
 
-    public func setExpanded(_ expanded: Bool,
-                            for node: DOMNode,
-                            isolation: isolated (any Actor) = #isolation) async
-    public func isExpanded(_ node: DOMNode) -> Bool
+    public struct Node: Sendable, Hashable, Identifiable {
+        public enum Children: Sendable, Hashable {
+            case unrequested(count: Int)
+            case loaded([DOMNode.ID])
+        }
+        public let id: DOMNode.ID
+        public let nodeName: String
+        public let localName: String
+        public let nodeValue: String
+        public let nodeType: Int
+        public let attributes: [String: String]
+        public let childNodeCount: Int
+        public let children: Children
+    }
+}
+
+public struct DOMTreeTransaction: Sendable, Hashable {
+    public let revision: UInt64
+    public let oldSnapshot: DOMTreeSnapshot
+    public let newSnapshot: DOMTreeSnapshot
+    public let changes: [Change]
+
+    public enum Change: Sendable, Hashable {
+        case rootChanged(rootNodeID: DOMNode.ID?)
+        case childrenReplaced(parentID: DOMNode.ID)
+        case childInserted(parentID: DOMNode.ID)
+        case childRemoved(parentID: DOMNode.ID)
+        case childCountChanged(nodeID: DOMNode.ID)
+        case nodeChanged(nodeID: DOMNode.ID)
+        case selectionChanged(nodeID: DOMNode.ID?)
+    }
+}
+
+public final class DOMTreeController {
+    public var snapshot: DOMTreeSnapshot { get }
+    public var transactions: AsyncStream<DOMTreeTransaction> { get }
 }
 
 extension WebInspectorContext {
@@ -1134,6 +1169,12 @@ extension WebInspectorContext {
                                isolation: isolated (any Actor) = #isolation) async throws -> DOMTreeController
 }
 ```
+
+`DOMTreeController` does not own expansion state, flattened rows, UIKit index
+paths, or a second model graph. It forwards a value snapshot of the
+context-owned `DOMNode` graph and emits semantic diff hints from the same
+`apply*` mutations. UI layers convert those snapshots into outline rows,
+diffable data-source updates, or expansion state locally.
 
 SwiftUI `@WebInspectorQuery` / environment convenience is intentionally not part of
 the core DataKit binding surface because the core product is toolkit-free. If a
@@ -1171,9 +1212,10 @@ public enum DOMUpdate: Sendable {
 ```
 
 The doctrine (CodexDataKit): the **observable model is the data**; `updates` are
-hints. UI reads `node.children` and uses updates only to invalidate. Ordered row
-projection belongs to `DOMTreeController`, not to an ad-hoc UI mirror of the
-tree.
+hints. UI reads `node.children` and uses updates only to invalidate. Ordered DOM
+snapshot and child-relationship transactions belong to `DOMTreeController`;
+expansion state and flat row projection belong to the UI layer, not to an
+ad-hoc DataKit mirror of the tree.
 
 ### 4.5 Write-back and cross-domain wiring (all through the context)
 
@@ -1338,11 +1380,12 @@ in W4. Until that migration lands, it remains the UIKit compatibility owner over
 the legacy internal UI/Core targets, while the new DataKit contract is proven by
 `ContractTests` and package tests.
 
-- Its view controllers render from the context's `@Observable` models and drive
-  initial lists from `WebInspectorFetchedResults.items`. Ordered transactions are a
-  planned data-kit public contract, but they are not M3: the UI may keep internal
-  diffing behind the UI boundary until `WebInspectorFetchedResultsController` and
-  `DOMTreeController` have real transaction owners and contract tests.
+- Its view controllers render from the context-owned `@Observable` models and
+  drive initial lists from `WebInspectorFetchedResults.items`. DOM views use
+  `DOMTreeController.snapshot` / `transactions` for semantic tree invalidation,
+  then keep expansion and row projection in the UI layer. Ordered fetched-results
+  transactions remain planned until `WebInspectorFetchedResultsController` has a
+  real transaction owner and contract tests.
 - Today's `WebInspectorUI*` internal targets fold in (F-03 `@_exported`
   deletions carry over); `WebInspectorNativeAttachment.swift` and the
   `@_disfavoredOverload` attach decoys are deleted (F-04) — attach now goes
@@ -1365,7 +1408,7 @@ UI is a new module over `WebInspectorDataKit`, edits neither kit (§2 target tes
 | `WebInspectorContainer` / `WebInspectorContext` | `SwiftData.ModelContainer` / `ModelContext` | container owns connection; context is actor-confined; `mainContext` is a MainActor convenience |
 | `WebInspectorFetchDescriptor` / `WebInspectorFetchedResults` | `FetchDescriptor` / `@Query` results | value descriptor + observable results |
 | planned `WebInspectorFetchedResultsController` | `NSFetchedResultsController` | forwarded current value + ordered transactions |
-| planned `DOMTreeController` | `NSFetchedResultsController` adapted to tree shape | forwarded current tree projection + ordered tree transactions |
+| `DOMTreeController` | `NSFetchedResultsController` adapted to tree shape | forwarded current tree snapshot + semantic tree transactions |
 | models (`DOMNode`, `NetworkRequest`, …) | SwiftData `@Model` classes | `@Observable`, identity, in-place update, weak context |
 
 Verify signatures against Xcode DocumentationSearch / Apple docs at
@@ -1434,10 +1477,10 @@ alias target left behind.
 
 Resolved during review:
 
-- DOM ordered tree changes are a planned DataKit transaction contract
-  (`DOMTreeController`), not an implementation detail left to UIKit. It is not
-  part of the current M3 surface until the transaction owner and contract tests
-  land.
+- DOM ordered tree changes are a DataKit transaction contract
+  (`DOMTreeController`), not an implementation detail left to UIKit. The current
+  binding surface is snapshot + semantic diff stream only; expansion state and
+  flattened rows remain UI artifacts.
 - `currentPage` keeps semantic identity across provisional commit; ProxyKit owns
   the hidden route-ID swap.
 

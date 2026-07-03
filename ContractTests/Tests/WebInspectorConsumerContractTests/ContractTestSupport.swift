@@ -178,7 +178,7 @@ actor ContractDataKitActor {
         return target
     }
 
-    func assertPublicSurfaceIsUsable() throws {
+    func assertPublicSurfaceIsUsable() async throws {
         let context = modelContext()
         let requestResults: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
         let consoleResults: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults(for: .allConsoleMessages)
@@ -191,6 +191,12 @@ actor ContractDataKitActor {
         #expect(root.nodeName == "#document")
         #expect(context.node(for: root.id) === root)
         requirePersistentModel(root)
+
+        let treeController = try await context.treeController()
+        let treeSnapshot: DOMTreeSnapshot = treeController.snapshot
+        #expect(treeSnapshot.rootNodeID == root.id)
+        #expect(treeSnapshot.node(for: root.id)?.nodeName == "#document")
+        _ = treeController.transactions
 
         context.select(root)
         #expect(context.selectedNode === root)
