@@ -1103,6 +1103,104 @@ func fetchedResultsControllerPublishesNetworkInsertAndUpdateTransactions() async
 
 @MainActor
 @Test
+func clearNetworkRequestsPublishesDeletesAndIgnoresClearedEvents() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let controller = WebInspectorFetchedResultsController(fetchedResults: results)
+    let recorder = FetchedResultsTransactionRecorder(stream: controller.transactions)
+    defer { recorder.cancel() }
+    try await recorder.waitUntilStarted()
+
+    let firstRequestID = Network.Request.ID("clear-first-request")
+    let firstModelID = NetworkRequest.ID(firstRequestID)
+    await runtime.backend.emit(
+        .requestWillBeSent(
+            id: firstRequestID,
+            request: Network.Request(id: firstRequestID, url: "https://example.com/first", method: "GET"),
+            resourceType: .fetch,
+            redirectResponse: nil,
+            timestamp: 1
+        ),
+        target: target
+    )
+    try await recorder.waitForTransactionCount(1)
+
+    let secondRequestID = Network.Request.ID("clear-second-request")
+    let secondModelID = NetworkRequest.ID(secondRequestID)
+    await runtime.backend.emit(
+        .requestWillBeSent(
+            id: secondRequestID,
+            request: Network.Request(id: secondRequestID, url: "https://example.com/second", method: "GET"),
+            resourceType: .fetch,
+            redirectResponse: nil,
+            timestamp: 2
+        ),
+        target: target
+    )
+    try await recorder.waitForTransactionCount(2)
+    #expect(controller.snapshot.itemIDs == [firstModelID, secondModelID])
+
+    context.clearNetworkRequests()
+
+    try await recorder.waitForTransactionCount(3)
+    #expect(recorder.transactions.last?.itemChanges == [
+        .delete(itemID: secondModelID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 1)),
+        .delete(itemID: firstModelID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)),
+    ])
+    #expect(controller.snapshot.itemIDs == [])
+    #expect(results.items.isEmpty)
+    #expect(context.registeredRequest(for: firstModelID) == nil)
+    #expect(context.registeredRequest(for: secondModelID) == nil)
+
+    await runtime.backend.emit(
+        .responseReceived(
+            id: firstRequestID,
+            response: Network.Response(status: 200),
+            resourceType: .fetch,
+            timestamp: 3
+        ),
+        target: target
+    )
+    await runtime.backend.emit(
+        .dataReceived(id: firstRequestID, dataLength: 7, encodedDataLength: 4, timestamp: 4),
+        target: target
+    )
+    await runtime.backend.emit(
+        .loadingFinished(id: secondRequestID, timestamp: 5, sourceMapURL: nil, metrics: nil),
+        target: target
+    )
+    await runtime.backend.emit(
+        .webSocket(.closed(id: secondRequestID, timestamp: 6)),
+        target: target
+    )
+    for _ in 0..<10 {
+        await Task.yield()
+    }
+    #expect(context.state == .attached)
+    #expect(results.items.isEmpty)
+    #expect(recorder.transactions.count == 3)
+
+    await runtime.backend.emit(
+        .requestWillBeSent(
+            id: firstRequestID,
+            request: Network.Request(id: firstRequestID, url: "https://example.com/reused", method: "GET"),
+            resourceType: .fetch,
+            redirectResponse: nil,
+            timestamp: 7
+        ),
+        target: target
+    )
+
+    try await recorder.waitForTransactionCount(4)
+    let reusedRequest = try #require(results.items.first)
+    #expect(reusedRequest.id == firstModelID)
+    #expect(reusedRequest.url == "https://example.com/reused")
+    #expect(context.registeredRequest(for: firstModelID) === reusedRequest)
+}
+
+@MainActor
+@Test
 func fetchedResultsControllerPublishesConsoleInsertUpdateAndDeleteTransactions() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)

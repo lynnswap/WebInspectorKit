@@ -216,6 +216,7 @@ actor ContractDataKitActor {
         #expect(context.selectedNode === root)
         context.select(nil)
         context.selectContext(nil)
+        context.clearNetworkRequests()
         #expect(context.selectedNode == nil)
         #expect(context.selectedContext == nil)
     }

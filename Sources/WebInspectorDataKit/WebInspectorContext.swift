@@ -39,6 +39,7 @@ public final class WebInspectorContext {
     private var treeStates: [WeakDOMTreeState]
     private var requestsByID: [NetworkRequest.ID: NetworkRequest]
     private var orderedRequestIDs: [NetworkRequest.ID]
+    private var clearedNetworkRequestIDs: Set<NetworkRequest.ID>
     private var networkFetchedResults: [WeakWebInspectorFetchedResults<NetworkRequest>]
     private var consoleMessagesByID: [ConsoleMessage.ID: ConsoleMessage]
     private var orderedConsoleMessageIDs: [ConsoleMessage.ID]
@@ -79,6 +80,7 @@ public final class WebInspectorContext {
         treeStates = []
         requestsByID = [:]
         orderedRequestIDs = []
+        clearedNetworkRequestIDs = []
         networkFetchedResults = []
         consoleMessagesByID = [:]
         orderedConsoleMessageIDs = []
@@ -135,6 +137,11 @@ public final class WebInspectorContext {
     ) -> NetworkRequest? {
         requireOwner(isolation)
         return requestsByID[id]
+    }
+
+    public func clearNetworkRequests(isolation: isolated (any Actor) = #isolation) {
+        requireOwner(isolation)
+        clearNetworkRequests()
     }
 
     public func registeredMessage(
@@ -1211,15 +1218,13 @@ extension WebInspectorContext {
                 timestamp: timestamp
             )
         case let .responseReceived(id, response, resourceType, timestamp):
-            guard let request = requestsByID[NetworkRequest.ID(id)] else {
-                fail(.disconnected("Network.responseReceived referenced an unknown request."))
+            guard let request = networkRequest(for: id, method: "responseReceived") else {
                 return
             }
             request.applyResponse(response, resourceType: resourceType, timestamp: timestamp)
             refreshAllRequests(updatedItemIDs: [request.id])
         case let .dataReceived(id, dataLength, encodedDataLength, timestamp):
-            guard let request = requestsByID[NetworkRequest.ID(id)] else {
-                fail(.disconnected("Network.dataReceived referenced an unknown request."))
+            guard let request = networkRequest(for: id, method: "dataReceived") else {
                 return
             }
             request.applyDataReceived(
@@ -1229,15 +1234,13 @@ extension WebInspectorContext {
             )
             refreshAllRequests(updatedItemIDs: [request.id])
         case let .loadingFinished(id, timestamp, sourceMapURL, metrics):
-            guard let request = requestsByID[NetworkRequest.ID(id)] else {
-                fail(.disconnected("Network.loadingFinished referenced an unknown request."))
+            guard let request = networkRequest(for: id, method: "loadingFinished") else {
                 return
             }
             request.finish(timestamp: timestamp, sourceMapURL: sourceMapURL, metrics: metrics)
             refreshAllRequests(updatedItemIDs: [request.id])
         case let .loadingFailed(id, errorText, canceled, timestamp):
-            guard let request = requestsByID[NetworkRequest.ID(id)] else {
-                fail(.disconnected("Network.loadingFailed referenced an unknown request."))
+            guard let request = networkRequest(for: id, method: "loadingFailed") else {
                 return
             }
             request.fail(errorText: errorText, canceled: canceled, timestamp: timestamp)
@@ -1259,6 +1262,7 @@ extension WebInspectorContext {
         timestamp: Double
     ) {
         let id = NetworkRequest.ID(proxyID)
+        clearedNetworkRequestIDs.remove(id)
         let request: NetworkRequest
         var updatedItemIDs = Set<NetworkRequest.ID>()
         if let existing = requestsByID[id] {
@@ -1289,6 +1293,9 @@ extension WebInspectorContext {
         timestamp: Double
     ) {
         let id = NetworkRequest.ID(proxyID)
+        guard clearedNetworkRequestIDs.contains(id) == false else {
+            return
+        }
         let request: NetworkRequest
         if let existing = requestsByID[id] {
             request = existing
@@ -1358,6 +1365,7 @@ extension WebInspectorContext {
 
     private func applyWebSocketCreated(id proxyID: Network.Request.ID, url: String) {
         let id = NetworkRequest.ID(proxyID)
+        clearedNetworkRequestIDs.remove(id)
         let request: NetworkRequest
         if let existing = requestsByID[id] {
             request = existing
@@ -1372,14 +1380,40 @@ extension WebInspectorContext {
     }
 
     private func networkRequest(
-        forWebSocketEvent proxyID: Network.Request.ID,
+        for proxyID: Network.Request.ID,
         method: String
     ) -> NetworkRequest? {
-        guard let request = requestsByID[NetworkRequest.ID(proxyID)] else {
+        let id = NetworkRequest.ID(proxyID)
+        guard let request = requestsByID[id] else {
+            guard clearedNetworkRequestIDs.contains(id) == false else {
+                return nil
+            }
             fail(.disconnected("Network.\(method) referenced an unknown request."))
             return nil
         }
         return request
+    }
+
+    private func networkRequest(
+        forWebSocketEvent proxyID: Network.Request.ID,
+        method: String
+    ) -> NetworkRequest? {
+        let id = NetworkRequest.ID(proxyID)
+        guard let request = requestsByID[id] else {
+            guard clearedNetworkRequestIDs.contains(id) == false else {
+                return nil
+            }
+            fail(.disconnected("Network.\(method) referenced an unknown request."))
+            return nil
+        }
+        return request
+    }
+
+    private func clearNetworkRequests() {
+        clearedNetworkRequestIDs.formUnion(requestsByID.keys)
+        requestsByID = [:]
+        orderedRequestIDs = []
+        refreshAllRequests()
     }
 
     private func currentNetworkRequests() -> [NetworkRequest] {

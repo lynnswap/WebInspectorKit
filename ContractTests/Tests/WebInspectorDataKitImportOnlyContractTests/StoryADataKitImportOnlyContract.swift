@@ -22,6 +22,7 @@ private actor DataKitImportOnlyActor {
         _ = context.state
         _ = context.rootNode?.children
         _ = context.selectedNode?.attributes
+        context.clearNetworkRequests()
         let treeController = try await context.treeController()
         let treeSnapshot: DOMTreeSnapshot = treeController.snapshot
         _ = treeSnapshot.rootNodeID
