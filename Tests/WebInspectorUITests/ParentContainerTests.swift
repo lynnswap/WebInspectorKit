@@ -3,14 +3,10 @@ import ObservationBridge
 import Testing
 import WebInspectorDataKit
 import WebInspectorProxyKit
+import WebInspectorProxyKitTesting
 import WebInspectorTransport
 import UIKit
 import WebKit
-@testable import WebInspectorCore
-@testable import WebInspectorCoreConsoleNetwork
-@testable import WebInspectorCoreDOMCSS
-@testable import WebInspectorCoreRuntime
-@testable import WebInspectorCoreSupport
 @testable import WebInspectorUI
 @testable import WebInspectorUISyntaxBody
 @testable import WebInspectorUINetwork
@@ -110,7 +106,7 @@ struct ParentContainerTests {
         let observedWebView = WKWebView(frame: .zero)
         let observedWebViewID = ObjectIdentifier(observedWebView)
         let observerRecorder = PageUserInterfaceStyleObserverRecorder(styleOnStart: .dark)
-        let attachAction: @MainActor (InspectorSession, WKWebView) async throws -> Void = { _, webView in
+        let attachAction: @MainActor (WKWebView) async throws -> Void = { webView in
             if ObjectIdentifier(webView) != observedWebViewID {
                 throw AttachmentFailure()
             }
@@ -401,10 +397,7 @@ struct ParentContainerTests {
 
     @Test
     func programmaticDismissAutomaticallyDetachesOnce() async throws {
-        let detachRecorder = DetachRecorder()
-        let session = makeSessionWithNoOpAttachment(detachAction: { _ in
-            detachRecorder.record()
-        })
+        let session = makeSessionWithNoOpAttachment()
         let presenter = UIViewController()
         let viewController = WebInspectorViewController(session: session)
         let window = showInWindow(presenter)
@@ -414,19 +407,16 @@ struct ParentContainerTests {
         #expect(await waitUntil { presenter.presentedViewController === viewController })
 
         viewController.dismiss(animated: false)
-        #expect(await waitUntil { detachRecorder.count == 1 })
+        #expect(await waitUntil { session.detachCountForTesting == 1 })
 
         viewController.finishRootPresentationLifecycleForTesting()
-        _ = await waitUntil { detachRecorder.count == 1 }
-        #expect(detachRecorder.count == 1)
+        _ = await waitUntil { session.detachCountForTesting == 1 }
+        #expect(session.detachCountForTesting == 1)
     }
 
     @Test
     func rootPresentationFallbacksDetachOnlyOnce() async throws {
-        let detachRecorder = DetachRecorder()
-        let session = makeSessionWithNoOpAttachment(detachAction: { _ in
-            detachRecorder.record()
-        })
+        let session = makeSessionWithNoOpAttachment()
         _ = WebInspectorTab.ContentFactory.makeViewController(
             for: .dom,
             session: session,
@@ -437,20 +427,17 @@ struct ParentContainerTests {
         #expect(session.interface.contentCacheCountForTesting > 0)
 
         viewController.finishRootPresentationLifecycleForTesting()
-        #expect(await waitUntil { detachRecorder.count == 1 })
+        #expect(await waitUntil { session.detachCountForTesting == 1 })
         viewController.finishRootPresentationLifecycleForTesting()
-        _ = await waitUntil { detachRecorder.count == 1 }
+        _ = await waitUntil { session.detachCountForTesting == 1 }
 
-        #expect(detachRecorder.count == 1)
+        #expect(session.detachCountForTesting == 1)
         #expect(session.interface.contentCacheCountForTesting == 0)
     }
 
     @Test
     func hiddenNavigationControllerRemovalFinishesRootPresentationLifecycle() async throws {
-        let detachRecorder = DetachRecorder()
-        let session = makeSessionWithNoOpAttachment(detachAction: { _ in
-            detachRecorder.record()
-        })
+        let session = makeSessionWithNoOpAttachment()
         _ = WebInspectorTab.ContentFactory.makeViewController(
             for: .dom,
             session: session,
@@ -467,22 +454,19 @@ struct ParentContainerTests {
         let coveringViewController = UIViewController()
         navigationController.pushViewController(coveringViewController, animated: false)
         #expect(await waitUntil { navigationController.topViewController === coveringViewController })
-        #expect(detachRecorder.count == 0)
+        #expect(session.detachCountForTesting == 0)
         #expect(session.interface.contentCacheCountForTesting > 0)
 
         window.rootViewController = UIViewController()
         window.layoutIfNeeded()
         #expect(navigationController.view.window == nil)
-        #expect(await waitUntil { detachRecorder.count == 1 })
+        #expect(await waitUntil { session.detachCountForTesting == 1 })
         #expect(session.interface.contentCacheCountForTesting == 0)
     }
 
     @Test
     func directWindowRootRemovalFinishesRootPresentationLifecycle() async throws {
-        let detachRecorder = DetachRecorder()
-        let session = makeSessionWithNoOpAttachment(detachAction: { _ in
-            detachRecorder.record()
-        })
+        let session = makeSessionWithNoOpAttachment()
         _ = WebInspectorTab.ContentFactory.makeViewController(
             for: .dom,
             session: session,
@@ -499,7 +483,7 @@ struct ParentContainerTests {
         window.layoutIfNeeded()
 
         #expect(viewController.view.window == nil)
-        #expect(await waitUntil { detachRecorder.count == 1 })
+        #expect(await waitUntil { session.detachCountForTesting == 1 })
         #expect(session.interface.contentCacheCountForTesting == 0)
     }
 
@@ -524,10 +508,7 @@ struct ParentContainerTests {
 
     @Test
     func interactiveDismissCancelDoesNotDetachOrDropContentCache() async throws {
-        let detachRecorder = DetachRecorder()
-        let session = makeSessionWithNoOpAttachment(detachAction: { _ in
-            detachRecorder.record()
-        })
+        let session = makeSessionWithNoOpAttachment()
         _ = WebInspectorTab.ContentFactory.makeViewController(
             for: .network,
             session: session,
@@ -540,17 +521,14 @@ struct ParentContainerTests {
         viewController.finishRootPresentationLifecycleForTesting(cancelled: true)
         await Task.yield()
 
-        #expect(detachRecorder.count == 0)
+        #expect(session.detachCountForTesting == 0)
         #expect(viewController.hasFinishedRootPresentationLifecycleForTesting == false)
         #expect(session.interface.contentCacheCountForTesting == cacheCountBeforeCancel)
     }
 
     @Test
     func hostReplacementAndCompactTabSwitchDoNotDetachRootSession() async throws {
-        let detachRecorder = DetachRecorder()
-        let session = makeSessionWithNoOpAttachment(detachAction: { _ in
-            detachRecorder.record()
-        })
+        let session = makeSessionWithNoOpAttachment()
         let viewController = WebInspectorViewController(session: session)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
@@ -563,16 +541,13 @@ struct ParentContainerTests {
         viewController.horizontalSizeClassOverrideForTesting = .regular
         await Task.yield()
 
-        #expect(detachRecorder.count == 0)
+        #expect(session.detachCountForTesting == 0)
         #expect(viewController.hasFinishedRootPresentationLifecycleForTesting == false)
     }
 
     @Test
     func rootDismissDropsContentCacheWithoutAutomaticDetach() async throws {
-        let detachRecorder = DetachRecorder()
-        let session = makeSessionWithNoOpAttachment(detachAction: { _ in
-            detachRecorder.record()
-        })
+        let session = makeSessionWithNoOpAttachment()
         _ = WebInspectorTab.ContentFactory.makeViewController(
             for: .dom,
             session: session,
@@ -591,7 +566,7 @@ struct ParentContainerTests {
         viewController.finishRootPresentationLifecycleForTesting()
         await Task.yield()
 
-        #expect(detachRecorder.count == 0)
+        #expect(session.detachCountForTesting == 0)
         #expect(session.interface.contentCacheCountForTesting == 0)
     }
 
@@ -630,7 +605,7 @@ struct ParentContainerTests {
 
     @Test
     func compactFactoryUsesDomainNavigationControllers() throws {
-        let session = WebInspectorSession(inspector: InspectorSession(), dataContext: makeContext())
+        let session = WebInspectorSession(context: makeContext())
 
         let domViewController = WebInspectorTab.ContentFactory.makeViewController(
             for: .dom,
@@ -714,7 +689,7 @@ struct ParentContainerTests {
     @Test
     func networkPanelModelSelectionIsSharedAcrossParentHosts() async throws {
         let context = makeContext()
-        let session = WebInspectorSession(inspector: InspectorSession(), dataContext: context)
+        let session = WebInspectorSession(context: context)
         let requestID = applyRequest(
             to: context,
             requestID: "1",
@@ -850,19 +825,23 @@ struct ParentContainerTests {
         return window
     }
 
+    private func makeFakeContainer() async throws -> WebInspectorContainer {
+        let runtime = try await WebInspectorProxyTestRuntime.start()
+        return WebInspectorContainer(proxy: runtime.proxy)
+    }
+
     private func attach(
         _ session: WebInspectorSession,
         to webView: WKWebView,
-        perform attachAction: @escaping @MainActor (InspectorSession, WKWebView) async throws -> Void = { _, _ in }
+        perform attachAction: @escaping @MainActor (WKWebView) async throws -> Void = { _ in }
     ) async throws {
-        try await session.attachPresentation(to: webView) { inspector, webView in
-            try await attachAction(inspector, webView)
-            return makeContext()
+        try await session.attach(to: webView) { [self] webView in
+            try await attachAction(webView)
+            return try await makeFakeContainer()
         }
     }
 
     private func makeSessionWithNoOpAttachment(
-        detachAction: @escaping @MainActor (InspectorSession) async -> Void = { _ in },
         makePageUserInterfaceStyleObserver: @escaping @MainActor (
             WKWebView,
             @escaping @MainActor (UIUserInterfaceStyle) -> Void
@@ -871,9 +850,7 @@ struct ParentContainerTests {
         }
     ) -> WebInspectorSession {
         WebInspectorSession(
-            inspector: InspectorSession(),
-            dataContext: makeContext(),
-            detachAction: detachAction,
+            context: makeContext(),
             makePageUserInterfaceStyleObserver: makePageUserInterfaceStyleObserver
         )
     }
@@ -932,14 +909,6 @@ struct ParentContainerTests {
                 return
             }
             apply(style)
-        }
-    }
-
-    private final class DetachRecorder {
-        private(set) var count = 0
-
-        func record() {
-            count += 1
         }
     }
 

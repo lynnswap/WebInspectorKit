@@ -1,5 +1,4 @@
 #if canImport(UIKit)
-import WebInspectorCore
 import UIKit
 import WebInspectorUIBase
 import WebInspectorUIDOM
@@ -10,10 +9,7 @@ enum WebInspectorViewControllerPreviewFixtures {
     static func makeSession() -> WebInspectorSession {
         let dataContext = DOMPreviewFixtures.makeWebInspectorContext()
         NetworkPreviewFixtures.applySampleData(to: dataContext, mode: .detail)
-        return WebInspectorSession(
-            inspector: InspectorSession(),
-            dataContext: dataContext
-        )
+        return WebInspectorSession(context: dataContext)
     }
 }
 

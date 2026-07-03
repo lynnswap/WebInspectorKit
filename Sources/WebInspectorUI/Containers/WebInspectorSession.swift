@@ -2,7 +2,6 @@
 import Observation
 import UIKit
 import WebKit
-import WebInspectorCore
 import WebInspectorDataKit
 import WebInspectorUIBase
 import WebInspectorUINetwork
@@ -10,31 +9,33 @@ import WebInspectorUINetwork
 @MainActor
 @Observable
 public final class WebInspectorSession {
-    package let inspector: InspectorSession
     package let interface: InterfaceModel
     /// The user interface style inferred from the inspected page.
     ///
     /// The value is `.unspecified` until the page style is known or when no useful style can be inferred.
     public private(set) var pageUserInterfaceStyle: UIUserInterfaceStyle = .unspecified
-    @ObservationIgnored private let detachAction: @MainActor (InspectorSession) async -> Void
-    @ObservationIgnored private var dataContext: WebInspectorContext?
+    @ObservationIgnored private var container: WebInspectorContainer?
+    @ObservationIgnored private var dataContext: WebInspectorContext
     @ObservationIgnored private let makePageUserInterfaceStyleObserver: @MainActor (
         WKWebView,
         @escaping @MainActor (UIUserInterfaceStyle) -> Void
     ) -> any WebInspectorPageUserInterfaceStyleObserving
     @ObservationIgnored private var pageUserInterfaceStyleObserver: (any WebInspectorPageUserInterfaceStyleObserving)?
+    #if DEBUG
+    @ObservationIgnored package private(set) var detachCountForTesting = 0
+    #endif
 
-    public convenience init(tabs: [WebInspectorTab] = [.dom, .network]) {
-        self.init(inspector: InspectorSession(), tabs: tabs)
+    public init(tabs: [WebInspectorTab] = [.dom, .network]) {
+        self.interface = InterfaceModel(tabs: tabs)
+        self.dataContext = Self.makeDetachedDataContext()
+        self.makePageUserInterfaceStyleObserver = { webView, apply in
+            WebInspectorPageUserInterfaceStyleObserver(webView: webView, apply: apply)
+        }
     }
 
     package init(
-        inspector: InspectorSession,
+        context: WebInspectorContext,
         tabs: [WebInspectorTab] = [.dom, .network],
-        dataContext: WebInspectorContext? = nil,
-        detachAction: @escaping @MainActor (InspectorSession) async -> Void = { inspector in
-            await inspector.detach()
-        },
         makePageUserInterfaceStyleObserver: @escaping @MainActor (
             WKWebView,
             @escaping @MainActor (UIUserInterfaceStyle) -> Void
@@ -42,10 +43,8 @@ public final class WebInspectorSession {
             WebInspectorPageUserInterfaceStyleObserver(webView: webView, apply: apply)
         }
     ) {
-        self.inspector = inspector
         self.interface = InterfaceModel(tabs: tabs)
-        self.dataContext = dataContext ?? Self.makeDetachedDataContext()
-        self.detachAction = detachAction
+        self.dataContext = context
         self.makePageUserInterfaceStyleObserver = makePageUserInterfaceStyleObserver
     }
 
@@ -54,33 +53,26 @@ public final class WebInspectorSession {
         interface.removeContentCache()
     }
 
-    package var attachment: AttachedInspection {
-        inspector.attachment
-    }
-
     package var context: WebInspectorContext {
-        guard let dataContext else {
-            preconditionFailure("WebInspectorSession has no installed WebInspectorContext.")
-        }
-        return dataContext
+        dataContext
     }
 
-    @_disfavoredOverload
     public func attach(to webView: WKWebView) async throws {
-        try await attachPresentation(to: webView) { _, _ in
-            throw AttachmentUnavailableError()
+        try await attach(to: webView) { webView in
+            try await WebInspectorContainer(attachingTo: webView)
         }
     }
 
-    package func attachPresentation(
+    package func attach(
         to webView: WKWebView,
-        perform attach: @MainActor (InspectorSession, WKWebView) async throws -> WebInspectorContext?
+        makeContainer: @MainActor (WKWebView) async throws -> WebInspectorContainer
     ) async throws {
         stopPageUserInterfaceStyleObservation()
-        await stopDataContext(replaceWithDetached: false)
+        await stopContainer(replaceContextWithDetached: false)
         do {
-            let context = try await attach(inspector, webView)
-            installDataContext(context ?? Self.makeDetachedDataContext())
+            let container = try await makeContainer(webView)
+            self.container = container
+            installDataContext(container.mainContext)
             startPageUserInterfaceStyleObservation(for: webView)
         } catch {
             installDataContext(Self.makeDetachedDataContext())
@@ -90,18 +82,33 @@ public final class WebInspectorSession {
     }
 
     public func detach() async {
+        #if DEBUG
+        detachCountForTesting += 1
+        #endif
         stopPageUserInterfaceStyleObservation()
-        await stopDataContext(replaceWithDetached: true)
-        await detachAction(inspector)
+        await stopContainer(replaceContextWithDetached: true)
     }
 
     package func retireRootPresentation(detach: Bool) async {
         interface.removeContentCache()
         guard detach else {
-            await inspector.retireBackendInteractionForPresentationEnd()
+            await suspendBackendInteractionForPresentationEnd()
             return
         }
         await self.detach()
+    }
+
+    /// Mirrors the legacy presentation-end retirement: without tearing down the
+    /// connection, disable the element picker and hide any visible highlight so
+    /// a re-presentation starts from a clean interaction state.
+    private func suspendBackendInteractionForPresentationEnd() async {
+        guard dataContext.status.state == .attached else {
+            return
+        }
+        if dataContext.isElementPickerEnabled {
+            try? await dataContext.setElementPickerEnabled(false)
+        }
+        try? await dataContext.hideHighlight()
     }
 
     private func startPageUserInterfaceStyleObservation(for webView: WKWebView) {
@@ -130,29 +137,21 @@ public final class WebInspectorSession {
         interface.removeNetworkPanelModel()
     }
 
-    private func stopDataContext(replaceWithDetached: Bool) async {
-        guard let context = dataContext else {
-            if replaceWithDetached {
-                installDataContext(Self.makeDetachedDataContext())
-            }
-            return
-        }
-        dataContext = nil
+    private func stopContainer(replaceContextWithDetached: Bool) async {
         interface.removeNetworkPanelModel()
-        await context.stop()
-        if replaceWithDetached {
+        if let container {
+            self.container = nil
+            await container.close()
+        } else {
+            await dataContext.stop()
+        }
+        if replaceContextWithDetached {
             installDataContext(Self.makeDetachedDataContext())
         }
     }
 
     private static func makeDetachedDataContext() -> WebInspectorContext {
         WebInspectorContext.detached(isolation: MainActor.shared)
-    }
-
-    private struct AttachmentUnavailableError: Error, CustomStringConvertible {
-        var description: String {
-            "Native WKWebView attachment is provided by WebInspectorKit."
-        }
     }
 }
 

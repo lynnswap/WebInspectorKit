@@ -200,9 +200,7 @@ let package = Package(
         .target(
             name: "WebInspectorUI",
             dependencies: [
-                "WebInspectorCore",
                 "WebInspectorDataKit",
-                "WebInspectorTransport",
                 "WebInspectorUIBase",
                 "WebInspectorUIDOM",
                 "WebInspectorUINetwork",
@@ -217,11 +215,6 @@ let package = Package(
         .target(
             name: "WebInspectorKit",
             dependencies: [
-                "WebInspectorCore",
-                "WebInspectorDataKit",
-                "WebInspectorNativeTransport",
-                "WebInspectorProxyKit",
-                "WebInspectorTransport",
                 "WebInspectorUI"
             ],
             swiftSettings: strictSwiftSettings
@@ -320,6 +313,7 @@ let package = Package(
                 "WebInspectorCore",
                 "WebInspectorDataKit",
                 "WebInspectorProxyKit",
+                "WebInspectorProxyKitTesting",
                 "WebInspectorTransport",
                 "WebInspectorUIBase",
                 "WebInspectorUIDOM",

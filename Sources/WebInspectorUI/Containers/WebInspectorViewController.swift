@@ -1,8 +1,6 @@
 #if canImport(UIKit)
 import UIKit
 import WebKit
-import WebInspectorCore
-import WebInspectorDataKit
 import WebInspectorUIBase
 
 @MainActor
@@ -155,14 +153,6 @@ public final class WebInspectorViewController: UIViewController {
         finishRootPresentationLifecycle()
     }
 
-    package func attachPresentation(
-        to webView: WKWebView,
-        perform attach: @MainActor (InspectorSession, WKWebView) async throws -> WebInspectorContext?
-    ) async throws {
-        try await session.attachPresentation(to: webView, perform: attach)
-    }
-
-    @_disfavoredOverload
     public func attach(to webView: WKWebView) async throws {
         try await session.attach(to: webView)
     }
