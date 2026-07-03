@@ -982,9 +982,12 @@ public final class WebSocketState {
 }
 
 /// `Network.webSocketCreated` is the row-creation owner. Later WebSocket
-/// events (`handshake*`, `frame*`, `closed`) must reference a registered
-/// `NetworkRequest`; otherwise DataKit fails the context as a broken protocol
-/// sequence. Forward-compatible raw WebSocket events (`.other`) stay no-op,
+/// events (`handshake*`, `frame*`, `closed`) referencing an untracked
+/// `NetworkRequest` are SKIPPED, not treated as a broken sequence: WebKit
+/// emits frame/close events for sockets opened before `Network.enable`
+/// (attach mid-stream), so an unknown reference is part of the normal
+/// protocol flow. `state = .failed` is reserved for terminal connection
+/// loss. Forward-compatible raw WebSocket events (`.other`) stay no-op,
 /// same as domain-level `.unknown`.
 @Observable
 public final class NetworkBody {

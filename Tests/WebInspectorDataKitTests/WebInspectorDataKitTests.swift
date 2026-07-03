@@ -474,6 +474,42 @@ func explicitSelectionSupersedesPendingDOMInspectResolution() async throws {
 
 @MainActor
 @Test
+func domMutationEventForUnmaterializedNodeIsSkipped() async throws {
+    // Live pages emit mutation events for nodes WebKit has bound for this
+    // frontend but this context has not materialized (attach mid-flight,
+    // evicted subtrees). They must be skipped, not fail the context.
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+    let documentID = DOM.Node.ID("document")
+    let childID = DOM.Node.ID("child")
+
+    await enqueueStartupReplies(
+        on: runtime.backend,
+        document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document", childNodeCount: 1)
+    )
+    let container = WebInspectorContainer(proxy: runtime.proxy)
+    let context = container.mainContext
+    try await waitForStartupSubscribers(runtime: runtime, target: target)
+    try await waitUntil { context.rootNode != nil }
+
+    await runtime.backend.emit(
+        .attributeModified(DOM.Node.ID("unmaterialized"), name: "class", value: "x"),
+        target: target
+    )
+    await runtime.backend.emit(
+        .setChildNodes(parent: documentID, nodes: [
+            DOM.Node(id: childID, nodeType: 1, nodeName: "DIV", localName: "div", childNodeCount: 0)
+        ]),
+        target: target
+    )
+
+    let child = try await waitForChild(in: context)
+    #expect(child.id == DOMNode.ID(childID))
+    #expect(context.state == .attached)
+}
+
+@MainActor
+@Test
 func startupEnablesTrackedDomainsBeforeInitialDocumentSnapshot() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
@@ -2557,33 +2593,31 @@ func memoryCacheEventCreatesFinishedCachedRequestFromResponse() async throws {
 
 @MainActor
 @Test
-func memoryCacheEventWithoutURLForNewRequestFailsContext() async throws {
+func memoryCacheEventWithoutURLForNewRequestIsSkipped() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let requestID = Network.Request.ID("cached-request-without-url")
 
     await runtime.backend.emit(
         .requestServedFromMemoryCache(
-            id: requestID,
+            id: Network.Request.ID("cached-request-without-url"),
             response: Network.Response(status: 200),
             timestamp: 5
         ),
         target: target
     )
+    await runtime.backend.emit(
+        .requestServedFromMemoryCache(
+            id: Network.Request.ID("cached-request-with-url"),
+            response: Network.Response(url: "https://example.com/cached.css", status: 200),
+            timestamp: 6
+        ),
+        target: target
+    )
 
-    try await waitUntil {
-        guard case .failed = context.state else {
-            return false
-        }
-        return true
-    }
-    guard case let .failed(error) = context.state else {
-        Issue.record("Expected failed context state.")
-        return
-    }
-    #expect(error == .disconnected("Network.requestServedFromMemoryCache omitted response URL for a new request."))
     let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
-    #expect(results.items.isEmpty)
+    try await waitUntil { results.items.count == 1 }
+    #expect(results.items.first?.url == "https://example.com/cached.css")
+    #expect(context.state == .attached)
 }
 
 @MainActor
@@ -2811,7 +2845,7 @@ func webSocketLifecycleStoresHandshakeFramesErrorAndClosedState() async throws {
 
 @MainActor
 @Test
-func webSocketEventForUnknownRequestFailsContext() async throws {
+func webSocketEventForUnknownRequestIsSkipped() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let requestID = Network.Request.ID("missing-websocket")
@@ -2824,18 +2858,16 @@ func webSocketEventForUnknownRequestFailsContext() async throws {
         )),
         target: target
     )
+    await runtime.backend.emit(
+        .webSocket(.created(id: requestID, url: "wss://example.com/socket")),
+        target: target
+    )
 
-    try await waitUntil {
-        guard case .failed = context.state else {
-            return false
-        }
-        return true
-    }
-    guard case let .failed(error) = context.state else {
-        Issue.record("Expected failed context state.")
-        return
-    }
-    #expect(error == .disconnected("Network.webSocketHandshakeResponseReceived referenced an unknown request."))
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    try await waitUntil { results.items.count == 1 }
+    #expect(results.items.first?.webSocket?.readyState == .connecting)
+    #expect(results.items.first?.webSocket?.handshakeResponse == nil)
+    #expect(context.state == .attached)
 }
 
 @MainActor

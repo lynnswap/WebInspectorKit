@@ -572,24 +572,20 @@ public final class WebInspectorContext {
     ) async {
         requireOwner(isolation)
         guard nodesByID[node.id] === node else {
-            fail(.disconnected("DOMNode is not registered in this WebInspectorContext."))
+            skipEvent("requestChildren ignored a DOMNode from a previous document generation")
             return
         }
         guard let currentPage else {
-            fail(.disconnected("WebInspectorDataKit has no current page target."))
+            skipEvent("requestChildren ignored: no current page target")
             return
         }
 
         do {
             try await currentPage.dom.requestChildNodes(node.id.proxyID, depth: depth)
-        } catch let error as WebInspectorProxyError {
-            fail(error)
+        } catch is CancellationError {
+            return
         } catch {
-            fail(.commandFailed(
-                domain: "DOM",
-                method: "requestChildNodes",
-                message: String(describing: error)
-            ))
+            failIfTerminal(error, operation: "DOM.requestChildNodes")
         }
     }
 
@@ -754,8 +750,10 @@ public final class WebInspectorContext {
     private func startup(isolation: isolated (any Actor)) async {
         requireOwner(isolation)
         if let teardownError = await disableEnabledDomainsBeforeRestart(isolation: isolation) {
-            fail(teardownError)
-            return
+            failIfTerminal(teardownError, operation: "domain disable before restart")
+            if case .failed = state {
+                return
+            }
         }
 
         do {
@@ -798,13 +796,15 @@ public final class WebInspectorContext {
                 await disableEnabledDomainsAfterCancellation(isolation: isolation)
                 return
             }
-            fail(await disableEnabledDomainsAfterStartupFailure(isolation: isolation) ?? error)
+            await logStartupTeardownFailure(isolation: isolation)
+            fail(error)
         } catch {
             guard Task.isCancelled == false else {
                 await disableEnabledDomainsAfterCancellation(isolation: isolation)
                 return
             }
-            fail(await disableEnabledDomainsAfterStartupFailure(isolation: isolation) ?? .attachFailed(String(describing: error)))
+            await logStartupTeardownFailure(isolation: isolation)
+            fail(.attachFailed(String(describing: error)))
         }
     }
 
@@ -895,7 +895,7 @@ public final class WebInspectorContext {
         isolation: isolated (any Actor)
     ) async {
         if let error = await disableEnabledDomains(isolation: isolation) {
-            fail(error)
+            failIfTerminal(error, operation: "domain disable after cancellation")
         }
     }
 
@@ -903,6 +903,14 @@ public final class WebInspectorContext {
         isolation: isolated (any Actor)
     ) async -> WebInspectorProxyError? {
         await disableEnabledDomains(isolation: isolation)
+    }
+
+    /// Best-effort teardown after a startup failure: the startup error is the
+    /// root cause and owns `state`; a teardown error must not mask it.
+    private func logStartupTeardownFailure(isolation: isolated (any Actor)) async {
+        if let teardownError = await disableEnabledDomainsAfterStartupFailure(isolation: isolation) {
+            WebInspectorDataKitLog.debug("domain disable after startup failure also failed: \(String(describing: teardownError))")
+        }
     }
 
     private func subscribe(to target: WebInspectorTarget, isolation: isolated (any Actor)) {
@@ -1012,7 +1020,40 @@ public final class WebInspectorContext {
     }
 
     private func fail(_ error: WebInspectorProxyError) {
-        transition(to: .failed(error))
+        switch state {
+        case .failed, .detached:
+            return
+        case .attaching, .attached:
+            transition(to: .failed(error))
+        }
+    }
+
+    /// Inbound events may reference entities this context has not materialized:
+    /// WebKit only reports what it has bound for this frontend, but binding can
+    /// predate domain tracking (attach mid-flight) or outlive this context's
+    /// index (evicted subtrees). Skipping is the protocol-correct response;
+    /// `state = .failed` is reserved for terminal connection loss.
+    private func skipEvent(_ reason: String) {
+        WebInspectorDataKitLog.debug("event skipped: \(reason)")
+    }
+
+    /// Command failures surface at their call site (thrown, or a per-model
+    /// phase such as `NetworkBody.Phase.failed`); only terminal connection
+    /// loss moves the whole context to `.failed`.
+    private func failIfTerminal(_ error: Error, operation: String) {
+        switch error {
+        case let proxyError as WebInspectorProxyError:
+            switch proxyError {
+            case .disconnected, .unsupported, .attachFailed:
+                fail(proxyError)
+            case .closed:
+                WebInspectorDataKitLog.debug("\(operation) raced connection close")
+            case .commandFailed, .timeout:
+                WebInspectorDataKitLog.debug("\(operation) failed: \(String(describing: proxyError))")
+            }
+        default:
+            WebInspectorDataKitLog.debug("\(operation) failed: \(String(describing: error))")
+        }
     }
 
     private func requireOwner(_ isolation: isolated (any Actor)) {
@@ -1035,7 +1076,7 @@ public final class WebInspectorContext {
     func reloadDocument(isolation: isolated (any Actor) = #isolation) {
         requireOwner(isolation)
         guard let currentPage else {
-            fail(.disconnected("WebInspectorDataKit has no current page target."))
+            skipEvent("reloadDocument ignored: no current page target")
             return
         }
 
@@ -1050,14 +1091,8 @@ public final class WebInspectorContext {
                 self?.applyDocument(document, isolation: isolation)
             } catch is CancellationError {
                 return
-            } catch let error as WebInspectorProxyError {
-                self?.fail(error)
             } catch {
-                self?.fail(.commandFailed(
-                    domain: "DOM",
-                    method: "getDocument",
-                    message: String(describing: error)
-                ))
+                self?.failIfTerminal(error, operation: "DOM.getDocument")
             }
         }
     }
@@ -1067,7 +1102,7 @@ public final class WebInspectorContext {
         isolation: isolated (any Actor) = #isolation
     ) {
         guard let currentPage else {
-            fail(.disconnected("WebInspectorDataKit has no current page target."))
+            skipEvent("requestInspectionSubtree ignored: no current page target")
             return
         }
 
@@ -1078,14 +1113,8 @@ public final class WebInspectorContext {
                 try await currentPage.dom.requestChildNodes(rootID, depth: -1)
             } catch is CancellationError {
                 return
-            } catch let error as WebInspectorProxyError {
-                self?.fail(error)
             } catch {
-                self?.fail(.commandFailed(
-                    domain: "DOM",
-                    method: "requestChildNodes",
-                    message: String(describing: error)
-                ))
+                self?.failIfTerminal(error, operation: "DOM.requestChildNodes")
             }
         }
     }
@@ -1106,14 +1135,14 @@ extension WebInspectorContext {
             applyChildNodeRemoved(parent: parent, node: node, isolation: isolation)
         case let .childNodeCountUpdated(id, count):
             guard let node = nodesByID[DOMNode.ID(id)] else {
-                fail(.disconnected("DOM.childNodeCountUpdated referenced an unknown node."))
+                skipEvent("DOM.childNodeCountUpdated referenced an unmaterialized node")
                 return
             }
             node.updateChildNodeCount(count)
             notifyDOMTreeControllers(changes: [.childCountChanged(nodeID: DOMNode.ID(id))], isolation: isolation)
         case let .attributeModified(id, name, value):
             guard let node = nodesByID[DOMNode.ID(id)] else {
-                fail(.disconnected("DOM.attributeModified referenced an unknown node."))
+                skipEvent("DOM.attributeModified referenced an unmaterialized node")
                 return
             }
             node.setAttribute(name: name, value: value)
@@ -1121,7 +1150,7 @@ extension WebInspectorContext {
             notifyDOMTreeControllers(changes: [.nodeChanged(nodeID: DOMNode.ID(id))], isolation: isolation)
         case let .attributeRemoved(id, name):
             guard let node = nodesByID[DOMNode.ID(id)] else {
-                fail(.disconnected("DOM.attributeRemoved referenced an unknown node."))
+                skipEvent("DOM.attributeRemoved referenced an unmaterialized node")
                 return
             }
             node.removeAttribute(name: name)
@@ -1129,7 +1158,7 @@ extension WebInspectorContext {
             notifyDOMTreeControllers(changes: [.nodeChanged(nodeID: DOMNode.ID(id))], isolation: isolation)
         case let .characterDataModified(id, value):
             guard let node = nodesByID[DOMNode.ID(id)] else {
-                fail(.disconnected("DOM.characterDataModified referenced an unknown node."))
+                skipEvent("DOM.characterDataModified referenced an unmaterialized node")
                 return
             }
             node.setNodeValue(value)
@@ -1198,7 +1227,7 @@ extension WebInspectorContext {
         isolation: isolated (any Actor) = #isolation
     ) {
         guard let parentNode = nodesByID[DOMNode.ID(parent)] else {
-            fail(.disconnected("DOM.setChildNodes referenced an unknown parent node."))
+            skipEvent("DOM.setChildNodes referenced an unmaterialized parent node")
             return
         }
         let previousChildren: [DOMNode]
@@ -1228,7 +1257,7 @@ extension WebInspectorContext {
         isolation: isolated (any Actor) = #isolation
     ) {
         guard let parentNode = nodesByID[DOMNode.ID(parent)] else {
-            fail(.disconnected("DOM.childNodeInserted referenced an unknown parent node."))
+            skipEvent("DOM.childNodeInserted referenced an unmaterialized parent node")
             return
         }
 
@@ -1256,13 +1285,13 @@ extension WebInspectorContext {
         isolation: isolated (any Actor)
     ) {
         guard let parentNode = nodesByID[DOMNode.ID(parent)] else {
-            fail(.disconnected("DOM.childNodeRemoved referenced an unknown parent node."))
+            skipEvent("DOM.childNodeRemoved referenced an unmaterialized parent node")
             return
         }
 
         let removedID = DOMNode.ID(node)
         guard let removedNode = nodesByID[removedID] else {
-            fail(.disconnected("DOM.childNodeRemoved referenced an unknown child node."))
+            skipEvent("DOM.childNodeRemoved referenced an unmaterialized child node")
             return
         }
         let selectedNodeWasRemoved = removeSubtreeFromIndex(removedNode)
@@ -1715,7 +1744,7 @@ extension WebInspectorContext {
             request = existing
         } else {
             guard let url = response.url else {
-                fail(.disconnected("Network.requestServedFromMemoryCache omitted response URL for a new request."))
+                skipEvent("Network.requestServedFromMemoryCache omitted response URL for a new request")
                 return
             }
             let payload = Network.Request(
@@ -1737,37 +1766,37 @@ extension WebInspectorContext {
         case let .created(id, url):
             applyWebSocketCreated(id: id, url: url)
         case let .handshakeRequest(id, request, timestamp):
-            guard let networkRequest = networkRequest(forWebSocketEvent: id, method: "webSocketWillSendHandshakeRequest") else {
+            guard let networkRequest = networkRequest(for: id, method: "webSocketWillSendHandshakeRequest") else {
                 return
             }
             networkRequest.applyWebSocketHandshakeRequest(request, timestamp: timestamp)
             refreshAllRequests(updatedItemIDs: [networkRequest.id])
         case let .handshakeResponse(id, response, timestamp):
-            guard let networkRequest = networkRequest(forWebSocketEvent: id, method: "webSocketHandshakeResponseReceived") else {
+            guard let networkRequest = networkRequest(for: id, method: "webSocketHandshakeResponseReceived") else {
                 return
             }
             networkRequest.applyWebSocketHandshakeResponse(response, timestamp: timestamp)
             refreshAllRequests(updatedItemIDs: [networkRequest.id])
         case let .frameSent(id, frame, timestamp):
-            guard let networkRequest = networkRequest(forWebSocketEvent: id, method: "webSocketFrameSent") else {
+            guard let networkRequest = networkRequest(for: id, method: "webSocketFrameSent") else {
                 return
             }
             networkRequest.appendWebSocketFrame(frame, direction: .sent, timestamp: timestamp)
             refreshAllRequests(updatedItemIDs: [networkRequest.id])
         case let .frameReceived(id, frame, timestamp):
-            guard let networkRequest = networkRequest(forWebSocketEvent: id, method: "webSocketFrameReceived") else {
+            guard let networkRequest = networkRequest(for: id, method: "webSocketFrameReceived") else {
                 return
             }
             networkRequest.appendWebSocketFrame(frame, direction: .received, timestamp: timestamp)
             refreshAllRequests(updatedItemIDs: [networkRequest.id])
         case let .error(id, message, timestamp):
-            guard let networkRequest = networkRequest(forWebSocketEvent: id, method: "webSocketFrameError") else {
+            guard let networkRequest = networkRequest(for: id, method: "webSocketFrameError") else {
                 return
             }
             networkRequest.appendWebSocketError(message, timestamp: timestamp)
             refreshAllRequests(updatedItemIDs: [networkRequest.id])
         case let .closed(id, timestamp):
-            guard let networkRequest = networkRequest(forWebSocketEvent: id, method: "webSocketClosed") else {
+            guard let networkRequest = networkRequest(for: id, method: "webSocketClosed") else {
                 return
             }
             networkRequest.closeWebSocket(timestamp: timestamp)
@@ -1799,25 +1828,9 @@ extension WebInspectorContext {
     ) -> NetworkRequest? {
         let id = NetworkRequest.ID(proxyID)
         guard let request = requestsByID[id] else {
-            guard clearedNetworkRequestIDs.contains(id) == false else {
-                return nil
+            if clearedNetworkRequestIDs.contains(id) == false {
+                skipEvent("Network.\(method) referenced an untracked request")
             }
-            fail(.disconnected("Network.\(method) referenced an unknown request."))
-            return nil
-        }
-        return request
-    }
-
-    private func networkRequest(
-        forWebSocketEvent proxyID: Network.Request.ID,
-        method: String
-    ) -> NetworkRequest? {
-        let id = NetworkRequest.ID(proxyID)
-        guard let request = requestsByID[id] else {
-            guard clearedNetworkRequestIDs.contains(id) == false else {
-                return nil
-            }
-            fail(.disconnected("Network.\(method) referenced an unknown request."))
             return nil
         }
         return request
@@ -1852,7 +1865,7 @@ extension WebInspectorContext {
         case let .messageRepeatCountUpdated(count, timestamp):
             guard let lastConsoleMessageID,
                   let message = consoleMessagesByID[lastConsoleMessageID] else {
-                fail(.disconnected("Console.messageRepeatCountUpdated referenced no current message."))
+                skipEvent("Console.messageRepeatCountUpdated arrived before any tracked message")
                 return
             }
             message.updateRepeatCount(count, timestamp: timestamp)
@@ -1876,21 +1889,17 @@ extension WebInspectorContext {
     private func releaseConsoleRuntimeObjectGroup(isolation: isolated (any Actor) = #isolation) {
         consoleObjectGroupReleaseTask?.cancel()
         guard let currentPage else {
-            fail(.disconnected("Console.messagesCleared cannot release runtime object group without a current page target."))
+            skipEvent("Console.messagesCleared arrived without a current page target")
             return
         }
         consoleObjectGroupReleaseTask = Task { [weak self, currentPage] in
             _ = isolation
             do {
                 try await currentPage.runtime.releaseObjectGroup(.console)
-            } catch let error as WebInspectorProxyError {
-                self?.fail(error)
+            } catch is CancellationError {
+                return
             } catch {
-                self?.fail(.commandFailed(
-                    domain: "Runtime",
-                    method: "releaseObjectGroup",
-                    message: String(describing: error)
-                ))
+                self?.failIfTerminal(error, operation: "Runtime.releaseObjectGroup")
             }
         }
     }
@@ -1933,7 +1942,7 @@ extension WebInspectorContext {
             applyExecutionContextDestroyed(id)
         case let .executionContextsCleared(eventTargetID):
             if let targetID, eventTargetID != targetID {
-                fail(.disconnected("Runtime.executionContextsCleared referenced a mismatched target."))
+                skipEvent("Runtime.executionContextsCleared referenced a mismatched target")
                 return
             }
             clearExecutionContexts()
@@ -1960,7 +1969,7 @@ extension WebInspectorContext {
     private func applyExecutionContextDestroyed(_ proxyID: Runtime.ExecutionContext.ID) {
         let id = RuntimeContext.ID(proxyID)
         guard let removed = runtimeContextsByID.removeValue(forKey: id) else {
-            fail(.disconnected("Runtime.executionContextDestroyed referenced an unknown context."))
+            skipEvent("Runtime.executionContextDestroyed referenced an untracked context")
             return
         }
         orderedRuntimeContextIDs.removeAll { $0 == id }
