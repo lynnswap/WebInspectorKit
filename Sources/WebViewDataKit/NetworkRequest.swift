@@ -177,6 +177,7 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
     public private(set) var state: State
     public private(set) var status: Int?
     public private(set) var mimeType: String?
+    public private(set) var sourceMapURL: String?
     public private(set) var requestHeaders: [String: String]
     public private(set) var responseHeaders: [String: String]
     public private(set) var requestSentTimestamp: Double?
@@ -185,6 +186,7 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
     public private(set) var finishedOrFailedTimestamp: Double?
     public private(set) var decodedDataLength: Int
     public private(set) var encodedDataLength: Int
+    public private(set) var metrics: Network.Metrics?
     public private(set) var redirects: [RedirectHop]
     public private(set) var webSocket: WebSocketState?
     public private(set) var responseBody: NetworkBody
@@ -220,6 +222,7 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         state = .pending
         status = nil
         mimeType = nil
+        sourceMapURL = nil
         requestHeaders = request.headers
         responseHeaders = [:]
         requestSentTimestamp = timestamp
@@ -228,6 +231,7 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         finishedOrFailedTimestamp = nil
         decodedDataLength = 0
         encodedDataLength = 0
+        metrics = nil
         redirects = []
         webSocket = resourceType == .webSocket ? WebSocketState() : nil
         responseBody = NetworkBody()
@@ -256,6 +260,7 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         requestHeaders = request.headers
         status = nil
         mimeType = nil
+        sourceMapURL = nil
         responseHeaders = [:]
         requestSentTimestamp = timestamp
         responseReceivedTimestamp = nil
@@ -263,6 +268,7 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         finishedOrFailedTimestamp = nil
         decodedDataLength = 0
         encodedDataLength = 0
+        metrics = nil
         redirects = []
         webSocket = resourceType == .webSocket ? WebSocketState() : nil
         responseBody = NetworkBody()
@@ -289,6 +295,7 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         requestHeaders = request.headers
         status = nil
         mimeType = nil
+        sourceMapURL = nil
         responseHeaders = [:]
         requestSentTimestamp = timestamp
         responseReceivedTimestamp = nil
@@ -296,6 +303,7 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         finishedOrFailedTimestamp = nil
         decodedDataLength = 0
         encodedDataLength = 0
+        metrics = nil
         responseBody = NetworkBody()
         state = .pending
     }
@@ -332,7 +340,15 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         }
     }
 
-    package func finish(timestamp: Double) {
+    package func finish(timestamp: Double, sourceMapURL: String?, metrics: Network.Metrics?) {
+        self.sourceMapURL = sourceMapURL
+        self.metrics = metrics
+        if let encodedDataLength = metrics?.encodedDataLength {
+            self.encodedDataLength = max(0, encodedDataLength)
+        }
+        if let decodedBodyLength = metrics?.decodedBodyLength {
+            decodedDataLength = max(0, decodedBodyLength)
+        }
         finishedOrFailedTimestamp = timestamp
         state = .finished
     }
@@ -350,6 +366,7 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         webSocket = nil
         status = response.status
         mimeType = response.mimeType
+        sourceMapURL = nil
         responseHeaders = response.headers
         if let requestHeaders = response.requestHeaders {
             self.requestHeaders = requestHeaders
@@ -361,6 +378,7 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         finishedOrFailedTimestamp = timestamp
         decodedDataLength = 0
         encodedDataLength = 0
+        metrics = nil
         redirects = []
         responseBody = NetworkBody()
         state = .finished

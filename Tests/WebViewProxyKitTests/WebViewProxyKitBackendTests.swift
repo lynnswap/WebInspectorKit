@@ -269,6 +269,40 @@ func networkEventsAreSeparatedByRouteForStableTargetID() async throws {
 }
 
 @Test
+func networkLoadingFinishedCarriesTerminalMetadata() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+
+    let eventTask = Task {
+        var iterator = target.network.events.makeAsyncIterator()
+        return await iterator.next()
+    }
+
+    try await runtime.backend.waitForSubscribers(domain: "Network", target: target, count: 1)
+
+    await runtime.backend.emit(
+        .loadingFinished(
+            id: Network.Request.ID("terminal-request"),
+            timestamp: 8,
+            sourceMapURL: "terminal.js.map",
+            metrics: Network.Metrics(encodedDataLength: 256, decodedBodyLength: 512)
+        ),
+        target: target
+    )
+
+    let event = try #require(try await value(of: eventTask))
+    guard case let .loadingFinished(id, timestamp, sourceMapURL, metrics) = event else {
+        Issue.record("Expected Network.loadingFinished.")
+        return
+    }
+    #expect(id == Network.Request.ID("terminal-request"))
+    #expect(timestamp == 8)
+    #expect(sourceMapURL == "terminal.js.map")
+    #expect(metrics?.encodedDataLength == 256)
+    #expect(metrics?.decodedBodyLength == 512)
+}
+
+@Test
 func pageReloadDispatchesToTargetRoute() async throws {
     let runtime = try await WebViewProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()

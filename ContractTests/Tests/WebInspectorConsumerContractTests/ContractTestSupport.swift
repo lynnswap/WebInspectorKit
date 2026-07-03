@@ -81,7 +81,15 @@ enum ContractTestSupport {
             .dataReceived(id: request.id, dataLength: 7, encodedDataLength: 4, timestamp: 3),
             target: target
         )
-        await backend.emit(.loadingFinished(id: request.id, timestamp: 4), target: target)
+        await backend.emit(
+            .loadingFinished(
+                id: request.id,
+                timestamp: 4,
+                sourceMapURL: "data.json.map",
+                metrics: Network.Metrics(encodedDataLength: 4, decodedBodyLength: 7)
+            ),
+            target: target
+        )
     }
 
     @MainActor

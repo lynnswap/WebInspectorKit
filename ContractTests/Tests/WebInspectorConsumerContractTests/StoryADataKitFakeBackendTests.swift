@@ -63,6 +63,9 @@ func fakeBackendDrivesDataKitDOMNetworkAndRuntimeContracts() async throws {
     #expect(requestModel.responseHeaders["Content-Type"] == "application/json")
     #expect(requestModel.decodedDataLength == 7)
     #expect(requestModel.encodedDataLength == 4)
+    #expect(requestModel.sourceMapURL == "data.json.map")
+    #expect(requestModel.metrics?.encodedDataLength == 4)
+    #expect(requestModel.metrics?.decodedBodyLength == 7)
     #expect(context.registeredRequest(for: requestModel.id) === requestModel)
 
     await runtime.backend.enqueue(

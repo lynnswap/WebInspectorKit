@@ -996,12 +996,12 @@ extension WebViewModelContext {
                 encodedDataLength: encodedDataLength,
                 timestamp: timestamp
             )
-        case let .loadingFinished(id, timestamp):
+        case let .loadingFinished(id, timestamp, sourceMapURL, metrics):
             guard let request = requestsByID[NetworkRequest.ID(id)] else {
                 fail(.disconnected("Network.loadingFinished referenced an unknown request."))
                 return
             }
-            request.finish(timestamp: timestamp)
+            request.finish(timestamp: timestamp, sourceMapURL: sourceMapURL, metrics: metrics)
         case let .loadingFailed(id, errorText, canceled, timestamp):
             guard let request = requestsByID[NetworkRequest.ID(id)] else {
                 fail(.disconnected("Network.loadingFailed referenced an unknown request."))

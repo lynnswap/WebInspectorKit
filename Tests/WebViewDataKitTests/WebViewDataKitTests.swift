@@ -1254,7 +1254,7 @@ func networkEventsPopulateAllRequestsInOrder() async throws {
         target: target
     )
     await runtime.backend.emit(
-        .loadingFinished(id: requestID, timestamp: 4),
+        .loadingFinished(id: requestID, timestamp: 4, sourceMapURL: nil, metrics: nil),
         target: target
     )
 
@@ -1277,6 +1277,93 @@ func networkEventsPopulateAllRequestsInOrder() async throws {
     #expect(request.decodedDataLength == 12)
     #expect(request.encodedDataLength == 5)
     #expect(context.registeredRequest(for: request.id) === request)
+}
+
+@MainActor
+@Test
+func loadingFinishedStoresTerminalMetadataAndOverridesDataTotals() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let requestID = Network.Request.ID("request-with-terminal-metadata")
+
+    await runtime.backend.emit(
+        .requestWillBeSent(
+            id: requestID,
+            request: Network.Request(id: requestID, url: "https://example.com/app.js", method: "GET"),
+            resourceType: .script,
+            redirectResponse: nil,
+            timestamp: 1
+        ),
+        target: target
+    )
+    await runtime.backend.emit(
+        .dataReceived(id: requestID, dataLength: 5, encodedDataLength: 2, timestamp: 2),
+        target: target
+    )
+    await runtime.backend.emit(
+        .loadingFinished(
+            id: requestID,
+            timestamp: 3,
+            sourceMapURL: "app.js.map",
+            metrics: Network.Metrics(encodedDataLength: 9, decodedBodyLength: 12)
+        ),
+        target: target
+    )
+
+    let results: WebViewFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
+    try await waitUntil {
+        results.items.first?.state == .finished
+    }
+    let request = try #require(results.items.first)
+    #expect(request.sourceMapURL == "app.js.map")
+    #expect(request.metrics?.encodedDataLength == 9)
+    #expect(request.metrics?.decodedBodyLength == 12)
+    #expect(request.lastDataReceivedTimestamp == 2)
+    #expect(request.finishedOrFailedTimestamp == 3)
+    #expect(request.decodedDataLength == 12)
+    #expect(request.encodedDataLength == 9)
+}
+
+@MainActor
+@Test
+func loadingFinishedClampsNegativeMetricTotals() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let requestID = Network.Request.ID("request-with-negative-terminal-metrics")
+
+    await runtime.backend.emit(
+        .requestWillBeSent(
+            id: requestID,
+            request: Network.Request(id: requestID, url: "https://example.com/negative", method: "GET"),
+            resourceType: .fetch,
+            redirectResponse: nil,
+            timestamp: 1
+        ),
+        target: target
+    )
+    await runtime.backend.emit(
+        .dataReceived(id: requestID, dataLength: 5, encodedDataLength: 4, timestamp: 2),
+        target: target
+    )
+    await runtime.backend.emit(
+        .loadingFinished(
+            id: requestID,
+            timestamp: 3,
+            sourceMapURL: nil,
+            metrics: Network.Metrics(encodedDataLength: -8, decodedBodyLength: -13)
+        ),
+        target: target
+    )
+
+    let results: WebViewFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
+    try await waitUntil {
+        results.items.first?.state == .finished
+    }
+    let request = try #require(results.items.first)
+    #expect(request.metrics?.encodedDataLength == -8)
+    #expect(request.metrics?.decodedBodyLength == -13)
+    #expect(request.decodedDataLength == 0)
+    #expect(request.encodedDataLength == 0)
 }
 
 @MainActor
@@ -1364,7 +1451,15 @@ func completedRequestDoesNotTreatLaterRequestWillBeSentAsRedirect() async throws
         ),
         target: target
     )
-    await runtime.backend.emit(.loadingFinished(id: requestID, timestamp: 2), target: target)
+    await runtime.backend.emit(
+        .loadingFinished(
+            id: requestID,
+            timestamp: 2,
+            sourceMapURL: "first.map",
+            metrics: Network.Metrics(encodedDataLength: 20, decodedBodyLength: 40)
+        ),
+        target: target
+    )
 
     let results: WebViewFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
     try await waitUntil { results.items.first?.state == .finished }
@@ -1388,6 +1483,8 @@ func completedRequestDoesNotTreatLaterRequestWillBeSentAsRedirect() async throws
     #expect(request.redirects.isEmpty)
     #expect(request.requestSentTimestamp == 3)
     #expect(request.finishedOrFailedTimestamp == nil)
+    #expect(request.sourceMapURL == nil)
+    #expect(request.metrics == nil)
 }
 
 @MainActor
@@ -2306,7 +2403,7 @@ private func emitFinishedRequest(
         ),
         target: target
     )
-    await backend.emit(.loadingFinished(id: id, timestamp: 3), target: target)
+    await backend.emit(.loadingFinished(id: id, timestamp: 3, sourceMapURL: nil, metrics: nil), target: target)
 }
 
 @MainActor
