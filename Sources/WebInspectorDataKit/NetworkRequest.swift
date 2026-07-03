@@ -204,6 +204,26 @@ public final class WebSocketState {
 
 @Observable
 public final class NetworkBody {
+    public enum Role: CaseIterable, Hashable, Sendable {
+        case request
+        case response
+    }
+
+    public enum Kind: Hashable, Sendable {
+        case text
+        case form
+        case binary
+    }
+
+    public enum SyntaxKind: Hashable, Sendable {
+        case plainText
+        case json
+        case html
+        case xml
+        case css
+        case javascript
+    }
+
     public enum Phase: Equatable, Sendable {
         case available
         case fetching
@@ -211,14 +231,92 @@ public final class NetworkBody {
         case failed(WebInspectorProxyError)
     }
 
-    public private(set) var phase: Phase
-    public private(set) var text: String?
-    public private(set) var isBase64Encoded: Bool
+    struct Payload: Equatable, Sendable {
+        var body: String
+        var base64Encoded: Bool
+        var size: Int?
+        var isTruncated: Bool
 
-    init(phase: Phase = .available, text: String? = nil, isBase64Encoded: Bool = false) {
-        self.phase = phase
-        self.text = text
+        init(
+            body: String,
+            base64Encoded: Bool,
+            size: Int? = nil,
+            isTruncated: Bool = false
+        ) {
+            self.body = body
+            self.base64Encoded = base64Encoded
+            self.size = size
+            self.isTruncated = isTruncated
+        }
+    }
+
+    public let role: Role
+    public private(set) var kind: Kind {
+        didSet {
+            invalidateTextRepresentation()
+        }
+    }
+    public private(set) var phase: Phase
+    public private(set) var full: String? {
+        didSet {
+            text = full
+            invalidateTextRepresentation()
+        }
+    }
+    public private(set) var text: String?
+    public private(set) var size: Int?
+    public private(set) var isBase64Encoded: Bool
+    public private(set) var isTruncated: Bool
+    public private(set) var sourceSyntaxKind: SyntaxKind {
+        didSet {
+            invalidateTextRepresentation()
+        }
+    }
+    public private(set) var textRepresentation: String?
+    public private(set) var textRepresentationSyntaxKind: SyntaxKind
+    @ObservationIgnored private var isBatchingTextRepresentationInvalidation: Bool
+    @ObservationIgnored private var needsTextRepresentationInvalidation: Bool
+
+    init(
+        role: Role = .response,
+        kind: Kind = .text,
+        full: String? = nil,
+        size: Int? = nil,
+        isBase64Encoded: Bool = false,
+        isTruncated: Bool = false,
+        sourceSyntaxKind: SyntaxKind = .plainText,
+        phase: Phase? = nil
+    ) {
+        self.role = role
+        self.kind = kind
+        self.phase = phase ?? (full == nil ? .available : .loaded)
+        self.full = full
+        text = full
+        self.size = size ?? full?.utf8.count
         self.isBase64Encoded = isBase64Encoded
+        self.isTruncated = isTruncated
+        self.sourceSyntaxKind = sourceSyntaxKind
+        textRepresentation = nil
+        textRepresentationSyntaxKind = .plainText
+        isBatchingTextRepresentationInvalidation = false
+        needsTextRepresentationInvalidation = false
+        refreshTextRepresentation()
+    }
+
+    var needsFetch: Bool {
+        switch phase {
+        case .available:
+            full == nil
+        case .fetching, .loaded, .failed:
+            false
+        }
+    }
+
+    func updateHints(kind: Kind, sourceSyntaxKind: SyntaxKind) {
+        withTextRepresentationInvalidationBatch {
+            self.kind = kind
+            self.sourceSyntaxKind = sourceSyntaxKind
+        }
     }
 
     func markFetching() {
@@ -226,13 +324,202 @@ public final class NetworkBody {
     }
 
     func load(_ body: Network.Body) {
-        text = body.data
-        isBase64Encoded = body.base64Encoded
+        load(Payload(body: body.data, base64Encoded: body.base64Encoded))
+    }
+
+    func load(_ payload: Payload) {
+        withTextRepresentationInvalidationBatch {
+            full = payload.body
+            isBase64Encoded = payload.base64Encoded
+            isTruncated = payload.isTruncated
+        }
+        size = payload.size ?? payload.body.utf8.count
         phase = .loaded
     }
 
     func fail(_ error: WebInspectorProxyError) {
         phase = .failed(error)
+    }
+
+    static func makeRequestBody(for request: Network.Request) -> NetworkBody? {
+        guard let postData = request.postData else {
+            return nil
+        }
+        let hints = bodyHints(
+            mimeType: nil,
+            headers: request.headers,
+            url: request.url,
+            role: .request
+        )
+        return NetworkBody(
+            role: .request,
+            kind: hints.kind,
+            full: postData,
+            size: postData.utf8.count,
+            sourceSyntaxKind: hints.syntaxKind,
+            phase: .loaded
+        )
+    }
+
+    static func makeResponseBody(for response: Network.Response, fallbackURL: String = "") -> NetworkBody {
+        let hints = bodyHints(
+            mimeType: response.mimeType,
+            headers: response.headers,
+            url: response.url ?? fallbackURL,
+            role: .response
+        )
+        return NetworkBody(
+            role: .response,
+            kind: hints.kind,
+            sourceSyntaxKind: hints.syntaxKind,
+            phase: .available
+        )
+    }
+
+    static func bodyHints(
+        mimeType: String?,
+        headers: [String: String],
+        url: String,
+        role: Role
+    ) -> (kind: Kind, syntaxKind: SyntaxKind) {
+        let contentType = (mimeType ?? headerValue(named: "content-type", in: headers) ?? "")
+            .split(separator: ";", maxSplits: 1, omittingEmptySubsequences: true)
+            .first
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines).lowercased() } ?? ""
+
+        if role == .request && contentType == "application/x-www-form-urlencoded" {
+            return (.form, .plainText)
+        }
+        if contentType.contains("json") {
+            return (.text, .json)
+        }
+        if contentType == "text/html" || contentType == "application/xhtml+xml" {
+            return (.text, .html)
+        }
+        if contentType == "text/xml" || contentType == "application/xml" || contentType.hasSuffix("+xml") {
+            return (.text, .xml)
+        }
+        if contentType == "text/css" {
+            return (.text, .css)
+        }
+        if contentType == "text/javascript" || contentType == "application/javascript" || contentType == "application/ecmascript" {
+            return (.text, .javascript)
+        }
+        if contentType.hasPrefix("text/") || contentType.isEmpty {
+            return (.text, syntaxKind(forPathExtensionIn: url))
+        }
+        return (.binary, .plainText)
+    }
+
+    private static func headerValue(named name: String, in headers: [String: String]) -> String? {
+        headers.first { $0.key.caseInsensitiveCompare(name) == .orderedSame }?.value
+    }
+
+    private static func syntaxKind(forPathExtensionIn url: String) -> SyntaxKind {
+        switch URL(string: url)?.pathExtension.lowercased() {
+        case "json":
+            .json
+        case "html", "htm":
+            .html
+        case "xml", "svg":
+            .xml
+        case "css":
+            .css
+        case "js", "mjs", "cjs":
+            .javascript
+        default:
+            .plainText
+        }
+    }
+
+    private func withTextRepresentationInvalidationBatch(_ updates: () -> Void) {
+        isBatchingTextRepresentationInvalidation = true
+        updates()
+        isBatchingTextRepresentationInvalidation = false
+
+        if needsTextRepresentationInvalidation {
+            needsTextRepresentationInvalidation = false
+            refreshTextRepresentation()
+        }
+    }
+
+    private func invalidateTextRepresentation() {
+        guard isBatchingTextRepresentationInvalidation == false else {
+            needsTextRepresentationInvalidation = true
+            return
+        }
+        refreshTextRepresentation()
+    }
+
+    private func refreshTextRepresentation() {
+        let contentText = decodedContentText()
+        let formText = kind == .form ? formattedURLEncodedFormText(from: contentText) : nil
+        let displayText = formText ?? (kind == .binary ? nil : contentText)
+        let syntaxKind: SyntaxKind = if kind == .binary || kind == .form {
+            .plainText
+        } else {
+            sourceSyntaxKind
+        }
+
+        if textRepresentation != displayText {
+            textRepresentation = displayText
+        }
+        if textRepresentationSyntaxKind != syntaxKind {
+            textRepresentationSyntaxKind = syntaxKind
+        }
+    }
+
+    private func decodedContentText() -> String? {
+        guard let full else {
+            return nil
+        }
+        guard kind != .binary else {
+            return isBase64Encoded ? nil : full
+        }
+        guard isBase64Encoded else {
+            return full
+        }
+        guard let data = Data(base64Encoded: full) else {
+            return nil
+        }
+        if let decoded = String(data: data, encoding: .utf8) {
+            return decoded
+        }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    private func formattedURLEncodedFormText(from text: String?) -> String? {
+        guard let text, text.isEmpty == false, text.contains("=") else {
+            return nil
+        }
+
+        var lines: [String] = []
+        for pair in text.split(separator: "&", omittingEmptySubsequences: false) {
+            let parts = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            guard parts.isEmpty == false else {
+                continue
+            }
+            guard let name = decodeFormComponent(String(parts[0])) else {
+                return nil
+            }
+            let value: String
+            if parts.count > 1 {
+                guard let decodedValue = decodeFormComponent(String(parts[1])) else {
+                    return nil
+                }
+                value = decodedValue
+            } else {
+                value = ""
+            }
+            lines.append("\(name)=\(value)")
+        }
+        return lines.isEmpty ? nil : lines.joined(separator: "\n")
+    }
+
+    private func decodeFormComponent(_ component: String) -> String? {
+        component
+            .replacingOccurrences(of: "+", with: " ")
+            .removingPercentEncoding
     }
 }
 
@@ -272,6 +559,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
     public private(set) var metrics: Network.Metrics?
     public private(set) var redirects: [RedirectHop]
     public private(set) var webSocket: WebSocketState?
+    public private(set) var requestBody: NetworkBody?
     public private(set) var responseBody: NetworkBody
 
     @ObservationIgnored weak var modelContext: WebInspectorContext?
@@ -317,12 +605,23 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         metrics = nil
         redirects = []
         webSocket = resourceType == .webSocket ? WebSocketState() : nil
+        requestBody = NetworkBody.makeRequestBody(for: request)
         responseBody = NetworkBody()
         self.modelContext = modelContext
         currentRequest = request
     }
 
+    public var canFetchResponseBody: Bool {
+        guard state == .finished else {
+            return false
+        }
+        return responseBody.needsFetch
+    }
+
     public func fetchResponseBody(isolation: isolated (any Actor) = #isolation) async {
+        guard canFetchResponseBody else {
+            return
+        }
         responseBody.markFetching()
         guard let modelContext else {
             responseBody.fail(.disconnected("NetworkRequest is not registered in a WebInspectorContext."))
@@ -354,6 +653,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         metrics = nil
         redirects = []
         webSocket = resourceType == .webSocket ? WebSocketState() : nil
+        requestBody = NetworkBody.makeRequestBody(for: request)
         responseBody = NetworkBody()
         state = .pending
     }
@@ -387,6 +687,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         decodedDataLength = 0
         encodedDataLength = 0
         metrics = nil
+        requestBody = NetworkBody.makeRequestBody(for: request)
         responseBody = NetworkBody()
         state = .pending
     }
@@ -407,10 +708,13 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         responseHeaders = response.headers
         if let requestHeaders = response.requestHeaders {
             self.requestHeaders = requestHeaders
+            currentRequest = requestWithHeaders(requestHeaders)
+            refreshRequestBodyHints()
         }
         if let timestamp {
             responseReceivedTimestamp = timestamp
         }
+        responseBody = NetworkBody.makeResponseBody(for: response, fallbackURL: currentRequest.url)
         state = .responded
     }
 
@@ -454,7 +758,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         if let requestHeaders = response.requestHeaders {
             self.requestHeaders = requestHeaders
         }
-        currentRequest = Network.Request(id: proxyID, url: url, method: method, headers: requestHeaders)
+        currentRequest = requestWithHeaders(requestHeaders)
         requestSentTimestamp = timestamp
         responseReceivedTimestamp = timestamp
         lastDataReceivedTimestamp = nil
@@ -463,7 +767,8 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         encodedDataLength = 0
         metrics = nil
         redirects = []
-        responseBody = NetworkBody()
+        requestBody = NetworkBody.makeRequestBody(for: currentRequest)
+        responseBody = NetworkBody.makeResponseBody(for: response, fallbackURL: currentRequest.url)
         state = .finished
     }
 
@@ -488,6 +793,8 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         method = request.method
         resourceType = .webSocket
         requestHeaders = request.headers
+        requestBody = NetworkBody.makeRequestBody(for: request)
+        responseBody = NetworkBody()
         if let timestamp {
             requestSentTimestamp = timestamp
         }
@@ -528,5 +835,31 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         let webSocket = WebSocketState()
         self.webSocket = webSocket
         return webSocket
+    }
+
+    private func requestWithHeaders(_ headers: [String: String]) -> Network.Request {
+        Network.Request(
+            id: currentRequest.id,
+            url: currentRequest.url,
+            method: currentRequest.method,
+            headers: headers,
+            postData: currentRequest.postData,
+            referrerPolicy: currentRequest.referrerPolicy,
+            integrity: currentRequest.integrity
+        )
+    }
+
+    private func refreshRequestBodyHints() {
+        guard let requestBody else {
+            self.requestBody = NetworkBody.makeRequestBody(for: currentRequest)
+            return
+        }
+        let hints = NetworkBody.bodyHints(
+            mimeType: nil,
+            headers: currentRequest.headers,
+            url: currentRequest.url,
+            role: .request
+        )
+        requestBody.updateHints(kind: hints.kind, sourceSyntaxKind: hints.syntaxKind)
     }
 }

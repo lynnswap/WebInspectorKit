@@ -2432,6 +2432,171 @@ func webSocketOtherEventDoesNotMutateRequests() async throws {
 
 @MainActor
 @Test
+func requestPostDataCreatesNetworkBodyWithFormRepresentation() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let requestID = Network.Request.ID("form-request")
+
+    await runtime.backend.emit(
+        .requestWillBeSent(
+            id: requestID,
+            request: Network.Request(
+                id: requestID,
+                url: "https://example.com/form",
+                method: "POST",
+                headers: ["Content-Type": " application/x-www-form-urlencoded; charset=utf-8"],
+                postData: "name=Jane+Doe&city=Tokyo%20East"
+            ),
+            resourceType: .fetch,
+            redirectResponse: nil,
+            timestamp: 1
+        ),
+        target: target
+    )
+
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    try await waitUntil { results.items.count == 1 }
+    let request = try #require(results.items.first)
+    let body = try #require(request.requestBody)
+    #expect(body.role == .request)
+    #expect(body.kind == .form)
+    #expect(body.phase == .loaded)
+    #expect(body.full == "name=Jane+Doe&city=Tokyo%20East")
+    #expect(body.text == "name=Jane+Doe&city=Tokyo%20East")
+    #expect(body.size == "name=Jane+Doe&city=Tokyo%20East".utf8.count)
+    #expect(body.isBase64Encoded == false)
+    #expect(body.isTruncated == false)
+    #expect(body.sourceSyntaxKind == .plainText)
+    #expect(body.textRepresentation == "name=Jane Doe\ncity=Tokyo East")
+    #expect(body.textRepresentationSyntaxKind == .plainText)
+    #expect(request.canFetchResponseBody == false)
+}
+
+@MainActor
+@Test
+func responseRequestHeadersRefreshRequestBodyHints() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let requestID = Network.Request.ID("form-request-hints")
+
+    await runtime.backend.emit(
+        .requestWillBeSent(
+            id: requestID,
+            request: Network.Request(
+                id: requestID,
+                url: "https://example.com/form",
+                method: "POST",
+                postData: "name=Jane+Doe&city=Tokyo%20East"
+            ),
+            resourceType: .fetch,
+            redirectResponse: nil,
+            timestamp: 1
+        ),
+        target: target
+    )
+
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    try await waitUntil { results.items.count == 1 }
+    let request = try #require(results.items.first)
+    let body = try #require(request.requestBody)
+    #expect(body.kind == .text)
+    #expect(body.textRepresentation == "name=Jane+Doe&city=Tokyo%20East")
+
+    await runtime.backend.emit(
+        .responseReceived(
+            id: requestID,
+            response: Network.Response(
+                status: 200,
+                headers: ["Content-Type": "text/plain"],
+                requestHeaders: ["Content-Type": "application/x-www-form-urlencoded"]
+            ),
+            resourceType: .fetch,
+            timestamp: 2
+        ),
+        target: target
+    )
+
+    try await waitUntil { body.kind == .form }
+    #expect(request.requestHeaders["Content-Type"] == "application/x-www-form-urlencoded")
+    #expect(body.textRepresentation == "name=Jane Doe\ncity=Tokyo East")
+    #expect(body.textRepresentationSyntaxKind == .plainText)
+}
+
+@MainActor
+@Test
+func responseBodyPublishesHintsAndFetchLifecycle() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let requestID = Network.Request.ID("json-response-body")
+
+    await runtime.backend.emit(
+        .requestWillBeSent(
+            id: requestID,
+            request: Network.Request(
+                id: requestID,
+                url: "https://example.com/api/data.json",
+                method: "GET"
+            ),
+            resourceType: .fetch,
+            redirectResponse: nil,
+            timestamp: 1
+        ),
+        target: target
+    )
+    await runtime.backend.emit(
+        .responseReceived(
+            id: requestID,
+            response: Network.Response(status: 200),
+            resourceType: .fetch,
+            timestamp: 2
+        ),
+        target: target
+    )
+
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    try await waitUntil { results.items.first?.state == .responded }
+    let request = try #require(results.items.first)
+    let body = request.responseBody
+    #expect(body.role == .response)
+    #expect(body.kind == .text)
+    #expect(body.phase == .available)
+    #expect(body.full == nil)
+    #expect(body.sourceSyntaxKind == .json)
+    #expect(body.textRepresentation == nil)
+    #expect(body.textRepresentationSyntaxKind == .json)
+    #expect(request.canFetchResponseBody == false)
+
+    await runtime.backend.emit(
+        .loadingFinished(id: requestID, timestamp: 3, sourceMapURL: nil, metrics: nil),
+        target: target
+    )
+    try await waitUntil { request.canFetchResponseBody }
+
+    await runtime.backend.enqueue(
+        Network.Body(data: #"{"ok":true}"#, base64Encoded: false),
+        for: "Network",
+        method: "getResponseBody"
+    )
+
+    await request.fetchResponseBody()
+    #expect(body.phase == .loaded)
+    #expect(body.full == #"{"ok":true}"#)
+    #expect(body.text == #"{"ok":true}"#)
+    #expect(body.size == #"{"ok":true}"#.utf8.count)
+    #expect(body.isBase64Encoded == false)
+    #expect(body.isTruncated == false)
+    #expect(body.textRepresentation == #"{"ok":true}"#)
+    #expect(body.textRepresentationSyntaxKind == .json)
+    #expect(request.canFetchResponseBody == false)
+
+    let commandsBeforeSecondFetch = await runtime.backend.recordedCommands()
+    await request.fetchResponseBody()
+    let commandsAfterSecondFetch = await runtime.backend.recordedCommands()
+    #expect(commandsAfterSecondFetch == commandsBeforeSecondFetch)
+}
+
+@MainActor
+@Test
 func fetchResponseBodyStoresLoadedAndFailedPhases() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
@@ -2442,7 +2607,9 @@ func fetchResponseBodyStoresLoadedAndFailedPhases() async throws {
     await emitFinishedRequest(id: failedID, target: target, backend: runtime.backend)
 
     let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
-    try await waitUntil { results.items.count == 2 }
+    try await waitUntil {
+        results.items.count == 2 && results.items.allSatisfy { $0.state == .finished }
+    }
     let loadedRequest = try #require(results.items.first { $0.id == NetworkRequest.ID(loadedID) })
     let failedRequest = try #require(results.items.first { $0.id == NetworkRequest.ID(failedID) })
 
