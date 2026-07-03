@@ -234,7 +234,7 @@ private enum WebInspectorTransportCommandEncoder {
         case (.dom, "requestChildNodes"):
             let payload = try payload(command.payload, as: DOM.RequestChildNodesPayload.self, command: command)
             return try data([
-                "nodeId": payload.id.rawValue,
+                "nodeId": nodeIDValue(payload.id.rawValue),
                 "depth": payload.depth,
             ])
 
@@ -244,11 +244,26 @@ private enum WebInspectorTransportCommandEncoder {
 
         case (.dom, "getOuterHTML"):
             let payload = try payload(command.payload, as: DOM.GetOuterHTMLPayload.self, command: command)
-            return try data(["nodeId": payload.id.rawValue])
+            return try data(["nodeId": nodeIDValue(payload.id.rawValue)])
 
         case (.dom, "removeNode"):
             let payload = try payload(command.payload, as: DOM.RemoveNodePayload.self, command: command)
-            return try data(["nodeId": payload.id.rawValue])
+            return try data(["nodeId": nodeIDValue(payload.id.rawValue)])
+
+        case (.dom, "highlightNode"):
+            let payload = try payload(command.payload, as: DOM.HighlightNodePayload.self, command: command)
+            return try data([
+                "nodeId": nodeIDValue(payload.id.rawValue),
+                "highlightConfig": highlightConfig(),
+            ])
+
+        case (.dom, "setInspectModeEnabled"):
+            let payload = try payload(command.payload, as: DOM.SetInspectModeEnabledPayload.self, command: command)
+            var object: [String: Any] = ["enabled": payload.enabled]
+            if payload.enabled {
+                object["highlightConfig"] = highlightConfig()
+            }
+            return try data(object)
 
         case (.network, "getResponseBody"):
             let payload = try payload(command.payload, as: Network.GetResponseBodyPayload.self, command: command)
@@ -294,11 +309,18 @@ private enum WebInspectorTransportCommandEncoder {
 
         case (.css, "getMatchedStylesForNode"):
             let payload = try payload(command.payload, as: CSS.GetMatchedStylesForNodePayload.self, command: command)
-            return try data(["nodeId": payload.node.rawValue])
+            return try data(["nodeId": nodeIDValue(payload.node.rawValue)])
 
         case (.css, "getComputedStyleForNode"):
             let payload = try payload(command.payload, as: CSS.GetComputedStyleForNodePayload.self, command: command)
-            return try data(["nodeId": payload.node.rawValue])
+            return try data(["nodeId": nodeIDValue(payload.node.rawValue)])
+
+        case (.css, "setStyleText"):
+            let payload = try payload(command.payload, as: CSS.SetStyleTextPayload.self, command: command)
+            return try data([
+                "styleId": try styleIDPayload(payload.id, command: command),
+                "text": payload.text,
+            ])
 
         default:
             throw unsupported(command)
@@ -327,6 +349,51 @@ private enum WebInspectorTransportCommandEncoder {
         case let .other(value):
             value
         }
+    }
+
+    private static func nodeIDValue(_ rawValue: String) -> Any {
+        if let value = Int(rawValue) {
+            return value
+        }
+        return rawValue
+    }
+
+    private static func styleIDPayload<Payload: Sendable, Result: Sendable>(
+        _ id: CSS.Style.ID,
+        command: WebInspectorProxyCommand<Payload, Result>
+    ) throws -> [String: Any] {
+        let components = id.rawValue.split(separator: CSSStyleIDPayload.separator, omittingEmptySubsequences: false)
+        guard components.count == 2,
+              let ordinal = Int(components[1]) else {
+            throw WebInspectorProxyError.commandFailed(
+                domain: command.domain.rawValue,
+                method: command.method,
+                message: "CSS style identifier is not backed by a WebKit CSSStyleId."
+            )
+        }
+        return [
+            "styleSheetId": String(components[0]),
+            "ordinal": ordinal,
+        ]
+    }
+
+    private static func highlightConfig() -> [String: Any] {
+        [
+            "showInfo": false,
+            "contentColor": highlightColor(red: 111, green: 168, blue: 220, alpha: 0.66),
+            "paddingColor": highlightColor(red: 147, green: 196, blue: 125, alpha: 0.66),
+            "borderColor": highlightColor(red: 255, green: 229, blue: 153, alpha: 0.66),
+            "marginColor": highlightColor(red: 246, green: 178, blue: 107, alpha: 0.66),
+        ]
+    }
+
+    private static func highlightColor(red: Int, green: Int, blue: Int, alpha: Double) -> [String: Any] {
+        [
+            "r": red,
+            "g": green,
+            "b": blue,
+            "a": alpha,
+        ]
     }
 
     private static func data(_ object: [String: Any]) throws -> Data {
@@ -376,6 +443,18 @@ private enum WebInspectorTransportCommandDecoder {
             let payload = try decode(ResponseBodyResult.self, from: result.resultData)
             return Network.Body(data: payload.body, base64Encoded: payload.base64Encoded) as! Result
         }
+        if Result.self == CSS.MatchedStyles.self {
+            let payload = try decode(CSSMatchedStylesResult.self, from: result.resultData)
+            return payload.proxyMatchedStyles() as! Result
+        }
+        if Result.self == [CSS.ComputedProperty].self {
+            let payload = try decode(CSSComputedStyleResult.self, from: result.resultData)
+            return payload.computedStyle.map(\.proxyProperty) as! Result
+        }
+        if Result.self == CSS.Style.self {
+            let payload = try decode(CSSSetStyleTextResult.self, from: result.resultData)
+            return payload.style.proxyStyle() as! Result
+        }
 
         throw WebInspectorProxyError.commandFailed(
             domain: command.domain.rawValue,
@@ -394,6 +473,15 @@ private enum WebInspectorTransportCommandDecoder {
 
     private struct RequestNodeResult: Decodable {
         var nodeId: String
+
+        private enum CodingKeys: String, CodingKey {
+            case nodeId
+        }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            nodeId = try container.decodeStringOrInteger(forKey: .nodeId)
+        }
     }
 
     private struct OuterHTMLResult: Decodable {
@@ -403,5 +491,221 @@ private enum WebInspectorTransportCommandDecoder {
     private struct ResponseBodyResult: Decodable {
         var body: String
         var base64Encoded: Bool
+    }
+}
+
+private struct CSSMatchedStylesResult: Decodable {
+    var matchedCSSRules: [CSSRuleMatchPayload]?
+    var inlineStyle: CSSStylePayload?
+    var attributesStyle: CSSStylePayload?
+    var pseudoElements: [CSSPseudoIDMatchesPayload]?
+    var inherited: [CSSInheritedStyleEntryPayload]?
+
+    func proxyMatchedStyles() -> CSS.MatchedStyles {
+        let matchedRules = matchedCSSRules?.map { $0.rule.proxyRule() } ?? []
+        let inheritedRules = inherited?.flatMap { entry in
+            entry.matchedCSSRules.map { $0.rule.proxyRule() }
+        } ?? []
+        let pseudoRules = pseudoElements?.flatMap { pseudo in
+            pseudo.matches.map { $0.rule.proxyRule() }
+        } ?? []
+
+        return CSS.MatchedStyles(
+            matchedRules: matchedRules,
+            inherited: inheritedRules,
+            pseudoElements: pseudoRules,
+            inlineStyle: inlineStyle?.proxyStyle(fallbackID: "anonymous:inline"),
+            attributesStyle: attributesStyle?.proxyStyle(fallbackID: "anonymous:attributes")
+        )
+    }
+}
+
+private struct CSSComputedStyleResult: Decodable {
+    var computedStyle: [CSSComputedPropertyPayload]
+}
+
+private struct CSSSetStyleTextResult: Decodable {
+    var style: CSSStylePayload
+}
+
+private struct CSSRuleMatchPayload: Decodable {
+    var rule: CSSRulePayload
+}
+
+private struct CSSPseudoIDMatchesPayload: Decodable {
+    var matches: [CSSRuleMatchPayload]
+}
+
+private struct CSSInheritedStyleEntryPayload: Decodable {
+    var matchedCSSRules: [CSSRuleMatchPayload]
+}
+
+private struct CSSRulePayload: Decodable {
+    var ruleId: CSSRuleIDPayload?
+    var selectorList: CSSSelectorListPayload
+    var sourceURL: String?
+    var sourceLine: Int?
+    var sourceLocation: CSSSourceRangePayload?
+    var origin: String
+    var style: CSSStylePayload
+    var groupings: [CSSGroupingPayload]?
+    var isImplicitlyNested: Bool?
+
+    func proxyRule() -> CSS.Rule {
+        let fallbackStyleID = "anonymous:rule:\(origin):\(selectorList.text):\(sourceURL ?? ""):\(sourceLine ?? -1)"
+        return CSS.Rule(
+            id: ruleId.map { CSS.Rule.ID($0.rawValue) },
+            selectorList: selectorList.proxySelectorList,
+            sourceURL: sourceURL,
+            sourceLine: sourceLine,
+            sourceLocation: sourceLocation?.proxyRange,
+            origin: CSS.Origin(rawValue: origin),
+            style: style.proxyStyle(fallbackID: fallbackStyleID),
+            groupings: groupings?.map(\.proxyGrouping) ?? [],
+            isImplicitlyNested: isImplicitlyNested ?? false
+        )
+    }
+}
+
+private struct CSSSelectorListPayload: Decodable {
+    var selectors: [CSSSelectorPayload]
+    var text: String
+
+    var proxySelectorList: CSS.Rule.SelectorList {
+        CSS.Rule.SelectorList(selectors: selectors.map(\.text), text: text)
+    }
+}
+
+private struct CSSSelectorPayload: Decodable {
+    var text: String
+}
+
+private struct CSSGroupingPayload: Decodable {
+    var text: String?
+
+    var proxyGrouping: CSS.Rule.Grouping {
+        CSS.Rule.Grouping(text: text ?? "")
+    }
+}
+
+private struct CSSStylePayload: Decodable {
+    var styleId: CSSStyleIDPayload?
+    var cssProperties: [CSSPropertyPayload]
+    var shorthandEntries: [CSSShorthandEntryPayload]?
+    var cssText: String?
+    var range: CSSSourceRangePayload?
+    var width: String?
+    var height: String?
+
+    func proxyStyle(fallbackID: String = "anonymous:style") -> CSS.Style {
+        let rawStyleID = styleId?.rawValue ?? fallbackID
+        let isEditable = styleId != nil
+        return CSS.Style(
+            id: CSS.Style.ID(rawStyleID),
+            properties: cssProperties.enumerated().map { offset, payload in
+                payload.proxyProperty(styleID: rawStyleID, index: offset, isEditable: isEditable)
+            },
+            shorthandEntries: shorthandEntries?.map(\.proxyEntry) ?? [],
+            cssText: cssText ?? "",
+            range: range?.proxyRange,
+            width: width,
+            height: height,
+            isEditable: isEditable
+        )
+    }
+}
+
+private struct CSSStyleIDPayload: Decodable {
+    static let separator: Character = "\u{1F}"
+
+    var styleSheetId: String
+    var ordinal: Int
+
+    var rawValue: String {
+        "\(styleSheetId)\(Self.separator)\(ordinal)"
+    }
+}
+
+private struct CSSRuleIDPayload: Decodable {
+    var styleSheetId: String
+    var ordinal: Int
+
+    var rawValue: String {
+        "\(styleSheetId)\(CSSStyleIDPayload.separator)\(ordinal)"
+    }
+}
+
+private struct CSSPropertyPayload: Decodable {
+    var name: String
+    var value: String
+    var priority: String?
+    var text: String?
+    var parsedOk: Bool?
+    var status: String?
+    var implicit: Bool?
+    var range: CSSSourceRangePayload?
+
+    func proxyProperty(styleID: String, index: Int, isEditable: Bool) -> CSS.Property {
+        CSS.Property(
+            id: CSS.Property.ID("\(styleID)\(CSSStyleIDPayload.separator)\(index)"),
+            name: name,
+            value: value,
+            priority: priority,
+            text: text,
+            parsedOk: parsedOk ?? true,
+            status: CSS.Status(rawProtocolValue: status),
+            implicit: implicit ?? false,
+            range: range?.proxyRange,
+            isEditable: isEditable,
+            isModifiedByInspector: false
+        )
+    }
+}
+
+private struct CSSShorthandEntryPayload: Decodable {
+    var name: String
+    var value: String
+    var priority: String?
+
+    var proxyEntry: CSS.Style.ShorthandEntry {
+        CSS.Style.ShorthandEntry(name: name, value: value, priority: priority)
+    }
+}
+
+private struct CSSComputedPropertyPayload: Decodable {
+    var name: String
+    var value: String
+
+    var proxyProperty: CSS.ComputedProperty {
+        CSS.ComputedProperty(name: name, value: value)
+    }
+}
+
+private struct CSSSourceRangePayload: Decodable {
+    var startLine: Int
+    var startColumn: Int
+    var endLine: Int
+    var endColumn: Int
+
+    var proxyRange: CSS.Style.SourceRange {
+        CSS.Style.SourceRange(
+            startLine: startLine,
+            startColumn: startColumn,
+            endLine: endLine,
+            endColumn: endColumn
+        )
+    }
+}
+
+private extension CSS.Status {
+    init(rawProtocolValue: String?) {
+        switch rawProtocolValue {
+        case "inactive":
+            self = .inactive
+        case "disabled":
+            self = .disabled
+        default:
+            self = .active
+        }
     }
 }

@@ -57,6 +57,18 @@ enum WebInspectorTransportEventDecoder {
         case "DOM.characterDataModified":
             let params = try decode(CharacterDataModifiedParams.self, from: event)
             return .characterDataModified(DOM.Node.ID(params.nodeId), value: params.characterData)
+        case "DOM.shadowRootPushed":
+            let params = try decode(ShadowRootPushedParams.self, from: event)
+            return try .shadowRootPushed(host: DOM.Node.ID(params.hostId), root: params.root.proxyNode())
+        case "DOM.shadowRootPopped":
+            let params = try decode(ShadowRootPoppedParams.self, from: event)
+            return .shadowRootPopped(host: DOM.Node.ID(params.hostId), root: DOM.Node.ID(params.rootId))
+        case "DOM.pseudoElementAdded":
+            let params = try decode(PseudoElementAddedParams.self, from: event)
+            return try .pseudoElementAdded(parent: DOM.Node.ID(params.parentId), element: params.pseudoElement.proxyNode())
+        case "DOM.pseudoElementRemoved":
+            let params = try decode(PseudoElementRemovedParams.self, from: event)
+            return .pseudoElementRemoved(parent: DOM.Node.ID(params.parentId), element: DOM.Node.ID(params.pseudoElementId))
         default:
             return .unknown(rawEvent(from: event))
         }
@@ -360,6 +372,70 @@ private struct CharacterDataModifiedParams: Decodable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         nodeId = try container.decodeStringOrInteger(forKey: .nodeId)
         characterData = try container.decode(String.self, forKey: .characterData)
+    }
+}
+
+private struct ShadowRootPushedParams: Decodable {
+    var hostId: String
+    var root: WebInspectorTransportDOMNodePayload
+
+    private enum CodingKeys: String, CodingKey {
+        case hostId
+        case root
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        hostId = try container.decodeStringOrInteger(forKey: .hostId)
+        root = try container.decode(WebInspectorTransportDOMNodePayload.self, forKey: .root)
+    }
+}
+
+private struct ShadowRootPoppedParams: Decodable {
+    var hostId: String
+    var rootId: String
+
+    private enum CodingKeys: String, CodingKey {
+        case hostId
+        case rootId
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        hostId = try container.decodeStringOrInteger(forKey: .hostId)
+        rootId = try container.decodeStringOrInteger(forKey: .rootId)
+    }
+}
+
+private struct PseudoElementAddedParams: Decodable {
+    var parentId: String
+    var pseudoElement: WebInspectorTransportDOMNodePayload
+
+    private enum CodingKeys: String, CodingKey {
+        case parentId
+        case pseudoElement
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        parentId = try container.decodeStringOrInteger(forKey: .parentId)
+        pseudoElement = try container.decode(WebInspectorTransportDOMNodePayload.self, forKey: .pseudoElement)
+    }
+}
+
+private struct PseudoElementRemovedParams: Decodable {
+    var parentId: String
+    var pseudoElementId: String
+
+    private enum CodingKeys: String, CodingKey {
+        case parentId
+        case pseudoElementId
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        parentId = try container.decodeStringOrInteger(forKey: .parentId)
+        pseudoElementId = try container.decodeStringOrInteger(forKey: .pseudoElementId)
     }
 }
 
