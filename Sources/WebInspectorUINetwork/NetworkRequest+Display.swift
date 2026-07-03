@@ -131,23 +131,11 @@ extension NetworkRequest {
     }
 
     package func durationText(for value: TimeInterval) -> String {
-        if value < 1 {
-            let milliseconds = Int((value * 1000).rounded())
-            return "\(milliseconds) ms"
-        }
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        formatter.minimumFractionDigits = 2
-        formatter.maximumFractionDigits = 2
-        formatter.usesGroupingSeparator = false
-        let seconds = formatter.string(from: NSNumber(value: value)) ?? String(value)
-        return "\(seconds) s"
+        NetworkDisplay.durationText(for: value)
     }
 
     package func sizeText(for length: Int) -> String {
-        let formatter = ByteCountFormatter()
-        formatter.countStyle = .binary
-        return formatter.string(fromByteCount: Int64(length))
+        NetworkDisplay.sizeText(for: length)
     }
 }
 
@@ -159,9 +147,29 @@ extension NetworkDisplay {
         responseURLSummary: NetworkDisplay.URLSummary?,
         mediaPreviewClassifier: NetworkDisplay.MediaPreviewClassifier
     ) -> NetworkDisplay.ResourceFilter {
-        guard let response else {
-            if let resourceType {
-                return NetworkDisplay.ResourceFilter(resourceType: resourceType)
+        resourceFilter(
+            resourceTypeRawValue: resourceType?.rawValue,
+            hasResponse: response != nil,
+            responseMIMEType: response?.mimeType,
+            responseHeaders: response?.headers ?? [:],
+            responseURLSummary: response.map { responseURLSummary ?? NetworkDisplay.URLSummary(url: $0.url) },
+            requestURLSummary: requestURLSummary,
+            mediaPreviewClassifier: mediaPreviewClassifier
+        )
+    }
+
+    package static func resourceFilter(
+        resourceTypeRawValue: String?,
+        hasResponse: Bool,
+        responseMIMEType: String?,
+        responseHeaders: [String: String],
+        responseURLSummary: NetworkDisplay.URLSummary?,
+        requestURLSummary: NetworkDisplay.URLSummary,
+        mediaPreviewClassifier: NetworkDisplay.MediaPreviewClassifier
+    ) -> NetworkDisplay.ResourceFilter {
+        guard hasResponse else {
+            if let resourceTypeRawValue {
+                return NetworkDisplay.ResourceFilter(resourceTypeRawValue: resourceTypeRawValue)
             }
             return NetworkDisplay.ResourceFilter.inferred(
                 mimeType: nil,
@@ -171,23 +179,23 @@ extension NetworkDisplay {
         }
 
         let responseMIMEType = NetworkDisplay.displayMIMEType(
-            mimeType: response.mimeType,
-            headers: response.headers
+            mimeType: responseMIMEType,
+            headers: responseHeaders
         )
-        if let resourceType,
-           NetworkDisplay.shouldKeepResourceTypeForURLInferredMedia(resourceType) {
+        if let resourceTypeRawValue,
+           NetworkDisplay.shouldKeepResourceTypeForURLInferredMedia(rawValue: resourceTypeRawValue) {
             if case .previewable = mediaPreviewClassifier(responseMIMEType, nil) {
                 return .media
             }
-            return NetworkDisplay.ResourceFilter(resourceType: resourceType)
+            return NetworkDisplay.ResourceFilter(resourceTypeRawValue: resourceTypeRawValue)
         }
 
-        let responseURLSummary = responseURLSummary ?? NetworkDisplay.URLSummary(url: response.url)
+        let responseURLSummary = responseURLSummary ?? requestURLSummary
         switch mediaPreviewClassifier(responseMIMEType, responseURLSummary.rawURL) {
         case .previewable:
             return .media
         case .notPreviewable:
-            if resourceType == .image || resourceType == .media {
+            if NetworkDisplay.isMediaResourceType(rawValue: resourceTypeRawValue) {
                 return .media
             }
             return NetworkDisplay.ResourceFilter.inferred(
@@ -198,8 +206,8 @@ extension NetworkDisplay {
         case .unknown:
             break
         }
-        if let resourceType {
-            return NetworkDisplay.ResourceFilter(resourceType: resourceType)
+        if let resourceTypeRawValue {
+            return NetworkDisplay.ResourceFilter(resourceTypeRawValue: resourceTypeRawValue)
         }
         return NetworkDisplay.ResourceFilter.inferred(
             mimeType: responseMIMEType,
@@ -211,6 +219,18 @@ extension NetworkDisplay {
     package static func fileTypeLabel(
         mimeType: String?,
         resourceType: NetworkRequest.ResourceType?,
+        urlSummary: NetworkDisplay.URLSummary
+    ) -> String {
+        fileTypeLabel(
+            mimeType: mimeType,
+            resourceTypeRawValue: resourceType?.rawValue,
+            urlSummary: urlSummary
+        )
+    }
+
+    package static func fileTypeLabel(
+        mimeType: String?,
+        resourceTypeRawValue: String?,
         urlSummary: NetworkDisplay.URLSummary
     ) -> String {
         if let mimeType,
@@ -226,8 +246,8 @@ extension NetworkDisplay {
            pathExtension.isEmpty == false {
             return pathExtension
         }
-        if let resourceType {
-            return resourceType.displayLabel
+        if let resourceTypeRawValue {
+            return resourceTypeDisplayLabel(rawValue: resourceTypeRawValue)
         }
         return "-"
     }
@@ -265,12 +285,21 @@ extension NetworkDisplay {
         )
     }
 
-    fileprivate static func shouldKeepResourceTypeForURLInferredMedia(_ resourceType: NetworkRequest.ResourceType) -> Bool {
-        switch resourceType {
-        case .image, .media, .xhr, .fetch, .other:
-            return false
+    fileprivate static func shouldKeepResourceTypeForURLInferredMedia(rawValue: String) -> Bool {
+        switch rawValue.lowercased() {
+        case "image", "media", "xhr", "fetch", "other":
+            false
         default:
-            return true
+            true
+        }
+    }
+
+    private static func isMediaResourceType(rawValue: String?) -> Bool {
+        switch rawValue?.lowercased() {
+        case "image", "media":
+            true
+        default:
+            false
         }
     }
 
@@ -289,36 +318,34 @@ extension NetworkDisplay {
         }
         return headers.first { $0.key.caseInsensitiveCompare(name) == .orderedSame }?.value
     }
-}
 
-extension NetworkRequest.ResourceType {
-    fileprivate var displayLabel: String {
-        switch self {
-        case .document:
+    private static func resourceTypeDisplayLabel(rawValue: String) -> String {
+        switch rawValue.lowercased() {
+        case "document":
             "document"
-        case .styleSheet:
+        case "stylesheet":
             "stylesheet"
-        case .image:
+        case "image":
             "image"
-        case .media:
+        case "media":
             "media"
-        case .font:
+        case "font":
             "font"
-        case .script:
+        case "script":
             "script"
-        case .xhr:
+        case "xhr":
             "xhr"
-        case .fetch:
+        case "fetch":
             "fetch"
-        case .ping:
+        case "ping":
             "ping"
-        case .beacon:
+        case "beacon":
             "beacon"
-        case .webSocket:
+        case "websocket":
             "websocket"
-        case .eventSource:
+        case "eventsource":
             "eventsource"
-        case .other:
+        case "other":
             "other"
         default:
             rawValue.lowercased()

@@ -68,23 +68,27 @@ extension NetworkDisplay {
             }
         }
 
-        init(resourceType: NetworkRequest.ResourceType) {
-            switch resourceType {
-            case .document:
+        init(resourceTypeRawValue: String) {
+            switch resourceTypeRawValue.lowercased() {
+            case "document":
                 self = .document
-            case .styleSheet:
+            case "stylesheet":
                 self = .stylesheet
-            case .image, .media:
+            case "image", "media":
                 self = .media
-            case .font:
+            case "font":
                 self = .font
-            case .script:
+            case "script":
                 self = .script
-            case .xhr, .fetch, .ping, .beacon:
+            case "xhr", "fetch", "ping", "beacon":
                 self = .xhrFetch
             default:
                 self = .other
             }
+        }
+
+        init(resourceType: NetworkRequest.ResourceType) {
+            self.init(resourceTypeRawValue: resourceType.rawValue)
         }
 
         init(mimeType: String?, url: String) {

@@ -178,6 +178,7 @@ let package = Package(
             name: "WebInspectorUINetwork",
             dependencies: [
                 "WebInspectorCore",
+                "WebInspectorDataKit",
                 "WebInspectorTransport",
                 "WebInspectorUIBase",
                 .product(name: "ObservationBridge", package: "ObservationBridge"),
