@@ -22,6 +22,7 @@ public final class WebInspectorContext {
     public private(set) var teardownError: WebInspectorProxyError?
     public private(set) var rootNode: DOMNode?
     public private(set) var selectedNode: DOMNode?
+    public private(set) var isElementPickerEnabled: Bool
     public private(set) var executionContexts: [RuntimeContext]
     public private(set) var selectedContext: RuntimeContext?
 
@@ -64,6 +65,7 @@ public final class WebInspectorContext {
         teardownError = nil
         rootNode = nil
         selectedNode = nil
+        isElementPickerEnabled = false
         executionContexts = []
         selectedContext = nil
         currentPage = nil
@@ -182,6 +184,90 @@ public final class WebInspectorContext {
         selectedNode = node
         notifyDOMTreeSelectionChanged(node, isolation: isolation)
         refreshSelectedStyles(isolation: isolation)
+    }
+
+    public func copyText(
+        _ kind: DOMNode.CopyTextKind,
+        for node: DOMNode,
+        isolation: isolated (any Actor) = #isolation
+    ) async throws -> String {
+        requireOwner(isolation)
+        try registeredNode(node)
+        switch kind {
+        case .html:
+            let page = try currentPageOrThrow()
+            return try await page.dom.outerHTML(of: node.id.proxyID)
+        case .selectorPath:
+            return try currentDOMTreeSnapshot(containing: [node]).selectorPath(for: node.id)
+        case .xPath:
+            return try currentDOMTreeSnapshot(containing: [node]).xPath(for: node.id)
+        }
+    }
+
+    public func delete(_ node: DOMNode, isolation: isolated (any Actor) = #isolation) async throws {
+        try await delete([node], isolation: isolation)
+    }
+
+    public func delete(_ nodes: [DOMNode], isolation: isolated (any Actor) = #isolation) async throws {
+        requireOwner(isolation)
+        let page = try currentPageOrThrow()
+        var seenNodeIDs: Set<DOMNode.ID> = []
+        let uniqueNodes = try nodes
+            .map { try registeredNode($0) }
+            .filter { seenNodeIDs.insert($0.id).inserted }
+        let snapshot = try currentDOMTreeSnapshot(containing: uniqueNodes)
+        let sortedNodes = uniqueNodes
+            .sorted {
+                snapshot.ancestorNodeIDs(of: $0.id).count > snapshot.ancestorNodeIDs(of: $1.id).count
+            }
+        for node in sortedNodes {
+            try await page.dom.removeNode(node.id.proxyID)
+        }
+        clearSelectionIfDeleted(sortedNodes.map(\.id), snapshot: snapshot, isolation: isolation)
+    }
+
+    public func highlight(_ node: DOMNode, isolation: isolated (any Actor) = #isolation) async throws {
+        requireOwner(isolation)
+        try registeredNode(node)
+        let page = try currentPageOrThrow()
+        try await page.dom.highlightNode(node.id.proxyID)
+    }
+
+    public func hideHighlight(isolation: isolated (any Actor) = #isolation) async throws {
+        requireOwner(isolation)
+        let page = try currentPageOrThrow()
+        try await page.dom.hideHighlight()
+    }
+
+    public func setElementPickerEnabled(
+        _ isEnabled: Bool,
+        isolation: isolated (any Actor) = #isolation
+    ) async throws {
+        requireOwner(isolation)
+        let page = try currentPageOrThrow()
+        try await page.dom.setInspectMode(enabled: isEnabled)
+        isElementPickerEnabled = isEnabled
+    }
+
+    public func reloadPage(
+        ignoringCache: Bool = false,
+        isolation: isolated (any Actor) = #isolation
+    ) async throws {
+        requireOwner(isolation)
+        let page = try currentPageOrThrow()
+        try await page.page.reload(ignoringCache: ignoringCache)
+    }
+
+    public func selectorPath(for node: DOMNode, isolation: isolated (any Actor) = #isolation) throws -> String {
+        requireOwner(isolation)
+        try registeredNode(node)
+        return try currentDOMTreeSnapshot(containing: [node]).selectorPath(for: node.id)
+    }
+
+    public func xPath(for node: DOMNode, isolation: isolated (any Actor) = #isolation) throws -> String {
+        requireOwner(isolation)
+        try registeredNode(node)
+        return try currentDOMTreeSnapshot(containing: [node]).xPath(for: node.id)
     }
 
     public func treeController(
@@ -576,6 +662,7 @@ public final class WebInspectorContext {
         consoleObjectGroupReleaseTask?.cancel()
         consoleObjectGroupReleaseTask = nil
         pendingInspectedNodeID = nil
+        isElementPickerEnabled = false
         currentPage = nil
         teardownError = nil
         teardownError = await disableEnabledDomains(isolation: isolation)
@@ -787,6 +874,56 @@ public final class WebInspectorContext {
         notifyDOMTreeControllers(changes: [.selectionChanged(nodeID: node?.id)], isolation: isolation)
     }
 
+    private func clearSelectionIfDeleted(
+        _ deletedRootIDs: [DOMNode.ID],
+        snapshot: DOMTreeSnapshot,
+        isolation: isolated (any Actor)
+    ) {
+        guard let selectedNode else {
+            return
+        }
+        let deletedRootIDs = Set(deletedRootIDs)
+        guard deletedRootIDs.contains(selectedNode.id)
+            || snapshot.ancestorNodeIDs(of: selectedNode.id).contains(where: deletedRootIDs.contains)
+        else {
+            return
+        }
+
+        styleRefreshTask?.cancel()
+        styleRefreshTask = nil
+        styleRefreshGeneration += 1
+        selectedNode.setElementStyles(nil)
+        self.selectedNode = nil
+        notifyDOMTreeSelectionChanged(nil, isolation: isolation)
+    }
+
+    @discardableResult
+    private func registeredNode(_ node: DOMNode) throws -> DOMNode {
+        guard nodesByID[node.id] === node else {
+            throw WebInspectorProxyError.disconnected("DOMNode is not registered in this WebInspectorContext.")
+        }
+        return node
+    }
+
+    private func currentPageOrThrow() throws -> WebInspectorTarget {
+        guard let currentPage else {
+            throw WebInspectorProxyError.disconnected("WebInspectorDataKit has no current page target.")
+        }
+        return currentPage
+    }
+
+    private func currentDOMTreeSnapshot() -> DOMTreeSnapshot {
+        DOMTreeSnapshot.make(revision: 0, rootNode: rootNode, selectedNode: selectedNode)
+    }
+
+    private func currentDOMTreeSnapshot(containing nodes: [DOMNode]) throws -> DOMTreeSnapshot {
+        let snapshot = currentDOMTreeSnapshot()
+        for node in nodes where snapshot.node(for: node.id) == nil {
+            throw WebInspectorProxyError.disconnected("DOMNode is not in the current DOM tree.")
+        }
+        return snapshot
+    }
+
     private func pruneReleasedTreeStates() {
         treeStates.removeAll { $0.tree == nil }
     }
@@ -908,6 +1045,7 @@ extension WebInspectorContext {
             markSelectedStylesNeedsRefresh(for: DOMNode.ID(id))
             notifyDOMTreeControllers(changes: [.nodeChanged(nodeID: DOMNode.ID(id))], isolation: isolation)
         case let .inspect(id):
+            isElementPickerEnabled = false
             let inspectedNodeID = DOMNode.ID(id)
             guard let node = nodesByID[inspectedNodeID] else {
                 pendingInspectedNodeID = inspectedNodeID
@@ -945,6 +1083,7 @@ extension WebInspectorContext {
         styleRefreshGeneration += 1
         rootNode = nil
         selectedNode = nil
+        isElementPickerEnabled = false
         pendingInspectedNodeID = nil
         nodesByID = [:]
         notifyDOMTreeControllers(changes: [.rootChanged(rootNodeID: nil)], isolation: isolation)

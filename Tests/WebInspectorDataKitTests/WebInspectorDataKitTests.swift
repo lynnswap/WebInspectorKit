@@ -126,6 +126,181 @@ func requestChildrenDispatchesDOMCommandAndMaterializesSetChildNodes() async thr
 
 @MainActor
 @Test
+func domTreeSnapshotBuildsSelectorAndXPathFromDataKitProjection() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let documentID = DOM.Node.ID("document")
+    let htmlID = DOM.Node.ID("html")
+    let bodyID = DOM.Node.ID("body")
+    let firstCardID = DOM.Node.ID("first-card")
+    let featuredCardID = DOM.Node.ID("featured-card")
+    let inputID = DOM.Node.ID("search")
+    let textID = DOM.Node.ID("body-text")
+
+    let document = DOM.Node(
+        id: documentID,
+        nodeType: 9,
+        nodeName: "#document",
+        children: [
+            DOM.Node(
+                id: htmlID,
+                nodeType: 1,
+                nodeName: "HTML",
+                localName: "html",
+                children: [
+                    DOM.Node(
+                        id: bodyID,
+                        nodeType: 1,
+                        nodeName: "BODY",
+                        localName: "body",
+                        children: [
+                            DOM.Node(
+                                id: firstCardID,
+                                nodeType: 1,
+                                nodeName: "DIV",
+                                localName: "div",
+                                attributes: ["class": "card"],
+                                attributeList: [DOM.Attribute(name: "class", value: "card")]
+                            ),
+                            DOM.Node(
+                                id: featuredCardID,
+                                nodeType: 1,
+                                nodeName: "DIV",
+                                localName: "div",
+                                attributes: ["class": "card featured"],
+                                attributeList: [DOM.Attribute(name: "class", value: "card featured")]
+                            ),
+                            DOM.Node(
+                                id: inputID,
+                                nodeType: 1,
+                                nodeName: "INPUT",
+                                localName: "input",
+                                attributes: ["type": "search"],
+                                attributeList: [DOM.Attribute(name: "type", value: "search")]
+                            ),
+                            DOM.Node(id: textID, nodeType: 3, nodeName: "#text", nodeValue: "hello"),
+                        ]
+                    )
+                ]
+            )
+        ]
+    )
+    let (_, context) = try await startContext(runtime: runtime, document: document)
+    let tree = try await context.treeController()
+    let snapshot = tree.snapshot
+
+    #expect(snapshot.selectorPath(for: DOMNode.ID(documentID)) == "")
+    #expect(snapshot.xPath(for: DOMNode.ID(documentID)) == "/")
+    #expect(snapshot.selectorPath(for: DOMNode.ID(featuredCardID)) == "body > div.featured")
+    #expect(snapshot.xPath(for: DOMNode.ID(featuredCardID)) == "/html/body/div[2]")
+    #expect(snapshot.selectorPath(for: DOMNode.ID(inputID)) == "body > input[type=\"search\"]")
+    #expect(snapshot.xPath(for: DOMNode.ID(textID)) == "/html/body/text()")
+}
+
+@MainActor
+@Test
+func domCommandsDispatchThroughDataKitContext() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let documentID = DOM.Node.ID("document")
+    let htmlID = DOM.Node.ID("html")
+    let bodyID = DOM.Node.ID("body")
+    let parentID = DOM.Node.ID("parent")
+    let childID = DOM.Node.ID("child")
+    let document = DOM.Node(
+        id: documentID,
+        nodeType: 9,
+        nodeName: "#document",
+        children: [
+            DOM.Node(
+                id: htmlID,
+                nodeType: 1,
+                nodeName: "HTML",
+                localName: "html",
+                children: [
+                    DOM.Node(
+                        id: bodyID,
+                        nodeType: 1,
+                        nodeName: "BODY",
+                        localName: "body",
+                        children: [
+                            DOM.Node(
+                                id: parentID,
+                                nodeType: 1,
+                                nodeName: "DIV",
+                                localName: "div",
+                                attributes: ["class": "card"],
+                                attributeList: [DOM.Attribute(name: "class", value: "card")],
+                                children: [
+                                    DOM.Node(
+                                        id: childID,
+                                        nodeType: 1,
+                                        nodeName: "SPAN",
+                                        localName: "span",
+                                        attributes: ["id": "title"],
+                                        attributeList: [DOM.Attribute(name: "id", value: "title")]
+                                    )
+                                ]
+                            )
+                        ]
+                    )
+                ]
+            )
+        ]
+    )
+    let (target, context) = try await startContext(runtime: runtime, document: document)
+    let parent = try #require(context.node(for: DOMNode.ID(parentID)))
+    let child = try #require(context.node(for: DOMNode.ID(childID)))
+
+    await runtime.backend.enqueue("<span id=\"title\"></span>", for: "DOM", method: "getOuterHTML")
+    #expect(try await child.copyText(.html) == "<span id=\"title\"></span>")
+    #expect(try await child.copyText(.selectorPath) == "#title")
+    #expect(try context.xPath(for: child) == "/html/body/div/span")
+
+    await runtime.backend.enqueue((), for: "DOM", method: "highlightNode")
+    try await child.highlight()
+
+    await runtime.backend.enqueue((), for: "DOM", method: "hideHighlight")
+    try await context.hideHighlight()
+
+    await runtime.backend.enqueue((), for: "DOM", method: "setInspectModeEnabled")
+    try await context.setElementPickerEnabled(true)
+    #expect(context.isElementPickerEnabled)
+
+    await enqueueCSSStyleReplies(on: runtime.backend)
+    await runtime.backend.emit(.inspect(childID), target: target)
+    try await waitUntil { context.selectedNode === child }
+    try await waitUntil { child.elementStyles?.phase == .loaded }
+    #expect(context.isElementPickerEnabled == false)
+
+    await runtime.backend.enqueue((), for: "DOM", method: "removeNode")
+    await runtime.backend.enqueue((), for: "DOM", method: "removeNode")
+    try await context.delete([parent, child])
+    #expect(context.selectedNode == nil)
+    #expect(child.elementStyles == nil)
+
+    await runtime.backend.enqueue((), for: "Page", method: "reload")
+    try await context.reloadPage(ignoringCache: true)
+
+    let commands = await runtime.backend.recordedCommands()
+    let outerHTML = try #require(commands.first { $0.domain == "DOM" && $0.method == "getOuterHTML" })
+    #expect(outerHTML.payload.cast(as: DOM.GetOuterHTMLPayload.self)?.id == childID)
+
+    let highlight = try #require(commands.first { $0.domain == "DOM" && $0.method == "highlightNode" })
+    #expect(highlight.payload.cast(as: DOM.HighlightNodePayload.self)?.id == childID)
+
+    let inspectMode = try #require(commands.first { $0.domain == "DOM" && $0.method == "setInspectModeEnabled" })
+    #expect(inspectMode.payload.cast(as: DOM.SetInspectModeEnabledPayload.self)?.enabled == true)
+
+    let removals = commands.filter { $0.domain == "DOM" && $0.method == "removeNode" }
+    #expect(removals.count == 2)
+    #expect(removals.first?.payload.cast(as: DOM.RemoveNodePayload.self)?.id == childID)
+    #expect(removals.last?.payload.cast(as: DOM.RemoveNodePayload.self)?.id == parentID)
+
+    let reload = try #require(commands.first { $0.domain == "Page" && $0.method == "reload" })
+    #expect(reload.payload.cast(as: Page.ReloadPayload.self)?.ignoringCache == true)
+}
+
+@MainActor
+@Test
 func domInspectSelectsKnownNodeAndLoadsStyles() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)

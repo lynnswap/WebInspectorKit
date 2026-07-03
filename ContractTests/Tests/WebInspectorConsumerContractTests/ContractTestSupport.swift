@@ -271,6 +271,38 @@ actor ContractDataKitActor {
         #expect(context.node(for: child.id) === child)
         #expect(child.attributeList.map(\.name) == ["data-contract", "data-second"])
 
+        let treeController = try await context.treeController()
+        #expect(treeController.snapshot.selectorPath(for: child.id) == "main")
+        #expect(try context.selectorPath(for: child) == "main")
+        #expect(try context.xPath(for: child) == "/main")
+
+        await runtime.backend.enqueue("<main data-contract=\"dom\"></main>", for: "DOM", method: "getOuterHTML")
+        #expect(try await child.copyText(.html) == "<main data-contract=\"dom\"></main>")
+        #expect(try await child.copyText(.selectorPath) == "main")
+
+        await runtime.backend.enqueue((), for: "DOM", method: "highlightNode")
+        try await child.highlight()
+        await runtime.backend.enqueue((), for: "DOM", method: "hideHighlight")
+        try await context.hideHighlight()
+        await runtime.backend.enqueue((), for: "DOM", method: "setInspectModeEnabled")
+        try await context.setElementPickerEnabled(true)
+        #expect(context.isElementPickerEnabled)
+        await runtime.backend.enqueue((), for: "DOM", method: "setInspectModeEnabled")
+        try await context.setElementPickerEnabled(false)
+        #expect(context.isElementPickerEnabled == false)
+        await runtime.backend.enqueue((), for: "DOM", method: "removeNode")
+        try await child.delete()
+        await runtime.backend.enqueue((), for: "Page", method: "reload")
+        try await context.reloadPage()
+
+        let domCommands = await runtime.backend.recordedCommands()
+        #expect(domCommands.contains(RecordedCommand(domain: "DOM", method: "getOuterHTML")))
+        #expect(domCommands.contains(RecordedCommand(domain: "DOM", method: "highlightNode")))
+        #expect(domCommands.contains(RecordedCommand(domain: "DOM", method: "hideHighlight")))
+        #expect(domCommands.contains(RecordedCommand(domain: "DOM", method: "setInspectModeEnabled")))
+        #expect(domCommands.contains(RecordedCommand(domain: "DOM", method: "removeNode")))
+        #expect(domCommands.contains(RecordedCommand(domain: "Page", method: "reload")))
+
         let request = WebInspectorProxyTestFixtures.networkRequest(
             id: "contract-request",
             url: "https://example.com/data.json",

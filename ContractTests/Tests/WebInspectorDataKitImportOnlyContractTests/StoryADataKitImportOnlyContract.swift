@@ -23,12 +23,25 @@ private actor DataKitImportOnlyActor {
         _ = context.rootNode?.children
         _ = context.selectedNode?.attributes
         _ = context.selectedNode?.attributeList.first?.name
+        _ = context.isElementPickerEnabled
         context.clearNetworkRequests()
         let treeController = try await context.treeController()
         let treeSnapshot: DOMTreeSnapshot = treeController.snapshot
         _ = treeSnapshot.rootNodeID
         _ = treeSnapshot.nodesByID.values.first?.attributeList.first?.value
+        _ = treeSnapshot.rootNodeID.map { treeSnapshot.selectorPath(for: $0) }
+        _ = treeSnapshot.rootNodeID.map { treeSnapshot.xPath(for: $0) }
         _ = treeController.transactions
+        if let selectedNode = context.selectedNode {
+            _ = try context.selectorPath(for: selectedNode)
+            _ = try context.xPath(for: selectedNode)
+            _ = try await selectedNode.copyText(.selectorPath)
+            try await selectedNode.highlight()
+            try await selectedNode.delete()
+        }
+        try await context.hideHighlight()
+        try await context.setElementPickerEnabled(false)
+        try await context.reloadPage()
         _ = requests.items.first?.url
         _ = requests.items.first?.state
         _ = requests.items.first?.hasResponse

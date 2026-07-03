@@ -209,6 +209,16 @@ final class DOMTreeState {
         rootNode: DOMNode?,
         selectedNode: DOMNode?
     ) -> DOMTreeSnapshot {
+        DOMTreeSnapshot.make(revision: revision, rootNode: rootNode, selectedNode: selectedNode)
+    }
+}
+
+extension DOMTreeSnapshot {
+    static func make(
+        revision: UInt64,
+        rootNode: DOMNode?,
+        selectedNode: DOMNode?
+    ) -> DOMTreeSnapshot {
         guard let rootNode else {
             return DOMTreeSnapshot(
                 revision: revision,

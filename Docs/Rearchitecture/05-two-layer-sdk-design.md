@@ -870,21 +870,39 @@ where ID: Hashable & Sendable {
 @Observable
 public final class DOMNode: WebInspectorPersistentModel {
     public struct ID: Hashable, Sendable { /* opaque; wraps proxy DOM.Node.ID */ }
+    public struct Kind: RawRepresentable, Hashable, Sendable { public let rawValue: Int }
+    public struct Attribute: Hashable, Sendable { public let name: String; public let value: String }
+    public enum CopyTextKind: Hashable, Sendable { case html, selectorPath, xPath }
     public let id: ID
     public private(set) var nodeName: String
     public private(set) var localName: String
     public private(set) var nodeValue: String
     public private(set) var nodeType: Int
+    public var kind: Kind { get }
+    public private(set) var frameID: FrameID?
+    public private(set) var documentURL: String?
+    public private(set) var baseURL: String?
     public private(set) var attributes: [String: String]
+    public private(set) var attributeList: [Attribute]
     public private(set) var childNodeCount: Int
     /// Children with an explicit loading state (the current ChildrenState).
     public enum Children { case unrequested(count: Int); case loaded([DOMNode]) }
     public private(set) var children: Children
+    public private(set) var contentDocument: DOMNode?
+    public private(set) var shadowRoots: [DOMNode]
+    public private(set) var templateContent: DOMNode?
+    public private(set) var beforePseudoElement: DOMNode?
+    public private(set) var otherPseudoElements: [DOMNode]
+    public private(set) var afterPseudoElement: DOMNode?
     public private(set) var elementStyles: CSSStyles?     // selection-driven, see §4.5
 
     // Write-back (delegates to context → currentPage.dom):
     public func requestChildren(depth: Int = 1,
                                 isolation: isolated (any Actor) = #isolation) async
+    public func copyText(_ kind: CopyTextKind,
+                         isolation: isolated (any Actor) = #isolation) async throws -> String
+    public func delete(isolation: isolated (any Actor) = #isolation) async throws
+    public func highlight(isolation: isolated (any Actor) = #isolation) async throws
 }
 
 @Observable
@@ -1050,13 +1068,17 @@ public struct RuntimeEvaluation {
 Implemented DOM projection expansion for the W4b tree-render cutover:
 `DOMNode.frameID`, `documentURL`, `baseURL`, ordered `attributeList`,
 shadow/pseudo/content-document/template projections, and the corresponding
-`DOMTreeSnapshot.Node` fields are binding surface. Planned model extensions
-still not public API: `DOMNode.highlight/remove/outerHTML`, request body
-storage, network wall-time, cached body size/type, response source, initiator,
-richer `NetworkBody` metadata, CSS property mutation, fetched-results
-phases/query mutation, detached-root registry, shadow/pseudo event mutation
-binding, and target-commit proof. Each extension must add its own owner,
-event-coverage row, and contract test before it becomes binding public surface.
+`DOMTreeSnapshot.Node` fields are binding surface. DOM command/path surface
+needed by W4b is also binding surface: `DOMNode.copyText(_:)`,
+`DOMNode.highlight()`, `DOMNode.delete()`, `WebInspectorContext.hideHighlight()`,
+`setElementPickerEnabled(_:)`, `reloadPage(ignoringCache:)`, and
+snapshot/context selector-path and XPath helpers. Planned model extensions
+still not public API: request body storage, network wall-time, cached body
+size/type, response source, initiator, richer `NetworkBody` metadata, CSS
+property mutation, fetched-results phases/query mutation, detached-root
+registry, shadow/pseudo event mutation binding, and target-commit proof. Each
+extension must add its own owner, event-coverage row, and contract test before
+it becomes binding public surface.
 
 ### 4.3 Fetch, fetched results, tree controller
 

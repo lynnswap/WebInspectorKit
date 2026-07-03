@@ -43,6 +43,12 @@ public final class DOMNode: WebInspectorPersistentModel {
         }
     }
 
+    public enum CopyTextKind: Hashable, Sendable {
+        case html
+        case selectorPath
+        case xPath
+    }
+
     public enum Children {
         case unrequested(count: Int)
         case loaded([DOMNode])
@@ -108,6 +114,30 @@ public final class DOMNode: WebInspectorPersistentModel {
             preconditionFailure("DOMNode is not registered in a WebInspectorContext.")
         }
         await modelContext.requestChildren(for: self, depth: depth, isolation: isolation)
+    }
+
+    public func copyText(
+        _ kind: CopyTextKind,
+        isolation: isolated (any Actor) = #isolation
+    ) async throws -> String {
+        guard let modelContext else {
+            preconditionFailure("DOMNode is not registered in a WebInspectorContext.")
+        }
+        return try await modelContext.copyText(kind, for: self, isolation: isolation)
+    }
+
+    public func delete(isolation: isolated (any Actor) = #isolation) async throws {
+        guard let modelContext else {
+            preconditionFailure("DOMNode is not registered in a WebInspectorContext.")
+        }
+        try await modelContext.delete(self, isolation: isolation)
+    }
+
+    public func highlight(isolation: isolated (any Actor) = #isolation) async throws {
+        guard let modelContext else {
+            preconditionFailure("DOMNode is not registered in a WebInspectorContext.")
+        }
+        try await modelContext.highlight(self, isolation: isolation)
     }
 
     func update(from node: DOM.Node) {
