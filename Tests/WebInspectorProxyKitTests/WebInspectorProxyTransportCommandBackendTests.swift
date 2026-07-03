@@ -58,6 +58,33 @@ func transportCommandBackendDecodesDOMRequestNodeResult() async throws {
 }
 
 @Test
+func transportCommandBackendPreservesDOMRequestChildNodesRecursiveDepth() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let target = pageTarget(proxy: WebInspectorProxy(backend: WebInspectorTransportBackend(transport: transport)))
+
+    let requestChildrenTask = Task {
+        try await target.dom.requestChildNodes(DOM.Node.ID("document"), depth: -1)
+    }
+
+    let sent = try await waitForTargetMessage(backend, method: "DOM.requestChildNodes")
+    #expect(sent.targetIdentifier == ProtocolTarget.ID("page-main"))
+    #expect(try messageMethod(sent.message) == "DOM.requestChildNodes")
+    let parameters = try messageParameters(sent.message)
+    #expect(parameters["nodeId"] as? String == "document")
+    #expect((parameters["depth"] as? NSNumber)?.intValue == -1)
+
+    await receiveTargetReply(
+        transport,
+        targetID: sent.targetIdentifier,
+        messageID: try messageID(sent.message),
+        result: "{}"
+    )
+    try await requestChildrenTask.value
+}
+
+@Test
 func transportCommandBackendDecodesDOMDocumentResult() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
@@ -228,6 +255,63 @@ func transportBackendDecodesNetworkResponseEventForTargetRoute() async throws {
     #expect(response.source == Network.Source(rawValue: "network"))
     #expect(resourceType == .document)
     #expect(timestamp == 12.5)
+}
+
+@Test
+func transportBackendDecodesWebSocketHandshakeEventsForTargetRoute() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let target = pageTarget(proxy: WebInspectorProxy(backend: WebInspectorTransportBackend(transport: transport)))
+
+    let requestEventTask = Task {
+        var iterator = target.network.events.makeAsyncIterator()
+        return await iterator.next()
+    }
+
+    await waitForEventSubscription(target, domain: .network)
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        method: "Network.webSocketWillSendHandshakeRequest",
+        params: #"{"requestId":"ws-1","timestamp":1.25,"request":{"headers":{"Upgrade":"websocket","Sec-WebSocket-Key":"abc"}}}"#
+    )
+
+    let requestEvent = try #require(try await value(of: requestEventTask))
+    guard case let .webSocket(.handshakeRequest(id, request, timestamp)) = requestEvent else {
+        Issue.record("Expected Network.webSocketWillSendHandshakeRequest.")
+        return
+    }
+    #expect(id == Network.Request.ID("ws-1"))
+    #expect(request.id == Network.Request.ID("ws-1"))
+    #expect(request.method == "GET")
+    #expect(request.headers["Upgrade"] == "websocket")
+    #expect(request.headers["Sec-WebSocket-Key"] == "abc")
+    #expect(timestamp == 1.25)
+
+    let responseEventTask = Task {
+        var iterator = target.network.events.makeAsyncIterator()
+        return await iterator.next()
+    }
+
+    await waitForEventSubscription(target, domain: .network)
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        method: "Network.webSocketHandshakeResponseReceived",
+        params: #"{"requestId":"ws-1","timestamp":2.5,"response":{"status":101,"statusText":"Switching Protocols","headers":{"Upgrade":"websocket"}}}"#
+    )
+
+    let responseEvent = try #require(try await value(of: responseEventTask))
+    guard case let .webSocket(.handshakeResponse(responseID, response, responseTimestamp)) = responseEvent else {
+        Issue.record("Expected Network.webSocketHandshakeResponseReceived.")
+        return
+    }
+    #expect(responseID == Network.Request.ID("ws-1"))
+    #expect(response.status == 101)
+    #expect(response.statusText == "Switching Protocols")
+    #expect(response.headers["Upgrade"] == "websocket")
+    #expect(responseTimestamp == 2.5)
 }
 
 @Test

@@ -145,6 +145,20 @@ enum WebInspectorTransportEventDecoder {
         case "Network.webSocketCreated":
             let params = try decode(WebSocketCreatedParams.self, from: event)
             return .webSocket(.created(id: Network.Request.ID(params.requestId), url: params.url))
+        case "Network.webSocketWillSendHandshakeRequest":
+            let params = try decode(WebSocketWillSendHandshakeRequestParams.self, from: event)
+            return .webSocket(.handshakeRequest(
+                id: Network.Request.ID(params.requestId),
+                request: params.request.proxyRequest(id: params.requestId),
+                timestamp: params.timestamp
+            ))
+        case "Network.webSocketHandshakeResponseReceived":
+            let params = try decode(WebSocketHandshakeResponseReceivedParams.self, from: event)
+            return .webSocket(.handshakeResponse(
+                id: Network.Request.ID(params.requestId),
+                response: params.response.proxyResponse(fallbackURL: nil),
+                timestamp: params.timestamp
+            ))
         case "Network.webSocketFrameReceived":
             let params = try decode(WebSocketFrameParams.self, from: event)
             return .webSocket(.frameReceived(
@@ -169,9 +183,6 @@ enum WebInspectorTransportEventDecoder {
         case "Network.webSocketClosed":
             let params = try decode(WebSocketClosedParams.self, from: event)
             return .webSocket(.closed(id: Network.Request.ID(params.requestId), timestamp: params.timestamp))
-        case "Network.webSocketWillSendHandshakeRequest",
-             "Network.webSocketHandshakeResponseReceived":
-            return .webSocket(.other(rawEvent(from: event)))
         default:
             return .unknown(rawEvent(from: event))
         }
@@ -515,6 +526,31 @@ private struct CachedResourcePayload: Decodable {
 private struct WebSocketCreatedParams: Decodable {
     var requestId: String
     var url: String
+}
+
+private struct WebSocketWillSendHandshakeRequestParams: Decodable {
+    var requestId: String
+    var timestamp: Double?
+    var request: WebSocketHandshakeRequestPayload
+}
+
+private struct WebSocketHandshakeResponseReceivedParams: Decodable {
+    var requestId: String
+    var timestamp: Double?
+    var response: ResponsePayload
+}
+
+private struct WebSocketHandshakeRequestPayload: Decodable {
+    var headers: [String: String]?
+
+    func proxyRequest(id: String) -> Network.Request {
+        Network.Request(
+            id: Network.Request.ID(id),
+            url: "",
+            method: "GET",
+            headers: headers ?? [:]
+        )
+    }
 }
 
 private struct WebSocketFrameParams: Decodable {

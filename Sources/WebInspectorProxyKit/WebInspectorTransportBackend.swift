@@ -235,7 +235,7 @@ private enum WebInspectorTransportCommandEncoder {
             let payload = try payload(command.payload, as: DOM.RequestChildNodesPayload.self, command: command)
             return try data([
                 "nodeId": payload.id.rawValue,
-                "depth": max(1, payload.depth),
+                "depth": payload.depth,
             ])
 
         case (.dom, "requestNode"):
