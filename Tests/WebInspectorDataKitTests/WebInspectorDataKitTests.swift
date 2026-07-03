@@ -1,7 +1,10 @@
+import Foundation
 import Testing
 @testable import WebInspectorDataKit
 import WebInspectorProxyKit
 import WebInspectorProxyKitTesting
+import WebInspectorTestSupport
+import WebInspectorTransport
 
 @MainActor
 @Test
@@ -610,6 +613,72 @@ func consoleEnableReplayIsCapturedBeforeCommandReturns() async throws {
     await enableGate.open()
     try await waitUntil { context.state == .attached }
     #expect(results.items.map(\.text) == ["replayed"])
+}
+
+@MainActor
+@Test
+func transportBackedStartupCapturesRuntimeAndConsoleReplayBeforeEnableReplies() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    let proxy = WebInspectorProxy(backend: WebInspectorTransportBackend(transport: transport))
+    let target = await proxy.installTargetForTesting(kind: .page, frameID: FrameID("main-frame"))
+    await installTransportPageTarget(in: transport, targetID: ProtocolTarget.ID(target.route.rawValue))
+    let container = WebInspectorContainer(proxy: proxy)
+    let context = container.mainContext
+    let consoleResults: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults(for: .allConsoleMessages)
+
+    let runtimeEnable = try await waitForTransportTargetMessage(backend, method: "Runtime.enable")
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: runtimeEnable.targetIdentifier,
+        method: "Runtime.executionContextCreated",
+        params: #"{"context":{"id":11,"name":"Main","frameId":"main-frame","type":"normal"}}"#
+    )
+    try await waitUntil {
+        context.executionContexts.first?.id == RuntimeContext.ID(Runtime.ExecutionContext.ID("11"))
+    }
+    await receiveTransportTargetReply(
+        transport,
+        targetID: runtimeEnable.targetIdentifier,
+        messageID: try transportMessageID(runtimeEnable.message),
+        result: "{}"
+    )
+
+    let networkEnable = try await waitForTransportTargetMessage(backend, method: "Network.enable")
+    await receiveTransportTargetReply(
+        transport,
+        targetID: networkEnable.targetIdentifier,
+        messageID: try transportMessageID(networkEnable.message),
+        result: "{}"
+    )
+
+    let getDocument = try await waitForTransportTargetMessage(backend, method: "DOM.getDocument")
+    await receiveTransportTargetReply(
+        transport,
+        targetID: getDocument.targetIdentifier,
+        messageID: try transportMessageID(getDocument.message),
+        result: ##"{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document","localName":"","nodeValue":"","frameId":"main-frame","childNodeCount":0}}"##
+    )
+
+    let consoleEnable = try await waitForTransportTargetMessage(backend, method: "Console.enable")
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: consoleEnable.targetIdentifier,
+        method: "Console.messageAdded",
+        params: #"{"message":{"source":"console-api","level":"warning","text":"replayed","repeatCount":1}}"#
+    )
+    try await waitUntil { consoleResults.items.map(\.text) == ["replayed"] }
+    await receiveTransportTargetReply(
+        transport,
+        targetID: consoleEnable.targetIdentifier,
+        messageID: try transportMessageID(consoleEnable.message),
+        result: "{}"
+    )
+
+    try await waitUntil { context.state == .attached }
+    #expect(context.rootNode?.id == DOMNode.ID(DOM.Node.ID("1")))
+    #expect(context.selectedContext?.id == RuntimeContext.ID(Runtime.ExecutionContext.ID("11")))
+    #expect(consoleResults.items.map(\.text) == ["replayed"])
 }
 
 @MainActor
@@ -2442,6 +2511,92 @@ private func emitFinishedRequest(
         target: target
     )
     await backend.emit(.loadingFinished(id: id, timestamp: 3, sourceMapURL: nil, metrics: nil), target: target)
+}
+
+private func installTransportPageTarget(
+    in transport: TransportSession,
+    targetID: ProtocolTarget.ID,
+    frameID: String = "main-frame"
+) async {
+    let targetID = jsonEscapedString(targetID.rawValue)
+    let frameID = jsonEscapedString(frameID)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"\#(targetID)","type":"page","frameId":"\#(frameID)","isProvisional":false}}}"#
+    )
+}
+
+private func waitForTransportTargetMessage(
+    _ backend: FakeTransportBackend,
+    method: String,
+    timeout: Duration = .seconds(1)
+) async throws -> SentTargetMessage {
+    try await withThrowingTaskGroup(of: SentTargetMessage.self) { group in
+        group.addTask {
+            try await backend.waitForTargetMessage(method: method)
+        }
+        group.addTask {
+            try await Task.sleep(for: timeout)
+            throw TimedOut()
+        }
+        guard let message = try await group.next() else {
+            throw TimedOut()
+        }
+        group.cancelAll()
+        return message
+    }
+}
+
+private func receiveTransportTargetReply(
+    _ transport: TransportSession,
+    targetID: ProtocolTarget.ID,
+    messageID: UInt64,
+    result: String
+) async {
+    await transport.receiveRootMessage(transportTargetDispatchMessage(
+        targetID: targetID,
+        message: #"{"id":\#(messageID),"result":\#(result)}"#
+    ))
+}
+
+private func receiveTransportTargetEvent(
+    _ transport: TransportSession,
+    targetID: ProtocolTarget.ID,
+    method: String,
+    params: String
+) async {
+    await transport.receiveRootMessage(transportTargetDispatchMessage(
+        targetID: targetID,
+        message: #"{"method":"\#(method)","params":\#(params)}"#
+    ))
+}
+
+private func transportTargetDispatchMessage(targetID: ProtocolTarget.ID, message: String) -> String {
+    let escapedTargetID = jsonEscapedString(targetID.rawValue)
+    let escapedMessage = jsonEscapedString(message)
+    return #"{"method":"Target.dispatchMessageFromTarget","params":{"targetId":"\#(escapedTargetID)","message":"\#(escapedMessage)"}}"#
+}
+
+private func jsonEscapedString(_ string: String) -> String {
+    string
+        .replacingOccurrences(of: #"\"#, with: #"\\"#)
+        .replacingOccurrences(of: #"""#, with: #"\""#)
+}
+
+private func transportMessageID(_ message: String) throws -> UInt64 {
+    let object = try transportMessageObject(message)
+    if let number = object["id"] as? NSNumber {
+        return number.uint64Value
+    }
+    if let string = object["id"] as? String,
+       let id = UInt64(string) {
+        return id
+    }
+    throw TransportSession.Error.malformedMessage
+}
+
+private func transportMessageObject(_ message: String) throws -> [String: Any] {
+    let data = try #require(message.data(using: .utf8))
+    return try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
 }
 
 @MainActor

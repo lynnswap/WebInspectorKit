@@ -1,11 +1,13 @@
 import Foundation
 import WebInspectorTransport
 
-package struct WebInspectorTransportCommandBackend: WebInspectorProxyBackend {
+package struct WebInspectorTransportBackend: WebInspectorProxyBackend {
     private let transport: TransportSession
+    private let eventSubscriptions: WebInspectorTransportEventSubscriptions
 
     package init(transport: TransportSession) {
         self.transport = transport
+        eventSubscriptions = WebInspectorTransportEventSubscriptions()
     }
 
     package func dispatchCommand<Payload: Sendable, Result: Sendable>(
@@ -26,9 +28,9 @@ package struct WebInspectorTransportCommandBackend: WebInspectorProxyBackend {
         targetID: WebInspectorTarget.ID,
         domain: WebInspectorProxyEventDomain
     ) async {
-        _ = route
-        _ = targetID
-        preconditionFailure("WebInspectorTransportCommandBackend does not own \(domain.rawValue) event streams.")
+        await eventSubscriptions.waitForActiveSubscriber(
+            WebInspectorTransportEventSubscriptionKey(route: route, targetID: targetID, domain: domain)
+        )
     }
 
     package nonisolated func events(
@@ -36,9 +38,38 @@ package struct WebInspectorTransportCommandBackend: WebInspectorProxyBackend {
         targetID: WebInspectorTarget.ID,
         domain: WebInspectorProxyEventDomain
     ) -> AsyncStream<WebInspectorProxyEvent> {
-        _ = route
-        _ = targetID
-        preconditionFailure("WebInspectorTransportCommandBackend does not own \(domain.rawValue) event streams.")
+        AsyncStream<WebInspectorProxyEvent> { continuation in
+            let key = WebInspectorTransportEventSubscriptionKey(route: route, targetID: targetID, domain: domain)
+            let task = Task {
+                let stream = await transport.events(for: protocolDomain(for: domain))
+                guard Task.isCancelled == false else {
+                    continuation.finish()
+                    return
+                }
+                await eventSubscriptions.register(key)
+                for await event in stream {
+                    guard Task.isCancelled == false else {
+                        break
+                    }
+                    guard await shouldDeliver(event, to: route) else {
+                        continue
+                    }
+                    do {
+                        continuation.yield(try WebInspectorTransportEventDecoder.proxyEvent(from: event, targetID: targetID))
+                    } catch {
+                        preconditionFailure("Failed to decode \(event.method): \(error)")
+                    }
+                }
+                await eventSubscriptions.unregister(key)
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
+                Task {
+                    await eventSubscriptions.unregister(key)
+                }
+            }
+        }
     }
 
     private func mapTransportError(_ error: any Error, domain: String, method: String) -> any Error {
@@ -58,6 +89,70 @@ package struct WebInspectorTransportCommandBackend: WebInspectorProxyBackend {
                 method: method,
                 message: "\(transportError)"
             )
+        }
+    }
+
+    private nonisolated func shouldDeliver(_ event: ProtocolEvent, to route: RoutingTargetID) async -> Bool {
+        if let targetID = event.targetID {
+            return targetID.rawValue == route.rawValue
+        }
+        let snapshot = await transport.snapshot()
+        return snapshot.currentMainPageTargetID?.rawValue == route.rawValue
+    }
+}
+
+private func protocolDomain(for domain: WebInspectorProxyEventDomain) -> ProtocolDomain {
+    switch domain {
+    case .dom:
+        .dom
+    case .inspector:
+        .inspector
+    case .css:
+        .css
+    case .network:
+        .network
+    case .console:
+        .console
+    case .runtime:
+        .runtime
+    }
+}
+
+private struct WebInspectorTransportEventSubscriptionKey: Hashable, Sendable {
+    var route: RoutingTargetID
+    var targetID: WebInspectorTarget.ID
+    var domain: WebInspectorProxyEventDomain
+}
+
+private actor WebInspectorTransportEventSubscriptions {
+    private var activeSubscriberCounts: [WebInspectorTransportEventSubscriptionKey: Int] = [:]
+    private var waiters: [WebInspectorTransportEventSubscriptionKey: [CheckedContinuation<Void, Never>]] = [:]
+
+    func register(_ key: WebInspectorTransportEventSubscriptionKey) {
+        activeSubscriberCounts[key, default: 0] += 1
+        let continuations = waiters.removeValue(forKey: key) ?? []
+        for continuation in continuations {
+            continuation.resume()
+        }
+    }
+
+    func unregister(_ key: WebInspectorTransportEventSubscriptionKey) {
+        guard let count = activeSubscriberCounts[key] else {
+            return
+        }
+        if count <= 1 {
+            activeSubscriberCounts[key] = nil
+        } else {
+            activeSubscriberCounts[key] = count - 1
+        }
+    }
+
+    func waitForActiveSubscriber(_ key: WebInspectorTransportEventSubscriptionKey) async {
+        guard activeSubscriberCounts[key, default: 0] == 0 else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters[key, default: []].append(continuation)
         }
     }
 }
@@ -273,7 +368,7 @@ private enum WebInspectorTransportCommandDecoder {
     }
 
     private struct DocumentResult: Decodable {
-        var root: ProtocolDOMNode
+        var root: WebInspectorTransportDOMNodePayload
     }
 
     private struct RequestNodeResult: Decodable {
@@ -287,157 +382,5 @@ private enum WebInspectorTransportCommandDecoder {
     private struct ResponseBodyResult: Decodable {
         var body: String
         var base64Encoded: Bool
-    }
-
-    private final class ProtocolDOMNode: Decodable {
-        var nodeId: String
-        var nodeType: Int
-        var nodeName: String
-        var localName: String
-        var nodeValue: String
-        var frameId: String?
-        var childNodeCount: Int?
-        var children: [ProtocolDOMNode]?
-        var attributes: [String]?
-        var documentURL: String?
-        var baseURL: String?
-        var pseudoType: String?
-        var shadowRootType: String?
-        var contentDocument: ProtocolDOMNode?
-        var shadowRoots: [ProtocolDOMNode]?
-        var templateContent: ProtocolDOMNode?
-        var pseudoElements: [ProtocolDOMNode]?
-
-        private enum CodingKeys: String, CodingKey {
-            case nodeId
-            case nodeType
-            case nodeName
-            case localName
-            case nodeValue
-            case frameId
-            case childNodeCount
-            case children
-            case attributes
-            case documentURL
-            case baseURL
-            case pseudoType
-            case shadowRootType
-            case contentDocument
-            case shadowRoots
-            case templateContent
-            case pseudoElements
-        }
-
-        init(from decoder: any Decoder) throws {
-            let container = try decoder.container(keyedBy: CodingKeys.self)
-            if let integerID = try? container.decode(Int.self, forKey: .nodeId) {
-                nodeId = String(integerID)
-            } else {
-                nodeId = try container.decode(String.self, forKey: .nodeId)
-            }
-            nodeType = try container.decode(Int.self, forKey: .nodeType)
-            nodeName = try container.decode(String.self, forKey: .nodeName)
-            localName = try container.decode(String.self, forKey: .localName)
-            nodeValue = try container.decode(String.self, forKey: .nodeValue)
-            frameId = try container.decodeIfPresent(String.self, forKey: .frameId)
-            childNodeCount = try container.decodeIfPresent(Int.self, forKey: .childNodeCount)
-            children = try container.decodeIfPresent([ProtocolDOMNode].self, forKey: .children)
-            attributes = try container.decodeIfPresent([String].self, forKey: .attributes)
-            documentURL = try container.decodeIfPresent(String.self, forKey: .documentURL)
-            baseURL = try container.decodeIfPresent(String.self, forKey: .baseURL)
-            pseudoType = try container.decodeIfPresent(String.self, forKey: .pseudoType)
-            shadowRootType = try container.decodeIfPresent(String.self, forKey: .shadowRootType)
-            contentDocument = try container.decodeIfPresent(ProtocolDOMNode.self, forKey: .contentDocument)
-            shadowRoots = try container.decodeIfPresent([ProtocolDOMNode].self, forKey: .shadowRoots)
-            templateContent = try container.decodeIfPresent(ProtocolDOMNode.self, forKey: .templateContent)
-            pseudoElements = try container.decodeIfPresent([ProtocolDOMNode].self, forKey: .pseudoElements)
-        }
-
-        func proxyNode() throws -> DOM.Node {
-            let pseudoElements = try (pseudoElements ?? []).map { try $0.proxyNode() }
-            return DOM.Node(
-                id: DOM.Node.ID(nodeId),
-                nodeType: nodeType,
-                nodeName: nodeName,
-                localName: localName,
-                nodeValue: nodeValue,
-                frameID: frameId.map(FrameID.init),
-                documentURL: documentURL,
-                baseURL: baseURL,
-                attributes: try attributeDictionary(),
-                childNodeCount: childNodeCount ?? 0,
-                children: try children?.map { try $0.proxyNode() },
-                contentDocument: try contentDocument?.proxyNode(),
-                shadowRoots: try (shadowRoots ?? []).map { try $0.proxyNode() },
-                templateContent: try templateContent?.proxyNode(),
-                beforePseudoElement: pseudoElements.first { $0.pseudoType?.isBefore == true },
-                otherPseudoElements: pseudoElements.filter { $0.pseudoType?.isBefore != true && $0.pseudoType?.isAfter != true },
-                afterPseudoElement: pseudoElements.first { $0.pseudoType?.isAfter == true },
-                pseudoType: Self.pseudoType(pseudoType),
-                shadowRootType: Self.shadowRootType(shadowRootType)
-            )
-        }
-
-        private func attributeDictionary() throws -> [String: String] {
-            guard let attributes else {
-                return [:]
-            }
-            guard attributes.count.isMultiple(of: 2) else {
-                throw DecodingError.dataCorrupted(.init(
-                    codingPath: [CodingKeys.attributes],
-                    debugDescription: "DOM.Node attributes must be an even flat name/value array."
-                ))
-            }
-            var result: [String: String] = [:]
-            result.reserveCapacity(attributes.count / 2)
-            for index in stride(from: 0, to: attributes.count, by: 2) {
-                result[attributes[index]] = attributes[index + 1]
-            }
-            return result
-        }
-
-        private static func pseudoType(_ value: String?) -> DOM.PseudoType? {
-            switch value {
-            case nil:
-                nil
-            case "before":
-                .before
-            case "after":
-                .after
-            case let .some(value):
-                .other(value)
-            }
-        }
-
-        private static func shadowRootType(_ value: String?) -> DOM.ShadowRootType? {
-            switch value {
-            case nil:
-                nil
-            case "open":
-                .open
-            case "closed":
-                .closed
-            case "user-agent":
-                .userAgent
-            case let .some(value):
-                .other(value)
-            }
-        }
-    }
-}
-
-private extension DOM.PseudoType {
-    var isBefore: Bool {
-        if case .before = self {
-            return true
-        }
-        return false
-    }
-
-    var isAfter: Bool {
-        if case .after = self {
-            return true
-        }
-        return false
     }
 }

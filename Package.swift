@@ -301,7 +301,9 @@ let package = Package(
             name: "WebInspectorDataKitTests",
             dependencies: [
                 "WebInspectorDataKit",
-                "WebInspectorProxyKitTesting"
+                "WebInspectorProxyKitTesting",
+                "WebInspectorTransport",
+                "WebInspectorTestSupport"
             ],
             path: "Tests/WebInspectorDataKitTests",
             swiftSettings: strictSwiftSettings
