@@ -158,11 +158,40 @@ public actor WebViewProxy {
         targetID: WebViewTarget.ID,
         route: RoutingTargetID
     ) -> AsyncStream<DOM.Event> {
-        eventStream(targetID: targetID, route: route, domain: .dom) { event in
-            guard case let .dom(value) = event else {
-                return nil
+        guard let backend else {
+            preconditionFailure("WebViewProxy has no backend for DOM events.")
+        }
+        return AsyncStream<DOM.Event> { continuation in
+            let task = Task {
+                await withTaskGroup(of: Void.self) { group in
+                    group.addTask {
+                        for await event in backend.events(route: route, targetID: targetID, domain: .dom) {
+                            guard case let .dom(value) = event else {
+                                preconditionFailure("Backend emitted a mismatched event for DOM.")
+                            }
+                            continuation.yield(value)
+                        }
+                    }
+                    group.addTask {
+                        for await event in backend.events(route: route, targetID: targetID, domain: .inspector) {
+                            guard case let .inspector(value) = event else {
+                                preconditionFailure("Backend emitted a mismatched event for Inspector.")
+                            }
+                            await self.emitDOMInspectEvent(
+                                for: value,
+                                targetID: targetID,
+                                route: route,
+                                continuation: continuation
+                            )
+                        }
+                    }
+                    await group.waitForAll()
+                    continuation.finish()
+                }
             }
-            return value
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
         }
     }
 
@@ -247,6 +276,32 @@ public actor WebViewProxy {
             continuation.onTermination = { _ in
                 task.cancel()
             }
+        }
+    }
+
+    private nonisolated func emitDOMInspectEvent(
+        for event: Inspector.Event,
+        targetID: WebViewTarget.ID,
+        route: RoutingTargetID,
+        continuation: AsyncStream<DOM.Event>.Continuation
+    ) async {
+        guard case let .inspect(object, _) = event else {
+            return
+        }
+        guard object.subtype?.rawValue == "node", let objectID = object.id else {
+            return
+        }
+        do {
+            let nodeID: DOM.Node.ID = try await dispatchCommand(
+                targetID: targetID,
+                route: route,
+                domain: .dom,
+                method: "requestNode",
+                payload: DOM.RequestNodePayload(objectID: objectID)
+            )
+            continuation.yield(.inspect(nodeID))
+        } catch {
+            continuation.yield(.unknown(RawEvent(domain: "Inspector", method: "inspect")))
         }
     }
 }

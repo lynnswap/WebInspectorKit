@@ -2264,6 +2264,7 @@ private func waitForStartupSubscribers(
     target: WebViewTarget
 ) async throws {
     try await runtime.backend.waitForSubscribers(domain: "DOM", target: target, count: 1)
+    try await runtime.backend.waitForSubscribers(domain: "Inspector", target: target, count: 1)
     try await runtime.backend.waitForSubscribers(domain: "CSS", target: target, count: 1)
     try await runtime.backend.waitForSubscribers(domain: "Network", target: target, count: 1)
     try await runtime.backend.waitForSubscribers(domain: "Console", target: target, count: 1)

@@ -11,6 +11,7 @@ package enum WebViewProxyDomain: String, Hashable, Sendable {
 
 package enum WebViewProxyEventDomain: String, Hashable, Sendable {
     case dom = "DOM"
+    case inspector = "Inspector"
     case css = "CSS"
     case network = "Network"
     case console = "Console"
@@ -41,6 +42,7 @@ package struct WebViewProxyCommand<Payload: Sendable, Result: Sendable>: Sendabl
 
 package enum WebViewProxyEvent: Sendable {
     case dom(DOM.Event)
+    case inspector(Inspector.Event)
     case css(CSS.Event)
     case network(Network.Event)
     case console(Console.Event)

@@ -120,6 +120,14 @@ public actor WebViewTestBackend {
         emit(.dom(event), target: target.id, route: target.route, domain: .dom)
     }
 
+    package func emit(_ event: Inspector.Event, target: WebViewTarget.ID) async {
+        emit(.inspector(event), target: target, route: nil, domain: .inspector)
+    }
+
+    package func emit(_ event: Inspector.Event, target: WebViewTarget) async {
+        emit(.inspector(event), target: target.id, route: target.route, domain: .inspector)
+    }
+
     public func emit(_ event: CSS.Event, target: WebViewTarget.ID) async {
         emit(.css(event), target: target, route: nil, domain: .css)
     }

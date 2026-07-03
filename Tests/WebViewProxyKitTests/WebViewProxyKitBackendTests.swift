@@ -27,6 +27,131 @@ func domGetDocumentDispatchesToTargetRoute() async throws {
 }
 
 @Test
+func domRequestNodeDispatchesToTargetRoute() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+    let objectID = Runtime.RemoteObject.ID("remote-node")
+    let expectedNodeID = DOM.Node.ID("selected-node")
+
+    await runtime.backend.enqueue(expectedNodeID, for: "DOM", method: "requestNode")
+
+    let nodeID = try await target.dom.requestNode(forRemoteObject: objectID)
+    #expect(nodeID == expectedNodeID)
+
+    let commands = await runtime.backend.recordedCommands()
+    let command = try #require(commands.first)
+    #expect(command.targetID == target.id)
+    #expect(command.route == target.route)
+    #expect(command.domain == "DOM")
+    #expect(command.method == "requestNode")
+    let payload = try #require(command.payload.cast(as: DOM.RequestNodePayload.self))
+    #expect(payload.objectID == objectID)
+}
+
+@Test
+func inspectorInspectResolvesNodeRemoteObjectToDOMInspectEvent() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+    let objectID = Runtime.RemoteObject.ID("remote-node")
+    let expectedNodeID = DOM.Node.ID("selected-node")
+
+    let eventTask = Task {
+        var iterator = target.dom.events.makeAsyncIterator()
+        return await iterator.next()
+    }
+
+    try await runtime.backend.waitForSubscribers(domain: "DOM", target: target, count: 1)
+    try await runtime.backend.waitForSubscribers(domain: "Inspector", target: target, count: 1)
+    await runtime.backend.enqueue(expectedNodeID, for: "DOM", method: "requestNode")
+
+    await runtime.backend.emit(
+        .inspect(
+            Runtime.RemoteObject(
+                id: objectID,
+                kind: .object,
+                subtype: Runtime.Subtype(rawValue: "node")
+            ),
+            hints: .object([:])
+        ),
+        target: target
+    )
+
+    let event = try #require(try await value(of: eventTask))
+    guard case let .inspect(nodeID) = event else {
+        Issue.record("Expected Inspector.inspect to resolve to DOM.inspect.")
+        return
+    }
+    #expect(nodeID == expectedNodeID)
+
+    let commands = await runtime.backend.recordedCommands()
+    let command = try #require(commands.first)
+    #expect(command.targetID == target.id)
+    #expect(command.route == target.route)
+    #expect(command.domain == "DOM")
+    #expect(command.method == "requestNode")
+    let payload = try #require(command.payload.cast(as: DOM.RequestNodePayload.self))
+    #expect(payload.objectID == objectID)
+}
+
+@Test
+func domInspectEventPassesThroughWithoutRequestNode() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+    let expectedNodeID = DOM.Node.ID("protocol-node")
+
+    let eventTask = Task {
+        var iterator = target.dom.events.makeAsyncIterator()
+        return await iterator.next()
+    }
+
+    try await runtime.backend.waitForSubscribers(domain: "DOM", target: target, count: 1)
+    try await runtime.backend.waitForSubscribers(domain: "Inspector", target: target, count: 1)
+
+    await runtime.backend.emit(.inspect(expectedNodeID), target: target)
+
+    let event = try #require(try await value(of: eventTask))
+    guard case let .inspect(nodeID) = event else {
+        Issue.record("Expected DOM.inspect to pass through.")
+        return
+    }
+    #expect(nodeID == expectedNodeID)
+    #expect(await runtime.backend.recordedCommands().isEmpty)
+}
+
+@Test
+func inspectorInspectIgnoresNonNodeRemoteObject() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+    let recorder = EventRecorder<DOM.Event>()
+
+    let eventTask = Task {
+        var iterator = target.dom.events.makeAsyncIterator()
+        if let event = await iterator.next() {
+            await recorder.record(event)
+        }
+    }
+
+    try await runtime.backend.waitForSubscribers(domain: "DOM", target: target, count: 1)
+    try await runtime.backend.waitForSubscribers(domain: "Inspector", target: target, count: 1)
+
+    await runtime.backend.emit(
+        .inspect(
+            Runtime.RemoteObject(
+                id: Runtime.RemoteObject.ID("function-object"),
+                kind: .function
+            ),
+            hints: .object([:])
+        ),
+        target: target
+    )
+
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(await recorder.value() == nil)
+    eventTask.cancel()
+    #expect(await runtime.backend.recordedCommands().isEmpty)
+}
+
+@Test
 func networkEventsAreSeparatedByTarget() async throws {
     let runtime = try await WebViewProxyTestRuntime.start()
     let firstTarget = try await runtime.proxy.waitForCurrentPage()
@@ -271,6 +396,18 @@ func cssEnableAndDisableDispatchToTargetRoute() async throws {
 }
 
 private struct TimedOut: Error {}
+
+private actor EventRecorder<Element: Sendable> {
+    private var recordedValue: Element?
+
+    func record(_ value: Element) {
+        recordedValue = value
+    }
+
+    func value() -> Element? {
+        recordedValue
+    }
+}
 
 private func value<T: Sendable>(
     of task: Task<T, Never>,
