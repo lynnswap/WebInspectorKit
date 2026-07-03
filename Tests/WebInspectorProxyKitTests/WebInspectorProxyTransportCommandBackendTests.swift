@@ -113,6 +113,26 @@ func transportBackedProxyMaterializesCurrentPageFromTransportRegistry() async th
 }
 
 @Test
+func transportBackedProxyCloseDetachesTransportAndFinishesEventStreams() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+
+    let eventTask = Task {
+        var iterator = target.dom.events.makeAsyncIterator()
+        return await iterator.next()
+    }
+
+    await waitForEventSubscription(target, domain: .dom)
+    await proxy.close()
+
+    #expect(await backend.isDetached())
+    #expect(try await value(of: eventTask) == nil)
+}
+
+@Test
 func transportBackedCurrentPageRouteFollowsCommittedMainPageTarget() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))

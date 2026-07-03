@@ -1,6 +1,10 @@
 import Foundation
+import OSLog
 import WebKit
+import WebInspectorNativeTransport
 import WebInspectorTransport
+
+private let logger = Logger(subsystem: "WebInspectorKit", category: "WebInspectorProxy")
 
 public actor WebInspectorProxy {
     public struct Configuration: Equatable, Sendable {
@@ -18,6 +22,7 @@ public actor WebInspectorProxy {
 
     private let configuration: Configuration
     private let backend: (any WebInspectorProxyBackend)?
+    private let closeConnection: (@Sendable () async -> Void)?
     private var pageTarget: WebInspectorTarget?
     private var nextTargetOrdinal: UInt64
     private var closed: Bool
@@ -27,15 +32,34 @@ public actor WebInspectorProxy {
         attachingTo webView: WKWebView,
         configuration: Configuration = .init()
     ) async throws {
-        _ = webView
+        let nativeConnection: NativeInspectorConnection
+        do {
+            nativeConnection = try await NativeInspectorConnectionFactory.attach(
+                to: webView,
+                responseTimeout: configuration.responseTimeout,
+                fatalFailureHandler: { message in
+                    logger.error("Native inspector fatal failure: \(message, privacy: .private)")
+                }
+            )
+        } catch {
+            throw Self.mapNativeAttachError(error)
+        }
+
         self.configuration = configuration
-        backend = nil
+        backend = WebInspectorTransportBackend(transport: nativeConnection.transport)
+        closeConnection = {
+            await nativeConnection.close()
+        }
         pageTarget = nil
         nextTargetOrdinal = 0
         closed = false
-        throw WebInspectorProxyError.unsupported([
-            "Native WKWebView attachment is not implemented in the WebInspectorProxyKit shell."
-        ])
+
+        do {
+            try await bootstrapCurrentPage(from: nativeConnection.transport)
+        } catch {
+            await close()
+            throw Self.mapNativeAttachError(error)
+        }
     }
 
     package init(
@@ -44,6 +68,7 @@ public actor WebInspectorProxy {
     ) {
         self.configuration = configuration
         self.backend = backend
+        closeConnection = nil
         pageTarget = nil
         nextTargetOrdinal = 0
         closed = false
@@ -55,22 +80,17 @@ public actor WebInspectorProxy {
     ) async throws {
         self.configuration = configuration
         backend = WebInspectorTransportBackend(transport: transport)
+        closeConnection = {
+            await transport.detach()
+        }
         pageTarget = nil
         nextTargetOrdinal = 0
         closed = false
 
         do {
-            let transportTarget = try await transport.waitForCurrentMainPageTarget(
-                timeout: configuration.bootstrapTimeout
-            )
-            let snapshot = await transport.snapshot()
-            guard let record = snapshot.targetsByID[transportTarget.targetID] else {
-                throw WebInspectorProxyError.disconnected("Current page target disappeared during bootstrap.")
-            }
-            pageTarget = try currentPageTarget(from: record)
+            try await bootstrapCurrentPage(from: transport)
         } catch {
-            closed = true
-            await transport.detach()
+            await close()
             throw Self.mapBootstrapTargetError(error)
         }
     }
@@ -104,8 +124,12 @@ public actor WebInspectorProxy {
     }
 
     public func close() async {
+        guard closed == false else {
+            return
+        }
         closed = true
         pageTarget = nil
+        await closeConnection?()
     }
 
     public func waitUntilClosed() async throws {
@@ -309,6 +333,17 @@ public actor WebInspectorProxy {
         }
     }
 
+    private func bootstrapCurrentPage(from transport: TransportSession) async throws {
+        let transportTarget = try await transport.waitForCurrentMainPageTarget(
+            timeout: configuration.bootstrapTimeout
+        )
+        let snapshot = await transport.snapshot()
+        guard let record = snapshot.targetsByID[transportTarget.targetID] else {
+            throw WebInspectorProxyError.disconnected("Current page target disappeared during bootstrap.")
+        }
+        pageTarget = try currentPageTarget(from: record)
+    }
+
     private func currentPageTarget(from record: ProtocolTarget.Record) throws -> WebInspectorTarget {
         guard let kind = WebInspectorTarget.Kind(protocolKind: record.kind) else {
             throw WebInspectorProxyError.disconnected("Current page target has unsupported kind.")
@@ -341,6 +376,30 @@ public actor WebInspectorProxy {
         case .malformedMessage:
             return WebInspectorProxyError.disconnected("Malformed target bootstrap message.")
         }
+    }
+
+    private nonisolated static func mapNativeAttachError(_ error: any Error) -> any Error {
+        if let proxyError = error as? WebInspectorProxyError {
+            return proxyError
+        }
+        if let transportError = error as? TransportSession.Error {
+            return mapBootstrapTargetError(transportError)
+        }
+        if let factoryError = error as? NativeInspectorBackendFactoryError {
+            switch factoryError {
+            case let .missingSymbols(functions):
+                let missingFunctions = functions.sorted().joined(separator: ", ")
+                if missingFunctions.isEmpty {
+                    return WebInspectorProxyError.unsupported([
+                        "Native Web Inspector symbols are unavailable."
+                    ])
+                }
+                return WebInspectorProxyError.unsupported([
+                    "Native Web Inspector symbols are unavailable: \(missingFunctions)"
+                ])
+            }
+        }
+        return WebInspectorProxyError.attachFailed(String(describing: error))
     }
 }
 

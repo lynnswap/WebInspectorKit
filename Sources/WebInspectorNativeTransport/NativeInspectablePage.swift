@@ -1,19 +1,70 @@
 import WebKit
-import WebInspectorCore
+import WebInspectorNativeBridge
 import WebInspectorTransport
 
-package extension InspectorSession {
-    @MainActor
-    func attach(to webView: WKWebView) async throws {
-        let attachRequestGeneration = beginAttachmentRequest()
-        let resolvedSymbols = try await NativeInspectorBackendFactory.resolvedSymbolsDetached()
-        try ensureCurrentAttachmentRequest(attachRequestGeneration)
-        try await detachForAttachmentRequest(attachRequestGeneration)
+package struct NativeInspectorConnection: Sendable {
+    package let transport: TransportSession
+    package let receiver: TransportReceiver
+    package let reloadPage: @MainActor @Sendable () async throws -> Void
+    package let canReloadPage: @MainActor @Sendable () -> Bool
+    private let cleanup: @MainActor @Sendable () -> Void
 
-        let receiver = TransportReceiver()
-        let page = NativeInspectablePage(
-            webView: webView
+    package init(
+        transport: TransportSession,
+        receiver: TransportReceiver,
+        reloadPage: @escaping @MainActor @Sendable () async throws -> Void,
+        canReloadPage: @escaping @MainActor @Sendable () -> Bool,
+        cleanup: @escaping @MainActor @Sendable () -> Void
+    ) {
+        self.transport = transport
+        self.receiver = receiver
+        self.reloadPage = reloadPage
+        self.canReloadPage = canReloadPage
+        self.cleanup = cleanup
+    }
+
+    package func close() async {
+        receiver.close()
+        await transport.detach()
+        await restoreInspectabilityIfNeeded()
+    }
+
+    @MainActor
+    package func restoreInspectabilityIfNeeded() {
+        cleanup()
+    }
+}
+
+package enum NativeInspectorConnectionFactory {
+    @MainActor
+    package static func attach(
+        to webView: WKWebView,
+        responseTimeout: Duration?,
+        fatalFailureHandler: @escaping @Sendable (String) -> Void = { _ in }
+    ) async throws -> NativeInspectorConnection {
+        let resolvedSymbols = try await NativeInspectorBackendFactory.resolvedSymbolsDetached()
+        return try await attach(
+            to: webView,
+            resolvedSymbols: resolvedSymbols,
+            makeTransportSession: { backend in
+                TransportSession(
+                    backend: backend,
+                    responseTimeout: responseTimeout
+                )
+            },
+            fatalFailureHandler: fatalFailureHandler
         )
+    }
+
+    @MainActor
+    package static func attach(
+        to webView: WKWebView,
+        resolvedSymbols: WebInspectorNativeResolvedSymbols,
+        makeTransportSession: @MainActor (any TransportBackend) -> TransportSession,
+        fatalFailureHandler: @escaping @Sendable (String) -> Void = { _ in }
+    ) async throws -> NativeInspectorConnection {
+        let receiver = TransportReceiver()
+        let page = NativeInspectablePage(webView: webView)
         var transport: TransportSession?
 
         do {
@@ -23,31 +74,27 @@ package extension InspectorSession {
                 messageHandler: { message in
                     receiver.receive(message)
                 },
-                fatalFailureHandler: { [weak self] message in
-                    Task { @MainActor in
-                        self?.recordAttachmentError(InspectorSession.Error(message))
-                    }
-                }
+                fatalFailureHandler: fatalFailureHandler
             )
-            let createdTransport = makeTransportSession(backend: backend)
+            let createdTransport = makeTransportSession(backend)
             transport = createdTransport
             receiver.setTransport(createdTransport)
 
             try backend.attach()
-            try await connectAttachment(
+
+            return NativeInspectorConnection(
                 transport: createdTransport,
                 receiver: receiver,
-                pageReloadAction: { [page] in
+                reloadPage: { [page] in
                     try Task.checkCancellation()
                     try page.reload()
                 },
-                pageReloadAvailability: { [page] in
+                canReloadPage: { [page] in
                     page.canReload
                 },
-                connectionCleanup: { [page] in
+                cleanup: { [page] in
                     page.restoreInspectabilityIfNeeded()
-                },
-                attachRequestGeneration: attachRequestGeneration
+                }
             )
         } catch {
             receiver.close()
@@ -77,7 +124,7 @@ package final class NativeInspectablePage {
 
     package func reload() throws {
         guard let webView else {
-            throw InspectorSession.Error("Inspected WKWebView is no longer available.")
+            throw NativeInspectablePageError.missingWebView
         }
         webView.reload()
     }
@@ -95,6 +142,17 @@ package final class NativeInspectablePage {
     #if DEBUG
     package init(missingWebViewForTesting: Void) {}
     #endif
+}
+
+package enum NativeInspectablePageError: Error, Equatable, Sendable, CustomStringConvertible {
+    case missingWebView
+
+    package var description: String {
+        switch self {
+        case .missingWebView:
+            "Inspected WKWebView is no longer available."
+        }
+    }
 }
 
 @MainActor
