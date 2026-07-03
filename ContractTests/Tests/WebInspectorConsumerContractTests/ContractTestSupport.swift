@@ -89,7 +89,12 @@ enum ContractTestSupport {
                 id: request.id,
                 timestamp: 4,
                 sourceMapURL: "data.json.map",
-                metrics: Network.Metrics(encodedDataLength: 4, decodedBodyLength: 7)
+                metrics: Network.Metrics(
+                    networkProtocol: "h2",
+                    remoteAddress: "203.0.113.30:443",
+                    encodedDataLength: 4,
+                    decodedBodyLength: 7
+                )
             ),
             target: target
         )
@@ -287,6 +292,8 @@ actor ContractDataKitActor {
         #expect(requestModel.decodedDataLength == 7)
         #expect(requestModel.encodedDataLength == 4)
         #expect(requestModel.sourceMapURL == "data.json.map")
+        #expect(requestModel.metrics?.networkProtocol == "h2")
+        #expect(requestModel.metrics?.remoteAddress == "203.0.113.30:443")
         #expect(requestModel.metrics?.encodedDataLength == 4)
         #expect(requestModel.metrics?.decodedBodyLength == 7)
         #expect(context.registeredRequest(for: requestModel.id) === requestModel)

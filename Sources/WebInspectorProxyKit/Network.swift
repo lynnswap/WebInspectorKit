@@ -138,15 +138,21 @@ public enum Network {
 
     public struct Metrics: Sendable {
         public let timestamp: Double?
+        public let networkProtocol: String?
+        public let remoteAddress: String?
         public let encodedDataLength: Int?
         public let decodedBodyLength: Int?
 
         public init(
             timestamp: Double? = nil,
+            networkProtocol: String? = nil,
+            remoteAddress: String? = nil,
             encodedDataLength: Int? = nil,
             decodedBodyLength: Int? = nil
         ) {
             self.timestamp = timestamp
+            self.networkProtocol = networkProtocol
+            self.remoteAddress = remoteAddress
             self.encodedDataLength = encodedDataLength
             self.decodedBodyLength = decodedBodyLength
         }

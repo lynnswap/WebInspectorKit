@@ -577,12 +577,23 @@ private struct ResponsePayload: Decodable {
 }
 
 private struct MetricsPayload: Decodable {
+    var networkProtocol: String?
+    var remoteAddress: String?
     var responseBodyBytesReceived: Int?
     var responseBodyDecodedSize: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case networkProtocol = "protocol"
+        case remoteAddress
+        case responseBodyBytesReceived
+        case responseBodyDecodedSize
+    }
 
     func proxyMetrics(timestamp: Double) -> Network.Metrics {
         Network.Metrics(
             timestamp: timestamp,
+            networkProtocol: networkProtocol,
+            remoteAddress: remoteAddress,
             encodedDataLength: responseBodyBytesReceived,
             decodedBodyLength: responseBodyDecodedSize
         )

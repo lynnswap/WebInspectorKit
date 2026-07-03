@@ -1974,7 +1974,12 @@ func loadingFinishedStoresTerminalMetadataAndOverridesDataTotals() async throws 
             id: requestID,
             timestamp: 3,
             sourceMapURL: "app.js.map",
-            metrics: Network.Metrics(encodedDataLength: 9, decodedBodyLength: 12)
+            metrics: Network.Metrics(
+                networkProtocol: "h3",
+                remoteAddress: "203.0.113.20:443",
+                encodedDataLength: 9,
+                decodedBodyLength: 12
+            )
         ),
         target: target
     )
@@ -1985,6 +1990,8 @@ func loadingFinishedStoresTerminalMetadataAndOverridesDataTotals() async throws 
     }
     let request = try #require(results.items.first)
     #expect(request.sourceMapURL == "app.js.map")
+    #expect(request.metrics?.networkProtocol == "h3")
+    #expect(request.metrics?.remoteAddress == "203.0.113.20:443")
     #expect(request.metrics?.encodedDataLength == 9)
     #expect(request.metrics?.decodedBodyLength == 12)
     #expect(request.lastDataReceivedTimestamp == 2)

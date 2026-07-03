@@ -648,7 +648,7 @@ func transportBackendFiltersEventsByRoute() async throws {
         transport,
         targetID: ProtocolTarget.ID("frame-target"),
         method: "Network.loadingFinished",
-        params: #"{"requestId":"frame-request","timestamp":4,"sourceMapURL":"frame.js.map","metrics":{"responseBodyBytesReceived":128,"responseBodyDecodedSize":256}}"#
+        params: #"{"requestId":"frame-request","timestamp":4,"sourceMapURL":"frame.js.map","metrics":{"protocol":"h2","remoteAddress":"203.0.113.10:443","responseBodyBytesReceived":128,"responseBodyDecodedSize":256}}"#
     )
 
     let frameEvent = try #require(try await value(of: frameEventTask))
@@ -659,6 +659,8 @@ func transportBackendFiltersEventsByRoute() async throws {
     #expect(id == Network.Request.ID("frame-request"))
     #expect(timestamp == 4)
     #expect(sourceMapURL == "frame.js.map")
+    #expect(metrics?.networkProtocol == "h2")
+    #expect(metrics?.remoteAddress == "203.0.113.10:443")
     #expect(metrics?.encodedDataLength == 128)
     #expect(metrics?.decodedBodyLength == 256)
 
