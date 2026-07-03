@@ -5,6 +5,11 @@ import WebViewProxyKit
 @MainActor
 @Observable
 public final class WebViewModelContext {
+    private enum RuntimeObjectOwner: Hashable {
+        case client
+        case console
+    }
+
     public enum State: Equatable, Sendable {
         case attaching
         case attached
@@ -42,7 +47,9 @@ public final class WebViewModelContext {
     @ObservationIgnored private var orderedRuntimeContextIDs: [RuntimeContext.ID]
     @ObservationIgnored private var runtimeObjectsByID: [RuntimeObject.ID: RuntimeObject]
     @ObservationIgnored private var runtimeObjectIDsByProxyID: [Runtime.RemoteObject.ID: RuntimeObject.ID]
+    @ObservationIgnored private var runtimeObjectOwnersByID: [RuntimeObject.ID: Set<RuntimeObjectOwner>]
     @ObservationIgnored private var nextRuntimeObjectOrdinal: Int
+    @ObservationIgnored private var consoleObjectGroupReleaseTask: Task<Void, Never>?
 
     public init(proxy: WebViewProxy) {
         self.proxy = proxy
@@ -74,7 +81,9 @@ public final class WebViewModelContext {
         orderedRuntimeContextIDs = []
         runtimeObjectsByID = [:]
         runtimeObjectIDsByProxyID = [:]
+        runtimeObjectOwnersByID = [:]
         nextRuntimeObjectOrdinal = 0
+        consoleObjectGroupReleaseTask = nil
     }
 
     deinit {
@@ -84,6 +93,7 @@ public final class WebViewModelContext {
         for task in eventTasks {
             task.cancel()
         }
+        consoleObjectGroupReleaseTask?.cancel()
     }
 
     public func start() {
@@ -146,7 +156,7 @@ public final class WebViewModelContext {
         let executionContext = context ?? selectedContext
         let result = try await currentPage.runtime.evaluate(expression, in: executionContext?.id.proxyID)
         return RuntimeEvaluation(
-            object: registerRuntimeObject(result.object),
+            object: registerRuntimeObject(result.object, owner: .client),
             isException: result.wasThrown
         )
     }
@@ -232,7 +242,7 @@ public final class WebViewModelContext {
         return descriptors.map { descriptor in
             let remoteValue = descriptor.value
             let childObject = remoteValue.flatMap { value in
-                value.id == nil ? nil : registerRuntimeObject(value)
+                value.id == nil ? nil : registerRuntimeObject(value, owner: .client)
             }
             return RuntimeObject.Property(
                 name: descriptor.name,
@@ -254,8 +264,8 @@ public final class WebViewModelContext {
         let entries = try await currentPage.runtime.collectionEntries(of: proxyID)
         return entries.map { entry in
             RuntimeObject.Entry(
-                key: entry.key.map(registerRuntimeObject),
-                value: registerRuntimeObject(entry.value)
+                key: entry.key.map { registerRuntimeObject($0, owner: .client) },
+                value: registerRuntimeObject(entry.value, owner: .client)
             )
         }
     }
@@ -269,11 +279,15 @@ public final class WebViewModelContext {
         return object
     }
 
-    private func registerRuntimeObject(_ payload: Runtime.RemoteObject) -> RuntimeObject {
+    private func registerRuntimeObject(
+        _ payload: Runtime.RemoteObject,
+        owner: RuntimeObjectOwner
+    ) -> RuntimeObject {
         if let proxyID = payload.id,
            let id = runtimeObjectIDsByProxyID[proxyID],
            let object = runtimeObjectsByID[id] {
             object.update(from: payload)
+            runtimeObjectOwnersByID[id, default: []].insert(owner)
             return object
         }
 
@@ -288,13 +302,32 @@ public final class WebViewModelContext {
 
         let object = RuntimeObject(id: id, remoteObject: payload, modelContext: self)
         runtimeObjectsByID[id] = object
+        runtimeObjectOwnersByID[id] = [owner]
         return object
     }
 
     private func clearRuntimeObjects() {
         runtimeObjectsByID = [:]
         runtimeObjectIDsByProxyID = [:]
+        runtimeObjectOwnersByID = [:]
         nextRuntimeObjectOrdinal = 0
+    }
+
+    private func unregisterRuntimeObjects(owner: RuntimeObjectOwner) {
+        for (id, owners) in runtimeObjectOwnersByID.map({ ($0.key, $0.value) }) {
+            var remainingOwners = owners
+            remainingOwners.remove(owner)
+            guard remainingOwners.isEmpty else {
+                runtimeObjectOwnersByID[id] = remainingOwners
+                continue
+            }
+            runtimeObjectOwnersByID.removeValue(forKey: id)
+            if let object = runtimeObjectsByID.removeValue(forKey: id),
+               let proxyID = object.proxyID,
+               runtimeObjectIDsByProxyID[proxyID] == id {
+                runtimeObjectIDsByProxyID.removeValue(forKey: proxyID)
+            }
+        }
     }
 
     private func runtimeValueText(for object: Runtime.RemoteObject) -> String? {
@@ -331,6 +364,8 @@ public final class WebViewModelContext {
             task.cancel()
         }
         eventTasks = []
+        consoleObjectGroupReleaseTask?.cancel()
+        consoleObjectGroupReleaseTask = nil
         currentPage = nil
         teardownError = nil
         teardownError = await disableEnabledDomains()
@@ -855,8 +890,9 @@ extension WebViewModelContext {
             request.fail(errorText: errorText, canceled: canceled, timestamp: timestamp)
         case let .webSocket(event):
             apply(event)
-        case .requestServedFromMemoryCache,
-             .unknown:
+        case let .requestServedFromMemoryCache(id, response, timestamp):
+            applyRequestServedFromMemoryCache(id: id, response: response, timestamp: timestamp)
+        case .unknown:
             break
         }
     }
@@ -887,6 +923,34 @@ extension WebViewModelContext {
             requestsByID[id] = request
             orderedRequestIDs.append(id)
         }
+        refreshAllRequests()
+    }
+
+    private func applyRequestServedFromMemoryCache(
+        id proxyID: Network.Request.ID,
+        response: Network.Response,
+        timestamp: Double
+    ) {
+        let id = NetworkRequest.ID(proxyID)
+        let request: NetworkRequest
+        if let existing = requestsByID[id] {
+            request = existing
+        } else {
+            guard let url = response.url else {
+                fail(.disconnected("Network.requestServedFromMemoryCache omitted response URL for a new request."))
+                return
+            }
+            let payload = Network.Request(
+                id: proxyID,
+                url: url,
+                method: "GET",
+                headers: response.requestHeaders ?? [:]
+            )
+            request = NetworkRequest(request: payload, resourceType: nil, timestamp: timestamp, modelContext: self)
+            requestsByID[id] = request
+            orderedRequestIDs.append(id)
+        }
+        request.applyMemoryCache(response: response, timestamp: timestamp)
         refreshAllRequests()
     }
 
@@ -973,19 +1037,46 @@ extension WebViewModelContext {
             }
             message.updateRepeatCount(count, timestamp: timestamp)
         case .messagesCleared:
-            consoleMessagesByID = [:]
-            orderedConsoleMessageIDs = []
-            lastConsoleMessageID = nil
-            refreshAllConsoleMessages()
+            clearConsoleMessages()
+            releaseConsoleRuntimeObjectGroup()
         case .unknown:
             break
+        }
+    }
+
+    private func clearConsoleMessages() {
+        consoleMessagesByID = [:]
+        orderedConsoleMessageIDs = []
+        lastConsoleMessageID = nil
+        unregisterRuntimeObjects(owner: .console)
+        refreshAllConsoleMessages()
+    }
+
+    private func releaseConsoleRuntimeObjectGroup() {
+        consoleObjectGroupReleaseTask?.cancel()
+        guard let currentPage else {
+            fail(.disconnected("Console.messagesCleared cannot release runtime object group without a current page target."))
+            return
+        }
+        consoleObjectGroupReleaseTask = Task { @MainActor [weak self, currentPage] in
+            do {
+                try await currentPage.runtime.releaseObjectGroup(.console)
+            } catch let error as WebViewProxyError {
+                self?.fail(error)
+            } catch {
+                self?.fail(.commandFailed(
+                    domain: "Runtime",
+                    method: "releaseObjectGroup",
+                    message: String(describing: error)
+                ))
+            }
         }
     }
 
     private func applyMessageAdded(_ payload: Console.Message) {
         let id = ConsoleMessage.ID(nextConsoleMessageOrdinal)
         nextConsoleMessageOrdinal += 1
-        let parameters = payload.parameters.map(registerRuntimeObject)
+        let parameters = payload.parameters.map { registerRuntimeObject($0, owner: .console) }
         let message = ConsoleMessage(id: id, message: payload, parameters: parameters)
         consoleMessagesByID[id] = message
         orderedConsoleMessageIDs.append(id)

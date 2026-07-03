@@ -337,6 +337,29 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         state = .failed(errorText: errorText, canceled: canceled)
     }
 
+    package func applyMemoryCache(response: Network.Response, timestamp: Double) {
+        if let url = response.url {
+            self.url = url
+        }
+        resourceType = nil
+        webSocket = nil
+        status = response.status
+        mimeType = response.mimeType
+        responseHeaders = response.headers
+        if let requestHeaders = response.requestHeaders {
+            self.requestHeaders = requestHeaders
+        }
+        currentRequest = Network.Request(id: proxyID, url: url, method: method, headers: requestHeaders)
+        requestSentTimestamp = timestamp
+        responseReceivedTimestamp = timestamp
+        lastDataReceivedTimestamp = nil
+        finishedOrFailedTimestamp = timestamp
+        decodedDataLength = 0
+        redirects = []
+        responseBody = NetworkBody()
+        state = .finished
+    }
+
     package func finishResponseBodyFetch(result: Result<Network.Body, WebViewProxyError>) {
         switch result {
         case let .success(body):

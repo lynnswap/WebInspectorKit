@@ -1046,6 +1046,82 @@ func loadingFailedStoresFailureTimestampAndClampsDataLength() async throws {
 
 @MainActor
 @Test
+func memoryCacheEventCreatesFinishedCachedRequestFromResponse() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let requestID = Network.Request.ID("cached-request")
+
+    await runtime.backend.emit(
+        .requestServedFromMemoryCache(
+            id: requestID,
+            response: Network.Response(
+                url: "https://example.com/cached.css",
+                status: 200,
+                statusText: "OK",
+                mimeType: "text/css",
+                headers: ["Content-Type": "text/css"],
+                source: Network.Source(rawValue: "memory-cache"),
+                requestHeaders: ["Accept": "text/css"]
+            ),
+            timestamp: 5
+        ),
+        target: target
+    )
+
+    let results: WebViewFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
+    try await waitUntil {
+        results.items.count == 1 && results.items.first?.state == .finished
+    }
+    let request = try #require(results.items.first)
+    #expect(request.url == "https://example.com/cached.css")
+    #expect(request.method == "GET")
+    #expect(request.resourceType == nil)
+    #expect(request.status == 200)
+    #expect(request.mimeType == "text/css")
+    #expect(request.requestHeaders["Accept"] == "text/css")
+    #expect(request.responseHeaders["Content-Type"] == "text/css")
+    #expect(request.requestSentTimestamp == 5)
+    #expect(request.responseReceivedTimestamp == 5)
+    #expect(request.lastDataReceivedTimestamp == nil)
+    #expect(request.finishedOrFailedTimestamp == 5)
+    #expect(request.decodedDataLength == 0)
+    #expect(request.responseBody.phase == .available)
+    #expect(context.registeredRequest(for: request.id) === request)
+}
+
+@MainActor
+@Test
+func memoryCacheEventWithoutURLForNewRequestFailsContext() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let requestID = Network.Request.ID("cached-request-without-url")
+
+    await runtime.backend.emit(
+        .requestServedFromMemoryCache(
+            id: requestID,
+            response: Network.Response(status: 200),
+            timestamp: 5
+        ),
+        target: target
+    )
+
+    try await waitUntil {
+        guard case .failed = context.state else {
+            return false
+        }
+        return true
+    }
+    guard case let .failed(error) = context.state else {
+        Issue.record("Expected failed context state.")
+        return
+    }
+    #expect(error == .disconnected("Network.requestServedFromMemoryCache omitted response URL for a new request."))
+    let results: WebViewFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
+    #expect(results.items.isEmpty)
+}
+
+@MainActor
+@Test
 func webSocketCreatedCreatesRequestWithConnectingState() async throws {
     let runtime = try await WebViewProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
@@ -1405,12 +1481,17 @@ func consoleEventsPopulateRepeatAndClearFetchedMessages() async throws {
     try await waitUntil { results.items.count == 2 }
     #expect(results.items.map(\.text) == ["hello", "second"])
 
+    await runtime.backend.enqueue((), for: "Runtime", method: "releaseObjectGroup")
     await runtime.backend.emit(
         .messagesCleared(reason: Console.ClearReason(rawValue: "console-api")),
         target: target
     )
     try await waitUntil { results.items.isEmpty }
     #expect(context.registeredMessage(for: message.id) == nil)
+    try await waitUntil {
+        await runtime.backend.recordedCommands()
+            .contains(RecordedCommand(domain: "Runtime", method: "releaseObjectGroup"))
+    }
 }
 
 @MainActor
@@ -1454,6 +1535,49 @@ func consoleMessageParametersRegisterRuntimeObjects() async throws {
 
     #expect(firstParameter === secondParameter)
     #expect(firstParameter.description == "after")
+}
+
+@MainActor
+@Test
+func consoleMessagesClearedReleasesConsoleRuntimeObjects() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let objectID = Runtime.RemoteObject.ID("console-stale-object")
+    let results: WebViewFetchedResults<ConsoleMessage> = context.fetchedResults(for: .allConsoleMessages)
+
+    await runtime.backend.emit(
+        .messageAdded(Console.Message(
+            source: Console.Source(rawValue: "console-api"),
+            level: Console.Level(rawValue: "log"),
+            text: "clear me",
+            parameters: [
+                Runtime.RemoteObject(id: objectID, kind: .object, description: "console object")
+            ]
+        )),
+        target: target
+    )
+    try await waitUntil { results.items.count == 1 }
+    let message = try #require(results.items.first)
+    let parameter = try #require(message.parameters.first)
+
+    await runtime.backend.enqueue((), for: "Runtime", method: "releaseObjectGroup")
+    await runtime.backend.emit(
+        .messagesCleared(reason: Console.ClearReason(rawValue: "console-api")),
+        target: target
+    )
+
+    try await waitUntil {
+        await runtime.backend.recordedCommands()
+            .contains(RecordedCommand(domain: "Runtime", method: "releaseObjectGroup"))
+    }
+    try await waitUntil { results.items.isEmpty }
+    do {
+        _ = try await parameter.properties()
+        Issue.record("Expected cleared console RuntimeObject to be stale.")
+    } catch let error as WebViewProxyError {
+        #expect(error == .disconnected("RuntimeObject is not registered in this WebViewModelContext."))
+    }
+    #expect(context.state == .attached)
 }
 
 @MainActor
