@@ -11,8 +11,8 @@ escalations, not judgment calls.
    through public API — the README Quick Start example becomes actually
    implementable.
 2. **A second app can consume the inspector core without the built-in UI.**
-   A planned (not yet started) second app can import `WebViewDataKit` (or
-   `WebViewProxyKit` for a low-level-only tool) and attach / observe / command
+   A planned (not yet started) second app can import `WebInspectorDataKit` (or
+   `WebInspectorProxyKit` for a low-level-only tool) and attach / observe / command
    an inspected `WKWebView` with its own presentation, without importing the
    UIKit `WebInspectorKit` UI product.
 3. **The public products stop being empty modules.** Every library product
@@ -75,14 +75,14 @@ sections of the active design document.
    (F-29, F-30). Cost: loses intra-Core build parallelism from commit
    `0118f24b` (the UI-vs-non-UI split survives — UIKit UI stays separate).
    03 resolved this as one `WebInspectorCore` product; 05 supersedes the product
-   shape with two non-UI public layers: `WebViewProxyKit` and `WebViewDataKit`.
+   shape with two non-UI public layers: `WebInspectorProxyKit` and `WebInspectorDataKit`.
    Alternative (rejected): keep 4 sub-targets and design 4 public surfaces —
    forces consumers to learn an internal taxonomy and either re-introduces
    `@_exported` or multiplies import statements.
 2. **Transport stays package-internal; no public transport axis.** No second
    transport consumer exists or is planned (scope contract), so publishing
    `TransportBackend` + envelope types would be speculative generalization.
-   The raw transport stack stays package-internal inside `WebViewProxyKit`; the
+   The raw transport stack stays package-internal inside `WebInspectorProxyKit`; the
    public low-level surface is typed proxy commands/events, not raw envelopes.
    The empty products are demoted instead (05 §1). The half-duplex seam
    asymmetry (F-37) is recorded, not redesigned.

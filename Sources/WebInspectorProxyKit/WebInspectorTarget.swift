@@ -16,7 +16,7 @@ package struct RoutingTargetID: Hashable, Sendable {
     }
 }
 
-public struct WebViewTarget: Identifiable, Sendable {
+public struct WebInspectorTarget: Identifiable, Sendable {
     public struct ID: Hashable, Sendable {
         package let rawValue: String
 
@@ -37,7 +37,7 @@ public struct WebViewTarget: Identifiable, Sendable {
     public let frameID: FrameID?
     public let isProvisional: Bool
 
-    package let proxy: WebViewProxy
+    package let proxy: WebInspectorProxy
     package let route: RoutingTargetID
 
     package init(
@@ -45,7 +45,7 @@ public struct WebViewTarget: Identifiable, Sendable {
         kind: Kind,
         frameID: FrameID?,
         isProvisional: Bool,
-        proxy: WebViewProxy,
+        proxy: WebInspectorProxy,
         route: RoutingTargetID
     ) {
         self.id = id
@@ -81,25 +81,25 @@ public struct WebViewTarget: Identifiable, Sendable {
     }
 
     package func waitForModelEventSubscriptions() async {
-        for domain in [WebViewProxyEventDomain.dom, .inspector, .css, .network, .console, .runtime] {
+        for domain in [WebInspectorProxyEventDomain.dom, .inspector, .css, .network, .console, .runtime] {
             await proxy.waitForEventSubscription(targetID: id, route: route, domain: domain)
         }
     }
 }
 
 package struct DomainClientContext: Sendable {
-    package let proxy: WebViewProxy
-    package let targetID: WebViewTarget.ID
+    package let proxy: WebInspectorProxy
+    package let targetID: WebInspectorTarget.ID
     package let route: RoutingTargetID
 
-    package init(proxy: WebViewProxy, targetID: WebViewTarget.ID, route: RoutingTargetID) {
+    package init(proxy: WebInspectorProxy, targetID: WebInspectorTarget.ID, route: RoutingTargetID) {
         self.proxy = proxy
         self.targetID = targetID
         self.route = route
     }
 
     package func dispatch<Payload: Sendable, Result: Sendable>(
-        domain: WebViewProxyDomain,
+        domain: WebInspectorProxyDomain,
         method: String,
         payload: Payload,
         returning resultType: Result.Type = Result.self
@@ -115,7 +115,7 @@ package struct DomainClientContext: Sendable {
     }
 
     package func dispatchVoid<Payload: Sendable>(
-        domain: WebViewProxyDomain,
+        domain: WebInspectorProxyDomain,
         method: String,
         payload: Payload
     ) async throws {

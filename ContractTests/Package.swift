@@ -19,11 +19,18 @@ let package = Package(
     ],
     targets: [
         .testTarget(
+            name: "WebInspectorDataKitImportOnlyContractTests",
+            dependencies: [
+                .product(name: "WebInspectorDataKit", package: "WebInspectorKit"),
+            ],
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
             name: "WebInspectorConsumerContractTests",
             dependencies: [
-                .product(name: "WebViewDataKit", package: "WebInspectorKit"),
-                .product(name: "WebViewProxyKit", package: "WebInspectorKit"),
-                .product(name: "WebViewProxyKitTesting", package: "WebInspectorKit"),
+                .product(name: "WebInspectorDataKit", package: "WebInspectorKit"),
+                .product(name: "WebInspectorProxyKit", package: "WebInspectorKit"),
+                .product(name: "WebInspectorProxyKitTesting", package: "WebInspectorKit"),
                 .product(
                     name: "WebInspectorKit",
                     package: "WebInspectorKit",

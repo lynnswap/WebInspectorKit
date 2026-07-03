@@ -1,6 +1,6 @@
 import Foundation
 
-public enum WebViewProxyError: Error, Sendable, Equatable {
+public enum WebInspectorProxyError: Error, Sendable, Equatable {
     case unsupported([String])
     case attachFailed(String)
     case closed
@@ -9,10 +9,10 @@ public enum WebViewProxyError: Error, Sendable, Equatable {
     case timeout(domain: String, method: String)
 }
 
-package func unimplementedCommand(domain: String, method: String) -> WebViewProxyError {
+package func unimplementedCommand(domain: String, method: String) -> WebInspectorProxyError {
     .commandFailed(
         domain: domain,
         method: method,
-        message: "WebViewProxyKit shell does not implement \(domain).\(method)."
+        message: "WebInspectorProxyKit shell does not implement \(domain).\(method)."
     )
 }

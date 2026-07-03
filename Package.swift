@@ -17,36 +17,16 @@ let package = Package(
     ],
     products: [
         .library(
-            name: "WebViewProxyKit",
-            targets: ["WebViewProxyKit"]
+            name: "WebInspectorProxyKit",
+            targets: ["WebInspectorProxyKit"]
         ),
         .library(
-            name: "WebViewProxyKitTesting",
-            targets: ["WebViewProxyKitTesting"]
+            name: "WebInspectorProxyKitTesting",
+            targets: ["WebInspectorProxyKitTesting"]
         ),
         .library(
-            name: "WebViewDataKit",
-            targets: ["WebViewDataKit"]
-        ),
-        .library(
-            name: "WebInspectorCore",
-            targets: ["WebInspectorCore"]
-        ),
-        .library(
-            name: "WebInspectorNativeBridge",
-            targets: ["WebInspectorNativeBridge"]
-        ),
-        .library(
-            name: "WebInspectorNativeSymbols",
-            targets: ["WebInspectorNativeSymbols"]
-        ),
-        .library(
-            name: "WebInspectorTransport",
-            targets: ["WebInspectorTransport"]
-        ),
-        .library(
-            name: "WebInspectorUI",
-            targets: ["WebInspectorUI"]
+            name: "WebInspectorDataKit",
+            targets: ["WebInspectorDataKit"]
         ),
         .library(
             name: "WebInspectorKit",
@@ -73,21 +53,21 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "WebViewProxyKit",
+            name: "WebInspectorProxyKit",
             dependencies: [],
             swiftSettings: strictSwiftSettings
         ),
         .target(
-            name: "WebViewProxyKitTesting",
+            name: "WebInspectorProxyKitTesting",
             dependencies: [
-                "WebViewProxyKit"
+                "WebInspectorProxyKit"
             ],
             swiftSettings: strictSwiftSettings
         ),
         .target(
-            name: "WebViewDataKit",
+            name: "WebInspectorDataKit",
             dependencies: [
-                "WebViewProxyKit"
+                "WebInspectorProxyKit"
             ],
             swiftSettings: strictSwiftSettings
         ),
@@ -305,21 +285,21 @@ let package = Package(
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(
-            name: "WebViewProxyKitTests",
+            name: "WebInspectorProxyKitTests",
             dependencies: [
-                "WebViewProxyKit",
-                "WebViewProxyKitTesting"
+                "WebInspectorProxyKit",
+                "WebInspectorProxyKitTesting"
             ],
-            path: "Tests/WebViewProxyKitTests",
+            path: "Tests/WebInspectorProxyKitTests",
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(
-            name: "WebViewDataKitTests",
+            name: "WebInspectorDataKitTests",
             dependencies: [
-                "WebViewDataKit",
-                "WebViewProxyKitTesting"
+                "WebInspectorDataKit",
+                "WebInspectorProxyKitTesting"
             ],
-            path: "Tests/WebViewDataKitTests",
+            path: "Tests/WebInspectorDataKitTests",
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(

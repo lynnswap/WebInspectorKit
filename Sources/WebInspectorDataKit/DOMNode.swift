@@ -1,14 +1,13 @@
 import Foundation
 import Observation
-import WebViewProxyKit
+import WebInspectorProxyKit
 
-@MainActor
 @Observable
-public final class DOMNode: Identifiable {
+public final class DOMNode: WebInspectorPersistentModel {
     public struct ID: Hashable, Sendable {
-        package let proxyID: DOM.Node.ID
+        let proxyID: DOM.Node.ID
 
-        package init(_ proxyID: DOM.Node.ID) {
+        init(_ proxyID: DOM.Node.ID) {
             self.proxyID = proxyID
         }
     }
@@ -28,9 +27,9 @@ public final class DOMNode: Identifiable {
     public private(set) var children: Children
     public private(set) var elementStyles: CSSStyles?
 
-    @ObservationIgnored package weak var modelContext: WebViewModelContext?
+    @ObservationIgnored weak var modelContext: WebInspectorContext?
 
-    package init(node: DOM.Node, modelContext: WebViewModelContext) {
+    init(node: DOM.Node, modelContext: WebInspectorContext) {
         id = ID(node.id)
         nodeName = node.nodeName
         localName = node.localName
@@ -43,14 +42,17 @@ public final class DOMNode: Identifiable {
         self.modelContext = modelContext
     }
 
-    public func requestChildren(depth: Int = 1) async {
+    public func requestChildren(
+        depth: Int = 1,
+        isolation: isolated (any Actor) = #isolation
+    ) async {
         guard let modelContext else {
-            preconditionFailure("DOMNode is not registered in a WebViewModelContext.")
+            preconditionFailure("DOMNode is not registered in a WebInspectorContext.")
         }
-        await modelContext.requestChildren(for: self, depth: depth)
+        await modelContext.requestChildren(for: self, depth: depth, isolation: isolation)
     }
 
-    package func update(from node: DOM.Node) {
+    func update(from node: DOM.Node) {
         nodeName = node.nodeName
         localName = node.localName
         nodeValue = node.nodeValue
@@ -59,36 +61,40 @@ public final class DOMNode: Identifiable {
         childNodeCount = node.childNodeCount
     }
 
-    package func setChildren(_ nodes: [DOMNode]) {
+    func setChildren(_ nodes: [DOMNode]) {
         childNodeCount = nodes.count
         children = .loaded(nodes)
     }
 
-    package func setChildrenUnrequested(count: Int) {
+    func setChildrenUnrequested(count: Int) {
         childNodeCount = count
         children = .unrequested(count: count)
     }
 
-    package func updateChildNodeCount(_ count: Int) {
+    func updateChildNodeCount(_ count: Int) {
         childNodeCount = count
         if case .unrequested = children {
             children = .unrequested(count: count)
         }
     }
 
-    package func setAttribute(name: String, value: String) {
+    func setAttribute(name: String, value: String) {
         attributes[name] = value
     }
 
-    package func removeAttribute(name: String) {
+    func removeAttribute(name: String) {
         attributes[name] = nil
     }
 
-    package func setNodeValue(_ value: String) {
+    func setNodeValue(_ value: String) {
         nodeValue = value
     }
 
-    package func setElementStyles(_ styles: CSSStyles?) {
+    func setElementStyles(_ styles: CSSStyles?) {
         elementStyles = styles
+    }
+
+    func setModelContext(_ context: WebInspectorContext) {
+        modelContext = context
     }
 }

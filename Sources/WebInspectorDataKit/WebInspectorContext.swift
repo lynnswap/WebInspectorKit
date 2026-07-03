@@ -1,10 +1,9 @@
 import Foundation
 import Observation
-import WebViewProxyKit
+import WebInspectorProxyKit
 
-@MainActor
 @Observable
-public final class WebViewModelContext {
+public final class WebInspectorContext {
     private enum RuntimeObjectOwner: Hashable {
         case client
         case console
@@ -14,36 +13,39 @@ public final class WebViewModelContext {
         case attaching
         case attached
         case detached
-        case failed(WebViewProxyError)
+        case failed(WebInspectorProxyError)
     }
 
-    public let proxy: WebViewProxy
+    @ObservationIgnored private(set) weak var container: WebInspectorContainer?
+    @ObservationIgnored private let proxy: WebInspectorProxy
+    @ObservationIgnored private let domainEnablement: WebInspectorDomainEnablementRegistry
+    @ObservationIgnored private let owner: any Actor
     public private(set) var state: State
-    public private(set) var teardownError: WebViewProxyError?
+    public private(set) var teardownError: WebInspectorProxyError?
     public private(set) var rootNode: DOMNode?
     public private(set) var selectedNode: DOMNode?
     public private(set) var executionContexts: [RuntimeContext]
     public private(set) var selectedContext: RuntimeContext?
 
-    @ObservationIgnored private var currentPage: WebViewTarget?
+    @ObservationIgnored private var currentPage: WebInspectorTarget?
     @ObservationIgnored private var startupTask: Task<Void, Never>?
     @ObservationIgnored private var documentReloadTask: Task<Void, Never>?
     @ObservationIgnored private var inspectResolutionTask: Task<Void, Never>?
     @ObservationIgnored private var styleRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var styleRefreshGeneration: Int
-    @ObservationIgnored private var eventTasks: [Task<Void, Never>]
-    @ObservationIgnored private var networkTrackingTarget: WebViewTarget?
-    @ObservationIgnored private var runtimeTrackingTarget: WebViewTarget?
-    @ObservationIgnored private var consoleTrackingTarget: WebViewTarget?
+    @ObservationIgnored private var eventPumps: [WebInspectorEventPump]
+    @ObservationIgnored private var networkTrackingTarget: WebInspectorTarget?
+    @ObservationIgnored private var runtimeTrackingTarget: WebInspectorTarget?
+    @ObservationIgnored private var consoleTrackingTarget: WebInspectorTarget?
     @ObservationIgnored private var nodesByID: [DOMNode.ID: DOMNode]
     @ObservationIgnored private var requestsByID: [NetworkRequest.ID: NetworkRequest]
     @ObservationIgnored private var orderedRequestIDs: [NetworkRequest.ID]
-    @ObservationIgnored private let allNetworkRequests: WebViewFetchedResults<NetworkRequest>
+    @ObservationIgnored private let allNetworkRequests: WebInspectorFetchedResults<NetworkRequest>
     @ObservationIgnored private var consoleMessagesByID: [ConsoleMessage.ID: ConsoleMessage]
     @ObservationIgnored private var orderedConsoleMessageIDs: [ConsoleMessage.ID]
     @ObservationIgnored private var lastConsoleMessageID: ConsoleMessage.ID?
     @ObservationIgnored private var nextConsoleMessageOrdinal: Int
-    @ObservationIgnored private let allConsoleMessages: WebViewFetchedResults<ConsoleMessage>
+    @ObservationIgnored private let allConsoleMessages: WebInspectorFetchedResults<ConsoleMessage>
     @ObservationIgnored private var runtimeContextsByID: [RuntimeContext.ID: RuntimeContext]
     @ObservationIgnored private var orderedRuntimeContextIDs: [RuntimeContext.ID]
     @ObservationIgnored private var runtimeObjectsByID: [RuntimeObject.ID: RuntimeObject]
@@ -53,8 +55,11 @@ public final class WebViewModelContext {
     @ObservationIgnored private var pendingInspectedNodeID: DOMNode.ID?
     @ObservationIgnored private var consoleObjectGroupReleaseTask: Task<Void, Never>?
 
-    public init(proxy: WebViewProxy) {
-        self.proxy = proxy
+    public init(_ container: WebInspectorContainer, isolation: isolated (any Actor)) {
+        self.container = container
+        proxy = container.proxy
+        domainEnablement = container.domainEnablement
+        owner = isolation
         state = .attaching
         teardownError = nil
         rootNode = nil
@@ -67,19 +72,19 @@ public final class WebViewModelContext {
         inspectResolutionTask = nil
         styleRefreshTask = nil
         styleRefreshGeneration = 0
-        eventTasks = []
+        eventPumps = []
         networkTrackingTarget = nil
         runtimeTrackingTarget = nil
         consoleTrackingTarget = nil
         nodesByID = [:]
         requestsByID = [:]
         orderedRequestIDs = []
-        allNetworkRequests = WebViewFetchedResults()
+        allNetworkRequests = WebInspectorFetchedResults()
         consoleMessagesByID = [:]
         orderedConsoleMessageIDs = []
         lastConsoleMessageID = nil
         nextConsoleMessageOrdinal = 0
-        allConsoleMessages = WebViewFetchedResults()
+        allConsoleMessages = WebInspectorFetchedResults()
         runtimeContextsByID = [:]
         orderedRuntimeContextIDs = []
         runtimeObjectsByID = [:]
@@ -88,6 +93,7 @@ public final class WebViewModelContext {
         nextRuntimeObjectOrdinal = 0
         pendingInspectedNodeID = nil
         consoleObjectGroupReleaseTask = nil
+        WebInspectorDataKitLog.debug("context state=\(state.logDescription)")
     }
 
     deinit {
@@ -95,18 +101,18 @@ public final class WebViewModelContext {
         documentReloadTask?.cancel()
         inspectResolutionTask?.cancel()
         styleRefreshTask?.cancel()
-        for task in eventTasks {
-            task.cancel()
-        }
+        stopEventPumps()
         consoleObjectGroupReleaseTask?.cancel()
     }
 
-    public func start() {
+    public func start(isolation: isolated (any Actor) = #isolation) {
+        requireOwner(isolation)
         let previousStartupTask = startupTask
         previousStartupTask?.cancel()
         state = .attaching
         teardownError = nil
         startupTask = Task { [weak self, previousStartupTask] in
+            _ = isolation
             await previousStartupTask?.value
             guard Task.isCancelled == false else {
                 return
@@ -114,51 +120,64 @@ public final class WebViewModelContext {
             guard let self else {
                 return
             }
-            await self.startup()
+            await self.startup(isolation: isolation)
         }
     }
 
-    public func node(for id: DOMNode.ID) -> DOMNode? {
-        nodesByID[id]
+    public func node(for id: DOMNode.ID, isolation: isolated (any Actor) = #isolation) -> DOMNode? {
+        requireOwner(isolation)
+        return nodesByID[id]
     }
 
-    public func registeredRequest(for id: NetworkRequest.ID) -> NetworkRequest? {
-        requestsByID[id]
+    public func registeredRequest(
+        for id: NetworkRequest.ID,
+        isolation: isolated (any Actor) = #isolation
+    ) -> NetworkRequest? {
+        requireOwner(isolation)
+        return requestsByID[id]
     }
 
-    public func registeredMessage(for id: ConsoleMessage.ID) -> ConsoleMessage? {
-        consoleMessagesByID[id]
+    public func registeredMessage(
+        for id: ConsoleMessage.ID,
+        isolation: isolated (any Actor) = #isolation
+    ) -> ConsoleMessage? {
+        requireOwner(isolation)
+        return consoleMessagesByID[id]
     }
 
-    public func select(_ node: DOMNode?) {
+    public func select(_ node: DOMNode?, isolation: isolated (any Actor) = #isolation) {
+        requireOwner(isolation)
         pendingInspectedNodeID = nil
         inspectResolutionTask?.cancel()
         inspectResolutionTask = nil
         selectedNode = node
-        refreshSelectedStyles()
+        refreshSelectedStyles(isolation: isolation)
     }
 
-    public func selectContext(_ context: RuntimeContext?) {
+    public func selectContext(_ context: RuntimeContext?, isolation: isolated (any Actor) = #isolation) {
+        requireOwner(isolation)
         guard let context else {
             selectedContext = nil
             return
         }
         guard runtimeContextsByID[context.id] === context else {
-            preconditionFailure("RuntimeContext is not registered in this WebViewModelContext.")
+            preconditionFailure("RuntimeContext is not registered in this WebInspectorContext.")
         }
         selectedContext = context
     }
 
     public func evaluate(
         _ expression: String,
-        in context: RuntimeContext? = nil
+        in context: RuntimeContext? = nil,
+        isolation: isolated (any Actor) = #isolation
     ) async throws -> RuntimeEvaluation {
+        requireOwner(isolation)
         if let context, runtimeContextsByID[context.id] !== context {
-            let error = WebViewProxyError.disconnected("RuntimeContext is not registered in this WebViewModelContext.")
+            let error = WebInspectorProxyError.disconnected("RuntimeContext is not registered in this WebInspectorContext.")
             throw error
         }
         guard let currentPage else {
-            throw WebViewProxyError.disconnected("WebViewDataKit has no current page target.")
+            throw WebInspectorProxyError.disconnected("WebInspectorDataKit has no current page target.")
         }
 
         let executionContext = context ?? selectedContext
@@ -169,33 +188,33 @@ public final class WebViewModelContext {
         )
     }
 
-    public func fetchedResults<Model: WebViewFetchableModel>(
-        for descriptor: WebViewFetchDescriptor<Model>
-    ) -> WebViewFetchedResults<Model> {
+    public func fetchedResults<Model: WebInspectorFetchableModel>(
+        for descriptor: WebInspectorFetchDescriptor<Model>,
+        isolation: isolated (any Actor) = #isolation
+    ) -> WebInspectorFetchedResults<Model> {
+        requireOwner(isolation)
         switch descriptor.kind {
         case .allRequests:
-            guard let results = allNetworkRequests as? WebViewFetchedResults<Model> else {
+            guard let results = allNetworkRequests as? WebInspectorFetchedResults<Model> else {
                 preconditionFailure("The .allRequests descriptor can only fetch NetworkRequest models.")
             }
             return results
         case .allConsoleMessages:
-            guard let results = allConsoleMessages as? WebViewFetchedResults<Model> else {
+            guard let results = allConsoleMessages as? WebInspectorFetchedResults<Model> else {
                 preconditionFailure("The .allConsoleMessages descriptor can only fetch ConsoleMessage models.")
             }
             return results
         }
     }
 
-    public func fetchedResultsController<Model: WebViewFetchableModel>(
-        for descriptor: WebViewFetchDescriptor<Model>
-    ) -> WebViewFetchedResultsController<Model> {
-        WebViewFetchedResultsController(fetchedResults: fetchedResults(for: descriptor))
-    }
-
-    package func fetchResponseBody(for request: NetworkRequest) async {
+    func fetchResponseBody(
+        for request: NetworkRequest,
+        isolation: isolated (any Actor) = #isolation
+    ) async {
+        requireOwner(isolation)
         guard let currentPage else {
             request.finishResponseBodyFetch(
-                result: .failure(.disconnected("WebViewDataKit has no current page target."))
+                result: .failure(.disconnected("WebInspectorDataKit has no current page target."))
             )
             return
         }
@@ -203,7 +222,7 @@ public final class WebViewModelContext {
         do {
             let body = try await currentPage.network.responseBody(for: request.proxyID)
             request.finishResponseBodyFetch(result: .success(body))
-        } catch let error as WebViewProxyError {
+        } catch let error as WebInspectorProxyError {
             request.finishResponseBodyFetch(result: .failure(error))
         } catch {
             request.finishResponseBodyFetch(result: .failure(.commandFailed(
@@ -214,19 +233,24 @@ public final class WebViewModelContext {
         }
     }
 
-    package func requestChildren(for node: DOMNode, depth: Int) async {
+    func requestChildren(
+        for node: DOMNode,
+        depth: Int,
+        isolation: isolated (any Actor) = #isolation
+    ) async {
+        requireOwner(isolation)
         guard nodesByID[node.id] === node else {
-            fail(.disconnected("DOMNode is not registered in this WebViewModelContext."))
+            fail(.disconnected("DOMNode is not registered in this WebInspectorContext."))
             return
         }
         guard let currentPage else {
-            fail(.disconnected("WebViewDataKit has no current page target."))
+            fail(.disconnected("WebInspectorDataKit has no current page target."))
             return
         }
 
         do {
             try await currentPage.dom.requestChildNodes(node.id.proxyID, depth: depth)
-        } catch let error as WebViewProxyError {
+        } catch let error as WebInspectorProxyError {
             fail(error)
         } catch {
             fail(.commandFailed(
@@ -237,13 +261,17 @@ public final class WebViewModelContext {
         }
     }
 
-    package func properties(for object: RuntimeObject) async throws -> [RuntimeObject.Property] {
+    func properties(
+        for object: RuntimeObject,
+        isolation: isolated (any Actor) = #isolation
+    ) async throws -> [RuntimeObject.Property] {
+        requireOwner(isolation)
         try registeredRuntimeObject(object)
         guard let proxyID = object.proxyID else {
             return []
         }
         guard let currentPage else {
-            throw WebViewProxyError.disconnected("WebViewDataKit has no current page target.")
+            throw WebInspectorProxyError.disconnected("WebInspectorDataKit has no current page target.")
         }
 
         let descriptors = try await currentPage.runtime.properties(of: proxyID)
@@ -260,13 +288,17 @@ public final class WebViewModelContext {
         }
     }
 
-    package func collectionEntries(for object: RuntimeObject) async throws -> [RuntimeObject.Entry] {
+    func collectionEntries(
+        for object: RuntimeObject,
+        isolation: isolated (any Actor) = #isolation
+    ) async throws -> [RuntimeObject.Entry] {
+        requireOwner(isolation)
         try registeredRuntimeObject(object)
         guard let proxyID = object.proxyID else {
             return []
         }
         guard let currentPage else {
-            throw WebViewProxyError.disconnected("WebViewDataKit has no current page target.")
+            throw WebInspectorProxyError.disconnected("WebInspectorDataKit has no current page target.")
         }
 
         let entries = try await currentPage.runtime.collectionEntries(of: proxyID)
@@ -281,7 +313,7 @@ public final class WebViewModelContext {
     @discardableResult
     private func registeredRuntimeObject(_ object: RuntimeObject) throws -> RuntimeObject {
         guard runtimeObjectsByID[object.id] === object else {
-            let error = WebViewProxyError.disconnected("RuntimeObject is not registered in this WebViewModelContext.")
+            let error = WebInspectorProxyError.disconnected("RuntimeObject is not registered in this WebInspectorContext.")
             throw error
         }
         return object
@@ -360,7 +392,13 @@ public final class WebViewModelContext {
         }
     }
 
-    package func detach() async {
+    public func stop(isolation: isolated (any Actor) = #isolation) async {
+        requireOwner(isolation)
+        await detach(isolation: isolation)
+    }
+
+    func detach(isolation: isolated (any Actor) = #isolation) async {
+        requireOwner(isolation)
         startupTask?.cancel()
         startupTask = nil
         documentReloadTask?.cancel()
@@ -370,21 +408,19 @@ public final class WebViewModelContext {
         styleRefreshTask?.cancel()
         styleRefreshTask = nil
         styleRefreshGeneration += 1
-        for task in eventTasks {
-            task.cancel()
-        }
-        eventTasks = []
+        stopEventPumps()
         consoleObjectGroupReleaseTask?.cancel()
         consoleObjectGroupReleaseTask = nil
         pendingInspectedNodeID = nil
         currentPage = nil
         teardownError = nil
-        teardownError = await disableEnabledDomains()
-        state = .detached
+        teardownError = await disableEnabledDomains(isolation: isolation)
+        transition(to: .detached)
     }
 
-    private func startup() async {
-        if let teardownError = await disableEnabledDomainsBeforeRestart() {
+    private func startup(isolation: isolated (any Actor)) async {
+        requireOwner(isolation)
+        if let teardownError = await disableEnabledDomainsBeforeRestart(isolation: isolation) {
             fail(teardownError)
             return
         }
@@ -392,69 +428,83 @@ public final class WebViewModelContext {
         do {
             let target = try await proxy.waitForCurrentPage()
             currentPage = target
-            subscribe(to: target)
+            subscribe(to: target, isolation: isolation)
             await target.waitForModelEventSubscriptions()
             guard Task.isCancelled == false else {
-                await disableEnabledDomainsAfterCancellation()
+                await disableEnabledDomainsAfterCancellation(isolation: isolation)
                 return
             }
             resetReplayBackedModelsBeforeEnable()
-            try await enableRuntimeTracking(on: target)
+            try await enableRuntimeTracking(on: target, isolation: isolation)
             guard Task.isCancelled == false else {
-                await disableEnabledDomainsAfterCancellation()
+                await disableEnabledDomainsAfterCancellation(isolation: isolation)
                 return
             }
-            try await enableNetworkTracking(on: target)
+            try await enableNetworkTracking(on: target, isolation: isolation)
             guard Task.isCancelled == false else {
-                await disableEnabledDomainsAfterCancellation()
+                await disableEnabledDomainsAfterCancellation(isolation: isolation)
                 return
             }
             let document = try await target.dom.getDocument()
             guard Task.isCancelled == false else {
-                await disableEnabledDomainsAfterCancellation()
+                await disableEnabledDomainsAfterCancellation(isolation: isolation)
                 return
             }
-            try await enableConsoleTracking(on: target)
+            try await enableConsoleTracking(on: target, isolation: isolation)
             guard Task.isCancelled == false else {
-                await disableEnabledDomainsAfterCancellation()
+                await disableEnabledDomainsAfterCancellation(isolation: isolation)
                 return
             }
-            applyDocument(document)
-            state = .attached
+            applyDocument(document, isolation: isolation)
+            transition(to: .attached)
         } catch is CancellationError {
-            await disableEnabledDomainsAfterCancellation()
+            await disableEnabledDomainsAfterCancellation(isolation: isolation)
             return
-        } catch let error as WebViewProxyError {
+        } catch let error as WebInspectorProxyError {
             guard Task.isCancelled == false else {
-                await disableEnabledDomainsAfterCancellation()
+                await disableEnabledDomainsAfterCancellation(isolation: isolation)
                 return
             }
-            fail(await disableEnabledDomainsAfterStartupFailure() ?? error)
+            fail(await disableEnabledDomainsAfterStartupFailure(isolation: isolation) ?? error)
         } catch {
             guard Task.isCancelled == false else {
-                await disableEnabledDomainsAfterCancellation()
+                await disableEnabledDomainsAfterCancellation(isolation: isolation)
                 return
             }
-            fail(await disableEnabledDomainsAfterStartupFailure() ?? .attachFailed(String(describing: error)))
+            fail(await disableEnabledDomainsAfterStartupFailure(isolation: isolation) ?? .attachFailed(String(describing: error)))
         }
     }
 
-    private func disableEnabledDomainsBeforeRestart() async -> WebViewProxyError? {
-        await disableEnabledDomains()
+    private func disableEnabledDomainsBeforeRestart(
+        isolation: isolated (any Actor)
+    ) async -> WebInspectorProxyError? {
+        await disableEnabledDomains(isolation: isolation)
     }
 
-    private func enableRuntimeTracking(on target: WebViewTarget) async throws {
-        try await target.runtime.enable()
+    private func enableRuntimeTracking(
+        on target: WebInspectorTarget,
+        isolation: isolated (any Actor)
+    ) async throws {
+        _ = isolation
+        try await domainEnablement.acquire(.runtime, on: target)
         runtimeTrackingTarget = target
     }
 
-    private func enableConsoleTracking(on target: WebViewTarget) async throws {
-        try await target.console.enable()
+    private func enableConsoleTracking(
+        on target: WebInspectorTarget,
+        isolation: isolated (any Actor)
+    ) async throws {
+        _ = isolation
+        try await domainEnablement.acquire(.console, on: target)
         consoleTrackingTarget = target
     }
 
-    private func enableNetworkTracking(on target: WebViewTarget) async throws {
-        try await target.network.enable()
+    private func enableNetworkTracking(
+        on target: WebInspectorTarget,
+        isolation: isolated (any Actor)
+    ) async throws {
+        _ = isolation
+        try await domainEnablement.acquire(.network, on: target)
         networkTrackingTarget = target
     }
 
@@ -466,146 +516,127 @@ public final class WebViewModelContext {
         refreshAllConsoleMessages()
     }
 
-    private func disableEnabledDomains() async -> WebViewProxyError? {
-        let consoleError = await disableConsoleTracking()
-        let runtimeError = await disableRuntimeTracking()
-        let networkError = await disableNetworkTracking()
+    private func disableEnabledDomains(
+        isolation: isolated (any Actor)
+    ) async -> WebInspectorProxyError? {
+        let consoleError = await disableConsoleTracking(isolation: isolation)
+        let runtimeError = await disableRuntimeTracking(isolation: isolation)
+        let networkError = await disableNetworkTracking(isolation: isolation)
         return consoleError ?? runtimeError ?? networkError
     }
 
-    private func disableConsoleTracking() async -> WebViewProxyError? {
+    private func disableConsoleTracking(
+        isolation: isolated (any Actor)
+    ) async -> WebInspectorProxyError? {
+        _ = isolation
         guard let target = consoleTrackingTarget else {
             return nil
         }
         consoleTrackingTarget = nil
-        do {
-            try await target.console.disable()
-            return nil
-        } catch WebViewProxyError.closed {
-            return nil
-        } catch WebViewProxyError.disconnected(_) {
-            return nil
-        } catch let error as WebViewProxyError {
-            return error
-        } catch {
-            return .commandFailed(
-                domain: "Console",
-                method: "disable",
-                message: String(describing: error)
-            )
-        }
+        return await domainEnablement.release(.console, on: target)
     }
 
-    private func disableRuntimeTracking() async -> WebViewProxyError? {
+    private func disableRuntimeTracking(
+        isolation: isolated (any Actor)
+    ) async -> WebInspectorProxyError? {
+        _ = isolation
         guard let target = runtimeTrackingTarget else {
             return nil
         }
         runtimeTrackingTarget = nil
-        do {
-            try await target.runtime.disable()
-            return nil
-        } catch WebViewProxyError.closed {
-            return nil
-        } catch WebViewProxyError.disconnected(_) {
-            return nil
-        } catch let error as WebViewProxyError {
-            return error
-        } catch {
-            return .commandFailed(
-                domain: "Runtime",
-                method: "disable",
-                message: String(describing: error)
-            )
-        }
+        return await domainEnablement.release(.runtime, on: target)
     }
 
-    private func disableNetworkTracking() async -> WebViewProxyError? {
+    private func disableNetworkTracking(
+        isolation: isolated (any Actor)
+    ) async -> WebInspectorProxyError? {
+        _ = isolation
         guard let target = networkTrackingTarget else {
             return nil
         }
         networkTrackingTarget = nil
-        do {
-            try await target.network.disable()
-            return nil
-        } catch WebViewProxyError.closed {
-            return nil
-        } catch WebViewProxyError.disconnected(_) {
-            return nil
-        } catch let error as WebViewProxyError {
-            return error
-        } catch {
-            return .commandFailed(
-                domain: "Network",
-                method: "disable",
-                message: String(describing: error)
-            )
-        }
+        return await domainEnablement.release(.network, on: target)
     }
 
-    private func disableEnabledDomainsAfterCancellation() async {
-        if let error = await disableEnabledDomains() {
+    private func disableEnabledDomainsAfterCancellation(
+        isolation: isolated (any Actor)
+    ) async {
+        if let error = await disableEnabledDomains(isolation: isolation) {
             fail(error)
         }
     }
 
-    private func disableEnabledDomainsAfterStartupFailure() async -> WebViewProxyError? {
-        await disableEnabledDomains()
+    private func disableEnabledDomainsAfterStartupFailure(
+        isolation: isolated (any Actor)
+    ) async -> WebInspectorProxyError? {
+        await disableEnabledDomains(isolation: isolation)
     }
 
-    private func subscribe(to target: WebViewTarget) {
-        for task in eventTasks {
-            task.cancel()
+    private func subscribe(to target: WebInspectorTarget, isolation: isolated (any Actor)) {
+        stopEventPumps()
+
+        let domPump = WebInspectorEventPump(stream: target.dom.events, isolation: isolation) { [weak self] event in
+            self?.apply(event, isolation: isolation)
         }
-        eventTasks = [
-            Task { [weak self] in
-                for await event in target.dom.events {
-                    self?.apply(event)
-                }
-            },
-            Task { [weak self] in
-                for await event in target.network.events {
-                    self?.apply(event)
-                }
-            },
-            Task { [weak self] in
-                for await event in target.css.events {
-                    self?.apply(event)
-                }
-            },
-            Task { [weak self] in
-                for await event in target.console.events {
-                    self?.apply(event)
-                }
-            },
-            Task { [weak self, targetID = target.id] in
-                for await event in target.runtime.events {
-                    self?.apply(event, targetID: targetID)
-                }
-            }
-        ]
+
+        let networkPump = WebInspectorEventPump(stream: target.network.events, isolation: isolation) { [weak self] event in
+            self?.apply(event, isolation: isolation)
+        }
+
+        let cssPump = WebInspectorEventPump(stream: target.css.events, isolation: isolation) { [weak self] event in
+            self?.apply(event, isolation: isolation)
+        }
+
+        let consolePump = WebInspectorEventPump(stream: target.console.events, isolation: isolation) { [weak self] event in
+            self?.apply(event, isolation: isolation)
+        }
+
+        let runtimePump = WebInspectorEventPump(stream: target.runtime.events, isolation: isolation) { [weak self, targetID = target.id] event in
+            self?.apply(event, targetID: targetID, isolation: isolation)
+        }
+
+        eventPumps = [domPump, networkPump, cssPump, consolePump, runtimePump]
     }
 
-    private func fail(_ error: WebViewProxyError) {
-        state = .failed(error)
+    private func stopEventPumps() {
+        for pump in eventPumps {
+            pump.stop()
+        }
+        eventPumps = []
     }
 
-    package func reloadDocument() {
+    private func fail(_ error: WebInspectorProxyError) {
+        transition(to: .failed(error))
+    }
+
+    private func requireOwner(_ isolation: isolated (any Actor)) {
+        precondition(isolation === owner, "WebInspectorContext must be used from the actor that created it.")
+    }
+
+    private func transition(to newState: State) {
+        state = newState
+        WebInspectorDataKitLog.debug("context state=\(newState.logDescription)")
+    }
+
+    func reloadDocument(isolation: isolated (any Actor) = #isolation) {
+        requireOwner(isolation)
         guard let currentPage else {
-            fail(.disconnected("WebViewDataKit has no current page target."))
+            fail(.disconnected("WebInspectorDataKit has no current page target."))
             return
         }
 
         documentReloadTask?.cancel()
         documentReloadTask = Task { [weak self, currentPage] in
+            _ = isolation
             do {
                 let document = try await currentPage.dom.getDocument()
                 guard Task.isCancelled == false else {
                     return
                 }
-                self?.applyDocument(document)
+                self?.applyDocument(document, isolation: isolation)
             } catch is CancellationError {
                 return
-            } catch let error as WebViewProxyError {
+            } catch let error as WebInspectorProxyError {
                 self?.fail(error)
             } catch {
                 self?.fail(.commandFailed(
@@ -617,19 +648,23 @@ public final class WebViewModelContext {
         }
     }
 
-    private func requestInspectionSubtree(from rootNode: DOMNode) {
+    private func requestInspectionSubtree(
+        from rootNode: DOMNode,
+        isolation: isolated (any Actor) = #isolation
+    ) {
         guard let currentPage else {
-            fail(.disconnected("WebViewDataKit has no current page target."))
+            fail(.disconnected("WebInspectorDataKit has no current page target."))
             return
         }
 
         inspectResolutionTask?.cancel()
         inspectResolutionTask = Task { [weak self, currentPage, rootID = rootNode.id.proxyID] in
+            _ = isolation
             do {
                 try await currentPage.dom.requestChildNodes(rootID, depth: -1)
             } catch is CancellationError {
                 return
-            } catch let error as WebViewProxyError {
+            } catch let error as WebInspectorProxyError {
                 self?.fail(error)
             } catch {
                 self?.fail(.commandFailed(
@@ -642,16 +677,17 @@ public final class WebViewModelContext {
     }
 }
 
-extension WebViewModelContext {
-    package func apply(_ event: DOM.Event) {
+extension WebInspectorContext {
+    func apply(_ event: DOM.Event, isolation: isolated (any Actor) = #isolation) {
+        requireOwner(isolation)
         switch event {
         case .documentUpdated:
             resetDOM()
-            reloadDocument()
+            reloadDocument(isolation: isolation)
         case let .setChildNodes(parent, nodes):
-            applySetChildNodes(parent: parent, nodes: nodes)
+            applySetChildNodes(parent: parent, nodes: nodes, isolation: isolation)
         case let .childNodeInserted(parent, previous, node):
-            applyChildNodeInserted(parent: parent, previous: previous, node: node)
+            applyChildNodeInserted(parent: parent, previous: previous, node: node, isolation: isolation)
         case let .childNodeRemoved(parent, node):
             applyChildNodeRemoved(parent: parent, node: node)
         case let .childNodeCountUpdated(id, count):
@@ -685,13 +721,13 @@ extension WebViewModelContext {
             let inspectedNodeID = DOMNode.ID(id)
             guard let node = nodesByID[inspectedNodeID] else {
                 pendingInspectedNodeID = inspectedNodeID
-                resolvePendingInspectedNode(requestSubtreeIfNeeded: true)
+                resolvePendingInspectedNode(requestSubtreeIfNeeded: true, isolation: isolation)
                 return
             }
             pendingInspectedNodeID = nil
             inspectResolutionTask?.cancel()
             inspectResolutionTask = nil
-            select(node)
+            select(node, isolation: isolation)
         case .detachedRoot,
              .shadowRootPushed,
              .shadowRootPopped,
@@ -702,11 +738,12 @@ extension WebViewModelContext {
         }
     }
 
-    package func applyDocument(_ node: DOM.Node) {
+    func applyDocument(_ node: DOM.Node, isolation: isolated (any Actor) = #isolation) {
+        requireOwner(isolation)
         var materializedPayloadIDs = Set<DOMNode.ID>()
         collectMaterializedPayloadIDs(node, into: &materializedPayloadIDs)
         rootNode = model(for: node, preserving: materializedPayloadIDs)
-        resolvePendingInspectedNode(requestSubtreeIfNeeded: true)
+        resolvePendingInspectedNode(requestSubtreeIfNeeded: true, isolation: isolation)
     }
 
     private func resetDOM() {
@@ -721,7 +758,11 @@ extension WebViewModelContext {
         nodesByID = [:]
     }
 
-    private func applySetChildNodes(parent: DOM.Node.ID, nodes: [DOM.Node]) {
+    private func applySetChildNodes(
+        parent: DOM.Node.ID,
+        nodes: [DOM.Node],
+        isolation: isolated (any Actor) = #isolation
+    ) {
         guard let parentNode = nodesByID[DOMNode.ID(parent)] else {
             fail(.disconnected("DOM.setChildNodes referenced an unknown parent node."))
             return
@@ -742,10 +783,15 @@ extension WebViewModelContext {
             removeSubtreeFromIndex(previousChild, preserving: newSubtreeIDs)
         }
         parentNode.setChildren(newChildren)
-        resolvePendingInspectedNode(requestSubtreeIfNeeded: false)
+        resolvePendingInspectedNode(requestSubtreeIfNeeded: false, isolation: isolation)
     }
 
-    private func applyChildNodeInserted(parent: DOM.Node.ID, previous: DOM.Node.ID?, node: DOM.Node) {
+    private func applyChildNodeInserted(
+        parent: DOM.Node.ID,
+        previous: DOM.Node.ID?,
+        node: DOM.Node,
+        isolation: isolated (any Actor) = #isolation
+    ) {
         guard let parentNode = nodesByID[DOMNode.ID(parent)] else {
             fail(.disconnected("DOM.childNodeInserted referenced an unknown parent node."))
             return
@@ -764,7 +810,7 @@ extension WebViewModelContext {
             children.insert(inserted, at: 0)
         }
         parentNode.setChildren(children)
-        resolvePendingInspectedNode(requestSubtreeIfNeeded: false)
+        resolvePendingInspectedNode(requestSubtreeIfNeeded: false, isolation: isolation)
     }
 
     private func applyChildNodeRemoved(parent: DOM.Node.ID, node: DOM.Node.ID) {
@@ -833,7 +879,7 @@ extension WebViewModelContext {
                 previousChildren = []
             }
             existing.update(from: payload)
-            existing.modelContext = self
+            existing.setModelContext(self)
             node = existing
         } else {
             previousChildren = []
@@ -859,25 +905,29 @@ extension WebViewModelContext {
         return node
     }
 
-    private func resolvePendingInspectedNode(requestSubtreeIfNeeded: Bool) {
+    private func resolvePendingInspectedNode(
+        requestSubtreeIfNeeded: Bool,
+        isolation: isolated (any Actor) = #isolation
+    ) {
         guard let pendingInspectedNodeID else {
             return
         }
         guard let inspectedNode = nodesByID[pendingInspectedNodeID] else {
             if requestSubtreeIfNeeded, let rootNode {
-                requestInspectionSubtree(from: rootNode)
+                requestInspectionSubtree(from: rootNode, isolation: isolation)
             }
             return
         }
         self.pendingInspectedNodeID = nil
         inspectResolutionTask?.cancel()
         inspectResolutionTask = nil
-        select(inspectedNode)
+        select(inspectedNode, isolation: isolation)
     }
 }
 
-extension WebViewModelContext {
-    package func apply(_ event: CSS.Event) {
+extension WebInspectorContext {
+    func apply(_ event: CSS.Event, isolation: isolated (any Actor) = #isolation) {
+        requireOwner(isolation)
         switch event {
         case .styleSheetChanged,
              .styleSheetAdded,
@@ -891,7 +941,7 @@ extension WebViewModelContext {
         }
     }
 
-    private func refreshSelectedStyles() {
+    private func refreshSelectedStyles(isolation: isolated (any Actor) = #isolation) {
         styleRefreshTask?.cancel()
         styleRefreshTask = nil
 
@@ -903,20 +953,27 @@ extension WebViewModelContext {
             return
         }
 
-        let styles = selectedNode.elementStyles ?? CSSStyles(nodeID: selectedNode.id)
+        let styles = selectedNode.elementStyles ?? CSSStyles(nodeID: selectedNode.id, modelContext: self)
         selectedNode.setElementStyles(styles)
         styles.markLoading()
         styleRefreshGeneration += 1
         let generation = styleRefreshGeneration
-        styleRefreshTask = Task { @MainActor [weak self, weak selectedNode, styles] in
+        styleRefreshTask = Task { [weak self, weak selectedNode, styles] in
+            _ = isolation
             guard let self, let selectedNode else {
                 return
             }
-            await self.loadStyles(for: selectedNode, into: styles, generation: generation)
+            await self.loadStyles(for: selectedNode, into: styles, generation: generation, isolation: isolation)
         }
     }
 
-    private func loadStyles(for node: DOMNode, into styles: CSSStyles, generation: Int) async {
+    private func loadStyles(
+        for node: DOMNode,
+        into styles: CSSStyles,
+        generation: Int,
+        isolation: isolated (any Actor) = #isolation
+    ) async {
+        _ = isolation
         guard isCurrentStyleRefresh(node: node, generation: generation) else {
             return
         }
@@ -935,7 +992,7 @@ extension WebViewModelContext {
                 return
             }
             styles.load(matchedStyles: matchedStyles, computedProperties: computedProperties)
-        } catch let error as WebViewProxyError {
+        } catch let error as WebInspectorProxyError {
             guard isCurrentStyleRefresh(node: node, generation: generation) else {
                 return
             }
@@ -969,8 +1026,9 @@ extension WebViewModelContext {
     }
 }
 
-extension WebViewModelContext {
-    package func apply(_ event: Network.Event) {
+extension WebInspectorContext {
+    func apply(_ event: Network.Event, isolation: isolated (any Actor) = #isolation) {
+        requireOwner(isolation)
         switch event {
         case let .requestWillBeSent(id, request, resourceType, redirectResponse, timestamp):
             applyRequestWillBeSent(
@@ -1144,8 +1202,9 @@ extension WebViewModelContext {
     }
 }
 
-extension WebViewModelContext {
-    package func apply(_ event: Console.Event) {
+extension WebInspectorContext {
+    func apply(_ event: Console.Event, isolation: isolated (any Actor) = #isolation) {
+        requireOwner(isolation)
         switch event {
         case let .messageAdded(message):
             applyMessageAdded(message)
@@ -1158,7 +1217,7 @@ extension WebViewModelContext {
             message.updateRepeatCount(count, timestamp: timestamp)
         case .messagesCleared:
             clearConsoleMessages()
-            releaseConsoleRuntimeObjectGroup()
+            releaseConsoleRuntimeObjectGroup(isolation: isolation)
         case .unknown:
             break
         }
@@ -1172,16 +1231,17 @@ extension WebViewModelContext {
         refreshAllConsoleMessages()
     }
 
-    private func releaseConsoleRuntimeObjectGroup() {
+    private func releaseConsoleRuntimeObjectGroup(isolation: isolated (any Actor) = #isolation) {
         consoleObjectGroupReleaseTask?.cancel()
         guard let currentPage else {
             fail(.disconnected("Console.messagesCleared cannot release runtime object group without a current page target."))
             return
         }
-        consoleObjectGroupReleaseTask = Task { @MainActor [weak self, currentPage] in
+        consoleObjectGroupReleaseTask = Task { [weak self, currentPage] in
+            _ = isolation
             do {
                 try await currentPage.runtime.releaseObjectGroup(.console)
-            } catch let error as WebViewProxyError {
+            } catch let error as WebInspectorProxyError {
                 self?.fail(error)
             } catch {
                 self?.fail(.commandFailed(
@@ -1197,7 +1257,7 @@ extension WebViewModelContext {
         let id = ConsoleMessage.ID(nextConsoleMessageOrdinal)
         nextConsoleMessageOrdinal += 1
         let parameters = payload.parameters.map { registerRuntimeObject($0, owner: .console) }
-        let message = ConsoleMessage(id: id, message: payload, parameters: parameters)
+        let message = ConsoleMessage(id: id, message: payload, parameters: parameters, modelContext: self)
         consoleMessagesByID[id] = message
         orderedConsoleMessageIDs.append(id)
         lastConsoleMessageID = id
@@ -1209,8 +1269,13 @@ extension WebViewModelContext {
     }
 }
 
-extension WebViewModelContext {
-    package func apply(_ event: Runtime.Event, targetID: WebViewTarget.ID? = nil) {
+extension WebInspectorContext {
+    func apply(
+        _ event: Runtime.Event,
+        targetID: WebInspectorTarget.ID? = nil,
+        isolation: isolated (any Actor) = #isolation
+    ) {
+        requireOwner(isolation)
         switch event {
         case let .executionContextCreated(context):
             applyExecutionContextCreated(context)
@@ -1232,7 +1297,7 @@ extension WebViewModelContext {
         if let context = runtimeContextsByID[id] {
             context.update(from: payload)
         } else {
-            let context = RuntimeContext(context: payload)
+            let context = RuntimeContext(context: payload, modelContext: self)
             runtimeContextsByID[id] = context
             orderedRuntimeContextIDs.append(id)
         }

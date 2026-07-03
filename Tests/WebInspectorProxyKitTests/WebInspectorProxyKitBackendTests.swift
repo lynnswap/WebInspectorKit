@@ -1,10 +1,10 @@
 import Testing
-import WebViewProxyKit
-import WebViewProxyKitTesting
+import WebInspectorProxyKit
+import WebInspectorProxyKitTesting
 
 @Test
 func domGetDocumentDispatchesToTargetRoute() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
     let expectedNode = DOM.Node(
         id: DOM.Node.ID("document"),
@@ -28,7 +28,7 @@ func domGetDocumentDispatchesToTargetRoute() async throws {
 
 @Test
 func domRequestNodeDispatchesToTargetRoute() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
     let objectID = Runtime.RemoteObject.ID("remote-node")
     let expectedNodeID = DOM.Node.ID("selected-node")
@@ -50,7 +50,7 @@ func domRequestNodeDispatchesToTargetRoute() async throws {
 
 @Test
 func inspectorInspectResolvesNodeRemoteObjectToDOMInspectEvent() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
     let objectID = Runtime.RemoteObject.ID("remote-node")
     let expectedNodeID = DOM.Node.ID("selected-node")
@@ -95,7 +95,7 @@ func inspectorInspectResolvesNodeRemoteObjectToDOMInspectEvent() async throws {
 
 @Test
 func domInspectEventPassesThroughWithoutRequestNode() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
     let expectedNodeID = DOM.Node.ID("protocol-node")
 
@@ -120,7 +120,7 @@ func domInspectEventPassesThroughWithoutRequestNode() async throws {
 
 @Test
 func inspectorInspectIgnoresNonNodeRemoteObject() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
     let recorder = EventRecorder<DOM.Event>()
 
@@ -153,7 +153,7 @@ func inspectorInspectIgnoresNonNodeRemoteObject() async throws {
 
 @Test
 func networkEventsAreSeparatedByTarget() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let firstTarget = try await runtime.proxy.waitForCurrentPage()
     let secondTarget = await runtime.proxy.installTargetForTesting(kind: .frame)
 
@@ -210,9 +210,9 @@ func networkEventsAreSeparatedByTarget() async throws {
 
 @Test
 func networkEventsAreSeparatedByRouteForStableTargetID() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let originalTarget = try await runtime.proxy.waitForCurrentPage()
-    let retargetedHandle = WebViewTarget(
+    let retargetedHandle = WebInspectorTarget(
         id: originalTarget.id,
         kind: originalTarget.kind,
         frameID: originalTarget.frameID,
@@ -270,7 +270,7 @@ func networkEventsAreSeparatedByRouteForStableTargetID() async throws {
 
 @Test
 func networkLoadingFinishedCarriesTerminalMetadata() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
 
     let eventTask = Task {
@@ -304,7 +304,7 @@ func networkLoadingFinishedCarriesTerminalMetadata() async throws {
 
 @Test
 func pageReloadDispatchesToTargetRoute() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
 
     await runtime.backend.enqueue((), for: "Page", method: "reload")
@@ -323,7 +323,7 @@ func pageReloadDispatchesToTargetRoute() async throws {
 
 @Test
 func networkEnableAndDisableDispatchToTargetRoute() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
 
     await runtime.backend.enqueue((), for: "Network", method: "enable")
@@ -350,7 +350,7 @@ func networkEnableAndDisableDispatchToTargetRoute() async throws {
 
 @Test
 func consoleEnableAndDisableDispatchToTargetRoute() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
 
     await runtime.backend.enqueue((), for: "Console", method: "enable")
@@ -377,7 +377,7 @@ func consoleEnableAndDisableDispatchToTargetRoute() async throws {
 
 @Test
 func runtimeEnableAndDisableDispatchToTargetRoute() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
 
     await runtime.backend.enqueue((), for: "Runtime", method: "enable")
@@ -404,7 +404,7 @@ func runtimeEnableAndDisableDispatchToTargetRoute() async throws {
 
 @Test
 func cssEnableAndDisableDispatchToTargetRoute() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
 
     await runtime.backend.enqueue((), for: "CSS", method: "enable")

@@ -1,14 +1,14 @@
 import Testing
-import WebViewProxyKit
-import WebViewProxyKitTesting
+import WebInspectorProxyKit
+import WebInspectorProxyKitTesting
 
 @Test
-func webViewProxyPublicLifecycleAndCommandSurfaceWorksFromConsumerPackage() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+func webInspectorProxyPublicLifecycleAndCommandSurfaceWorksFromConsumerPackage() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
 
     guard case .page = target.kind else {
-        Issue.record("Expected WebViewProxyTestRuntime to install a page target.")
+        Issue.record("Expected WebInspectorProxyTestRuntime to install a page target.")
         return
     }
     #expect(await runtime.proxy.canReload)
@@ -26,8 +26,8 @@ func webViewProxyPublicLifecycleAndCommandSurfaceWorksFromConsumerPackage() asyn
 }
 
 @Test
-func webViewProxyNetworkEventsMulticastToConsumerSubscribers() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+func webInspectorProxyNetworkEventsMulticastToConsumerSubscribers() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
 
     let firstEventTask = Task {
@@ -43,7 +43,7 @@ func webViewProxyNetworkEventsMulticastToConsumerSubscribers() async throws {
 
     await runtime.backend.emit(
         .responseReceived(
-            id: WebViewProxyTestFixtures.networkRequestID("contract-multicast-request"),
+            id: WebInspectorProxyTestFixtures.networkRequestID("contract-multicast-request"),
             response: Network.Response(status: 204, mimeType: "application/json"),
             resourceType: .fetch,
             timestamp: 42
@@ -63,7 +63,7 @@ func webViewProxyNetworkEventsMulticastToConsumerSubscribers() async throws {
         return
     }
 
-    let expectedID = WebViewProxyTestFixtures.networkRequestID("contract-multicast-request")
+    let expectedID = WebInspectorProxyTestFixtures.networkRequestID("contract-multicast-request")
     #expect(firstID == expectedID)
     #expect(secondID == expectedID)
     #expect(firstResponse.status == 204)

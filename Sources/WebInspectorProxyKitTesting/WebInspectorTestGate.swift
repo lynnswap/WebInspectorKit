@@ -1,6 +1,6 @@
 import Foundation
 
-public actor WebViewTestGate {
+public actor WebInspectorTestGate {
     private var isOpen: Bool
     private var waiters: [CheckedContinuation<Void, Never>]
 

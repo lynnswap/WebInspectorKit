@@ -1,6 +1,6 @@
 import Foundation
 
-package enum WebViewProxyDomain: String, Hashable, Sendable {
+package enum WebInspectorProxyDomain: String, Hashable, Sendable {
     case dom = "DOM"
     case css = "CSS"
     case network = "Network"
@@ -9,7 +9,7 @@ package enum WebViewProxyDomain: String, Hashable, Sendable {
     case page = "Page"
 }
 
-package enum WebViewProxyEventDomain: String, Hashable, Sendable {
+package enum WebInspectorProxyEventDomain: String, Hashable, Sendable {
     case dom = "DOM"
     case inspector = "Inspector"
     case css = "CSS"
@@ -18,17 +18,17 @@ package enum WebViewProxyEventDomain: String, Hashable, Sendable {
     case runtime = "Runtime"
 }
 
-package struct WebViewProxyCommand<Payload: Sendable, Result: Sendable>: Sendable {
-    package let targetID: WebViewTarget.ID
+package struct WebInspectorProxyCommand<Payload: Sendable, Result: Sendable>: Sendable {
+    package let targetID: WebInspectorTarget.ID
     package let route: RoutingTargetID
-    package let domain: WebViewProxyDomain
+    package let domain: WebInspectorProxyDomain
     package let method: String
     package let payload: Payload
 
     package init(
-        targetID: WebViewTarget.ID,
+        targetID: WebInspectorTarget.ID,
         route: RoutingTargetID,
-        domain: WebViewProxyDomain,
+        domain: WebInspectorProxyDomain,
         method: String,
         payload: Payload
     ) {
@@ -40,7 +40,7 @@ package struct WebViewProxyCommand<Payload: Sendable, Result: Sendable>: Sendabl
     }
 }
 
-package enum WebViewProxyEvent: Sendable {
+package enum WebInspectorProxyEvent: Sendable {
     case dom(DOM.Event)
     case inspector(Inspector.Event)
     case css(CSS.Event)
@@ -49,20 +49,20 @@ package enum WebViewProxyEvent: Sendable {
     case runtime(Runtime.Event)
 }
 
-package protocol WebViewProxyBackend: Sendable {
+package protocol WebInspectorProxyBackend: Sendable {
     func dispatchCommand<Payload: Sendable, Result: Sendable>(
-        _ command: WebViewProxyCommand<Payload, Result>
+        _ command: WebInspectorProxyCommand<Payload, Result>
     ) async throws -> Result
 
     nonisolated func events(
         route: RoutingTargetID,
-        targetID: WebViewTarget.ID,
-        domain: WebViewProxyEventDomain
-    ) -> AsyncStream<WebViewProxyEvent>
+        targetID: WebInspectorTarget.ID,
+        domain: WebInspectorProxyEventDomain
+    ) -> AsyncStream<WebInspectorProxyEvent>
 
     func waitForEventSubscription(
         route: RoutingTargetID,
-        targetID: WebViewTarget.ID,
-        domain: WebViewProxyEventDomain
+        targetID: WebInspectorTarget.ID,
+        domain: WebInspectorProxyEventDomain
     ) async
 }

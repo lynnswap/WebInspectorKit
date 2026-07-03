@@ -1,14 +1,13 @@
 import Foundation
 import Observation
-import WebViewProxyKit
+import WebInspectorProxyKit
 
-@MainActor
 @Observable
-public final class RuntimeContext: Identifiable {
+public final class RuntimeContext: WebInspectorPersistentModel {
     public struct ID: Hashable, Sendable {
-        package let proxyID: Runtime.ExecutionContext.ID
+        let proxyID: Runtime.ExecutionContext.ID
 
-        package init(_ proxyID: Runtime.ExecutionContext.ID) {
+        init(_ proxyID: Runtime.ExecutionContext.ID) {
             self.proxyID = proxyID
         }
     }
@@ -18,14 +17,17 @@ public final class RuntimeContext: Identifiable {
     public private(set) var frameID: FrameID?
     public private(set) var kind: Runtime.ContextKind
 
-    package init(context: Runtime.ExecutionContext) {
+    @ObservationIgnored weak var modelContext: WebInspectorContext?
+
+    init(context: Runtime.ExecutionContext, modelContext: WebInspectorContext) {
         id = ID(context.id)
         name = context.name
         frameID = context.frameID
         kind = context.kind
+        self.modelContext = modelContext
     }
 
-    package func update(from context: Runtime.ExecutionContext) {
+    func update(from context: Runtime.ExecutionContext) {
         name = context.name
         frameID = context.frameID
         kind = context.kind

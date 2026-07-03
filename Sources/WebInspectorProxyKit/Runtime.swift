@@ -373,7 +373,7 @@ public enum Runtime {
     public enum Event: Sendable {
         case executionContextCreated(ExecutionContext)
         case executionContextDestroyed(ExecutionContext.ID)
-        case executionContextsCleared(target: WebViewTarget.ID)
+        case executionContextsCleared(target: WebInspectorTarget.ID)
         case unknown(RawEvent)
     }
 

@@ -10,7 +10,7 @@ delegated to Codex; these documents are the design contract.
 | [02-findings.md](02-findings.md) | Phase 1 — numbered measured findings F-01…F-39 (baselines for acceptance re-measurement) |
 | [03-design-doc.md](03-design-doc.md) | Phase 2 (v1) — promote the `@Observable` god-model to a 2-product public surface. **Superseded on the public-surface question by 05.** |
 | [04-codex-prompt.md](04-codex-prompt.md) | Retired delegation prompt for the 03 direction. Do not use for implementation. |
-| [05-two-layer-sdk-design.md](05-two-layer-sdk-design.md) | Phase 2 (v2) — the current direction: split into `WebViewProxyKit` (typed streams/commands) + `WebViewDataKit` (SwiftData/CoreData-style models), CodexKit-style. Keeps 01/02 as inputs. |
+| [05-two-layer-sdk-design.md](05-two-layer-sdk-design.md) | Phase 2 (v2) — the current direction: split into `WebInspectorProxyKit` (typed streams/commands) + `WebInspectorDataKit` (SwiftData/CoreData-style models), CodexKit-style. Keeps 01/02 as inputs. |
 | [06-implementation-gate.md](06-implementation-gate.md) | Phase 2 gate checklist — event coverage, DTO field lists, contract-test plan, and worker split before implementation delegation |
 | [measurements/](measurements/) | Raw measurement reports (10) with evidence tables and re-measure commands |
 
@@ -18,8 +18,8 @@ Headline: the package currently exposes **3 public types (32 declarations)
 against 2,376 package declarations**; 3 of 6 library products are empty
 modules; custom tabs receive a session with zero domain access; attach works
 only via an `@_exported` + `@_disfavoredOverload` umbrella trick. The current
-design splits the SDK into `WebViewProxyKit` (typed commands/events),
-`WebViewDataKit` (observable domain models), `WebViewProxyKitTesting`
+design splits the SDK into `WebInspectorProxyKit` (typed commands/events),
+`WebInspectorDataKit` (observable domain models), `WebInspectorProxyKitTesting`
 (deterministic fake runtime), and `WebInspectorKit` (UIKit drop-in UI),
 unlocking custom tabs, a headless second app, and a future AppKit UI.
 

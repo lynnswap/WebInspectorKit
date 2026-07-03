@@ -1,7 +1,7 @@
 import Foundation
 import WebKit
 
-public actor WebViewProxy {
+public actor WebInspectorProxy {
     public struct Configuration: Equatable, Sendable {
         public var responseTimeout: Duration
         public var bootstrapTimeout: Duration
@@ -16,9 +16,8 @@ public actor WebViewProxy {
     }
 
     private let configuration: Configuration
-    private let backend: (any WebViewProxyBackend)?
-    private var pageTarget: WebViewTarget?
-    private var targetsByID: [WebViewTarget.ID: WebViewTarget]
+    private let backend: (any WebInspectorProxyBackend)?
+    private var pageTarget: WebInspectorTarget?
     private var nextTargetOrdinal: UInt64
     private var closed: Bool
 
@@ -31,58 +30,42 @@ public actor WebViewProxy {
         self.configuration = configuration
         backend = nil
         pageTarget = nil
-        targetsByID = [:]
         nextTargetOrdinal = 0
         closed = false
-        throw WebViewProxyError.unsupported([
-            "Native WKWebView attachment is not implemented in the WebViewProxyKit shell."
+        throw WebInspectorProxyError.unsupported([
+            "Native WKWebView attachment is not implemented in the WebInspectorProxyKit shell."
         ])
     }
 
     package init(
         configuration: Configuration = .init(),
-        backend: (any WebViewProxyBackend)? = nil
+        backend: (any WebInspectorProxyBackend)? = nil
     ) {
         self.configuration = configuration
         self.backend = backend
         pageTarget = nil
-        targetsByID = [:]
         nextTargetOrdinal = 0
         closed = false
     }
 
-    public var currentPage: WebViewTarget? {
+    public var currentPage: WebInspectorTarget? {
         pageTarget
-    }
-
-    public nonisolated var targets: WebViewTargetChanges {
-        WebViewTargetChanges { [self] in
-            AsyncStream<WebViewTargetChange> { continuation in
-                Task {
-                    let targets = await currentTargetsSnapshot()
-                    for target in targets {
-                        continuation.yield(.created(target))
-                    }
-                    continuation.finish()
-                }
-            }
-        }
     }
 
     public var canReload: Bool {
         pageTarget != nil && closed == false
     }
 
-    public func waitForCurrentPage() async throws -> WebViewTarget {
+    public func waitForCurrentPage() async throws -> WebInspectorTarget {
         if let pageTarget {
             return pageTarget
         }
-        throw WebViewProxyError.disconnected("WebViewProxyKit shell has no current page target.")
+        throw WebInspectorProxyError.disconnected("WebInspectorProxyKit shell has no current page target.")
     }
 
     public func reload() async throws {
         guard let pageTarget else {
-            throw WebViewProxyError.disconnected("WebViewProxyKit shell has no current page target.")
+            throw WebInspectorProxyError.disconnected("WebInspectorProxyKit shell has no current page target.")
         }
         let _: Void = try await dispatchCommand(
             targetID: pageTarget.id,
@@ -96,55 +79,49 @@ public actor WebViewProxy {
     public func close() async {
         closed = true
         pageTarget = nil
-        targetsByID.removeAll()
     }
 
     public func waitUntilClosed() async throws {
         guard closed else {
-            throw WebViewProxyError.disconnected("WebViewProxyKit shell is not connected.")
+            throw WebInspectorProxyError.disconnected("WebInspectorProxyKit shell is not connected.")
         }
     }
 
     package func installTargetForTesting(
-        kind: WebViewTarget.Kind = .page,
+        kind: WebInspectorTarget.Kind = .page,
         frameID: FrameID? = nil,
         isProvisional: Bool = false
-    ) -> WebViewTarget {
+    ) -> WebInspectorTarget {
         let ordinal = nextTargetOrdinal
         nextTargetOrdinal += 1
-        let target = WebViewTarget(
-            id: WebViewTarget.ID("test-target-\(ordinal)"),
+        let target = WebInspectorTarget(
+            id: WebInspectorTarget.ID("test-target-\(ordinal)"),
             kind: kind,
             frameID: frameID,
             isProvisional: isProvisional,
             proxy: self,
             route: RoutingTargetID("test-route-\(ordinal)")
         )
-        targetsByID[target.id] = target
         if kind == .page && isProvisional == false {
             pageTarget = target
         }
         return target
     }
 
-    private func currentTargetsSnapshot() -> [WebViewTarget] {
-        Array(targetsByID.values)
-    }
-
     package func dispatchCommand<Payload: Sendable, Result: Sendable>(
-        targetID: WebViewTarget.ID,
+        targetID: WebInspectorTarget.ID,
         route: RoutingTargetID,
-        domain: WebViewProxyDomain,
+        domain: WebInspectorProxyDomain,
         method: String,
         payload: Payload
     ) async throws -> Result {
         guard closed == false else {
-            throw WebViewProxyError.closed
+            throw WebInspectorProxyError.closed
         }
         guard let backend else {
             throw unimplementedCommand(domain: domain.rawValue, method: method)
         }
-        let command = WebViewProxyCommand<Payload, Result>(
+        let command = WebInspectorProxyCommand<Payload, Result>(
             targetID: targetID,
             route: route,
             domain: domain,
@@ -155,11 +132,11 @@ public actor WebViewProxy {
     }
 
     package nonisolated func domEvents(
-        targetID: WebViewTarget.ID,
+        targetID: WebInspectorTarget.ID,
         route: RoutingTargetID
     ) -> AsyncStream<DOM.Event> {
         guard let backend else {
-            preconditionFailure("WebViewProxy has no backend for DOM events.")
+            preconditionFailure("WebInspectorProxy has no backend for DOM events.")
         }
         return AsyncStream<DOM.Event> { continuation in
             let task = Task {
@@ -196,7 +173,7 @@ public actor WebViewProxy {
     }
 
     package nonisolated func cssEvents(
-        targetID: WebViewTarget.ID,
+        targetID: WebInspectorTarget.ID,
         route: RoutingTargetID
     ) -> AsyncStream<CSS.Event> {
         eventStream(targetID: targetID, route: route, domain: .css) { event in
@@ -208,7 +185,7 @@ public actor WebViewProxy {
     }
 
     package nonisolated func networkEvents(
-        targetID: WebViewTarget.ID,
+        targetID: WebInspectorTarget.ID,
         route: RoutingTargetID
     ) -> AsyncStream<Network.Event> {
         eventStream(targetID: targetID, route: route, domain: .network) { event in
@@ -220,7 +197,7 @@ public actor WebViewProxy {
     }
 
     package nonisolated func consoleEvents(
-        targetID: WebViewTarget.ID,
+        targetID: WebInspectorTarget.ID,
         route: RoutingTargetID
     ) -> AsyncStream<Console.Event> {
         eventStream(targetID: targetID, route: route, domain: .console) { event in
@@ -232,7 +209,7 @@ public actor WebViewProxy {
     }
 
     package nonisolated func runtimeEvents(
-        targetID: WebViewTarget.ID,
+        targetID: WebInspectorTarget.ID,
         route: RoutingTargetID
     ) -> AsyncStream<Runtime.Event> {
         eventStream(targetID: targetID, route: route, domain: .runtime) { event in
@@ -244,24 +221,24 @@ public actor WebViewProxy {
     }
 
     package nonisolated func waitForEventSubscription(
-        targetID: WebViewTarget.ID,
+        targetID: WebInspectorTarget.ID,
         route: RoutingTargetID,
-        domain: WebViewProxyEventDomain
+        domain: WebInspectorProxyEventDomain
     ) async {
         guard let backend else {
-            preconditionFailure("WebViewProxy has no backend for \(domain.rawValue) events.")
+            preconditionFailure("WebInspectorProxy has no backend for \(domain.rawValue) events.")
         }
         await backend.waitForEventSubscription(route: route, targetID: targetID, domain: domain)
     }
 
     private nonisolated func eventStream<Element: Sendable>(
-        targetID: WebViewTarget.ID,
+        targetID: WebInspectorTarget.ID,
         route: RoutingTargetID,
-        domain: WebViewProxyEventDomain,
-        extract: @escaping @Sendable (WebViewProxyEvent) -> Element?
+        domain: WebInspectorProxyEventDomain,
+        extract: @escaping @Sendable (WebInspectorProxyEvent) -> Element?
     ) -> AsyncStream<Element> {
         guard let backend else {
-            preconditionFailure("WebViewProxy has no backend for \(domain.rawValue) events.")
+            preconditionFailure("WebInspectorProxy has no backend for \(domain.rawValue) events.")
         }
         return AsyncStream<Element> { continuation in
             let task = Task {
@@ -281,7 +258,7 @@ public actor WebViewProxy {
 
     private nonisolated func emitDOMInspectEvent(
         for event: Inspector.Event,
-        targetID: WebViewTarget.ID,
+        targetID: WebInspectorTarget.ID,
         route: RoutingTargetID,
         continuation: AsyncStream<DOM.Event>.Continuation
     ) async {

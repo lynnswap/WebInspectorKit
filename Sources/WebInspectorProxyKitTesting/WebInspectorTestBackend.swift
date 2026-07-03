@@ -1,5 +1,5 @@
 import Foundation
-import WebViewProxyKit
+import WebInspectorProxyKit
 
 package struct AnyRecordedValue: @unchecked Sendable {
     package let value: Any
@@ -14,14 +14,14 @@ package struct AnyRecordedValue: @unchecked Sendable {
 }
 
 public struct RecordedCommand: Equatable, Sendable {
-    public let targetID: WebViewTarget.ID
+    public let targetID: WebInspectorTarget.ID
     public let domain: String
     public let method: String
     package let route: RoutingTargetID
     package let payload: AnyRecordedValue
 
     public init(domain: String, method: String) {
-        targetID = WebViewTarget.ID("unscoped-recorded-command")
+        targetID = WebInspectorTarget.ID("unscoped-recorded-command")
         route = RoutingTargetID("unscoped-recorded-command")
         self.domain = domain
         self.method = method
@@ -29,7 +29,7 @@ public struct RecordedCommand: Equatable, Sendable {
     }
 
     package init<Payload: Sendable, Result: Sendable>(
-        command: WebViewProxyCommand<Payload, Result>
+        command: WebInspectorProxyCommand<Payload, Result>
     ) {
         targetID = command.targetID
         route = command.route
@@ -46,7 +46,7 @@ public struct RecordedCommand: Equatable, Sendable {
 private struct HeldCommand: Sendable {
     var domain: String
     var method: String
-    var gate: WebViewTestGate
+    var gate: WebInspectorTestGate
 }
 
 private struct CommandKey: Hashable, Sendable {
@@ -64,27 +64,27 @@ private struct QueuedResult: @unchecked Sendable {
 
 private struct EventSubscriptionKey: Hashable, Sendable {
     var route: RoutingTargetID
-    var targetID: WebViewTarget.ID
-    var domain: WebViewProxyEventDomain
+    var targetID: WebInspectorTarget.ID
+    var domain: WebInspectorProxyEventDomain
 }
 
 private struct SubscriberWaiter: Sendable {
     var route: RoutingTargetID?
-    var targetID: WebViewTarget.ID
-    var domain: WebViewProxyEventDomain
+    var targetID: WebInspectorTarget.ID
+    var domain: WebInspectorProxyEventDomain
     var count: Int
     var continuation: CheckedContinuation<Void, Never>
 }
 
-public enum WebViewTestBackendError: Error, Equatable, Sendable {
+public enum WebInspectorTestBackendError: Error, Equatable, Sendable {
     case unsupportedEventDomain(String)
 }
 
-public actor WebViewTestBackend {
+public actor WebInspectorTestBackend {
     private var enqueuedReplies: [CommandKey: [QueuedResult]]
     private var commands: [RecordedCommand]
     private var heldCommands: [HeldCommand]
-    private var eventContinuations: [EventSubscriptionKey: [UUID: AsyncStream<WebViewProxyEvent>.Continuation]]
+    private var eventContinuations: [EventSubscriptionKey: [UUID: AsyncStream<WebInspectorProxyEvent>.Continuation]]
     private var subscriberWaiters: [SubscriberWaiter]
 
     public init() {
@@ -104,51 +104,51 @@ public actor WebViewTestBackend {
         enqueuedReplies[key, default: []].append(QueuedResult(result))
     }
 
-    public func emit(_ event: Network.Event, target: WebViewTarget.ID) async {
+    public func emit(_ event: Network.Event, target: WebInspectorTarget.ID) async {
         emit(.network(event), target: target, route: nil, domain: .network)
     }
 
-    public func emit(_ event: Network.Event, target: WebViewTarget) async {
+    public func emit(_ event: Network.Event, target: WebInspectorTarget) async {
         emit(.network(event), target: target.id, route: target.route, domain: .network)
     }
 
-    public func emit(_ event: DOM.Event, target: WebViewTarget.ID) async {
+    public func emit(_ event: DOM.Event, target: WebInspectorTarget.ID) async {
         emit(.dom(event), target: target, route: nil, domain: .dom)
     }
 
-    public func emit(_ event: DOM.Event, target: WebViewTarget) async {
+    public func emit(_ event: DOM.Event, target: WebInspectorTarget) async {
         emit(.dom(event), target: target.id, route: target.route, domain: .dom)
     }
 
-    package func emit(_ event: Inspector.Event, target: WebViewTarget.ID) async {
+    package func emit(_ event: Inspector.Event, target: WebInspectorTarget.ID) async {
         emit(.inspector(event), target: target, route: nil, domain: .inspector)
     }
 
-    package func emit(_ event: Inspector.Event, target: WebViewTarget) async {
+    package func emit(_ event: Inspector.Event, target: WebInspectorTarget) async {
         emit(.inspector(event), target: target.id, route: target.route, domain: .inspector)
     }
 
-    public func emit(_ event: CSS.Event, target: WebViewTarget.ID) async {
+    public func emit(_ event: CSS.Event, target: WebInspectorTarget.ID) async {
         emit(.css(event), target: target, route: nil, domain: .css)
     }
 
-    public func emit(_ event: CSS.Event, target: WebViewTarget) async {
+    public func emit(_ event: CSS.Event, target: WebInspectorTarget) async {
         emit(.css(event), target: target.id, route: target.route, domain: .css)
     }
 
-    public func emit(_ event: Console.Event, target: WebViewTarget.ID) async {
+    public func emit(_ event: Console.Event, target: WebInspectorTarget.ID) async {
         emit(.console(event), target: target, route: nil, domain: .console)
     }
 
-    public func emit(_ event: Console.Event, target: WebViewTarget) async {
+    public func emit(_ event: Console.Event, target: WebInspectorTarget) async {
         emit(.console(event), target: target.id, route: target.route, domain: .console)
     }
 
-    public func emit(_ event: Runtime.Event, target: WebViewTarget.ID) async {
+    public func emit(_ event: Runtime.Event, target: WebInspectorTarget.ID) async {
         emit(.runtime(event), target: target, route: nil, domain: .runtime)
     }
 
-    public func emit(_ event: Runtime.Event, target: WebViewTarget) async {
+    public func emit(_ event: Runtime.Event, target: WebInspectorTarget) async {
         emit(.runtime(event), target: target.id, route: target.route, domain: .runtime)
     }
 
@@ -158,11 +158,11 @@ public actor WebViewTestBackend {
 
     public func waitForSubscribers(
         domain: String,
-        target: WebViewTarget.ID,
+        target: WebInspectorTarget.ID,
         count: Int
     ) async throws {
-        guard let eventDomain = WebViewProxyEventDomain(rawValue: domain) else {
-            throw WebViewTestBackendError.unsupportedEventDomain(domain)
+        guard let eventDomain = WebInspectorProxyEventDomain(rawValue: domain) else {
+            throw WebInspectorTestBackendError.unsupportedEventDomain(domain)
         }
         guard subscriberCount(for: target, domain: eventDomain) < count else {
             return
@@ -184,11 +184,11 @@ public actor WebViewTestBackend {
 
     public func waitForSubscribers(
         domain: String,
-        target: WebViewTarget,
+        target: WebInspectorTarget,
         count: Int
     ) async throws {
-        guard let eventDomain = WebViewProxyEventDomain(rawValue: domain) else {
-            throw WebViewTestBackendError.unsupportedEventDomain(domain)
+        guard let eventDomain = WebInspectorProxyEventDomain(rawValue: domain) else {
+            throw WebInspectorTestBackendError.unsupportedEventDomain(domain)
         }
         let key = EventSubscriptionKey(route: target.route, targetID: target.id, domain: eventDomain)
         guard subscriberCount(for: key) < count else {
@@ -209,15 +209,15 @@ public actor WebViewTestBackend {
         }
     }
 
-    public func hold(domain: String, method: String, gate: WebViewTestGate) async {
+    public func hold(domain: String, method: String, gate: WebInspectorTestGate) async {
         heldCommands.append(HeldCommand(domain: domain, method: method, gate: gate))
     }
 
     private func emit(
-        _ event: WebViewProxyEvent,
-        target targetID: WebViewTarget.ID,
+        _ event: WebInspectorProxyEvent,
+        target targetID: WebInspectorTarget.ID,
         route: RoutingTargetID?,
-        domain: WebViewProxyEventDomain
+        domain: WebInspectorProxyEventDomain
     ) {
         let key = EventSubscriptionKey(
             route: route ?? unambiguousRoute(for: targetID, domain: domain),
@@ -230,7 +230,7 @@ public actor WebViewTestBackend {
     }
 
     private func addEventContinuation(
-        _ continuation: AsyncStream<WebViewProxyEvent>.Continuation,
+        _ continuation: AsyncStream<WebInspectorProxyEvent>.Continuation,
         id: UUID,
         key: EventSubscriptionKey
     ) {
@@ -249,7 +249,7 @@ public actor WebViewTestBackend {
         eventContinuations[key]?.count ?? 0
     }
 
-    private func subscriberCount(for targetID: WebViewTarget.ID, domain: WebViewProxyEventDomain) -> Int {
+    private func subscriberCount(for targetID: WebInspectorTarget.ID, domain: WebInspectorProxyEventDomain) -> Int {
         eventContinuations.reduce(into: 0) { count, entry in
             if entry.key.targetID == targetID && entry.key.domain == domain {
                 count += entry.value.count
@@ -258,8 +258,8 @@ public actor WebViewTestBackend {
     }
 
     private func unambiguousRoute(
-        for targetID: WebViewTarget.ID,
-        domain: WebViewProxyEventDomain,
+        for targetID: WebInspectorTarget.ID,
+        domain: WebInspectorProxyEventDomain,
         matching keys: [EventSubscriptionKey]? = nil
     ) -> RoutingTargetID {
         let matchingKeys = keys ?? eventContinuations.keys.filter {
@@ -268,7 +268,7 @@ public actor WebViewTestBackend {
         let routes = Set(matchingKeys.map(\.route))
         guard routes.count <= 1 else {
             preconditionFailure(
-                "Multiple routes are subscribed for \(domain.rawValue) target \(targetID); emit with WebViewTarget."
+                "Multiple routes are subscribed for \(domain.rawValue) target \(targetID); emit with WebInspectorTarget."
             )
         }
         guard let route = routes.first else {
@@ -299,9 +299,9 @@ public actor WebViewTestBackend {
     }
 }
 
-extension WebViewTestBackend: WebViewProxyBackend {
+extension WebInspectorTestBackend: WebInspectorProxyBackend {
     package func dispatchCommand<Payload: Sendable, Result: Sendable>(
-        _ command: WebViewProxyCommand<Payload, Result>
+        _ command: WebInspectorProxyCommand<Payload, Result>
     ) async throws -> Result {
         commands.append(RecordedCommand(command: command))
 
@@ -313,7 +313,7 @@ extension WebViewTestBackend: WebViewProxyBackend {
 
         let key = CommandKey(domain: command.domain.rawValue, method: command.method)
         guard var results = enqueuedReplies[key], results.isEmpty == false else {
-            throw WebViewProxyError.commandFailed(
+            throw WebInspectorProxyError.commandFailed(
                 domain: command.domain.rawValue,
                 method: command.method,
                 message: "No enqueued result for \(command.domain.rawValue).\(command.method)."
@@ -324,7 +324,7 @@ extension WebViewTestBackend: WebViewProxyBackend {
         enqueuedReplies[key] = results.isEmpty ? nil : results
 
         guard let result = queued.value as? Result else {
-            throw WebViewProxyError.commandFailed(
+            throw WebInspectorProxyError.commandFailed(
                 domain: command.domain.rawValue,
                 method: command.method,
                 message: "Enqueued result for \(command.domain.rawValue).\(command.method) has type "
@@ -336,8 +336,8 @@ extension WebViewTestBackend: WebViewProxyBackend {
 
     package func waitForEventSubscription(
         route: RoutingTargetID,
-        targetID: WebViewTarget.ID,
-        domain: WebViewProxyEventDomain
+        targetID: WebInspectorTarget.ID,
+        domain: WebInspectorProxyEventDomain
     ) async {
         let key = EventSubscriptionKey(route: route, targetID: targetID, domain: domain)
         while subscriberCount(for: key) < 1 {
@@ -350,12 +350,12 @@ extension WebViewTestBackend: WebViewProxyBackend {
 
     package nonisolated func events(
         route: RoutingTargetID,
-        targetID: WebViewTarget.ID,
-        domain: WebViewProxyEventDomain
-    ) -> AsyncStream<WebViewProxyEvent> {
+        targetID: WebInspectorTarget.ID,
+        domain: WebInspectorProxyEventDomain
+    ) -> AsyncStream<WebInspectorProxyEvent> {
         _ = route
         let key = EventSubscriptionKey(route: route, targetID: targetID, domain: domain)
-        return AsyncStream<WebViewProxyEvent> { continuation in
+        return AsyncStream<WebInspectorProxyEvent> { continuation in
             let id = UUID()
             Task {
                 await self.addEventContinuation(continuation, id: id, key: key)

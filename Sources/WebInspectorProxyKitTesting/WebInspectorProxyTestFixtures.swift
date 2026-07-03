@@ -1,7 +1,7 @@
 import Foundation
-import WebViewProxyKit
+import WebInspectorProxyKit
 
-public enum WebViewProxyTestFixtures {
+public enum WebInspectorProxyTestFixtures {
     public static func domNodeID(_ rawValue: String) -> DOM.Node.ID {
         DOM.Node.ID(rawValue)
     }

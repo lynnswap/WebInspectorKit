@@ -1,22 +1,107 @@
 import Foundation
 import Observation
-import WebViewProxyKit
+import WebInspectorProxyKit
 
-public protocol WebViewFetchableModel: AnyObject {}
+public struct NetworkRequestSnapshot: Equatable, Sendable {
+    public let url: String
+    public let method: String
+    public let headers: [String: String]
+    public let postData: String?
+    public let referrerPolicy: String?
+    public let integrity: String?
 
-public struct RedirectHop: Sendable {
-    public let request: Network.Request
-    public let response: Network.Response
+    public init(
+        url: String,
+        method: String,
+        headers: [String: String] = [:],
+        postData: String? = nil,
+        referrerPolicy: String? = nil,
+        integrity: String? = nil
+    ) {
+        self.url = url
+        self.method = method
+        self.headers = headers
+        self.postData = postData
+        self.referrerPolicy = referrerPolicy
+        self.integrity = integrity
+    }
+
+    init(_ request: Network.Request) {
+        self.init(
+            url: request.url,
+            method: request.method,
+            headers: request.headers,
+            postData: request.postData,
+            referrerPolicy: request.referrerPolicy?.rawValue,
+            integrity: request.integrity
+        )
+    }
+}
+
+public struct NetworkResponseSnapshot: Equatable, Sendable {
+    public let url: String?
+    public let status: Int?
+    public let statusText: String?
+    public let mimeType: String?
+    public let headers: [String: String]
+    public let source: String?
+    public let requestHeaders: [String: String]?
+
+    public init(
+        url: String? = nil,
+        status: Int? = nil,
+        statusText: String? = nil,
+        mimeType: String? = nil,
+        headers: [String: String] = [:],
+        source: String? = nil,
+        requestHeaders: [String: String]? = nil
+    ) {
+        self.url = url
+        self.status = status
+        self.statusText = statusText
+        self.mimeType = mimeType
+        self.headers = headers
+        self.source = source
+        self.requestHeaders = requestHeaders
+    }
+
+    init(_ response: Network.Response) {
+        self.init(
+            url: response.url,
+            status: response.status,
+            statusText: response.statusText,
+            mimeType: response.mimeType,
+            headers: response.headers,
+            source: response.source?.rawValue,
+            requestHeaders: response.requestHeaders
+        )
+    }
+}
+
+public struct RedirectHop: Equatable, Sendable {
+    public let request: NetworkRequestSnapshot
+    public let response: NetworkResponseSnapshot
     public let timestamp: Double
 
-    public init(request: Network.Request, response: Network.Response, timestamp: Double) {
+    public init(
+        request: NetworkRequestSnapshot,
+        response: NetworkResponseSnapshot,
+        timestamp: Double
+    ) {
         self.request = request
         self.response = response
         self.timestamp = timestamp
     }
+
+    init(request: Network.Request, response: Network.Response, timestamp: Double) {
+        self.init(
+            request: NetworkRequestSnapshot(request),
+            response: NetworkResponseSnapshot(response),
+            timestamp: timestamp
+        )
+    }
 }
 
-@MainActor
 @Observable
 public final class WebSocketState {
     public enum ReadyState: Equatable, Sendable {
@@ -60,40 +145,40 @@ public final class WebSocketState {
     }
 
     public private(set) var readyState: ReadyState
-    public private(set) var handshakeRequest: Network.Request?
-    public private(set) var handshakeResponse: Network.Response?
+    public private(set) var handshakeRequest: NetworkRequestSnapshot?
+    public private(set) var handshakeResponse: NetworkResponseSnapshot?
     public private(set) var frames: [Frame]
 
-    package init(readyState: ReadyState = .connecting) {
+    init(readyState: ReadyState = .connecting) {
         self.readyState = readyState
         handshakeRequest = nil
         handshakeResponse = nil
         frames = []
     }
 
-    package func markConnecting() {
+    func markConnecting() {
         readyState = .connecting
     }
 
-    package func markOpen() {
+    func markOpen() {
         readyState = .open
     }
 
-    package func markClosed() {
+    func markClosed() {
         readyState = .closed
     }
 
-    package func applyHandshakeRequest(_ request: Network.Request) {
-        handshakeRequest = request
+    func applyHandshakeRequest(_ request: Network.Request) {
+        handshakeRequest = NetworkRequestSnapshot(request)
         readyState = .connecting
     }
 
-    package func applyHandshakeResponse(_ response: Network.Response) {
-        handshakeResponse = response
+    func applyHandshakeResponse(_ response: Network.Response) {
+        handshakeResponse = NetworkResponseSnapshot(response)
         readyState = .open
     }
 
-    package func appendFrame(
+    func appendFrame(
         _ frame: Network.WebSocketFrame,
         direction: FrameDirection,
         timestamp: Double
@@ -108,7 +193,7 @@ public final class WebSocketState {
         ))
     }
 
-    package func appendError(_ message: String, timestamp: Double) {
+    func appendError(_ message: String, timestamp: Double) {
         frames.append(Frame(
             direction: .error(message),
             errorMessage: message,
@@ -117,48 +202,46 @@ public final class WebSocketState {
     }
 }
 
-@MainActor
 @Observable
 public final class NetworkBody {
     public enum Phase: Equatable, Sendable {
         case available
         case fetching
         case loaded
-        case failed(WebViewProxyError)
+        case failed(WebInspectorProxyError)
     }
 
     public private(set) var phase: Phase
     public private(set) var text: String?
     public private(set) var isBase64Encoded: Bool
 
-    package init(phase: Phase = .available, text: String? = nil, isBase64Encoded: Bool = false) {
+    init(phase: Phase = .available, text: String? = nil, isBase64Encoded: Bool = false) {
         self.phase = phase
         self.text = text
         self.isBase64Encoded = isBase64Encoded
     }
 
-    package func markFetching() {
+    func markFetching() {
         phase = .fetching
     }
 
-    package func load(_ body: Network.Body) {
+    func load(_ body: Network.Body) {
         text = body.data
         isBase64Encoded = body.base64Encoded
         phase = .loaded
     }
 
-    package func fail(_ error: WebViewProxyError) {
+    func fail(_ error: WebInspectorProxyError) {
         phase = .failed(error)
     }
 }
 
-@MainActor
 @Observable
-public final class NetworkRequest: Identifiable, WebViewFetchableModel {
+public final class NetworkRequest: WebInspectorFetchableModel {
     public struct ID: Hashable, Sendable {
-        package let proxyID: Network.Request.ID
+        let proxyID: Network.Request.ID
 
-        package init(_ proxyID: Network.Request.ID) {
+        init(_ proxyID: Network.Request.ID) {
             self.proxyID = proxyID
         }
     }
@@ -191,14 +274,14 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
     public private(set) var webSocket: WebSocketState?
     public private(set) var responseBody: NetworkBody
 
-    @ObservationIgnored package weak var modelContext: WebViewModelContext?
+    @ObservationIgnored weak var modelContext: WebInspectorContext?
     @ObservationIgnored private var currentRequest: Network.Request
 
-    package var proxyID: Network.Request.ID {
+    var proxyID: Network.Request.ID {
         id.proxyID
     }
 
-    package var isActive: Bool {
+    var isActive: Bool {
         switch state {
         case .pending,
              .responded:
@@ -209,11 +292,11 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         }
     }
 
-    package init(
+    init(
         request: Network.Request,
         resourceType: Network.ResourceType?,
         timestamp: Double?,
-        modelContext: WebViewModelContext
+        modelContext: WebInspectorContext
     ) {
         id = ID(request.id)
         url = request.url
@@ -239,16 +322,16 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         currentRequest = request
     }
 
-    public func fetchResponseBody() async {
+    public func fetchResponseBody(isolation: isolated (any Actor) = #isolation) async {
         responseBody.markFetching()
         guard let modelContext else {
-            responseBody.fail(.disconnected("NetworkRequest is not registered in a WebViewModelContext."))
+            responseBody.fail(.disconnected("NetworkRequest is not registered in a WebInspectorContext."))
             return
         }
-        await modelContext.fetchResponseBody(for: self)
+        await modelContext.fetchResponseBody(for: self, isolation: isolation)
     }
 
-    package func applyRequestWillBeSent(
+    func applyRequestWillBeSent(
         request: Network.Request,
         resourceType: Network.ResourceType?,
         timestamp: Double
@@ -275,7 +358,7 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         state = .pending
     }
 
-    package func applyRedirect(
+    func applyRedirect(
         to request: Network.Request,
         redirectResponse: Network.Response,
         timestamp: Double,
@@ -308,7 +391,7 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         state = .pending
     }
 
-    package func applyResponse(
+    func applyResponse(
         _ response: Network.Response,
         resourceType: Network.ResourceType,
         timestamp: Double?
@@ -331,7 +414,7 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         state = .responded
     }
 
-    package func applyDataReceived(dataLength: Int, encodedDataLength: Int, timestamp: Double) {
+    func applyDataReceived(dataLength: Int, encodedDataLength: Int, timestamp: Double) {
         decodedDataLength += max(0, dataLength)
         self.encodedDataLength += max(0, encodedDataLength)
         lastDataReceivedTimestamp = timestamp
@@ -340,7 +423,7 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         }
     }
 
-    package func finish(timestamp: Double, sourceMapURL: String?, metrics: Network.Metrics?) {
+    func finish(timestamp: Double, sourceMapURL: String?, metrics: Network.Metrics?) {
         self.sourceMapURL = sourceMapURL
         self.metrics = metrics
         if let encodedDataLength = metrics?.encodedDataLength {
@@ -353,12 +436,12 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         state = .finished
     }
 
-    package func fail(errorText: String, canceled: Bool, timestamp: Double) {
+    func fail(errorText: String, canceled: Bool, timestamp: Double) {
         finishedOrFailedTimestamp = timestamp
         state = .failed(errorText: errorText, canceled: canceled)
     }
 
-    package func applyMemoryCache(response: Network.Response, timestamp: Double) {
+    func applyMemoryCache(response: Network.Response, timestamp: Double) {
         if let url = response.url {
             self.url = url
         }
@@ -384,7 +467,7 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         state = .finished
     }
 
-    package func finishResponseBodyFetch(result: Result<Network.Body, WebViewProxyError>) {
+    func finishResponseBodyFetch(result: Result<Network.Body, WebInspectorProxyError>) {
         switch result {
         case let .success(body):
             responseBody.load(body)
@@ -393,13 +476,13 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         }
     }
 
-    package func applyWebSocketCreated(url: String) {
+    func applyWebSocketCreated(url: String) {
         self.url = url
         resourceType = .webSocket
         _ = ensureWebSocketState()
     }
 
-    package func applyWebSocketHandshakeRequest(_ request: Network.Request, timestamp: Double?) {
+    func applyWebSocketHandshakeRequest(_ request: Network.Request, timestamp: Double?) {
         currentRequest = request
         url = request.url
         method = request.method
@@ -412,12 +495,12 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         ensureWebSocketState().applyHandshakeRequest(request)
     }
 
-    package func applyWebSocketHandshakeResponse(_ response: Network.Response, timestamp: Double?) {
+    func applyWebSocketHandshakeResponse(_ response: Network.Response, timestamp: Double?) {
         applyResponse(response, resourceType: .webSocket, timestamp: timestamp)
         ensureWebSocketState().applyHandshakeResponse(response)
     }
 
-    package func appendWebSocketFrame(
+    func appendWebSocketFrame(
         _ frame: Network.WebSocketFrame,
         direction: WebSocketState.FrameDirection,
         timestamp: Double
@@ -427,12 +510,12 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         ensureWebSocketState().appendFrame(frame, direction: direction, timestamp: timestamp)
     }
 
-    package func appendWebSocketError(_ message: String, timestamp: Double) {
+    func appendWebSocketError(_ message: String, timestamp: Double) {
         lastDataReceivedTimestamp = timestamp
         ensureWebSocketState().appendError(message, timestamp: timestamp)
     }
 
-    package func closeWebSocket(timestamp: Double) {
+    func closeWebSocket(timestamp: Double) {
         ensureWebSocketState().markClosed()
         finishedOrFailedTimestamp = timestamp
         state = .finished

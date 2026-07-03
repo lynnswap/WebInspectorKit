@@ -1,14 +1,13 @@
 import Foundation
 import Observation
-import WebViewProxyKit
+import WebInspectorProxyKit
 
-@MainActor
 @Observable
-public final class CSSStyles: Identifiable {
+public final class CSSStyles: WebInspectorPersistentModel {
     public struct ID: Hashable, Sendable {
-        package let nodeID: DOMNode.ID
+        let nodeID: DOMNode.ID
 
-        package init(nodeID: DOMNode.ID) {
+        init(nodeID: DOMNode.ID) {
             self.nodeID = nodeID
         }
     }
@@ -18,7 +17,7 @@ public final class CSSStyles: Identifiable {
         case loaded
         case needsRefresh
         case unavailable
-        case failed(WebViewProxyError)
+        case failed(WebInspectorProxyError)
     }
 
     public let id: ID
@@ -26,34 +25,37 @@ public final class CSSStyles: Identifiable {
     public private(set) var sections: [CSS.Rule]
     public private(set) var computedProperties: [CSS.ComputedProperty]
 
-    package init(nodeID: DOMNode.ID) {
+    @ObservationIgnored weak var modelContext: WebInspectorContext?
+
+    init(nodeID: DOMNode.ID, modelContext: WebInspectorContext) {
         id = ID(nodeID: nodeID)
         phase = .loading
         sections = []
         computedProperties = []
+        self.modelContext = modelContext
     }
 
-    package func markLoading() {
+    func markLoading() {
         phase = .loading
     }
 
-    package func load(matchedStyles: CSS.MatchedStyles, computedProperties: [CSS.ComputedProperty]) {
+    func load(matchedStyles: CSS.MatchedStyles, computedProperties: [CSS.ComputedProperty]) {
         sections = matchedStyles.matchedRules
         self.computedProperties = computedProperties
         phase = .loaded
     }
 
-    package func markNeedsRefresh() {
+    func markNeedsRefresh() {
         phase = .needsRefresh
     }
 
-    package func markUnavailable() {
+    func markUnavailable() {
         sections = []
         computedProperties = []
         phase = .unavailable
     }
 
-    package func fail(_ error: WebViewProxyError) {
+    func fail(_ error: WebInspectorProxyError) {
         sections = []
         computedProperties = []
         phase = .failed(error)

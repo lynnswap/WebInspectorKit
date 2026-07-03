@@ -1,23 +1,22 @@
 import Foundation
 import Observation
-import WebViewProxyKit
+import WebInspectorProxyKit
 
-@MainActor
 @Observable
-public final class RuntimeObject: Identifiable {
+public final class RuntimeObject: WebInspectorPersistentModel {
     public struct ID: Hashable, Sendable {
-        package enum Storage: Hashable, Sendable {
+        enum Storage: Hashable, Sendable {
             case remote(Runtime.RemoteObject.ID)
             case synthetic(Int)
         }
 
-        package let storage: Storage
+        let storage: Storage
 
-        package init(remote id: Runtime.RemoteObject.ID) {
+        init(remote id: Runtime.RemoteObject.ID) {
             storage = .remote(id)
         }
 
-        package init(synthetic ordinal: Int) {
+        init(synthetic ordinal: Int) {
             storage = .synthetic(ordinal)
         }
     }
@@ -53,17 +52,17 @@ public final class RuntimeObject: Identifiable {
     public private(set) var size: Int?
     public private(set) var preview: Runtime.ObjectPreview?
 
-    @ObservationIgnored package weak var modelContext: WebViewModelContext?
-    @ObservationIgnored package var proxyID: Runtime.RemoteObject.ID?
+    @ObservationIgnored weak var modelContext: WebInspectorContext?
+    @ObservationIgnored var proxyID: Runtime.RemoteObject.ID?
 
     public var canRequestProperties: Bool {
         proxyID != nil
     }
 
-    package init(
+    init(
         id: ID,
         remoteObject: Runtime.RemoteObject,
-        modelContext: WebViewModelContext
+        modelContext: WebInspectorContext
     ) {
         self.id = id
         kind = remoteObject.kind
@@ -77,27 +76,27 @@ public final class RuntimeObject: Identifiable {
         self.modelContext = modelContext
     }
 
-    public func properties() async throws -> [Property] {
+    public func properties(isolation: isolated (any Actor) = #isolation) async throws -> [Property] {
         guard canRequestProperties else {
             return []
         }
         guard let modelContext else {
-            throw WebViewProxyError.disconnected("RuntimeObject is not registered in a WebViewModelContext.")
+            throw WebInspectorProxyError.disconnected("RuntimeObject is not registered in a WebInspectorContext.")
         }
-        return try await modelContext.properties(for: self)
+        return try await modelContext.properties(for: self, isolation: isolation)
     }
 
-    public func collectionEntries() async throws -> [Entry] {
+    public func collectionEntries(isolation: isolated (any Actor) = #isolation) async throws -> [Entry] {
         guard canRequestProperties else {
             return []
         }
         guard let modelContext else {
-            throw WebViewProxyError.disconnected("RuntimeObject is not registered in a WebViewModelContext.")
+            throw WebInspectorProxyError.disconnected("RuntimeObject is not registered in a WebInspectorContext.")
         }
-        return try await modelContext.collectionEntries(for: self)
+        return try await modelContext.collectionEntries(for: self, isolation: isolation)
     }
 
-    package func update(from remoteObject: Runtime.RemoteObject) {
+    func update(from remoteObject: Runtime.RemoteObject) {
         kind = remoteObject.kind
         subtype = remoteObject.subtype
         className = remoteObject.className

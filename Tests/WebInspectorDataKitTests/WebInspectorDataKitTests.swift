@@ -1,12 +1,12 @@
 import Testing
-import WebViewDataKit
-import WebViewProxyKit
-import WebViewProxyKitTesting
+@testable import WebInspectorDataKit
+import WebInspectorProxyKit
+import WebInspectorProxyKitTesting
 
 @MainActor
 @Test
 func domEventsPopulateRootAndPreserveChildIdentity() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
     let documentID = DOM.Node.ID("document")
     let childID = DOM.Node.ID("child")
@@ -17,7 +17,7 @@ func domEventsPopulateRootAndPreserveChildIdentity() async throws {
         document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document", childNodeCount: 1)
     )
 
-    let container = WebViewModelContainer(proxy: runtime.proxy)
+    let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
     try await waitUntil { context.rootNode != nil }
@@ -89,7 +89,7 @@ func domEventsPopulateRootAndPreserveChildIdentity() async throws {
 @MainActor
 @Test
 func requestChildrenDispatchesDOMCommandAndMaterializesSetChildNodes() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let document = try #require(context.rootNode)
     let childID = DOM.Node.ID("requested-child")
@@ -124,7 +124,7 @@ func requestChildrenDispatchesDOMCommandAndMaterializesSetChildNodes() async thr
 @MainActor
 @Test
 func domInspectSelectsKnownNodeAndLoadsStyles() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let document = try #require(context.rootNode)
     let elementID = DOM.Node.ID("inspect-node")
@@ -153,7 +153,7 @@ func domInspectSelectsKnownNodeAndLoadsStyles() async throws {
 @MainActor
 @Test
 func domInspectRequestsSubtreeBeforeSelectingUnresolvedNode() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let document = try #require(context.rootNode)
     let staleID = DOM.Node.ID("stale-node")
@@ -202,9 +202,9 @@ func domInspectRequestsSubtreeBeforeSelectingUnresolvedNode() async throws {
 @MainActor
 @Test
 func domInspectBeforeDocumentArrivesRequestsSubtreeAfterRootApplies() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
-    let gate = WebViewTestGate()
+    let gate = WebInspectorTestGate()
     let documentID = DOM.Node.ID("document")
     let elementID = DOM.Node.ID("deferred-inspect-node")
 
@@ -214,7 +214,7 @@ func domInspectBeforeDocumentArrivesRequestsSubtreeAfterRootApplies() async thro
         document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document")
     )
 
-    let container = WebViewModelContainer(proxy: runtime.proxy)
+    let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
     try await waitUntil {
@@ -256,7 +256,7 @@ func domInspectBeforeDocumentArrivesRequestsSubtreeAfterRootApplies() async thro
 @MainActor
 @Test
 func explicitSelectionSupersedesPendingDOMInspectResolution() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let document = try #require(context.rootNode)
     let selectedID = DOM.Node.ID("manual-selection")
@@ -297,12 +297,12 @@ func explicitSelectionSupersedesPendingDOMInspectResolution() async throws {
 @MainActor
 @Test
 func startupEnablesTrackedDomainsBeforeInitialDocumentSnapshot() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
 
     await enqueueStartupReplies(on: runtime.backend)
 
-    let container = WebViewModelContainer(proxy: runtime.proxy)
+    let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
     try await waitUntil { context.state == .attached }
@@ -314,13 +314,13 @@ func startupEnablesTrackedDomainsBeforeInitialDocumentSnapshot() async throws {
 @MainActor
 @Test
 func networkEnableFailureFailsStartupBeforeDocumentFetch() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
 
     await runtime.backend.enqueue((), for: "Runtime", method: "enable")
     await runtime.backend.enqueue((), for: "Runtime", method: "disable")
 
-    let container = WebViewModelContainer(proxy: runtime.proxy)
+    let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
     try await waitUntil {
@@ -351,7 +351,7 @@ func networkEnableFailureFailsStartupBeforeDocumentFetch() async throws {
 @MainActor
 @Test
 func consoleEnableFailureFailsStartupBeforeAttachingDocument() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
 
     await runtime.backend.enqueue((), for: "Runtime", method: "enable")
@@ -364,7 +364,7 @@ func consoleEnableFailureFailsStartupBeforeAttachingDocument() async throws {
     await runtime.backend.enqueue((), for: "Runtime", method: "disable")
     await runtime.backend.enqueue((), for: "Network", method: "disable")
 
-    let container = WebViewModelContainer(proxy: runtime.proxy)
+    let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
     try await waitUntil {
@@ -398,10 +398,10 @@ func consoleEnableFailureFailsStartupBeforeAttachingDocument() async throws {
 @MainActor
 @Test
 func runtimeEnableFailureFailsStartupBeforeConsoleNetworkAndDocumentFetch() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
 
-    let container = WebViewModelContainer(proxy: runtime.proxy)
+    let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
     try await waitUntil {
@@ -430,13 +430,13 @@ func runtimeEnableFailureFailsStartupBeforeConsoleNetworkAndDocumentFetch() asyn
 @MainActor
 @Test
 func closeAfterAttachedDisablesEnabledDomains() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
 
     await enqueueStartupReplies(on: runtime.backend)
     await enqueueDomainDisableReplies(on: runtime.backend)
 
-    let container = WebViewModelContainer(proxy: runtime.proxy)
+    let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
     try await waitUntil { context.state == .attached }
@@ -452,14 +452,14 @@ func closeAfterAttachedDisablesEnabledDomains() async throws {
 @MainActor
 @Test
 func closeRecordsNetworkDisableFailureAndDetachesContext() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
 
     await enqueueStartupReplies(on: runtime.backend)
     await runtime.backend.enqueue((), for: "Console", method: "disable")
     await runtime.backend.enqueue((), for: "Runtime", method: "disable")
 
-    let container = WebViewModelContainer(proxy: runtime.proxy)
+    let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
     try await waitUntil { context.state == .attached }
@@ -476,7 +476,7 @@ func closeRecordsNetworkDisableFailureAndDetachesContext() async throws {
 @MainActor
 @Test
 func restartDisablesPreviousDomainTrackingBeforeReenable() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
 
     await enqueueStartupReplies(
@@ -484,7 +484,7 @@ func restartDisablesPreviousDomainTrackingBeforeReenable() async throws {
         document: DOM.Node(id: DOM.Node.ID("document-1"), nodeType: 9, nodeName: "#document")
     )
 
-    let container = WebViewModelContainer(proxy: runtime.proxy)
+    let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
     try await waitUntil { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("document-1")) }
@@ -506,14 +506,14 @@ func restartDisablesPreviousDomainTrackingBeforeReenable() async throws {
 @MainActor
 @Test
 func restartWaitsForPreviousStartupCleanupBeforeReenable() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
-    let enableGate = WebViewTestGate()
+    let enableGate = WebInspectorTestGate()
 
     await runtime.backend.hold(domain: "Network", method: "enable", gate: enableGate)
     await enqueueDomainEnableReplies(on: runtime.backend)
 
-    let container = WebViewModelContainer(proxy: runtime.proxy)
+    let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
     try await waitUntil {
@@ -551,15 +551,15 @@ func restartWaitsForPreviousStartupCleanupBeforeReenable() async throws {
 @MainActor
 @Test
 func runtimeEnableReplayIsCapturedBeforeCommandReturns() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
-    let enableGate = WebViewTestGate()
+    let enableGate = WebInspectorTestGate()
     let contextID = Runtime.ExecutionContext.ID("main")
 
     await runtime.backend.hold(domain: "Runtime", method: "enable", gate: enableGate)
     await enqueueStartupReplies(on: runtime.backend)
 
-    let container = WebViewModelContainer(proxy: runtime.proxy)
+    let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitUntil {
         await runtime.backend.recordedCommands() == [
@@ -583,16 +583,16 @@ func runtimeEnableReplayIsCapturedBeforeCommandReturns() async throws {
 @MainActor
 @Test
 func consoleEnableReplayIsCapturedBeforeCommandReturns() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
-    let enableGate = WebViewTestGate()
+    let enableGate = WebInspectorTestGate()
 
     await runtime.backend.hold(domain: "Console", method: "enable", gate: enableGate)
     await enqueueStartupReplies(on: runtime.backend)
 
-    let container = WebViewModelContainer(proxy: runtime.proxy)
+    let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
-    let results: WebViewFetchedResults<ConsoleMessage> = context.fetchedResults(for: .allConsoleMessages)
+    let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults(for: .allConsoleMessages)
     try await waitUntil {
         await runtime.backend.recordedCommands() == startupCommands
     }
@@ -615,11 +615,11 @@ func consoleEnableReplayIsCapturedBeforeCommandReturns() async throws {
 @MainActor
 @Test
 func restartClearsRuntimeContextsBeforeEnableReplay() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let staleID = Runtime.ExecutionContext.ID("stale")
     let replayID = Runtime.ExecutionContext.ID("replayed")
-    let enableGate = WebViewTestGate()
+    let enableGate = WebInspectorTestGate()
 
     await runtime.backend.emit(
         .executionContextCreated(Runtime.ExecutionContext(id: staleID, name: "Stale", kind: .normal)),
@@ -661,10 +661,10 @@ func restartClearsRuntimeContextsBeforeEnableReplay() async throws {
 @MainActor
 @Test
 func restartClearsConsoleMessagesBeforeConsoleReplay() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let results: WebViewFetchedResults<ConsoleMessage> = context.fetchedResults(for: .allConsoleMessages)
-    let enableGate = WebViewTestGate()
+    let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults(for: .allConsoleMessages)
+    let enableGate = WebInspectorTestGate()
 
     await runtime.backend.emit(
         .messageAdded(Console.Message(
@@ -707,7 +707,7 @@ func restartClearsConsoleMessagesBeforeConsoleReplay() async throws {
 @MainActor
 @Test
 func documentUpdatedReloadsRootDocument() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let replacementID = DOM.Node.ID("replacement-document")
 
@@ -727,7 +727,7 @@ func documentUpdatedReloadsRootDocument() async throws {
 @MainActor
 @Test
 func childInsertIntoUnrequestedParentDoesNotMarkChildrenLoaded() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let document = try #require(context.rootNode)
     let insertedID = DOM.Node.ID("inserted-child")
@@ -760,7 +760,7 @@ func childInsertIntoUnrequestedParentDoesNotMarkChildrenLoaded() async throws {
 @MainActor
 @Test
 func selectingDOMNodeLoadsCSSStylesAndComputedProperties() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let document = try #require(context.rootNode)
     let elementID = DOM.Node.ID("styled-node")
@@ -798,7 +798,7 @@ func selectingDOMNodeLoadsCSSStylesAndComputedProperties() async throws {
 @MainActor
 @Test
 func selectingNonElementDOMNodeDoesNotRequestCSSStyles() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (_, context) = try await startContext(runtime: runtime)
     let document = try #require(context.rootNode)
 
@@ -816,7 +816,7 @@ func selectingNonElementDOMNodeDoesNotRequestCSSStyles() async throws {
 @MainActor
 @Test
 func cssEventsAndSelectedDOMMutationsMarkSelectedStylesStale() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let document = try #require(context.rootNode)
     let selectedID = DOM.Node.ID("selected")
@@ -902,11 +902,11 @@ func cssEventsAndSelectedDOMMutationsMarkSelectedStylesStale() async throws {
 @MainActor
 @Test
 func cssInvalidationDuringStyleFetchIsNotOverwrittenByStaleResult() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let document = try #require(context.rootNode)
     let elementID = DOM.Node.ID("styled-node")
-    let computedGate = WebViewTestGate()
+    let computedGate = WebInspectorTestGate()
 
     await runtime.backend.emit(
         .setChildNodes(parent: document.id.proxyID, nodes: [
@@ -956,7 +956,7 @@ func cssInvalidationDuringStyleFetchIsNotOverwrittenByStaleResult() async throws
 @MainActor
 @Test
 func removingLoadedChildPurgesDescendantsFromIdentityMap() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
     let documentID = DOM.Node.ID("document")
     let childID = DOM.Node.ID("child")
@@ -967,7 +967,7 @@ func removingLoadedChildPurgesDescendantsFromIdentityMap() async throws {
         document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document")
     )
 
-    let container = WebViewModelContainer(proxy: runtime.proxy)
+    let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
     try await waitUntil { context.rootNode != nil }
@@ -1011,7 +1011,7 @@ func removingLoadedChildPurgesDescendantsFromIdentityMap() async throws {
 @MainActor
 @Test
 func setChildNodesPreservesReparentedDescendantIdentity() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
     let documentID = DOM.Node.ID("document")
     let oldParentID = DOM.Node.ID("old-parent")
@@ -1023,7 +1023,7 @@ func setChildNodesPreservesReparentedDescendantIdentity() async throws {
         document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document")
     )
 
-    let container = WebViewModelContainer(proxy: runtime.proxy)
+    let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
     try await waitUntil { context.rootNode != nil }
@@ -1071,7 +1071,7 @@ func setChildNodesPreservesReparentedDescendantIdentity() async throws {
 @MainActor
 @Test
 func setChildNodesPrunesOmittedDescendantsWhenReusingChildNode() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
     let documentID = DOM.Node.ID("document")
     let childID = DOM.Node.ID("child")
@@ -1083,7 +1083,7 @@ func setChildNodesPrunesOmittedDescendantsWhenReusingChildNode() async throws {
         document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document")
     )
 
-    let container = WebViewModelContainer(proxy: runtime.proxy)
+    let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
     try await waitUntil { context.rootNode != nil }
@@ -1124,7 +1124,7 @@ func setChildNodesPrunesOmittedDescendantsWhenReusingChildNode() async throws {
 @MainActor
 @Test
 func setChildNodesPreservesLoadedDescendantsForShallowRefresh() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
     let documentID = DOM.Node.ID("document")
     let childID = DOM.Node.ID("child")
@@ -1135,7 +1135,7 @@ func setChildNodesPreservesLoadedDescendantsForShallowRefresh() async throws {
         document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document")
     )
 
-    let container = WebViewModelContainer(proxy: runtime.proxy)
+    let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
     try await waitUntil { context.rootNode != nil }
@@ -1178,8 +1178,8 @@ func setChildNodesPreservesLoadedDescendantsForShallowRefresh() async throws {
 @MainActor
 @Test
 func closeDuringStartupKeepsContextDetached() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
-    let gate = WebViewTestGate()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let gate = WebInspectorTestGate()
     let documentID = DOM.Node.ID("document")
 
     await runtime.backend.hold(domain: "DOM", method: "getDocument", gate: gate)
@@ -1189,7 +1189,7 @@ func closeDuringStartupKeepsContextDetached() async throws {
     )
     await enqueueDomainDisableReplies(on: runtime.backend)
 
-    let container = WebViewModelContainer(proxy: runtime.proxy)
+    let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitUntil {
         await runtime.backend.recordedCommands()
@@ -1216,8 +1216,46 @@ func closeDuringStartupKeepsContextDetached() async throws {
 
 @MainActor
 @Test
+func domainEnablementReleaseDuringPendingEnableDisablesAfterEnableCompletes() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+    let registry = WebInspectorDomainEnablementRegistry()
+    let gate = WebInspectorTestGate()
+
+    await runtime.backend.hold(domain: "Runtime", method: "enable", gate: gate)
+
+    let acquireTask = Task {
+        try await registry.acquire(.runtime, on: target)
+    }
+
+    try await waitUntil {
+        await runtime.backend.recordedCommands() == [
+            RecordedCommand(domain: "Runtime", method: "enable")
+        ]
+    }
+
+    let releaseTask = Task {
+        await registry.release(.runtime, on: target)
+    }
+
+    await runtime.backend.enqueue((), for: "Runtime", method: "enable")
+    await runtime.backend.enqueue((), for: "Runtime", method: "disable")
+    await gate.open()
+
+    try await acquireTask.value
+    #expect(await releaseTask.value == nil)
+
+    let commands = await runtime.backend.recordedCommands()
+    #expect(commands == [
+        RecordedCommand(domain: "Runtime", method: "enable"),
+        RecordedCommand(domain: "Runtime", method: "disable"),
+    ])
+}
+
+@MainActor
+@Test
 func networkEventsPopulateAllRequestsInOrder() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let requestID = Network.Request.ID("request-1")
 
@@ -1258,7 +1296,7 @@ func networkEventsPopulateAllRequestsInOrder() async throws {
         target: target
     )
 
-    let results: WebViewFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
     try await waitUntil {
         results.items.count == 1 && results.items.first?.state == .finished
     }
@@ -1282,7 +1320,7 @@ func networkEventsPopulateAllRequestsInOrder() async throws {
 @MainActor
 @Test
 func loadingFinishedStoresTerminalMetadataAndOverridesDataTotals() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let requestID = Network.Request.ID("request-with-terminal-metadata")
 
@@ -1310,7 +1348,7 @@ func loadingFinishedStoresTerminalMetadataAndOverridesDataTotals() async throws 
         target: target
     )
 
-    let results: WebViewFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
     try await waitUntil {
         results.items.first?.state == .finished
     }
@@ -1327,7 +1365,7 @@ func loadingFinishedStoresTerminalMetadataAndOverridesDataTotals() async throws 
 @MainActor
 @Test
 func loadingFinishedClampsNegativeMetricTotals() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let requestID = Network.Request.ID("request-with-negative-terminal-metrics")
 
@@ -1355,7 +1393,7 @@ func loadingFinishedClampsNegativeMetricTotals() async throws {
         target: target
     )
 
-    let results: WebViewFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
     try await waitUntil {
         results.items.first?.state == .finished
     }
@@ -1369,7 +1407,7 @@ func loadingFinishedClampsNegativeMetricTotals() async throws {
 @MainActor
 @Test
 func repeatedRequestWillBeSentClearsStaleResponseFields() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let requestID = Network.Request.ID("redirected-request")
 
@@ -1397,7 +1435,7 @@ func repeatedRequestWillBeSentClearsStaleResponseFields() async throws {
         target: target
     )
 
-    let results: WebViewFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
     try await waitUntil {
         results.items.first?.status == 302
     }
@@ -1437,7 +1475,7 @@ func repeatedRequestWillBeSentClearsStaleResponseFields() async throws {
 @MainActor
 @Test
 func completedRequestDoesNotTreatLaterRequestWillBeSentAsRedirect() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let requestID = Network.Request.ID("reused-request")
 
@@ -1461,7 +1499,7 @@ func completedRequestDoesNotTreatLaterRequestWillBeSentAsRedirect() async throws
         target: target
     )
 
-    let results: WebViewFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
     try await waitUntil { results.items.first?.state == .finished }
     let request = try #require(results.items.first)
 
@@ -1490,7 +1528,7 @@ func completedRequestDoesNotTreatLaterRequestWillBeSentAsRedirect() async throws
 @MainActor
 @Test
 func loadingFailedStoresFailureTimestampAndClampsDataLength() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let requestID = Network.Request.ID("failed-request")
 
@@ -1513,7 +1551,7 @@ func loadingFailedStoresFailureTimestampAndClampsDataLength() async throws {
         target: target
     )
 
-    let results: WebViewFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
     try await waitUntil { results.items.first?.state == .failed(errorText: "cancelled", canceled: true) }
     let request = try #require(results.items.first)
     #expect(request.requestSentTimestamp == 1)
@@ -1526,7 +1564,7 @@ func loadingFailedStoresFailureTimestampAndClampsDataLength() async throws {
 @MainActor
 @Test
 func memoryCacheEventCreatesFinishedCachedRequestFromResponse() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let requestID = Network.Request.ID("cached-request")
 
@@ -1547,7 +1585,7 @@ func memoryCacheEventCreatesFinishedCachedRequestFromResponse() async throws {
         target: target
     )
 
-    let results: WebViewFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
     try await waitUntil {
         results.items.count == 1 && results.items.first?.state == .finished
     }
@@ -1572,7 +1610,7 @@ func memoryCacheEventCreatesFinishedCachedRequestFromResponse() async throws {
 @MainActor
 @Test
 func memoryCacheEventWithoutURLForNewRequestFailsContext() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let requestID = Network.Request.ID("cached-request-without-url")
 
@@ -1596,14 +1634,14 @@ func memoryCacheEventWithoutURLForNewRequestFailsContext() async throws {
         return
     }
     #expect(error == .disconnected("Network.requestServedFromMemoryCache omitted response URL for a new request."))
-    let results: WebViewFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
     #expect(results.items.isEmpty)
 }
 
 @MainActor
 @Test
 func webSocketCreatedCreatesRequestWithConnectingState() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let requestID = Network.Request.ID("websocket-created")
 
@@ -1612,7 +1650,7 @@ func webSocketCreatedCreatesRequestWithConnectingState() async throws {
         target: target
     )
 
-    let results: WebViewFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
     try await waitUntil { results.items.count == 1 }
     let request = try #require(results.items.first)
     #expect(request.url == "wss://example.com/socket")
@@ -1627,7 +1665,7 @@ func webSocketCreatedCreatesRequestWithConnectingState() async throws {
 @MainActor
 @Test
 func webSocketCreatedPreservesExistingNetworkLifecycleMetadata() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let requestID = Network.Request.ID("websocket-created-after-request")
 
@@ -1665,7 +1703,7 @@ func webSocketCreatedPreservesExistingNetworkLifecycleMetadata() async throws {
         target: target
     )
 
-    let results: WebViewFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
     try await waitUntil { results.items.first?.decodedDataLength == 7 }
     let request = try #require(results.items.first)
     let webSocket = try #require(request.webSocket)
@@ -1721,7 +1759,7 @@ func webSocketCreatedPreservesExistingNetworkLifecycleMetadata() async throws {
 @MainActor
 @Test
 func webSocketLifecycleStoresHandshakeFramesErrorAndClosedState() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let requestID = Network.Request.ID("websocket-lifecycle")
 
@@ -1729,7 +1767,7 @@ func webSocketLifecycleStoresHandshakeFramesErrorAndClosedState() async throws {
         .webSocket(.created(id: requestID, url: "wss://example.com/socket")),
         target: target
     )
-    let results: WebViewFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
     try await waitUntil { results.items.count == 1 }
     let request = try #require(results.items.first)
 
@@ -1822,7 +1860,7 @@ func webSocketLifecycleStoresHandshakeFramesErrorAndClosedState() async throws {
 @MainActor
 @Test
 func webSocketEventForUnknownRequestFailsContext() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let requestID = Network.Request.ID("missing-websocket")
 
@@ -1851,9 +1889,9 @@ func webSocketEventForUnknownRequestFailsContext() async throws {
 @MainActor
 @Test
 func webSocketOtherEventDoesNotMutateRequests() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let results: WebViewFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
 
     await runtime.backend.emit(
         .webSocket(.other(RawEvent(domain: "Network", method: "webSocketFutureEvent"))),
@@ -1870,7 +1908,7 @@ func webSocketOtherEventDoesNotMutateRequests() async throws {
 @MainActor
 @Test
 func fetchResponseBodyStoresLoadedAndFailedPhases() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let loadedID = Network.Request.ID("loaded-request")
     let failedID = Network.Request.ID("failed-request")
@@ -1878,7 +1916,7 @@ func fetchResponseBodyStoresLoadedAndFailedPhases() async throws {
     await emitFinishedRequest(id: loadedID, target: target, backend: runtime.backend)
     await emitFinishedRequest(id: failedID, target: target, backend: runtime.backend)
 
-    let results: WebViewFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
     try await waitUntil { results.items.count == 2 }
     let loadedRequest = try #require(results.items.first { $0.id == NetworkRequest.ID(loadedID) })
     let failedRequest = try #require(results.items.first { $0.id == NetworkRequest.ID(failedID) })
@@ -1911,11 +1949,11 @@ func fetchResponseBodyStoresLoadedAndFailedPhases() async throws {
 @MainActor
 @Test
 func consoleEventsPopulateRepeatAndClearFetchedMessages() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let requestID = Network.Request.ID("request-1")
 
-    let results: WebViewFetchedResults<ConsoleMessage> = context.fetchedResults(for: .allConsoleMessages)
+    let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults(for: .allConsoleMessages)
     await runtime.backend.emit(
         .messageAdded(Console.Message(
             source: Console.Source(rawValue: "console-api"),
@@ -1981,10 +2019,10 @@ func consoleEventsPopulateRepeatAndClearFetchedMessages() async throws {
 @MainActor
 @Test
 func consoleMessageParametersRegisterRuntimeObjects() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let objectID = Runtime.RemoteObject.ID("console-object")
-    let results: WebViewFetchedResults<ConsoleMessage> = context.fetchedResults(for: .allConsoleMessages)
+    let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults(for: .allConsoleMessages)
 
     await runtime.backend.emit(
         .messageAdded(Console.Message(
@@ -2024,10 +2062,10 @@ func consoleMessageParametersRegisterRuntimeObjects() async throws {
 @MainActor
 @Test
 func consoleMessagesClearedReleasesConsoleRuntimeObjects() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let objectID = Runtime.RemoteObject.ID("console-stale-object")
-    let results: WebViewFetchedResults<ConsoleMessage> = context.fetchedResults(for: .allConsoleMessages)
+    let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults(for: .allConsoleMessages)
 
     await runtime.backend.emit(
         .messageAdded(Console.Message(
@@ -2058,8 +2096,8 @@ func consoleMessagesClearedReleasesConsoleRuntimeObjects() async throws {
     do {
         _ = try await parameter.properties()
         Issue.record("Expected cleared console RuntimeObject to be stale.")
-    } catch let error as WebViewProxyError {
-        #expect(error == .disconnected("RuntimeObject is not registered in this WebViewModelContext."))
+    } catch let error as WebInspectorProxyError {
+        #expect(error == .disconnected("RuntimeObject is not registered in this WebInspectorContext."))
     }
     #expect(context.state == .attached)
 }
@@ -2067,7 +2105,7 @@ func consoleMessagesClearedReleasesConsoleRuntimeObjects() async throws {
 @MainActor
 @Test
 func evaluateRegistersRuntimeObjectInSelectedContext() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let contextID = Runtime.ExecutionContext.ID("main")
     let objectID = Runtime.RemoteObject.ID("evaluation-result")
@@ -2115,7 +2153,7 @@ func evaluateRegistersRuntimeObjectInSelectedContext() async throws {
 @MainActor
 @Test
 func runtimeObjectPropertiesAndCollectionEntriesUseRuntimeCommands() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (_, context) = try await startContext(runtime: runtime)
     let objectID = Runtime.RemoteObject.ID("root-object")
     let childID = Runtime.RemoteObject.ID("child-object")
@@ -2177,7 +2215,7 @@ func runtimeObjectPropertiesAndCollectionEntriesUseRuntimeCommands() async throw
 @MainActor
 @Test
 func staleRuntimeObjectThrowsWithoutFailingContext() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let contextID = Runtime.ExecutionContext.ID("main")
     let objectID = Runtime.RemoteObject.ID("stale-object")
@@ -2209,8 +2247,8 @@ func staleRuntimeObjectThrowsWithoutFailingContext() async throws {
     do {
         _ = try await evaluation.object.properties()
         Issue.record("Expected stale runtime object to throw.")
-    } catch let error as WebViewProxyError {
-        #expect(error == .disconnected("RuntimeObject is not registered in this WebViewModelContext."))
+    } catch let error as WebInspectorProxyError {
+        #expect(error == .disconnected("RuntimeObject is not registered in this WebInspectorContext."))
     }
     #expect(context.state == .attached)
 }
@@ -2218,7 +2256,7 @@ func staleRuntimeObjectThrowsWithoutFailingContext() async throws {
 @MainActor
 @Test
 func runtimeEventsPopulateContextsAndFallbackSelection() async throws {
-    let runtime = try await WebViewProxyTestRuntime.start()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let mainID = Runtime.ExecutionContext.ID("main")
     let utilityID = Runtime.ExecutionContext.ID("utility")
@@ -2283,12 +2321,12 @@ func runtimeEventsPopulateContextsAndFallbackSelection() async throws {
 
 @MainActor
 private func startContext(
-    runtime: WebViewProxyTestRuntime
-) async throws -> (WebViewTarget, WebViewModelContext) {
+    runtime: WebInspectorProxyTestRuntime
+) async throws -> (WebInspectorTarget, WebInspectorContext) {
     let target = try await runtime.proxy.waitForCurrentPage()
     await enqueueStartupReplies(on: runtime.backend)
 
-    let container = WebViewModelContainer(proxy: runtime.proxy)
+    let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
     try await waitUntil { context.state == .attached }
@@ -2313,26 +2351,26 @@ private var shutdownCommands: [RecordedCommand] {
 }
 
 private func enqueueStartupReplies(
-    on backend: WebViewTestBackend,
+    on backend: WebInspectorTestBackend,
     document: DOM.Node = DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document")
 ) async {
     await enqueueDomainEnableReplies(on: backend)
     await backend.enqueue(document, for: "DOM", method: "getDocument")
 }
 
-private func enqueueDomainEnableReplies(on backend: WebViewTestBackend) async {
+private func enqueueDomainEnableReplies(on backend: WebInspectorTestBackend) async {
     await backend.enqueue((), for: "Runtime", method: "enable")
     await backend.enqueue((), for: "Network", method: "enable")
     await backend.enqueue((), for: "Console", method: "enable")
 }
 
-private func enqueueDomainDisableReplies(on backend: WebViewTestBackend) async {
+private func enqueueDomainDisableReplies(on backend: WebInspectorTestBackend) async {
     await backend.enqueue((), for: "Console", method: "disable")
     await backend.enqueue((), for: "Runtime", method: "disable")
     await backend.enqueue((), for: "Network", method: "disable")
 }
 
-private func enqueueCSSStyleReplies(on backend: WebViewTestBackend) async {
+private func enqueueCSSStyleReplies(on backend: WebInspectorTestBackend) async {
     await backend.enqueue(
         CSS.MatchedStyles(matchedRules: [
             CSS.Rule(
@@ -2368,8 +2406,8 @@ private func enqueueCSSStyleReplies(on backend: WebViewTestBackend) async {
 
 @MainActor
 private func waitForStartupSubscribers(
-    runtime: WebViewProxyTestRuntime,
-    target: WebViewTarget
+    runtime: WebInspectorProxyTestRuntime,
+    target: WebInspectorTarget
 ) async throws {
     try await runtime.backend.waitForSubscribers(domain: "DOM", target: target, count: 1)
     try await runtime.backend.waitForSubscribers(domain: "Inspector", target: target, count: 1)
@@ -2381,8 +2419,8 @@ private func waitForStartupSubscribers(
 
 private func emitFinishedRequest(
     id: Network.Request.ID,
-    target: WebViewTarget,
-    backend: WebViewTestBackend
+    target: WebInspectorTarget,
+    backend: WebInspectorTestBackend
 ) async {
     await backend.emit(
         .requestWillBeSent(
@@ -2407,7 +2445,7 @@ private func emitFinishedRequest(
 }
 
 @MainActor
-private func waitForChild(in context: WebViewModelContext) async throws -> DOMNode {
+private func waitForChild(in context: WebInspectorContext) async throws -> DOMNode {
     try await waitUntil {
         guard let root = context.rootNode else {
             return false

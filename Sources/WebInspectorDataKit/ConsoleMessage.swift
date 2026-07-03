@@ -1,14 +1,13 @@
 import Foundation
 import Observation
-import WebViewProxyKit
+import WebInspectorProxyKit
 
-@MainActor
 @Observable
-public final class ConsoleMessage: Identifiable, WebViewFetchableModel {
+public final class ConsoleMessage: WebInspectorFetchableModel {
     public struct ID: Comparable, Hashable, Sendable {
-        package let ordinal: Int
+        let ordinal: Int
 
-        package init(_ ordinal: Int) {
+        init(_ ordinal: Int) {
             self.ordinal = ordinal
         }
 
@@ -31,7 +30,14 @@ public final class ConsoleMessage: Identifiable, WebViewFetchableModel {
     public private(set) var networkRequestID: NetworkRequest.ID?
     public private(set) var timestamp: Double?
 
-    package init(id: ID, message: Console.Message, parameters: [RuntimeObject]) {
+    @ObservationIgnored weak var modelContext: WebInspectorContext?
+
+    init(
+        id: ID,
+        message: Console.Message,
+        parameters: [RuntimeObject],
+        modelContext: WebInspectorContext
+    ) {
         self.id = id
         source = message.source
         level = message.level
@@ -45,9 +51,10 @@ public final class ConsoleMessage: Identifiable, WebViewFetchableModel {
         stackTrace = message.stackTrace
         networkRequestID = message.networkRequestID.map(NetworkRequest.ID.init)
         timestamp = message.timestamp
+        self.modelContext = modelContext
     }
 
-    package func updateRepeatCount(_ count: Int, timestamp: Double?) {
+    func updateRepeatCount(_ count: Int, timestamp: Double?) {
         repeatCount = count
         self.timestamp = timestamp
     }
