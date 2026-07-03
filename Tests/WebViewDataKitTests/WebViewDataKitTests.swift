@@ -123,6 +123,179 @@ func requestChildrenDispatchesDOMCommandAndMaterializesSetChildNodes() async thr
 
 @MainActor
 @Test
+func domInspectSelectsKnownNodeAndLoadsStyles() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let document = try #require(context.rootNode)
+    let elementID = DOM.Node.ID("inspect-node")
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
+        ]),
+        target: target
+    )
+    let element = try await waitForChild(in: context)
+
+    await enqueueCSSStyleReplies(on: runtime.backend)
+    await runtime.backend.emit(.inspect(elementID), target: target)
+
+    try await waitUntil { context.selectedNode === element }
+    let styles = try #require(element.elementStyles)
+    try await waitUntil { styles.phase == .loaded }
+    #expect(styles.sections.map(\.selectorList.text) == [".card"])
+
+    let commands = await runtime.backend.recordedCommands()
+    #expect(commands.contains(RecordedCommand(domain: "CSS", method: "getMatchedStylesForNode")))
+    #expect(commands.contains(RecordedCommand(domain: "CSS", method: "getComputedStyleForNode")))
+}
+
+@MainActor
+@Test
+func domInspectRequestsSubtreeBeforeSelectingUnresolvedNode() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let document = try #require(context.rootNode)
+    let staleID = DOM.Node.ID("stale-node")
+    let elementID = DOM.Node.ID("resolved-inspect-node")
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(id: staleID, nodeType: 1, nodeName: "SPAN", localName: "span")
+        ]),
+        target: target
+    )
+    try await waitUntil { context.node(for: DOMNode.ID(staleID)) != nil }
+
+    await runtime.backend.enqueue((), for: "DOM", method: "requestChildNodes")
+    await enqueueCSSStyleReplies(on: runtime.backend)
+    await runtime.backend.emit(.inspect(elementID), target: target)
+    try await waitUntil {
+        await runtime.backend.recordedCommands().contains(
+            RecordedCommand(domain: "DOM", method: "requestChildNodes")
+        )
+    }
+
+    let commands = await runtime.backend.recordedCommands()
+    let command = try #require(commands.last {
+        $0.domain == "DOM" && $0.method == "requestChildNodes"
+    })
+    let payload = try #require(command.payload.cast(as: DOM.RequestChildNodesPayload.self))
+    #expect(payload.id == document.id.proxyID)
+    #expect(payload.depth == -1)
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
+        ]),
+        target: target
+    )
+
+    try await waitUntil { context.selectedNode?.id == DOMNode.ID(elementID) }
+    #expect(context.state == .attached)
+    #expect(context.node(for: DOMNode.ID(staleID)) == nil)
+    let selected = try #require(context.selectedNode)
+    let styles = try #require(selected.elementStyles)
+    try await waitUntil { styles.phase == .loaded }
+}
+
+@MainActor
+@Test
+func domInspectBeforeDocumentArrivesRequestsSubtreeAfterRootApplies() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+    let gate = WebViewTestGate()
+    let documentID = DOM.Node.ID("document")
+    let elementID = DOM.Node.ID("deferred-inspect-node")
+
+    await runtime.backend.hold(domain: "DOM", method: "getDocument", gate: gate)
+    await enqueueStartupReplies(
+        on: runtime.backend,
+        document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document")
+    )
+
+    let container = WebViewModelContainer(proxy: runtime.proxy)
+    let context = container.mainContext
+    try await waitForStartupSubscribers(runtime: runtime, target: target)
+    try await waitUntil {
+        await runtime.backend.recordedCommands()
+            .contains(RecordedCommand(domain: "DOM", method: "getDocument"))
+    }
+
+    await runtime.backend.emit(.inspect(elementID), target: target)
+    await runtime.backend.enqueue((), for: "DOM", method: "requestChildNodes")
+    await enqueueCSSStyleReplies(on: runtime.backend)
+    await gate.open()
+
+    try await waitUntil {
+        await runtime.backend.recordedCommands().contains(
+            RecordedCommand(domain: "DOM", method: "requestChildNodes")
+        )
+    }
+    let commands = await runtime.backend.recordedCommands()
+    let command = try #require(commands.last {
+        $0.domain == "DOM" && $0.method == "requestChildNodes"
+    })
+    let payload = try #require(command.payload.cast(as: DOM.RequestChildNodesPayload.self))
+    #expect(payload.id == documentID)
+    #expect(payload.depth == -1)
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: documentID, nodes: [
+            DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
+        ]),
+        target: target
+    )
+
+    try await waitUntil { context.selectedNode?.id == DOMNode.ID(elementID) }
+    let selected = try #require(context.selectedNode)
+    let styles = try #require(selected.elementStyles)
+    try await waitUntil { styles.phase == .loaded }
+}
+
+@MainActor
+@Test
+func explicitSelectionSupersedesPendingDOMInspectResolution() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let document = try #require(context.rootNode)
+    let selectedID = DOM.Node.ID("manual-selection")
+    let inspectedID = DOM.Node.ID("late-inspect-node")
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(id: selectedID, nodeType: 1, nodeName: "BUTTON", localName: "button")
+        ]),
+        target: target
+    )
+    let manualSelection = try await waitForChild(in: context)
+
+    await runtime.backend.enqueue((), for: "DOM", method: "requestChildNodes")
+    await runtime.backend.emit(.inspect(inspectedID), target: target)
+    try await waitUntil {
+        await runtime.backend.recordedCommands().contains(
+            RecordedCommand(domain: "DOM", method: "requestChildNodes")
+        )
+    }
+
+    await enqueueCSSStyleReplies(on: runtime.backend)
+    context.select(manualSelection)
+    try await waitUntil { context.selectedNode === manualSelection }
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(id: selectedID, nodeType: 1, nodeName: "BUTTON", localName: "button"),
+            DOM.Node(id: inspectedID, nodeType: 1, nodeName: "DIV", localName: "div"),
+        ]),
+        target: target
+    )
+    try await waitUntil { context.node(for: DOMNode.ID(inspectedID)) != nil }
+
+    #expect(context.selectedNode === manualSelection)
+}
+
+@MainActor
+@Test
 func startupEnablesTrackedDomainsBeforeInitialDocumentSnapshot() async throws {
     let runtime = try await WebViewProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
@@ -673,18 +846,54 @@ func cssEventsAndSelectedDOMMutationsMarkSelectedStylesStale() async throws {
     let styles = try #require(selected.elementStyles)
     try await waitUntil { styles.phase == .loaded }
 
+    func reloadSelectedStyles() async throws {
+        await enqueueCSSStyleReplies(on: runtime.backend)
+        context.select(selected)
+        try await waitUntil { styles.phase == .loaded }
+    }
+
     await runtime.backend.emit(.styleSheetChanged, target: target)
     try await waitUntil { styles.phase == .needsRefresh }
 
-    await enqueueCSSStyleReplies(on: runtime.backend)
-    context.select(selected)
-    try await waitUntil { styles.phase == .loaded }
+    try await reloadSelectedStyles()
+
+    await runtime.backend.emit(
+        .styleSheetAdded(CSS.StyleSheetHeader(
+            styleSheetID: CSS.StyleSheet.ID("sheet-1"),
+            origin: CSS.Origin(rawValue: "author")
+        )),
+        target: target
+    )
+    try await waitUntil { styles.phase == .needsRefresh }
+
+    try await reloadSelectedStyles()
+
+    await runtime.backend.emit(.styleSheetRemoved(CSS.StyleSheet.ID("sheet-1")), target: target)
+    try await waitUntil { styles.phase == .needsRefresh }
+
+    try await reloadSelectedStyles()
+
+    await runtime.backend.emit(.mediaQueryResultChanged, target: target)
+    try await waitUntil { styles.phase == .needsRefresh }
+
+    try await reloadSelectedStyles()
 
     await runtime.backend.emit(.attributeModified(otherID, name: "class", value: "ignored"), target: target)
     for _ in 0..<10 {
         await Task.yield()
     }
     #expect(styles.phase == .loaded)
+
+    await runtime.backend.emit(.nodeLayoutFlagsChanged(otherID), target: target)
+    for _ in 0..<10 {
+        await Task.yield()
+    }
+    #expect(styles.phase == .loaded)
+
+    await runtime.backend.emit(.nodeLayoutFlagsChanged(selectedID), target: target)
+    try await waitUntil { styles.phase == .needsRefresh }
+
+    try await reloadSelectedStyles()
 
     await runtime.backend.emit(.attributeModified(selectedID, name: "class", value: "changed"), target: target)
     try await waitUntil { styles.phase == .needsRefresh }
@@ -797,6 +1006,173 @@ func removingLoadedChildPurgesDescendantsFromIdentityMap() async throws {
         context.node(for: DOMNode.ID(childID)) == nil
             && context.node(for: DOMNode.ID(grandchildID)) == nil
     }
+}
+
+@MainActor
+@Test
+func setChildNodesPreservesReparentedDescendantIdentity() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+    let documentID = DOM.Node.ID("document")
+    let oldParentID = DOM.Node.ID("old-parent")
+    let newParentID = DOM.Node.ID("new-parent")
+    let movedChildID = DOM.Node.ID("moved-child")
+
+    await enqueueStartupReplies(
+        on: runtime.backend,
+        document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document")
+    )
+
+    let container = WebViewModelContainer(proxy: runtime.proxy)
+    let context = container.mainContext
+    try await waitForStartupSubscribers(runtime: runtime, target: target)
+    try await waitUntil { context.rootNode != nil }
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: documentID, nodes: [
+            DOM.Node(
+                id: oldParentID,
+                nodeType: 1,
+                nodeName: "SECTION",
+                localName: "section",
+                children: [
+                    DOM.Node(id: movedChildID, nodeType: 1, nodeName: "SPAN", localName: "span")
+                ]
+            )
+        ]),
+        target: target
+    )
+
+    try await waitUntil { context.node(for: DOMNode.ID(movedChildID)) != nil }
+    let movedChild = try #require(context.node(for: DOMNode.ID(movedChildID)))
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: documentID, nodes: [
+            DOM.Node(
+                id: newParentID,
+                nodeType: 1,
+                nodeName: "ARTICLE",
+                localName: "article",
+                children: [
+                    DOM.Node(id: movedChildID, nodeType: 1, nodeName: "SPAN", localName: "span")
+                ]
+            )
+        ]),
+        target: target
+    )
+
+    try await waitUntil {
+        context.node(for: DOMNode.ID(oldParentID)) == nil
+            && context.node(for: DOMNode.ID(newParentID)) != nil
+    }
+    #expect(context.node(for: DOMNode.ID(movedChildID)) === movedChild)
+}
+
+@MainActor
+@Test
+func setChildNodesPrunesOmittedDescendantsWhenReusingChildNode() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+    let documentID = DOM.Node.ID("document")
+    let childID = DOM.Node.ID("child")
+    let removedSpanID = DOM.Node.ID("removed-span")
+    let removedEmID = DOM.Node.ID("removed-em")
+
+    await enqueueStartupReplies(
+        on: runtime.backend,
+        document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document")
+    )
+
+    let container = WebViewModelContainer(proxy: runtime.proxy)
+    let context = container.mainContext
+    try await waitForStartupSubscribers(runtime: runtime, target: target)
+    try await waitUntil { context.rootNode != nil }
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: documentID, nodes: [
+            DOM.Node(
+                id: childID,
+                nodeType: 1,
+                nodeName: "DIV",
+                localName: "div",
+                children: [
+                    DOM.Node(id: removedSpanID, nodeType: 1, nodeName: "SPAN", localName: "span"),
+                    DOM.Node(id: removedEmID, nodeType: 1, nodeName: "EM", localName: "em"),
+                ]
+            )
+        ]),
+        target: target
+    )
+
+    try await waitUntil { context.node(for: DOMNode.ID(removedEmID)) != nil }
+    let child = try #require(context.node(for: DOMNode.ID(childID)))
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: documentID, nodes: [
+            DOM.Node(id: childID, nodeType: 1, nodeName: "DIV", localName: "div", childNodeCount: 0)
+        ]),
+        target: target
+    )
+
+    try await waitUntil {
+        context.node(for: DOMNode.ID(removedSpanID)) == nil
+            && context.node(for: DOMNode.ID(removedEmID)) == nil
+    }
+    #expect(context.node(for: DOMNode.ID(childID)) === child)
+}
+
+@MainActor
+@Test
+func setChildNodesPreservesLoadedDescendantsForShallowRefresh() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+    let documentID = DOM.Node.ID("document")
+    let childID = DOM.Node.ID("child")
+    let grandchildID = DOM.Node.ID("grandchild")
+
+    await enqueueStartupReplies(
+        on: runtime.backend,
+        document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document")
+    )
+
+    let container = WebViewModelContainer(proxy: runtime.proxy)
+    let context = container.mainContext
+    try await waitForStartupSubscribers(runtime: runtime, target: target)
+    try await waitUntil { context.rootNode != nil }
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: documentID, nodes: [
+            DOM.Node(
+                id: childID,
+                nodeType: 1,
+                nodeName: "DIV",
+                localName: "div",
+                children: [
+                    DOM.Node(id: grandchildID, nodeType: 1, nodeName: "SPAN", localName: "span")
+                ]
+            )
+        ]),
+        target: target
+    )
+
+    try await waitUntil { context.node(for: DOMNode.ID(grandchildID)) != nil }
+    let grandchild = try #require(context.node(for: DOMNode.ID(grandchildID)))
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: documentID, nodes: [
+            DOM.Node(id: childID, nodeType: 1, nodeName: "DIV", localName: "div", childNodeCount: 1)
+        ]),
+        target: target
+    )
+
+    try await waitUntil {
+        guard let child = context.node(for: DOMNode.ID(childID)),
+              case let .loaded(children) = child.children else {
+            return false
+        }
+        return children.first === grandchild
+    }
+    #expect(context.node(for: DOMNode.ID(grandchildID)) === grandchild)
 }
 
 @MainActor

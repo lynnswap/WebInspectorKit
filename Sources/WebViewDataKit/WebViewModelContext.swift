@@ -28,6 +28,7 @@ public final class WebViewModelContext {
     @ObservationIgnored private var currentPage: WebViewTarget?
     @ObservationIgnored private var startupTask: Task<Void, Never>?
     @ObservationIgnored private var documentReloadTask: Task<Void, Never>?
+    @ObservationIgnored private var inspectResolutionTask: Task<Void, Never>?
     @ObservationIgnored private var styleRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var styleRefreshGeneration: Int
     @ObservationIgnored private var eventTasks: [Task<Void, Never>]
@@ -49,6 +50,7 @@ public final class WebViewModelContext {
     @ObservationIgnored private var runtimeObjectIDsByProxyID: [Runtime.RemoteObject.ID: RuntimeObject.ID]
     @ObservationIgnored private var runtimeObjectOwnersByID: [RuntimeObject.ID: Set<RuntimeObjectOwner>]
     @ObservationIgnored private var nextRuntimeObjectOrdinal: Int
+    @ObservationIgnored private var pendingInspectedNodeID: DOMNode.ID?
     @ObservationIgnored private var consoleObjectGroupReleaseTask: Task<Void, Never>?
 
     public init(proxy: WebViewProxy) {
@@ -62,6 +64,7 @@ public final class WebViewModelContext {
         currentPage = nil
         startupTask = nil
         documentReloadTask = nil
+        inspectResolutionTask = nil
         styleRefreshTask = nil
         styleRefreshGeneration = 0
         eventTasks = []
@@ -83,12 +86,14 @@ public final class WebViewModelContext {
         runtimeObjectIDsByProxyID = [:]
         runtimeObjectOwnersByID = [:]
         nextRuntimeObjectOrdinal = 0
+        pendingInspectedNodeID = nil
         consoleObjectGroupReleaseTask = nil
     }
 
     deinit {
         startupTask?.cancel()
         documentReloadTask?.cancel()
+        inspectResolutionTask?.cancel()
         styleRefreshTask?.cancel()
         for task in eventTasks {
             task.cancel()
@@ -126,6 +131,9 @@ public final class WebViewModelContext {
     }
 
     public func select(_ node: DOMNode?) {
+        pendingInspectedNodeID = nil
+        inspectResolutionTask?.cancel()
+        inspectResolutionTask = nil
         selectedNode = node
         refreshSelectedStyles()
     }
@@ -357,6 +365,8 @@ public final class WebViewModelContext {
         startupTask = nil
         documentReloadTask?.cancel()
         documentReloadTask = nil
+        inspectResolutionTask?.cancel()
+        inspectResolutionTask = nil
         styleRefreshTask?.cancel()
         styleRefreshTask = nil
         styleRefreshGeneration += 1
@@ -366,6 +376,7 @@ public final class WebViewModelContext {
         eventTasks = []
         consoleObjectGroupReleaseTask?.cancel()
         consoleObjectGroupReleaseTask = nil
+        pendingInspectedNodeID = nil
         currentPage = nil
         teardownError = nil
         teardownError = await disableEnabledDomains()
@@ -605,6 +616,30 @@ public final class WebViewModelContext {
             }
         }
     }
+
+    private func requestInspectionSubtree(from rootNode: DOMNode) {
+        guard let currentPage else {
+            fail(.disconnected("WebViewDataKit has no current page target."))
+            return
+        }
+
+        inspectResolutionTask?.cancel()
+        inspectResolutionTask = Task { [weak self, currentPage, rootID = rootNode.id.proxyID] in
+            do {
+                try await currentPage.dom.requestChildNodes(rootID, depth: -1)
+            } catch is CancellationError {
+                return
+            } catch let error as WebViewProxyError {
+                self?.fail(error)
+            } catch {
+                self?.fail(.commandFailed(
+                    domain: "DOM",
+                    method: "requestChildNodes",
+                    message: String(describing: error)
+                ))
+            }
+        }
+    }
 }
 
 extension WebViewModelContext {
@@ -646,27 +681,43 @@ extension WebViewModelContext {
             }
             node.setNodeValue(value)
             markSelectedStylesNeedsRefresh(for: DOMNode.ID(id))
+        case let .inspect(id):
+            let inspectedNodeID = DOMNode.ID(id)
+            guard let node = nodesByID[inspectedNodeID] else {
+                pendingInspectedNodeID = inspectedNodeID
+                resolvePendingInspectedNode(requestSubtreeIfNeeded: true)
+                return
+            }
+            pendingInspectedNodeID = nil
+            inspectResolutionTask?.cancel()
+            inspectResolutionTask = nil
+            select(node)
         case .detachedRoot,
              .shadowRootPushed,
              .shadowRootPopped,
              .pseudoElementAdded,
              .pseudoElementRemoved,
-             .inspect,
              .unknown:
             break
         }
     }
 
     package func applyDocument(_ node: DOM.Node) {
-        rootNode = model(for: node)
+        var materializedPayloadIDs = Set<DOMNode.ID>()
+        collectMaterializedPayloadIDs(node, into: &materializedPayloadIDs)
+        rootNode = model(for: node, preserving: materializedPayloadIDs)
+        resolvePendingInspectedNode(requestSubtreeIfNeeded: true)
     }
 
     private func resetDOM() {
+        inspectResolutionTask?.cancel()
+        inspectResolutionTask = nil
         styleRefreshTask?.cancel()
         styleRefreshTask = nil
         styleRefreshGeneration += 1
         rootNode = nil
         selectedNode = nil
+        pendingInspectedNodeID = nil
         nodesByID = [:]
     }
 
@@ -675,7 +726,23 @@ extension WebViewModelContext {
             fail(.disconnected("DOM.setChildNodes referenced an unknown parent node."))
             return
         }
-        parentNode.setChildren(nodes.map { model(for: $0) })
+        let previousChildren: [DOMNode]
+        if case let .loaded(children) = parentNode.children {
+            previousChildren = children
+        } else {
+            previousChildren = []
+        }
+        var newSubtreeIDs = Set<DOMNode.ID>()
+        for node in nodes {
+            collectMaterializedPayloadIDs(node, into: &newSubtreeIDs)
+        }
+        let newChildren = nodes.map { model(for: $0, preserving: newSubtreeIDs) }
+        let newChildIDs = Set(newChildren.map(\.id))
+        for previousChild in previousChildren where newChildIDs.contains(previousChild.id) == false {
+            removeSubtreeFromIndex(previousChild, preserving: newSubtreeIDs)
+        }
+        parentNode.setChildren(newChildren)
+        resolvePendingInspectedNode(requestSubtreeIfNeeded: false)
     }
 
     private func applyChildNodeInserted(parent: DOM.Node.ID, previous: DOM.Node.ID?, node: DOM.Node) {
@@ -688,13 +755,16 @@ extension WebViewModelContext {
             parentNode.updateChildNodeCount(parentNode.childNodeCount + 1)
             return
         }
-        let inserted = model(for: node)
+        var materializedPayloadIDs = Set<DOMNode.ID>()
+        collectMaterializedPayloadIDs(node, into: &materializedPayloadIDs)
+        let inserted = model(for: node, preserving: materializedPayloadIDs)
         if let previous, let index = children.firstIndex(where: { $0.id == DOMNode.ID(previous) }) {
             children.insert(inserted, at: children.index(after: index))
         } else {
             children.insert(inserted, at: 0)
         }
         parentNode.setChildren(children)
+        resolvePendingInspectedNode(requestSubtreeIfNeeded: false)
     }
 
     private func applyChildNodeRemoved(parent: DOM.Node.ID, node: DOM.Node.ID) {
@@ -717,9 +787,10 @@ extension WebViewModelContext {
         parentNode.setChildren(children.filter { $0.id != removedID })
     }
 
-    private func removeSubtreeFromIndex(_ root: DOMNode) {
+    private func removeSubtreeFromIndex(_ root: DOMNode, preserving preservedIDs: Set<DOMNode.ID> = []) {
         var removedIDs = Set<DOMNode.ID>()
         collectSubtreeIDs(root, into: &removedIDs)
+        removedIDs.subtract(preservedIDs)
         for id in removedIDs {
             nodesByID[id] = nil
         }
@@ -741,22 +812,67 @@ extension WebViewModelContext {
         }
     }
 
-    private func model(for payload: DOM.Node) -> DOMNode {
+    private func collectMaterializedPayloadIDs(_ node: DOM.Node, into ids: inout Set<DOMNode.ID>) {
+        ids.insert(DOMNode.ID(node.id))
+        guard let children = node.children else {
+            return
+        }
+        for child in children {
+            collectMaterializedPayloadIDs(child, into: &ids)
+        }
+    }
+
+    private func model(for payload: DOM.Node, preserving materializedPayloadIDs: Set<DOMNode.ID>) -> DOMNode {
         let id = DOMNode.ID(payload.id)
         let node: DOMNode
+        let previousChildren: [DOMNode]
         if let existing = nodesByID[id] {
+            if case let .loaded(children) = existing.children {
+                previousChildren = children
+            } else {
+                previousChildren = []
+            }
             existing.update(from: payload)
             existing.modelContext = self
             node = existing
         } else {
+            previousChildren = []
             node = DOMNode(node: payload, modelContext: self)
             nodesByID[id] = node
         }
 
         if let children = payload.children {
-            node.setChildren(children.map { model(for: $0) })
+            let newChildren = children.map { model(for: $0, preserving: materializedPayloadIDs) }
+            let newChildIDs = Set(newChildren.map(\.id))
+            for previousChild in previousChildren where newChildIDs.contains(previousChild.id) == false {
+                removeSubtreeFromIndex(previousChild, preserving: materializedPayloadIDs)
+            }
+            node.setChildren(newChildren)
+        } else if payload.childNodeCount == 0 && previousChildren.isEmpty == false {
+            for previousChild in previousChildren {
+                removeSubtreeFromIndex(previousChild, preserving: materializedPayloadIDs)
+            }
+            node.setChildrenUnrequested(count: payload.childNodeCount)
+        } else {
+            node.updateChildNodeCount(payload.childNodeCount)
         }
         return node
+    }
+
+    private func resolvePendingInspectedNode(requestSubtreeIfNeeded: Bool) {
+        guard let pendingInspectedNodeID else {
+            return
+        }
+        guard let inspectedNode = nodesByID[pendingInspectedNodeID] else {
+            if requestSubtreeIfNeeded, let rootNode {
+                requestInspectionSubtree(from: rootNode)
+            }
+            return
+        }
+        self.pendingInspectedNodeID = nil
+        inspectResolutionTask?.cancel()
+        inspectResolutionTask = nil
+        select(inspectedNode)
     }
 }
 

@@ -64,6 +64,11 @@ public final class DOMNode: Identifiable {
         children = .loaded(nodes)
     }
 
+    package func setChildrenUnrequested(count: Int) {
+        childNodeCount = count
+        children = .unrequested(count: count)
+    }
+
     package func updateChildNodeCount(_ count: Int) {
         childNodeCount = count
         if case .unrequested = children {
