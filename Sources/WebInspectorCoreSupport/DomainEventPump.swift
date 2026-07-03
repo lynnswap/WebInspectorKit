@@ -22,13 +22,13 @@ package final class DomainEventPump {
         apply: @escaping @MainActor @Sendable (ProtocolEvent) async -> Void
     ) {
         stop()
-        task = Task { @MainActor [weak self] in
+        let target = DomainEventPumpTarget(pump: self, apply: apply)
+        task = Task.detached(priority: .userInitiated) {
             for await event in stream {
                 if Task.isCancelled {
                     break
                 }
-                await apply(event)
-                self?.markApplied(event.sequence)
+                await target.apply(event)
             }
         }
     }
@@ -53,7 +53,7 @@ package final class DomainEventPump {
         }
     }
 
-    private func markApplied(_ sequence: UInt64) {
+    fileprivate func markApplied(_ sequence: UInt64) {
         appliedSequence = max(appliedSequence, sequence)
         let readySequences = appliedSequenceWaiters.keys.filter { $0 <= appliedSequence }
         let readyWaiters = readySequences.flatMap { sequence in
@@ -70,5 +70,24 @@ package final class DomainEventPump {
         for waiter in waiters {
             waiter.resume(returning: value)
         }
+    }
+}
+
+private final class DomainEventPumpTarget: @unchecked Sendable {
+    private weak var pump: DomainEventPump?
+    private let applyEvent: @MainActor @Sendable (ProtocolEvent) async -> Void
+
+    @MainActor
+    init(
+        pump: DomainEventPump,
+        apply: @escaping @MainActor @Sendable (ProtocolEvent) async -> Void
+    ) {
+        self.pump = pump
+        applyEvent = apply
+    }
+
+    func apply(_ event: ProtocolEvent) async {
+        await applyEvent(event)
+        await pump?.markApplied(event.sequence)
     }
 }
