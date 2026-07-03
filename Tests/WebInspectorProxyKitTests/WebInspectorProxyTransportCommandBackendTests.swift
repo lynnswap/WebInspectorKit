@@ -175,6 +175,7 @@ func transportCommandBackendDecodesDOMDocumentResult() async throws {
     let child = try #require(document.children?.first)
     #expect(child.id == DOM.Node.ID("2"))
     #expect(child.attributes["lang"] == "en")
+    #expect(child.attributeList == [DOM.Attribute(name: "lang", value: "en")])
 }
 
 @Test

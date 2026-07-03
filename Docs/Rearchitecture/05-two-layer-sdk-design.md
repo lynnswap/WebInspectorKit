@@ -1047,13 +1047,15 @@ public struct RuntimeEvaluation {
 }
 ```
 
-Planned model extensions (not M3/M4 public API): `DOMNode.frameID`,
-`documentURL`, `baseURL`, shadow/pseudo/content-document projections,
-`DOMNode.highlight/remove/outerHTML`, request body storage, network wall-time,
-cached body size/type, response source, initiator, richer `NetworkBody`
-metadata, CSS property mutation, fetched-results phases/query mutation, and
-richer DOM transaction coverage for detached roots, shadow roots, pseudo
-elements, and content documents. Each extension must add its own owner,
+Implemented DOM projection expansion for the W4b tree-render cutover:
+`DOMNode.frameID`, `documentURL`, `baseURL`, ordered `attributeList`,
+shadow/pseudo/content-document/template projections, and the corresponding
+`DOMTreeSnapshot.Node` fields are binding surface. Planned model extensions
+still not public API: `DOMNode.highlight/remove/outerHTML`, request body
+storage, network wall-time, cached body size/type, response source, initiator,
+richer `NetworkBody` metadata, CSS property mutation, fetched-results
+phases/query mutation, detached-root registry, shadow/pseudo event mutation
+binding, and target-commit proof. Each extension must add its own owner,
 event-coverage row, and contract test before it becomes binding public surface.
 
 ### 4.3 Fetch, fetched results, tree controller
@@ -1202,10 +1204,33 @@ public struct DOMTreeSnapshot: Sendable, Hashable {
         public let localName: String
         public let nodeValue: String
         public let nodeType: Int
+        public let kind: DOMNode.Kind
+        public let frameID: FrameID?
+        public let documentURL: String?
+        public let baseURL: String?
         public let attributes: [String: String]
+        public let attributeList: [DOMNode.Attribute]
         public let childNodeCount: Int
         public let children: Children
+        public let contentDocumentID: DOMNode.ID?
+        public let shadowRootIDs: [DOMNode.ID]
+        public let templateContentID: DOMNode.ID?
+        public let beforePseudoElementID: DOMNode.ID?
+        public let otherPseudoElementIDs: [DOMNode.ID]
+        public let afterPseudoElementID: DOMNode.ID?
+        public let pseudoType: DOM.PseudoType?
+        public let shadowRootType: DOM.ShadowRootType?
     }
+
+    public struct VisibleChildren: Sendable, Hashable {
+        public let nodeIDs: [DOMNode.ID]
+        public let hasUnloadedChildren: Bool
+        public let hasRenderableChildren: Bool
+    }
+
+    public func visibleChildren(of id: DOMNode.ID) -> VisibleChildren
+    public func displayRootIDs() -> [DOMNode.ID]
+    public func isTemplateContent(_ id: DOMNode.ID) -> Bool
 }
 
 public struct DOMTreeTransaction: Sendable, Hashable {

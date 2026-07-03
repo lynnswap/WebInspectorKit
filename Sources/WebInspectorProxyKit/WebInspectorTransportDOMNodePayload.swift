@@ -72,6 +72,7 @@ final class WebInspectorTransportDOMNodePayload: Decodable {
             documentURL: documentURL,
             baseURL: baseURL,
             attributes: try attributeDictionary(),
+            attributeList: try attributeList(),
             childNodeCount: childNodeCount ?? 0,
             children: try children?.map { try $0.proxyNode() },
             contentDocument: try contentDocument?.proxyNode(),
@@ -86,8 +87,12 @@ final class WebInspectorTransportDOMNodePayload: Decodable {
     }
 
     private func attributeDictionary() throws -> [String: String] {
+        Dictionary(uniqueKeysWithValues: try attributeList().map { ($0.name, $0.value) })
+    }
+
+    private func attributeList() throws -> [DOM.Attribute] {
         guard let attributes else {
-            return [:]
+            return []
         }
         guard attributes.count.isMultiple(of: 2) else {
             throw DecodingError.dataCorrupted(.init(
@@ -95,10 +100,10 @@ final class WebInspectorTransportDOMNodePayload: Decodable {
                 debugDescription: "DOM.Node attributes must be an even flat name/value array."
             ))
         }
-        var result: [String: String] = [:]
+        var result: [DOM.Attribute] = []
         result.reserveCapacity(attributes.count / 2)
         for index in stride(from: 0, to: attributes.count, by: 2) {
-            result[attributes[index]] = attributes[index + 1]
+            result.append(DOM.Attribute(name: attributes[index], value: attributes[index + 1]))
         }
         return result
     }

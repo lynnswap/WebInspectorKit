@@ -1051,6 +1051,9 @@ extension WebInspectorContext {
 
     private func collectSubtreeIDs(_ node: DOMNode, into ids: inout Set<DOMNode.ID>) {
         ids.insert(node.id)
+        for associatedRoot in node.associatedSubtreeRoots() {
+            collectSubtreeIDs(associatedRoot, into: &ids)
+        }
         guard case let .loaded(children) = node.children else {
             return
         }
@@ -1061,10 +1064,10 @@ extension WebInspectorContext {
 
     private func collectMaterializedPayloadIDs(_ node: DOM.Node, into ids: inout Set<DOMNode.ID>) {
         ids.insert(DOMNode.ID(node.id))
-        guard let children = node.children else {
-            return
+        for associatedNode in associatedPayloadNodes(for: node) {
+            collectMaterializedPayloadIDs(associatedNode, into: &ids)
         }
-        for child in children {
+        for child in node.children ?? [] {
             collectMaterializedPayloadIDs(child, into: &ids)
         }
     }
@@ -1073,19 +1076,41 @@ extension WebInspectorContext {
         let id = DOMNode.ID(payload.id)
         let node: DOMNode
         let previousChildren: [DOMNode]
+        let previousAssociatedRoots: [DOMNode]
         if let existing = nodesByID[id] {
             if case let .loaded(children) = existing.children {
                 previousChildren = children
             } else {
                 previousChildren = []
             }
+            previousAssociatedRoots = existing.associatedSubtreeRoots()
             existing.update(from: payload)
             existing.setModelContext(self)
             node = existing
         } else {
             previousChildren = []
+            previousAssociatedRoots = []
             node = DOMNode(node: payload, modelContext: self)
             nodesByID[id] = node
+        }
+
+        let contentDocument = payload.contentDocument.map { model(for: $0, preserving: materializedPayloadIDs) }
+        let shadowRoots = payload.shadowRoots.map { model(for: $0, preserving: materializedPayloadIDs) }
+        let templateContent = payload.templateContent.map { model(for: $0, preserving: materializedPayloadIDs) }
+        let beforePseudoElement = payload.beforePseudoElement.map { model(for: $0, preserving: materializedPayloadIDs) }
+        let otherPseudoElements = payload.otherPseudoElements.map { model(for: $0, preserving: materializedPayloadIDs) }
+        let afterPseudoElement = payload.afterPseudoElement.map { model(for: $0, preserving: materializedPayloadIDs) }
+        node.setAssociatedNodes(
+            contentDocument: contentDocument,
+            shadowRoots: shadowRoots,
+            templateContent: templateContent,
+            beforePseudoElement: beforePseudoElement,
+            otherPseudoElements: otherPseudoElements,
+            afterPseudoElement: afterPseudoElement
+        )
+        let associatedIDs = Set(node.associatedSubtreeRoots().map(\.id))
+        for previousRoot in previousAssociatedRoots where associatedIDs.contains(previousRoot.id) == false {
+            removeSubtreeFromIndex(previousRoot, preserving: materializedPayloadIDs)
         }
 
         if let children = payload.children {
@@ -1104,6 +1129,17 @@ extension WebInspectorContext {
             node.updateChildNodeCount(payload.childNodeCount)
         }
         return node
+    }
+
+    private func associatedPayloadNodes(for node: DOM.Node) -> [DOM.Node] {
+        [node.contentDocument]
+            .compactMap { $0 }
+            + node.shadowRoots
+            + [node.templateContent, node.beforePseudoElement]
+            .compactMap { $0 }
+            + node.otherPseudoElements
+            + [node.afterPseudoElement]
+            .compactMap { $0 }
     }
 
     private func resolvePendingInspectedNode(

@@ -15,6 +15,7 @@ public enum WebInspectorProxyTestFixtures {
         documentURL: String? = nil,
         baseURL: String? = nil,
         attributes: [String: String] = [:],
+        attributeList: [DOM.Attribute]? = nil,
         childNodeCount: Int = 0,
         children: [DOM.Node]? = nil
     ) -> DOM.Node {
@@ -27,6 +28,7 @@ public enum WebInspectorProxyTestFixtures {
             documentURL: documentURL,
             baseURL: baseURL,
             attributes: attributes,
+            attributeList: attributeList,
             childNodeCount: childNodeCount,
             children: children
         )

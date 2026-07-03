@@ -1,4 +1,5 @@
 import Foundation
+import WebInspectorProxyKit
 
 public struct DOMTreeSnapshot: Hashable, Sendable {
     public struct Node: Hashable, Identifiable, Sendable {
@@ -12,9 +13,38 @@ public struct DOMTreeSnapshot: Hashable, Sendable {
         public let localName: String
         public let nodeValue: String
         public let nodeType: Int
+        public let kind: DOMNode.Kind
+        public let frameID: FrameID?
+        public let documentURL: String?
+        public let baseURL: String?
         public let attributes: [String: String]
+        public let attributeList: [DOMNode.Attribute]
         public let childNodeCount: Int
         public let children: Children
+        public let contentDocumentID: DOMNode.ID?
+        public let shadowRootIDs: [DOMNode.ID]
+        public let templateContentID: DOMNode.ID?
+        public let beforePseudoElementID: DOMNode.ID?
+        public let otherPseudoElementIDs: [DOMNode.ID]
+        public let afterPseudoElementID: DOMNode.ID?
+        public let pseudoType: DOM.PseudoType?
+        public let shadowRootType: DOM.ShadowRootType?
+
+        public var displayName: String {
+            if !localName.isEmpty {
+                return localName
+            }
+            if !nodeName.isEmpty {
+                return nodeName
+            }
+            return nodeValue.isEmpty ? nodeName : nodeValue
+        }
+    }
+
+    public struct VisibleChildren: Hashable, Sendable {
+        public let nodeIDs: [DOMNode.ID]
+        public let hasUnloadedChildren: Bool
+        public let hasRenderableChildren: Bool
     }
 
     public let revision: UInt64
@@ -32,6 +62,55 @@ public struct DOMTreeSnapshot: Hashable, Sendable {
             return []
         }
         return children
+    }
+
+    public func visibleChildren(of id: DOMNode.ID) -> VisibleChildren {
+        guard let node = nodesByID[id] else {
+            return VisibleChildren(nodeIDs: [], hasUnloadedChildren: false, hasRenderableChildren: false)
+        }
+
+        var children: [DOMNode.ID] = []
+        if let templateContentID = node.templateContentID {
+            children.append(templateContentID)
+        }
+        if let beforePseudoElementID = node.beforePseudoElementID {
+            children.append(beforePseudoElementID)
+        }
+        children.append(contentsOf: node.otherPseudoElementIDs)
+        if let contentDocumentID = node.contentDocumentID {
+            children.append(contentDocumentID)
+        } else {
+            children.append(contentsOf: node.shadowRootIDs)
+            children.append(contentsOf: self.children(of: id))
+        }
+        if let afterPseudoElementID = node.afterPseudoElementID {
+            children.append(afterPseudoElementID)
+        }
+
+        return VisibleChildren(
+            nodeIDs: children,
+            hasUnloadedChildren: node.hasUnloadedRegularChildren,
+            hasRenderableChildren: !children.isEmpty || node.childNodeCount > 0
+        )
+    }
+
+    public func displayRootIDs() -> [DOMNode.ID] {
+        guard let rootNodeID,
+              let rootNode = nodesByID[rootNodeID] else {
+            return []
+        }
+        if rootNode.kind == .document {
+            return visibleChildren(of: rootNodeID).nodeIDs
+        }
+        return [rootNodeID]
+    }
+
+    public func isTemplateContent(_ id: DOMNode.ID) -> Bool {
+        guard let parentID = parentByNodeID[id],
+              let parent = nodesByID[parentID] else {
+            return false
+        }
+        return parent.templateContentID == id
     }
 
     public func parent(of id: DOMNode.ID) -> DOMNode.ID? {
@@ -177,17 +256,42 @@ final class DOMTreeState {
             localName: node.localName,
             nodeValue: node.nodeValue,
             nodeType: node.nodeType,
+            kind: node.kind,
+            frameID: node.frameID,
+            documentURL: node.documentURL,
+            baseURL: node.baseURL,
             attributes: node.attributes,
+            attributeList: node.attributeList,
             childNodeCount: node.childNodeCount,
-            children: children
+            children: children,
+            contentDocumentID: node.contentDocument?.id,
+            shadowRootIDs: node.shadowRoots.map(\.id),
+            templateContentID: node.templateContent?.id,
+            beforePseudoElementID: node.beforePseudoElement?.id,
+            otherPseudoElementIDs: node.otherPseudoElements.map(\.id),
+            afterPseudoElementID: node.afterPseudoElement?.id,
+            pseudoType: node.pseudoType,
+            shadowRootType: node.shadowRootType
         )
 
+        for child in node.associatedSubtreeRoots() {
+            collectSnapshotNodes(child, parentID: node.id, nodesByID: &nodesByID, parentByNodeID: &parentByNodeID)
+        }
         guard case let .loaded(childNodes) = node.children else {
             return
         }
         for child in childNodes {
             collectSnapshotNodes(child, parentID: node.id, nodesByID: &nodesByID, parentByNodeID: &parentByNodeID)
         }
+    }
+}
+
+extension DOMTreeSnapshot.Node {
+    var hasUnloadedRegularChildren: Bool {
+        if case let .unrequested(count) = children {
+            return count > 0
+        }
+        return false
     }
 }
 

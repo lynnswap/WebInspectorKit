@@ -1,6 +1,16 @@
 import Foundation
 
 public enum DOM {
+    public struct Attribute: Hashable, Sendable {
+        public let name: String
+        public let value: String
+
+        public init(name: String, value: String) {
+            self.name = name
+            self.value = value
+        }
+    }
+
     public struct Client: Sendable {
         package let context: DomainClientContext
 
@@ -182,6 +192,7 @@ public enum DOM {
         public let documentURL: String?
         public let baseURL: String?
         public var attributes: [String: String]
+        public var attributeList: [DOM.Attribute]
         public var childNodeCount: Int
         public var children: [Node]?
         public var contentDocument: Node? { recursiveFields.contentDocument }
@@ -206,6 +217,7 @@ public enum DOM {
             documentURL: String? = nil,
             baseURL: String? = nil,
             attributes: [String: String] = [:],
+            attributeList: [DOM.Attribute]? = nil,
             childNodeCount: Int = 0,
             children: [Node]? = nil,
             contentDocument: Node? = nil,
@@ -226,6 +238,7 @@ public enum DOM {
             self.documentURL = documentURL
             self.baseURL = baseURL
             self.attributes = attributes
+            self.attributeList = attributeList ?? attributes.map { DOM.Attribute(name: $0.key, value: $0.value) }
             self.childNodeCount = childNodeCount
             self.children = children
             self.shadowRoots = shadowRoots
@@ -263,13 +276,13 @@ public enum DOM {
         }
     }
 
-    public enum PseudoType: Sendable {
+    public enum PseudoType: Hashable, Sendable {
         case before
         case after
         case other(String)
     }
 
-    public enum ShadowRootType: Sendable {
+    public enum ShadowRootType: Hashable, Sendable {
         case open
         case closed
         case userAgent

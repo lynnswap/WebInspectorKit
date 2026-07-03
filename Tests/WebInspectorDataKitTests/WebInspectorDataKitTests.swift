@@ -864,6 +864,132 @@ func domTreeControllerPublishesCurrentSnapshotAndChildTransactions() async throw
 
 @MainActor
 @Test
+func domTreeControllerSnapshotIncludesRecursiveDOMAssociations() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let documentID = DOM.Node.ID("document")
+    let iframeID = DOM.Node.ID("iframe")
+    let frameDocumentID = DOM.Node.ID("frame-document")
+    let frameBodyID = DOM.Node.ID("frame-body")
+    let templateHostID = DOM.Node.ID("template-host")
+    let templateContentID = DOM.Node.ID("template-content")
+    let shadowHostID = DOM.Node.ID("shadow-host")
+    let beforePseudoID = DOM.Node.ID("before-pseudo")
+    let shadowRootID = DOM.Node.ID("shadow-root")
+    let shadowSpanID = DOM.Node.ID("shadow-span")
+    let afterPseudoID = DOM.Node.ID("after-pseudo")
+    let ignoredIframeChildID = DOM.Node.ID("ignored-iframe-child")
+
+    let (_, context) = try await startContext(
+        runtime: runtime,
+        document: DOM.Node(
+            id: documentID,
+            nodeType: 9,
+            nodeName: "#document",
+            children: [
+                DOM.Node(
+                    id: iframeID,
+                    nodeType: 1,
+                    nodeName: "IFRAME",
+                    localName: "iframe",
+                    frameID: FrameID("child-frame"),
+                    documentURL: "https://example.test/frame",
+                    baseURL: "https://example.test/",
+                    attributes: ["data-second": "2", "src": "/frame"],
+                    attributeList: [
+                        DOM.Attribute(name: "src", value: "/frame"),
+                        DOM.Attribute(name: "data-second", value: "2"),
+                    ],
+                    children: [
+                        DOM.Node(id: ignoredIframeChildID, nodeType: 1, nodeName: "SPAN", localName: "span")
+                    ],
+                    contentDocument: DOM.Node(
+                        id: frameDocumentID,
+                        nodeType: 9,
+                        nodeName: "#document",
+                        children: [
+                            DOM.Node(id: frameBodyID, nodeType: 1, nodeName: "BODY", localName: "body")
+                        ]
+                    )
+                ),
+                DOM.Node(
+                    id: templateHostID,
+                    nodeType: 1,
+                    nodeName: "TEMPLATE",
+                    localName: "template",
+                    templateContent: DOM.Node(
+                        id: templateContentID,
+                        nodeType: 11,
+                        nodeName: "#document-fragment"
+                    )
+                ),
+                DOM.Node(
+                    id: shadowHostID,
+                    nodeType: 1,
+                    nodeName: "DIV",
+                    localName: "div",
+                    shadowRoots: [
+                        DOM.Node(
+                            id: shadowRootID,
+                            nodeType: 11,
+                            nodeName: "#shadow-root",
+                            children: [
+                                DOM.Node(id: shadowSpanID, nodeType: 1, nodeName: "SPAN", localName: "span")
+                            ],
+                            shadowRootType: .open
+                        )
+                    ],
+                    beforePseudoElement: DOM.Node(
+                        id: beforePseudoID,
+                        nodeType: 1,
+                        nodeName: "::before",
+                        pseudoType: .before
+                    ),
+                    afterPseudoElement: DOM.Node(
+                        id: afterPseudoID,
+                        nodeType: 1,
+                        nodeName: "::after",
+                        pseudoType: .after
+                    )
+                ),
+            ]
+        )
+    )
+
+    let controller = try await context.treeController()
+    let snapshot = controller.snapshot
+    let document = try #require(context.rootNode)
+    let iframe = try #require(snapshot.node(for: DOMNode.ID(iframeID)))
+    let templateContent = try #require(snapshot.node(for: DOMNode.ID(templateContentID)))
+    let shadowRoot = try #require(snapshot.node(for: DOMNode.ID(shadowRootID)))
+
+    #expect(snapshot.displayRootIDs() == [DOMNode.ID(iframeID), DOMNode.ID(templateHostID), DOMNode.ID(shadowHostID)])
+    #expect(snapshot.visibleChildren(of: DOMNode.ID(iframeID)).nodeIDs == [DOMNode.ID(frameDocumentID)])
+    #expect(snapshot.visibleChildren(of: DOMNode.ID(templateHostID)).nodeIDs == [DOMNode.ID(templateContentID)])
+    #expect(snapshot.visibleChildren(of: DOMNode.ID(shadowHostID)).nodeIDs == [
+        DOMNode.ID(beforePseudoID),
+        DOMNode.ID(shadowRootID),
+        DOMNode.ID(afterPseudoID),
+    ])
+    #expect(snapshot.visibleChildren(of: DOMNode.ID(shadowRootID)).nodeIDs == [DOMNode.ID(shadowSpanID)])
+    #expect(snapshot.children(of: DOMNode.ID(iframeID)) == [DOMNode.ID(ignoredIframeChildID)])
+    #expect(snapshot.parent(of: DOMNode.ID(frameDocumentID)) == DOMNode.ID(iframeID))
+    #expect(snapshot.parent(of: DOMNode.ID(templateContentID)) == DOMNode.ID(templateHostID))
+    #expect(snapshot.parent(of: DOMNode.ID(beforePseudoID)) == DOMNode.ID(shadowHostID))
+    #expect(snapshot.isTemplateContent(DOMNode.ID(templateContentID)))
+    #expect(iframe.kind == DOMNode.Kind.element)
+    #expect(iframe.frameID == FrameID("child-frame"))
+    #expect(iframe.documentURL == "https://example.test/frame")
+    #expect(iframe.baseURL == "https://example.test/")
+    #expect(iframe.attributes["src"] == "/frame")
+    #expect(iframe.attributeList.map(\.name) == ["src", "data-second"])
+    #expect(iframe.contentDocumentID == DOMNode.ID(frameDocumentID))
+    #expect(templateContent.kind == DOMNode.Kind.documentFragment)
+    #expect(shadowRoot.shadowRootType == DOM.ShadowRootType.open)
+    #expect(document.contentDocument == nil)
+}
+
+@MainActor
+@Test
 func domTreeControllerPublishesSelectionTransactionsWithoutOwningExpansion() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(

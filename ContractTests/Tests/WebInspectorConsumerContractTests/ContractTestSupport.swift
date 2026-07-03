@@ -245,7 +245,11 @@ actor ContractDataKitActor {
                     nodeType: 1,
                     nodeName: "MAIN",
                     localName: "main",
-                    attributes: ["data-contract": "dom"]
+                    attributes: ["data-second": "2", "data-contract": "dom"],
+                    attributeList: [
+                        DOM.Attribute(name: "data-contract", value: "dom"),
+                        DOM.Attribute(name: "data-second", value: "2"),
+                    ]
                 ),
             ]),
             target: target
@@ -265,6 +269,7 @@ actor ContractDataKitActor {
         }
         let child = try #require(children.first)
         #expect(context.node(for: child.id) === child)
+        #expect(child.attributeList.map(\.name) == ["data-contract", "data-second"])
 
         let request = WebInspectorProxyTestFixtures.networkRequest(
             id: "contract-request",
