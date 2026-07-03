@@ -34,9 +34,19 @@
             skipped = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "WebInspectorCoreTests"
-               BuildableName = "WebInspectorCoreTests"
-               BlueprintName = "WebInspectorCoreTests"
+               BlueprintIdentifier = "WebInspectorProxyKitTests"
+               BuildableName = "WebInspectorProxyKitTests"
+               BlueprintName = "WebInspectorProxyKitTests"
+               ReferencedContainer = "container:">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "WebInspectorDataKitTests"
+               BuildableName = "WebInspectorDataKitTests"
+               BlueprintName = "WebInspectorDataKitTests"
                ReferencedContainer = "container:">
             </BuildableReference>
          </TestableReference>
@@ -74,9 +84,9 @@
             skipped = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "WebInspectorRuntimeTests"
-               BuildableName = "WebInspectorRuntimeTests"
-               BlueprintName = "WebInspectorRuntimeTests"
+               BlueprintIdentifier = "WebInspectorNativeTransportTests"
+               BuildableName = "WebInspectorNativeTransportTests"
+               BlueprintName = "WebInspectorNativeTransportTests"
                ReferencedContainer = "container:">
             </BuildableReference>
          </TestableReference>
