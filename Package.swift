@@ -167,6 +167,8 @@ let package = Package(
             name: "WebInspectorUIDOM",
             dependencies: [
                 "WebInspectorCore",
+                "WebInspectorDataKit",
+                "WebInspectorProxyKit",
                 "WebInspectorTransport",
                 "WebInspectorUIBase",
                 .product(name: "ObservationBridge", package: "ObservationBridge"),

@@ -1,7 +1,8 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
 import Foundation
-import WebInspectorCore
+import WebInspectorDataKit
+import WebInspectorProxyKit
 
 extension DOMTreeTextView {
     @MainActor
@@ -174,12 +175,12 @@ extension DOMTreeTextView {
 extension DOMTreeTextView {
     @MainActor
     final class RowRenderBuilder {
-        private let dom: DOMSession
+        private let treeController: DOMTreeController
         private let expansionState: DOMTreeTextView.ExpansionState
         private var markupCache: [DOMTreeTextView.MarkupCacheKey: DOMTreeTextView.CachedMarkup] = [:]
 
-        init(dom: DOMSession, expansionState: DOMTreeTextView.ExpansionState) {
-            self.dom = dom
+        init(treeController: DOMTreeController, expansionState: DOMTreeTextView.ExpansionState) {
+            self.treeController = treeController
             self.expansionState = expansionState
         }
 
@@ -197,7 +198,7 @@ extension DOMTreeTextView {
         ) -> DOMTreeTextView.RowRenderBuildRequest {
             let expansionSnapshot = expansionState.snapshot
             return DOMTreeTextView.RowRenderBuildRequest(
-                snapshot: dom.domTreeRenderSnapshot(),
+                snapshot: treeController.snapshot,
                 expansionState: expansionSnapshot,
                 previousRowCapacity: previousRowCapacity,
                 previousTextCapacity: previousTextCapacity,
@@ -249,16 +250,16 @@ extension DOMTreeTextView {
         let regularChildKnownCount: Int
         let isTemplateContent: Bool
 
-        init(node: DOMTreeRenderNodeSnapshot, isTemplateContent: Bool) {
+        init(node: DOMTreeSnapshot.Node, isTemplateContent: Bool) {
             id = node.id
-            nodeType = node.nodeType
+            nodeType = node.kind
             nodeName = node.nodeName
             localName = node.localName
             nodeValue = node.nodeValue
-            attributes = node.attributes
-            pseudoType = node.pseudoType
-            shadowRootType = node.shadowRootType
-            regularChildKnownCount = node.regularChildKnownCount
+            attributes = node.attributeList
+            pseudoType = node.pseudoType?.domTreeDisplayName
+            shadowRootType = node.shadowRootType?.domTreeDisplayName
+            regularChildKnownCount = node.childNodeCount
             self.isTemplateContent = isTemplateContent
         }
 
@@ -282,14 +283,14 @@ extension DOMTreeTextView {
     }
 
     struct RowRenderBuildRequest: Sendable {
-        let snapshot: DOMTreeRenderSnapshot
+        let snapshot: DOMTreeSnapshot
         let expansionState: [DOMNode.ID: Bool]
         let previousRowCapacity: Int
         let previousTextCapacity: Int
         let markupCache: [DOMTreeTextView.MarkupCacheKey: DOMTreeTextView.CachedMarkup]
 
         init(
-            snapshot: DOMTreeRenderSnapshot,
+            snapshot: DOMTreeSnapshot,
             expansionState: [DOMNode.ID: Bool],
             previousRowCapacity: Int,
             previousTextCapacity: Int,
@@ -303,7 +304,7 @@ extension DOMTreeTextView {
         }
 
         var treeRevision: UInt64 {
-            snapshot.treeRevision
+            snapshot.revision
         }
 
         func isNodeOpen(nodeID: DOMNode.ID, displayName: String) -> Bool {
@@ -352,7 +353,7 @@ extension DOMTreeTextView {
             }
 
             var visitedNodeIDs: Set<DOMNode.ID> = [nodeID]
-            var parentID = node.parentID
+            var parentID = snapshot.parent(of: nodeID)
             while let currentParentID = parentID {
                 guard visitedNodeIDs.insert(currentParentID).inserted,
                       let parent = snapshot.node(for: currentParentID),
@@ -362,7 +363,7 @@ extension DOMTreeTextView {
                 if displayRootIDs.contains(currentParentID) {
                     return true
                 }
-                parentID = parent.parentID
+                parentID = snapshot.parent(of: currentParentID)
             }
             return false
         }
@@ -479,7 +480,7 @@ extension DOMTreeTextView {
                       let node = request.snapshot.node(for: nodeID) else {
                     return
                 }
-                let visibleChildren = request.snapshot.visibleChildrenProjection(of: nodeID)
+                let visibleChildren = request.snapshot.visibleChildren(of: nodeID)
                 let renderNode = DOMTreeTextView.RowRenderNode(
                     node: node,
                     isTemplateContent: request.snapshot.isTemplateContent(nodeID)
@@ -500,7 +501,7 @@ extension DOMTreeTextView {
                 guard hasDisclosure, isOpen else {
                     return
                 }
-                for childID in visibleChildren.children {
+                for childID in visibleChildren.nodeIDs {
                     try collect(childID, depth: depth + 1)
                 }
                 guard DOMTreeTextView.MarkupBuilder.rendersClosingTagRow(for: renderNode) else {
@@ -618,6 +619,34 @@ extension DOMTreeTextView {
             )
             renderedLinePrefixCache[depth] = prefix
             return prefix
+        }
+    }
+}
+
+private extension DOM.PseudoType {
+    var domTreeDisplayName: String {
+        switch self {
+        case .before:
+            return "before"
+        case .after:
+            return "after"
+        case let .other(value):
+            return value
+        }
+    }
+}
+
+private extension DOM.ShadowRootType {
+    var domTreeDisplayName: String {
+        switch self {
+        case .open:
+            return "open"
+        case .closed:
+            return "closed"
+        case .userAgent:
+            return "user-agent"
+        case let .other(value):
+            return value
         }
     }
 }

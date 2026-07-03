@@ -1,12 +1,8 @@
 #if canImport(UIKit)
 import Testing
-import WebInspectorTransport
 import UIKit
-@testable import WebInspectorCore
-@testable import WebInspectorCoreConsoleNetwork
-@testable import WebInspectorCoreDOMCSS
-@testable import WebInspectorCoreRuntime
-@testable import WebInspectorCoreSupport
+@testable import WebInspectorDataKit
+@testable import WebInspectorProxyKit
 @testable import WebInspectorUI
 @testable import WebInspectorUISyntaxBody
 @testable import WebInspectorUINetwork
@@ -19,7 +15,7 @@ struct DOMTreeMenuModelTests {
     func singleNodeSelectionEnablesTextAndNodeActions() throws {
         let fixture = try makeMenuFixture()
         let model = DOMTreeMenuModel(
-            dom: fixture.session,
+            context: fixture.context,
             copyNodeTextAction: { _, kind in
                 switch kind {
                 case .html:
@@ -54,7 +50,7 @@ struct DOMTreeMenuModelTests {
     func singleNodeSelectionDisablesDeleteWhenHandlerIsMissing() throws {
         let fixture = try makeMenuFixture()
         let model = DOMTreeMenuModel(
-            dom: fixture.session,
+            context: fixture.context,
             copyNodeTextAction: nil,
             deleteNodesAction: nil
         )
@@ -79,7 +75,7 @@ struct DOMTreeMenuModelTests {
     func multiNodeSelectionUsesSharedHTMLCopyAndMultiDeleteState() throws {
         let fixture = try makeMenuFixture()
         let model = DOMTreeMenuModel(
-            dom: fixture.session,
+            context: fixture.context,
             copyNodeTextAction: { _, kind in
                 kind == .html ? "<node></node>" : nil
             },
@@ -110,7 +106,7 @@ struct DOMTreeMenuModelTests {
         let fixture = try makeMenuFixture()
         var clearCount = 0
         let failingModel = DOMTreeMenuModel(
-            dom: fixture.session,
+            context: fixture.context,
             copyNodeTextAction: nil,
             deleteNodesAction: { _, _ in false }
         )
@@ -131,7 +127,7 @@ struct DOMTreeMenuModelTests {
 
         var deletedNodeIDs: [DOMNode.ID] = []
         let successfulModel = DOMTreeMenuModel(
-            dom: fixture.session,
+            context: fixture.context,
             copyNodeTextAction: nil,
             deleteNodesAction: { nodeIDs, _ in
                 deletedNodeIDs = nodeIDs
@@ -157,74 +153,70 @@ struct DOMTreeMenuModelTests {
 }
 
 private struct DOMTreeMenuModelFixture {
-    var session: DOMSession
+    var context: WebInspectorContext
     var divID: DOMNode.ID
     var inputID: DOMNode.ID
 }
 
 @MainActor
 private func makeMenuFixture() throws -> DOMTreeMenuModelFixture {
-    let targetID = ProtocolTarget.ID("page-main")
-    let session = DOMSession()
-    session.applyTargetCreated(
-        ProtocolTarget.Record(
-            id: targetID,
-            kind: .page,
-            frameID: DOMFrame.ID("main-frame")
-        ),
-        makeCurrentMainPage: true
-    )
-    _ = session.replaceDocumentRoot(menuFixtureDocument(), targetID: targetID)
-
-    let divID = try #require(
-        session.snapshot().currentNodeIDByKey[DOMNode.CurrentKey(targetID: targetID, nodeID: .init(7))]
-    )
-    let inputID = try #require(
-        session.snapshot().currentNodeIDByKey[DOMNode.CurrentKey(targetID: targetID, nodeID: .init(12))]
-    )
-    return DOMTreeMenuModelFixture(session: session, divID: divID, inputID: inputID)
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    context.seedDOMDocument(menuFixtureDocument())
+    let divID = DOMNode.ID(DOM.Node.ID("div"))
+    let inputID = DOMNode.ID(DOM.Node.ID("input"))
+    _ = try #require(context.node(for: divID))
+    _ = try #require(context.node(for: inputID))
+    return DOMTreeMenuModelFixture(context: context, divID: divID, inputID: inputID)
 }
 
-private func menuFixtureDocument() -> DOMNode.Payload {
-    DOMNode.Payload(
-        nodeID: .init(1),
-        nodeType: .document,
+private func menuFixtureDocument() -> DOM.Node {
+    DOM.Node(
+        id: .init("document"),
+        nodeType: 9,
         nodeName: "#document",
-        regularChildren: .loaded([
-            DOMNode.Payload(
-                nodeID: .init(3),
-                nodeType: .element,
+        childNodeCount: 1,
+        children: [
+            DOM.Node(
+                id: .init("html"),
+                nodeType: 1,
                 nodeName: "HTML",
                 localName: "html",
-                regularChildren: .loaded([
-                    DOMNode.Payload(
-                        nodeID: .init(6),
-                        nodeType: .element,
+                childNodeCount: 1,
+                children: [
+                    DOM.Node(
+                        id: .init("body"),
+                        nodeType: 1,
                         nodeName: "BODY",
                         localName: "body",
-                        regularChildren: .loaded([
-                            DOMNode.Payload(
-                                nodeID: .init(7),
-                                nodeType: .element,
+                        childNodeCount: 2,
+                        children: [
+                            DOM.Node(
+                                id: .init("div"),
+                                nodeType: 1,
                                 nodeName: "DIV",
                                 localName: "div",
                                 attributes: [
-                                    DOMNode.Attribute(name: "id", value: "start-of-content"),
-                                    DOMNode.Attribute(name: "data-testid", value: "cellInnerDiv"),
+                                    "id": "start-of-content",
+                                    "data-testid": "cellInnerDiv",
+                                ],
+                                attributeList: [
+                                    DOM.Attribute(name: "id", value: "start-of-content"),
+                                    DOM.Attribute(name: "data-testid", value: "cellInnerDiv"),
                                 ]
                             ),
-                            DOMNode.Payload(
-                                nodeID: .init(12),
-                                nodeType: .element,
+                            DOM.Node(
+                                id: .init("input"),
+                                nodeType: 1,
                                 nodeName: "INPUT",
                                 localName: "input",
-                                attributes: [DOMNode.Attribute(name: "disabled", value: "")]
+                                attributes: ["disabled": ""],
+                                attributeList: [DOM.Attribute(name: "disabled", value: "")]
                             ),
-                        ])
+                        ]
                     ),
-                ])
+                ]
             ),
-        ])
+        ]
     )
 }
 #endif

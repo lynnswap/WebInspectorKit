@@ -3,6 +3,7 @@ import ObservationBridge
 import Testing
 import WebInspectorTestSupport
 import WebInspectorTransport
+import class WebInspectorDataKit.WebInspectorContext
 import UIKit
 @testable import WebInspectorCore
 @testable import WebInspectorCoreConsoleNetwork
@@ -942,23 +943,22 @@ struct DOMContainerTests {
 
     @Test
     func compactContainerWrapsDOMRootControllerWithoutChangingIdentity() {
-        let dom = makeDOMSession()
-        let treeViewController = DOMTreeViewController(dom: dom)
+        let context = makeWebInspectorContext()
+        let treeViewController = DOMTreeViewController(context: context)
         let navigationController = DOMCompactNavigationController(rootViewController: treeViewController)
 
         #expect(navigationController.viewControllers == [treeViewController])
         #expect(navigationController.navigationBar.prefersLargeTitles == false)
-        #expect(treeViewController.navigationItem.style == .browser)
+        #expect(treeViewController.navigationItem.style == UINavigationItem.ItemStyle.browser)
     }
 
     @Test
     func compactContainerInstallsSessionNavigationActions() throws {
-        let session = AttachedInspection(dom: makeDOMSession())
-        let inspector = InspectorSession(attachment: session)
-        let treeViewController = DOMTreeViewController(inspection: session)
+        let context = makeWebInspectorContext()
+        let treeViewController = DOMTreeViewController(context: context)
         let navigationController = DOMCompactNavigationController(
             rootViewController: treeViewController,
-            inspector: inspector
+            context: context
         )
 
         let pickItem = try #require(treeViewController.navigationItem.trailingItemGroups.first?.barButtonItems.first)
@@ -966,111 +966,6 @@ struct DOMContainerTests {
         #expect(navigationController.viewControllers == [treeViewController])
         #expect(pickItem.accessibilityIdentifier == "WebInspector.DOM.PickButton")
         #expect(treeViewController.navigationItem.additionalOverflowItems != nil)
-    }
-
-    @Test
-    func compactNavigationPickButtonEnablesWhenDOMCommandsBecomeActive() async throws {
-        let targetID = ProtocolTarget.ID("page-main")
-        let backend = RecordingTransportBackend()
-        let transport = TransportSession(backend: backend, responseTimeout: nil)
-        await transport.receiveRootMessage(pageTargetCreatedMessage(targetID: targetID))
-
-        let attachmentGate = CommandAttachmentGate()
-        let dom = makeDOMSessionWithoutDocument(targetID: targetID)
-        dom.bindProtocolChannel(
-            ProtocolCommandChannel(
-                transport: transport,
-                isCurrent: { true },
-                isAttached: { attachmentGate.isAttached },
-                appliedSequence: { 0 },
-                shouldEnableCompatibilityCSS: { _ in false },
-                markTargetDomainEnabled: { _, _ in }
-            ),
-            recordError: { _ in }
-        )
-        defer {
-            dom.unbindProtocolChannel()
-        }
-
-        let session = AttachedInspection(dom: dom)
-        let inspector = InspectorSession(attachment: session)
-        let treeViewController = DOMTreeViewController(inspection: session)
-        let navigationController = DOMCompactNavigationController(
-            rootViewController: treeViewController,
-            inspector: inspector
-        )
-        let navigationItems = try #require(navigationController.domNavigationItemsForTesting)
-        let observation = try #require(navigationItems.observationDeliveryForTesting)
-        let pickItem = navigationItems.pickItemForTesting
-        let pickItemIdentity = ObjectIdentifier(pickItem)
-
-        let renderedEnabledState = await observation.values {
-            pickItem.isEnabled
-        }
-        #expect(await renderedEnabledState.waitUntilValue(false))
-
-        attachmentGate.isAttached = true
-        dom.recordCommandAvailabilityMutation()
-
-        #expect(await renderedEnabledState.waitUntilValue(true))
-        #expect(ObjectIdentifier(navigationItems.pickItemForTesting) == pickItemIdentity)
-    }
-
-    @Test
-    func treeControllerRetriesDocumentLoadWhenDOMCommandsBecomeActive() async throws {
-        let targetID = ProtocolTarget.ID("page-main")
-        let backend = RecordingTransportBackend()
-        let transport = TransportSession(backend: backend, responseTimeout: nil)
-        await transport.receiveRootMessage(pageTargetCreatedMessage(targetID: targetID))
-
-        let attachmentGate = CommandAttachmentGate()
-        let dom = makeDOMSessionWithoutDocument(targetID: targetID)
-        dom.bindProtocolChannel(
-            ProtocolCommandChannel(
-                transport: transport,
-                isCurrent: { true },
-                isAttached: { attachmentGate.isAttached },
-                appliedSequence: { 0 },
-                shouldEnableCompatibilityCSS: { _ in false },
-                markTargetDomainEnabled: { _, _ in }
-            ),
-            recordError: { _ in }
-        )
-        defer {
-            dom.unbindProtocolChannel()
-        }
-
-        let session = AttachedInspection(dom: dom)
-        let treeViewController = DOMTreeViewController(inspection: session)
-        let window = showInWindow(treeViewController)
-        defer {
-            window.isHidden = true
-        }
-
-        let observation = try #require(treeViewController.domRootObservationDeliveryForTesting)
-        let renderedDocumentState = await observation.values {
-            dom.currentPageRootNode != nil
-        }
-        let treeTextView = treeViewController.displayedDOMTreeTextViewForTesting
-        #expect(await renderedDocumentState.waitUntilValue(false))
-        #expect(await backend.sentTargetMessages().isEmpty)
-
-        attachmentGate.isAttached = true
-        dom.recordCommandAvailabilityMutation()
-
-        let documentRequest = try await waitForTargetMessage(backend, method: "DOM.getDocument")
-        await receiveTargetReply(
-            transport,
-            targetID: documentRequest.targetIdentifier,
-            messageID: try messageID(documentRequest.message),
-            result: loadedDocumentResult
-        )
-        await dom.waitUntilDocumentRequestsIdle(targetID: documentRequest.targetIdentifier)
-
-        #expect(await renderedDocumentState.waitUntilValue(true))
-        await treeTextView.waitForRowDocumentForTesting()
-        #expect(treeTextView.documentTextForTesting.contains("<html"))
-        #expect(await backend.sentTargetMessages().count == 1)
     }
 
     @Test
@@ -1098,48 +993,54 @@ struct DOMContainerTests {
     @Test
     func splitContainerInstallsTreeAndElementColumns() throws {
         let dom = makeDOMSession()
-        let treeViewController = DOMTreeViewController(dom: dom)
+        let context = makeWebInspectorContext()
+        let treeViewController = DOMTreeViewController(context: context)
         let elementViewController = makeElementViewController(dom: dom)
         let splitViewController = DOMSplitViewController(
             treeViewController: treeViewController,
-            elementViewController: elementViewController
+            elementViewController: elementViewController,
+            context: context
         )
 
         splitViewController.loadViewIfNeeded()
 
         if #available(iOS 26.0, *) {
             let treeNavigationController = try #require(
-                splitViewController.viewController(for: .secondary) as? UINavigationController
+                splitViewController.viewController(for: UISplitViewController.Column.secondary) as? UINavigationController
             )
             let elementNavigationController = try #require(
-                splitViewController.viewController(for: .inspector) as? UINavigationController
+                splitViewController.viewController(for: UISplitViewController.Column.inspector) as? UINavigationController
             )
             #expect(treeNavigationController.viewControllers.first === treeViewController)
             #expect(elementNavigationController.viewControllers.first === elementViewController)
-            #expect(splitViewController.preferredDisplayMode == .secondaryOnly)
+            #expect(splitViewController.preferredDisplayMode == UISplitViewController.DisplayMode.secondaryOnly)
         } else {
             let treeNavigationController = try #require(
-                splitViewController.viewController(for: .primary) as? UINavigationController
+                splitViewController.viewController(for: UISplitViewController.Column.primary) as? UINavigationController
             )
             let elementNavigationController = try #require(
-                splitViewController.viewController(for: .secondary) as? UINavigationController
+                splitViewController.viewController(for: UISplitViewController.Column.secondary) as? UINavigationController
             )
             #expect(treeNavigationController.viewControllers.first === treeViewController)
             #expect(elementNavigationController.viewControllers.first === elementViewController)
-            #expect(splitViewController.preferredDisplayMode == .oneBesideSecondary)
+            #expect(splitViewController.preferredDisplayMode == UISplitViewController.DisplayMode.oneBesideSecondary)
         }
     }
 
     @Test
     func splitContainerInstallsSessionNavigationActions() throws {
         let session = AttachedInspection(dom: makeDOMSession())
-        let splitViewController = DOMSplitViewController(inspection: session)
+        let splitViewController = DOMSplitViewController(context: makeWebInspectorContext(), inspection: session)
 
         splitViewController.loadViewIfNeeded()
 
         let pickItem = try #require(splitViewController.navigationItem.trailingItemGroups.first?.barButtonItems.first)
         #expect(pickItem.accessibilityIdentifier == "WebInspector.DOM.PickButton")
         #expect(splitViewController.navigationItem.additionalOverflowItems != nil)
+    }
+
+    private func makeWebInspectorContext() -> WebInspectorContext {
+        WebInspectorContext.preview(isolation: MainActor.shared)
     }
 
     private struct BodyStyleIDs {

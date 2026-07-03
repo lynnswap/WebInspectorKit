@@ -1,15 +1,14 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
-import ObservationBridge
-import WebInspectorCore
+import WebInspectorDataKit
 import UIKit
 
 @MainActor
 package final class DOMNavigationItems: NSObject {
     private typealias UndoManagerProvider = @MainActor () -> UndoManager?
 
-    private let inspector: InspectorSession
-    private var domObservation: PortableObservationTracking.Token?
+    private let context: WebInspectorContext
+    private var statusTask: Task<Void, Never>?
     private var undoManagerProvider: UndoManagerProvider = { nil }
 
     private lazy var pickItem: UIBarButtonItem = {
@@ -23,14 +22,14 @@ package final class DOMNavigationItems: NSObject {
         return item
     }()
 
-    package init(inspector: InspectorSession) {
-        self.inspector = inspector
+    package init(context: WebInspectorContext) {
+        self.context = context
         super.init()
         startObservingInspection()
     }
 
     isolated deinit {
-        domObservation?.cancel()
+        statusTask?.cancel()
     }
 
     package func install(
@@ -49,12 +48,10 @@ package final class DOMNavigationItems: NSObject {
     }
 
     private func startObservingInspection() {
-        domObservation = withPortableContinuousObservation { [weak self, inspector] _ in
-            let dom = inspector.attachment.dom
-            self?.renderPickItem(
-                isEnabled: dom.canBeginElementPicker,
-                isSelectingElement: dom.isSelectingElement
-            )
+        statusTask = Task { @MainActor [weak self, context] in
+            for await status in context.statusUpdates {
+                self?.renderPickItem(status: status)
+            }
         }
     }
 
@@ -119,17 +116,10 @@ package final class DOMNavigationItems: NSObject {
         UIAction(
             title: String(localized: "reload", bundle: WebInspectorUILocalization.bundle),
             image: UIImage(systemName: "arrow.clockwise"),
-            attributes: (inspector.canReloadPage || inspector.attachment.dom.canReloadDocument) ? [] : [.disabled]
-        ) { [weak inspector] _ in
+            attributes: context.status.state == .attached ? [] : [.disabled]
+        ) { [weak context] _ in
             Task { @MainActor in
-                guard let inspector else {
-                    return
-                }
-                if inspector.canReloadPage {
-                    try? await inspector.reloadPage()
-                } else {
-                    try? await inspector.attachment.dom.reloadDocument()
-                }
+                try? await context?.reloadPage()
             }
         }
     }
@@ -138,26 +128,38 @@ package final class DOMNavigationItems: NSObject {
         UIAction(
             title: String(localized: "inspector.delete_node", bundle: WebInspectorUILocalization.bundle),
             image: UIImage(systemName: "trash"),
-            attributes: inspector.attachment.dom.canDeleteSelectedNode ? [.destructive] : [.disabled, .destructive]
-        ) { [weak inspector] _ in
+            attributes: context.status.selectedNodeID == nil ? [.disabled, .destructive] : [.destructive]
+        ) { [weak context] _ in
             Task { @MainActor in
-                try? await inspector?.attachment.dom.deleteSelectedNode(undoManager: undoManagerProvider())
+                guard let selectedNode = context?.selectedNode else {
+                    return
+                }
+                _ = undoManagerProvider
+                try? await context?.delete(selectedNode)
             }
         }
     }
 
     @objc
     private func toggleElementPicker() {
-        Task { @MainActor [weak inspector] in
-            await inspector?.attachment.dom.toggleElementPicker()
+        Task { @MainActor [weak context] in
+            guard let context else {
+                return
+            }
+            try? await context.setElementPickerEnabled(!context.isElementPickerEnabled)
         }
     }
 
     private func updatePickItemAppearance() {
-        let dom = inspector.attachment.dom
         renderPickItem(
-            isEnabled: dom.canBeginElementPicker,
-            isSelectingElement: dom.isSelectingElement
+            status: context.status
+        )
+    }
+
+    private func renderPickItem(status: WebInspectorContext.Status) {
+        renderPickItem(
+            isEnabled: status.state == .attached,
+            isSelectingElement: status.isElementPickerEnabled
         )
     }
 
@@ -174,8 +176,8 @@ package final class DOMNavigationItems: NSObject {
 
 #if DEBUG
 extension DOMNavigationItems {
-    var observationDeliveryForTesting: PortableObservationTracking.Token? {
-        domObservation
+    var statusObservationTaskForTesting: Task<Void, Never>? {
+        statusTask
     }
 
     var pickItemForTesting: UIBarButtonItem {

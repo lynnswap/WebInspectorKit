@@ -69,13 +69,10 @@ package struct DOMTabController: WebInspectorTab.BuiltInController {
         case (.compact, .tab):
             DOMCompactNavigationController(
                 rootViewController: cachedTreeViewController(session: session),
-                inspector: session.inspector
+                context: session.context
             )
         case (.compact, .domElement):
-            DOMCompactNavigationController(
-                rootViewController: cachedElementViewController(session: session),
-                inspector: session.inspector
-            )
+            DOMCompactNavigationController(rootViewController: cachedElementViewController(session: session))
         case (_, .customTab):
             UIViewController()
         case (.regular, _):
@@ -83,8 +80,7 @@ package struct DOMTabController: WebInspectorTab.BuiltInController {
                 contentViewController: DOMSplitViewController(
                     treeViewController: cachedTreeViewController(session: session),
                     elementViewController: cachedElementViewController(session: session),
-                    inspection: session.attachment,
-                    inspector: session.inspector
+                    context: session.context
                 )
             )
         }
@@ -92,7 +88,7 @@ package struct DOMTabController: WebInspectorTab.BuiltInController {
 
     private func cachedTreeViewController(session: WebInspectorSession) -> DOMTreeViewController {
         session.interface.viewController(for: contentKey(ContentID.tree)) {
-            DOMTreeViewController(inspection: session.attachment)
+            DOMTreeViewController(context: session.context)
         }
     }
 

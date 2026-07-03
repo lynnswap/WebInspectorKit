@@ -1,45 +1,55 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
-import WebInspectorCore
-import ObservationBridge
+import WebInspectorDataKit
 import UIKit
 
 @MainActor
 package final class DOMTreeViewController: UIViewController {
     private let treeView: DOMTreeTextView
-    private weak var inspection: AttachedInspection?
-    private var domRootObservation: PortableObservationTracking.Token?
-    private var isRenderingLifecycleActive = false
 
     package var domTreeUndoManager: UndoManager? {
         treeView.undoManager
     }
 
-    package init(inspection: AttachedInspection) {
-        self.inspection = inspection
+    package init(context: WebInspectorContext) {
         self.treeView = DOMTreeTextView(
-            dom: inspection.dom,
-            requestChildrenAction: { [weak inspection] nodeID in
-                await inspection?.dom.requestChildNodes(for: nodeID) ?? false
-            },
-            highlightNodeAction: { [weak inspection] nodeID, owner in
-                await inspection?.dom.highlightNode(for: nodeID, owner: owner)
-            },
-            restoreHighlightAction: { [weak inspection] in
-                await inspection?.dom.restoreSelectedNodeHighlightOrHide()
-            },
-            copyNodeTextAction: { [weak inspection] nodeID, kind in
-                guard let inspection else {
-                    return nil
-                }
-                return try? await inspection.dom.copyNodeText(kind, for: nodeID)
-            },
-            deleteNodesAction: { [weak inspection] nodeIDs, undoManager in
-                guard let inspection else {
+            context: context,
+            requestChildrenAction: { [weak context] nodeID in
+                guard let context else {
                     return false
                 }
                 do {
-                    try await inspection.dom.deleteNodes(nodeIDs, undoManager: undoManager)
+                    try await context.requestChildren(for: nodeID)
+                    return true
+                } catch {
+                    return false
+                }
+            },
+            highlightNodeAction: { [weak context] nodeID, _ in
+                try? await context?.highlightNode(for: nodeID)
+            },
+            restoreHighlightAction: { [weak context] in
+                guard let context else {
+                    return
+                }
+                if let selectedNode = context.selectedNode {
+                    try? await selectedNode.highlight()
+                } else {
+                    try? await context.hideHighlight()
+                }
+            },
+            copyNodeTextAction: { [weak context] nodeID, kind in
+                guard let context else {
+                    return nil
+                }
+                return try? await context.copyText(kind, for: nodeID)
+            },
+            deleteNodesAction: { [weak context] nodeIDs, _ in
+                guard let context else {
+                    return false
+                }
+                do {
+                    try await context.delete(nodeIDs: nodeIDs)
                     return true
                 } catch {
                     return false
@@ -49,19 +59,9 @@ package final class DOMTreeViewController: UIViewController {
         super.init(nibName: nil, bundle: nil)
     }
 
-    package init(dom: DOMSession) {
-        self.inspection = nil
-        self.treeView = DOMTreeTextView(dom: dom)
-        super.init(nibName: nil, bundle: nil)
-    }
-
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         nil
-    }
-
-    isolated deinit {
-        domRootObservation?.cancel()
     }
 
     override package func loadView() {
@@ -78,9 +78,6 @@ package final class DOMTreeViewController: UIViewController {
                 viewController.applyBackgroundFromTraits()
             }
         }
-        if let inspection {
-            startObservingDOMRoot(inspection: inspection)
-        }
     }
 
     private func applyBackgroundFromTraits() {
@@ -89,68 +86,17 @@ package final class DOMTreeViewController: UIViewController {
 
     override package func viewIsAppearing(_ animated: Bool) {
         super.viewIsAppearing(animated)
-        isRenderingLifecycleActive = true
         treeView.setRenderingActive(true)
-        ensureDOMDocumentLoadedIfNeeded()
     }
 
     override package func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
-        isRenderingLifecycleActive = false
         treeView.setRenderingActive(false)
-    }
-
-    private func startObservingDOMRoot(inspection: AttachedInspection) {
-        domRootObservation?.cancel()
-        domRootObservation = withPortableContinuousObservation { [weak self, weak inspection] _ in
-            guard let self, let dom = inspection?.dom else {
-                return
-            }
-            _ = dom.treeRevision
-            let hasRoot = dom.currentPageRootNode != nil
-            let canReloadDocument = dom.canReloadDocument
-            ensureDOMDocumentLoadedIfNeeded(
-                hasRoot: hasRoot,
-                canReloadDocument: canReloadDocument
-            )
-        }
-    }
-
-    private func ensureDOMDocumentLoadedIfNeeded() {
-        guard let dom = inspection?.dom else {
-            return
-        }
-        ensureDOMDocumentLoadedIfNeeded(
-            hasRoot: dom.currentPageRootNode != nil,
-            canReloadDocument: dom.canReloadDocument
-        )
-    }
-
-    private func ensureDOMDocumentLoadedIfNeeded(
-        hasRoot: Bool,
-        canReloadDocument: Bool
-    ) {
-        guard let inspection else {
-            return
-        }
-        guard isRenderingLifecycleActive,
-              !hasRoot,
-              canReloadDocument else {
-            return
-        }
-
-        Task { @MainActor [weak inspection] in
-            _ = await inspection?.dom.ensureDocumentLoaded()
-        }
     }
 }
 
 #if DEBUG
 extension DOMTreeViewController {
-    var domRootObservationDeliveryForTesting: PortableObservationTracking.Token? {
-        domRootObservation
-    }
-
     var displayedDOMTreeTextViewForTesting: DOMTreeTextView {
         treeView
     }
@@ -164,7 +110,7 @@ extension DOMTreeViewController {
 @MainActor
 private enum DOMTreeViewControllerPreview {
     static func makeViewController() -> UINavigationController {
-        let viewController = DOMTreeViewController(dom: DOMPreviewFixtures.makeDOMSession())
+        let viewController = DOMTreeViewController(context: DOMPreviewFixtures.makeWebInspectorContext())
         return UINavigationController(rootViewController: viewController)
     }
 }

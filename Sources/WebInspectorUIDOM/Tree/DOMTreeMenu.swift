@@ -1,6 +1,6 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
-import WebInspectorCore
+import WebInspectorDataKit
 import Observation
 import SwiftUI
 import UIKit
@@ -11,7 +11,7 @@ typealias DOMTreeMenuDeleteNodesAction = @MainActor ([DOMNode.ID], UndoManager?)
 @MainActor
 @Observable
 final class DOMTreeMenuModel {
-    let dom: DOMSession
+    let context: WebInspectorContext
     var nodeIDs: [DOMNode.ID] = []
     var selectedText: String?
     var localMarkupTextByNodeID: [DOMNode.ID: String] = [:]
@@ -23,11 +23,11 @@ final class DOMTreeMenuModel {
     private let deleteNodesAction: DOMTreeMenuDeleteNodesAction?
 
     init(
-        dom: DOMSession,
+        context: WebInspectorContext,
         copyNodeTextAction: DOMTreeMenuCopyNodeTextAction?,
         deleteNodesAction: DOMTreeMenuDeleteNodesAction?
     ) {
-        self.dom = dom
+        self.context = context
         self.copyNodeTextAction = copyNodeTextAction
         self.deleteNodesAction = deleteNodesAction
     }
@@ -51,7 +51,7 @@ final class DOMTreeMenuModel {
     }
 
     var availableNodeIDs: [DOMNode.ID] {
-        nodeIDs.filter { dom.node(for: $0) != nil }
+        nodeIDs.filter { (try? context.requiredNode(for: $0)) != nil }
     }
 
     var showsSelectedTextCopy: Bool {
@@ -121,7 +121,7 @@ final class DOMTreeMenuModel {
     private var singleNodeID: DOMNode.ID? {
         guard !isMultiNodeMenu,
               let nodeID = nodeIDs.first,
-              dom.node(for: nodeID) != nil else {
+              (try? context.requiredNode(for: nodeID)) != nil else {
             return nil
         }
         return nodeID
@@ -167,13 +167,12 @@ final class DOMTreeMenuModel {
         guard let deleteNodesAction else {
             return nil
         }
-        let sortedNodeIDs = uniqueNodeIDsInOrder(nodeIDs)
-            .sorted { depthFromRoot(for: $0) > depthFromRoot(for: $1) }
-        guard !sortedNodeIDs.isEmpty else {
+        let uniqueNodeIDs = uniqueNodeIDsInOrder(nodeIDs)
+        guard !uniqueNodeIDs.isEmpty else {
             return nil
         }
         return Task { @MainActor in
-            guard await deleteNodesAction(sortedNodeIDs, undoManager) else {
+            guard await deleteNodesAction(uniqueNodeIDs, undoManager) else {
                 return
             }
             clearLocalSelection()
@@ -181,16 +180,22 @@ final class DOMTreeMenuModel {
     }
 
     func canCopyText(_ kind: DOMNode.CopyTextKind, for nodeID: DOMNode.ID) -> Bool {
-        guard let node = dom.node(for: nodeID) else {
+        guard (try? context.requiredNode(for: nodeID)) != nil else {
             return false
         }
         switch kind {
         case .html:
             return copyNodeTextAction != nil || !(localMarkupTextByNodeID[nodeID]?.isEmpty ?? true)
         case .selectorPath:
-            return !dom.selectorPath(for: node).isEmpty
+            guard let path = try? context.selectorPath(for: nodeID) else {
+                return false
+            }
+            return !path.isEmpty
         case .xPath:
-            return !dom.xPath(for: node).isEmpty
+            guard let path = try? context.xPath(for: nodeID) else {
+                return false
+            }
+            return !path.isEmpty
         }
     }
 
@@ -198,28 +203,14 @@ final class DOMTreeMenuModel {
         if let copyNodeTextAction {
             return await copyNodeTextAction(nodeID, kind)
         }
-        guard let node = dom.node(for: nodeID) else {
-            return nil
-        }
         switch kind {
         case .html:
             return localMarkupTextByNodeID[nodeID]
         case .selectorPath:
-            return dom.selectorPath(for: node)
+            return try? context.selectorPath(for: nodeID)
         case .xPath:
-            return dom.xPath(for: node)
+            return try? context.xPath(for: nodeID)
         }
-    }
-
-    private func depthFromRoot(for nodeID: DOMNode.ID) -> Int {
-        var depth = 0
-        var currentNode = dom.node(for: nodeID)
-        while let parentID = currentNode?.parentID,
-              let parent = dom.node(for: parentID) {
-            depth += 1
-            currentNode = parent
-        }
-        return depth
     }
 
     private func uniqueNodeIDsInOrder(_ nodeIDs: [DOMNode.ID]) -> [DOMNode.ID] {

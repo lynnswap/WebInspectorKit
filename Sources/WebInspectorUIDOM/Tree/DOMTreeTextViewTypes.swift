@@ -1,6 +1,6 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
-import WebInspectorCore
+import WebInspectorDataKit
 import Observation
 import UIKit
 

@@ -1,6 +1,7 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
 import WebInspectorCore
+import WebInspectorDataKit
 import UIKit
 
 @MainActor
@@ -17,7 +18,7 @@ package final class DOMCompactNavigationController: UINavigationController {
 
     package init(
         rootViewController: UIViewController,
-        inspector: InspectorSession
+        context: WebInspectorContext
     ) {
         rootViewController.webInspectorDetachFromContainerForReuse()
         super.init(rootViewController: rootViewController)
@@ -25,7 +26,7 @@ package final class DOMCompactNavigationController: UINavigationController {
         webInspectorApplyNavigationControllerBackground(to: self)
         rootViewController.navigationItem.style = .browser
         let treeViewController = rootViewController as? DOMTreeViewController
-        let navigationItems = DOMNavigationItems(inspector: inspector)
+        let navigationItems = DOMNavigationItems(context: context)
         navigationItems.install(on: rootViewController.navigationItem) { [weak self, weak treeViewController] in
             treeViewController?.domTreeUndoManager ?? self?.undoManager
         }
@@ -62,7 +63,7 @@ extension DOMCompactNavigationController {
 
 #Preview("DOM Compact Tree") {
     DOMCompactNavigationController(
-        rootViewController: DOMTreeViewController(dom: DOMPreviewFixtures.makeDOMSession())
+        rootViewController: DOMTreeViewController(context: DOMPreviewFixtures.makeWebInspectorContext())
     )
 }
 

@@ -16,6 +16,14 @@ final class WebInspectorAsyncStreamRelay<Element: Sendable>: Sendable {
     }
 
     func makeStream() -> AsyncStream<Element> {
+        makeStream(initialElementIfAny: nil)
+    }
+
+    func makeStream(initialElement: Element) -> AsyncStream<Element> {
+        makeStream(initialElementIfAny: initialElement)
+    }
+
+    private func makeStream(initialElementIfAny initialElement: Element?) -> AsyncStream<Element> {
         let id = UUID()
         let pair = AsyncStream<Element>.makeStream(bufferingPolicy: .unbounded)
         let shouldFinish = state.withLock { state in
@@ -30,6 +38,9 @@ final class WebInspectorAsyncStreamRelay<Element: Sendable>: Sendable {
             return pair.stream
         }
 
+        if let initialElement {
+            pair.continuation.yield(initialElement)
+        }
         pair.continuation.onTermination = { [weak self] _ in
             self?.removeStream(id)
         }

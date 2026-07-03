@@ -1,6 +1,6 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
-import WebInspectorCore
+import WebInspectorDataKit
 
 extension DOMTreeTextView {
     struct SelectionObservation {

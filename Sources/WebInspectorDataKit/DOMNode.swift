@@ -7,7 +7,7 @@ public final class DOMNode: WebInspectorPersistentModel {
     public struct ID: Hashable, Sendable {
         let proxyID: DOM.Node.ID
 
-        init(_ proxyID: DOM.Node.ID) {
+        package init(_ proxyID: DOM.Node.ID) {
             self.proxyID = proxyID
         }
     }
