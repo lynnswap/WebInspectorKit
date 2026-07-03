@@ -119,6 +119,10 @@ jobs:
           end
           RUBY
 
+      - name: Verify DataKit public symbol boundary
+        if: matrix.name == 'iOS 26 all' && env.SKIP_IOS_TESTS != 'true'
+        run: Scripts/check-datakit-symbol-boundary.sh
+
       - name: Resolve iOS simulator destination
         run: |
           ruby <<'RUBY'

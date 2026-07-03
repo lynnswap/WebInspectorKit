@@ -1467,8 +1467,12 @@ W4 cutover invariant:
   ProxyKit/DataKit separately to the same `WKWebView`.
 - `AttachedInspection`, `InspectorSession`, and `WebInspectorCore*` may remain
   only as migration scaffolding behind package boundaries while their consumers
-  are being replaced. They cannot coexist with a public DataKit handoff as an
-  alternate source of truth.
+  are being replaced. W4's exit condition deletes the Core-named session/model
+  targets from the shipped package graph; implementation that is still useful
+  must move into the owning `WebInspectorNativeTransport`,
+  `WebInspectorProxyKit`, `WebInspectorDataKit`, or UI target before deletion.
+  They cannot coexist with a public DataKit handoff as an alternate source of
+  truth, and they are not a long-term non-UI internals layer.
 
 - Its view controllers render from the context-owned `@Observable` models and
   drive lists from `WebInspectorFetchedResults.items` and
