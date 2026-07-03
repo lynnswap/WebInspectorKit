@@ -184,6 +184,7 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
     public private(set) var lastDataReceivedTimestamp: Double?
     public private(set) var finishedOrFailedTimestamp: Double?
     public private(set) var decodedDataLength: Int
+    public private(set) var encodedDataLength: Int
     public private(set) var redirects: [RedirectHop]
     public private(set) var webSocket: WebSocketState?
     public private(set) var responseBody: NetworkBody
@@ -226,6 +227,7 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         lastDataReceivedTimestamp = nil
         finishedOrFailedTimestamp = nil
         decodedDataLength = 0
+        encodedDataLength = 0
         redirects = []
         webSocket = resourceType == .webSocket ? WebSocketState() : nil
         responseBody = NetworkBody()
@@ -260,6 +262,7 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         lastDataReceivedTimestamp = nil
         finishedOrFailedTimestamp = nil
         decodedDataLength = 0
+        encodedDataLength = 0
         redirects = []
         webSocket = resourceType == .webSocket ? WebSocketState() : nil
         responseBody = NetworkBody()
@@ -292,6 +295,7 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         lastDataReceivedTimestamp = nil
         finishedOrFailedTimestamp = nil
         decodedDataLength = 0
+        encodedDataLength = 0
         responseBody = NetworkBody()
         state = .pending
     }
@@ -319,8 +323,9 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         state = .responded
     }
 
-    package func applyDataReceived(dataLength: Int, timestamp: Double) {
+    package func applyDataReceived(dataLength: Int, encodedDataLength: Int, timestamp: Double) {
         decodedDataLength += max(0, dataLength)
+        self.encodedDataLength += max(0, encodedDataLength)
         lastDataReceivedTimestamp = timestamp
         if state == .pending {
             state = .responded
@@ -355,6 +360,7 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         lastDataReceivedTimestamp = nil
         finishedOrFailedTimestamp = timestamp
         decodedDataLength = 0
+        encodedDataLength = 0
         redirects = []
         responseBody = NetworkBody()
         state = .finished

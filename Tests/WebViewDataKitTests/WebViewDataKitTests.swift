@@ -1250,7 +1250,7 @@ func networkEventsPopulateAllRequestsInOrder() async throws {
         target: target
     )
     await runtime.backend.emit(
-        .dataReceived(id: requestID, dataLength: 12, timestamp: 3),
+        .dataReceived(id: requestID, dataLength: 12, encodedDataLength: 5, timestamp: 3),
         target: target
     )
     await runtime.backend.emit(
@@ -1275,6 +1275,7 @@ func networkEventsPopulateAllRequestsInOrder() async throws {
     #expect(request.lastDataReceivedTimestamp == 3)
     #expect(request.finishedOrFailedTimestamp == 4)
     #expect(request.decodedDataLength == 12)
+    #expect(request.encodedDataLength == 5)
     #expect(context.registeredRequest(for: request.id) === request)
 }
 
@@ -1337,6 +1338,7 @@ func repeatedRequestWillBeSentClearsStaleResponseFields() async throws {
     #expect(request.lastDataReceivedTimestamp == nil)
     #expect(request.finishedOrFailedTimestamp == nil)
     #expect(request.decodedDataLength == 0)
+    #expect(request.encodedDataLength == 0)
     #expect(request.responseBody.phase == .available)
     #expect(request.responseBody.text == nil)
     #expect(request.redirects.count == 1)
@@ -1405,7 +1407,10 @@ func loadingFailedStoresFailureTimestampAndClampsDataLength() async throws {
         ),
         target: target
     )
-    await runtime.backend.emit(.dataReceived(id: requestID, dataLength: -10, timestamp: 2), target: target)
+    await runtime.backend.emit(
+        .dataReceived(id: requestID, dataLength: -10, encodedDataLength: -20, timestamp: 2),
+        target: target
+    )
     await runtime.backend.emit(
         .loadingFailed(id: requestID, errorText: "cancelled", canceled: true, timestamp: 3),
         target: target
@@ -1418,6 +1423,7 @@ func loadingFailedStoresFailureTimestampAndClampsDataLength() async throws {
     #expect(request.lastDataReceivedTimestamp == 2)
     #expect(request.finishedOrFailedTimestamp == 3)
     #expect(request.decodedDataLength == 0)
+    #expect(request.encodedDataLength == 0)
 }
 
 @MainActor
@@ -1461,6 +1467,7 @@ func memoryCacheEventCreatesFinishedCachedRequestFromResponse() async throws {
     #expect(request.lastDataReceivedTimestamp == nil)
     #expect(request.finishedOrFailedTimestamp == 5)
     #expect(request.decodedDataLength == 0)
+    #expect(request.encodedDataLength == 0)
     #expect(request.responseBody.phase == .available)
     #expect(context.registeredRequest(for: request.id) === request)
 }
@@ -1556,7 +1563,10 @@ func webSocketCreatedPreservesExistingNetworkLifecycleMetadata() async throws {
         ),
         target: target
     )
-    await runtime.backend.emit(.dataReceived(id: requestID, dataLength: 7, timestamp: 3), target: target)
+    await runtime.backend.emit(
+        .dataReceived(id: requestID, dataLength: 7, encodedDataLength: 3, timestamp: 3),
+        target: target
+    )
 
     let results: WebViewFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
     try await waitUntil { results.items.first?.decodedDataLength == 7 }
@@ -1607,6 +1617,7 @@ func webSocketCreatedPreservesExistingNetworkLifecycleMetadata() async throws {
     #expect(request.lastDataReceivedTimestamp == 3)
     #expect(request.finishedOrFailedTimestamp == nil)
     #expect(request.decodedDataLength == 7)
+    #expect(request.encodedDataLength == 3)
     #expect(request.state == .responded)
 }
 

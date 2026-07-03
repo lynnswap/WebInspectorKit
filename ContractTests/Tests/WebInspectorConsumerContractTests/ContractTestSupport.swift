@@ -77,7 +77,10 @@ enum ContractTestSupport {
             ),
             target: target
         )
-        await backend.emit(.dataReceived(id: request.id, dataLength: 7, timestamp: 3), target: target)
+        await backend.emit(
+            .dataReceived(id: request.id, dataLength: 7, encodedDataLength: 4, timestamp: 3),
+            target: target
+        )
         await backend.emit(.loadingFinished(id: request.id, timestamp: 4), target: target)
     }
 
