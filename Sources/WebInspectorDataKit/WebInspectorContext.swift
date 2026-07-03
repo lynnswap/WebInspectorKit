@@ -38,6 +38,8 @@ public final class WebInspectorContext {
     private var inspectResolutionTask: Task<Void, Never>?
     private var styleRefreshTask: Task<Void, Never>?
     private var styleRefreshGeneration: Int
+    private var isStyleHydrationActive: Bool
+    private var styleToggleTasks: [CSS.Property.ID: Task<Void, Never>]
     private var eventPumps: [WebInspectorEventPump]
     private var networkTrackingTarget: WebInspectorTarget?
     private var runtimeTrackingTarget: WebInspectorTarget?
@@ -81,6 +83,8 @@ public final class WebInspectorContext {
         inspectResolutionTask = nil
         styleRefreshTask = nil
         styleRefreshGeneration = 0
+        isStyleHydrationActive = false
+        styleToggleTasks = [:]
         eventPumps = []
         networkTrackingTarget = nil
         runtimeTrackingTarget = nil
@@ -127,6 +131,9 @@ public final class WebInspectorContext {
         documentReloadTask?.cancel()
         inspectResolutionTask?.cancel()
         styleRefreshTask?.cancel()
+        for task in styleToggleTasks.values {
+            task.cancel()
+        }
         stopEventPumps()
         consoleObjectGroupReleaseTask?.cancel()
     }
@@ -736,6 +743,10 @@ public final class WebInspectorContext {
         styleRefreshTask?.cancel()
         styleRefreshTask = nil
         styleRefreshGeneration += 1
+        for task in styleToggleTasks.values {
+            task.cancel()
+        }
+        styleToggleTasks = [:]
         stopEventPumps()
         consoleObjectGroupReleaseTask?.cancel()
         consoleObjectGroupReleaseTask = nil
@@ -1504,11 +1515,19 @@ extension WebInspectorContext {
             guard isCurrentStyleRefresh(node: node, generation: generation) else {
                 return
             }
+            let inlineStyles = try await currentPage.css.inlineStyles(for: node.id.proxyID)
+            guard isCurrentStyleRefresh(node: node, generation: generation) else {
+                return
+            }
             let computedProperties = try await currentPage.css.computedStyle(for: node.id.proxyID)
             guard isCurrentStyleRefresh(node: node, generation: generation) else {
                 return
             }
-            styles.load(matchedStyles: matchedStyles, computedProperties: computedProperties)
+            styles.load(
+                matchedStyles: matchedStyles,
+                inlineStyles: inlineStyles,
+                computedProperties: computedProperties
+            )
         } catch let error as WebInspectorProxyError {
             guard isCurrentStyleRefresh(node: node, generation: generation) else {
                 return
@@ -1520,7 +1539,7 @@ extension WebInspectorContext {
             }
             styles.fail(.commandFailed(
                 domain: "CSS",
-                method: "getMatchedStylesForNode/getComputedStyleForNode",
+                method: "getMatchedStylesForNode/getInlineStylesForNode/getComputedStyleForNode",
                 message: String(describing: error)
             ))
         }
@@ -1530,16 +1549,99 @@ extension WebInspectorContext {
         Task.isCancelled == false && selectedNode === node && styleRefreshGeneration == generation
     }
 
-    private func markSelectedStylesNeedsRefresh(for nodeID: DOMNode.ID) {
+    /// Reports whether the style pane is visible. While active, stale
+    /// selected-node styles (`.needsRefresh`) re-fetch immediately; while
+    /// inactive they stay stale until the next activation or selection.
+    public func setStyleHydrationActive(_ active: Bool, isolation: isolated (any Actor) = #isolation) {
+        requireOwner(isolation)
+        guard isStyleHydrationActive != active else {
+            return
+        }
+        isStyleHydrationActive = active
+        guard active, let styles = selectedNode?.elementStyles else {
+            return
+        }
+        switch styles.phase {
+        case .needsRefresh, .failed:
+            refreshSelectedStyles(isolation: isolation)
+        case .loading, .loaded, .unavailable:
+            break
+        }
+    }
+
+    /// Toggles a CSS declaration on or off by rewriting its owning style
+    /// text. Returns false without issuing a command when the property is
+    /// not currently editable (no selected styles, stale phase, read-only
+    /// section, or unrewritable style text), or when a toggle for the same
+    /// property is already in flight.
+    @discardableResult
+    public func requestSetCSSProperty(
+        _ id: CSS.Property.ID,
+        enabled: Bool,
+        isolation: isolated (any Actor) = #isolation
+    ) -> Bool {
+        requireOwner(isolation)
+        guard let currentPage,
+              styleToggleTasks[id] == nil,
+              let styles = selectedNode?.elementStyles,
+              let intent = styles.setStyleTextIntent(for: id, enabled: enabled) else {
+            return false
+        }
+
+        styleToggleTasks[id] = Task { [weak self, currentPage, styles] in
+            _ = isolation
+            do {
+                let result = try await currentPage.css.setStyleText(intent.styleID, text: intent.text)
+                guard let self else {
+                    return
+                }
+                self.styleToggleTasks[id] = nil
+                guard Task.isCancelled == false else {
+                    return
+                }
+                styles.applySetStyleText(result: result, for: id)
+                self.refreshSelectedStylesIfHydrationActive(isolation: isolation)
+            } catch is CancellationError {
+                self?.styleToggleTasks[id] = nil
+            } catch {
+                guard let self else {
+                    return
+                }
+                self.styleToggleTasks[id] = nil
+                guard Task.isCancelled == false else {
+                    return
+                }
+                self.failIfTerminal(error, operation: "CSS.setStyleText")
+                self.refreshSelectedStyles(isolation: isolation)
+            }
+        }
+        return true
+    }
+
+    private func refreshSelectedStylesIfHydrationActive(isolation: isolated (any Actor) = #isolation) {
+        guard isStyleHydrationActive else {
+            return
+        }
+        refreshSelectedStyles(isolation: isolation)
+    }
+
+    private func markSelectedStylesNeedsRefresh(
+        for nodeID: DOMNode.ID,
+        isolation: isolated (any Actor) = #isolation
+    ) {
         guard selectedNode?.id == nodeID else {
             return
         }
-        markSelectedStylesNeedsRefresh()
+        markSelectedStylesNeedsRefresh(isolation: isolation)
     }
 
-    private func markSelectedStylesNeedsRefresh() {
+    private func markSelectedStylesNeedsRefresh(isolation: isolated (any Actor) = #isolation) {
         styleRefreshGeneration += 1
-        selectedNode?.elementStyles?.markNeedsRefresh()
+        guard let styles = selectedNode?.elementStyles else {
+            return
+        }
+        styles.markNeedsRefresh()
+        refreshSelectedStylesIfHydrationActive(isolation: isolation)
     }
 }
 

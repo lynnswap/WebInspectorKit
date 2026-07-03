@@ -321,7 +321,7 @@ func domInspectSelectsKnownNodeAndLoadsStyles() async throws {
     try await waitUntil { context.selectedNode === element }
     let styles = try #require(element.elementStyles)
     try await waitUntil { styles.phase == .loaded }
-    #expect(styles.sections.map(\.selectorList.text) == [".card"])
+    #expect(styles.sections.map(\.title) == [".card"])
 
     let commands = await runtime.backend.recordedCommands()
     #expect(commands.contains(RecordedCommand(domain: "CSS", method: "getMatchedStylesForNode")))
@@ -1746,12 +1746,14 @@ func selectingDOMNodeLoadsCSSStylesAndComputedProperties() async throws {
     let styles = try #require(element.elementStyles)
     #expect(styles.phase == .loading)
     try await waitUntil { styles.phase == .loaded }
-    #expect(styles.sections.map(\.selectorList.text) == [".card"])
+    #expect(styles.sections.map(\.title) == [".card"])
+    #expect(styles.sections.map(\.kind) == [.rule])
     #expect(styles.computedProperties.map(\.name) == ["display"])
 
     let commands = await runtime.backend.recordedCommands()
     #expect(commands.contains(RecordedCommand(domain: "CSS", method: "enable")) == false)
     #expect(commands.contains(RecordedCommand(domain: "CSS", method: "getMatchedStylesForNode")))
+    #expect(commands.contains(RecordedCommand(domain: "CSS", method: "getInlineStylesForNode")))
     #expect(commands.contains(RecordedCommand(domain: "CSS", method: "getComputedStyleForNode")))
 }
 
@@ -1887,6 +1889,7 @@ func cssInvalidationDuringStyleFetchIsNotOverwrittenByStaleResult() async throws
         for: "CSS",
         method: "getMatchedStylesForNode"
     )
+    await runtime.backend.enqueue(CSS.InlineStyles(), for: "CSS", method: "getInlineStylesForNode")
     await runtime.backend.hold(domain: "CSS", method: "getComputedStyleForNode", gate: computedGate)
     await runtime.backend.enqueue(
         [CSS.ComputedProperty(name: "display", value: "grid")],
@@ -1911,6 +1914,303 @@ func cssInvalidationDuringStyleFetchIsNotOverwrittenByStaleResult() async throws
     }
     #expect(styles.phase == .needsRefresh)
     #expect(styles.computedProperties.isEmpty)
+}
+
+@MainActor
+@Test
+func selectingDOMNodeLoadsInlineAndAttributesStyleSections() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let document = try #require(context.rootNode)
+    let elementID = DOM.Node.ID("styled-node")
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
+        ]),
+        target: target
+    )
+    let element = try await waitForChild(in: context)
+
+    await runtime.backend.enqueue(
+        CSS.MatchedStyles(matchedRules: [
+            CSS.Rule(
+                selectorList: CSS.Rule.SelectorList(selectors: [".card"], text: ".card"),
+                origin: CSS.Origin(rawValue: "regular"),
+                style: CSS.Style(id: CSS.Style.ID("style-rule"), cssText: "display: grid;")
+            )
+        ]),
+        for: "CSS",
+        method: "getMatchedStylesForNode"
+    )
+    await runtime.backend.enqueue(
+        CSS.InlineStyles(
+            inlineStyle: CSS.Style(
+                id: CSS.Style.ID("style-inline"),
+                properties: [
+                    CSS.Property(
+                        id: CSS.Property.ID("inline-color"),
+                        name: "color",
+                        value: "red",
+                        text: "color: red;",
+                        isEditable: true
+                    )
+                ],
+                cssText: "color: red;",
+                isEditable: true
+            ),
+            attributesStyle: CSS.Style(
+                id: CSS.Style.ID("style-attributes"),
+                properties: [
+                    CSS.Property(id: CSS.Property.ID("attribute-width"), name: "width", value: "100px")
+                ]
+            )
+        ),
+        for: "CSS",
+        method: "getInlineStylesForNode"
+    )
+    await runtime.backend.enqueue(
+        [CSS.ComputedProperty(name: "display", value: "grid")],
+        for: "CSS",
+        method: "getComputedStyleForNode"
+    )
+
+    context.select(element)
+
+    let styles = try #require(element.elementStyles)
+    try await waitUntil { styles.phase == .loaded }
+    #expect(styles.sections.map(\.kind) == [.inlineStyle, .rule, .attributesStyle])
+    #expect(styles.sections.map(\.title) == ["element.style", ".card", "Attributes"])
+    #expect(styles.sections.map(\.isEditable) == [true, false, false])
+}
+
+@MainActor
+@Test
+func styleSheetChangedWhileHydrationActiveTriggersImmediateRefetch() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let document = try #require(context.rootNode)
+    let elementID = DOM.Node.ID("styled-node")
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
+        ]),
+        target: target
+    )
+    let element = try await waitForChild(in: context)
+
+    context.setStyleHydrationActive(true)
+    await enqueueCSSStyleReplies(on: runtime.backend)
+    context.select(element)
+    let styles = try #require(element.elementStyles)
+    try await waitUntil { styles.phase == .loaded }
+
+    await enqueueCSSStyleReplies(on: runtime.backend)
+    await runtime.backend.emit(.styleSheetChanged, target: target)
+
+    try await waitUntil {
+        await matchedStylesCommandCount(on: runtime.backend) == 2
+    }
+    try await waitUntil { styles.phase == .loaded }
+}
+
+@MainActor
+@Test
+func styleSheetChangedWhileHydrationInactiveDefersRefetchUntilActivation() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let document = try #require(context.rootNode)
+    let elementID = DOM.Node.ID("styled-node")
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
+        ]),
+        target: target
+    )
+    let element = try await waitForChild(in: context)
+
+    await enqueueCSSStyleReplies(on: runtime.backend)
+    context.select(element)
+    let styles = try #require(element.elementStyles)
+    try await waitUntil { styles.phase == .loaded }
+
+    await runtime.backend.emit(.styleSheetChanged, target: target)
+    try await waitUntil { styles.phase == .needsRefresh }
+    for _ in 0..<10 {
+        await Task.yield()
+    }
+    #expect(styles.phase == .needsRefresh)
+    #expect(await matchedStylesCommandCount(on: runtime.backend) == 1)
+
+    await enqueueCSSStyleReplies(on: runtime.backend)
+    context.setStyleHydrationActive(true)
+
+    try await waitUntil { styles.phase == .loaded }
+    #expect(await matchedStylesCommandCount(on: runtime.backend) == 2)
+}
+
+@MainActor
+@Test
+func requestSetCSSPropertyTogglesDeclarationAndRefreshesStyles() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let document = try #require(context.rootNode)
+    let elementID = DOM.Node.ID("styled-node")
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
+        ]),
+        target: target
+    )
+    let element = try await waitForChild(in: context)
+
+    context.setStyleHydrationActive(true)
+    await enqueueCSSStyleReplies(on: runtime.backend)
+    context.select(element)
+    let styles = try #require(element.elementStyles)
+    try await waitUntil { styles.phase == .loaded }
+
+    let disabledStyle = CSS.Style(
+        id: CSS.Style.ID("style-1"),
+        properties: [
+            CSS.Property(
+                id: CSS.Property.ID("property-1"),
+                name: "display",
+                value: "grid",
+                text: "/* display: grid; */",
+                status: .disabled,
+                isEditable: true
+            )
+        ],
+        cssText: "/* display: grid; */",
+        isEditable: true
+    )
+    await runtime.backend.enqueue(disabledStyle, for: "CSS", method: "setStyleText")
+    await runtime.backend.enqueue(
+        CSS.MatchedStyles(matchedRules: [
+            CSS.Rule(
+                selectorList: CSS.Rule.SelectorList(selectors: [".card"], text: ".card"),
+                origin: CSS.Origin(rawValue: "regular"),
+                style: disabledStyle
+            )
+        ]),
+        for: "CSS",
+        method: "getMatchedStylesForNode"
+    )
+    await runtime.backend.enqueue(CSS.InlineStyles(), for: "CSS", method: "getInlineStylesForNode")
+    await runtime.backend.enqueue(
+        [CSS.ComputedProperty(name: "display", value: "grid")],
+        for: "CSS",
+        method: "getComputedStyleForNode"
+    )
+
+    let propertyID = try #require(styles.sections.first?.style.properties.first?.id)
+    #expect(context.requestSetCSSProperty(propertyID, enabled: false))
+
+    try await waitUntil {
+        await matchedStylesCommandCount(on: runtime.backend) == 2
+    }
+    try await waitUntil { styles.phase == .loaded }
+
+    let commands = await runtime.backend.recordedCommands()
+    let setStyleText = try #require(commands.last { $0 == RecordedCommand(domain: "CSS", method: "setStyleText") })
+    let payload = try #require(setStyleText.payload.cast(as: CSS.SetStyleTextPayload.self))
+    #expect(payload.id == CSS.Style.ID("style-1"))
+    #expect(payload.text == "/* display: grid; */")
+
+    let property = try #require(styles.sections.first?.style.properties.first)
+    #expect(property.status == .disabled)
+    #expect(property.isModifiedByInspector)
+}
+
+@MainActor
+@Test
+func requestSetCSSPropertyRefusesStaleAndNonEditableProperties() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let document = try #require(context.rootNode)
+    let elementID = DOM.Node.ID("styled-node")
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
+        ]),
+        target: target
+    )
+    let element = try await waitForChild(in: context)
+
+    await runtime.backend.enqueue(
+        CSS.MatchedStyles(matchedRules: [
+            CSS.Rule(
+                selectorList: CSS.Rule.SelectorList(selectors: ["div"], text: "div"),
+                origin: CSS.Origin(rawValue: "user-agent"),
+                style: CSS.Style(
+                    id: CSS.Style.ID("style-ua"),
+                    properties: [
+                        CSS.Property(
+                            id: CSS.Property.ID("property-ua"),
+                            name: "display",
+                            value: "block",
+                            text: "display: block;",
+                            isEditable: true
+                        )
+                    ],
+                    cssText: "display: block;",
+                    isEditable: true
+                )
+            ),
+            CSS.Rule(
+                selectorList: CSS.Rule.SelectorList(selectors: [".card"], text: ".card"),
+                origin: CSS.Origin(rawValue: "regular"),
+                style: CSS.Style(
+                    id: CSS.Style.ID("style-1"),
+                    properties: [
+                        CSS.Property(
+                            id: CSS.Property.ID("property-1"),
+                            name: "display",
+                            value: "grid",
+                            text: "display: grid;",
+                            isEditable: true
+                        )
+                    ],
+                    cssText: "display: grid;",
+                    isEditable: true
+                )
+            ),
+        ]),
+        for: "CSS",
+        method: "getMatchedStylesForNode"
+    )
+    await runtime.backend.enqueue(CSS.InlineStyles(), for: "CSS", method: "getInlineStylesForNode")
+    await runtime.backend.enqueue(
+        [CSS.ComputedProperty(name: "display", value: "grid")],
+        for: "CSS",
+        method: "getComputedStyleForNode"
+    )
+    context.select(element)
+    let styles = try #require(element.elementStyles)
+    try await waitUntil { styles.phase == .loaded }
+
+    let userAgentSection = try #require(styles.sections.first { $0.title == "div" })
+    #expect(userAgentSection.isEditable == false)
+    let userAgentPropertyID = try #require(userAgentSection.style.properties.first?.id)
+    #expect(context.requestSetCSSProperty(userAgentPropertyID, enabled: false) == false)
+
+    let editableSection = try #require(styles.sections.first { $0.title == ".card" })
+    let editablePropertyID = try #require(editableSection.style.properties.first?.id)
+
+    await runtime.backend.emit(.styleSheetChanged, target: target)
+    try await waitUntil { styles.phase == .needsRefresh }
+    #expect(context.requestSetCSSProperty(editablePropertyID, enabled: false) == false)
+
+    for _ in 0..<10 {
+        await Task.yield()
+    }
+    let commands = await runtime.backend.recordedCommands()
+    #expect(commands.contains(RecordedCommand(domain: "CSS", method: "setStyleText")) == false)
 }
 
 @MainActor
@@ -3548,12 +3848,23 @@ private func enqueueCSSStyleReplies(on backend: WebInspectorTestBackend) async {
         method: "getMatchedStylesForNode"
     )
     await backend.enqueue(
+        CSS.InlineStyles(),
+        for: "CSS",
+        method: "getInlineStylesForNode"
+    )
+    await backend.enqueue(
         [
             CSS.ComputedProperty(name: "display", value: "grid")
         ],
         for: "CSS",
         method: "getComputedStyleForNode"
     )
+}
+
+private func matchedStylesCommandCount(on backend: WebInspectorTestBackend) async -> Int {
+    await backend.recordedCommands()
+        .filter { $0 == RecordedCommand(domain: "CSS", method: "getMatchedStylesForNode") }
+        .count
 }
 
 @MainActor
