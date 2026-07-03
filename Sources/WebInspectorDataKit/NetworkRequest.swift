@@ -546,7 +546,10 @@ public final class NetworkRequest: WebInspectorFetchableModel {
     public private(set) var resourceType: Network.ResourceType?
     public private(set) var state: State
     public private(set) var status: Int?
+    public private(set) var statusText: String?
+    public private(set) var responseURL: String?
     public private(set) var mimeType: String?
+    public private(set) var responseSource: String?
     public private(set) var sourceMapURL: String?
     public private(set) var requestHeaders: [String: String]
     public private(set) var responseHeaders: [String: String]
@@ -592,7 +595,10 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         self.resourceType = resourceType
         state = .pending
         status = nil
+        statusText = nil
+        responseURL = nil
         mimeType = nil
+        responseSource = nil
         sourceMapURL = nil
         requestHeaders = request.headers
         responseHeaders = [:]
@@ -641,7 +647,10 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         self.resourceType = resourceType
         requestHeaders = request.headers
         status = nil
+        statusText = nil
+        responseURL = nil
         mimeType = nil
+        responseSource = nil
         sourceMapURL = nil
         responseHeaders = [:]
         requestSentTimestamp = timestamp
@@ -677,7 +686,10 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         webSocket = resolvedResourceType == .webSocket ? webSocket ?? WebSocketState() : nil
         requestHeaders = request.headers
         status = nil
+        statusText = nil
+        responseURL = nil
         mimeType = nil
+        responseSource = nil
         sourceMapURL = nil
         responseHeaders = [:]
         requestSentTimestamp = timestamp
@@ -704,7 +716,10 @@ public final class NetworkRequest: WebInspectorFetchableModel {
             webSocket = nil
         }
         status = response.status
+        statusText = response.statusText
+        responseURL = response.url
         mimeType = response.mimeType
+        responseSource = response.source?.rawValue
         responseHeaders = response.headers
         if let requestHeaders = response.requestHeaders {
             self.requestHeaders = requestHeaders
@@ -752,7 +767,10 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         resourceType = nil
         webSocket = nil
         status = response.status
+        statusText = response.statusText
+        responseURL = response.url
         mimeType = response.mimeType
+        responseSource = response.source?.rawValue
         sourceMapURL = nil
         responseHeaders = response.headers
         if let requestHeaders = response.requestHeaders {
@@ -795,6 +813,11 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         requestHeaders = request.headers
         requestBody = NetworkBody.makeRequestBody(for: request)
         responseBody = NetworkBody()
+        status = nil
+        statusText = nil
+        responseURL = nil
+        mimeType = nil
+        responseSource = nil
         if let timestamp {
             requestSentTimestamp = timestamp
         }

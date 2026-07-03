@@ -1901,9 +1901,12 @@ func networkEventsPopulateAllRequestsInOrder() async throws {
         .responseReceived(
             id: requestID,
             response: Network.Response(
+                url: "https://cdn.example.com/data.json",
                 status: 200,
+                statusText: "OK",
                 mimeType: "application/json",
-                headers: ["Content-Type": "application/json"]
+                headers: ["Content-Type": "application/json"],
+                source: Network.Source(rawValue: "network")
             ),
             resourceType: .fetch,
             timestamp: 2
@@ -1928,7 +1931,10 @@ func networkEventsPopulateAllRequestsInOrder() async throws {
     #expect(request.method == "GET")
     #expect(request.resourceType == .fetch)
     #expect(request.status == 200)
+    #expect(request.statusText == "OK")
+    #expect(request.responseURL == "https://cdn.example.com/data.json")
     #expect(request.mimeType == "application/json")
+    #expect(request.responseSource == "network")
     #expect(request.requestHeaders["Accept"] == "application/json")
     #expect(request.responseHeaders["Content-Type"] == "application/json")
     #expect(request.requestSentTimestamp == 1)
@@ -2048,9 +2054,12 @@ func repeatedRequestWillBeSentClearsStaleResponseFields() async throws {
         .responseReceived(
             id: requestID,
             response: Network.Response(
+                url: "https://example.com/redirect",
                 status: 302,
+                statusText: "Found",
                 mimeType: "text/html",
-                headers: ["Location": "https://example.com/final"]
+                headers: ["Location": "https://example.com/final"],
+                source: Network.Source(rawValue: "network")
             ),
             resourceType: .document,
             timestamp: 2
@@ -2079,7 +2088,10 @@ func repeatedRequestWillBeSentClearsStaleResponseFields() async throws {
         request.url == "https://example.com/final" && request.state == .pending
     }
     #expect(request.status == nil)
+    #expect(request.statusText == nil)
+    #expect(request.responseURL == nil)
     #expect(request.mimeType == nil)
+    #expect(request.responseSource == nil)
     #expect(request.responseHeaders.isEmpty)
     #expect(request.requestSentTimestamp == 3)
     #expect(request.responseReceivedTimestamp == nil)
@@ -2217,7 +2229,10 @@ func memoryCacheEventCreatesFinishedCachedRequestFromResponse() async throws {
     #expect(request.method == "GET")
     #expect(request.resourceType == nil)
     #expect(request.status == 200)
+    #expect(request.statusText == "OK")
+    #expect(request.responseURL == "https://example.com/cached.css")
     #expect(request.mimeType == "text/css")
+    #expect(request.responseSource == "memory-cache")
     #expect(request.requestHeaders["Accept"] == "text/css")
     #expect(request.responseHeaders["Content-Type"] == "text/css")
     #expect(request.requestSentTimestamp == 5)

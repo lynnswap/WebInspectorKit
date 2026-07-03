@@ -68,9 +68,12 @@ enum ContractTestSupport {
             .responseReceived(
                 id: request.id,
                 response: Network.Response(
+                    url: request.url,
                     status: 200,
+                    statusText: "OK",
                     mimeType: "application/json",
-                    headers: ["Content-Type": "application/json"]
+                    headers: ["Content-Type": "application/json"],
+                    source: Network.Source(rawValue: "network")
                 ),
                 resourceType: .fetch,
                 timestamp: 2
@@ -275,6 +278,9 @@ actor ContractDataKitActor {
         #expect(requestModel.url == "https://example.com/data.json")
         #expect(requestModel.method == "GET")
         #expect(requestModel.status == 200)
+        #expect(requestModel.statusText == "OK")
+        #expect(requestModel.responseURL == "https://example.com/data.json")
+        #expect(requestModel.responseSource == "network")
         #expect(requestModel.responseHeaders["Content-Type"] == "application/json")
         #expect(requestModel.decodedDataLength == 7)
         #expect(requestModel.encodedDataLength == 4)
