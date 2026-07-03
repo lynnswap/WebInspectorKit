@@ -281,6 +281,8 @@ actor ContractDataKitActor {
         #expect(requestModel.statusText == "OK")
         #expect(requestModel.responseURL == "https://example.com/data.json")
         #expect(requestModel.responseSource == "network")
+        #expect(requestModel.hasResponse)
+        #expect(requestModel.hasResponseBody)
         #expect(requestModel.responseHeaders["Content-Type"] == "application/json")
         #expect(requestModel.decodedDataLength == 7)
         #expect(requestModel.encodedDataLength == 4)

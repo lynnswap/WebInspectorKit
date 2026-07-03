@@ -29,6 +29,8 @@ private actor DataKitImportOnlyActor {
         _ = treeController.transactions
         _ = requests.items.first?.url
         _ = requests.items.first?.state
+        _ = requests.items.first?.hasResponse
+        _ = requests.items.first?.hasResponseBody
         _ = requests.items.first?.metrics
         _ = requestsByMethod.sections.first?.title
         let requestSnapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID> =

@@ -66,11 +66,7 @@ extension NetworkRequest {
         let responseURLSummary = responseURL.map(NetworkDisplay.URLSummary.init(url:))
         return NetworkDisplay.resourceFilter(
             resourceTypeRawValue: resourceType?.rawValue,
-            hasResponse: responseReceivedTimestamp != nil
-                || status != nil
-                || mimeType != nil
-                || responseHeaders.isEmpty == false
-                || responseURL != nil,
+            hasResponse: hasResponse,
             responseMIMEType: mimeType,
             responseHeaders: responseHeaders,
             responseURLSummary: responseURLSummary,

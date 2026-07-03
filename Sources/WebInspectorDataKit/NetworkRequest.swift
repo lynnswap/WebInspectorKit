@@ -624,6 +624,20 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         return responseBody.needsFetch
     }
 
+    public var hasResponse: Bool {
+        responseReceivedTimestamp != nil
+            || status != nil
+            || statusText != nil
+            || responseURL != nil
+            || mimeType != nil
+            || responseHeaders.isEmpty == false
+            || responseSource != nil
+    }
+
+    public var hasResponseBody: Bool {
+        hasResponse && resourceType != .webSocket
+    }
+
     public func fetchResponseBody(isolation: isolated (any Actor) = #isolation) async {
         guard canFetchResponseBody else {
             return

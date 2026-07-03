@@ -1935,6 +1935,8 @@ func networkEventsPopulateAllRequestsInOrder() async throws {
     #expect(request.responseURL == "https://cdn.example.com/data.json")
     #expect(request.mimeType == "application/json")
     #expect(request.responseSource == "network")
+    #expect(request.hasResponse)
+    #expect(request.hasResponseBody)
     #expect(request.requestHeaders["Accept"] == "application/json")
     #expect(request.responseHeaders["Content-Type"] == "application/json")
     #expect(request.requestSentTimestamp == 1)
@@ -2297,6 +2299,8 @@ func webSocketCreatedCreatesRequestWithConnectingState() async throws {
     #expect(request.state == .pending)
     #expect(request.requestSentTimestamp == nil)
     #expect(request.webSocket?.readyState == .connecting)
+    #expect(request.hasResponse == false)
+    #expect(request.hasResponseBody == false)
     #expect(context.registeredRequest(for: request.id) === request)
 }
 
@@ -2451,6 +2455,8 @@ func webSocketLifecycleStoresHandshakeFramesErrorAndClosedState() async throws {
     #expect(request.responseHeaders["Upgrade"] == "websocket")
     #expect(request.requestHeaders["Upgrade"] == "websocket")
     #expect(request.responseReceivedTimestamp == 2)
+    #expect(request.hasResponse)
+    #expect(request.hasResponseBody == false)
 
     await runtime.backend.emit(
         .webSocket(.frameSent(
