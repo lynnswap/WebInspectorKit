@@ -829,30 +829,30 @@ extension WebViewModelContext {
                 redirectResponse: redirectResponse,
                 timestamp: timestamp
             )
-        case let .responseReceived(id, response, resourceType, _):
+        case let .responseReceived(id, response, resourceType, timestamp):
             guard let request = requestsByID[NetworkRequest.ID(id)] else {
                 fail(.disconnected("Network.responseReceived referenced an unknown request."))
                 return
             }
-            request.applyResponse(response, resourceType: resourceType)
-        case let .dataReceived(id, dataLength, _):
+            request.applyResponse(response, resourceType: resourceType, timestamp: timestamp)
+        case let .dataReceived(id, dataLength, timestamp):
             guard let request = requestsByID[NetworkRequest.ID(id)] else {
                 fail(.disconnected("Network.dataReceived referenced an unknown request."))
                 return
             }
-            request.applyDataReceived(dataLength: dataLength)
-        case let .loadingFinished(id, _):
+            request.applyDataReceived(dataLength: dataLength, timestamp: timestamp)
+        case let .loadingFinished(id, timestamp):
             guard let request = requestsByID[NetworkRequest.ID(id)] else {
                 fail(.disconnected("Network.loadingFinished referenced an unknown request."))
                 return
             }
-            request.finish()
-        case let .loadingFailed(id, errorText, canceled, _):
+            request.finish(timestamp: timestamp)
+        case let .loadingFailed(id, errorText, canceled, timestamp):
             guard let request = requestsByID[NetworkRequest.ID(id)] else {
                 fail(.disconnected("Network.loadingFailed referenced an unknown request."))
                 return
             }
-            request.fail(errorText: errorText, canceled: canceled)
+            request.fail(errorText: errorText, canceled: canceled, timestamp: timestamp)
         case let .webSocket(event):
             apply(event)
         case .requestServedFromMemoryCache,
@@ -880,10 +880,10 @@ extension WebViewModelContext {
                     resourceType: resourceType
                 )
             } else if existing.isActive == false {
-                request.applyRequestWillBeSent(request: payload, resourceType: resourceType)
+                request.applyRequestWillBeSent(request: payload, resourceType: resourceType, timestamp: timestamp)
             }
         } else {
-            request = NetworkRequest(request: payload, resourceType: resourceType, modelContext: self)
+            request = NetworkRequest(request: payload, resourceType: resourceType, timestamp: timestamp, modelContext: self)
             requestsByID[id] = request
             orderedRequestIDs.append(id)
         }
@@ -894,16 +894,16 @@ extension WebViewModelContext {
         switch event {
         case let .created(id, url):
             applyWebSocketCreated(id: id, url: url)
-        case let .handshakeRequest(id, request, _):
+        case let .handshakeRequest(id, request, timestamp):
             guard let networkRequest = networkRequest(forWebSocketEvent: id, method: "webSocketWillSendHandshakeRequest") else {
                 return
             }
-            networkRequest.applyWebSocketHandshakeRequest(request)
-        case let .handshakeResponse(id, response, _):
+            networkRequest.applyWebSocketHandshakeRequest(request, timestamp: timestamp)
+        case let .handshakeResponse(id, response, timestamp):
             guard let networkRequest = networkRequest(forWebSocketEvent: id, method: "webSocketHandshakeResponseReceived") else {
                 return
             }
-            networkRequest.applyWebSocketHandshakeResponse(response)
+            networkRequest.applyWebSocketHandshakeResponse(response, timestamp: timestamp)
         case let .frameSent(id, frame, timestamp):
             guard let networkRequest = networkRequest(forWebSocketEvent: id, method: "webSocketFrameSent") else {
                 return
@@ -919,11 +919,11 @@ extension WebViewModelContext {
                 return
             }
             networkRequest.appendWebSocketError(message, timestamp: timestamp)
-        case let .closed(id, _):
+        case let .closed(id, timestamp):
             guard let networkRequest = networkRequest(forWebSocketEvent: id, method: "webSocketClosed") else {
                 return
             }
-            networkRequest.closeWebSocket()
+            networkRequest.closeWebSocket(timestamp: timestamp)
         case .other:
             break
         }
@@ -936,7 +936,7 @@ extension WebViewModelContext {
             request = existing
         } else {
             let payload = Network.Request(id: proxyID, url: url, method: "GET")
-            request = NetworkRequest(request: payload, resourceType: .webSocket, modelContext: self)
+            request = NetworkRequest(request: payload, resourceType: .webSocket, timestamp: nil, modelContext: self)
             requestsByID[id] = request
             orderedRequestIDs.append(id)
         }

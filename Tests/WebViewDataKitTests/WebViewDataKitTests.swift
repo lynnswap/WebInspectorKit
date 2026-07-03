@@ -894,6 +894,11 @@ func networkEventsPopulateAllRequestsInOrder() async throws {
     #expect(request.mimeType == "application/json")
     #expect(request.requestHeaders["Accept"] == "application/json")
     #expect(request.responseHeaders["Content-Type"] == "application/json")
+    #expect(request.requestSentTimestamp == 1)
+    #expect(request.responseReceivedTimestamp == 2)
+    #expect(request.lastDataReceivedTimestamp == 3)
+    #expect(request.finishedOrFailedTimestamp == 4)
+    #expect(request.decodedDataLength == 12)
     #expect(context.registeredRequest(for: request.id) === request)
 }
 
@@ -951,6 +956,11 @@ func repeatedRequestWillBeSentClearsStaleResponseFields() async throws {
     #expect(request.status == nil)
     #expect(request.mimeType == nil)
     #expect(request.responseHeaders.isEmpty)
+    #expect(request.requestSentTimestamp == 3)
+    #expect(request.responseReceivedTimestamp == nil)
+    #expect(request.lastDataReceivedTimestamp == nil)
+    #expect(request.finishedOrFailedTimestamp == nil)
+    #expect(request.decodedDataLength == 0)
     #expect(request.responseBody.phase == .available)
     #expect(request.responseBody.text == nil)
     #expect(request.redirects.count == 1)
@@ -998,6 +1008,40 @@ func completedRequestDoesNotTreatLaterRequestWillBeSentAsRedirect() async throws
     }
     #expect(results.items.first === request)
     #expect(request.redirects.isEmpty)
+    #expect(request.requestSentTimestamp == 3)
+    #expect(request.finishedOrFailedTimestamp == nil)
+}
+
+@MainActor
+@Test
+func loadingFailedStoresFailureTimestampAndClampsDataLength() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let requestID = Network.Request.ID("failed-request")
+
+    await runtime.backend.emit(
+        .requestWillBeSent(
+            id: requestID,
+            request: Network.Request(id: requestID, url: "https://example.com/fail", method: "GET"),
+            resourceType: .fetch,
+            redirectResponse: nil,
+            timestamp: 1
+        ),
+        target: target
+    )
+    await runtime.backend.emit(.dataReceived(id: requestID, dataLength: -10, timestamp: 2), target: target)
+    await runtime.backend.emit(
+        .loadingFailed(id: requestID, errorText: "cancelled", canceled: true, timestamp: 3),
+        target: target
+    )
+
+    let results: WebViewFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
+    try await waitUntil { results.items.first?.state == .failed(errorText: "cancelled", canceled: true) }
+    let request = try #require(results.items.first)
+    #expect(request.requestSentTimestamp == 1)
+    #expect(request.lastDataReceivedTimestamp == 2)
+    #expect(request.finishedOrFailedTimestamp == 3)
+    #expect(request.decodedDataLength == 0)
 }
 
 @MainActor
@@ -1019,8 +1063,99 @@ func webSocketCreatedCreatesRequestWithConnectingState() async throws {
     #expect(request.method == "GET")
     #expect(request.resourceType == .webSocket)
     #expect(request.state == .pending)
+    #expect(request.requestSentTimestamp == nil)
     #expect(request.webSocket?.readyState == .connecting)
     #expect(context.registeredRequest(for: request.id) === request)
+}
+
+@MainActor
+@Test
+func webSocketCreatedPreservesExistingNetworkLifecycleMetadata() async throws {
+    let runtime = try await WebViewProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let requestID = Network.Request.ID("websocket-created-after-request")
+
+    await runtime.backend.emit(
+        .requestWillBeSent(
+            id: requestID,
+            request: Network.Request(
+                id: requestID,
+                url: "wss://example.com/socket",
+                method: "GET",
+                headers: ["Upgrade": "websocket"]
+            ),
+            resourceType: .webSocket,
+            redirectResponse: nil,
+            timestamp: 1
+        ),
+        target: target
+    )
+    await runtime.backend.emit(
+        .responseReceived(
+            id: requestID,
+            response: Network.Response(
+                status: 101,
+                statusText: "Switching Protocols",
+                headers: ["Upgrade": "websocket"],
+                requestHeaders: ["Upgrade": "websocket"]
+            ),
+            resourceType: .webSocket,
+            timestamp: 2
+        ),
+        target: target
+    )
+    await runtime.backend.emit(.dataReceived(id: requestID, dataLength: 7, timestamp: 3), target: target)
+
+    let results: WebViewFetchedResults<NetworkRequest> = context.fetchedResults(for: .allRequests)
+    try await waitUntil { results.items.first?.decodedDataLength == 7 }
+    let request = try #require(results.items.first)
+    let webSocket = try #require(request.webSocket)
+
+    await runtime.backend.emit(
+        .webSocket(.created(id: requestID, url: "wss://example.com/socket?created")),
+        target: target
+    )
+    try await waitUntil { request.url == "wss://example.com/socket?created" }
+    await runtime.backend.emit(
+        .webSocket(.handshakeRequest(
+            id: requestID,
+            request: Network.Request(
+                id: requestID,
+                url: "wss://example.com/socket?created",
+                method: "GET",
+                headers: ["Upgrade": "websocket"]
+            ),
+            timestamp: nil
+        )),
+        target: target
+    )
+    await runtime.backend.emit(
+        .webSocket(.handshakeResponse(
+            id: requestID,
+            response: Network.Response(
+                status: 101,
+                statusText: "Switching Protocols",
+                headers: ["Upgrade": "websocket"],
+                requestHeaders: ["Upgrade": "websocket"]
+            ),
+            timestamp: nil
+        )),
+        target: target
+    )
+    try await waitUntil { request.webSocket?.readyState == .open }
+
+    let currentWebSocket = try #require(request.webSocket)
+    #expect(currentWebSocket === webSocket)
+    #expect(request.method == "GET")
+    #expect(request.requestHeaders["Upgrade"] == "websocket")
+    #expect(request.status == 101)
+    #expect(request.responseHeaders["Upgrade"] == "websocket")
+    #expect(request.requestSentTimestamp == 1)
+    #expect(request.responseReceivedTimestamp == 2)
+    #expect(request.lastDataReceivedTimestamp == 3)
+    #expect(request.finishedOrFailedTimestamp == nil)
+    #expect(request.decodedDataLength == 7)
+    #expect(request.state == .responded)
 }
 
 @MainActor
@@ -1055,6 +1190,7 @@ func webSocketLifecycleStoresHandshakeFramesErrorAndClosedState() async throws {
         request.webSocket?.handshakeRequest?.headers["Upgrade"] == "websocket"
     }
     #expect(request.requestHeaders["Upgrade"] == "websocket")
+    #expect(request.requestSentTimestamp == 1)
     #expect(request.webSocket?.readyState == .connecting)
     #expect(request.state == .pending)
 
@@ -1078,6 +1214,7 @@ func webSocketLifecycleStoresHandshakeFramesErrorAndClosedState() async throws {
     #expect(request.status == 101)
     #expect(request.responseHeaders["Upgrade"] == "websocket")
     #expect(request.requestHeaders["Upgrade"] == "websocket")
+    #expect(request.responseReceivedTimestamp == 2)
 
     await runtime.backend.emit(
         .webSocket(.frameSent(
@@ -1109,6 +1246,8 @@ func webSocketLifecycleStoresHandshakeFramesErrorAndClosedState() async throws {
     #expect(webSocket.frames[1].payloadData == "world")
     #expect(webSocket.frames[2].errorMessage == "boom")
     #expect(webSocket.frames.map(\.timestamp) == [3, 4, 5])
+    #expect(request.decodedDataLength == 10)
+    #expect(request.lastDataReceivedTimestamp == 5)
 
     await runtime.backend.emit(
         .webSocket(.closed(id: requestID, timestamp: 6)),
@@ -1117,6 +1256,7 @@ func webSocketLifecycleStoresHandshakeFramesErrorAndClosedState() async throws {
     try await waitUntil {
         request.webSocket?.readyState == .closed && request.state == .finished
     }
+    #expect(request.finishedOrFailedTimestamp == 6)
 }
 
 @MainActor

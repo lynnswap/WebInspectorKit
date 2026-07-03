@@ -179,6 +179,11 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
     public private(set) var mimeType: String?
     public private(set) var requestHeaders: [String: String]
     public private(set) var responseHeaders: [String: String]
+    public private(set) var requestSentTimestamp: Double?
+    public private(set) var responseReceivedTimestamp: Double?
+    public private(set) var lastDataReceivedTimestamp: Double?
+    public private(set) var finishedOrFailedTimestamp: Double?
+    public private(set) var decodedDataLength: Int
     public private(set) var redirects: [RedirectHop]
     public private(set) var webSocket: WebSocketState?
     public private(set) var responseBody: NetworkBody
@@ -204,6 +209,7 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
     package init(
         request: Network.Request,
         resourceType: Network.ResourceType?,
+        timestamp: Double?,
         modelContext: WebViewModelContext
     ) {
         id = ID(request.id)
@@ -215,6 +221,11 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         mimeType = nil
         requestHeaders = request.headers
         responseHeaders = [:]
+        requestSentTimestamp = timestamp
+        responseReceivedTimestamp = nil
+        lastDataReceivedTimestamp = nil
+        finishedOrFailedTimestamp = nil
+        decodedDataLength = 0
         redirects = []
         webSocket = resourceType == .webSocket ? WebSocketState() : nil
         responseBody = NetworkBody()
@@ -233,7 +244,8 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
 
     package func applyRequestWillBeSent(
         request: Network.Request,
-        resourceType: Network.ResourceType?
+        resourceType: Network.ResourceType?,
+        timestamp: Double
     ) {
         currentRequest = request
         url = request.url
@@ -243,6 +255,11 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         status = nil
         mimeType = nil
         responseHeaders = [:]
+        requestSentTimestamp = timestamp
+        responseReceivedTimestamp = nil
+        lastDataReceivedTimestamp = nil
+        finishedOrFailedTimestamp = nil
+        decodedDataLength = 0
         redirects = []
         webSocket = resourceType == .webSocket ? WebSocketState() : nil
         responseBody = NetworkBody()
@@ -270,13 +287,19 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         status = nil
         mimeType = nil
         responseHeaders = [:]
+        requestSentTimestamp = timestamp
+        responseReceivedTimestamp = nil
+        lastDataReceivedTimestamp = nil
+        finishedOrFailedTimestamp = nil
+        decodedDataLength = 0
         responseBody = NetworkBody()
         state = .pending
     }
 
     package func applyResponse(
         _ response: Network.Response,
-        resourceType: Network.ResourceType
+        resourceType: Network.ResourceType,
+        timestamp: Double?
     ) {
         self.resourceType = resourceType
         if resourceType == .webSocket {
@@ -290,21 +313,27 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         if let requestHeaders = response.requestHeaders {
             self.requestHeaders = requestHeaders
         }
+        if let timestamp {
+            responseReceivedTimestamp = timestamp
+        }
         state = .responded
     }
 
-    package func applyDataReceived(dataLength: Int) {
-        _ = dataLength
+    package func applyDataReceived(dataLength: Int, timestamp: Double) {
+        decodedDataLength += max(0, dataLength)
+        lastDataReceivedTimestamp = timestamp
         if state == .pending {
             state = .responded
         }
     }
 
-    package func finish() {
+    package func finish(timestamp: Double) {
+        finishedOrFailedTimestamp = timestamp
         state = .finished
     }
 
-    package func fail(errorText: String, canceled: Bool) {
+    package func fail(errorText: String, canceled: Bool, timestamp: Double) {
+        finishedOrFailedTimestamp = timestamp
         state = .failed(errorText: errorText, canceled: canceled)
     }
 
@@ -318,33 +347,26 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
     }
 
     package func applyWebSocketCreated(url: String) {
-        let request = Network.Request(id: proxyID, url: url, method: "GET")
-        currentRequest = request
         self.url = url
-        method = request.method
         resourceType = .webSocket
-        requestHeaders = request.headers
-        status = nil
-        mimeType = nil
-        responseHeaders = [:]
-        redirects = []
-        webSocket = WebSocketState()
-        responseBody = NetworkBody()
-        state = .pending
+        _ = ensureWebSocketState()
     }
 
-    package func applyWebSocketHandshakeRequest(_ request: Network.Request) {
+    package func applyWebSocketHandshakeRequest(_ request: Network.Request, timestamp: Double?) {
         currentRequest = request
         url = request.url
         method = request.method
         resourceType = .webSocket
         requestHeaders = request.headers
+        if let timestamp {
+            requestSentTimestamp = timestamp
+        }
         state = .pending
         ensureWebSocketState().applyHandshakeRequest(request)
     }
 
-    package func applyWebSocketHandshakeResponse(_ response: Network.Response) {
-        applyResponse(response, resourceType: .webSocket)
+    package func applyWebSocketHandshakeResponse(_ response: Network.Response, timestamp: Double?) {
+        applyResponse(response, resourceType: .webSocket, timestamp: timestamp)
         ensureWebSocketState().applyHandshakeResponse(response)
     }
 
@@ -353,15 +375,19 @@ public final class NetworkRequest: Identifiable, WebViewFetchableModel {
         direction: WebSocketState.FrameDirection,
         timestamp: Double
     ) {
+        decodedDataLength += max(0, frame.payloadLength)
+        lastDataReceivedTimestamp = timestamp
         ensureWebSocketState().appendFrame(frame, direction: direction, timestamp: timestamp)
     }
 
     package func appendWebSocketError(_ message: String, timestamp: Double) {
+        lastDataReceivedTimestamp = timestamp
         ensureWebSocketState().appendError(message, timestamp: timestamp)
     }
 
-    package func closeWebSocket() {
+    package func closeWebSocket(timestamp: Double) {
         ensureWebSocketState().markClosed()
+        finishedOrFailedTimestamp = timestamp
         state = .finished
     }
 
