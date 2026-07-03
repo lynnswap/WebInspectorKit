@@ -282,29 +282,29 @@ func mediaFilterIncludesPreviewableMediaResponses() async throws {
 
 @Test
 func mediaPreviewSupportClassifiesAVIFAndExcludesSVG() {
-    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "image/avif", url: nil) == .image)
-    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: nil, url: "https://cdn.example.com/photo.avif") == .image)
-    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "image/apng", url: nil) == .image)
-    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: nil, url: "https://cdn.example.com/animated.apng") == .image)
-    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "application/octet-stream", url: "https://cdn.example.com/animated.apng") == .image)
-    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "image/x-png", url: nil) == .image)
-    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "image/pjpeg", url: nil) == .image)
-    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "image/x-unknown", url: "https://cdn.example.com/photo.png") == .image)
-    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: nil, url: "https://cdn.example.com/画像.png") == .image)
-    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "image/svg+xml", url: "https://cdn.example.com/icon.svg") == nil)
-    #expect(NetworkRequest.Display.MediaPreviewSupport.classification(mimeType: "image/svg+xml", url: "https://cdn.example.com/icon.svg") == .notPreviewable)
-    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "text/javascript", url: "https://cdn.example.com/player.mp4") == nil)
-    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "text/css", url: "https://cdn.example.com/theme.png") == nil)
-    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(mimeType: "application/octet-stream", url: "https://api.example.com/download") == nil)
-    #expect(NetworkRequest.Display.MediaPreviewSupport.temporaryFileExtension(
+    #expect(NetworkDisplay.MediaPreviewSupport.previewKind(mimeType: "image/avif", url: nil) == .image)
+    #expect(NetworkDisplay.MediaPreviewSupport.previewKind(mimeType: nil, url: "https://cdn.example.com/photo.avif") == .image)
+    #expect(NetworkDisplay.MediaPreviewSupport.previewKind(mimeType: "image/apng", url: nil) == .image)
+    #expect(NetworkDisplay.MediaPreviewSupport.previewKind(mimeType: nil, url: "https://cdn.example.com/animated.apng") == .image)
+    #expect(NetworkDisplay.MediaPreviewSupport.previewKind(mimeType: "application/octet-stream", url: "https://cdn.example.com/animated.apng") == .image)
+    #expect(NetworkDisplay.MediaPreviewSupport.previewKind(mimeType: "image/x-png", url: nil) == .image)
+    #expect(NetworkDisplay.MediaPreviewSupport.previewKind(mimeType: "image/pjpeg", url: nil) == .image)
+    #expect(NetworkDisplay.MediaPreviewSupport.previewKind(mimeType: "image/x-unknown", url: "https://cdn.example.com/photo.png") == .image)
+    #expect(NetworkDisplay.MediaPreviewSupport.previewKind(mimeType: nil, url: "https://cdn.example.com/画像.png") == .image)
+    #expect(NetworkDisplay.MediaPreviewSupport.previewKind(mimeType: "image/svg+xml", url: "https://cdn.example.com/icon.svg") == nil)
+    #expect(NetworkDisplay.MediaPreviewSupport.classification(mimeType: "image/svg+xml", url: "https://cdn.example.com/icon.svg") == .notPreviewable)
+    #expect(NetworkDisplay.MediaPreviewSupport.previewKind(mimeType: "text/javascript", url: "https://cdn.example.com/player.mp4") == nil)
+    #expect(NetworkDisplay.MediaPreviewSupport.previewKind(mimeType: "text/css", url: "https://cdn.example.com/theme.png") == nil)
+    #expect(NetworkDisplay.MediaPreviewSupport.previewKind(mimeType: "application/octet-stream", url: "https://api.example.com/download") == nil)
+    #expect(NetworkDisplay.MediaPreviewSupport.temporaryFileExtension(
         mimeType: "video/mp4",
         url: "https://api.example.com/download.php"
     ) == "mp4")
-    #expect(NetworkRequest.Display.MediaPreviewSupport.temporaryFileExtension(
+    #expect(NetworkDisplay.MediaPreviewSupport.temporaryFileExtension(
         mimeType: "application/vnd.apple.mpegurl",
         url: "https://api.example.com/download.php"
     ) == "m3u8")
-    #expect(NetworkRequest.Display.MediaPreviewSupport.temporaryFileExtension(
+    #expect(NetworkDisplay.MediaPreviewSupport.temporaryFileExtension(
         mimeType: "application/octet-stream",
         url: "https://cdn.example.com/player.mp4"
     ) == "mp4")
@@ -312,23 +312,23 @@ func mediaPreviewSupportClassifiesAVIFAndExcludesSVG() {
 
 @Test
 func mediaPreviewSupportClassifiesHLSPlaylists() {
-    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(
+    #expect(NetworkDisplay.MediaPreviewSupport.previewKind(
         mimeType: "application/vnd.apple.mpegurl",
         url: nil
     ) == .hlsPlaylist)
-    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(
+    #expect(NetworkDisplay.MediaPreviewSupport.previewKind(
         mimeType: "application/x-mpegurl; charset=utf-8",
         url: nil
     ) == .hlsPlaylist)
-    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(
+    #expect(NetworkDisplay.MediaPreviewSupport.previewKind(
         mimeType: "audio/mpegurl",
         url: nil
     ) == .hlsPlaylist)
-    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(
+    #expect(NetworkDisplay.MediaPreviewSupport.previewKind(
         mimeType: nil,
         url: "https://media.example.com/live/master.m3u8?token=abc"
     ) == .hlsPlaylist)
-    #expect(NetworkRequest.Display.MediaPreviewSupport.previewKind(
+    #expect(NetworkDisplay.MediaPreviewSupport.previewKind(
         mimeType: "application/octet-stream",
         url: "https://media.example.com/live/master.m3u8"
     ) == .hlsPlaylist)
@@ -365,7 +365,7 @@ func displayResourceFilterUpdatesWhenResponseMIMEBecomesPreviewable() async thro
     #expect(model.displayRequestIDs == [requestID])
     let request = try #require(network.request(for: requestID))
     #expect(request.displayResourceFilter(mediaPreviewClassifier: { mimeType, url in
-        NetworkRequest.Display.MediaPreviewSupport.classification(mimeType: mimeType, url: url)
+        NetworkDisplay.MediaPreviewSupport.classification(mimeType: mimeType, url: url)
     }) == .media)
 }
 
@@ -528,7 +528,7 @@ func displayResourceFilteringCachesDisplayEntriesAcrossRepeatedReads() async thr
         network: network,
         mediaPreviewClassifier: { mimeType, url in
             classificationCount.withLock { $0 += 1 }
-            return NetworkRequest.Display.MediaPreviewSupport.classification(mimeType: mimeType, url: url)
+            return NetworkDisplay.MediaPreviewSupport.classification(mimeType: mimeType, url: url)
         }
     )
     model.setResourceFilter(.media, enabled: true)
@@ -757,7 +757,7 @@ func displayRequestIDsSkipsMediaClassificationWhenUnfilteredOrSearchOnly() async
         network: network,
         mediaPreviewClassifier: { mimeType, url in
             classificationCount.withLock { $0 += 1 }
-            return NetworkRequest.Display.MediaPreviewSupport.classification(mimeType: mimeType, url: url)
+            return NetworkDisplay.MediaPreviewSupport.classification(mimeType: mimeType, url: url)
         }
     )
 

@@ -353,14 +353,14 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         activeSearchController.searchBar.text = text
     }
 
-    private func renderFilterItem(effectiveResourceFilters: Set<NetworkRequest.Display.ResourceFilter>) {
+    private func renderFilterItem(effectiveResourceFilters: Set<NetworkDisplay.ResourceFilter>) {
         guard isViewLoaded else {
             return
         }
         filterItem.isSelected = effectiveResourceFilters.isEmpty == false
     }
 
-    private func resourceFilterSelectionDidChange(effectiveResourceFilters: Set<NetworkRequest.Display.ResourceFilter>) {
+    private func resourceFilterSelectionDidChange(effectiveResourceFilters: Set<NetworkDisplay.ResourceFilter>) {
         renderFilterItem(effectiveResourceFilters: effectiveResourceFilters)
     }
 

@@ -92,7 +92,7 @@ package final class NetworkMediaPreviewCoordinator {
         for body: NetworkBody,
         metadata: NetworkMediaPreviewMetadata?
     ) -> NetworkMediaPreviewSource? {
-        guard let previewKind = NetworkRequest.Display.MediaPreviewSupport.previewKind(
+        guard let previewKind = NetworkDisplay.MediaPreviewSupport.previewKind(
             mimeType: metadata?.mimeType,
             url: metadata?.url
         ) else {
@@ -301,7 +301,7 @@ private enum NetworkMediaPreviewIdentity: Equatable {
 }
 
 private struct NetworkMediaPreviewInput: Equatable, Sendable {
-    var previewKind: NetworkRequest.Display.MediaPreviewKind
+    var previewKind: NetworkDisplay.MediaPreviewKind
     var bodyID: ObjectIdentifier
     var role: NetworkBody.Role
     var rawBody: String
@@ -350,7 +350,7 @@ private func playableRemoteMediaURL(_ url: String?) -> URL? {
 }
 
 private func mediaFileExtension(mimeType: String?, url: String?) -> String {
-    NetworkRequest.Display.MediaPreviewSupport.temporaryFileExtension(mimeType: mimeType, url: url)
+    NetworkDisplay.MediaPreviewSupport.temporaryFileExtension(mimeType: mimeType, url: url)
 }
 
 private func removeTemporaryMediaFile(at url: URL?) {

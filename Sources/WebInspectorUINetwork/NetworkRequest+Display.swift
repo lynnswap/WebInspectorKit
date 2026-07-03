@@ -2,22 +2,20 @@ import WebInspectorUIBase
 import WebInspectorCore
 import Foundation
 
-extension NetworkRequest {
-    package enum Display {}
-}
+package enum NetworkDisplay {}
 
-extension NetworkRequest.Display {
-    package typealias MediaPreviewClassifier = @Sendable (String?, String?) -> NetworkRequest.Display.MediaPreviewClassification
+extension NetworkDisplay {
+    package typealias MediaPreviewClassifier = @Sendable (String?, String?) -> NetworkDisplay.MediaPreviewClassification
 
     package struct Projection {
-        package var requestURLSummary: NetworkRequest.Display.URLSummary
-        package var responseURLSummary: NetworkRequest.Display.URLSummary?
+        package var requestURLSummary: NetworkDisplay.URLSummary
+        package var responseURLSummary: NetworkDisplay.URLSummary?
         package var fileTypeLabel: String
         package var searchTokens: [String]
 
         package init(
-            requestURLSummary: NetworkRequest.Display.URLSummary,
-            responseURLSummary: NetworkRequest.Display.URLSummary?,
+            requestURLSummary: NetworkDisplay.URLSummary,
+            responseURLSummary: NetworkDisplay.URLSummary?,
             fileTypeLabel: String,
             searchTokens: [String]
         ) {
@@ -31,7 +29,7 @@ extension NetworkRequest.Display {
 
 extension NetworkRequest {
     package var displayName: String {
-        NetworkRequest.Display.URLSummary(url: request.url).displayName
+        NetworkDisplay.URLSummary(url: request.url).displayName
     }
 
     package var statusLabel: String {
@@ -51,14 +49,14 @@ extension NetworkRequest {
     }
 
     package var fileTypeLabel: String {
-        NetworkRequest.Display.fileTypeLabel(
+        NetworkDisplay.fileTypeLabel(
             mimeType: response?.mimeType,
             resourceType: resourceType,
-            urlSummary: NetworkRequest.Display.URLSummary(url: request.url)
+            urlSummary: NetworkDisplay.URLSummary(url: request.url)
         )
     }
 
-    package var statusSeverity: NetworkRequest.Display.StatusSeverity {
+    package var statusSeverity: NetworkDisplay.StatusSeverity {
         if case .failed = state {
             return .error
         }
@@ -88,11 +86,11 @@ extension NetworkRequest {
     }
 
     package func displayResourceFilter(
-        mediaPreviewClassifier: NetworkRequest.Display.MediaPreviewClassifier
-    ) -> NetworkRequest.Display.ResourceFilter {
-        let requestURLSummary = NetworkRequest.Display.URLSummary(url: request.url)
-        let responseURLSummary = response.map { NetworkRequest.Display.URLSummary(url: $0.url) }
-        return NetworkRequest.Display.resourceFilter(
+        mediaPreviewClassifier: NetworkDisplay.MediaPreviewClassifier
+    ) -> NetworkDisplay.ResourceFilter {
+        let requestURLSummary = NetworkDisplay.URLSummary(url: request.url)
+        let responseURLSummary = response.map { NetworkDisplay.URLSummary(url: $0.url) }
+        return NetworkDisplay.resourceFilter(
             resourceType: resourceType,
             response: response,
             requestURLSummary: requestURLSummary,
@@ -101,20 +99,20 @@ extension NetworkRequest {
         )
     }
 
-    package func displayProjection() -> NetworkRequest.Display.Projection {
-        let requestURLSummary = NetworkRequest.Display.URLSummary(url: request.url)
-        let responseURLSummary = response.map { NetworkRequest.Display.URLSummary(url: $0.url) }
-        let fileTypeLabel = NetworkRequest.Display.fileTypeLabel(
+    package func displayProjection() -> NetworkDisplay.Projection {
+        let requestURLSummary = NetworkDisplay.URLSummary(url: request.url)
+        let responseURLSummary = response.map { NetworkDisplay.URLSummary(url: $0.url) }
+        let fileTypeLabel = NetworkDisplay.fileTypeLabel(
             mimeType: response?.mimeType,
             resourceType: resourceType,
             urlSummary: requestURLSummary
         )
         let statusCodeLabel = response.map { String($0.status) } ?? ""
-        return NetworkRequest.Display.Projection(
+        return NetworkDisplay.Projection(
             requestURLSummary: requestURLSummary,
             responseURLSummary: responseURLSummary,
             fileTypeLabel: fileTypeLabel,
-            searchTokens: NetworkRequest.Display.searchTokens(
+            searchTokens: NetworkDisplay.searchTokens(
                 requestURLSummary: requestURLSummary,
                 responseURLSummary: responseURLSummary,
                 requestMethod: request.method,
@@ -153,38 +151,38 @@ extension NetworkRequest {
     }
 }
 
-extension NetworkRequest.Display {
+extension NetworkDisplay {
     package static func resourceFilter(
         resourceType: NetworkRequest.ResourceType?,
         response: NetworkRequest.Response.Payload?,
-        requestURLSummary: NetworkRequest.Display.URLSummary,
-        responseURLSummary: NetworkRequest.Display.URLSummary?,
-        mediaPreviewClassifier: NetworkRequest.Display.MediaPreviewClassifier
-    ) -> NetworkRequest.Display.ResourceFilter {
+        requestURLSummary: NetworkDisplay.URLSummary,
+        responseURLSummary: NetworkDisplay.URLSummary?,
+        mediaPreviewClassifier: NetworkDisplay.MediaPreviewClassifier
+    ) -> NetworkDisplay.ResourceFilter {
         guard let response else {
             if let resourceType {
-                return NetworkRequest.Display.ResourceFilter(resourceType: resourceType)
+                return NetworkDisplay.ResourceFilter(resourceType: resourceType)
             }
-            return NetworkRequest.Display.ResourceFilter.inferred(
+            return NetworkDisplay.ResourceFilter.inferred(
                 mimeType: nil,
                 pathExtension: requestURLSummary.pathExtension,
                 mediaPreviewClassification: mediaPreviewClassifier(nil, requestURLSummary.rawURL)
             )
         }
 
-        let responseMIMEType = NetworkRequest.Display.displayMIMEType(
+        let responseMIMEType = NetworkDisplay.displayMIMEType(
             mimeType: response.mimeType,
             headers: response.headers
         )
         if let resourceType,
-           NetworkRequest.Display.shouldKeepResourceTypeForURLInferredMedia(resourceType) {
+           NetworkDisplay.shouldKeepResourceTypeForURLInferredMedia(resourceType) {
             if case .previewable = mediaPreviewClassifier(responseMIMEType, nil) {
                 return .media
             }
-            return NetworkRequest.Display.ResourceFilter(resourceType: resourceType)
+            return NetworkDisplay.ResourceFilter(resourceType: resourceType)
         }
 
-        let responseURLSummary = responseURLSummary ?? NetworkRequest.Display.URLSummary(url: response.url)
+        let responseURLSummary = responseURLSummary ?? NetworkDisplay.URLSummary(url: response.url)
         switch mediaPreviewClassifier(responseMIMEType, responseURLSummary.rawURL) {
         case .previewable:
             return .media
@@ -192,7 +190,7 @@ extension NetworkRequest.Display {
             if resourceType == .image || resourceType == .media {
                 return .media
             }
-            return NetworkRequest.Display.ResourceFilter.inferred(
+            return NetworkDisplay.ResourceFilter.inferred(
                 mimeType: responseMIMEType,
                 pathExtension: responseURLSummary.pathExtension,
                 mediaPreviewClassification: mediaPreviewClassifier(responseMIMEType, responseURLSummary.rawURL)
@@ -201,9 +199,9 @@ extension NetworkRequest.Display {
             break
         }
         if let resourceType {
-            return NetworkRequest.Display.ResourceFilter(resourceType: resourceType)
+            return NetworkDisplay.ResourceFilter(resourceType: resourceType)
         }
-        return NetworkRequest.Display.ResourceFilter.inferred(
+        return NetworkDisplay.ResourceFilter.inferred(
             mimeType: responseMIMEType,
             pathExtension: responseURLSummary.pathExtension,
             mediaPreviewClassification: mediaPreviewClassifier(responseMIMEType, responseURLSummary.rawURL)
@@ -213,7 +211,7 @@ extension NetworkRequest.Display {
     package static func fileTypeLabel(
         mimeType: String?,
         resourceType: NetworkRequest.ResourceType?,
-        urlSummary: NetworkRequest.Display.URLSummary
+        urlSummary: NetworkDisplay.URLSummary
     ) -> String {
         if let mimeType,
            let subtype = mimeType
@@ -248,8 +246,8 @@ extension NetworkRequest.Display {
     }
 
     package static func searchTokens(
-        requestURLSummary: NetworkRequest.Display.URLSummary,
-        responseURLSummary: NetworkRequest.Display.URLSummary?,
+        requestURLSummary: NetworkDisplay.URLSummary,
+        responseURLSummary: NetworkDisplay.URLSummary?,
         requestMethod: String,
         statusCodeLabel: String,
         statusText: String,

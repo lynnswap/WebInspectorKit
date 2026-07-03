@@ -3,9 +3,8 @@ import AVFoundation
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
-import WebInspectorCore
 
-extension NetworkRequest.Display {
+extension NetworkDisplay {
     package enum MediaPreviewKind: Equatable, Sendable {
         case image
         case movie
@@ -13,17 +12,17 @@ extension NetworkRequest.Display {
     }
 }
 
-extension NetworkRequest.Display {
+extension NetworkDisplay {
     package enum MediaPreviewClassification: Equatable, Sendable {
-        case previewable(NetworkRequest.Display.MediaPreviewKind)
+        case previewable(NetworkDisplay.MediaPreviewKind)
         case notPreviewable
         case unknown
     }
 }
 
-extension NetworkRequest.Display {
+extension NetworkDisplay {
     package enum MediaPreviewSupport {
-        package static func previewKind(mimeType: String?, url: String?) -> NetworkRequest.Display.MediaPreviewKind? {
+        package static func previewKind(mimeType: String?, url: String?) -> NetworkDisplay.MediaPreviewKind? {
             guard case .previewable(let kind) = classification(mimeType: mimeType, url: url) else {
                 return nil
             }
@@ -33,7 +32,7 @@ extension NetworkRequest.Display {
         package static func classification(
             mimeType: String?,
             url: String?
-        ) -> NetworkRequest.Display.MediaPreviewClassification {
+        ) -> NetworkDisplay.MediaPreviewClassification {
             let normalizedMIMEType = normalizedMIMEType(mimeType)
 
             if isHLSMIMEType(normalizedMIMEType) {
@@ -130,7 +129,7 @@ extension NetworkRequest.Display {
             }
         }
 
-        private static func classification(for type: UTType) -> NetworkRequest.Display.MediaPreviewClassification {
+        private static func classification(for type: UTType) -> NetworkDisplay.MediaPreviewClassification {
             if type.conforms(to: .svg) {
                 return .notPreviewable
             }
@@ -204,7 +203,7 @@ extension NetworkRequest.Display {
             pathExtension(url).map(knownImagePathExtensions.contains) == true
         }
 
-        private static func fastURLClassification(_ url: String?) -> NetworkRequest.Display.MediaPreviewClassification? {
+        private static func fastURLClassification(_ url: String?) -> NetworkDisplay.MediaPreviewClassification? {
             guard let pathExtension = pathExtension(url), pathExtension.isEmpty == false else {
                 return nil
             }
@@ -223,7 +222,7 @@ extension NetworkRequest.Display {
             return nil
         }
 
-        private static func imageClassification(url: String?) -> NetworkRequest.Display.MediaPreviewClassification {
+        private static func imageClassification(url: String?) -> NetworkDisplay.MediaPreviewClassification {
             if isSupportedImageURL(url) {
                 return .previewable(.image)
             }
@@ -244,7 +243,7 @@ extension NetworkRequest.Display {
             guard let url else {
                 return nil
             }
-            return NetworkRequest.Display.URLSummary(url: url).pathExtension
+            return NetworkDisplay.URLSummary(url: url).pathExtension
         }
 
         private static func shouldInferFromURL(mimeType: String?) -> Bool {

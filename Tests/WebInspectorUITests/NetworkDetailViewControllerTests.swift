@@ -22,11 +22,11 @@ extension WebInspectorUIRenderingTests {
 struct NetworkDetailViewControllerTests {
     @Test
     func resourceFilterSpecialistTitlesFollowWebInspectorLabels() {
-        #expect(NetworkRequest.Display.ResourceFilter.stylesheet.localizedTitle == "CSS")
-        #expect(NetworkRequest.Display.ResourceFilter.media.localizedTitle == String(localized: "network.filter.media", bundle: WebInspectorUILocalization.bundle))
+        #expect(NetworkDisplay.ResourceFilter.stylesheet.localizedTitle == "CSS")
+        #expect(NetworkDisplay.ResourceFilter.media.localizedTitle == String(localized: "network.filter.media", bundle: WebInspectorUILocalization.bundle))
         #expect(localizedResourceString("network.filter.media", locale: "en") == "Media")
-        #expect(NetworkRequest.Display.ResourceFilter.script.localizedTitle == "JS")
-        #expect(NetworkRequest.Display.ResourceFilter.xhrFetch.localizedTitle == "XHR / Fetch")
+        #expect(NetworkDisplay.ResourceFilter.script.localizedTitle == "JS")
+        #expect(NetworkDisplay.ResourceFilter.xhrFetch.localizedTitle == "XHR / Fetch")
     }
 
     @Test

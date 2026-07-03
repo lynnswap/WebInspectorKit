@@ -3,7 +3,7 @@ import WebInspectorCore
 @MainActor
 struct NetworkPanelDisplayCriteria: Equatable {
     var searchText: String
-    var resourceFilters: Set<NetworkRequest.Display.ResourceFilter>
+    var resourceFilters: Set<NetworkDisplay.ResourceFilter>
 
     var requiresEntries: Bool {
         searchText.isEmpty == false || resourceFilters.isEmpty == false
@@ -17,11 +17,11 @@ struct NetworkPanelDisplayCriteria: Equatable {
 @MainActor
 private struct NetworkPanelDisplayEntry {
     var requestID: NetworkRequest.ID
-    var requestURLSummary: NetworkRequest.Display.URLSummary
-    var responseURLSummary: NetworkRequest.Display.URLSummary?
+    var requestURLSummary: NetworkDisplay.URLSummary
+    var responseURLSummary: NetworkDisplay.URLSummary?
     var fileTypeLabel: String
     var searchTokens: [String]
-    var resourceFilter: NetworkRequest.Display.ResourceFilter?
+    var resourceFilter: NetworkDisplay.ResourceFilter?
 
     init(request: NetworkRequest) {
         let projection = request.displayProjection()
@@ -35,12 +35,12 @@ private struct NetworkPanelDisplayEntry {
 
     mutating func ensureResourceFilter(
         for request: NetworkRequest,
-        mediaPreviewClassifier: NetworkRequest.Display.MediaPreviewClassifier
-    ) -> NetworkRequest.Display.ResourceFilter {
+        mediaPreviewClassifier: NetworkDisplay.MediaPreviewClassifier
+    ) -> NetworkDisplay.ResourceFilter {
         if let resourceFilter {
             return resourceFilter
         }
-        let resourceFilter = NetworkRequest.Display.resourceFilter(
+        let resourceFilter = NetworkDisplay.resourceFilter(
             resourceType: request.resourceType,
             response: request.response,
             requestURLSummary: requestURLSummary,
@@ -54,7 +54,7 @@ private struct NetworkPanelDisplayEntry {
     mutating func matches(
         criteria: NetworkPanelDisplayCriteria,
         request: NetworkRequest,
-        mediaPreviewClassifier: NetworkRequest.Display.MediaPreviewClassifier
+        mediaPreviewClassifier: NetworkDisplay.MediaPreviewClassifier
     ) -> Bool {
         if criteria.requiresResourceFilter {
             let resourceFilter = ensureResourceFilter(
@@ -124,7 +124,7 @@ struct NetworkPanelDisplayIndex {
         criteria currentCriteria: NetworkPanelDisplayCriteria,
         topologyRevision currentTopologyRevision: Int,
         displayRevision currentDisplayRevision: Int?,
-        mediaPreviewClassifier: NetworkRequest.Display.MediaPreviewClassifier
+        mediaPreviewClassifier: NetworkDisplay.MediaPreviewClassifier
     ) -> [NetworkRequest.ID] {
         let previousCriteria = criteria
         let criteriaChanged = previousCriteria != currentCriteria
@@ -257,7 +257,7 @@ struct NetworkPanelDisplayIndex {
     private mutating func rebuildAllEntriesAndMembership(
         network: NetworkSession,
         criteria: NetworkPanelDisplayCriteria,
-        mediaPreviewClassifier: NetworkRequest.Display.MediaPreviewClassifier
+        mediaPreviewClassifier: NetworkDisplay.MediaPreviewClassifier
     ) {
         entriesByID.removeAll(keepingCapacity: true)
         rebuildMembership(
@@ -270,7 +270,7 @@ struct NetworkPanelDisplayIndex {
     private mutating func rebuildMembership(
         network: NetworkSession,
         criteria: NetworkPanelDisplayCriteria,
-        mediaPreviewClassifier: NetworkRequest.Display.MediaPreviewClassifier
+        mediaPreviewClassifier: NetworkDisplay.MediaPreviewClassifier
     ) {
 #if DEBUG
         fullMembershipEvaluationCount += 1
@@ -297,7 +297,7 @@ struct NetworkPanelDisplayIndex {
         _ requestID: NetworkRequest.ID,
         network: NetworkSession,
         criteria: NetworkPanelDisplayCriteria,
-        mediaPreviewClassifier: NetworkRequest.Display.MediaPreviewClassifier
+        mediaPreviewClassifier: NetworkDisplay.MediaPreviewClassifier
     ) {
         let wasMatching = matchingRequestIDs.contains(requestID)
         guard network.request(for: requestID) != nil else {
@@ -331,7 +331,7 @@ struct NetworkPanelDisplayIndex {
         _ requestID: NetworkRequest.ID,
         network: NetworkSession,
         criteria: NetworkPanelDisplayCriteria,
-        mediaPreviewClassifier: NetworkRequest.Display.MediaPreviewClassifier
+        mediaPreviewClassifier: NetworkDisplay.MediaPreviewClassifier
     ) -> Bool {
         guard let request = network.request(for: requestID) else {
             removeRequestFromIndex(requestID)

@@ -1,6 +1,5 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
-import WebInspectorCore
 import SwiftUI
 
 @MainActor
@@ -9,13 +8,13 @@ package struct NetworkListFilterMenuView: View {
 
     package var body: some View {
         Toggle(
-            NetworkRequest.Display.ResourceFilter.all.localizedTitle,
+            NetworkDisplay.ResourceFilter.all.localizedTitle,
             isOn: allFiltersBinding
         )
 
         Divider()
 
-        ForEach(NetworkRequest.Display.ResourceFilter.pickerCases, id: \.self) { filter in
+        ForEach(NetworkDisplay.ResourceFilter.pickerCases, id: \.self) { filter in
             Toggle(
                 filter.localizedTitle,
                 isOn: binding(for: filter)
@@ -34,7 +33,7 @@ package struct NetworkListFilterMenuView: View {
         }
     }
 
-    private func binding(for filter: NetworkRequest.Display.ResourceFilter) -> Binding<Bool> {
+    private func binding(for filter: NetworkDisplay.ResourceFilter) -> Binding<Bool> {
         Binding {
             model.activeResourceFilters.contains(filter)
         } set: { isOn in

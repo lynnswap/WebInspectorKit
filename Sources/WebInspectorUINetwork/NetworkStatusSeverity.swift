@@ -1,11 +1,10 @@
 import WebInspectorUIBase
-import WebInspectorCore
 
 #if canImport(UIKit)
 import UIKit
 #endif
 
-extension NetworkRequest.Display {
+extension NetworkDisplay {
     package enum StatusSeverity: Equatable, Sendable {
         case success
         case notice
@@ -16,7 +15,7 @@ extension NetworkRequest.Display {
 }
 
 #if canImport(UIKit)
-extension NetworkRequest.Display.StatusSeverity {
+extension NetworkDisplay.StatusSeverity {
     var color: UIColor {
         switch self {
         case .success:
