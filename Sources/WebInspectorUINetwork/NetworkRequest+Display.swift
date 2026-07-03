@@ -1,5 +1,4 @@
 import WebInspectorUIBase
-import WebInspectorCore
 import Foundation
 
 package enum NetworkDisplay {}
@@ -7,7 +6,7 @@ package enum NetworkDisplay {}
 extension NetworkDisplay {
     package typealias MediaPreviewClassifier = @Sendable (String?, String?) -> NetworkDisplay.MediaPreviewClassification
 
-    package struct Projection {
+    package struct Projection: Equatable {
         package var requestURLSummary: NetworkDisplay.URLSummary
         package var responseURLSummary: NetworkDisplay.URLSummary?
         package var fileTypeLabel: String
@@ -27,137 +26,7 @@ extension NetworkDisplay {
     }
 }
 
-extension NetworkRequest {
-    package var displayName: String {
-        NetworkDisplay.URLSummary(url: request.url).displayName
-    }
-
-    package var statusLabel: String {
-        if let status = response?.status, status > 0 {
-            return String(status)
-        }
-        switch state {
-        case .failed:
-            return "Failed"
-        case .pending:
-            return "Pending"
-        case .responded:
-            return "Pending"
-        case .finished:
-            return "Finished"
-        }
-    }
-
-    package var fileTypeLabel: String {
-        NetworkDisplay.fileTypeLabel(
-            mimeType: response?.mimeType,
-            resourceType: resourceType,
-            urlSummary: NetworkDisplay.URLSummary(url: request.url)
-        )
-    }
-
-    package var statusSeverity: NetworkDisplay.StatusSeverity {
-        if case .failed = state {
-            return .error
-        }
-        if let status = response?.status {
-            if status >= 500 {
-                return .error
-            }
-            if status >= 400 {
-                return .warning
-            }
-            if status >= 300 {
-                return .notice
-            }
-            return .success
-        }
-        if state == .finished {
-            return .success
-        }
-        return .neutral
-    }
-
-    package func matchesDisplaySearchText(_ query: String) -> Bool {
-        guard query.isEmpty == false else {
-            return true
-        }
-        return displayProjection().searchTokens.contains { $0.localizedStandardContains(query) }
-    }
-
-    package func displayResourceFilter(
-        mediaPreviewClassifier: NetworkDisplay.MediaPreviewClassifier
-    ) -> NetworkDisplay.ResourceFilter {
-        let requestURLSummary = NetworkDisplay.URLSummary(url: request.url)
-        let responseURLSummary = response.map { NetworkDisplay.URLSummary(url: $0.url) }
-        return NetworkDisplay.resourceFilter(
-            resourceType: resourceType,
-            response: response,
-            requestURLSummary: requestURLSummary,
-            responseURLSummary: responseURLSummary,
-            mediaPreviewClassifier: mediaPreviewClassifier
-        )
-    }
-
-    package func displayProjection() -> NetworkDisplay.Projection {
-        let requestURLSummary = NetworkDisplay.URLSummary(url: request.url)
-        let responseURLSummary = response.map { NetworkDisplay.URLSummary(url: $0.url) }
-        let fileTypeLabel = NetworkDisplay.fileTypeLabel(
-            mimeType: response?.mimeType,
-            resourceType: resourceType,
-            urlSummary: requestURLSummary
-        )
-        let statusCodeLabel = response.map { String($0.status) } ?? ""
-        return NetworkDisplay.Projection(
-            requestURLSummary: requestURLSummary,
-            responseURLSummary: responseURLSummary,
-            fileTypeLabel: fileTypeLabel,
-            searchTokens: NetworkDisplay.searchTokens(
-                requestURLSummary: requestURLSummary,
-                responseURLSummary: responseURLSummary,
-                requestMethod: request.method,
-                statusCodeLabel: statusCodeLabel,
-                statusText: response?.statusText ?? "",
-                fileTypeLabel: fileTypeLabel
-            )
-        )
-    }
-
-    package var duration: TimeInterval? {
-        guard let end = finishedOrFailedTimestamp ?? lastDataReceivedTimestamp ?? responseReceivedTimestamp else {
-            return nil
-        }
-        return max(0, end - requestSentTimestamp)
-    }
-
-    package func durationText(for value: TimeInterval) -> String {
-        NetworkDisplay.durationText(for: value)
-    }
-
-    package func sizeText(for length: Int) -> String {
-        NetworkDisplay.sizeText(for: length)
-    }
-}
-
 extension NetworkDisplay {
-    package static func resourceFilter(
-        resourceType: NetworkRequest.ResourceType?,
-        response: NetworkRequest.Response.Payload?,
-        requestURLSummary: NetworkDisplay.URLSummary,
-        responseURLSummary: NetworkDisplay.URLSummary?,
-        mediaPreviewClassifier: NetworkDisplay.MediaPreviewClassifier
-    ) -> NetworkDisplay.ResourceFilter {
-        resourceFilter(
-            resourceTypeRawValue: resourceType?.rawValue,
-            hasResponse: response != nil,
-            responseMIMEType: response?.mimeType,
-            responseHeaders: response?.headers ?? [:],
-            responseURLSummary: response.map { responseURLSummary ?? NetworkDisplay.URLSummary(url: $0.url) },
-            requestURLSummary: requestURLSummary,
-            mediaPreviewClassifier: mediaPreviewClassifier
-        )
-    }
-
     package static func resourceFilter(
         resourceTypeRawValue: String?,
         hasResponse: Bool,
@@ -213,18 +82,6 @@ extension NetworkDisplay {
             mimeType: responseMIMEType,
             pathExtension: responseURLSummary.pathExtension,
             mediaPreviewClassification: mediaPreviewClassifier(responseMIMEType, responseURLSummary.rawURL)
-        )
-    }
-
-    package static func fileTypeLabel(
-        mimeType: String?,
-        resourceType: NetworkRequest.ResourceType?,
-        urlSummary: NetworkDisplay.URLSummary
-    ) -> String {
-        fileTypeLabel(
-            mimeType: mimeType,
-            resourceTypeRawValue: resourceType?.rawValue,
-            urlSummary: urlSummary
         )
     }
 

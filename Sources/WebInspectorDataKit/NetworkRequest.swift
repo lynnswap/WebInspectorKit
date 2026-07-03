@@ -277,7 +277,7 @@ public final class NetworkBody {
     @ObservationIgnored private var isBatchingTextRepresentationInvalidation: Bool
     @ObservationIgnored private var needsTextRepresentationInvalidation: Bool
 
-    init(
+    package init(
         role: Role = .response,
         kind: Kind = .text,
         full: String? = nil,

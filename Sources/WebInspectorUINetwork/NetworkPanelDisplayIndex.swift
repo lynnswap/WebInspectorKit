@@ -1,4 +1,4 @@
-import WebInspectorCore
+import WebInspectorDataKit
 
 @MainActor
 struct NetworkPanelDisplayCriteria: Equatable {
@@ -15,55 +15,31 @@ struct NetworkPanelDisplayCriteria: Equatable {
 }
 
 @MainActor
-private struct NetworkPanelDisplayEntry {
+private struct NetworkPanelDisplayEntry: Equatable {
     var requestID: NetworkRequest.ID
     var requestURLSummary: NetworkDisplay.URLSummary
     var responseURLSummary: NetworkDisplay.URLSummary?
     var fileTypeLabel: String
     var searchTokens: [String]
-    var resourceFilter: NetworkDisplay.ResourceFilter?
+    var resourceFilter: NetworkDisplay.ResourceFilter
 
-    init(request: NetworkRequest) {
+    init(
+        request: NetworkRequest,
+        mediaPreviewClassifier: NetworkDisplay.MediaPreviewClassifier
+    ) {
         let projection = request.displayProjection()
         requestID = request.id
         requestURLSummary = projection.requestURLSummary
         responseURLSummary = projection.responseURLSummary
         fileTypeLabel = projection.fileTypeLabel
         searchTokens = projection.searchTokens
-        resourceFilter = nil
+        resourceFilter = request.displayResourceFilter(mediaPreviewClassifier: mediaPreviewClassifier)
     }
 
-    mutating func ensureResourceFilter(
-        for request: NetworkRequest,
-        mediaPreviewClassifier: NetworkDisplay.MediaPreviewClassifier
-    ) -> NetworkDisplay.ResourceFilter {
-        if let resourceFilter {
-            return resourceFilter
-        }
-        let resourceFilter = NetworkDisplay.resourceFilter(
-            resourceType: request.resourceType,
-            response: request.response,
-            requestURLSummary: requestURLSummary,
-            responseURLSummary: responseURLSummary,
-            mediaPreviewClassifier: mediaPreviewClassifier
-        )
-        self.resourceFilter = resourceFilter
-        return resourceFilter
-    }
-
-    mutating func matches(
-        criteria: NetworkPanelDisplayCriteria,
-        request: NetworkRequest,
-        mediaPreviewClassifier: NetworkDisplay.MediaPreviewClassifier
-    ) -> Bool {
-        if criteria.requiresResourceFilter {
-            let resourceFilter = ensureResourceFilter(
-                for: request,
-                mediaPreviewClassifier: mediaPreviewClassifier
-            )
-            guard criteria.resourceFilters.contains(resourceFilter) else {
-                return false
-            }
+    func matches(criteria: NetworkPanelDisplayCriteria) -> Bool {
+        if criteria.requiresResourceFilter,
+           criteria.resourceFilters.contains(resourceFilter) == false {
+            return false
         }
 
         if criteria.searchText.isEmpty == false {
@@ -97,8 +73,6 @@ struct NetworkPanelDisplayIndex {
     private var entriesByID: [NetworkRequest.ID: NetworkPanelDisplayEntry] = [:]
     private var matchingRequestIDs: Set<NetworkRequest.ID> = []
     private var criteria: NetworkPanelDisplayCriteria?
-    private var topologyRevision: Int?
-    private var displayRevision: Int = 0
 
     private(set) var filteredRequestIDs: [NetworkRequest.ID] = []
 
@@ -119,21 +93,15 @@ struct NetworkPanelDisplayIndex {
 #endif
 
     mutating func reconcile(
-        network: NetworkSession,
-        orderedRequestIDs currentOrderedRequestIDs: [NetworkRequest.ID],
+        requests currentRequests: [NetworkRequest],
         criteria currentCriteria: NetworkPanelDisplayCriteria,
-        topologyRevision currentTopologyRevision: Int,
-        displayRevision currentDisplayRevision: Int?,
         mediaPreviewClassifier: NetworkDisplay.MediaPreviewClassifier
     ) -> [NetworkRequest.ID] {
         let previousCriteria = criteria
         let criteriaChanged = previousCriteria != currentCriteria
         criteria = currentCriteria
 
-        let topologyChange = reconcileTopology(
-            orderedRequestIDs: currentOrderedRequestIDs,
-            topologyRevision: currentTopologyRevision
-        )
+        let topologyChange = reconcileTopology(orderedRequestIDs: currentRequests.map(\.id))
 
         guard currentCriteria.requiresEntries else {
             if criteriaChanged || topologyChange.isChanged {
@@ -143,64 +111,32 @@ struct NetworkPanelDisplayIndex {
             return filteredRequestIDs
         }
 
-        guard let currentDisplayRevision else {
-            return filteredRequestIDs
-        }
-
-        var dirtyRequestIDs: Set<NetworkRequest.ID> = []
-        var requiresFullEntryRebuild = false
-        if displayRevision < currentDisplayRevision {
-            let displayChanges = network.requestDisplayChanges(after: displayRevision)
-            dirtyRequestIDs = displayChanges.changedRequestIDs
-            requiresFullEntryRebuild = displayChanges.requiresFullReconcile
-            displayRevision = displayChanges.revision
-        }
-        if case let .appended(appendedRequestIDs) = topologyChange {
-            dirtyRequestIDs.formUnion(appendedRequestIDs)
-        }
-
-        if requiresFullEntryRebuild {
-            rebuildAllEntriesAndMembership(
-                network: network,
-                criteria: currentCriteria,
-                mediaPreviewClassifier: mediaPreviewClassifier
-            )
-            return filteredRequestIDs
-        }
+        let dirtyRequestIDs = refreshEntries(
+            requests: currentRequests,
+            mediaPreviewClassifier: mediaPreviewClassifier
+        )
 
         if criteriaChanged || topologyChange == .rebuilt {
-            rebuildDirtyEntries(dirtyRequestIDs, network: network)
-            rebuildMembership(
-                network: network,
-                criteria: currentCriteria,
-                mediaPreviewClassifier: mediaPreviewClassifier
-            )
+            rebuildMembership(criteria: currentCriteria)
             return filteredRequestIDs
         }
 
         for requestID in dirtyRequestIDs {
-            rebuildEntryAndUpdateMembership(
-                requestID,
-                network: network,
-                criteria: currentCriteria,
-                mediaPreviewClassifier: mediaPreviewClassifier
-            )
+            updateMembership(requestID, criteria: currentCriteria)
         }
 
         return filteredRequestIDs
     }
 
     private mutating func reconcileTopology(
-        orderedRequestIDs currentOrderedRequestIDs: [NetworkRequest.ID],
-        topologyRevision currentTopologyRevision: Int
+        orderedRequestIDs currentOrderedRequestIDs: [NetworkRequest.ID]
     ) -> TopologyChange {
-        guard topologyRevision != currentTopologyRevision || orderedRequestIDs != currentOrderedRequestIDs else {
+        guard orderedRequestIDs != currentOrderedRequestIDs else {
             return .none
         }
 
         let appendedRequestIDs = appendedRequestIDs(from: orderedRequestIDs, to: currentOrderedRequestIDs)
         orderedRequestIDs = currentOrderedRequestIDs
-        topologyRevision = currentTopologyRevision
         rebuildOrderRanks()
         pruneEntriesToCurrentRequests()
 
@@ -241,37 +177,22 @@ struct NetworkPanelDisplayIndex {
         filteredRequestIDs.removeAll { currentRequestIDs.contains($0) == false }
     }
 
-    private mutating func rebuildDirtyEntries(
-        _ requestIDs: Set<NetworkRequest.ID>,
-        network: NetworkSession
-    ) {
-        for requestID in requestIDs {
-            if network.request(for: requestID) == nil {
-                removeRequestFromIndex(requestID)
-            } else {
-                entriesByID[requestID] = makeEntry(for: requestID, network: network)
+    private mutating func refreshEntries(
+        requests: [NetworkRequest],
+        mediaPreviewClassifier: NetworkDisplay.MediaPreviewClassifier
+    ) -> Set<NetworkRequest.ID> {
+        var dirtyRequestIDs: Set<NetworkRequest.ID> = []
+        for request in requests {
+            let entry = makeEntry(for: request, mediaPreviewClassifier: mediaPreviewClassifier)
+            if entriesByID[request.id] != entry {
+                entriesByID[request.id] = entry
+                dirtyRequestIDs.insert(request.id)
             }
         }
+        return dirtyRequestIDs
     }
 
-    private mutating func rebuildAllEntriesAndMembership(
-        network: NetworkSession,
-        criteria: NetworkPanelDisplayCriteria,
-        mediaPreviewClassifier: NetworkDisplay.MediaPreviewClassifier
-    ) {
-        entriesByID.removeAll(keepingCapacity: true)
-        rebuildMembership(
-            network: network,
-            criteria: criteria,
-            mediaPreviewClassifier: mediaPreviewClassifier
-        )
-    }
-
-    private mutating func rebuildMembership(
-        network: NetworkSession,
-        criteria: NetworkPanelDisplayCriteria,
-        mediaPreviewClassifier: NetworkDisplay.MediaPreviewClassifier
-    ) {
+    private mutating func rebuildMembership(criteria: NetworkPanelDisplayCriteria) {
 #if DEBUG
         fullMembershipEvaluationCount += 1
 #endif
@@ -280,12 +201,8 @@ struct NetworkPanelDisplayIndex {
         filteredRequestIDs.reserveCapacity(orderedRequestIDs.count)
 
         for requestID in orderedRequestIDs.reversed() {
-            guard matchesRequest(
-                requestID,
-                network: network,
-                criteria: criteria,
-                mediaPreviewClassifier: mediaPreviewClassifier
-            ) else {
+            guard let entry = entriesByID[requestID],
+                  entry.matches(criteria: criteria) else {
                 continue
             }
             matchingRequestIDs.insert(requestID)
@@ -293,26 +210,17 @@ struct NetworkPanelDisplayIndex {
         }
     }
 
-    private mutating func rebuildEntryAndUpdateMembership(
+    private mutating func updateMembership(
         _ requestID: NetworkRequest.ID,
-        network: NetworkSession,
-        criteria: NetworkPanelDisplayCriteria,
-        mediaPreviewClassifier: NetworkDisplay.MediaPreviewClassifier
+        criteria: NetworkPanelDisplayCriteria
     ) {
         let wasMatching = matchingRequestIDs.contains(requestID)
-        guard network.request(for: requestID) != nil else {
+        guard let entry = entriesByID[requestID] else {
             removeRequestFromIndex(requestID)
             return
         }
 
-        entriesByID[requestID] = makeEntry(for: requestID, network: network)
-        let isMatching = matchesRequest(
-            requestID,
-            network: network,
-            criteria: criteria,
-            mediaPreviewClassifier: mediaPreviewClassifier
-        )
-
+        let isMatching = entry.matches(criteria: criteria)
         switch (wasMatching, isMatching) {
         case (false, false):
             break
@@ -327,43 +235,18 @@ struct NetworkPanelDisplayIndex {
         }
     }
 
-    private mutating func matchesRequest(
-        _ requestID: NetworkRequest.ID,
-        network: NetworkSession,
-        criteria: NetworkPanelDisplayCriteria,
+    private mutating func makeEntry(
+        for request: NetworkRequest,
         mediaPreviewClassifier: NetworkDisplay.MediaPreviewClassifier
-    ) -> Bool {
-        guard let request = network.request(for: requestID) else {
-            removeRequestFromIndex(requestID)
-            return false
-        }
-        if entriesByID[requestID] == nil {
-            entriesByID[requestID] = makeEntry(for: requestID, network: network)
-        }
-        guard var entry = entriesByID[requestID] else {
-            return false
-        }
-        let matches = entry.matches(
-            criteria: criteria,
+    ) -> NetworkPanelDisplayEntry {
+#if DEBUG
+        displayEntryBuildCount += 1
+        rebuiltDisplayRequestIDs.append(request.id)
+#endif
+        return NetworkPanelDisplayEntry(
             request: request,
             mediaPreviewClassifier: mediaPreviewClassifier
         )
-        entriesByID[requestID] = entry
-        return matches
-    }
-
-    private mutating func makeEntry(
-        for requestID: NetworkRequest.ID,
-        network: NetworkSession
-    ) -> NetworkPanelDisplayEntry? {
-        guard let request = network.request(for: requestID) else {
-            return nil
-        }
-#if DEBUG
-        displayEntryBuildCount += 1
-        rebuiltDisplayRequestIDs.append(requestID)
-#endif
-        return NetworkPanelDisplayEntry(request: request)
     }
 
     private mutating func removeRequestFromIndex(_ requestID: NetworkRequest.ID) {

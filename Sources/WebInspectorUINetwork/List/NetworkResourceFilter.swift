@@ -1,5 +1,4 @@
 import WebInspectorUIBase
-import WebInspectorCore
 import Foundation
 
 extension NetworkDisplay {
@@ -85,10 +84,6 @@ extension NetworkDisplay {
             default:
                 self = .other
             }
-        }
-
-        init(resourceType: NetworkRequest.ResourceType) {
-            self.init(resourceTypeRawValue: resourceType.rawValue)
         }
 
         init(mimeType: String?, url: String) {

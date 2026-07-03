@@ -1,6 +1,8 @@
 #if canImport(UIKit)
 import ObservationBridge
 import Testing
+import WebInspectorDataKit
+import WebInspectorProxyKit
 import WebInspectorTransport
 import UIKit
 import WebKit
@@ -196,10 +198,10 @@ struct ParentContainerTests {
     @Test
     func viewControllerPreviewSessionInjectsMockDOMAndNetworkModels() throws {
         let session = WebInspectorViewControllerPreviewFixtures.makeSession()
+        let model = session.interface.networkPanelModel(for: session.context)
 
         #expect(session.attachment.dom.currentPageRootNode?.nodeName == "#document")
-        #expect(session.attachment.network.requests.count >= 2)
-        #expect(session.interface.networkPanelModel(for: session.attachment).displayRequests.isEmpty == false)
+        #expect(model.displayRequests.count >= 2)
     }
 
     @Test
@@ -628,7 +630,7 @@ struct ParentContainerTests {
 
     @Test
     func compactFactoryUsesDomainNavigationControllers() throws {
-        let session = WebInspectorSession()
+        let session = WebInspectorSession(inspector: InspectorSession(), dataContext: makeContext())
 
         let domViewController = WebInspectorTab.ContentFactory.makeViewController(
             for: .dom,
@@ -711,15 +713,15 @@ struct ParentContainerTests {
 
     @Test
     func networkPanelModelSelectionIsSharedAcrossParentHosts() async throws {
-        let session = WebInspectorSession()
-        let request = try #require(
-            applyRequest(
-                to: session.attachment.network,
-                requestID: "1",
-                url: "https://example.com/app.js"
-            )
+        let context = makeContext()
+        let session = WebInspectorSession(inspector: InspectorSession(), dataContext: context)
+        let requestID = applyRequest(
+            to: context,
+            requestID: "1",
+            url: "https://example.com/app.js"
         )
-        let model = session.interface.networkPanelModel(for: session.attachment)
+        let request = try #require(context.registeredRequest(for: requestID))
+        let model = session.interface.networkPanelModel(for: context)
         let compactNavigationController = try #require(
             WebInspectorTab.ContentFactory.makeViewController(
                 for: .network,
@@ -790,45 +792,53 @@ struct ParentContainerTests {
         }
     }
 
+    private func makeContext() -> WebInspectorContext {
+        WebInspectorContext.preview(isolation: MainActor.shared)
+    }
+
+    @discardableResult
     private func applyRequest(
-        to network: NetworkSession,
+        to context: WebInspectorContext,
         requestID rawRequestID: String,
         url: String
-    ) -> NetworkRequest? {
-        let targetID = ProtocolTarget.ID("page")
-        let requestID = NetworkRequest.ProtocolID(rawRequestID)
-        let key = network.applyRequestWillBeSent(
-            targetID: targetID,
-            requestID: requestID,
-            frameID: DOMFrame.ID("main"),
-            loaderID: "loader",
-            documentURL: "https://example.com",
-            request: NetworkRequest.Payload(
-                url: url,
-                method: "GET"
+    ) -> WebInspectorDataKit.NetworkRequest.ID {
+        let requestID = WebInspectorProxyKit.Network.Request.ID(rawRequestID)
+        context.apply(
+            .requestWillBeSent(
+                id: requestID,
+                request: WebInspectorProxyKit.Network.Request(
+                    id: requestID,
+                    url: url,
+                    method: "GET"
+                ),
+                resourceType: .script,
+                redirectResponse: nil,
+                timestamp: 1
+            )
+        )
+        context.apply(
+            .responseReceived(
+                id: requestID,
+                response: WebInspectorProxyKit.Network.Response(
+                    url: url,
+                    status: 200,
+                    statusText: "OK",
+                    mimeType: "text/javascript",
+                    headers: ["content-type": "text/javascript"]
+                ),
+                resourceType: .script,
+                timestamp: 2
+            )
+        )
+        context.apply(
+            .loadingFinished(
+                id: requestID,
+                timestamp: 3,
+                sourceMapURL: nil,
+                metrics: nil
             ),
-            resourceType: .script,
-            timestamp: 1
         )
-        network.applyResponseReceived(
-            targetID: targetID,
-            requestID: requestID,
-            resourceType: .script,
-            response: NetworkRequest.Response.Payload(
-                url: url,
-                status: 200,
-                statusText: "OK",
-                headers: ["content-type": "text/javascript"],
-                mimeType: "text/javascript"
-            ),
-            timestamp: 2
-        )
-        network.applyLoadingFinished(
-            targetID: targetID,
-            requestID: requestID,
-            timestamp: 3
-        )
-        return network.request(for: key)
+        return context.registeredRequest(forProxyID: requestID)!.id
     }
 
     private func showInWindow(_ viewController: UIViewController) -> UIWindow {
@@ -845,7 +855,10 @@ struct ParentContainerTests {
         to webView: WKWebView,
         perform attachAction: @escaping @MainActor (InspectorSession, WKWebView) async throws -> Void = { _, _ in }
     ) async throws {
-        try await session.attachPresentation(to: webView, perform: attachAction)
+        try await session.attachPresentation(to: webView) { inspector, webView in
+            try await attachAction(inspector, webView)
+            return makeContext()
+        }
     }
 
     private func makeSessionWithNoOpAttachment(
@@ -859,6 +872,7 @@ struct ParentContainerTests {
     ) -> WebInspectorSession {
         WebInspectorSession(
             inspector: InspectorSession(),
+            dataContext: makeContext(),
             detachAction: detachAction,
             makePageUserInterfaceStyleObserver: makePageUserInterfaceStyleObserver
         )

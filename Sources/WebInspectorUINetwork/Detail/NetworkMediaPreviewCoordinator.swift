@@ -2,7 +2,7 @@
 import WebInspectorUIBase
 import Foundation
 import UIKit
-import WebInspectorCore
+import WebInspectorDataKit
 
 package struct NetworkMediaPreviewMetadata: Equatable, Sendable {
     package var mimeType: String?

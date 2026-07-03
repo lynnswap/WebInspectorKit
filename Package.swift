@@ -177,7 +177,6 @@ let package = Package(
         .target(
             name: "WebInspectorUINetwork",
             dependencies: [
-                "WebInspectorCore",
                 "WebInspectorDataKit",
                 "WebInspectorTransport",
                 "WebInspectorUIBase",
@@ -189,7 +188,8 @@ let package = Package(
         .target(
             name: "WebInspectorUISyntaxBody",
             dependencies: [
-                "WebInspectorCore",
+                "WebInspectorDataKit",
+                "WebInspectorProxyKit",
                 "WebInspectorUIBase",
                 "WebInspectorUINetwork",
                 .product(name: "ObservationBridge", package: "ObservationBridge"),
@@ -201,6 +201,7 @@ let package = Package(
             name: "WebInspectorUI",
             dependencies: [
                 "WebInspectorCore",
+                "WebInspectorDataKit",
                 "WebInspectorTransport",
                 "WebInspectorUIBase",
                 "WebInspectorUIDOM",
@@ -217,7 +218,9 @@ let package = Package(
             name: "WebInspectorKit",
             dependencies: [
                 "WebInspectorCore",
+                "WebInspectorDataKit",
                 "WebInspectorNativeTransport",
+                "WebInspectorProxyKit",
                 "WebInspectorTransport",
                 "WebInspectorUI"
             ],

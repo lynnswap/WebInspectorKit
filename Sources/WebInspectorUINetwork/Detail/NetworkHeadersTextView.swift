@@ -1,6 +1,6 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
-import WebInspectorCore
+import WebInspectorDataKit
 import UIKit
 
 @MainActor
@@ -291,7 +291,7 @@ private struct NetworkHeadersTextDocumentBuilder {
 
     private func summarySection() -> Section {
         var rows: [Row] = [
-            Row(key: String(localized: "network.headers.summary.url", defaultValue: "URL", bundle: WebInspectorUILocalization.bundle), value: request.request.url, style: .summary),
+            Row(key: String(localized: "network.headers.summary.url", defaultValue: "URL", bundle: WebInspectorUILocalization.bundle), value: request.url, style: .summary),
             Row(key: String(localized: "network.headers.summary.status", defaultValue: "Status", bundle: WebInspectorUILocalization.bundle), value: statusText(), style: .summary),
             Row(key: String(localized: "network.headers.summary.source", defaultValue: "Source", bundle: WebInspectorUILocalization.bundle), value: sourceText(), style: .summary),
         ]
@@ -312,7 +312,7 @@ private struct NetworkHeadersTextDocumentBuilder {
     }
 
     private func requestSection() -> Section {
-        let headers = request.request.headers
+        let headers = request.requestHeaders
         var rows: [Row] = requestProtocolRows()
         rows.append(contentsOf: headerRows(headers))
         if rows.isEmpty {
@@ -332,10 +332,10 @@ private struct NetworkHeadersTextDocumentBuilder {
     }
 
     private func responseSection() -> Section? {
-        guard request.response != nil else {
+        guard request.hasResponse else {
             return nil
         }
-        let headers = request.response?.headers ?? [:]
+        let headers = request.responseHeaders
         var rows: [Row] = responseProtocolRows()
         rows.append(contentsOf: headerRows(headers))
         if rows.isEmpty {
@@ -356,10 +356,10 @@ private struct NetworkHeadersTextDocumentBuilder {
 
     private func requestProtocolRows() -> [Row] {
         let protocolName = request.metrics?.networkProtocol ?? ""
-        let components = URLComponents(string: request.request.url)
+        let components = URLComponents(string: request.url)
         if protocolName == "h2" {
             return [
-                Row(key: ":method", value: request.request.method, style: .pseudoHeader),
+                Row(key: ":method", value: request.method, style: .pseudoHeader),
                 Row(key: ":scheme", value: components?.scheme, style: .pseudoHeader),
                 Row(key: ":authority", value: authority(from: components), style: .pseudoHeader),
                 Row(key: ":path", value: path(from: components), style: .pseudoHeader),
@@ -373,24 +373,26 @@ private struct NetworkHeadersTextDocumentBuilder {
         let path = path(from: components) ?? "/"
         let suffix = protocolName.hasPrefix("http/1") ? " \(protocolName.uppercased())" : ""
         return [
-            Row(key: "\(request.request.method) \(path)\(suffix)", value: nil, style: .pseudoHeader),
+            Row(key: "\(request.method) \(path)\(suffix)", value: nil, style: .pseudoHeader),
         ]
     }
 
     private func responseProtocolRows() -> [Row] {
-        guard let response = request.response else {
+        guard let status = request.status else {
             return []
         }
         let protocolName = request.metrics?.networkProtocol ?? ""
         if protocolName == "h2" {
-            return [Row(key: ":status", value: "\(response.status)", style: .pseudoHeader)]
+            return [Row(key: ":status", value: "\(status)", style: .pseudoHeader)]
         }
         if protocolName.hasPrefix("http/1") {
-            let suffix = response.statusText.isEmpty ? "" : " \(response.statusText)"
-            return [Row(key: "\(protocolName.uppercased()) \(response.status)\(suffix)", value: nil, style: .pseudoHeader)]
+            let statusText = request.statusText ?? ""
+            let suffix = statusText.isEmpty ? "" : " \(statusText)"
+            return [Row(key: "\(protocolName.uppercased()) \(status)\(suffix)", value: nil, style: .pseudoHeader)]
         }
-        let suffix = response.statusText.isEmpty ? "" : " \(response.statusText)"
-        return [Row(key: "\(response.status)\(suffix)", value: nil, style: .pseudoHeader)]
+        let statusText = request.statusText ?? ""
+        let suffix = statusText.isEmpty ? "" : " \(statusText)"
+        return [Row(key: "\(status)\(suffix)", value: nil, style: .pseudoHeader)]
     }
 
     private func headerRows(_ headers: [String: String]) -> [Row] {
@@ -406,30 +408,31 @@ private struct NetworkHeadersTextDocumentBuilder {
     }
 
     private func statusText() -> String {
-        guard let response = request.response else {
+        guard request.hasResponse else {
             return "-"
         }
-        let suffix = response.statusText.isEmpty ? "" : " \(response.statusText)"
-        return "\(response.status)\(suffix)"
+        let statusText = request.statusText ?? ""
+        let suffix = statusText.isEmpty ? "" : " \(statusText)"
+        return request.status.map { "\($0)\(suffix)" } ?? (statusText.isEmpty ? "-" : statusText)
     }
 
     private func sourceText() -> String {
-        guard let source = request.response?.source else {
+        guard let source = request.responseSource else {
             return "-"
         }
         switch source {
-        case .network:
+        case "network":
             return String(localized: "network.headers.source.network", defaultValue: "Network", bundle: WebInspectorUILocalization.bundle)
-        case .memoryCache:
+        case "memory-cache":
             return String(localized: "network.headers.source.memory_cache", defaultValue: "Memory Cache", bundle: WebInspectorUILocalization.bundle)
-        case .diskCache:
+        case "disk-cache":
             return String(localized: "network.headers.source.disk_cache", defaultValue: "Disk Cache", bundle: WebInspectorUILocalization.bundle)
-        case .serviceWorker:
+        case "service-worker":
             return String(localized: "network.headers.source.service_worker", defaultValue: "Service Worker", bundle: WebInspectorUILocalization.bundle)
-        case .inspectorOverride:
+        case "inspector-override":
             return String(localized: "network.headers.source.local_override", defaultValue: "Local Override", bundle: WebInspectorUILocalization.bundle)
         default:
-            return source.rawValue
+            return source
         }
     }
 

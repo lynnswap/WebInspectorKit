@@ -3,6 +3,7 @@ import Observation
 import UIKit
 import WebKit
 import WebInspectorCore
+import WebInspectorDataKit
 import WebInspectorUIBase
 import WebInspectorUINetwork
 
@@ -16,6 +17,7 @@ public final class WebInspectorSession {
     /// The value is `.unspecified` until the page style is known or when no useful style can be inferred.
     public private(set) var pageUserInterfaceStyle: UIUserInterfaceStyle = .unspecified
     @ObservationIgnored private let detachAction: @MainActor (InspectorSession) async -> Void
+    @ObservationIgnored private var dataContext: WebInspectorContext?
     @ObservationIgnored private let makePageUserInterfaceStyleObserver: @MainActor (
         WKWebView,
         @escaping @MainActor (UIUserInterfaceStyle) -> Void
@@ -29,6 +31,7 @@ public final class WebInspectorSession {
     package init(
         inspector: InspectorSession,
         tabs: [WebInspectorTab] = [.dom, .network],
+        dataContext: WebInspectorContext? = nil,
         detachAction: @escaping @MainActor (InspectorSession) async -> Void = { inspector in
             await inspector.detach()
         },
@@ -41,6 +44,7 @@ public final class WebInspectorSession {
     ) {
         self.inspector = inspector
         self.interface = InterfaceModel(tabs: tabs)
+        self.dataContext = dataContext ?? Self.makeDetachedDataContext()
         self.detachAction = detachAction
         self.makePageUserInterfaceStyleObserver = makePageUserInterfaceStyleObserver
     }
@@ -54,6 +58,13 @@ public final class WebInspectorSession {
         inspector.attachment
     }
 
+    package var context: WebInspectorContext {
+        guard let dataContext else {
+            preconditionFailure("WebInspectorSession has no installed WebInspectorContext.")
+        }
+        return dataContext
+    }
+
     @_disfavoredOverload
     public func attach(to webView: WKWebView) async throws {
         try await attachPresentation(to: webView) { _, _ in
@@ -63,13 +74,16 @@ public final class WebInspectorSession {
 
     package func attachPresentation(
         to webView: WKWebView,
-        perform attach: @MainActor (InspectorSession, WKWebView) async throws -> Void
+        perform attach: @MainActor (InspectorSession, WKWebView) async throws -> WebInspectorContext?
     ) async throws {
         stopPageUserInterfaceStyleObservation()
+        await stopDataContext(replaceWithDetached: false)
         do {
-            try await attach(inspector, webView)
+            let context = try await attach(inspector, webView)
+            installDataContext(context ?? Self.makeDetachedDataContext())
             startPageUserInterfaceStyleObservation(for: webView)
         } catch {
+            installDataContext(Self.makeDetachedDataContext())
             stopPageUserInterfaceStyleObservation()
             throw error
         }
@@ -77,6 +91,7 @@ public final class WebInspectorSession {
 
     public func detach() async {
         stopPageUserInterfaceStyleObservation()
+        await stopDataContext(replaceWithDetached: true)
         await detachAction(inspector)
     }
 
@@ -108,6 +123,30 @@ public final class WebInspectorSession {
             return
         }
         pageUserInterfaceStyle = style
+    }
+
+    package func installDataContext(_ context: WebInspectorContext) {
+        dataContext = context
+        interface.removeNetworkPanelModel()
+    }
+
+    private func stopDataContext(replaceWithDetached: Bool) async {
+        guard let context = dataContext else {
+            if replaceWithDetached {
+                installDataContext(Self.makeDetachedDataContext())
+            }
+            return
+        }
+        dataContext = nil
+        interface.removeNetworkPanelModel()
+        await context.stop()
+        if replaceWithDetached {
+            installDataContext(Self.makeDetachedDataContext())
+        }
+    }
+
+    private static func makeDetachedDataContext() -> WebInspectorContext {
+        WebInspectorContext.detached(isolation: MainActor.shared)
     }
 
     private struct AttachmentUnavailableError: Error, CustomStringConvertible {
@@ -204,17 +243,19 @@ package final class InterfaceModel {
         contentCache.viewController(for: key, make: make)
     }
 
-    package func networkPanelModel(for inspection: AttachedInspection) -> NetworkPanelModel {
+    package func networkPanelModel(for context: WebInspectorContext) -> NetworkPanelModel {
         if let networkPanelModel,
-           networkPanelModel.network === inspection.network {
+           networkPanelModel.context === context {
             return networkPanelModel
         }
 
-        let model = NetworkPanelModel(network: inspection.network) { [weak inspection] id in
-            await inspection?.network.fetchResponseBody(for: id)
-        }
+        let model = NetworkPanelModel(context: context)
         networkPanelModel = model
         return model
+    }
+
+    package func removeNetworkPanelModel() {
+        networkPanelModel = nil
     }
 
     package func pruneContentCache(retaining keys: Set<WebInspectorTab.ContentKey>) {

@@ -1,7 +1,7 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
 import UIKit
-import WebInspectorCore
+import WebInspectorDataKit
 
 @MainActor
 package enum NetworkBodySurface {

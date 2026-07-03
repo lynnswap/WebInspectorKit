@@ -2,6 +2,7 @@
 import UIKit
 import WebKit
 import WebInspectorCore
+import WebInspectorDataKit
 import WebInspectorUIBase
 
 @MainActor
@@ -156,7 +157,7 @@ public final class WebInspectorViewController: UIViewController {
 
     package func attachPresentation(
         to webView: WKWebView,
-        perform attach: @MainActor (InspectorSession, WKWebView) async throws -> Void
+        perform attach: @MainActor (InspectorSession, WKWebView) async throws -> WebInspectorContext?
     ) async throws {
         try await session.attachPresentation(to: webView, perform: attach)
     }

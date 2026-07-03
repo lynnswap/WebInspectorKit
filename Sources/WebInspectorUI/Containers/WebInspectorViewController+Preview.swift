@@ -11,10 +11,10 @@ enum WebInspectorViewControllerPreviewFixtures {
         let session = WebInspectorSession(
             inspector: InspectorSession(
                 attachment: AttachedInspection(
-                    dom: DOMPreviewFixtures.makeDOMSession(),
-                    network: NetworkPreviewFixtures.makeNetworkSession(mode: .detail)
+                    dom: DOMPreviewFixtures.makeDOMSession()
                 )
-            )
+            ),
+            dataContext: NetworkPreviewFixtures.makeContext(mode: .detail)
         )
         return session
     }

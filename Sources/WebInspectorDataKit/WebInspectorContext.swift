@@ -98,6 +98,20 @@ public final class WebInspectorContext {
         WebInspectorDataKitLog.debug("context state=\(state.logDescription)")
     }
 
+    package static func preview(isolation: isolated (any Actor)) -> WebInspectorContext {
+        let container = WebInspectorContainer(proxy: WebInspectorProxy())
+        let context = WebInspectorContext(container, isolation: isolation)
+        context.state = .attached
+        return context
+    }
+
+    package static func detached(isolation: isolated (any Actor)) -> WebInspectorContext {
+        let container = WebInspectorContainer(proxy: WebInspectorProxy())
+        let context = WebInspectorContext(container, isolation: isolation)
+        context.state = .detached
+        return context
+    }
+
     deinit {
         startupTask?.cancel()
         documentReloadTask?.cancel()
@@ -137,6 +151,14 @@ public final class WebInspectorContext {
     ) -> NetworkRequest? {
         requireOwner(isolation)
         return requestsByID[id]
+    }
+
+    package func registeredRequest(
+        forProxyID id: Network.Request.ID,
+        isolation: isolated (any Actor) = #isolation
+    ) -> NetworkRequest? {
+        requireOwner(isolation)
+        return requestsByID[NetworkRequest.ID(id)]
     }
 
     public func clearNetworkRequests(isolation: isolated (any Actor) = #isolation) {
@@ -1206,7 +1228,112 @@ extension WebInspectorContext {
 }
 
 extension WebInspectorContext {
-    func apply(_ event: Network.Event, isolation: isolated (any Actor) = #isolation) {
+    @discardableResult
+    package func seedNetworkRequest(
+        requestID rawRequestID: String,
+        url: String,
+        method: String = "GET",
+        resourceTypeRawValue: String?,
+        requestHeaders: [String: String] = [:],
+        postData: String? = nil,
+        responseMIMEType: String,
+        responseStatus: Int,
+        responseStatusText: String,
+        responseHeaders: [String: String] = [:],
+        responseBody: String? = nil,
+        timestamp: Double,
+        encodedBodyLength: Int = 0,
+        isolation: isolated (any Actor) = #isolation
+    ) -> NetworkRequest.ID {
+        requireOwner(isolation)
+        let requestID = Network.Request.ID(rawRequestID)
+        let resourceType = resourceTypeRawValue.map(Network.ResourceType.init(rawValue:))
+        apply(
+            .requestWillBeSent(
+                id: requestID,
+                request: Network.Request(
+                    id: requestID,
+                    url: url,
+                    method: method,
+                    headers: requestHeaders,
+                    postData: postData
+                ),
+                resourceType: resourceType,
+                redirectResponse: nil,
+                timestamp: timestamp
+            ),
+            isolation: isolation
+        )
+        apply(
+            .responseReceived(
+                id: requestID,
+                response: Network.Response(
+                    url: url,
+                    status: responseStatus,
+                    statusText: responseStatusText,
+                    mimeType: responseMIMEType,
+                    headers: responseHeaders,
+                    source: Network.Source(rawValue: "network"),
+                    requestHeaders: requestHeaders
+                ),
+                resourceType: resourceType ?? .other,
+                timestamp: timestamp + 0.1
+            ),
+            isolation: isolation
+        )
+        apply(
+            .dataReceived(
+                id: requestID,
+                dataLength: encodedBodyLength,
+                encodedDataLength: encodedBodyLength,
+                timestamp: timestamp + 0.11
+            ),
+            isolation: isolation
+        )
+        apply(
+            .loadingFinished(
+                id: requestID,
+                timestamp: timestamp + 0.2,
+                sourceMapURL: nil,
+                metrics: Network.Metrics(
+                    encodedDataLength: encodedBodyLength,
+                    decodedBodyLength: encodedBodyLength
+                )
+            ),
+            isolation: isolation
+        )
+        guard let request = networkRequest(for: requestID, method: "seedNetworkRequest") else {
+            preconditionFailure("Seeded NetworkRequest disappeared during preview seeding.")
+        }
+        if let responseBody {
+            request.responseBody.load(Network.Body(data: responseBody, base64Encoded: false))
+            refreshAllRequests(updatedItemIDs: [request.id])
+        }
+        return request.id
+    }
+
+    package func seedResponseBody(
+        for requestID: NetworkRequest.ID,
+        body: String,
+        base64Encoded: Bool = false,
+        size: Int? = nil,
+        isTruncated: Bool = false,
+        isolation: isolated (any Actor) = #isolation
+    ) {
+        requireOwner(isolation)
+        guard let request = requestsByID[requestID] else {
+            preconditionFailure("Cannot seed a response body for an unregistered NetworkRequest.")
+        }
+        request.responseBody.load(NetworkBody.Payload(
+            body: body,
+            base64Encoded: base64Encoded,
+            size: size,
+            isTruncated: isTruncated
+        ))
+        refreshAllRequests(updatedItemIDs: [requestID])
+    }
+
+    package func apply(_ event: Network.Event, isolation: isolated (any Actor) = #isolation) {
         requireOwner(isolation)
         switch event {
         case let .requestWillBeSent(id, request, resourceType, redirectResponse, timestamp):

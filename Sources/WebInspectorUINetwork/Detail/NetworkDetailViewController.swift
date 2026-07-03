@@ -1,6 +1,6 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
-import WebInspectorCore
+import WebInspectorDataKit
 import ObservationBridge
 import UIKit
 
@@ -474,7 +474,7 @@ package final class NetworkDetailViewController: UIViewController {
         if request.requestBody != nil {
             roles.append(.request)
         }
-        if request.responseBody != nil {
+        if request.hasResponseBody {
             roles.append(.response)
         }
         return roles
@@ -541,7 +541,7 @@ package final class NetworkDetailViewController: UIViewController {
         case .request:
             request.requestBody
         case .response:
-            request.responseBody
+            request.hasResponseBody ? request.responseBody : nil
         }
     }
 
@@ -565,13 +565,13 @@ package final class NetworkDetailViewController: UIViewController {
         switch role {
         case .request:
             return NetworkMediaPreviewMetadata(
-                mimeType: mimeType(from: nil, headers: request.request.headers),
-                url: request.request.url
+                mimeType: mimeType(from: nil, headers: request.requestHeaders),
+                url: request.url
             )
         case .response:
             return NetworkMediaPreviewMetadata(
-                mimeType: mimeType(from: request.response?.mimeType, headers: request.response?.headers ?? [:]),
-                url: request.response?.url ?? request.request.url
+                mimeType: mimeType(from: request.mimeType, headers: request.responseHeaders),
+                url: request.responseURL ?? request.url
             )
         }
     }

@@ -1,21 +1,17 @@
 import WebInspectorUIBase
-import WebInspectorCore
+import WebInspectorDataKit
 import Foundation
 import Observation
 
 @MainActor
 private final class NetworkResponseBodyFetchCoordinator {
-    private let action: NetworkPanelModel.ResponseBodyFetchAction?
     private var fetchesInFlight: Set<NetworkRequest.ID> = []
 
-    init(action: NetworkPanelModel.ResponseBodyFetchAction?) {
-        self.action = action
-    }
+    init() {}
 
     func fetchIfNeeded(for request: NetworkRequest) {
         guard request.canFetchResponseBody,
-              fetchesInFlight.contains(request.id) == false,
-              let action else {
+              fetchesInFlight.contains(request.id) == false else {
             return
         }
         fetchesInFlight.insert(request.id)
@@ -23,7 +19,7 @@ private final class NetworkResponseBodyFetchCoordinator {
             defer {
                 fetchesInFlight.remove(request.id)
             }
-            await action(request.id)
+            await request.fetchResponseBody()
         }
     }
 }
@@ -31,9 +27,8 @@ private final class NetworkResponseBodyFetchCoordinator {
 @MainActor
 @Observable
 package final class NetworkPanelModel {
-    package typealias ResponseBodyFetchAction = @MainActor (NetworkRequest.ID) async -> Void
-
-    package let network: NetworkSession
+    package let context: WebInspectorContext
+    package let requests: WebInspectorFetchedResults<NetworkRequest>
     package var selectedRequestID: NetworkRequest.ID?
     package var searchText: String = ""
     package var activeResourceFilters: Set<NetworkDisplay.ResourceFilter> = [] {
@@ -50,50 +45,53 @@ package final class NetworkPanelModel {
     @ObservationIgnored private var displayIndex: NetworkPanelDisplayIndex
 
     package init(
-        network: NetworkSession,
-        responseBodyFetchAction: ResponseBodyFetchAction? = nil,
+        context: WebInspectorContext,
         mediaPreviewClassifier: @escaping NetworkDisplay.MediaPreviewClassifier = { mimeType, url in
             NetworkDisplay.MediaPreviewSupport.classification(mimeType: mimeType, url: url)
         }
     ) {
-        self.network = network
-        self.responseBodyFetchCoordinator = NetworkResponseBodyFetchCoordinator(action: responseBodyFetchAction)
+        self.context = context
+        self.requests = context.fetchedResults()
+        self.responseBodyFetchCoordinator = NetworkResponseBodyFetchCoordinator()
         self.mediaPreviewClassifier = mediaPreviewClassifier
         self.displayIndex = NetworkPanelDisplayIndex()
     }
 
     package var displayRequestIDs: [NetworkRequest.ID] {
-        let requestIDs = network.orderedRequestIDs
+        let currentRequests = requests.items
         let criteria = NetworkPanelDisplayCriteria(
             searchText: normalizedSearchText,
             resourceFilters: effectiveResourceFilters
         )
         return displayIndex.reconcile(
-            network: network,
-            orderedRequestIDs: requestIDs,
+            requests: currentRequests,
             criteria: criteria,
-            topologyRevision: network.requestTopologyRevision,
-            displayRevision: criteria.requiresEntries ? network.requestDisplayRevision : nil,
             mediaPreviewClassifier: mediaPreviewClassifier
         )
     }
 
     package var displayRequests: [NetworkRequest] {
-        displayRequestIDs.compactMap { network.request(for: $0) }
+        displayRequestIDs.compactMap { request(for: $0) }
     }
 
     package var isEmpty: Bool {
-        network.orderedRequestIDs.isEmpty
+        requests.items.isEmpty
     }
 
     package var displayRowsInvalidationRevision: DisplayRowsInvalidationRevision {
         let query = normalizedSearchText
         let resourceFilters = effectiveResourceFilters
+        let entries = requests.items.map { request in
+            DisplayRowsInvalidationEntry(
+                requestID: request.id,
+                projection: request.displayProjection(),
+                resourceFilter: request.displayResourceFilter(mediaPreviewClassifier: mediaPreviewClassifier)
+            )
+        }
         return DisplayRowsInvalidationRevision(
             searchText: query,
             resourceFilters: resourceFilters,
-            topologyRevision: network.requestTopologyRevision,
-            displayRevision: query.isEmpty && resourceFilters.isEmpty ? nil : network.requestDisplayRevision
+            entries: entries
         )
     }
 
@@ -101,11 +99,11 @@ package final class NetworkPanelModel {
         guard let selectedRequestID else {
             return nil
         }
-        return network.request(for: selectedRequestID)
+        return requests.items.first { $0.id == selectedRequestID }
     }
 
     package func request(for id: NetworkRequest.ID) -> NetworkRequest? {
-        network.request(for: id)
+        context.registeredRequest(for: id)
     }
 
     package func selectRequest(_ request: NetworkRequest?) {
@@ -142,7 +140,7 @@ package final class NetworkPanelModel {
 
     package func clearRequests() {
         selectedRequestID = nil
-        network.reset()
+        context.clearNetworkRequests()
     }
 
     package func fetchResponseBodyIfNeeded(for request: NetworkRequest) {
@@ -179,10 +177,15 @@ extension NetworkPanelModel {
 #endif
 
 extension NetworkPanelModel {
+    package struct DisplayRowsInvalidationEntry: Equatable {
+        package var requestID: NetworkRequest.ID
+        package var projection: NetworkDisplay.Projection
+        package var resourceFilter: NetworkDisplay.ResourceFilter
+    }
+
     package struct DisplayRowsInvalidationRevision: Equatable {
         package var searchText: String
         package var resourceFilters: Set<NetworkDisplay.ResourceFilter>
-        package var topologyRevision: Int
-        package var displayRevision: Int?
+        package var entries: [DisplayRowsInvalidationEntry]
     }
 }

@@ -1,6 +1,7 @@
 #if canImport(UIKit)
 import AVKit
-import WebInspectorCore
+import WebInspectorDataKit
+import WebInspectorProxyKit
 import WebInspectorUIBase
 import WebInspectorUINetwork
 import Observation
@@ -344,14 +345,18 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
         }
     }
 
-    private func localizedDescription(for error: NetworkBody.FetchError) -> String {
+    private func localizedDescription(for error: WebInspectorProxyError) -> String {
         switch error {
-        case .unavailable:
+        case .closed:
             String(localized: "network.body.fetch.error.unavailable", bundle: WebInspectorUILocalization.bundle)
-        case .decodeFailed:
-            String(localized: "network.body.fetch.error.decode_failed", bundle: WebInspectorUILocalization.bundle)
-        case .unknown(let message):
-            message ?? String(localized: "network.body.fetch.error.unknown", bundle: WebInspectorUILocalization.bundle)
+        case .unsupported(let messages):
+            messages.joined(separator: "\n")
+        case .attachFailed(let message),
+             .disconnected(let message),
+             .commandFailed(_, _, let message):
+            message
+        case .timeout(let domain, let method):
+            "\(domain).\(method) timed out."
         }
     }
 
