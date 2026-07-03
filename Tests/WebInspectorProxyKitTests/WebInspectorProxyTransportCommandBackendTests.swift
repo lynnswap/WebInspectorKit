@@ -92,6 +92,69 @@ func transportCommandBackendDecodesDOMDocumentResult() async throws {
 }
 
 @Test
+func transportBackedProxyMaterializesCurrentPageFromTransportRegistry() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    let proxyTask = Task {
+        try await WebInspectorProxy(transport: transport)
+    }
+
+    await installPageTarget(in: transport)
+
+    let proxy = try await throwingValue(of: proxyTask)
+    let target = try await proxy.waitForCurrentPage()
+    #expect(target.id == .currentPage)
+    guard case .page = target.kind else {
+        Issue.record("Expected current page target.")
+        return
+    }
+    #expect(target.frameID == FrameID("main-frame"))
+    #expect(target.route == .currentPage)
+}
+
+@Test
+func transportBackedCurrentPageRouteFollowsCommittedMainPageTarget() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-old"))
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+
+    let firstReloadTask = Task {
+        try await target.page.reload()
+    }
+    let firstSent = try await waitForTargetMessage(backend, method: "Page.reload")
+    #expect(firstSent.targetIdentifier == ProtocolTarget.ID("page-old"))
+    await receiveTargetReply(
+        transport,
+        targetID: firstSent.targetIdentifier,
+        messageID: try messageID(firstSent.message),
+        result: "{}"
+    )
+    try await firstReloadTask.value
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-new","type":"page","isProvisional":true}}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-old","newTargetId":"page-new"}}"#
+    )
+
+    let secondReloadTask = Task {
+        try await target.page.reload()
+    }
+    let secondSent = try await waitForTargetMessage(backend, method: "Page.reload", after: 1)
+    #expect(secondSent.targetIdentifier == ProtocolTarget.ID("page-new"))
+    await receiveTargetReply(
+        transport,
+        targetID: secondSent.targetIdentifier,
+        messageID: try messageID(secondSent.message),
+        result: "{}"
+    )
+    try await secondReloadTask.value
+}
+
+@Test
 func transportBackendDecodesRootScopedDOMDocumentUpdatedForCurrentPage() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
@@ -245,9 +308,13 @@ private func pageTarget(proxy: WebInspectorProxy) -> WebInspectorTarget {
     )
 }
 
-private func installPageTarget(in transport: TransportSession) async {
+private func installPageTarget(
+    in transport: TransportSession,
+    targetID: ProtocolTarget.ID = ProtocolTarget.ID("page-main")
+) async {
+    let targetID = jsonEscapedString(targetID.rawValue)
     await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"\#(targetID)","type":"page","frameId":"main-frame","isProvisional":false}}}"#
     )
 }
 
@@ -272,7 +339,8 @@ private func receiveTargetEvent(
 
 private func waitForTargetMessage(
     _ backend: FakeTransportBackend,
-    method: String
+    method: String,
+    after count: Int = 0
 ) async throws -> SentTargetMessage {
     try await withThrowingTaskGroup(of: SentTargetMessage.self) { group in
         defer {
@@ -280,7 +348,7 @@ private func waitForTargetMessage(
         }
 
         group.addTask {
-            try await backend.waitForTargetMessage(method: method)
+            try await backend.waitForTargetMessage(method: method, after: count)
         }
         group.addTask {
             try await Task.sleep(for: transportCommandBackendWaitTimeout)
@@ -355,6 +423,26 @@ private func value<T: Sendable>(
     try await withThrowingTaskGroup(of: T.self) { group in
         group.addTask {
             await task.value
+        }
+        group.addTask {
+            try await Task.sleep(for: timeout)
+            throw TimedOut()
+        }
+        guard let value = try await group.next() else {
+            throw TimedOut()
+        }
+        group.cancelAll()
+        return value
+    }
+}
+
+private func throwingValue<T: Sendable>(
+    of task: Task<T, any Error>,
+    timeout: Duration = .seconds(1)
+) async throws -> T {
+    try await withThrowingTaskGroup(of: T.self) { group in
+        group.addTask {
+            try await task.value
         }
         group.addTask {
             try await Task.sleep(for: timeout)

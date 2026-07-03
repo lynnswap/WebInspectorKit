@@ -93,11 +93,23 @@ package struct WebInspectorTransportBackend: WebInspectorProxyBackend {
     }
 
     private nonisolated func shouldDeliver(_ event: ProtocolEvent, to route: RoutingTargetID) async -> Bool {
-        if let targetID = event.targetID {
-            return targetID.rawValue == route.rawValue
+        switch route.storage {
+        case let .target(rawValue):
+            if let targetID = event.targetID {
+                return targetID.rawValue == rawValue
+            }
+            let snapshot = await transport.snapshot()
+            return snapshot.currentMainPageTargetID?.rawValue == rawValue
+        case .currentPage:
+            let snapshot = await transport.snapshot()
+            guard let currentMainPageTargetID = snapshot.currentMainPageTargetID else {
+                return false
+            }
+            guard let targetID = event.targetID else {
+                return true
+            }
+            return targetID == currentMainPageTargetID
         }
-        let snapshot = await transport.snapshot()
-        return snapshot.currentMainPageTargetID?.rawValue == route.rawValue
     }
 }
 
@@ -165,9 +177,18 @@ private enum WebInspectorTransportCommandEncoder {
         return ProtocolCommand(
             domain: domain,
             method: "\(command.domain.rawValue).\(command.method)",
-            routing: .target(ProtocolTarget.ID(command.route.rawValue)),
+            routing: routing(for: command.route),
             parametersData: try parametersData(for: command)
         )
+    }
+
+    private static func routing(for route: RoutingTargetID) -> ProtocolCommand.Routing {
+        switch route.storage {
+        case let .target(rawValue):
+            .target(ProtocolTarget.ID(rawValue))
+        case .currentPage:
+            .octopus(pageTarget: nil)
+        }
     }
 
     private static func protocolDomain(for domain: WebInspectorProxyDomain) -> ProtocolDomain {

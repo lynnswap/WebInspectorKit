@@ -620,9 +620,10 @@ func consoleEnableReplayIsCapturedBeforeCommandReturns() async throws {
 func transportBackedStartupCapturesRuntimeAndConsoleReplayBeforeEnableReplies() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
-    let proxy = WebInspectorProxy(backend: WebInspectorTransportBackend(transport: transport))
-    let target = await proxy.installTargetForTesting(kind: .page, frameID: FrameID("main-frame"))
-    await installTransportPageTarget(in: transport, targetID: ProtocolTarget.ID(target.route.rawValue))
+    await installTransportPageTarget(in: transport, targetID: ProtocolTarget.ID("page-main"))
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+    #expect(target.id == .currentPage)
     let container = WebInspectorContainer(proxy: proxy)
     let context = container.mainContext
     let consoleResults: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults(for: .allConsoleMessages)

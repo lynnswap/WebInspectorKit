@@ -9,10 +9,30 @@ public struct FrameID: Hashable, Sendable {
 }
 
 package struct RoutingTargetID: Hashable, Sendable {
-    package let rawValue: String
+    package enum Storage: Hashable, Sendable {
+        case target(String)
+        case currentPage
+    }
+
+    package let storage: Storage
+
+    package static let currentPage = RoutingTargetID(storage: .currentPage)
 
     package init(_ rawValue: String) {
-        self.rawValue = rawValue
+        storage = .target(rawValue)
+    }
+
+    private init(storage: Storage) {
+        self.storage = storage
+    }
+
+    package var rawValue: String {
+        switch storage {
+        case let .target(rawValue):
+            rawValue
+        case .currentPage:
+            preconditionFailure("The current-page route has no fixed target identifier.")
+        }
     }
 }
 
@@ -23,6 +43,8 @@ public struct WebInspectorTarget: Identifiable, Sendable {
         package init(_ rawValue: String) {
             self.rawValue = rawValue
         }
+
+        package static let currentPage = ID("current-page")
     }
 
     public enum Kind: Sendable {

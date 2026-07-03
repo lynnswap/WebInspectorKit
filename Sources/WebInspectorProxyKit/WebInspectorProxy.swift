@@ -1,5 +1,6 @@
 import Foundation
 import WebKit
+import WebInspectorTransport
 
 public actor WebInspectorProxy {
     public struct Configuration: Equatable, Sendable {
@@ -46,6 +47,32 @@ public actor WebInspectorProxy {
         pageTarget = nil
         nextTargetOrdinal = 0
         closed = false
+    }
+
+    package init(
+        transport: TransportSession,
+        configuration: Configuration = .init()
+    ) async throws {
+        self.configuration = configuration
+        backend = WebInspectorTransportBackend(transport: transport)
+        pageTarget = nil
+        nextTargetOrdinal = 0
+        closed = false
+
+        do {
+            let transportTarget = try await transport.waitForCurrentMainPageTarget(
+                timeout: configuration.bootstrapTimeout
+            )
+            let snapshot = await transport.snapshot()
+            guard let record = snapshot.targetsByID[transportTarget.targetID] else {
+                throw WebInspectorProxyError.disconnected("Current page target disappeared during bootstrap.")
+            }
+            pageTarget = try currentPageTarget(from: record)
+        } catch {
+            closed = true
+            await transport.detach()
+            throw Self.mapBootstrapTargetError(error)
+        }
     }
 
     public var currentPage: WebInspectorTarget? {
@@ -279,6 +306,57 @@ public actor WebInspectorProxy {
             continuation.yield(.inspect(nodeID))
         } catch {
             continuation.yield(.unknown(RawEvent(domain: "Inspector", method: "inspect")))
+        }
+    }
+
+    private func currentPageTarget(from record: ProtocolTarget.Record) throws -> WebInspectorTarget {
+        guard let kind = WebInspectorTarget.Kind(protocolKind: record.kind) else {
+            throw WebInspectorProxyError.disconnected("Current page target has unsupported kind.")
+        }
+        return WebInspectorTarget(
+            id: .currentPage,
+            kind: kind,
+            frameID: record.frameID.map { FrameID($0.rawValue) },
+            isProvisional: record.isProvisional,
+            proxy: self,
+            route: .currentPage
+        )
+    }
+
+    private nonisolated static func mapBootstrapTargetError(_ error: any Error) -> any Error {
+        guard let transportError = error as? TransportSession.Error else {
+            return error
+        }
+        switch transportError {
+        case .missingMainPageTarget:
+            return WebInspectorProxyError.timeout(domain: "Target", method: "waitForCurrentPage")
+        case .transportClosed:
+            return WebInspectorProxyError.closed
+        case let .replyTimeout(method, _):
+            return WebInspectorProxyError.timeout(domain: "Target", method: method)
+        case let .remoteError(method, _, message):
+            return WebInspectorProxyError.commandFailed(domain: "Target", method: method, message: message)
+        case let .missingTarget(targetID):
+            return WebInspectorProxyError.disconnected("Target \(targetID.rawValue) disappeared during bootstrap.")
+        case .malformedMessage:
+            return WebInspectorProxyError.disconnected("Malformed target bootstrap message.")
+        }
+    }
+}
+
+private extension WebInspectorTarget.Kind {
+    init?(protocolKind: ProtocolTarget.Kind) {
+        switch protocolKind {
+        case .page:
+            self = .page
+        case .frame:
+            self = .frame
+        case .worker:
+            self = .worker
+        case .serviceWorker:
+            self = .serviceWorker
+        case .other:
+            return nil
         }
     }
 }
