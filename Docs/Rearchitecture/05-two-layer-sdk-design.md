@@ -1,12 +1,13 @@
 # Design Doc — Two-Layer SDK Surface (WebInspectorProxyKit + WebInspectorDataKit)
 
-Status: proposal (2026-07-02). This document supersedes the **public-surface
-direction** of [03-design-doc.md](03-design-doc.md). It keeps the scope
-outcomes of [01-scope-contract.md](01-scope-contract.md) and the measured
-findings of [02-findings.md](02-findings.md) as inputs, but it answers the
-newer owner requirement — *"stop publishing the Observable god-model; split the
-SDK into a low-level stream/command kit and a SwiftData/CoreData-style data
-kit"* — which 03 did not attempt.
+Status: binding contract for the staged two-layer SDK (2026-07-03). This
+document supersedes the **public-surface direction** of
+[03-design-doc.md](03-design-doc.md). It keeps the scope outcomes of
+[01-scope-contract.md](01-scope-contract.md) and the measured findings of
+[02-findings.md](02-findings.md) as inputs, but it answers the newer owner
+requirement — *"stop publishing the Observable god-model; split the SDK into a
+low-level stream/command kit and a SwiftData/CoreData-style data kit"* — which
+03 did not attempt.
 
 The style reference is `CodexKit` (`/Users/kn/Dev/CodexKit`): a low-level comm
 kit (`CodexAppServerKit`) that hides JSON-RPC behind typed domain verbs and
@@ -17,7 +18,8 @@ Inspector protocol, but not every CodexKit behavior is copied: WebKit inspector
 events are mostly live-only at the proxy layer, and replay belongs to DataKit's
 materialized models where the domain semantics require it.
 
-Naming decisions (owner-confirmed 2026-07-02):
+Naming decisions (owner-confirmed 2026-07-03, implemented without compatibility
+aliases):
 
 | Layer | Module | CodexKit analog |
 | --- | --- | --- |
@@ -26,13 +28,13 @@ Naming decisions (owner-confirmed 2026-07-02):
 | In-memory test runtime | **`WebInspectorProxyKitTesting`** | `CodexAppServerKitTesting` |
 | Drop-in UIKit inspector UI | **`WebInspectorKit`** (existing product, re-based onto `WebInspectorDataKit`) | — |
 
-Owner naming choices are recorded in §10; they do not block the interfaces
-below.
+Owner naming choices are recorded in §10.
 
-Signature notation: every `swift` block is the **binding interface sketch** —
-it compiles conceptually, is written before implementation (api-design norm),
-and the member list is the contract. Field ellipses (`// … full set = …`) point
-to the measured source where the full field list already exists.
+Signature notation: `swift` blocks marked **Initial binding contract** are the
+public surface that the current M3/M4 implementation must keep compiling and
+testing. Blocks marked **Planned surface** are accepted architecture, but are
+not public API until their owner, event coverage, and contract tests land. Do
+not ship planned names as empty wrappers or compatibility stubs.
 
 ---
 
@@ -56,6 +58,11 @@ accumulates state *and* serves render-diff snapshots to the built-in UI. The
 split gives each job a layer.
 
 ### 1.2 Products, dependency direction, client story
+
+The graph below is the target binding graph. The current `Package.swift`
+already exposes only the four final public products, but `WebInspectorKit`
+still uses the legacy internal UI/Core targets until W4 rebases the UIKit
+facade onto `WebInspectorDataKit`.
 
 ```mermaid
 flowchart TD
@@ -81,18 +88,18 @@ flowchart TD
 | `WebInspectorProxyKitTesting` | iOS 18+, macOS 15+ | Tests that drive either kit deterministically over an in-memory backend with no `WKWebView` and no private symbols. |
 | `WebInspectorKit` | iOS 18+ (UIKit) | Apps wanting the built-in drop-in inspector container (Monocly). |
 
-The **entire** current `WebInspectorTransport` + `WebInspectorNativeTransport`
-+ `WebInspectorNativeBridge` + `WebInspectorNativeSymbols` stack becomes
-**internal to `WebInspectorProxyKit`** — none of it is a public product (resolves
-F-02/F-10: the empty products disappear because their content is now the
-private engine of one designed product). This is the same move CodexKit makes
-with `JSONRPC`/`AppServerAPI`/`AppServerProcessTransport` (all `package`).
+The current `WebInspectorTransport` + `WebInspectorNativeTransport` +
+`WebInspectorNativeBridge` + `WebInspectorNativeSymbols` stack is no longer a
+public product surface. During migration these may remain separate internal
+targets used by the legacy UIKit product and tests, but external consumers only
+see the designed products above. The final ProxyKit implementation can fold or
+depend on those internal targets; it must not re-export them.
 
 ### 1.3 What moves where (from the current 16 targets)
 
 - `WebInspectorTransport`, `WebInspectorNativeTransport`, `WebInspectorNativeBridge`,
-  `WebInspectorNativeSymbols`, `WebInspectorCoreSupport` → **internal targets of
-  `WebInspectorProxyKit`** (the typed public surface sits on top). `TransportSession`,
+  `WebInspectorNativeSymbols`, `WebInspectorCoreSupport` → **internal
+  implementation targets**, not library products. `TransportSession`,
   `ProtocolCommand/Event`, `ProtocolCommandChannel`, `TransportReceiver`,
   `NativeInspectorBackend`, symbol resolution — all stay `package`/internal.
 - The domain `@Observable` classes (`DOMSession`, `NetworkSession`,
@@ -808,7 +815,12 @@ off main and hops only semantic mutation application to the actor that owns the
 context. If the context is `container.mainContext`, that owner is `MainActor`;
 if the context is private state inside a consumer actor, that actor is the
 owner. The owner actor is fixed at init and public/package entry points must
-fail fast when called from a different actor. Cross-target semantics
+fail fast when called from a different actor. This fail-fast check applies to
+methods and command/query entry points that accept `isolation:`. Public
+observable stored-property reads are not wrapped in runtime owner checks; the
+contract is that `WebInspectorContext` and its models are non-`Sendable`,
+actor-private references, and consumers read them on the actor that owns the
+context. Cross-target semantics
 the current code owns — frame-document projection, console merge/retarget on
 provisional commit, runtime object-group release — move **here**, into private
 context coordinators, not into the proxy (which stays per-target and faithful).
@@ -828,6 +840,8 @@ in-place identity-preserving updates
 (CodexDataKit model idiom). These models are not `Sendable`; only their IDs and
 snapshot/transaction values cross actors.
 
+Initial binding contract (M3/M4):
+
 ```swift
 public protocol WebInspectorPersistentModel: AnyObject, Observable, Identifiable, Hashable, SendableMetatype
 where ID: Hashable & Sendable {
@@ -843,33 +857,20 @@ where ID: Hashable & Sendable {
 public final class DOMNode: WebInspectorPersistentModel {
     public struct ID: Hashable, Sendable { /* opaque; wraps proxy DOM.Node.ID */ }
     public let id: ID
-    public private(set) var frameID: FrameID?
-    public private(set) var documentURL: String?
-    public private(set) var baseURL: String?
     public private(set) var nodeName: String
     public private(set) var localName: String
     public private(set) var nodeValue: String
-    public private(set) var attributes: [String: String]
     public private(set) var nodeType: Int
-    public private(set) var pseudoType: DOM.PseudoType?
+    public private(set) var attributes: [String: String]
+    public private(set) var childNodeCount: Int
     /// Children with an explicit loading state (the current ChildrenState).
     public enum Children { case unrequested(count: Int); case loaded([DOMNode]) }
     public private(set) var children: Children
-    public private(set) var contentDocument: DOMNode?
-    public private(set) var shadowRoots: [DOMNode]
-    public private(set) var templateContent: DOMNode?
-    public private(set) var beforePseudoElement: DOMNode?
-    public private(set) var otherPseudoElements: [DOMNode]
-    public private(set) var afterPseudoElement: DOMNode?
-    public var elementStyles: CSSStyles? { get }          // selection-driven, see §4.5
+    public private(set) var elementStyles: CSSStyles?     // selection-driven, see §4.5
 
     // Write-back (delegates to context → currentPage.dom):
     public func requestChildren(depth: Int = 1,
                                 isolation: isolated (any Actor) = #isolation) async
-    public func highlight(isolation: isolated (any Actor) = #isolation) async
-    public func remove(undoManager: UndoManager? = nil,
-                       isolation: isolated (any Actor) = #isolation) async throws
-    public func outerHTML(isolation: isolated (any Actor) = #isolation) async throws -> String
 }
 
 @Observable
@@ -883,25 +884,17 @@ public final class NetworkRequest: WebInspectorPersistentModel, WebInspectorFetc
     public private(set) var state: State
     public private(set) var status: Int?
     public private(set) var mimeType: String?
-    public private(set) var frameID: FrameID?
-    public private(set) var documentURL: String?
     public private(set) var sourceMapURL: String?
     public private(set) var requestHeaders: [String: String]
     public private(set) var responseHeaders: [String: String]
     public private(set) var requestSentTimestamp: Double?
-    public private(set) var requestSentWalltime: Double?
     public private(set) var responseReceivedTimestamp: Double?
     public private(set) var lastDataReceivedTimestamp: Double?
     public private(set) var finishedOrFailedTimestamp: Double?
-    public private(set) var encodedDataLength: Int
     public private(set) var decodedDataLength: Int
-    public private(set) var cachedResourceBodySize: Int?
-    public private(set) var responseSource: Network.Source?
+    public private(set) var encodedDataLength: Int
     public private(set) var metrics: Network.Metrics?
-    public private(set) var initiator: Network.Initiator?
-    public private(set) var requestBody: NetworkBody?
-    public private(set) var responseBody: NetworkBody?
-    public var canFetchResponseBody: Bool { get }
+    public private(set) var responseBody: NetworkBody
     /// Redirect chain — each hop keeps its own request/response. The proxy's
     /// `requestWillBeSent(redirectResponse:)` lands here.
     public private(set) var redirects: [RedirectHop]
@@ -940,11 +933,20 @@ public struct RedirectHop: Sendable {
 @Observable
 public final class WebSocketState {
     public enum ReadyState: Sendable { case connecting, open, closed }
+    public enum FrameDirection: Sendable { case sent, received, error(String) }
     public private(set) var readyState: ReadyState
     public private(set) var handshakeRequest: NetworkRequestSnapshot?
     public private(set) var handshakeResponse: NetworkResponseSnapshot?
     public private(set) var frames: [Frame]
-    public struct Frame: Sendable { /* direction, opcode, mask, payloadData/text/size, errorMessage?, timestamp */ }
+    public struct Frame: Sendable {
+        public let direction: FrameDirection
+        public let opcode: Int?
+        public let mask: Bool?
+        public let payloadData: String?
+        public let payloadLength: Int?
+        public let errorMessage: String?
+        public let timestamp: Double
+    }
 }
 
 /// `Network.webSocketCreated` is the row-creation owner. Later WebSocket
@@ -954,18 +956,10 @@ public final class WebSocketState {
 /// same as domain-level `.unknown`.
 @Observable
 public final class NetworkBody {
-    public enum Phase: Sendable { case available, fetching, loaded, failed(String) }
-    public enum Role: Sendable { case request, response }
-    public enum Kind: Sendable { case text, binary, image, unknown }
+    public enum Phase: Sendable { case available, fetching, loaded, failed(WebInspectorProxyError) }
     public private(set) var phase: Phase
-    public private(set) var role: Role
-    public private(set) var kind: Kind
     public private(set) var text: String?
-    public private(set) var size: Int
     public private(set) var isBase64Encoded: Bool
-    public private(set) var isTruncated: Bool
-    public private(set) var sourceSyntaxKind: String?
-    public private(set) var textRepresentationSyntaxKind: String?
 }
 
 @Observable
@@ -986,7 +980,14 @@ public final class ConsoleMessage: WebInspectorPersistentModel, WebInspectorFetc
     public private(set) var timestamp: Double?
 }
 
-@Observable public final class RuntimeContext: WebInspectorPersistentModel { /* id, name, frameID */ }
+@Observable
+public final class RuntimeContext: WebInspectorPersistentModel {
+    public struct ID: Hashable, Sendable { /* opaque; wraps proxy Runtime.ExecutionContext.ID */ }
+    public let id: ID
+    public private(set) var name: String
+    public private(set) var frameID: FrameID?
+    public private(set) var kind: Runtime.ContextKind
+}
 
 @Observable
 public final class RuntimeObject: WebInspectorPersistentModel {
@@ -1019,16 +1020,11 @@ public final class RuntimeObject: WebInspectorPersistentModel {
 @Observable
 public final class CSSStyles: WebInspectorPersistentModel {
     public struct ID: Hashable, Sendable { /* opaque */ }
+    public enum Phase: Sendable { case loading, loaded, needsRefresh, unavailable, failed(WebInspectorProxyError) }
     public let id: ID
-    public enum Phase: Sendable { case loading, loaded, needsRefresh, unavailable, failed(String) }
     public private(set) var phase: Phase
     public private(set) var sections: [CSS.Rule]
     public private(set) var computedProperties: [CSS.ComputedProperty]
-    /// The one CSS mutation (comment-out / re-enable a declaration). The ID is
-    /// reachable via `sections[].style.properties[].id`.
-    public func setProperty(_ property: CSS.Property.ID,
-                            enabled: Bool,
-                            isolation: isolated (any Actor) = #isolation) async throws
 }
 
 public struct RuntimeEvaluation {
@@ -1036,6 +1032,14 @@ public struct RuntimeEvaluation {
     public let isException: Bool
 }
 ```
+
+Planned model extensions (not M3/M4 public API): `DOMNode.frameID`,
+`documentURL`, `baseURL`, shadow/pseudo/content-document projections,
+`DOMNode.highlight/remove/outerHTML`, request body storage, network wall-time,
+cached body size/type, response source, initiator, richer `NetworkBody`
+metadata, CSS property mutation, and any row/tree transaction models. Each
+extension must add its own owner, event-coverage row, and contract test before
+it becomes binding public surface.
 
 ### 4.3 Fetch, fetched results, tree controller
 
@@ -1045,32 +1049,15 @@ so it gets a tree-shaped controller instead of pretending to be a flat fetch).
 This split mirrors the data shape: lists use fetched results, tree views use a
 DOM tree controller over the same `DOMNode` identity map.
 
+Initial binding contract (M3/M4):
+
 ```swift
 public protocol WebInspectorFetchableModel: WebInspectorPersistentModel {}
 // conformers: NetworkRequest, ConsoleMessage.
 
-public enum WebInspectorSortOrder: Sendable { case forward, reverse }
-public struct WebInspectorSortDescriptor<Model: WebInspectorFetchableModel>: Sendable, Hashable {
-    // Key paths validated against a closed known-key table; preconditionFailure on
-    // unsupported paths (CodexSortDescriptor idiom — fail fast, no silent guesses).
-    public init<Value: Comparable>(_ keyPath: KeyPath<Model, Value>, order: WebInspectorSortOrder = .forward)
-}
-
-/// Fixed-field predicate per model (CodexFetchPredicate idiom), not NSPredicate.
-public struct WebInspectorFetchPredicate<Model: WebInspectorFetchableModel>: Sendable, Hashable {
-    // NetworkRequest: resourceTypes, urlContains, statusRange, stateFilter …
-    // ConsoleMessage: levels, sources, textContains …
-}
-
 public struct WebInspectorFetchDescriptor<Model: WebInspectorFetchableModel>: Sendable, Hashable {
-    public var predicate: WebInspectorFetchPredicate<Model>?
-    public var sortBy: [WebInspectorSortDescriptor<Model>]
-    /// Retention cap — the data kit OWNS bounded growth here, fixing the current
-    /// unbounded request/console accumulation (domain research §7). nil = unbounded.
-    public var retentionLimit: Int?
-    public init(predicate: WebInspectorFetchPredicate<Model>? = nil,
-                sortBy: [WebInspectorSortDescriptor<Model>] = [],
-                retentionLimit: Int? = nil)
+    // Initial contract is a closed descriptor kind. Consumers use canned
+    // descriptors; arbitrary sort/predicate/retention is planned, not M3/M4.
 }
 
 // Canned descriptors as constrained statics (CodexFetchDescriptor.recentChats idiom):
@@ -1084,9 +1071,28 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
 }
 ```
 
-Planned fetched-results controller surface:
+Planned descriptor/controller surface:
 
 ```swift
+public enum WebInspectorSortOrder: Sendable { case forward, reverse }
+public struct WebInspectorSortDescriptor<Model: WebInspectorFetchableModel>: Sendable, Hashable {
+    // Key paths validated against a closed known-key table; preconditionFailure on
+    // unsupported paths (CodexSortDescriptor idiom — fail fast, no silent guesses).
+    public init<Value: Comparable>(_ keyPath: KeyPath<Model, Value>, order: WebInspectorSortOrder = .forward)
+}
+
+/// Fixed-field predicate per model (CodexFetchPredicate idiom), not NSPredicate.
+public struct WebInspectorFetchPredicate<Model: WebInspectorFetchableModel>: Sendable, Hashable {
+    // NetworkRequest: resourceTypes, urlContains, statusRange, stateFilter …
+    // ConsoleMessage: levels, sources, textContains …
+}
+
+extension WebInspectorFetchDescriptor {
+    public init(predicate: WebInspectorFetchPredicate<Model>? = nil,
+                sortBy: [WebInspectorSortDescriptor<Model>] = [],
+                retentionLimit: Int? = nil)
+}
+
 public final class WebInspectorFetchedResultsController<Model: WebInspectorFetchableModel> {
     public let fetchedResults: WebInspectorFetchedResults<Model>   // forwarded current value, no 2nd copy
     /// Ordered insert/delete/move/update transactions — the public replacement for
@@ -1099,9 +1105,11 @@ public final class WebInspectorFetchedResultsController<Model: WebInspectorFetch
 public enum WebInspectorDataPhase: Sendable, Equatable { case idle, loading, loaded, failed(String) }
 ```
 
-`WebInspectorFetchedResultsController`, `transactions`, `phase`, refresh, sort, and
-predicate APIs are not M3. They become public only with a real transaction owner
-and contract tests; do not add wrappers that merely forward `items`.
+`WebInspectorSortOrder`, `WebInspectorSortDescriptor`,
+`WebInspectorFetchPredicate`, `WebInspectorFetchedResultsController`,
+`transactions`, `phase`, refresh, arbitrary sort/predicate, and retention APIs
+are not M3/M4. They become public only with a real query/transaction owner and
+contract tests; do not add wrappers that merely forward `items`.
 
 DOM tree controller:
 
@@ -1135,6 +1143,8 @@ SwiftUI consumer becomes a first-class deliverable, add an optional
 dependencies to `WebInspectorDataKit`.
 
 ### 4.4 Live observation
+
+Planned surface, not M3/M4:
 
 ```swift
 extension WebInspectorContext {
@@ -1202,13 +1212,16 @@ public struct WebInspectorProxyTestRuntime: Sendable {
     public static func start() async throws -> WebInspectorProxyTestRuntime
 }
 public actor WebInspectorTestBackend {
-    // Enqueue typed command replies and emit typed events. `result` is a package
-    // wire-reply value (public DOM.Node/Network.Response are decode-only, §9).
-    public func enqueue(_ result: some Encodable, for domain: String, method: String) async
+    // Enqueue typed command replies and emit typed events through the same
+    // proxy/backend seam as production.
+    public func enqueue(_ result: some Sendable, for domain: String, method: String) async
     public func emit(_ event: Network.Event, target: WebInspectorTarget.ID) async
+    public func emit(_ event: Network.Event, target: WebInspectorTarget) async
     public func emit(_ event: DOM.Event, target: WebInspectorTarget.ID) async
-    // … per-domain overloads; targetCreated/committed/destroyed helpers.
+    public func emit(_ event: DOM.Event, target: WebInspectorTarget) async
+    // … per-domain overloads.
     public func recordedCommands() async -> [RecordedCommand]
+    public func waitForSubscribers(domain: String, target: WebInspectorTarget, count: Int) async throws
     public func hold(domain: String, method: String, gate: WebInspectorTestGate) async
 }
 public actor WebInspectorTestGate { public func wait() async; public func open() async }
@@ -1226,28 +1239,41 @@ through the proxy's fake backend, exactly like `CodexDataKitTests`).
 ```swift
 import WebInspectorDataKit
 
-let container = try await WebInspectorContainer(attachingTo: webView)
-let context = container.mainContext        // observe context.state for lifecycle
+actor InspectorStore {
+    private let container: WebInspectorContainer
+    private lazy var context = WebInspectorContext(container, isolation: self)
 
-// DOM tree
-if let root = context.rootNode {
-    await root.requestChildren(depth: 1)
-    if case .loaded(let kids) = root.children { context.select(kids.first) }
+    init(container: WebInspectorContainer) {
+        self.container = container
+    }
+
+    func start() {
+        context.start()
+    }
+
+    func snapshot() async throws {
+        if let root = context.rootNode {
+            await root.requestChildren(depth: 1)
+            if case .loaded(let children) = root.children {
+                context.select(children.first)
+            }
+        }
+
+        let requests: WebInspectorFetchedResults<NetworkRequest> =
+            context.fetchedResults(for: .allRequests)
+        await requests.items.last?.fetchResponseBody()
+
+        let result = try await context.evaluate("document.title")
+        print(result.isException ? "thrown" : result.object.description ?? "")
+    }
 }
-// styles of the selected node
-let styles = context.selectedNode?.elementStyles
-
-// Network list (bounded, live)
-let requests = context.fetchedResults(for: .allRequests)   // observe requests.items
-if let last = requests.items.last { await last.fetchResponseBody() /* read last.responseBody?.text */ }
-
-// Evaluate
-let result = try await context.evaluate("document.title")
-print(result.isException ? "⚠️ \(result.object.description ?? "")" : result.object.description ?? "")
 ```
 
-Before: impossible outside the package (F-05/F-21/F-22). Compiles on macOS
-because no UIKit type is in the surface.
+Before: impossible outside the package (F-05/F-21/F-22). This compiles on
+macOS because no UIKit type is in the surface, and it proves the context owner
+can be a consumer actor instead of `MainActor`. Live `WKWebView` attachment is
+still a separate `@MainActor` WebKit boundary; once a `WebInspectorContainer`
+exists, the DataKit context is not globally main-actor bound.
 
 ### Story A2 — low-level only (no data kit)
 
@@ -1269,20 +1295,20 @@ A network logger that never builds a model graph — the proxy is useful alone.
 
 ```swift
 import WebInspectorKit
-import WebInspectorDataKit
 
 let consoleTab = WebInspectorTab(id: "app_console", title: "Console", systemImage: "terminal") { session in
     ConsoleTabViewController(session: session)     // receives the existing WebInspectorSession facade
 }
 final class ConsoleTabViewController: UIViewController {
     let session: WebInspectorSession
-    let messages: WebInspectorFetchedResults<ConsoleMessage>
-    // input: guard let context = session.modelContext else { renderDetachedState(); return }
-    // let r = try await context.evaluate(text); render r.object.description / properties()
 }
 ```
 
-Before: impossible (F-05).
+Current contract: custom tabs keep receiving `WebInspectorSession`, and the
+UIKit factory shape is externally stable. Direct DataKit context access from a
+custom tab is not M3/M4 public surface; W4 must add a deliberate session-level
+accessor or command facade, with contract tests, before the README Console tab
+becomes a runtime DataKit consumer.
 
 ### Story C — drop-in UIKit (external contract preserved)
 
@@ -1298,15 +1324,19 @@ tab selection, page user-interface style, and the optional
 `WebInspectorContainer` / `WebInspectorContext` created by `attach(to:)`.
 `WebInspectorViewController(session:)`, `WebInspectorViewController.attach(to:)`,
 and `WebInspectorTab`'s existing `(WebInspectorSession) -> UIViewController`
-factory shape are preserved (F-07); internally the session now exposes
-`modelContext` for custom tabs. A `WebInspectorViewController(webView:)`
-convenience can be added, but it must not replace the session-based contract.
+factory shape are preserved (F-07). A public DataKit handoff for custom tabs is
+a W4 contract item, not an implicit field leak from the session. A
+`WebInspectorViewController(webView:)` convenience can be added, but it must not
+replace the session-based contract.
 
 ---
 
 ## 7. Where the existing UIKit UI sits
 
-`WebInspectorKit` (the product) becomes a **consumer of `WebInspectorDataKit`**:
+`WebInspectorKit` (the product) becomes a **consumer of `WebInspectorDataKit`**
+in W4. Until that migration lands, it remains the UIKit compatibility owner over
+the legacy internal UI/Core targets, while the new DataKit contract is proven by
+`ContractTests` and package tests.
 
 - Its view controllers render from the context's `@Observable` models and drive
   initial lists from `WebInspectorFetchedResults.items`. Ordered transactions are a
@@ -1413,7 +1443,7 @@ Resolved during review:
 
 ---
 
-## 11. Relationship to the prior design (03) and next step
+## 11. Relationship to the prior design (03) and implementation gate
 
 03 and this doc share phases 0–1 (scope, findings) but diverge at phase 2:
 
@@ -1425,18 +1455,13 @@ Resolved during review:
 | Render-diff plumbing | Stays package on the public class | Planned replacement by DataKit `WebInspectorFetchedResultsController.transactions` / `DOMTreeController.transactions`, with UIKit-specific rendering behind the UI boundary |
 | Migration cost | Lower (promote + rename) | Higher (rewrite the domain-model layer) — justified by the two-outcome unlock and by removing the god-model defect at the root (F-25/F-29/F-32) |
 
-Next step (per the `rearchitect` workflow): this is an interface sketch, not a
-gate-approved contract. Before delegating implementation, it needs (1) the full
-field lists filled from the measured payload structs, (2) consumer stories
-A/A2/B/C compiled as a proxy-consumer contract-test package (as 03 §8 planned),
-and (3) a **coverage audit**: every
-proxy `*.Event` case must have a data-kit model destination (e.g. each
-`Network.Event` case — including `webSocket(_:)` and `redirectResponse` — lands
-on a `NetworkRequest`/`WebSocketState` field), and every write-back command must
-have an `apply*`/echo owner. Only then does it become the binding design
-contract.
+This is now the binding design contract. [06-implementation-gate.md](06-implementation-gate.md)
+owns the implementation status table, coverage rows, contract-test shape, and
+worker split. A row marked planned or pending in 06 is accepted architecture,
+not shipped public API. A worker must update 06 when moving any planned surface
+into the initial binding contract.
 
-This design was adversarially reviewed (2026-07-02) from three lenses —
+This design was adversarially reviewed (2026-07-02 and updated 2026-07-03) from three lenses —
 CodexKit-idiom fidelity, WebKit-protocol correctness, and api-design axis
 leaks — and the confirmed defects (terminal clean-vs-fatal signal, network
 body-fetch error model, open `ResourceType`, reachable `CSS.Property.ID`,
