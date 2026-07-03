@@ -216,17 +216,30 @@ func transportCommandBackendEncodesAndDecodesCSSStyleCommands() async throws {
               "matchingSelectors": [0]
             }
           ],
-          "inlineStyle": {
-            "cssProperties": [
-              {"name": "color", "value": "red", "text": "color: red;"}
-            ],
-            "cssText": "color: red;"
-          },
-          "attributesStyle": {
-            "cssProperties": [
-              {"name": "width", "value": "20"}
-            ]
-          },
+          "inherited": [
+            {
+              "inlineStyle": {
+                "cssProperties": [
+                  {"name": "color", "value": "red", "text": "color: red;"}
+                ],
+                "cssText": "color: red;"
+              },
+              "matchedCSSRules": [
+                {
+                  "rule": {
+                    "ruleId": {"styleSheetId": "sheet", "ordinal": 3},
+                    "selectorList": {"selectors": [{"text": "html"}], "text": "html", "range": {"startLine": 4, "startColumn": 0, "endLine": 4, "endColumn": 4}},
+                    "origin": "author",
+                    "style": {
+                      "styleId": {"styleSheetId": "sheet", "ordinal": 3},
+                      "cssProperties": [{"name": "font-size", "value": "16px"}]
+                    }
+                  },
+                  "matchingSelectors": [0]
+                }
+              ]
+            }
+          ],
           "pseudoElements": [
             {
               "pseudoId": "before",
@@ -255,12 +268,46 @@ func transportCommandBackendEncodesAndDecodesCSSStyleCommands() async throws {
     #expect(rule.style.properties.first?.name == "margin")
     #expect(rule.style.properties.first?.status == .active)
     #expect(rule.style.isEditable)
-    #expect(matchedStyles.inlineStyle?.properties.first?.name == "color")
-    #expect(matchedStyles.inlineStyle?.isEditable == false)
-    #expect(matchedStyles.inlineStyle?.properties.first?.isEditable == false)
-    #expect(matchedStyles.attributesStyle?.properties.first?.name == "width")
-    #expect(matchedStyles.attributesStyle?.isEditable == false)
-    #expect(matchedStyles.pseudoElements.first?.selectorList.text == "body::before")
+    let inheritedEntry = try #require(matchedStyles.inherited.first)
+    #expect(inheritedEntry.inlineStyle?.properties.first?.name == "color")
+    #expect(inheritedEntry.inlineStyle?.isEditable == false)
+    #expect(inheritedEntry.matchedRules.first?.selectorList.text == "html")
+    #expect(inheritedEntry.matchedRules.first?.selectorList.range?.startLine == 4)
+    let pseudo = try #require(matchedStyles.pseudoElements.first)
+    #expect(pseudo.pseudoID == "before")
+    #expect(pseudo.matchedRules.first?.selectorList.text == "body::before")
+
+    let inlineStylesTask = Task {
+        try await target.css.inlineStyles(for: DOM.Node.ID("42"))
+    }
+    let inlineStylesCommand = try await waitForTargetMessage(backend, method: "CSS.getInlineStylesForNode")
+    parameters = try messageParameters(inlineStylesCommand.message)
+    #expect((parameters["nodeId"] as? NSNumber)?.intValue == 42)
+    await receiveTargetReply(
+        transport,
+        targetID: inlineStylesCommand.targetIdentifier,
+        messageID: try messageID(inlineStylesCommand.message),
+        result: """
+        {
+          "inlineStyle": {
+            "cssProperties": [
+              {"name": "color", "value": "blue", "text": "color: blue;"}
+            ],
+            "cssText": "color: blue;"
+          },
+          "attributesStyle": {
+            "cssProperties": [
+              {"name": "width", "value": "20"}
+            ]
+          }
+        }
+        """
+    )
+    let inlineStyles = try await inlineStylesTask.value
+    #expect(inlineStyles.inlineStyle?.properties.first?.name == "color")
+    #expect(inlineStyles.inlineStyle?.isEditable == false)
+    #expect(inlineStyles.attributesStyle?.properties.first?.name == "width")
+    #expect(inlineStyles.attributesStyle?.isEditable == false)
 
     let computedStyleTask = Task {
         try await target.css.computedStyle(for: DOM.Node.ID("42"))

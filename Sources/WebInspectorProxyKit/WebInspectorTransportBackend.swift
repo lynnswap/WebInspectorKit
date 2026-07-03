@@ -311,6 +311,10 @@ private enum WebInspectorTransportCommandEncoder {
             let payload = try payload(command.payload, as: CSS.GetMatchedStylesForNodePayload.self, command: command)
             return try data(["nodeId": nodeIDValue(payload.node.rawValue)])
 
+        case (.css, "getInlineStylesForNode"):
+            let payload = try payload(command.payload, as: CSS.GetInlineStylesForNodePayload.self, command: command)
+            return try data(["nodeId": nodeIDValue(payload.node.rawValue)])
+
         case (.css, "getComputedStyleForNode"):
             let payload = try payload(command.payload, as: CSS.GetComputedStyleForNodePayload.self, command: command)
             return try data(["nodeId": nodeIDValue(payload.node.rawValue)])
@@ -447,6 +451,10 @@ private enum WebInspectorTransportCommandDecoder {
             let payload = try decode(CSSMatchedStylesResult.self, from: result.resultData)
             return payload.proxyMatchedStyles() as! Result
         }
+        if Result.self == CSS.InlineStyles.self {
+            let payload = try decode(CSSInlineStylesResult.self, from: result.resultData)
+            return payload.proxyInlineStyles as! Result
+        }
         if Result.self == [CSS.ComputedProperty].self {
             let payload = try decode(CSSComputedStyleResult.self, from: result.resultData)
             return payload.computedStyle.map(\.proxyProperty) as! Result
@@ -496,24 +504,24 @@ private enum WebInspectorTransportCommandDecoder {
 
 private struct CSSMatchedStylesResult: Decodable {
     var matchedCSSRules: [CSSRuleMatchPayload]?
-    var inlineStyle: CSSStylePayload?
-    var attributesStyle: CSSStylePayload?
     var pseudoElements: [CSSPseudoIDMatchesPayload]?
     var inherited: [CSSInheritedStyleEntryPayload]?
 
     func proxyMatchedStyles() -> CSS.MatchedStyles {
-        let matchedRules = matchedCSSRules?.map { $0.rule.proxyRule() } ?? []
-        let inheritedRules = inherited?.flatMap { entry in
-            entry.matchedCSSRules.map { $0.rule.proxyRule() }
-        } ?? []
-        let pseudoRules = pseudoElements?.flatMap { pseudo in
-            pseudo.matches.map { $0.rule.proxyRule() }
-        } ?? []
+        CSS.MatchedStyles(
+            matchedRules: matchedCSSRules?.map { $0.rule.proxyRule() } ?? [],
+            inherited: inherited?.map(\.proxyEntry) ?? [],
+            pseudoElements: pseudoElements?.map(\.proxyMatches) ?? []
+        )
+    }
+}
 
-        return CSS.MatchedStyles(
-            matchedRules: matchedRules,
-            inherited: inheritedRules,
-            pseudoElements: pseudoRules,
+private struct CSSInlineStylesResult: Decodable {
+    var inlineStyle: CSSStylePayload?
+    var attributesStyle: CSSStylePayload?
+
+    var proxyInlineStyles: CSS.InlineStyles {
+        CSS.InlineStyles(
             inlineStyle: inlineStyle?.proxyStyle(fallbackID: "anonymous:inline"),
             attributesStyle: attributesStyle?.proxyStyle(fallbackID: "anonymous:attributes")
         )
@@ -533,11 +541,42 @@ private struct CSSRuleMatchPayload: Decodable {
 }
 
 private struct CSSPseudoIDMatchesPayload: Decodable {
+    var pseudoId: FlexibleStringPayload
     var matches: [CSSRuleMatchPayload]
+
+    var proxyMatches: CSS.MatchedStyles.PseudoElementMatches {
+        CSS.MatchedStyles.PseudoElementMatches(
+            pseudoID: pseudoId.stringValue,
+            matchedRules: matches.map { $0.rule.proxyRule() }
+        )
+    }
+}
+
+/// WebKit has shipped `pseudoId` both as a string and as an integer enum
+/// value depending on version; accept either.
+private struct FlexibleStringPayload: Decodable {
+    var stringValue: String
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let string = try? container.decode(String.self) {
+            stringValue = string
+        } else {
+            stringValue = String(try container.decode(Int.self))
+        }
+    }
 }
 
 private struct CSSInheritedStyleEntryPayload: Decodable {
-    var matchedCSSRules: [CSSRuleMatchPayload]
+    var inlineStyle: CSSStylePayload?
+    var matchedCSSRules: [CSSRuleMatchPayload]?
+
+    var proxyEntry: CSS.MatchedStyles.InheritedEntry {
+        CSS.MatchedStyles.InheritedEntry(
+            inlineStyle: inlineStyle?.proxyStyle(fallbackID: "anonymous:inherited-inline"),
+            matchedRules: matchedCSSRules?.map { $0.rule.proxyRule() } ?? []
+        )
+    }
 }
 
 private struct CSSRulePayload: Decodable {
@@ -570,9 +609,14 @@ private struct CSSRulePayload: Decodable {
 private struct CSSSelectorListPayload: Decodable {
     var selectors: [CSSSelectorPayload]
     var text: String
+    var range: CSSSourceRangePayload?
 
     var proxySelectorList: CSS.Rule.SelectorList {
-        CSS.Rule.SelectorList(selectors: selectors.map(\.text), text: text)
+        CSS.Rule.SelectorList(
+            selectors: selectors.map(\.text),
+            text: text,
+            range: range?.proxyRange
+        )
     }
 }
 

@@ -42,6 +42,15 @@ public enum CSS {
             )
         }
 
+        public func inlineStyles(for node: DOM.Node.ID) async throws -> InlineStyles {
+            try await context.dispatch(
+                domain: .css,
+                method: "getInlineStylesForNode",
+                payload: GetInlineStylesForNodePayload(node: node),
+                returning: InlineStyles.self
+            )
+        }
+
         public func setStyleText(_ id: Style.ID, text: String) async throws -> Style {
             try await context.dispatch(
                 domain: .css,
@@ -82,6 +91,14 @@ public enum CSS {
         }
     }
 
+    package struct GetInlineStylesForNodePayload: Sendable {
+        package let node: DOM.Node.ID
+
+        package init(node: DOM.Node.ID) {
+            self.node = node
+        }
+    }
+
     package struct SetStyleTextPayload: Sendable {
         package let id: Style.ID
         package let text: String
@@ -93,22 +110,51 @@ public enum CSS {
     }
 
     public struct MatchedStyles: Sendable {
+        /// One entry per ancestor in cascade order; WebKit reports the
+        /// ancestor's inline style alongside its matched rules.
+        public struct InheritedEntry: Sendable {
+            public let inlineStyle: Style?
+            public let matchedRules: [Rule]
+
+            public init(inlineStyle: Style? = nil, matchedRules: [Rule] = []) {
+                self.inlineStyle = inlineStyle
+                self.matchedRules = matchedRules
+            }
+        }
+
+        public struct PseudoElementMatches: Sendable {
+            public let pseudoID: String
+            public let matchedRules: [Rule]
+
+            public init(pseudoID: String, matchedRules: [Rule] = []) {
+                self.pseudoID = pseudoID
+                self.matchedRules = matchedRules
+            }
+        }
+
         public let matchedRules: [Rule]
-        public let inherited: [Rule]
-        public let pseudoElements: [Rule]
-        public let inlineStyle: Style?
-        public let attributesStyle: Style?
+        public let inherited: [InheritedEntry]
+        public let pseudoElements: [PseudoElementMatches]
 
         public init(
             matchedRules: [Rule] = [],
-            inherited: [Rule] = [],
-            pseudoElements: [Rule] = [],
-            inlineStyle: Style? = nil,
-            attributesStyle: Style? = nil
+            inherited: [InheritedEntry] = [],
+            pseudoElements: [PseudoElementMatches] = []
         ) {
             self.matchedRules = matchedRules
             self.inherited = inherited
             self.pseudoElements = pseudoElements
+        }
+    }
+
+    /// Result of `CSS.getInlineStylesForNode` — the element's `style`
+    /// attribute declaration and the style synthesized from presentational
+    /// HTML attributes.
+    public struct InlineStyles: Sendable {
+        public let inlineStyle: Style?
+        public let attributesStyle: Style?
+
+        public init(inlineStyle: Style? = nil, attributesStyle: Style? = nil) {
             self.inlineStyle = inlineStyle
             self.attributesStyle = attributesStyle
         }
@@ -223,10 +269,12 @@ public enum CSS {
         public struct SelectorList: Sendable {
             public let selectors: [String]
             public let text: String
+            public let range: Style.SourceRange?
 
-            public init(selectors: [String] = [], text: String = "") {
+            public init(selectors: [String] = [], text: String = "", range: Style.SourceRange? = nil) {
                 self.selectors = selectors
                 self.text = text
+                self.range = range
             }
         }
 
