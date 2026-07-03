@@ -1,41 +1,54 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
-import WebInspectorCore
+import WebInspectorDataKit
+import WebInspectorProxyKit
 import UIKit
+
+extension CSS.Property {
+    /// Whether the declaration currently applies (not commented out).
+    var isEnabled: Bool {
+        status != .disabled
+    }
+
+    /// Whether another declaration overrides this one in the cascade.
+    var isOverridden: Bool {
+        status == .inactive
+    }
+}
 
 @MainActor
 package struct DOMElementStylePresentationItemIdentifier: Hashable {
     package enum Kind: Hashable {
-        case property(propertyID: CSSProperty.ID?, propertyIndex: Int)
+        case property(propertyID: CSS.Property.ID, propertyIndex: Int)
         case hiddenUnusedVariables(count: Int)
     }
 
-    package var sectionID: CSSStyle.Section.ID
+    package var sectionID: CSSStyleSection.ID
     package var kind: Kind
 }
 
 @MainActor
 package struct DOMElementStylePresentationSection {
-    package var id: CSSStyle.Section.ID
+    package var id: CSSStyleSection.ID
     package var items: [DOMElementStylePresentationItemIdentifier]
 }
 
 @MainActor
 package enum DOMElementStyleDiffableSnapshotBuilder {
     package static func visibleSections(
-        sections: [CSSStyle.Section],
-        expandedUnusedVariableSectionIDs: Set<CSSStyle.Section.ID>
+        sections: [CSSStyleSection],
+        expandedUnusedVariableSectionIDs: Set<CSSStyleSection.ID>
     ) -> [DOMElementStylePresentationSection] {
         var visibleSections: [DOMElementStylePresentationSection] = []
         let usedCSSVariables = DOMElementStyleVariableVisibility.usedCSSVariableNames(in: sections)
 
-        for section in sections where !section.style.cssProperties.isEmpty {
+        for section in sections where !section.style.properties.isEmpty {
             let hiddenVariableIndices = DOMElementStyleVariableVisibility.hiddenUnusedVariableIndices(
                 in: section,
                 usedCSSVariables: usedCSSVariables
             )
             let showsHiddenVariables = expandedUnusedVariableSectionIDs.contains(section.id)
-            let propertyItems = section.style.cssProperties.enumerated().compactMap {
+            let propertyItems = section.style.properties.enumerated().compactMap {
                 index,
                 property -> DOMElementStylePresentationItemIdentifier? in
                 guard showsHiddenVariables || !hiddenVariableIndices.contains(index) else {
@@ -73,11 +86,11 @@ package enum DOMElementStyleDiffableSnapshotBuilder {
     package static func makeSnapshot(
         visibleSections: [DOMElementStylePresentationSection]
     ) -> NSDiffableDataSourceSnapshot<
-        CSSStyle.Section.ID,
+        CSSStyleSection.ID,
         DOMElementStylePresentationItemIdentifier
     > {
         var snapshot = NSDiffableDataSourceSnapshot<
-            CSSStyle.Section.ID,
+            CSSStyleSection.ID,
             DOMElementStylePresentationItemIdentifier
         >()
         for section in visibleSections {
@@ -91,7 +104,7 @@ package enum DOMElementStyleDiffableSnapshotBuilder {
 @MainActor
 package final class DOMElementStyleSnapshotCoordinator {
     package typealias Snapshot = NSDiffableDataSourceSnapshot<
-        CSSStyle.Section.ID,
+        CSSStyleSection.ID,
         DOMElementStylePresentationItemIdentifier
     >
 
@@ -110,76 +123,125 @@ package final class DOMElementStyleSnapshotCoordinator {
         package var snapshot: Snapshot?
         package var applyMode: ApplyMode
         package var placeholderMode: PlaceholderMode
+        /// Sections whose rendered header content changed while keeping
+        /// their identity; visible header views must be re-bound because
+        /// diffable snapshots do not reconfigure supplementary views.
+        package var updatedSectionIDs: Set<CSSStyleSection.ID>
+
+        init(
+            snapshot: Snapshot?,
+            applyMode: ApplyMode,
+            placeholderMode: PlaceholderMode,
+            updatedSectionIDs: Set<CSSStyleSection.ID> = []
+        ) {
+            self.snapshot = snapshot
+            self.applyMode = applyMode
+            self.placeholderMode = placeholderMode
+            self.updatedSectionIDs = updatedSectionIDs
+        }
     }
 
     private struct SelectionEpoch {
-        var objectID: ObjectIdentifier
+        var stylesObjectID: ObjectIdentifier
         var hasRenderedLoadedSnapshot = false
     }
 
-    private struct VisibleBindingTopology: Equatable {
-        var sectionObjectIDs: [CSSStyle.Section.ID: ObjectIdentifier]
-        var propertyObjectIDs: [DOMElementStylePresentationItemIdentifier: ObjectIdentifier]
+    /// The fields a property row renders. Sections and properties are value
+    /// types, so "did this row change" is decided by content comparison
+    /// (the legacy coordinator compared object identity instead).
+    private struct PropertyRenderContent: Equatable {
+        var name: String
+        var value: String
+        var priority: String?
+        var text: String?
+        var status: CSS.Status
+        var isEditable: Bool
+        var isModifiedByInspector: Bool
 
-        static let empty = VisibleBindingTopology(
-            sectionObjectIDs: [:],
-            propertyObjectIDs: [:]
+        init(_ property: CSS.Property) {
+            name = property.name
+            value = property.value
+            priority = property.priority
+            text = property.text
+            status = property.status
+            isEditable = property.isEditable
+            isModifiedByInspector = property.isModifiedByInspector
+        }
+    }
+
+    /// The fields a section header renders.
+    private struct SectionRenderContent: Equatable {
+        var title: String?
+        var originText: String?
+        var accessibilityOriginText: String?
+
+        init(_ section: CSSStyleSection) {
+            title = section.title
+            originText = section.rule.flatMap(DOMElementStyleSectionHeaderText.displayOriginText(for:))
+            accessibilityOriginText = section.rule.flatMap(
+                DOMElementStyleSectionHeaderText.accessibilityOriginText(for:)
+            )
+        }
+    }
+
+    private struct VisibleRenderContent: Equatable {
+        var sectionContents: [CSSStyleSection.ID: SectionRenderContent]
+        var propertyContents: [DOMElementStylePresentationItemIdentifier: PropertyRenderContent]
+
+        static let empty = VisibleRenderContent(
+            sectionContents: [:],
+            propertyContents: [:]
         )
     }
 
-    private var expandedUnusedVariableSectionIDs = Set<CSSStyle.Section.ID>()
-    private var displayedNodeStyles: CSSNodeStyles?
+    private var expandedUnusedVariableSectionIDs = Set<CSSStyleSection.ID>()
+    private var displayedSections: [CSSStyleSection]?
     private var visibleSections: [DOMElementStylePresentationSection] = []
-    private var visibleBindingTopology = VisibleBindingTopology.empty
+    private var visibleRenderContent = VisibleRenderContent.empty
     private var selectionEpoch: SelectionEpoch?
 
     package init() {}
 
-    package var visibleSectionIDs: [CSSStyle.Section.ID] {
+    package var visibleSectionIDs: [CSSStyleSection.ID] {
         visibleSections.map(\.id)
     }
 
-    package func bindSelectedNodeStyles(_ nodeStyles: CSSNodeStyles) {
-        let objectID = ObjectIdentifier(nodeStyles)
-        guard selectionEpoch?.objectID != objectID else {
+    package func bindSelectedNodeStyles(_ styles: CSSStyles) {
+        let stylesObjectID = ObjectIdentifier(styles)
+        guard selectionEpoch?.stylesObjectID != stylesObjectID else {
             return
         }
-        selectionEpoch = SelectionEpoch(objectID: objectID)
+        selectionEpoch = SelectionEpoch(stylesObjectID: stylesObjectID)
     }
 
-    package func updateSelectedNodeStyles(_ nodeStyles: CSSNodeStyles) -> SnapshotUpdate {
-        bindSelectedNodeStyles(nodeStyles)
-        switch nodeStyles.phase {
+    package func updateSelectedNodeStyles(_ styles: CSSStyles) -> SnapshotUpdate {
+        bindSelectedNodeStyles(styles)
+        switch styles.phase {
         case .loaded:
-            return updateLoadedSnapshot(nodeStyles)
+            return updateLoadedSnapshot(styles.sections)
         case .loading, .needsRefresh:
-            return updatePendingSnapshot()
+            return updatePendingSnapshot(styles.sections)
         case .unavailable, .failed:
             return updateUnavailableSnapshot()
         }
     }
 
-    package func updateUnavailablePhase(_ phase: CSSNodeStyles.Phase) -> SnapshotUpdate {
+    /// No selected element styles exist (no selection, or the selection is
+    /// not an element node).
+    package func updateUnavailable() -> SnapshotUpdate {
         selectionEpoch = nil
-        switch phase {
-        case .loaded:
-            return updateUnavailableSnapshot()
-        case .loading, .needsRefresh:
-            return updatePendingSnapshot()
-        case .unavailable, .failed:
-            return updateUnavailableSnapshot()
-        }
+        return updateUnavailableSnapshot()
     }
 
     package func revealHiddenUnusedVariables(
-        in sectionID: CSSStyle.Section.ID
+        in sectionID: CSSStyleSection.ID
     ) -> SnapshotUpdate? {
-        guard let displayedNodeStyles else {
+        guard let displayedSections else {
             return nil
         }
         let oldSectionIDs = visibleSectionIDs
         let oldItemIDs = visibleItemIDs
-        let currentSectionIDs = Set(displayedNodeStyles.sections.map(\.id))
+        let currentSectionIDs = Set(displayedSections.map(\.id))
         expandedUnusedVariableSectionIDs.formIntersection(currentSectionIDs)
         guard currentSectionIDs.contains(sectionID) else {
             return nil
@@ -187,7 +249,7 @@ package final class DOMElementStyleSnapshotCoordinator {
         expandedUnusedVariableSectionIDs.insert(sectionID)
         rebuildVisibleSections()
         let snapshot = diffableSnapshot()
-        visibleBindingTopology = makeVisibleBindingTopology()
+        visibleRenderContent = makeVisibleRenderContent()
         guard Self.hasStructuralChanges(
             oldSectionIDs: oldSectionIDs,
             oldItemIDs: oldItemIDs,
@@ -198,80 +260,157 @@ package final class DOMElementStyleSnapshotCoordinator {
         return SnapshotUpdate(snapshot: snapshot, applyMode: .diff(animated: true), placeholderMode: .none)
     }
 
-    package func section(for sectionID: CSSStyle.Section.ID) -> CSSStyle.Section? {
-        displayedNodeStyles?.sections.first { $0.id == sectionID }
+    package func section(for sectionID: CSSStyleSection.ID) -> CSSStyleSection? {
+        displayedSections?.first { $0.id == sectionID }
     }
 
     package func property(
         for item: DOMElementStylePresentationItemIdentifier,
-        in section: CSSStyle.Section
-    ) -> CSSProperty? {
-        guard case let .property(propertyID, propertyIndex) = item.kind else {
+        in section: CSSStyleSection
+    ) -> CSS.Property? {
+        guard case let .property(propertyID, _) = item.kind else {
             return nil
         }
-        if let propertyID {
-            return section.style.cssProperties.first { $0.id == propertyID }
-        }
-        guard section.style.cssProperties.indices.contains(propertyIndex) else {
-            return nil
-        }
-        return section.style.cssProperties[propertyIndex]
+        return section.style.properties.first { $0.id == propertyID }
     }
 
     private var visibleItemIDs: [DOMElementStylePresentationItemIdentifier] {
         visibleSections.flatMap(\.items)
     }
 
-    private func updateLoadedSnapshot(_ nodeStyles: CSSNodeStyles) -> SnapshotUpdate {
+    private func updateLoadedSnapshot(_ sections: [CSSStyleSection]) -> SnapshotUpdate {
         let oldSectionIDs = visibleSectionIDs
         let oldItemIDs = visibleItemIDs
-        let oldBindingTopology = visibleBindingTopology
+        let oldRenderContent = visibleRenderContent
         let replacesSelection = selectionEpoch?.hasRenderedLoadedSnapshot == false
         let hadVisibleSnapshot = visibleSections.isEmpty == false
 
-        displayedNodeStyles = nodeStyles
+        displayedSections = sections
         rebuildVisibleSections()
 
-        let snapshot = diffableSnapshot()
-        let newBindingTopology = makeVisibleBindingTopology()
+        var snapshot = diffableSnapshot()
+        let newRenderContent = makeVisibleRenderContent()
         let hasStructuralChanges = Self.hasStructuralChanges(
             oldSectionIDs: oldSectionIDs,
             oldItemIDs: oldItemIDs,
             snapshot: snapshot
         )
-        let hasBindingChanges = oldBindingTopology != newBindingTopology
+        let updatedItemIDs = Self.updatedKeys(
+            old: oldRenderContent.propertyContents,
+            new: newRenderContent.propertyContents
+        )
+        let updatedSectionIDs = Self.updatedKeys(
+            old: oldRenderContent.sectionContents,
+            new: newRenderContent.sectionContents
+        )
 
-        let applyMode: ApplyMode
-        if replacesSelection {
-            applyMode = hadVisibleSnapshot ? .reloadData : .diff(animated: false)
-        } else if hasStructuralChanges {
-            applyMode = .diff(animated: true)
-        } else if hasBindingChanges {
-            applyMode = .reloadData
-        } else {
-            selectionEpoch?.hasRenderedLoadedSnapshot = true
-            visibleBindingTopology = newBindingTopology
-            return SnapshotUpdate(snapshot: nil, applyMode: .none, placeholderMode: .none)
-        }
         selectionEpoch?.hasRenderedLoadedSnapshot = true
-        visibleBindingTopology = newBindingTopology
-        return SnapshotUpdate(snapshot: snapshot, applyMode: applyMode, placeholderMode: .none)
-    }
+        visibleRenderContent = newRenderContent
 
-    private func updatePendingSnapshot() -> SnapshotUpdate {
-        guard displayedNodeStyles != nil else {
-            return updateUnavailableSnapshot()
+        if replacesSelection {
+            return SnapshotUpdate(
+                snapshot: snapshot,
+                applyMode: hadVisibleSnapshot ? .reloadData : .diff(animated: false),
+                placeholderMode: .none
+            )
+        }
+        if hasStructuralChanges {
+            snapshot.reconfigureItems(Array(updatedItemIDs))
+            return SnapshotUpdate(
+                snapshot: snapshot,
+                applyMode: .diff(animated: true),
+                placeholderMode: .none,
+                updatedSectionIDs: updatedSectionIDs
+            )
+        }
+        if updatedItemIDs.isEmpty == false {
+            snapshot.reconfigureItems(Array(updatedItemIDs))
+            return SnapshotUpdate(
+                snapshot: snapshot,
+                applyMode: .diff(animated: false),
+                placeholderMode: .none,
+                updatedSectionIDs: updatedSectionIDs
+            )
+        }
+        if updatedSectionIDs.isEmpty == false {
+            return SnapshotUpdate(
+                snapshot: nil,
+                applyMode: .none,
+                placeholderMode: .none,
+                updatedSectionIDs: updatedSectionIDs
+            )
         }
         return SnapshotUpdate(snapshot: nil, applyMode: .none, placeholderMode: .none)
+    }
+
+    /// Pending phases (`loading`/`needsRefresh`) keep the displayed row
+    /// structure frozen until the follow-up refresh lands. When the pending
+    /// styles belong to the already-rendered selection, same-identity content
+    /// changes are still pushed through the reconfigure path: DataKit's
+    /// `applySetStyleText` rewrites sections in place (keeping identity) and
+    /// marks the styles stale, and the toggled declaration text plus the
+    /// modified-by-inspector badge must update immediately (the legacy build
+    /// rendered this through per-object observation in the cells).
+    private func updatePendingSnapshot(_ sections: [CSSStyleSection]) -> SnapshotUpdate {
+        guard displayedSections != nil else {
+            return updateUnavailableSnapshot()
+        }
+        guard selectionEpoch?.hasRenderedLoadedSnapshot == true else {
+            return SnapshotUpdate(snapshot: nil, applyMode: .none, placeholderMode: .none)
+        }
+
+        let prospectiveVisibleSections = DOMElementStyleDiffableSnapshotBuilder.visibleSections(
+            sections: sections,
+            expandedUnusedVariableSectionIDs: expandedUnusedVariableSectionIDs
+        )
+        var snapshot = DOMElementStyleDiffableSnapshotBuilder.makeSnapshot(
+            visibleSections: prospectiveVisibleSections
+        )
+        guard Self.hasStructuralChanges(
+            oldSectionIDs: visibleSectionIDs,
+            oldItemIDs: visibleItemIDs,
+            snapshot: snapshot
+        ) == false else {
+            return SnapshotUpdate(snapshot: nil, applyMode: .none, placeholderMode: .none)
+        }
+
+        displayedSections = sections
+        visibleSections = prospectiveVisibleSections
+        let oldRenderContent = visibleRenderContent
+        let newRenderContent = makeVisibleRenderContent()
+        visibleRenderContent = newRenderContent
+        let updatedItemIDs = Self.updatedKeys(
+            old: oldRenderContent.propertyContents,
+            new: newRenderContent.propertyContents
+        )
+        let updatedSectionIDs = Self.updatedKeys(
+            old: oldRenderContent.sectionContents,
+            new: newRenderContent.sectionContents
+        )
+        guard updatedItemIDs.isEmpty == false else {
+            return SnapshotUpdate(
+                snapshot: nil,
+                applyMode: .none,
+                placeholderMode: .none,
+                updatedSectionIDs: updatedSectionIDs
+            )
+        }
+        snapshot.reconfigureItems(Array(updatedItemIDs))
+        return SnapshotUpdate(
+            snapshot: snapshot,
+            applyMode: .diff(animated: false),
+            placeholderMode: .none,
+            updatedSectionIDs: updatedSectionIDs
+        )
     }
 
     private func updateUnavailableSnapshot() -> SnapshotUpdate {
         let oldSectionIDs = visibleSectionIDs
         let oldItemIDs = visibleItemIDs
         expandedUnusedVariableSectionIDs.removeAll()
-        displayedNodeStyles = nil
+        displayedSections = nil
         visibleSections = []
-        visibleBindingTopology = .empty
+        visibleRenderContent = .empty
         let snapshot = diffableSnapshot()
         let applyMode: ApplyMode = Self.hasStructuralChanges(
             oldSectionIDs: oldSectionIDs,
@@ -282,20 +421,20 @@ package final class DOMElementStyleSnapshotCoordinator {
     }
 
     private func rebuildVisibleSections() {
-        guard let displayedNodeStyles else {
+        guard let displayedSections else {
             visibleSections = []
             return
         }
-        let currentSectionIDs = Set(displayedNodeStyles.sections.map(\.id))
+        let currentSectionIDs = Set(displayedSections.map(\.id))
         expandedUnusedVariableSectionIDs.formIntersection(currentSectionIDs)
         visibleSections = DOMElementStyleDiffableSnapshotBuilder.visibleSections(
-            sections: displayedNodeStyles.sections,
+            sections: displayedSections,
             expandedUnusedVariableSectionIDs: expandedUnusedVariableSectionIDs
         )
     }
 
     private func diffableSnapshot() -> NSDiffableDataSourceSnapshot<
-        CSSStyle.Section.ID,
+        CSSStyleSection.ID,
         DOMElementStylePresentationItemIdentifier
     > {
         DOMElementStyleDiffableSnapshotBuilder.makeSnapshot(
@@ -303,36 +442,56 @@ package final class DOMElementStyleSnapshotCoordinator {
         )
     }
 
-    private func makeVisibleBindingTopology() -> VisibleBindingTopology {
-        guard let displayedNodeStyles else {
+    private func makeVisibleRenderContent() -> VisibleRenderContent {
+        guard let displayedSections else {
             return .empty
         }
 
-        let sectionsByID = Dictionary(uniqueKeysWithValues: displayedNodeStyles.sections.map { ($0.id, $0) })
-        var sectionObjectIDs: [CSSStyle.Section.ID: ObjectIdentifier] = [:]
-        var propertyObjectIDs: [DOMElementStylePresentationItemIdentifier: ObjectIdentifier] = [:]
+        var sectionsByID: [CSSStyleSection.ID: CSSStyleSection] = [:]
+        for section in displayedSections {
+            sectionsByID[section.id] = section
+        }
+        var sectionContents: [CSSStyleSection.ID: SectionRenderContent] = [:]
+        var propertyContents: [DOMElementStylePresentationItemIdentifier: PropertyRenderContent] = [:]
 
         for visibleSection in visibleSections {
             guard let section = sectionsByID[visibleSection.id] else {
                 continue
             }
-            sectionObjectIDs[visibleSection.id] = ObjectIdentifier(section)
+            sectionContents[visibleSection.id] = SectionRenderContent(section)
             for item in visibleSection.items {
                 guard let property = property(for: item, in: section) else {
                     continue
                 }
-                propertyObjectIDs[item] = ObjectIdentifier(property)
+                propertyContents[item] = PropertyRenderContent(property)
             }
         }
 
-        return VisibleBindingTopology(
-            sectionObjectIDs: sectionObjectIDs,
-            propertyObjectIDs: propertyObjectIDs
+        return VisibleRenderContent(
+            sectionContents: sectionContents,
+            propertyContents: propertyContents
         )
     }
 
+    /// Keys present in both dictionaries whose content changed. Keys that
+    /// only exist on one side are insertions or removals and are already
+    /// handled by the structural diff.
+    private static func updatedKeys<Key: Hashable, Content: Equatable>(
+        old: [Key: Content],
+        new: [Key: Content]
+    ) -> Set<Key> {
+        var updated = Set<Key>()
+        for (key, newContent) in new {
+            guard let oldContent = old[key], oldContent != newContent else {
+                continue
+            }
+            updated.insert(key)
+        }
+        return updated
+    }
+
     private static func hasStructuralChanges(
-        oldSectionIDs: [CSSStyle.Section.ID],
+        oldSectionIDs: [CSSStyleSection.ID],
         oldItemIDs: [DOMElementStylePresentationItemIdentifier],
         snapshot: Snapshot
     ) -> Bool {

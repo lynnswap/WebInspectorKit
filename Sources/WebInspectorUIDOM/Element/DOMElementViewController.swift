@@ -1,15 +1,17 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
-import WebInspectorCore
+import WebInspectorDataKit
+import WebInspectorProxyKit
 import ObservationBridge
 import UIKit
 
 @MainActor
 package final class DOMElementViewController: UICollectionViewController {
-    private let inspection: AttachedInspection
-    private var elementStylesObservation: PortableObservationTracking.Token?
-    private var selectedNodeStyleObservation: PortableObservationTracking.Token?
-    private var selectedNodeStylesObjectID: ObjectIdentifier?
+    private let context: WebInspectorContext
+    private var statusTask: Task<Void, Never>?
+    private var selectedStylesObservation: PortableObservationTracking.Token?
+    private var observedSelectedNodeObjectID: ObjectIdentifier?
+    private var hasBoundSelectedNode = false
     private let styleSnapshotCoordinator = DOMElementStyleSnapshotCoordinator()
 
 #if DEBUG
@@ -29,8 +31,8 @@ package final class DOMElementViewController: UICollectionViewController {
 
     private lazy var dataSource = makeDataSource()
 
-    package init(inspection: AttachedInspection) {
-        self.inspection = inspection
+    package init(context: WebInspectorContext) {
+        self.context = context
         super.init(collectionViewLayout: Self.makeLayout())
     }
 
@@ -43,9 +45,9 @@ package final class DOMElementViewController: UICollectionViewController {
 #if DEBUG
         resolveStyleRenderWaitersForTesting(result: false)
 #endif
-        inspection.dom.setSelectedNodeStyleHydrationActive(false)
-        elementStylesObservation?.cancel()
-        selectedNodeStyleObservation?.cancel()
+        context.setStyleHydrationActive(false)
+        statusTask?.cancel()
+        selectedStylesObservation?.cancel()
     }
 
     override package func viewDidLoad() {
@@ -65,11 +67,11 @@ package final class DOMElementViewController: UICollectionViewController {
 
     override package func viewIsAppearing(_ animated: Bool) {
         super.viewIsAppearing(animated)
-        inspection.dom.setSelectedNodeStyleHydrationActive(true)
+        context.setStyleHydrationActive(true)
     }
 
     override package func viewDidDisappear(_ animated: Bool) {
-        inspection.dom.setSelectedNodeStyleHydrationActive(false)
+        context.setStyleHydrationActive(false)
         super.viewDidDisappear(animated)
     }
 
@@ -97,7 +99,7 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
     private func makeDataSource() -> UICollectionViewDiffableDataSource<
-        CSSStyle.Section.ID,
+        CSSStyleSection.ID,
         DOMElementStylePresentationItemIdentifier
     > {
         let propertyRegistration = UICollectionView.CellRegistration<
@@ -132,7 +134,7 @@ package final class DOMElementViewController: UICollectionViewController {
         }
 
         let dataSource = UICollectionViewDiffableDataSource<
-            CSSStyle.Section.ID,
+            CSSStyleSection.ID,
             DOMElementStylePresentationItemIdentifier
         >(
             collectionView: collectionView
@@ -163,11 +165,7 @@ package final class DOMElementViewController: UICollectionViewController {
                 return
             }
             let sectionID = dataSource.snapshot().sectionIdentifiers[indexPath.section]
-            guard let section = section(for: sectionID) else {
-                header.bind(nil)
-                return
-            }
-            header.bind(section)
+            header.bind(section(for: sectionID))
         }
 
         dataSource.supplementaryViewProvider = { collectionView, elementKind, indexPath in
@@ -183,53 +181,58 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
     private func startObservingState() {
-        let elementStyles = inspection.dom.elementStyles
-        let token = withPortableContinuousObservation { [weak self, elementStyles] _ in
-            let selectedNodeStyles = elementStyles.selectedNodeStyles
-            let selectedPhase = elementStyles.selectedPhase
-            self?.bindSelectedNodeStyles(
-                selectedNodeStyles,
-                unavailableState: selectedPhase
-            )
+        bindSelectedNode(context.selectedNode)
+        statusTask = Task { @MainActor [weak self, context] in
+            for await status in context.statusUpdates {
+                guard let self else {
+                    return
+                }
+                bindSelectedNode(status.selectedNodeID.flatMap { context.node(for: $0) })
+            }
         }
-        elementStylesObservation = token
     }
 
-    private func bindSelectedNodeStyles(_ nodeStyles: CSSNodeStyles?, unavailableState: CSSNodeStyles.Phase) {
-        guard let nodeStyles else {
-            unbindSelectedNodeStyles()
-            applySnapshotUpdate(styleSnapshotCoordinator.updateUnavailablePhase(unavailableState))
+    private func bindSelectedNode(_ node: DOMNode?) {
+        let nodeObjectID = node.map(ObjectIdentifier.init)
+        guard hasBoundSelectedNode == false || observedSelectedNodeObjectID != nodeObjectID else {
             return
         }
-
-        let nodeStylesObjectID = ObjectIdentifier(nodeStyles)
-        guard selectedNodeStylesObjectID != nodeStylesObjectID else {
+        hasBoundSelectedNode = true
+        observedSelectedNodeObjectID = nodeObjectID
+        selectedStylesObservation?.cancel()
+        guard let node else {
+            selectedStylesObservation = nil
+            renderSelectedStyles(nil)
             return
         }
-        selectedNodeStyleObservation?.cancel()
-        selectedNodeStylesObjectID = nodeStylesObjectID
-        styleSnapshotCoordinator.bindSelectedNodeStyles(nodeStyles)
-        let token = withPortableContinuousObservation { [weak self, weak nodeStyles, nodeStylesObjectID] _ in
+        let token = withPortableContinuousObservation { [weak self, weak node, nodeObjectID] _ in
             guard let self,
-                  let nodeStyles,
-                  self.selectedNodeStylesObjectID == nodeStylesObjectID else {
+                  self.observedSelectedNodeObjectID == nodeObjectID else {
                 return
             }
-            self.applySnapshotUpdate(
-                self.styleSnapshotCoordinator.updateSelectedNodeStyles(nodeStyles)
-            )
+            guard let node else {
+                self.renderSelectedStyles(nil)
+                return
+            }
+            self.renderSelectedStyles(node.elementStyles)
         }
-        selectedNodeStyleObservation = token
+        selectedStylesObservation = token
     }
 
-    private func unbindSelectedNodeStyles() {
-        selectedNodeStylesObjectID = nil
-        selectedNodeStyleObservation?.cancel()
-        selectedNodeStyleObservation = nil
+    /// Renders the selected node's styles. Runs inside the observation
+    /// closure so the coordinator's reads of `phase`/`sections` register
+    /// Observation tracking on the `CSSStyles` model.
+    private func renderSelectedStyles(_ styles: CSSStyles?) {
+        guard let styles else {
+            applySnapshotUpdate(styleSnapshotCoordinator.updateUnavailable())
+            return
+        }
+        applySnapshotUpdate(styleSnapshotCoordinator.updateSelectedNodeStyles(styles))
     }
 
     private func applySnapshotUpdate(_ update: DOMElementStyleSnapshotCoordinator.SnapshotUpdate) {
         applyPlaceholder(update.placeholderMode)
+        rebindVisibleHeaders(update.updatedSectionIDs)
         switch update.applyMode {
         case .none:
 #if DEBUG
@@ -298,18 +301,45 @@ package final class DOMElementViewController: UICollectionViewController {
         }
     }
 
-    private func section(for sectionID: CSSStyle.Section.ID) -> CSSStyle.Section? {
+    /// Section headers are supplementary views; diffable snapshots never
+    /// reconfigure them, so same-identity header content changes are pushed
+    /// to the visible header views directly.
+    private func rebindVisibleHeaders(_ updatedSectionIDs: Set<CSSStyleSection.ID>) {
+        guard updatedSectionIDs.isEmpty == false else {
+            return
+        }
+        let sectionIdentifiers = dataSource.snapshot().sectionIdentifiers
+        let indexPaths = collectionView.indexPathsForVisibleSupplementaryElements(
+            ofKind: UICollectionView.elementKindSectionHeader
+        )
+        for indexPath in indexPaths {
+            guard sectionIdentifiers.indices.contains(indexPath.section) else {
+                continue
+            }
+            let sectionID = sectionIdentifiers[indexPath.section]
+            guard updatedSectionIDs.contains(sectionID),
+                  let header = collectionView.supplementaryView(
+                      forElementKind: UICollectionView.elementKindSectionHeader,
+                      at: indexPath
+                  ) as? DOMElementStyleSectionHeaderView else {
+                continue
+            }
+            header.bind(section(for: sectionID))
+        }
+    }
+
+    private func section(for sectionID: CSSStyleSection.ID) -> CSSStyleSection? {
         styleSnapshotCoordinator.section(for: sectionID)
     }
 
     private func property(
         for item: DOMElementStylePresentationItemIdentifier,
-        in section: CSSStyle.Section
-    ) -> CSSProperty? {
+        in section: CSSStyleSection
+    ) -> CSS.Property? {
         styleSnapshotCoordinator.property(for: item, in: section)
     }
 
-    private func showHiddenUnusedVariables(in sectionID: CSSStyle.Section.ID) {
+    private func showHiddenUnusedVariables(in sectionID: CSSStyleSection.ID) {
         guard let update = styleSnapshotCoordinator.revealHiddenUnusedVariables(in: sectionID) else {
             return
         }
@@ -317,8 +347,8 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
     private func toggleAction() -> DOMElementStylePropertyView.ToggleAction? {
-        return { [weak inspection] propertyID, enabled in
-            inspection?.dom.requestSetCSSProperty(propertyID, enabled: enabled) ?? false
+        return { [weak context] propertyID, enabled in
+            context?.requestSetCSSProperty(propertyID, enabled: enabled) ?? false
         }
     }
 
@@ -358,12 +388,7 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
     package func renderCurrentStylesForTesting() {
-        let elementStyles = inspection.dom.elementStyles
-        if let selectedNodeStyles = elementStyles.selectedNodeStyles {
-            applySnapshotUpdate(styleSnapshotCoordinator.updateSelectedNodeStyles(selectedNodeStyles))
-        } else {
-            applySnapshotUpdate(styleSnapshotCoordinator.updateUnavailablePhase(elementStyles.selectedPhase))
-        }
+        renderSelectedStyles(context.selectedNode?.elementStyles)
     }
 
     private func finishStyleRenderForTesting() {

@@ -1,16 +1,14 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
-import WebInspectorCore
-import ObservationBridge
+import WebInspectorProxyKit
 import UIKit
 
 @MainActor
 package final class DOMElementStylePropertyCollectionCell: UICollectionViewListCell {
     private static let modifiedBackgroundColor = UIColor.systemGreen.withProminence(.quaternary).withAlphaComponent(0.99)
 
-    private var propertyObservation: PortableObservationTracking.Token?
     private let propertyView = DOMElementStylePropertyView()
-    private weak var property: CSSProperty?
+    private var property: CSS.Property?
     private var toggleAction: DOMElementStylePropertyView.ToggleAction?
 
     override package init(frame: CGRect) {
@@ -23,13 +21,9 @@ package final class DOMElementStylePropertyCollectionCell: UICollectionViewListC
         nil
     }
 
-    isolated deinit {
-        propertyObservation?.cancel()
-    }
-
     override package func prepareForReuse() {
         super.prepareForReuse()
-        unbind()
+        clear()
     }
 
     override package func updateConfiguration(using state: UICellConfigurationState) {
@@ -40,41 +34,19 @@ package final class DOMElementStylePropertyCollectionCell: UICollectionViewListC
         )
     }
 
+    /// Properties are value types: the cell renders the configured value
+    /// once and is re-rendered through the coordinator's reconfigure path
+    /// when the row's content changes.
     package func bind(
-        property: CSSProperty,
+        property: CSS.Property,
         onToggle: DOMElementStylePropertyView.ToggleAction?
     ) {
         self.property = property
         toggleAction = onToggle
-
-        propertyObservation?.cancel()
-        propertyObservation = withPortableContinuousObservation { [weak self, weak property] _ in
-            guard let self else {
-                return
-            }
-            guard let property else {
-                self.clear()
-                return
-            }
-            self.render(property)
-        }
+        render(property)
     }
 
     package func clear() {
-        propertyObservation?.cancel()
-        propertyObservation = nil
-        property = nil
-        toggleAction = nil
-        propertyView.clear()
-        renderBackground(
-            isModifiedByInspector: false,
-            state: configurationState
-        )
-    }
-
-    private func unbind() {
-        propertyObservation?.cancel()
-        propertyObservation = nil
         property = nil
         toggleAction = nil
         propertyView.clear()
@@ -98,7 +70,7 @@ package final class DOMElementStylePropertyCollectionCell: UICollectionViewListC
         ])
     }
 
-    private func render(_ property: CSSProperty) {
+    private func render(_ property: CSS.Property) {
         propertyView.render(property: property, onToggle: toggleAction)
         renderBackground(
             isModifiedByInspector: property.isModifiedByInspector,

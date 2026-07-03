@@ -166,10 +166,8 @@ let package = Package(
         .target(
             name: "WebInspectorUIDOM",
             dependencies: [
-                "WebInspectorCore",
                 "WebInspectorDataKit",
                 "WebInspectorProxyKit",
-                "WebInspectorTransport",
                 "WebInspectorUIBase",
                 .product(name: "ObservationBridge", package: "ObservationBridge"),
                 .product(name: "UIHostingMenu", package: "UIHostingMenu", condition: .when(platforms: [.iOS]))
@@ -320,6 +318,8 @@ let package = Package(
             name: "WebInspectorUITests",
             dependencies: [
                 "WebInspectorCore",
+                "WebInspectorDataKit",
+                "WebInspectorProxyKit",
                 "WebInspectorTransport",
                 "WebInspectorUIBase",
                 "WebInspectorUIDOM",

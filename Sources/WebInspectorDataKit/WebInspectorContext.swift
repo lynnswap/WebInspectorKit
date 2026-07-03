@@ -1217,6 +1217,34 @@ extension WebInspectorContext {
         notifyStatusChanged()
     }
 
+    /// Seeds the selected element node's styles through the same load path
+    /// the backend refresh uses. Requires a selected element node; cancels
+    /// any in-flight backend refresh so it cannot clobber the seeded state.
+    package func seedSelectedNodeStyles(
+        matchedStyles: CSS.MatchedStyles,
+        inlineStyles: CSS.InlineStyles? = nil,
+        computedProperties: [CSS.ComputedProperty] = [],
+        isolation: isolated (any Actor) = #isolation
+    ) {
+        requireOwner(isolation)
+        guard let selectedNode else {
+            preconditionFailure("seedSelectedNodeStyles requires a selected node.")
+        }
+        guard selectedNode.nodeType == 1 else {
+            preconditionFailure("seedSelectedNodeStyles requires a selected element node.")
+        }
+        styleRefreshTask?.cancel()
+        styleRefreshTask = nil
+        styleRefreshGeneration += 1
+        let styles = selectedNode.elementStyles ?? CSSStyles(nodeID: selectedNode.id, modelContext: self)
+        selectedNode.setElementStyles(styles)
+        styles.load(
+            matchedStyles: matchedStyles,
+            inlineStyles: inlineStyles ?? CSS.InlineStyles(),
+            computedProperties: computedProperties
+        )
+    }
+
     private func resetDOM(isolation: isolated (any Actor)) {
         inspectResolutionTask?.cancel()
         inspectResolutionTask = nil

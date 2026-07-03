@@ -1,6 +1,5 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
-import WebInspectorCore
 import WebInspectorDataKit
 import UIKit
 
@@ -68,9 +67,8 @@ extension DOMCompactNavigationController {
 }
 
 #Preview("DOM Compact Element") {
-    let inspection = AttachedInspection(dom: DOMPreviewFixtures.makeDOMSession())
     DOMCompactNavigationController(
-        rootViewController: DOMElementViewController(inspection: inspection)
+        rootViewController: DOMElementViewController(context: DOMPreviewFixtures.makeWebInspectorContext())
     )
 }
 #endif

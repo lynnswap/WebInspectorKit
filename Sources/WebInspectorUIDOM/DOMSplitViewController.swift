@@ -1,6 +1,5 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
-import WebInspectorCore
 import WebInspectorDataKit
 import UIKit
 
@@ -17,10 +16,10 @@ package final class DOMSplitViewController: UISplitViewController {
         rootViewController: elementViewController
     )
 
-    package convenience init(context: WebInspectorContext, inspection: AttachedInspection) {
+    package convenience init(context: WebInspectorContext) {
         self.init(
             treeViewController: DOMTreeViewController(context: context),
-            elementViewController: DOMElementViewController(inspection: inspection),
+            elementViewController: DOMElementViewController(context: context),
             context: context
         )
     }
@@ -107,14 +106,7 @@ extension DOMSplitViewController {
 @MainActor
 private enum DOMSplitViewControllerPreview {
     static func makeViewController() -> DOMSplitViewController {
-        let dom = DOMPreviewFixtures.makeDOMSession()
-        let inspection = AttachedInspection(dom: dom)
-        let context = DOMPreviewFixtures.makeWebInspectorContext()
-        return DOMSplitViewController(
-            treeViewController: DOMTreeViewController(context: context),
-            elementViewController: DOMElementViewController(inspection: inspection),
-            context: context
-        )
+        DOMSplitViewController(context: DOMPreviewFixtures.makeWebInspectorContext())
     }
 }
 #endif

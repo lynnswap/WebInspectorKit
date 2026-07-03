@@ -8,15 +8,12 @@ import WebInspectorUINetwork
 @MainActor
 enum WebInspectorViewControllerPreviewFixtures {
     static func makeSession() -> WebInspectorSession {
-        let session = WebInspectorSession(
-            inspector: InspectorSession(
-                attachment: AttachedInspection(
-                    dom: DOMPreviewFixtures.makeDOMSession()
-                )
-            ),
-            dataContext: NetworkPreviewFixtures.makeContext(mode: .detail)
+        let dataContext = DOMPreviewFixtures.makeWebInspectorContext()
+        NetworkPreviewFixtures.applySampleData(to: dataContext, mode: .detail)
+        return WebInspectorSession(
+            inspector: InspectorSession(),
+            dataContext: dataContext
         )
-        return session
     }
 }
 

@@ -200,7 +200,7 @@ struct ParentContainerTests {
         let session = WebInspectorViewControllerPreviewFixtures.makeSession()
         let model = session.interface.networkPanelModel(for: session.context)
 
-        #expect(session.attachment.dom.currentPageRootNode?.nodeName == "#document")
+        #expect(session.context.rootNode?.nodeName == "#document")
         #expect(model.displayRequests.count >= 2)
     }
 

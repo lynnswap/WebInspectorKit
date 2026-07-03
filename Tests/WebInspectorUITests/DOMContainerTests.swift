@@ -1,18 +1,10 @@
 #if canImport(UIKit)
-import ObservationBridge
 import Testing
 import WebInspectorTestSupport
 import WebInspectorTransport
-import class WebInspectorDataKit.WebInspectorContext
+import WebInspectorProxyKit
 import UIKit
-@testable import WebInspectorCore
-@testable import WebInspectorCoreConsoleNetwork
-@testable import WebInspectorCoreDOMCSS
-@testable import WebInspectorCoreRuntime
-@testable import WebInspectorCoreSupport
-@testable import WebInspectorUI
-@testable import WebInspectorUISyntaxBody
-@testable import WebInspectorUINetwork
+@testable import WebInspectorDataKit
 @testable import WebInspectorUIDOM
 @testable import WebInspectorUIBase
 
@@ -22,8 +14,8 @@ extension WebInspectorUIRenderingTests {
 struct DOMContainerTests {
     @Test
     func elementViewControllerShowsUnavailableStateWithoutSelectedStyles() {
-        let dom = makeDOMSession()
-        let viewController = makeElementViewController(dom: dom)
+        let context = makeElementContext()
+        let viewController = makeElementViewController(context: context)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -42,8 +34,8 @@ struct DOMContainerTests {
             return
         }
 
-        let dom = makeDOMSession()
-        let viewController = makeElementViewController(dom: dom)
+        let context = makeElementContext()
+        let viewController = makeElementViewController(context: context)
         viewController.traitOverrides.webInspectorDrawsBackground = false
 
         viewController.loadViewIfNeeded()
@@ -54,18 +46,8 @@ struct DOMContainerTests {
 
     @Test
     func elementViewControllerKeepsUnavailableStateWhenDocumentRootArrivesWithoutSelection() async throws {
-        let targetID = ProtocolTarget.ID("page-main")
-        let dom = DOMSession()
-        dom.applyTargetCreated(
-            ProtocolTarget.Record(
-                id: targetID,
-                kind: .page,
-                frameID: DOMFrame.ID("main-frame"),
-                capabilities: .pageDefault
-            ),
-            makeCurrentMainPage: true
-        )
-        let viewController = makeElementViewController(dom: dom)
+        let context = makeWebInspectorContext()
+        let viewController = makeElementViewController(context: context)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -73,7 +55,7 @@ struct DOMContainerTests {
         #expect(viewController.collectionView.isHidden == false)
         #expect(viewController.collectionView.numberOfSections == 0)
 
-        _ = dom.replaceDocumentRoot(documentNode(), targetID: targetID)
+        context.seedDOMDocument(documentNode())
 
         let didKeepUnavailableState = await waitUntilRendered(in: viewController) {
             viewController.contentUnavailableConfiguration != nil
@@ -85,14 +67,11 @@ struct DOMContainerTests {
 
     @Test
     func elementViewControllerRendersLoadedStyleSections() async throws {
-        let dom = makeDOMSession(capabilities: .pageDefault)
-        let body = try #require(firstElement(named: "body", in: dom))
-        dom.selectNode(body.id)
+        let context = makeElementContext()
+        _ = try selectElement(named: "body", in: context)
+        applyBodyStyles(to: context)
 
-        let css = dom.elementStyles
-        try applyBodyStyles(to: css, in: dom)
-
-        let viewController = makeElementViewController(dom: dom)
+        let viewController = makeElementViewController(context: context)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -120,7 +99,7 @@ struct DOMContainerTests {
 
     @Test
     func elementStyleSectionHeaderTextFormatsRuleOriginText() {
-        let stylesheetLocation = CSSRule.SourceLocation(
+        let stylesheetLocation = DOMElementStyleSectionHeaderText.SourceLocation(
             sourceURL: "https://styles.example/assets/result-card.css",
             line: 27,
             column: 22164
@@ -129,27 +108,24 @@ struct DOMContainerTests {
         #expect(DOMElementStyleSectionHeaderText.fullDisplayText(for: stylesheetLocation) == "https://styles.example/assets/result-card.css:28:22165")
 
         #expect(DOMElementStyleSectionHeaderText.displayText(
-            for: CSSRule.SourceLocation(sourceURL: "styles.css", line: 1)
+            for: DOMElementStyleSectionHeaderText.SourceLocation(sourceURL: "styles.css", line: 1)
         ) == "styles.css:2")
         #expect(DOMElementStyleSectionHeaderText.displayText(
-            for: CSSRule.SourceLocation(sourceURL: "styles.css", line: 0, column: 80)
+            for: DOMElementStyleSectionHeaderText.SourceLocation(sourceURL: "styles.css", line: 0, column: 80)
         ) == "styles.css:1")
         #expect(DOMElementStyleSectionHeaderText.displayText(
-            for: CSSRule.SourceLocation(sourceURL: "styles.css", line: 0, column: 81)
+            for: DOMElementStyleSectionHeaderText.SourceLocation(sourceURL: "styles.css", line: 0, column: 81)
         ) == "styles.css:1:82")
-        #expect(DOMElementStyleSectionHeaderText.displayText(for: .userAgent)?.isEmpty == false)
+        #expect(DOMElementStyleSectionHeaderText.displayText(for: CSS.Origin(rawValue: "user-agent"))?.isEmpty == false)
     }
 
     @Test
     func elementViewControllerKeepsVisibleRowsDuringSameNodeStyleRefresh() async throws {
-        let dom = makeDOMSession(capabilities: .pageDefault)
-        let body = try #require(firstElement(named: "body", in: dom))
-        dom.selectNode(body.id)
+        let context = makeElementContext()
+        let body = try selectElement(named: "body", in: context)
+        applyBodyStyles(to: context)
 
-        let css = dom.elementStyles
-        try applyBodyStyles(to: css, in: dom)
-
-        let viewController = makeElementViewController(dom: dom)
+        let viewController = makeElementViewController(context: context)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -163,16 +139,14 @@ struct DOMContainerTests {
         let cellIDsBeforeUpdate = visibleCellIDs(in: viewController)
         let applyCountBeforeUpdate = viewController.styleSnapshotApplyCountForTesting
 
-        let identity = try dom.selectedCSSNodeStylesID().get()
-        let refreshToken = css.beginRefresh(id: identity)
+        let styles = try #require(body.elementStyles)
+        styles.markLoading()
         window.layoutIfNeeded()
         #expect(viewController.collectionView.isHidden == false)
         #expect(visibleCellIDs(in: viewController) == cellIDsBeforeUpdate)
 
-        try applyBodyStyles(
-            to: css,
-            in: dom,
-            token: refreshToken,
+        applyBodyStyles(
+            to: context,
             marginValue: "4px",
             marginText: "margin: 4px;"
         )
@@ -186,19 +160,21 @@ struct DOMContainerTests {
         #expect(didUpdateVisibleRow)
         #expect(viewController.collectionView.isHidden == false)
         #expect(visibleCellIDs(in: viewController) == cellIDsBeforeUpdate)
-        #expect(viewController.styleSnapshotApplyCountForTesting == applyCountBeforeUpdate)
+        // Value-type rows cannot self-observe: the same-identity content
+        // change surfaces as exactly one reconfigure apply that keeps the
+        // existing cells (the legacy build re-rendered in place with no
+        // snapshot apply at all).
+        #expect(viewController.styleSnapshotApplyCountForTesting == applyCountBeforeUpdate + 1)
+        #expect(viewController.lastSnapshotApplyModeForTesting == .diff(animated: false))
     }
 
     @Test
     func elementViewControllerCompletesCleanStyleRenderWithoutApplyingSnapshot() async throws {
-        let dom = makeDOMSession(capabilities: .pageDefault)
-        let body = try #require(firstElement(named: "body", in: dom))
-        dom.selectNode(body.id)
+        let context = makeElementContext()
+        _ = try selectElement(named: "body", in: context)
+        applyBodyStyles(to: context)
 
-        let css = dom.elementStyles
-        try applyBodyStyles(to: css, in: dom)
-
-        let viewController = makeElementViewController(dom: dom)
+        let viewController = makeElementViewController(context: context)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -219,14 +195,11 @@ struct DOMContainerTests {
 
     @Test
     func elementViewControllerUpdatesVisibleSectionHeaderDuringSameNodeStyleRefresh() async throws {
-        let dom = makeDOMSession(capabilities: .pageDefault)
-        let body = try #require(firstElement(named: "body", in: dom))
-        dom.selectNode(body.id)
+        let context = makeElementContext()
+        _ = try selectElement(named: "body", in: context)
+        applyBodyStyles(to: context)
 
-        let css = dom.elementStyles
-        try applyBodyStyles(to: css, in: dom)
-
-        let viewController = makeElementViewController(dom: dom)
+        let viewController = makeElementViewController(context: context)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -240,12 +213,8 @@ struct DOMContainerTests {
         let headerBeforeUpdate = try #require(styleSectionHeaderViews(in: viewController).first)
         let headerIDBeforeUpdate = ObjectIdentifier(headerBeforeUpdate)
 
-        let identity = try dom.selectedCSSNodeStylesID().get()
-        let refreshToken = css.beginRefresh(id: identity)
-        try applyBodyStyles(
-            to: css,
-            in: dom,
-            token: refreshToken,
+        applyBodyStyles(
+            to: context,
             selector: ".content",
             sourceURL: "updated.css",
             sourceLine: 5
@@ -265,14 +234,11 @@ struct DOMContainerTests {
 
     @Test
     func elementViewControllerRequestsAnimatedDifferencesForSameSelectionStructuralStyleChange() async throws {
-        let dom = makeDOMSession(capabilities: .pageDefault)
-        let body = try #require(firstElement(named: "body", in: dom))
-        dom.selectNode(body.id)
+        let context = makeElementContext()
+        _ = try selectElement(named: "body", in: context)
+        applyBodyStyles(to: context)
 
-        let css = dom.elementStyles
-        try applyBodyStyles(to: css, in: dom)
-
-        let viewController = makeElementViewController(dom: dom)
+        let viewController = makeElementViewController(context: context)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -284,7 +250,7 @@ struct DOMContainerTests {
         }
         #expect(didRenderBodyRows)
 
-        try applyInheritedVariableStyles(to: css, in: dom)
+        applyInheritedVariableStyles(to: context)
 
         let didRenderUpdatedSections = await waitUntilRendered(in: viewController) {
             viewController.collectionView.numberOfSections == 2
@@ -299,24 +265,19 @@ struct DOMContainerTests {
 
     @Test
     func elementViewControllerDoesNotRequestAnimatedDifferencesWhenSwitchingToCachedSelectionStyles() async throws {
-        let dom = makeDOMSession(capabilities: .pageDefault)
-        let input = try #require(firstElement(named: "input", in: dom))
-        dom.selectNode(input.id)
-
-        let css = dom.elementStyles
-        try applyBodyStyles(
-            to: css,
-            in: dom,
+        let context = makeElementContext()
+        let input = try selectElement(named: "input", in: context)
+        applyBodyStyles(
+            to: context,
             selector: "input",
             marginValue: "8px",
             marginText: "margin: 8px;"
         )
 
-        let body = try #require(firstElement(named: "body", in: dom))
-        dom.selectNode(body.id)
-        try applyBodyStyles(to: css, in: dom)
+        _ = try selectElement(named: "body", in: context)
+        applyBodyStyles(to: context)
 
-        let viewController = makeElementViewController(dom: dom)
+        let viewController = makeElementViewController(context: context)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -327,7 +288,13 @@ struct DOMContainerTests {
         }
         #expect(didRenderBodyRows)
 
-        dom.selectNode(input.id)
+        context.select(input)
+        applyBodyStyles(
+            to: context,
+            selector: "input",
+            marginValue: "8px",
+            marginText: "margin: 8px;"
+        )
 
         let didRenderInputRows = await waitUntilRendered(in: viewController) {
             stylePropertyViews(in: viewController)
@@ -341,14 +308,11 @@ struct DOMContainerTests {
 
     @Test
     func elementViewControllerKeepsCurrentRowsWhileNewSelectionStylesAreHydrating() async throws {
-        let dom = makeDOMSession(capabilities: .pageDefault)
-        let body = try #require(firstElement(named: "body", in: dom))
-        dom.selectNode(body.id)
+        let context = makeElementContext()
+        _ = try selectElement(named: "body", in: context)
+        applyBodyStyles(to: context)
 
-        let css = dom.elementStyles
-        try applyBodyStyles(to: css, in: dom)
-
-        let viewController = makeElementViewController(dom: dom)
+        let viewController = makeElementViewController(context: context)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -360,17 +324,23 @@ struct DOMContainerTests {
         window.layoutIfNeeded()
         #expect(didRenderBodyRows)
 
-        let input = try #require(firstElement(named: "input", in: dom))
-        let bodyIdentity = try dom.selectedCSSNodeStylesID().get()
-        dom.selectNode(input.id)
-        let inputIdentity = try dom.selectedCSSNodeStylesID().get()
-        let inputRefreshToken = css.beginRefresh(id: inputIdentity)
+        let body = try #require(context.selectedNode)
+        let input = try selectElement(named: "input", in: context)
+        // Seed once to cancel the preview context's backend-less refresh
+        // task, then hold the fresh selection in `.loading` so the pending
+        // policy is observable while the run loop settles.
+        applyBodyStyles(
+            to: context,
+            selector: "input",
+            marginValue: "8px",
+            marginText: "margin: 8px;"
+        )
+        let inputStyles = try #require(input.elementStyles)
+        inputStyles.markLoading()
         window.layoutIfNeeded()
 
-        #expect(bodyIdentity != inputIdentity)
-        #expect(css.selectedNodeStyles?.id == inputIdentity)
-        #expect(css.selectedPhase == .loading)
-        #expect(css.refreshPhase(forSelected: inputIdentity) == .loading)
+        #expect(body !== input)
+        #expect(inputStyles.phase == .loading)
         let didKeepBodyRowsWhileInputLoads = await waitUntilRendered(in: viewController) {
             viewController.contentUnavailableConfiguration == nil
                 && viewController.collectionView.isHidden == false
@@ -381,10 +351,8 @@ struct DOMContainerTests {
         }
         #expect(didKeepBodyRowsWhileInputLoads)
 
-        try applyBodyStyles(
-            to: css,
-            in: dom,
-            token: inputRefreshToken,
+        applyBodyStyles(
+            to: context,
             selector: "input",
             marginValue: "8px",
             marginText: "margin: 8px;"
@@ -403,16 +371,13 @@ struct DOMContainerTests {
 
     @Test
     func elementViewControllerShowsPlaceholderForInitialElementSelectionWhileStylesHydrate() async throws {
-        let dom = makeDOMSession(capabilities: .pageDefault)
-        let css = dom.elementStyles
-        let viewController = makeElementViewController(dom: dom)
+        let context = makeElementContext()
+        let viewController = makeElementViewController(context: context)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        let body = try #require(firstElement(named: "body", in: dom))
-        dom.selectNode(body.id)
-        let identity = try dom.selectedCSSNodeStylesID().get()
-        _ = css.beginRefresh(id: identity)
+        let body = try selectElement(named: "body", in: context)
+        #expect(body.elementStyles?.phase == .loading)
 
         let didRenderPlaceholder = await waitUntilRendered(in: viewController) {
             viewController.contentUnavailableConfiguration != nil
@@ -425,14 +390,11 @@ struct DOMContainerTests {
 
     @Test
     func elementViewControllerClearsRetainedRowsWhenSelectionClears() async throws {
-        let dom = makeDOMSession(capabilities: .pageDefault)
-        let body = try #require(firstElement(named: "body", in: dom))
-        dom.selectNode(body.id)
+        let context = makeElementContext()
+        _ = try selectElement(named: "body", in: context)
+        applyBodyStyles(to: context)
 
-        let css = dom.elementStyles
-        try applyBodyStyles(to: css, in: dom)
-
-        let viewController = makeElementViewController(dom: dom)
+        let viewController = makeElementViewController(context: context)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -443,13 +405,11 @@ struct DOMContainerTests {
         }
         #expect(didRenderBodyRows)
 
-        let input = try #require(firstElement(named: "input", in: dom))
-        dom.selectNode(input.id)
-        let inputIdentity = try dom.selectedCSSNodeStylesID().get()
-        _ = css.beginRefresh(id: inputIdentity)
+        let input = try selectElement(named: "input", in: context)
+        #expect(input.elementStyles?.phase == .loading)
         #expect(stylePropertyViews(in: viewController).map(\.declarationTextForTesting).contains("margin: 0;"))
 
-        dom.selectNode(nil)
+        context.select(nil)
 
         let didClearRows = await waitUntilRendered(in: viewController) {
             viewController.contentUnavailableConfiguration != nil
@@ -462,14 +422,11 @@ struct DOMContainerTests {
 
     @Test
     func elementViewControllerClearsDisplayedRowsWhenSelectedNodeIsRemoved() async throws {
-        let dom = makeDOMSession(capabilities: .pageDefault)
-        let body = try #require(firstElement(named: "body", in: dom))
-        dom.selectNode(body.id)
+        let context = makeElementContext()
+        _ = try selectElement(named: "body", in: context)
+        applyBodyStyles(to: context)
 
-        let css = dom.elementStyles
-        try applyBodyStyles(to: css, in: dom)
-
-        let viewController = makeElementViewController(dom: dom)
+        let viewController = makeElementViewController(context: context)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -480,7 +437,7 @@ struct DOMContainerTests {
         }
         #expect(didRenderBodyRows)
 
-        dom.applyNodeRemoved(body.id)
+        context.apply(.childNodeRemoved(parent: DOM.Node.ID("html"), node: DOM.Node.ID("body")))
 
         let didClearRows = await waitUntilRendered(in: viewController) {
             viewController.contentUnavailableConfiguration != nil
@@ -493,14 +450,11 @@ struct DOMContainerTests {
 
     @Test
     func elementViewControllerClearsDisplayedRowsWhenSelectedStylesBecomeUnavailable() async throws {
-        let dom = makeDOMSession(capabilities: .pageDefault)
-        let body = try #require(firstElement(named: "body", in: dom))
-        dom.selectNode(body.id)
+        let context = makeElementContext()
+        let body = try selectElement(named: "body", in: context)
+        applyBodyStyles(to: context)
 
-        let css = dom.elementStyles
-        try applyBodyStyles(to: css, in: dom)
-
-        let viewController = makeElementViewController(dom: dom)
+        let viewController = makeElementViewController(context: context)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -511,8 +465,8 @@ struct DOMContainerTests {
         }
         #expect(didRenderBodyRows)
 
-        let identity = try dom.selectedCSSNodeStylesID().get()
-        css.markSelectedNodeStylesUnavailable(id: identity, reason: .staleNode(body.id))
+        let styles = try #require(body.elementStyles)
+        styles.markUnavailable()
 
         let didClearRows = await waitUntilRendered(in: viewController) {
             viewController.contentUnavailableConfiguration != nil
@@ -525,14 +479,11 @@ struct DOMContainerTests {
 
     @Test
     func elementViewControllerCollapsesUnusedInheritedCSSVariablesAndAnimatesReveal() async throws {
-        let dom = makeDOMSession(capabilities: .pageDefault)
-        let body = try #require(firstElement(named: "body", in: dom))
-        dom.selectNode(body.id)
+        let context = makeElementContext()
+        _ = try selectElement(named: "body", in: context)
+        applyInheritedVariableStyles(to: context)
 
-        let css = dom.elementStyles
-        try applyInheritedVariableStyles(to: css, in: dom)
-
-        let viewController = makeElementViewController(dom: dom)
+        let viewController = makeElementViewController(context: context)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -575,22 +526,18 @@ struct DOMContainerTests {
 
     @Test
     func elementViewControllerIgnoresVariableReferencesInsideCSSStringsAndComments() async throws {
-        let dom = makeDOMSession(capabilities: .pageDefault)
-        let body = try #require(firstElement(named: "body", in: dom))
-        dom.selectNode(body.id)
-
-        let css = dom.elementStyles
-        try applyInheritedVariableStyles(
-            to: css,
-            in: dom,
+        let context = makeElementContext()
+        _ = try selectElement(named: "body", in: context)
+        applyInheritedVariableStyles(
+            to: context,
             additionalBodyProperties: [
-                CSSProperty.Payload(
+                PropertySpec(
                     name: "content",
                     value: #""var(--unused-a)""#,
                     text: #"content: "var(--unused-a)";"#,
                     status: .active
                 ),
-                CSSProperty.Payload(
+                PropertySpec(
                     name: "background",
                     value: "/* var(--unused-b) */ transparent",
                     text: "background: /* var(--unused-b) */ transparent;",
@@ -599,7 +546,7 @@ struct DOMContainerTests {
             ]
         )
 
-        let viewController = makeElementViewController(dom: dom)
+        let viewController = makeElementViewController(context: context)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -616,16 +563,12 @@ struct DOMContainerTests {
 
     @Test
     func elementViewControllerIgnoresVariableReferencesFromInactiveDeclarations() async throws {
-        let dom = makeDOMSession(capabilities: .pageDefault)
-        let body = try #require(firstElement(named: "body", in: dom))
-        dom.selectNode(body.id)
-
-        let css = dom.elementStyles
-        try applyInheritedVariableStyles(
-            to: css,
-            in: dom,
+        let context = makeElementContext()
+        _ = try selectElement(named: "body", in: context)
+        applyInheritedVariableStyles(
+            to: context,
             additionalBodyProperties: [
-                CSSProperty.Payload(
+                PropertySpec(
                     name: "border-color",
                     value: "var(--unused-a)",
                     text: "border-color: var(--unused-a);",
@@ -634,7 +577,7 @@ struct DOMContainerTests {
             ]
         )
 
-        let viewController = makeElementViewController(dom: dom)
+        let viewController = makeElementViewController(context: context)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -650,19 +593,15 @@ struct DOMContainerTests {
 
     @Test
     func elementViewControllerTreatsCSSVariableFunctionNamesCaseInsensitively() async throws {
-        let dom = makeDOMSession(capabilities: .pageDefault)
-        let body = try #require(firstElement(named: "body", in: dom))
-        dom.selectNode(body.id)
-
-        let css = dom.elementStyles
-        try applyInheritedVariableStyles(
-            to: css,
-            in: dom,
+        let context = makeElementContext()
+        _ = try selectElement(named: "body", in: context)
+        applyInheritedVariableStyles(
+            to: context,
             bodyColorValue: "VAR(--foreground)",
             foregroundValue: "vAr(--palette-primary)"
         )
 
-        let viewController = makeElementViewController(dom: dom)
+        let viewController = makeElementViewController(context: context)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -682,16 +621,12 @@ struct DOMContainerTests {
 
     @Test
     func elementViewControllerIgnoresVarTextInsideOtherFunctionNames() async throws {
-        let dom = makeDOMSession(capabilities: .pageDefault)
-        let body = try #require(firstElement(named: "body", in: dom))
-        dom.selectNode(body.id)
-
-        let css = dom.elementStyles
-        try applyInheritedVariableStyles(
-            to: css,
-            in: dom,
+        let context = makeElementContext()
+        _ = try selectElement(named: "body", in: context)
+        applyInheritedVariableStyles(
+            to: context,
             additionalBodyProperties: [
-                CSSProperty.Payload(
+                PropertySpec(
                     name: "background",
                     value: "myvar(--unused-a)",
                     text: "background: myvar(--unused-a);",
@@ -700,7 +635,7 @@ struct DOMContainerTests {
             ]
         )
 
-        let viewController = makeElementViewController(dom: dom)
+        let viewController = makeElementViewController(context: context)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -716,16 +651,12 @@ struct DOMContainerTests {
 
     @Test
     func elementViewControllerIgnoresReferencesFromUnusedLocalCustomProperties() async throws {
-        let dom = makeDOMSession(capabilities: .pageDefault)
-        let body = try #require(firstElement(named: "body", in: dom))
-        dom.selectNode(body.id)
-
-        let css = dom.elementStyles
-        try applyInheritedVariableStyles(
-            to: css,
-            in: dom,
+        let context = makeElementContext()
+        _ = try selectElement(named: "body", in: context)
+        applyInheritedVariableStyles(
+            to: context,
             additionalBodyProperties: [
-                CSSProperty.Payload(
+                PropertySpec(
                     name: "--local-unused",
                     value: "var(--unused-a)",
                     text: "--local-unused: var(--unused-a);",
@@ -734,7 +665,7 @@ struct DOMContainerTests {
             ]
         )
 
-        let viewController = makeElementViewController(dom: dom)
+        let viewController = makeElementViewController(context: context)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -750,22 +681,18 @@ struct DOMContainerTests {
 
     @Test
     func elementViewControllerFollowsReferencesFromUsedLocalCustomProperties() async throws {
-        let dom = makeDOMSession(capabilities: .pageDefault)
-        let body = try #require(firstElement(named: "body", in: dom))
-        dom.selectNode(body.id)
-
-        let css = dom.elementStyles
-        try applyInheritedVariableStyles(
-            to: css,
-            in: dom,
+        let context = makeElementContext()
+        _ = try selectElement(named: "body", in: context)
+        applyInheritedVariableStyles(
+            to: context,
             additionalBodyProperties: [
-                CSSProperty.Payload(
+                PropertySpec(
                     name: "--local-used",
                     value: "var(--unused-a)",
                     text: "--local-used: var(--unused-a);",
                     status: .active
                 ),
-                CSSProperty.Payload(
+                PropertySpec(
                     name: "border-color",
                     value: "var(--local-used)",
                     text: "border-color: var(--local-used);",
@@ -774,7 +701,7 @@ struct DOMContainerTests {
             ]
         )
 
-        let viewController = makeElementViewController(dom: dom)
+        let viewController = makeElementViewController(context: context)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -791,14 +718,11 @@ struct DOMContainerTests {
 
     @Test
     func elementViewControllerUpdatesCollapsedUnusedVariableCountAfterStyleRefresh() async throws {
-        let dom = makeDOMSession(capabilities: .pageDefault)
-        let body = try #require(firstElement(named: "body", in: dom))
-        dom.selectNode(body.id)
+        let context = makeElementContext()
+        _ = try selectElement(named: "body", in: context)
+        applyInheritedVariableStyles(to: context)
 
-        let css = dom.elementStyles
-        try applyInheritedVariableStyles(to: css, in: dom)
-
-        let viewController = makeElementViewController(dom: dom)
+        let viewController = makeElementViewController(context: context)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -807,11 +731,10 @@ struct DOMContainerTests {
         }
         #expect(didCollapseUnusedVariables)
 
-        try applyInheritedVariableStyles(
-            to: css,
-            in: dom,
+        applyInheritedVariableStyles(
+            to: context,
             additionalRootProperties: [
-                CSSProperty.Payload(
+                PropertySpec(
                     name: "--unused-c",
                     value: "green",
                     text: "--unused-c: green;",
@@ -843,11 +766,8 @@ struct DOMContainerTests {
 
     @Test
     func elementStylePropertyViewSendsToggleActionWithImmediateControlFeedback() {
-        let propertyID = CSSProperty.ID(
-            styleID: CSSStyle.ID(styleSheetID: CSSStyleSheet.ID("test-sheet"), ordinal: 0),
-            propertyIndex: 0
-        )
-        let property = CSSProperty(
+        let propertyID = CSS.Property.ID("test-style:0")
+        let property = CSS.Property(
             id: propertyID,
             name: "margin",
             value: "0",
@@ -856,7 +776,7 @@ struct DOMContainerTests {
             isEditable: true
         )
         let propertyView = DOMElementStylePropertyView()
-        var requestedPropertyID: CSSProperty.ID?
+        var requestedPropertyID: CSS.Property.ID?
         var requestedEnabled: Bool?
         propertyView.bind(property: property) { propertyID, enabled in
             requestedPropertyID = propertyID
@@ -880,50 +800,51 @@ struct DOMContainerTests {
     }
 
     @Test
-    func elementStylePropertyViewIgnoresNonEditableAndAnonymousProperties() {
-        let styleID = CSSStyle.ID(styleSheetID: CSSStyleSheet.ID("test-sheet"), ordinal: 0)
-        let nonEditableID = CSSProperty.ID(styleID: styleID, propertyIndex: 0)
-        let nonEditable = CSSProperty(
-            id: nonEditableID,
+    func elementStylePropertyViewIgnoresNonEditableProperties() {
+        let nonEditable = CSS.Property(
+            id: CSS.Property.ID("test-style:0"),
             name: "margin",
             value: "0",
             text: "margin: 0;",
             status: .active,
             isEditable: false
         )
-        let anonymous = CSSProperty(
+        let implicit = CSS.Property(
+            id: CSS.Property.ID("test-style:1"),
             name: "padding",
             value: "0",
             text: "padding: 0;",
             status: .active,
-            isEditable: true
+            implicit: true,
+            isEditable: false
         )
         let nonEditableView = DOMElementStylePropertyView()
-        let anonymousView = DOMElementStylePropertyView()
+        let implicitView = DOMElementStylePropertyView()
         var requestCount = 0
         nonEditableView.bind(property: nonEditable) { _, _ in
             requestCount += 1
             return true
         }
-        anonymousView.bind(property: anonymous) { _, _ in
+        implicitView.bind(property: implicit) { _, _ in
             requestCount += 1
             return true
         }
-        let stackView = UIStackView(arrangedSubviews: [nonEditableView, anonymousView])
+        let stackView = UIStackView(arrangedSubviews: [nonEditableView, implicitView])
         stackView.axis = .vertical
         let window = showViewInWindow(stackView)
         defer { window.isHidden = true }
 
         #expect(nonEditableView.isToggleEnabledForTesting == false)
-        #expect(anonymousView.isToggleEnabledForTesting == false)
+        #expect(implicitView.isToggleEnabledForTesting == false)
         nonEditableView.tapToggleForTesting()
-        anonymousView.tapToggleForTesting()
+        implicitView.tapToggleForTesting()
         #expect(requestCount == 0)
     }
 
     @Test
     func elementStylePropertyViewNormalizesMultilinePropertyText() {
-        let property = CSSProperty(
+        let property = CSS.Property(
+            id: CSS.Property.ID("test-style:0"),
             name: "background",
             value: "red",
             text: "background:\n    red;",
@@ -992,10 +913,9 @@ struct DOMContainerTests {
 
     @Test
     func splitContainerInstallsTreeAndElementColumns() throws {
-        let dom = makeDOMSession()
         let context = makeWebInspectorContext()
         let treeViewController = DOMTreeViewController(context: context)
-        let elementViewController = makeElementViewController(dom: dom)
+        let elementViewController = makeElementViewController(context: context)
         let splitViewController = DOMSplitViewController(
             treeViewController: treeViewController,
             elementViewController: elementViewController,
@@ -1029,8 +949,7 @@ struct DOMContainerTests {
 
     @Test
     func splitContainerInstallsSessionNavigationActions() throws {
-        let session = AttachedInspection(dom: makeDOMSession())
-        let splitViewController = DOMSplitViewController(context: makeWebInspectorContext(), inspection: session)
+        let splitViewController = DOMSplitViewController(context: makeWebInspectorContext())
 
         splitViewController.loadViewIfNeeded()
 
@@ -1039,138 +958,111 @@ struct DOMContainerTests {
         #expect(splitViewController.navigationItem.additionalOverflowItems != nil)
     }
 
+    private struct PropertySpec {
+        var name: String
+        var value: String
+        var text: String
+        var status: CSS.Status
+    }
+
+    private struct BodyStyleIDs {
+        var margin: CSS.Property.ID
+        var boxSizing: CSS.Property.ID
+        var fontSize: CSS.Property.ID
+    }
+
     private func makeWebInspectorContext() -> WebInspectorContext {
         WebInspectorContext.preview(isolation: MainActor.shared)
     }
 
-    private struct BodyStyleIDs {
-        var margin: CSSProperty.ID
-        var boxSizing: CSSProperty.ID
-        var fontSize: CSSProperty.ID
+    private func makeElementContext() -> WebInspectorContext {
+        let context = makeWebInspectorContext()
+        context.seedDOMDocument(documentNode())
+        return context
     }
 
-    private func makeDOMSession(capabilities: ProtocolTarget.Capabilities = []) -> DOMSession {
-        let targetID = ProtocolTarget.ID("page-main")
-        let session = DOMSession()
-        session.applyTargetCreated(
-            ProtocolTarget.Record(
-                id: targetID,
-                kind: .page,
-                frameID: DOMFrame.ID("main-frame"),
-                capabilities: capabilities
-            ),
-            makeCurrentMainPage: true
-        )
-        _ = session.replaceDocumentRoot(documentNode(), targetID: targetID)
-        return session
-    }
-
-    private func makeDOMSessionWithoutDocument(
-        targetID: ProtocolTarget.ID,
-        capabilities: ProtocolTarget.Capabilities = .pageDefault
-    ) -> DOMSession {
-        let session = DOMSession()
-        session.applyTargetCreated(
-            ProtocolTarget.Record(
-                id: targetID,
-                kind: .page,
-                frameID: DOMFrame.ID("main-frame"),
-                capabilities: capabilities
-            ),
-            makeCurrentMainPage: true
-        )
-        return session
-    }
-
-    private func makeElementViewController(dom: DOMSession) -> DOMElementViewController {
-        let viewController = DOMElementViewController(inspection: AttachedInspection(dom: dom))
+    private func makeElementViewController(context: WebInspectorContext) -> DOMElementViewController {
+        let viewController = DOMElementViewController(context: context)
         viewController.disablesSnapshotAnimationsForTesting = true
         return viewController
     }
 
+    private func selectElement(named localName: String, in context: WebInspectorContext) throws -> DOMNode {
+        let node = try #require(DOMPreviewFixtures.firstElement(named: localName, in: context))
+        context.select(node)
+        return node
+    }
+
     @discardableResult
     private func applyBodyStyles(
-        to css: CSSSession,
-        in dom: DOMSession,
-        token: CSSStyle.RefreshToken? = nil,
+        to context: WebInspectorContext,
         selector: String = "body",
         sourceURL: String = "styles.css",
         sourceLine: Int = 1,
         marginValue: String = "0",
         marginText: String = "margin: 0;"
-    ) throws -> BodyStyleIDs {
-        let identity = try dom.selectedCSSNodeStylesID().get()
-        let token = token ?? css.beginRefresh(id: identity)
-        let styleSheetID = CSSStyleSheet.ID("test-sheet")
-        let styleID = CSSStyle.ID(styleSheetID: styleSheetID, ordinal: 0)
-        css.applyRefresh(
-            token: token,
-            matched: CSSStyle.MatchedStylesPayload(
-                matchedRules: [
-                    CSSRule.MatchPayload(
-                        rule: CSSRule.Payload(
-                            id: CSSRule.ID(styleSheetID: styleSheetID, ordinal: 0),
-                            selectorList: CSSRule.SelectorList(
-                                selectors: [CSSRule.Selector(text: selector)],
-                                text: selector
-                            ),
-                            sourceURL: sourceURL,
-                            sourceLine: sourceLine,
-                            origin: .author,
-                            style: CSSStyle.Payload(
-                                id: styleID,
-                                cssProperties: [
-                                    CSSProperty.Payload(
-                                        name: "margin",
-                                        value: marginValue,
-                                        text: marginText,
-                                        status: .active
-                                    ),
-                                    CSSProperty.Payload(
-                                        name: "box-sizing",
-                                        value: "border-box",
-                                        text: "/* box-sizing: border-box; */",
-                                        status: .disabled
-                                    ),
-                                    CSSProperty.Payload(
-                                        name: "font-size",
-                                        value: "12px",
-                                        text: "font-size: 12px;",
-                                        status: .inactive
-                                    ),
-                                ],
-                                cssText: "\(marginText)\n/* box-sizing: border-box; */\nfont-size: 12px;"
-                            )
-                        ),
-                        matchingSelectors: [0]
+    ) -> BodyStyleIDs {
+        let styleID = "test-style"
+        let cssText = "\(marginText)\n/* box-sizing: border-box; */\nfont-size: 12px;"
+        let style = CSS.Style(
+            id: CSS.Style.ID(styleID),
+            properties: [
+                CSS.Property(
+                    id: CSS.Property.ID("\(styleID):0"),
+                    name: "margin",
+                    value: marginValue,
+                    text: marginText,
+                    status: .active
+                ),
+                CSS.Property(
+                    id: CSS.Property.ID("\(styleID):1"),
+                    name: "box-sizing",
+                    value: "border-box",
+                    text: "/* box-sizing: border-box; */",
+                    status: .disabled
+                ),
+                CSS.Property(
+                    id: CSS.Property.ID("\(styleID):2"),
+                    name: "font-size",
+                    value: "12px",
+                    text: "font-size: 12px;",
+                    status: .inactive
+                ),
+            ],
+            cssText: cssText,
+            isEditable: true
+        )
+        context.seedSelectedNodeStyles(
+            matchedStyles: CSS.MatchedStyles(matchedRules: [
+                CSS.Rule(
+                    id: CSS.Rule.ID("test-rule"),
+                    selectorList: CSS.Rule.SelectorList(
+                        selectors: [selector],
+                        text: selector
                     ),
-                ]
-            ),
-            inline: CSSStyle.InlineStylesPayload(),
-            computed: []
+                    sourceURL: sourceURL,
+                    sourceLine: sourceLine,
+                    origin: CSS.Origin(rawValue: "author"),
+                    style: style
+                ),
+            ])
         )
         return BodyStyleIDs(
-            margin: CSSProperty.ID(styleID: styleID, propertyIndex: 0),
-            boxSizing: CSSProperty.ID(styleID: styleID, propertyIndex: 1),
-            fontSize: CSSProperty.ID(styleID: styleID, propertyIndex: 2)
+            margin: CSS.Property.ID("\(styleID):0"),
+            boxSizing: CSS.Property.ID("\(styleID):1"),
+            fontSize: CSS.Property.ID("\(styleID):2")
         )
     }
 
     private func applyInheritedVariableStyles(
-        to css: CSSSession,
-        in dom: DOMSession,
+        to context: WebInspectorContext,
         bodyColorValue: String = "var(--foreground)",
         foregroundValue: String = "var(--palette-primary)",
-        additionalBodyProperties: [CSSProperty.Payload] = [],
-        additionalRootProperties: [CSSProperty.Payload] = []
-    ) throws {
-        let identity = try dom.selectedCSSNodeStylesID().get()
-        let token = css.beginRefresh(id: identity)
-        let styleSheetID = CSSStyleSheet.ID("variables")
-        let bodyStyleID = CSSStyle.ID(styleSheetID: styleSheetID, ordinal: 0)
-        let rootStyleID = CSSStyle.ID(styleSheetID: styleSheetID, ordinal: 1)
+        additionalBodyProperties: [PropertySpec] = [],
+        additionalRootProperties: [PropertySpec] = []
+    ) {
         let bodyProperties = [
-            CSSProperty.Payload(
+            PropertySpec(
                 name: "color",
                 value: bodyColorValue,
                 text: "color: \(bodyColorValue);",
@@ -1178,25 +1070,25 @@ struct DOMContainerTests {
             ),
         ] + additionalBodyProperties
         let rootProperties = [
-            CSSProperty.Payload(
+            PropertySpec(
                 name: "--foreground",
                 value: foregroundValue,
                 text: "--foreground: \(foregroundValue);",
                 status: .active
             ),
-            CSSProperty.Payload(
+            PropertySpec(
                 name: "--palette-primary",
                 value: "#111",
                 text: "--palette-primary: #111;",
                 status: .active
             ),
-            CSSProperty.Payload(
+            PropertySpec(
                 name: "--unused-a",
                 value: "red",
                 text: "--unused-a: red;",
                 status: .active
             ),
-            CSSProperty.Payload(
+            PropertySpec(
                 name: "--unused-b",
                 value: "blue",
                 text: "--unused-b: blue;",
@@ -1204,134 +1096,90 @@ struct DOMContainerTests {
             ),
         ] + additionalRootProperties
 
-        css.applyRefresh(
-            token: token,
-            matched: CSSStyle.MatchedStylesPayload(
+        context.seedSelectedNodeStyles(
+            matchedStyles: CSS.MatchedStyles(
                 matchedRules: [
-                    CSSRule.MatchPayload(
-                        rule: CSSRule.Payload(
-                            id: CSSRule.ID(styleSheetID: styleSheetID, ordinal: 0),
-                            selectorList: CSSRule.SelectorList(
-                                selectors: [CSSRule.Selector(text: "body")],
-                                text: "body"
-                            ),
-                            sourceURL: "variables.css",
-                            sourceLine: 12,
-                            origin: .author,
-                            style: CSSStyle.Payload(
-                                id: bodyStyleID,
-                                cssProperties: bodyProperties,
-                                cssText: bodyProperties.compactMap(\.text).joined(separator: "\n")
-                            )
+                    CSS.Rule(
+                        id: CSS.Rule.ID("variables-rule-body"),
+                        selectorList: CSS.Rule.SelectorList(
+                            selectors: ["body"],
+                            text: "body"
                         ),
-                        matchingSelectors: [0]
+                        sourceURL: "variables.css",
+                        sourceLine: 12,
+                        origin: CSS.Origin(rawValue: "author"),
+                        style: makeStyle(id: "variables-body", properties: bodyProperties)
                     ),
                 ],
                 inherited: [
-                    CSSStyle.InheritedStyleEntry(
-                        matchedRules: [
-                            CSSRule.MatchPayload(
-                                rule: CSSRule.Payload(
-                                    id: CSSRule.ID(styleSheetID: styleSheetID, ordinal: 1),
-                                    selectorList: CSSRule.SelectorList(
-                                        selectors: [CSSRule.Selector(text: ":root")],
-                                        text: ":root"
-                                    ),
-                                    sourceURL: "variables.css",
-                                    sourceLine: 1,
-                                    origin: .author,
-                                    style: CSSStyle.Payload(
-                                        id: rootStyleID,
-                                        cssProperties: rootProperties,
-                                        cssText: rootProperties.compactMap(\.text).joined(separator: "\n")
-                                    )
-                                ),
-                                matchingSelectors: [0]
+                    CSS.MatchedStyles.InheritedEntry(matchedRules: [
+                        CSS.Rule(
+                            id: CSS.Rule.ID("variables-rule-root"),
+                            selectorList: CSS.Rule.SelectorList(
+                                selectors: [":root"],
+                                text: ":root"
                             ),
-                        ]
-                    ),
-                ]
-            ),
-            inline: CSSStyle.InlineStylesPayload(),
-            computed: []
-        )
-    }
-
-    private func firstElement(named localName: String, in dom: DOMSession) -> DOMNode? {
-        guard let rootNode = dom.currentPageRootNode else {
-            return nil
-        }
-        var stack = [rootNode]
-        while let node = stack.popLast() {
-            if node.localName == localName {
-                return node
-            }
-            stack.append(contentsOf: dom.visibleDOMTreeChildren(of: node).reversed())
-        }
-        return nil
-    }
-
-    private func documentNode() -> DOMNode.Payload {
-        DOMNode.Payload(
-            nodeID: .init(1),
-            nodeType: .document,
-            nodeName: "#document",
-            regularChildren: .loaded([
-                DOMNode.Payload(
-                    nodeID: .init(2),
-                    nodeType: .element,
-                    nodeName: "HTML",
-                    localName: "html",
-                    regularChildren: .loaded([
-                        DOMNode.Payload(
-                            nodeID: .init(3),
-                            nodeType: .element,
-                            nodeName: "BODY",
-                            localName: "body",
-                            regularChildren: .loaded([
-                                DOMNode.Payload(
-                                    nodeID: .init(4),
-                                    nodeType: .element,
-                                    nodeName: "INPUT",
-                                    localName: "input"
-                                ),
-                            ])
+                            sourceURL: "variables.css",
+                            sourceLine: 1,
+                            origin: CSS.Origin(rawValue: "author"),
+                            style: makeStyle(id: "variables-root", properties: rootProperties)
                         ),
-                    ])
-                ),
-            ])
-        )
-    }
-
-    private var loadedDocumentResult: String {
-        ##"{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document","children":[{"nodeId":2,"nodeType":1,"nodeName":"HTML","localName":"html","children":[{"nodeId":3,"nodeType":1,"nodeName":"BODY","localName":"body"}]}]}}"##
-    }
-
-    private func pageTargetCreatedMessage(targetID: ProtocolTarget.ID) -> String {
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"\#(targetID.rawValue)","type":"page","frameId":"main-frame","domains":["DOM","Runtime","Target","Inspector","Network","CSS"],"isProvisional":false}}}"#
-    }
-
-    private func receiveTargetReply(
-        _ transport: TransportSession,
-        targetID: ProtocolTarget.ID,
-        messageID: UInt64,
-        result: String
-    ) async {
-        await transport.receiveRootMessage(
-            targetDispatchMessage(
-                targetID: targetID,
-                message: #"{"id":\#(messageID),"result":\#(result)}"#
+                    ]),
+                ]
             )
         )
     }
 
-    private func targetDispatchMessage(
-        targetID: ProtocolTarget.ID,
-        message: String
-    ) -> String {
-        let escapedTargetID = jsonEscapedString(targetID.rawValue)
-        let escapedMessage = jsonEscapedString(message)
-        return #"{"method":"Target.dispatchMessageFromTarget","params":{"targetId":"\#(escapedTargetID)","message":"\#(escapedMessage)"}}"#
+    private func makeStyle(id: String, properties: [PropertySpec]) -> CSS.Style {
+        CSS.Style(
+            id: CSS.Style.ID(id),
+            properties: properties.enumerated().map { index, spec in
+                CSS.Property(
+                    id: CSS.Property.ID("\(id):\(index)"),
+                    name: spec.name,
+                    value: spec.value,
+                    text: spec.text,
+                    status: spec.status
+                )
+            },
+            cssText: properties.map(\.text).joined(separator: "\n"),
+            isEditable: true
+        )
+    }
+
+    private func documentNode() -> DOM.Node {
+        DOM.Node(
+            id: DOM.Node.ID("document"),
+            nodeType: 9,
+            nodeName: "#document",
+            childNodeCount: 1,
+            children: [
+                DOM.Node(
+                    id: DOM.Node.ID("html"),
+                    nodeType: 1,
+                    nodeName: "HTML",
+                    localName: "html",
+                    childNodeCount: 1,
+                    children: [
+                        DOM.Node(
+                            id: DOM.Node.ID("body"),
+                            nodeType: 1,
+                            nodeName: "BODY",
+                            localName: "body",
+                            childNodeCount: 1,
+                            children: [
+                                DOM.Node(
+                                    id: DOM.Node.ID("input"),
+                                    nodeType: 1,
+                                    nodeName: "INPUT",
+                                    localName: "input"
+                                ),
+                            ]
+                        ),
+                    ]
+                ),
+            ]
+        )
     }
 
     private func waitForTargetMessage(
@@ -1362,34 +1210,9 @@ struct DOMContainerTests {
         }
     }
 
-    private func messageID(_ message: String) throws -> UInt64 {
-        let data = try #require(message.data(using: .utf8))
-        let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-        if let number = object["id"] as? NSNumber {
-            return number.uint64Value
-        }
-        if let string = object["id"] as? String,
-           let id = UInt64(string) {
-            return id
-        }
-        throw TransportSession.Error.malformedMessage
-    }
-
-    private func jsonEscapedString(_ string: String) -> String {
-        string
-            .replacingOccurrences(of: #"\"#, with: #"\\"#)
-            .replacingOccurrences(of: #"""#, with: #"\""#)
-            .replacingOccurrences(of: "\n", with: #"\n"#)
-            .replacingOccurrences(of: "\r", with: #"\r"#)
-    }
-
     private struct RecordedTargetMessage: Sendable {
         var message: String
         var targetIdentifier: ProtocolTarget.ID
-    }
-
-    private final class CommandAttachmentGate {
-        var isAttached = false
     }
 
     private actor RecordingTransportBackend: TransportBackend {

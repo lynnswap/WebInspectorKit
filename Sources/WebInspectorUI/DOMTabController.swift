@@ -94,7 +94,7 @@ package struct DOMTabController: WebInspectorTab.BuiltInController {
 
     private func cachedElementViewController(session: WebInspectorSession) -> DOMElementViewController {
         session.interface.viewController(for: contentKey(ContentID.element)) {
-            DOMElementViewController(inspection: session.attachment)
+            DOMElementViewController(context: session.context)
         }
     }
 

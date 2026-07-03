@@ -1,15 +1,8 @@
 #if canImport(UIKit)
 import Testing
-import WebInspectorTransport
 import UIKit
-@testable import WebInspectorCore
-@testable import WebInspectorCoreConsoleNetwork
-@testable import WebInspectorCoreDOMCSS
-@testable import WebInspectorCoreRuntime
-@testable import WebInspectorCoreSupport
-@testable import WebInspectorUI
-@testable import WebInspectorUISyntaxBody
-@testable import WebInspectorUINetwork
+import WebInspectorProxyKit
+@testable import WebInspectorDataKit
 @testable import WebInspectorUIDOM
 @testable import WebInspectorUIBase
 
@@ -17,10 +10,14 @@ extension WebInspectorUIRenderingTests {
 @MainActor
 @Suite
 struct DOMElementStyleSnapshotCoordinatorTests {
+    /// Keeps the weak `CSSStyles.modelContext` alive for the test lifetime.
+    private let modelContext = WebInspectorContext.preview(isolation: MainActor.shared)
+
     @Test
     func coordinatorRequestsNonAnimatedDiffForInitialLoadedSelection() throws {
         let coordinator = DOMElementStyleSnapshotCoordinator()
-        let nodeStyles = makeNodeStyles(sections: makeFlatStyleSections())
+        let nodeStyles = makeStyles()
+        load(nodeStyles, with: makeFlatMatchedStyles())
         coordinator.bindSelectedNodeStyles(nodeStyles)
 
         let update = coordinator.updateSelectedNodeStyles(nodeStyles)
@@ -35,17 +32,19 @@ struct DOMElementStyleSnapshotCoordinatorTests {
     @Test
     func coordinatorReloadsWhenSwitchingToCachedSelectionStyles() throws {
         let coordinator = DOMElementStyleSnapshotCoordinator()
-        let bodyStyles = makeNodeStyles(sections: makeFlatStyleSections())
+        let bodyStyles = makeStyles(nodeID: "node-body")
+        load(bodyStyles, with: makeFlatMatchedStyles())
         coordinator.bindSelectedNodeStyles(bodyStyles)
         _ = coordinator.updateSelectedNodeStyles(bodyStyles)
 
-        let inputStyles = makeNodeStyles(
-            nodeLocalID: 2,
-            sections: makeFlatStyleSections(
-                nodeLocalID: 2,
+        let inputStyles = makeStyles(nodeID: "node-input")
+        load(
+            inputStyles,
+            with: makeFlatMatchedStyles(
                 selector: "input",
                 marginValue: "8px",
-                marginText: "margin: 8px;"
+                marginText: "margin: 8px;",
+                styleIDSuffix: "input"
             )
         )
         coordinator.bindSelectedNodeStyles(inputStyles)
@@ -60,12 +59,15 @@ struct DOMElementStyleSnapshotCoordinatorTests {
     @Test
     func coordinatorReloadsSelectionReplacementWithMatchingDiffableIdentifiers() {
         let coordinator = DOMElementStyleSnapshotCoordinator()
-        let oldStyles = makeNodeStyles(sections: makeFlatStyleSections())
+        let oldStyles = makeStyles()
+        load(oldStyles, with: makeFlatMatchedStyles())
         coordinator.bindSelectedNodeStyles(oldStyles)
         _ = coordinator.updateSelectedNodeStyles(oldStyles)
 
-        let replacementStyles = makeNodeStyles(
-            sections: makeFlatStyleSections(
+        let replacementStyles = makeStyles()
+        load(
+            replacementStyles,
+            with: makeFlatMatchedStyles(
                 marginValue: "4px",
                 marginText: "margin: 4px;"
             )
@@ -81,26 +83,30 @@ struct DOMElementStyleSnapshotCoordinatorTests {
     @Test
     func coordinatorKeepsDisplayedRowsWhileSelectionHydratesThenReloadsLoadedReplacement() throws {
         let coordinator = DOMElementStyleSnapshotCoordinator()
-        let bodyStyles = makeNodeStyles(sections: makeFlatStyleSections())
+        let bodyStyles = makeStyles(nodeID: "node-body")
+        load(bodyStyles, with: makeFlatMatchedStyles())
         coordinator.bindSelectedNodeStyles(bodyStyles)
         _ = coordinator.updateSelectedNodeStyles(bodyStyles)
 
-        let inputStyles = makeNodeStyles(nodeLocalID: 2, sections: [], phase: .loading)
+        let inputStyles = makeStyles(nodeID: "node-input")
         coordinator.bindSelectedNodeStyles(inputStyles)
         let loadingUpdate = coordinator.updateSelectedNodeStyles(inputStyles)
 
+        #expect(inputStyles.phase == .loading)
         #expect(loadingUpdate.applyMode == .none)
         #expect(loadingUpdate.snapshot == nil)
         #expect(loadingUpdate.placeholderMode == .none)
         #expect(coordinator.visibleSectionIDs.isEmpty == false)
 
-        inputStyles.sections = makeFlatStyleSections(
-            nodeLocalID: 2,
-            selector: "input",
-            marginValue: "8px",
-            marginText: "margin: 8px;"
+        load(
+            inputStyles,
+            with: makeFlatMatchedStyles(
+                selector: "input",
+                marginValue: "8px",
+                marginText: "margin: 8px;",
+                styleIDSuffix: "input"
+            )
         )
-        inputStyles.phase = .loaded
         let loadedUpdate = coordinator.updateSelectedNodeStyles(inputStyles)
 
         #expect(loadedUpdate.applyMode == .reloadData)
@@ -110,11 +116,12 @@ struct DOMElementStyleSnapshotCoordinatorTests {
     @Test
     func coordinatorAnimatesSameSelectionStructuralStyleChange() throws {
         let coordinator = DOMElementStyleSnapshotCoordinator()
-        let nodeStyles = makeNodeStyles(sections: makeFlatStyleSections())
+        let nodeStyles = makeStyles()
+        load(nodeStyles, with: makeFlatMatchedStyles())
         coordinator.bindSelectedNodeStyles(nodeStyles)
         _ = coordinator.updateSelectedNodeStyles(nodeStyles)
 
-        nodeStyles.sections = makeStyleSections(inheritedOrdinal: 0)
+        load(nodeStyles, with: makeVariablesMatchedStyles())
         let update = coordinator.updateSelectedNodeStyles(nodeStyles)
 
         #expect(update.applyMode == .diff(animated: true))
@@ -123,57 +130,139 @@ struct DOMElementStyleSnapshotCoordinatorTests {
         #expect(containsVisibleProperty(named: "color", in: snapshot, coordinator: coordinator))
     }
 
+    /// Value-world replacement for the legacy in-place property mutation
+    /// policy: rows no longer observe property objects, so a same-identity
+    /// content change must surface as a reconfigure apply.
     @Test
-    func coordinatorDoesNotApplySnapshotForPropertyMutationWithoutTopologyChange() {
+    func coordinatorReconfiguresRowsForPropertyContentChangeWithoutStructuralChange() throws {
         let coordinator = DOMElementStyleSnapshotCoordinator()
-        let sections = makeFlatStyleSections()
-        let nodeStyles = makeNodeStyles(sections: sections)
+        let nodeStyles = makeStyles()
+        load(nodeStyles, with: makeFlatMatchedStyles())
+        coordinator.bindSelectedNodeStyles(nodeStyles)
+        let initialSnapshot = try loadedSnapshot(from: coordinator.updateSelectedNodeStyles(nodeStyles))
+
+        load(
+            nodeStyles,
+            with: makeFlatMatchedStyles(
+                marginValue: "4px",
+                marginText: "margin: 4px;"
+            )
+        )
+        let update = coordinator.updateSelectedNodeStyles(nodeStyles)
+
+        #expect(update.applyMode == .diff(animated: false))
+        #expect(update.placeholderMode == .none)
+        let snapshot = try loadedSnapshot(from: update)
+        #expect(snapshot.sectionIdentifiers == initialSnapshot.sectionIdentifiers)
+        #expect(snapshot.itemIdentifiers == initialSnapshot.itemIdentifiers)
+        let reconfiguredItems = snapshot.reconfiguredItemIdentifiers
+        #expect(reconfiguredItems.count == 1)
+        let reconfiguredItem = try #require(reconfiguredItems.first)
+        let section = try #require(coordinator.section(for: reconfiguredItem.sectionID))
+        #expect(coordinator.property(for: reconfiguredItem, in: section)?.name == "margin")
+    }
+
+    /// DataKit's `applySetStyleText` rewrites sections in place and marks
+    /// the styles `.needsRefresh`; the rewritten declaration text and the
+    /// modified-by-inspector badge must reach the rows before the follow-up
+    /// refresh lands.
+    @Test
+    func coordinatorReconfiguresSameSelectionContentDuringNeedsRefresh() throws {
+        let coordinator = DOMElementStyleSnapshotCoordinator()
+        let nodeStyles = makeStyles()
+        load(nodeStyles, with: makeFlatMatchedStyles())
+        coordinator.bindSelectedNodeStyles(nodeStyles)
+        let initialSnapshot = try loadedSnapshot(from: coordinator.updateSelectedNodeStyles(nodeStyles))
+
+        load(
+            nodeStyles,
+            with: makeFlatMatchedStyles(
+                marginValue: "4px",
+                marginText: "/* margin: 4px; */"
+            )
+        )
+        nodeStyles.markNeedsRefresh()
+        let update = coordinator.updateSelectedNodeStyles(nodeStyles)
+
+        #expect(update.applyMode == .diff(animated: false))
+        let snapshot = try loadedSnapshot(from: update)
+        #expect(snapshot.sectionIdentifiers == initialSnapshot.sectionIdentifiers)
+        #expect(snapshot.itemIdentifiers == initialSnapshot.itemIdentifiers)
+        #expect(snapshot.reconfiguredItemIdentifiers.count == 1)
+    }
+
+    /// Structure stays frozen while the styles are stale; structural changes
+    /// wait for the follow-up refresh to load.
+    @Test
+    func coordinatorKeepsDisplayedStructureForStructuralChangesDuringNeedsRefresh() {
+        let coordinator = DOMElementStyleSnapshotCoordinator()
+        let nodeStyles = makeStyles()
+        load(nodeStyles, with: makeFlatMatchedStyles())
+        coordinator.bindSelectedNodeStyles(nodeStyles)
+        _ = coordinator.updateSelectedNodeStyles(nodeStyles)
+        let renderedSectionIDs = coordinator.visibleSectionIDs
+
+        load(nodeStyles, with: makeVariablesMatchedStyles())
+        nodeStyles.markNeedsRefresh()
+        let update = coordinator.updateSelectedNodeStyles(nodeStyles)
+
+        #expect(update.applyMode == .none)
+        #expect(update.snapshot == nil)
+        #expect(coordinator.visibleSectionIDs == renderedSectionIDs)
+    }
+
+    @Test
+    func coordinatorDoesNotApplySnapshotWhenReloadedContentIsUnchanged() {
+        let coordinator = DOMElementStyleSnapshotCoordinator()
+        let nodeStyles = makeStyles()
+        load(nodeStyles, with: makeFlatMatchedStyles())
         coordinator.bindSelectedNodeStyles(nodeStyles)
         _ = coordinator.updateSelectedNodeStyles(nodeStyles)
 
-        let margin = sections[0].style.cssProperties[0]
-        margin.value = "4px"
-        margin.text = "margin: 4px;"
-
+        load(nodeStyles, with: makeFlatMatchedStyles())
         let update = coordinator.updateSelectedNodeStyles(nodeStyles)
 
         #expect(update.applyMode == .none)
         #expect(update.snapshot == nil)
         #expect(update.placeholderMode == .none)
+        #expect(update.updatedSectionIDs.isEmpty)
     }
 
+    /// Header content changes with stable section identity require no
+    /// snapshot apply; they are reported through `updatedSectionIDs` so the
+    /// view controller re-binds visible header views.
     @Test
-    func coordinatorReloadsWhenBackingPropertyObjectChangesWithoutStructuralIdentifiers() {
+    func coordinatorReportsHeaderContentChangeWithoutSnapshotApply() throws {
         let coordinator = DOMElementStyleSnapshotCoordinator()
-        let sections = makeFlatStyleSections()
-        let nodeStyles = makeNodeStyles(sections: sections)
+        let nodeStyles = makeStyles()
+        load(nodeStyles, with: makeFlatMatchedStyles())
         coordinator.bindSelectedNodeStyles(nodeStyles)
         _ = coordinator.updateSelectedNodeStyles(nodeStyles)
+        let sectionID = try #require(coordinator.visibleSectionIDs.first)
 
-        let replacementProperties = makeFlatStyleSections(
-            marginValue: "4px",
-            marginText: "margin: 4px;"
-        )[0].style.cssProperties
-        sections[0].style.cssProperties = replacementProperties
-
+        load(nodeStyles, with: makeFlatMatchedStyles(selector: ".content"))
         let update = coordinator.updateSelectedNodeStyles(nodeStyles)
 
-        #expect(update.applyMode == .reloadData)
-        #expect(update.placeholderMode == .none)
+        #expect(update.applyMode == .none)
+        #expect(update.snapshot == nil)
+        #expect(update.updatedSectionIDs == [sectionID])
+        #expect(coordinator.section(for: sectionID)?.title == ".content")
     }
 
     @Test
     func coordinatorRevealsHiddenUnusedVariablesWithAnimatedSnapshot() throws {
         let coordinator = DOMElementStyleSnapshotCoordinator()
-        let sections = makeStyleSections(inheritedOrdinal: 0)
-        let nodeStyles = makeNodeStyles(sections: sections)
+        let nodeStyles = makeStyles()
+        load(nodeStyles, with: makeVariablesMatchedStyles())
         coordinator.bindSelectedNodeStyles(nodeStyles)
 
         let initialSnapshot = try loadedSnapshot(from: coordinator.updateSelectedNodeStyles(nodeStyles))
         #expect(initialSnapshot.itemIdentifiers.containsHiddenUnusedVariables(count: 1))
         #expect(containsVisibleProperty(named: "--unused-a", in: initialSnapshot, coordinator: coordinator) == false)
 
-        let inheritedSection = try #require(sections.first { $0.kind == .inheritedRule(ancestorIndex: 0) })
+        let inheritedSection = try #require(
+            nodeStyles.sections.first { $0.kind == .inheritedRule(ancestorIndex: 0) }
+        )
         let revealedUpdate = try #require(coordinator.revealHiddenUnusedVariables(in: inheritedSection.id))
 
         #expect(revealedUpdate.applyMode == .diff(animated: true))
@@ -185,16 +274,23 @@ struct DOMElementStyleSnapshotCoordinatorTests {
     @Test
     func coordinatorPrunesExpandedUnusedVariableSectionsAfterSectionRefresh() throws {
         let coordinator = DOMElementStyleSnapshotCoordinator()
-        let oldSections = makeStyleSections(inheritedOrdinal: 0, unusedVariableName: "--unused-a")
-        let nodeStyles = makeNodeStyles(sections: oldSections)
+        let nodeStyles = makeStyles()
+        load(
+            nodeStyles,
+            with: makeVariablesMatchedStyles(inheritedAncestorIndex: 0, unusedVariableName: "--unused-a")
+        )
         coordinator.bindSelectedNodeStyles(nodeStyles)
         _ = coordinator.updateSelectedNodeStyles(nodeStyles)
 
-        let oldInheritedSection = try #require(oldSections.first { $0.kind == .inheritedRule(ancestorIndex: 0) })
+        let oldInheritedSection = try #require(
+            nodeStyles.sections.first { $0.kind == .inheritedRule(ancestorIndex: 0) }
+        )
         _ = try #require(coordinator.revealHiddenUnusedVariables(in: oldInheritedSection.id))
 
-        let newSections = makeStyleSections(inheritedOrdinal: 1, unusedVariableName: "--unused-b")
-        nodeStyles.sections = newSections
+        load(
+            nodeStyles,
+            with: makeVariablesMatchedStyles(inheritedAncestorIndex: 1, unusedVariableName: "--unused-b")
+        )
         let refreshedUpdate = coordinator.updateSelectedNodeStyles(nodeStyles)
         let refreshedSnapshot = try loadedSnapshot(from: refreshedUpdate)
 
@@ -209,7 +305,7 @@ struct DOMElementStyleSnapshotCoordinatorTests {
     private func loadedSnapshot(
         from update: DOMElementStyleSnapshotCoordinator.SnapshotUpdate
     ) throws -> NSDiffableDataSourceSnapshot<
-        CSSStyle.Section.ID,
+        CSSStyleSection.ID,
         DOMElementStylePresentationItemIdentifier
     > {
         try #require(update.snapshot)
@@ -218,7 +314,7 @@ struct DOMElementStyleSnapshotCoordinatorTests {
     private func containsVisibleProperty(
         named name: String,
         in snapshot: NSDiffableDataSourceSnapshot<
-            CSSStyle.Section.ID,
+            CSSStyleSection.ID,
             DOMElementStylePresentationItemIdentifier
         >,
         coordinator: DOMElementStyleSnapshotCoordinator
@@ -232,144 +328,117 @@ struct DOMElementStyleSnapshotCoordinatorTests {
         }
     }
 
-    private func makeNodeStyles(
-        nodeLocalID: Int = 1,
-        sections: [CSSStyle.Section],
-        phase: CSSNodeStyles.Phase = .loaded
-    ) -> CSSNodeStyles {
-        let identity = makeIdentity(nodeLocalID: nodeLocalID)
-        return CSSNodeStyles(
-            id: CSSNodeStyles.ID(
-                nodeID: identity.nodeID,
-                targetID: identity.targetID,
-                documentID: identity.documentID,
-                protocolNodeID: .init(nodeLocalID)
-            ),
-            phase: phase,
-            sections: sections
+    private func makeStyles(nodeID: String = "node-1") -> CSSStyles {
+        CSSStyles(
+            nodeID: DOMNode.ID(DOM.Node.ID(nodeID)),
+            modelContext: modelContext
         )
     }
 
-    private func makeFlatStyleSections(
-        nodeLocalID: Int = 1,
+    private func load(_ styles: CSSStyles, with matchedStyles: CSS.MatchedStyles) {
+        styles.load(
+            matchedStyles: matchedStyles,
+            inlineStyles: CSS.InlineStyles(),
+            computedProperties: []
+        )
+    }
+
+    private func makeFlatMatchedStyles(
         selector: String = "body",
         marginValue: String = "0",
-        marginText: String = "margin: 0;"
-    ) -> [CSSStyle.Section] {
-        let nodeID = makeIdentity(nodeLocalID: nodeLocalID).nodeID
-        let styleSheetID = CSSStyleSheet.ID("flat-styles")
-        let styleID = CSSStyle.ID(styleSheetID: styleSheetID, ordinal: 0)
-
-        return [
-            CSSStyle.Section(
-                id: CSSStyle.Section.ID(nodeID: nodeID, kind: .rule, ordinal: 0),
-                kind: .rule,
-                title: selector,
-                style: CSSStyle(
-                    id: styleID,
-                    cssProperties: [
-                        property(
-                            id: CSSProperty.ID(styleID: styleID, propertyIndex: 0),
-                            name: "margin",
-                            value: marginValue,
-                            text: marginText
-                        ),
-                        property(
-                            id: CSSProperty.ID(styleID: styleID, propertyIndex: 1),
-                            name: "padding",
-                            value: "8px",
-                            text: "padding: 8px;"
-                        ),
-                    ]
-                ),
-                isEditable: true
-            ),
-        ]
-    }
-
-    private func makeStyleSections(
-        nodeLocalID: Int = 1,
-        inheritedOrdinal: Int,
-        unusedVariableName: String = "--unused-a"
-    ) -> [CSSStyle.Section] {
-        let nodeID = makeIdentity(nodeLocalID: nodeLocalID).nodeID
-        let styleSheetID = CSSStyleSheet.ID("styles")
-
-        let ruleStyleID = CSSStyle.ID(styleSheetID: styleSheetID, ordinal: 0)
-        let inheritedStyleID = CSSStyle.ID(styleSheetID: styleSheetID, ordinal: inheritedOrdinal + 1)
-
-        return [
-            CSSStyle.Section(
-                id: CSSStyle.Section.ID(nodeID: nodeID, kind: .rule, ordinal: 0),
-                kind: .rule,
-                title: "body",
-                style: CSSStyle(
-                    id: ruleStyleID,
-                    cssProperties: [
-                        property(
-                            id: CSSProperty.ID(styleID: ruleStyleID, propertyIndex: 0),
-                            name: "color",
-                            value: "var(--used)",
-                            text: "color: var(--used);"
-                        ),
-                    ]
-                ),
-                isEditable: true
-            ),
-            CSSStyle.Section(
-                id: CSSStyle.Section.ID(
-                    nodeID: nodeID,
-                    kind: .inheritedRule(ancestorIndex: inheritedOrdinal),
-                    ordinal: inheritedOrdinal
-                ),
-                kind: .inheritedRule(ancestorIndex: inheritedOrdinal),
-                title: ":root",
-                style: CSSStyle(
-                    id: inheritedStyleID,
-                    cssProperties: [
-                        property(
-                            id: CSSProperty.ID(styleID: inheritedStyleID, propertyIndex: 0),
-                            name: "--used",
-                            value: "#111",
-                            text: "--used: #111;"
-                        ),
-                        property(
-                            id: CSSProperty.ID(styleID: inheritedStyleID, propertyIndex: 1),
-                            name: unusedVariableName,
-                            value: "red",
-                            text: "\(unusedVariableName): red;"
-                        ),
-                    ]
-                ),
-                isEditable: true
-            ),
-        ]
-    }
-
-    private func makeIdentity(
-        nodeLocalID: Int
-    ) -> (
-        targetID: ProtocolTarget.ID,
-        documentID: DOMDocument.ID,
-        nodeID: DOMNode.ID
-    ) {
-        let targetID = ProtocolTarget.ID("page-main")
-        let documentID = DOMDocument.ID(
-            targetID: targetID,
-            localDocumentLifetimeID: .init(1)
+        marginText: String = "margin: 0;",
+        styleIDSuffix: String = "flat"
+    ) -> CSS.MatchedStyles {
+        let styleID = "style-\(styleIDSuffix)"
+        let style = CSS.Style(
+            id: CSS.Style.ID(styleID),
+            properties: [
+                property(id: "\(styleID):0", name: "margin", value: marginValue, text: marginText),
+                property(id: "\(styleID):1", name: "padding", value: "8px", text: "padding: 8px;"),
+            ],
+            cssText: "\(marginText)\npadding: 8px;",
+            isEditable: true
         )
-        let nodeID = DOMNode.ID(documentID: documentID, nodeID: .init(nodeLocalID))
-        return (targetID, documentID, nodeID)
+        return CSS.MatchedStyles(matchedRules: [
+            CSS.Rule(
+                id: CSS.Rule.ID("rule-\(styleIDSuffix)"),
+                selectorList: CSS.Rule.SelectorList(selectors: [selector], text: selector),
+                origin: CSS.Origin(rawValue: "author"),
+                style: style
+            ),
+        ])
+    }
+
+    private func makeVariablesMatchedStyles(
+        inheritedAncestorIndex: Int = 0,
+        unusedVariableName: String = "--unused-a"
+    ) -> CSS.MatchedStyles {
+        let bodyStyle = CSS.Style(
+            id: CSS.Style.ID("style-variables-body"),
+            properties: [
+                property(
+                    id: "style-variables-body:0",
+                    name: "color",
+                    value: "var(--used)",
+                    text: "color: var(--used);"
+                ),
+            ],
+            cssText: "color: var(--used);",
+            isEditable: true
+        )
+        let rootStyle = CSS.Style(
+            id: CSS.Style.ID("style-variables-root"),
+            properties: [
+                property(
+                    id: "style-variables-root:0",
+                    name: "--used",
+                    value: "#111",
+                    text: "--used: #111;"
+                ),
+                property(
+                    id: "style-variables-root:1",
+                    name: unusedVariableName,
+                    value: "red",
+                    text: "\(unusedVariableName): red;"
+                ),
+            ],
+            cssText: "--used: #111;\n\(unusedVariableName): red;",
+            isEditable: true
+        )
+        let inheritedEntries = Array(
+            repeating: CSS.MatchedStyles.InheritedEntry(),
+            count: inheritedAncestorIndex
+        ) + [
+            CSS.MatchedStyles.InheritedEntry(matchedRules: [
+                CSS.Rule(
+                    id: CSS.Rule.ID("rule-variables-root"),
+                    selectorList: CSS.Rule.SelectorList(selectors: [":root"], text: ":root"),
+                    origin: CSS.Origin(rawValue: "author"),
+                    style: rootStyle
+                ),
+            ]),
+        ]
+        return CSS.MatchedStyles(
+            matchedRules: [
+                CSS.Rule(
+                    id: CSS.Rule.ID("rule-variables-body"),
+                    selectorList: CSS.Rule.SelectorList(selectors: ["body"], text: "body"),
+                    origin: CSS.Origin(rawValue: "author"),
+                    style: bodyStyle
+                ),
+            ],
+            inherited: inheritedEntries
+        )
     }
 
     private func property(
-        id: CSSProperty.ID,
+        id: String,
         name: String,
         value: String,
         text: String
-    ) -> CSSProperty {
-        CSSProperty(
-            id: id,
+    ) -> CSS.Property {
+        CSS.Property(
+            id: CSS.Property.ID(id),
             name: name,
             value: value,
             text: text,
