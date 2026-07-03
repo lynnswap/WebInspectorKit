@@ -22,6 +22,11 @@ DTO field lists, consumer contract tests, and worker boundaries.
 - DOM ordered row projection is a DataKit contract via `DOMTreeController`.
 - `WebInspectorSession` remains the UIKit facade and compatibility owner;
   custom tabs continue to receive `WebInspectorSession`.
+- `WKWebView`, `isInspectable`, native bridge attach/send/detach, and private
+  WebKit controller calls stay behind a small `@MainActor` boundary. MainActor
+  detachment is downstream-only: transport actors, event stream consumption,
+  JSON decode, target multiplexing, and domain mutation preparation move off
+  main before final `@Observable` model apply.
 
 ## Gate Checklist
 
@@ -33,6 +38,7 @@ Implementation can be delegated only after these rows are complete.
 | G2 | Every typed Proxy event has exactly one DataKit destination or an explicit no-op owner | Partially implemented; current DOM/CSS/Network/Console/Runtime DataKit subset is bound, while detached roots, shadow/pseudo nodes, Inspector alias, Target, and Page remain explicit scope items |
 | G3 | Story A/A2/B/C contract-test package shape is defined with validation commands | Implemented as standalone `ContractTests/` package over public products; Story B custom tabs compile against `WebInspectorSession`, while direct `session.modelContext` access remains a public API gap |
 | G4 | Worker branches are split by owner boundary and write set, with no overlapping primary files | Drafted below |
+| G5 | MainActor detachment owner map is fixed before stream/runtime refactors | Drafted below; native WebKit boundary remains `@MainActor`, while `DomainEventPump` and domain decode are the first downstream owners to move off main |
 
 ## Event Coverage Table
 
@@ -61,7 +67,7 @@ Each row must resolve to one of:
 | Network | `requestWillBeSent` | `applyRequestWillBeSent` inserts/updates request and redirect hop | Network coordinator | `NetworkRequest.url/method/requestHeaders/resourceType/state`, `requestSentTimestamp`, `redirects` | Implemented in DataKit shell |
 | Network | `responseReceived` | `applyResponseReceived` updates response, body placeholders, state | Network coordinator | `NetworkRequest.status/mimeType/responseHeaders/responseBody/state`, `responseReceivedTimestamp` | Implemented in DataKit shell |
 | Network | `dataReceived` | Updates decoded/encoded byte counts and last-data timestamp | Network coordinator | `NetworkRequest.decodedDataLength`, `NetworkRequest.encodedDataLength`, `lastDataReceivedTimestamp` | Implemented in DataKit shell |
-| Network | `loadingFinished`, `loadingFailed` | Updates final state, metrics/sourceMapURL/timestamp, active-close data | Network coordinator | `NetworkRequest.state`, body availability/failure, `finishedOrFailedTimestamp`; metrics/sourceMapURL need a ProxyKit DTO expansion before binding | Implemented current ProxyKit subset |
+| Network | `loadingFinished`, `loadingFailed` | Updates final state, metrics/sourceMapURL/timestamp, active-close data | Network coordinator | `NetworkRequest.state`, body availability/failure, `finishedOrFailedTimestamp`, `sourceMapURL`, `metrics`; terminal metric totals overwrite accumulated decoded/encoded byte counts | Implemented current DataKit/ProxyKit subset |
 | Network | `requestServedFromMemoryCache` | Upserts cached request/response and finished state | Network coordinator | `NetworkRequest.status/mimeType/responseHeaders/state/responseBody`, request/response/finish timestamps; cached body size/type/source map need a ProxyKit DTO expansion before binding | Implemented current ProxyKit subset |
 | Network | WebSocket family | Created/handshake/frame/error/closed mutate websocket state and frames | Network/WebSocket coordinator | `NetworkRequest.webSocket`, `WebSocketState.readyState`, frames, handshake request/response, lifecycle timestamps | Implemented in DataKit shell |
 | Console | `messageAdded` | Registers runtime objects in `.console`, then applies message | Console + Runtime coordinator | `ConsoleMessage.*`, `RuntimeObject` parameters, `networkRequestID` cross-link | Implemented in DataKit shell |
@@ -69,8 +75,10 @@ Each row must resolve to one of:
 | Console | `messagesCleared` | Clears console and releases `.console` runtime object group | Console + Runtime coordinator | Fetched console results clear; console-owned `RuntimeObject` invalidation; `Runtime.releaseObjectGroup(.console)` | Implemented in DataKit shell |
 | Runtime | `executionContextCreated` | Runtime and DOM target graph record context | Runtime + target graph coordinator | `RuntimeContext`, `executionContexts`, `selectedContext`, frame/context mapping | Implemented in DataKit shell |
 | Runtime | `executionContextDestroyed`, `executionContextsCleared` | Current code removes contexts/remote objects/default/selected context | Runtime coordinator | `RuntimeContext` removal, runtime object invalidation, selected context fallback | Implemented in DataKit shell |
-| Page | `frameNavigated`, `frameDetached`, `loadEventFired`, `domContentEventFired` | No current Page dispatcher registered | Unknown | Unknown | Keep out of initial public surface or measure Page protocol before binding |
-| Target | `targetCreated`, `targetDestroyed`, `didCommitProvisionalTarget` | Target graph/document/selection updates; `AttachedInspection` retargets Runtime/Console/Network | Proxy target registry + DataKit private coordinators | `WebViewTargetChange`, frame projection, console retarget, runtime object/context cleanup, network retarget | Draft |
+| Page | `frameNavigated`, `frameDetached` | No current Page dispatcher registered; WebKit treats these as frame/resource-tree signals, not a standalone initial consumer story | `WebViewModelContext` private frame projection coordinator when a frame/resource-tree story lands | Private coordinator; no public `Page.Event`/`Page.Frame` in the initial surface | Deferred |
+| Page | `loadEventFired`, `domContentEventFired` | No current Page dispatcher registered; current consumer stories do not observe page lifecycle milestones | None in initial DataKit; future Timeline/Page owner if a story reaches lifecycle milestones | Intentional no-op in the initial public surface | Deferred no-op |
+| Target | `targetCreated`, `targetDestroyed` | `TransportSession` already owns route records and target lifecycle; public consumers need semantic targets, not raw route IDs | Proxy target registry + `WebViewModelContext` target lifecycle coordinator | Private coordinator; optional semantic `WebViewTargetChange` only after a consumer story requires it | Required private contract; no raw target-route event surface |
+| Target | `didCommitProvisionalTarget` | Provisional commit swaps hidden route IDs while `currentPage` must keep semantic identity | Proxy target registry owns route swap; DataKit retarget coordinator owns DOM/CSS invalidation, Runtime cleanup, Console order, and Network ownership | Private coordinator preserving stable `currentPage` identity and preventing request/context ID collisions | Required private contract |
 
 Event-coverage notes:
 
@@ -78,8 +86,8 @@ Event-coverage notes:
   `mediaQueryResultChanged`, and `nodeLayoutFlagsChanged` as refresh invalidation
   events; do not expose a fake style ID.
 - Page events: current implementation has no Page dispatcher. Initial public
-  surface should either keep Page command-only or add Page event support as a
-  measured scope expansion.
+  surface keeps Page command-only. Frame/lifecycle projection requires a
+  measured consumer story and a private coordinator first.
 
 ## DTO Field Lists
 
@@ -98,7 +106,7 @@ wire passthrough trivia stay package unless a consumer story reaches them.
 | `Runtime.ExecutionContext` / `RuntimeContext` | `RuntimeExecutionContext.Payload`, `RuntimeContext.Record` | `id`, `name`, `frameID`, `kind/type`; keep target/runtime-agent IDs package | `Runtime.ContextKind`, `FrameID` | `Sources/WebInspectorCoreRuntime/Runtime/RuntimeProtocol.swift`; `Sources/WebInspectorTransport/RuntimeContextTypes.swift` | Draft |
 | `Network.Request` | `NetworkRequest.Payload` | `id`, `url`, `method`, `headers`, `postData`, `referrerPolicy`, `integrity` | `Network.Request.ID`, `Network.ReferrerPolicy` | `Sources/WebInspectorCoreConsoleNetwork/Network/NetworkProtocol.swift` | Draft |
 | `Network.Response` | `NetworkRequest.Response.Payload` | `url`, `status`, `statusText`, `headers`, `mimeType`, `source`, `requestHeaders`; keep timing/security package unless DataKit detail explicitly exposes summaries | `Network.Source` | `Sources/WebInspectorCoreConsoleNetwork/Network/NetworkProtocol.swift` | Draft |
-| `NetworkRequest` | `NetworkRequest` | 05 minimum plus request/response/data/finish timestamps, decoded/encoded length, and memory-cache response/status binding are implemented from current ProxyKit events. `documentURL`, `sourceMapURL`, cached body size/type, `responseSource`, metrics, and initiator require W2 DTO/event expansion before binding. | `Network.ResourceType`, `NetworkBody`, `RedirectHop`, `WebSocketState` | `Sources/WebInspectorCoreConsoleNetwork/Network/NetworkModel.swift`; `Sources/WebViewDataKit/NetworkRequest.swift` | Partially implemented |
+| `NetworkRequest` | `NetworkRequest` | 05 minimum plus request/response/data/finish timestamps, decoded/encoded length, loading-finished `sourceMapURL`/metrics, and memory-cache response/status binding are implemented from current ProxyKit events. `documentURL`, cached body size/type, `responseSource`, and initiator require W2 DTO/event expansion before binding. | `Network.ResourceType`, `NetworkBody`, `RedirectHop`, `WebSocketState` | `Sources/WebInspectorCoreConsoleNetwork/Network/NetworkModel.swift`; `Sources/WebViewDataKit/NetworkRequest.swift` | Partially implemented |
 | `RedirectHop` | `NetworkRequest.RedirectHop` | `request`, `response`, `timestamp`; add opaque `id` only if DataKit identity needs it | `Network.Request`, `Network.Response` | `Sources/WebInspectorCoreConsoleNetwork/Network/NetworkModel.swift` | Draft |
 | `WebSocketState.Frame` | `NetworkRequest.WebSocket.FrameEntry`, `FramePayload` | `direction`, `timestamp`, `opcode`, `mask`, `payloadData`, `payloadLength`, `errorMessage?` | `WebSocketState.ReadyState`, `WebSocketState.Frame.Direction` | `Sources/WebInspectorCoreConsoleNetwork/Network/NetworkModel.swift`; `Sources/WebInspectorCoreConsoleNetwork/Network/NetworkProtocol.swift` | Draft |
 | `NetworkBody` | `NetworkBody`, `NetworkBody.Payload` | `role`, `kind`, `phase`, `text/full`, `size`, `isBase64Encoded`, `isTruncated`, `sourceSyntaxKind`, `textRepresentation`, `textRepresentationSyntaxKind` | `NetworkBody.Role`, `NetworkBody.Kind`, `NetworkBody.SyntaxKind`, `NetworkBody.Phase` | `Sources/WebInspectorCoreConsoleNetwork/Network/NetworkBody.swift` | Draft |
@@ -169,6 +177,38 @@ too. The production call site to change is session creation in
 `Monocly/Monocly/Controllers/BrowserRootViewController+UIKit.swift`, while the
 sheet/window presentation and attach/detach lifecycle keep sharing the same
 `WebInspectorSession`.
+
+## MainActor Detachment Gate
+
+The invariant is not "make the inspector non-main." The invariant is that
+WebKit-owned page and inspector controller state remains main-thread-owned, and
+only downstream transport/runtime/domain work detaches from `MainActor`.
+
+Owner map:
+
+| Boundary | Owner | Isolation target | Notes |
+| --- | --- | --- | --- |
+| Native page handle | `NativeInspectablePage`, `NativeInspectorBackend`, `WebInspectorNativeBridge` | `@MainActor` | Owns `WKWebView`, `isInspectable`, reload, attach/send/detach, and private controller calls. Do not use `@unchecked Sendable`, `@preconcurrency`, or `nonisolated(unsafe)` to bypass this boundary. |
+| Raw transport, replies, target routes, event ordering | `TransportSession` | actor | Already owns command IDs, reply table, target registry, provisional route messages, runtime context registry, and ordered protocol event streams. |
+| Domain stream consumption | `DomainEventPump` | detached stream consumer plus MainActor applied-sequence tracker | First detachment slice. Consume `AsyncStream<ProtocolEvent>` off main and hop only the apply step to the caller's isolation. Preserve `waitUntilApplied(_:)` semantics by advancing the applied sequence only after apply returns. |
+| Domain decode and mutation preparation | Per-domain dispatcher/runtime processor | non-main | Second slice. Decode `ProtocolEvent.paramsData` with `decodeAsync` where payloads can be large, classify into `Sendable` domain mutations, then apply mutations on the model owner. |
+| Semantic model apply | `AttachedInspection` / `WebViewModelContext` | `@MainActor` for current UI-facing models | Keep final `@Observable` mutations on main until a larger `InspectorRuntime` actor owns state and emits snapshots/mutations. |
+| UIKit render | `WebInspectorSession` and UI modules | `@MainActor` | Public UIKit facade stays main actor owned. |
+
+Implementation slices:
+
+| Slice | Scope | Primary write set | Validation |
+| --- | --- | --- | --- |
+| M1 — off-main protocol event pump | Move only `DomainEventPump` stream consumption out of `@MainActor`; keep the pump API and applied-sequence waiters on `MainActor`, and use a detached consumer so the task cannot inherit main-actor execution | `Sources/WebInspectorCoreSupport/DomainEventPump.swift`; `Sources/WebInspectorCore/AttachedInspection.swift`; focused core tests | `swift test --filter WebInspectorCoreTests`; `swift test --filter WebInspectorTransportTests` |
+| M2 — two-phase domain dispatch | Split dispatch into off-main decode/mutation creation and main-owner apply; keep existing dispatchers as main-owner appliers at first, and start with Network because response-body command decode already uses `decodeAsync` | `Sources/WebInspectorCoreSupport/ProtocolDomain+Dispatching.swift`; per-domain `*ProtocolDispatching.swift`; focused domain tests | Core/domain tests plus large-payload decode tests |
+| M3 — DataKit typed event pump | Replace `WebViewModelContext.subscribe(to:)` inherited-main tasks with a CodexKit-style pump that consumes `WebViewTarget.*.events` off main and hops only `apply` to `WebViewModelContext` | `Sources/WebViewDataKit/WebViewModelContext.swift`; possible small support type under `Sources/WebViewDataKit` | `swift test --filter WebViewDataKitTests`; contract tests |
+| M4 — runtime actor extraction | Introduce an `InspectorRuntime` actor that owns connection lifecycle, bootstrap, target tasks, command channel, and emits semantic mutations/snapshots | New runtime/core support files; `AttachedInspection`; UI facade integration | Full package and workspace validation |
+
+M1 must not change the native bridge or make `WKWebView` sendable. M2 must not
+invent fallback target/page state; target identity remains owned by
+`TransportSession` and WebKit protocol events. M4 is intentionally later: doing
+it before M1/M2 would create a broad wrapper around state that is still being
+mutated and decoded on `MainActor`.
 
 ## W3 DataKit Preflight
 
