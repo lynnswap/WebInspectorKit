@@ -1415,10 +1415,13 @@ final class ConsoleTabViewController: UIViewController {
 ```
 
 Current contract: custom tabs keep receiving `WebInspectorSession`, and the
-UIKit factory shape is externally stable. Direct DataKit context access from a
-custom tab is not M3/M4 public surface; W4 must add a deliberate session-level
-accessor or command facade, with contract tests, before the README Console tab
-becomes a runtime DataKit consumer.
+UIKit factory shape is externally stable. Runtime DataKit access from a custom
+tab is **not** M3/M4 public surface. W4 may expose a session-level DataKit
+handoff only as part of the UIKit cutover where built-in tabs and custom tabs
+read the same `WebInspectorContainer` / `WebInspectorContext`. Adding
+`session.modelContext`, `session.context`, or a command facade while the built-in
+UI still reads `AttachedInspection` / `InspectorSession` is explicitly banned:
+it creates two semantic model graphs for one inspected page.
 
 ### Story C — drop-in UIKit (external contract preserved)
 
@@ -1435,7 +1438,9 @@ tab selection, page user-interface style, and the optional
 `WebInspectorViewController(session:)`, `WebInspectorViewController.attach(to:)`,
 and `WebInspectorTab`'s existing `(WebInspectorSession) -> UIViewController`
 factory shape are preserved (F-07). A public DataKit handoff for custom tabs is
-a W4 contract item, not an implicit field leak from the session. A
+a W4 cutover item, not an implicit field leak from the session. It becomes
+public only after `WebInspectorSession.attach(to:)` installs the single DataKit
+inspection graph that also powers the built-in DOM/Network UI. A
 `WebInspectorViewController(webView:)` convenience can be added, but it must not
 replace the session-based contract.
 
@@ -1444,19 +1449,37 @@ replace the session-based contract.
 ## 7. Where the existing UIKit UI sits
 
 `WebInspectorKit` (the product) becomes a **consumer of `WebInspectorDataKit`**
-in W4. Until that migration lands, it remains the UIKit compatibility owner over
-the legacy internal UI/Core targets, while the new DataKit contract is proven by
-`ContractTests` and package tests.
+in W4. The legacy internal UI/Core path has no long-term owner; it is migration
+evidence and characterization coverage only. W4 must not publish any UIKit
+DataKit accessor while that legacy path is still the built-in UI's semantic
+source of truth.
+
+W4 cutover invariant:
+
+- `WebInspectorSession` owns exactly one semantic inspection graph for an
+  attached page: a `WebInspectorContainer` and its MainActor
+  `WebInspectorContext`.
+- Built-in DOM/Network UI and app-provided tabs read that same context. No tab
+  receives a second context, a raw proxy, or a legacy Core session as a public
+  data source.
+- Native attachment composes one `NativeInspectorConnection` /
+  `TransportSession` for the page. W4 must not attach legacy Core and
+  ProxyKit/DataKit separately to the same `WKWebView`.
+- `AttachedInspection`, `InspectorSession`, and `WebInspectorCore*` may remain
+  only as migration scaffolding behind package boundaries while their consumers
+  are being replaced. They cannot coexist with a public DataKit handoff as an
+  alternate source of truth.
 
 - Its view controllers render from the context-owned `@Observable` models and
   drive lists from `WebInspectorFetchedResults.items` and
   `WebInspectorFetchedResultsController.snapshot` / `transactions`. DOM views
   use `DOMTreeController.snapshot` / `transactions` for semantic tree
   invalidation, then keep expansion and row projection in the UI layer.
-- Today's `WebInspectorUI*` internal targets fold in (F-03 `@_exported`
-  deletions carry over); `WebInspectorNativeAttachment.swift` and the
-  `@_disfavoredOverload` attach decoys are deleted (F-04) — attach now goes
-  through `WebInspectorSession.attach(to:)` creating a `WebInspectorContainer`.
+- W4 folds or rewires today's `WebInspectorUI*` internal targets as needed
+  (F-03 `@_exported` deletions carry over). `WebInspectorNativeAttachment.swift`
+  and the `@_disfavoredOverload` attach decoys are deleted or reduced to a thin
+  session call-through only after `WebInspectorSession.attach(to:)` creates the
+  single `WebInspectorContainer`.
 - The UI keeps whatever internal render-diff optimization it needs, but that is
   now **behind the UI boundary**, not a data-kit contract.
 
