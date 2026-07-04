@@ -73,6 +73,7 @@ public final class WebInspectorContext {
     private var currentPageRetargetTask: Task<Void, Never>?
     private var documentReloadTask: Task<Void, Never>?
     private var inspectResolutionTask: Task<Void, Never>?
+    private var inspectedNodeHighlightTask: Task<Void, Never>?
     private var styleRefreshTask: Task<Void, Never>?
     private var styleRefreshGeneration: Int
     private var isStyleHydrationActive: Bool
@@ -121,6 +122,7 @@ public final class WebInspectorContext {
         currentPageRetargetTask = nil
         documentReloadTask = nil
         inspectResolutionTask = nil
+        inspectedNodeHighlightTask = nil
         styleRefreshTask = nil
         styleRefreshGeneration = 0
         isStyleHydrationActive = false
@@ -171,6 +173,7 @@ public final class WebInspectorContext {
         currentPageRetargetTask?.cancel()
         documentReloadTask?.cancel()
         inspectResolutionTask?.cancel()
+        inspectedNodeHighlightTask?.cancel()
         styleRefreshTask?.cancel()
         for task in styleToggleTasks.values {
             task.cancel()
@@ -261,6 +264,8 @@ public final class WebInspectorContext {
         pendingInspectedNodeID = nil
         inspectResolutionTask?.cancel()
         inspectResolutionTask = nil
+        inspectedNodeHighlightTask?.cancel()
+        inspectedNodeHighlightTask = nil
         selectedNode = node
         notifyDOMTreeSelectionChanged(node, isolation: isolation)
         notifyStatusChanged()
@@ -800,6 +805,8 @@ public final class WebInspectorContext {
         documentReloadTask = nil
         inspectResolutionTask?.cancel()
         inspectResolutionTask = nil
+        inspectedNodeHighlightTask?.cancel()
+        inspectedNodeHighlightTask = nil
         styleRefreshTask?.cancel()
         styleRefreshTask = nil
         styleRefreshGeneration += 1
@@ -1494,7 +1501,7 @@ extension WebInspectorContext {
             pendingInspectedNodeID = nil
             inspectResolutionTask?.cancel()
             inspectResolutionTask = nil
-            select(node, isolation: isolation)
+            selectInspectedNode(node, isolation: isolation)
         case .detachedRoot,
              .shadowRootPushed,
              .shadowRootPopped,
@@ -1558,6 +1565,8 @@ extension WebInspectorContext {
         styleRefreshTask?.cancel()
         styleRefreshTask = nil
         styleRefreshGeneration += 1
+        inspectedNodeHighlightTask?.cancel()
+        inspectedNodeHighlightTask = nil
         rootNode = nil
         selectedNode = nil
         isElementPickerEnabled = false
@@ -1784,7 +1793,38 @@ extension WebInspectorContext {
         self.pendingInspectedNodeID = nil
         inspectResolutionTask?.cancel()
         inspectResolutionTask = nil
-        select(inspectedNode, isolation: isolation)
+        selectInspectedNode(inspectedNode, isolation: isolation)
+    }
+
+    private func selectInspectedNode(_ node: DOMNode, isolation: isolated (any Actor)) {
+        select(node, isolation: isolation)
+        restoreElementPickerHighlight(for: node, isolation: isolation)
+    }
+
+    private func restoreElementPickerHighlight(for node: DOMNode, isolation: isolated (any Actor)) {
+        guard let currentPage else {
+            skipEvent("DOM.inspect highlight restore ignored: no current page target")
+            return
+        }
+        let generation = domDocumentGeneration
+        let nodeID = node.id.proxyID
+        inspectedNodeHighlightTask?.cancel()
+        // Web Inspector clears the picker overlay after inspect. On touch devices
+        // WebInspectorKit keeps the picked node highlighted so the tap target remains visible.
+        inspectedNodeHighlightTask = Task { [weak self, currentPage, generation, nodeID] in
+            _ = isolation
+            do {
+                guard Task.isCancelled == false,
+                      self?.isDOMDocumentGeneration(generation, isolation: isolation) == true else {
+                    return
+                }
+                try await currentPage.dom.highlightNode(nodeID)
+            } catch is CancellationError {
+                return
+            } catch {
+                self?.failIfTerminal(error, operation: "DOM.highlightNode after inspect")
+            }
+        }
     }
 }
 

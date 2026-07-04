@@ -958,6 +958,42 @@ struct DOMContainerTests {
     }
 
     @Test
+    func navigationDOMRedoClearsWhenUndoManagerRegistersAnotherAction() async throws {
+        let fixture = try await makeLiveDOMContext()
+        let input = try #require(fixture.context.node(for: DOMNode.ID(DOM.Node.ID("input"))))
+        fixture.context.select(input)
+        let undoManager = UndoManager()
+        undoManager.groupsByEvent = false
+        let navigationItems = DOMNavigationItems(context: fixture.context)
+
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "removeNode")
+        await navigationItems.deleteSelectedNodeForTesting(undoManager: undoManager)
+
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "undo")
+        undoManager.undo()
+        _ = await recordedDOMCommands(on: fixture.runtime.backend, method: "undo", count: 1)
+        let didEnableRedo = await waitUntil {
+            navigationItems.canRedoForTesting(undoManager: undoManager)
+        }
+        #expect(didEnableRedo)
+
+        let marker = UndoRegistrationMarker()
+        undoManager.beginUndoGrouping()
+        undoManager.registerUndo(withTarget: marker) { _ in }
+        undoManager.endUndoGrouping()
+        let didClearRedo = await waitUntil {
+            !navigationItems.canRedoForTesting(undoManager: undoManager)
+        }
+        #expect(didClearRedo)
+
+        navigationItems.redoForTesting(undoManager: undoManager)
+        await Task.yield()
+
+        let commands = await fixture.runtime.backend.recordedCommands()
+        #expect(commands.domMutationUndoMethods == ["removeNode", "undo"])
+    }
+
+    @Test
     func navigationRedoDoesNotRegisterUndoWhenBackendRedoFails() async throws {
         let fixture = try await makeLiveDOMContext()
         let input = try #require(fixture.context.node(for: DOMNode.ID(DOM.Node.ID("input"))))
@@ -1774,4 +1810,6 @@ private extension Array where Element == RecordedCommand {
         .map(\.method)
     }
 }
+
+private final class UndoRegistrationMarker: NSObject {}
 #endif

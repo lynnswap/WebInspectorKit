@@ -272,6 +272,7 @@ func domCommandsDispatchThroughDataKitContext() async throws {
     #expect(context.isElementPickerEnabled)
 
     await enqueueCSSStyleReplies(on: runtime.backend)
+    await runtime.backend.enqueue((), for: "DOM", method: "highlightNode")
     await runtime.backend.emit(.inspect(childID), target: target)
     try await waitUntil { context.selectedNode === child }
     try await waitUntil { child.elementStyles?.phase == .loaded }
@@ -325,9 +326,17 @@ func domInspectSelectsKnownNodeAndLoadsStyles() async throws {
     let element = try await waitForChild(in: context)
 
     await enqueueCSSStyleReplies(on: runtime.backend)
+    await runtime.backend.enqueue((), for: "DOM", method: "highlightNode")
     await runtime.backend.emit(.inspect(elementID), target: target)
 
     try await waitUntil { context.selectedNode === element }
+    try await waitUntil {
+        await runtime.backend.recordedCommands().contains { command in
+            command.domain == "DOM"
+                && command.method == "highlightNode"
+                && command.payload.cast(as: DOM.HighlightNodePayload.self)?.id == elementID
+        }
+    }
     let styles = try #require(element.elementStyles)
     try await waitUntil { styles.phase == .loaded }
     #expect(styles.sections.map(\.title) == [".card"])
@@ -356,6 +365,7 @@ func domInspectRequestsSubtreeBeforeSelectingUnresolvedNode() async throws {
 
     await runtime.backend.enqueue((), for: "DOM", method: "requestChildNodes")
     await enqueueCSSStyleReplies(on: runtime.backend)
+    await runtime.backend.enqueue((), for: "DOM", method: "highlightNode")
     await runtime.backend.emit(.inspect(elementID), target: target)
     try await waitUntil {
         await runtime.backend.recordedCommands().contains(
@@ -379,6 +389,13 @@ func domInspectRequestsSubtreeBeforeSelectingUnresolvedNode() async throws {
     )
 
     try await waitUntil { context.selectedNode?.id == DOMNode.ID(elementID) }
+    try await waitUntil {
+        await runtime.backend.recordedCommands().contains { command in
+            command.domain == "DOM"
+                && command.method == "highlightNode"
+                && command.payload.cast(as: DOM.HighlightNodePayload.self)?.id == elementID
+        }
+    }
     #expect(context.state == .attached)
     #expect(context.node(for: DOMNode.ID(staleID)) == nil)
     let selected = try #require(context.selectedNode)
@@ -411,6 +428,7 @@ func domInspectBeforeDocumentArrivesRequestsSubtreeAfterRootApplies() async thro
 
     await runtime.backend.emit(.inspect(elementID), target: target)
     await runtime.backend.enqueue((), for: "DOM", method: "requestChildNodes")
+    await runtime.backend.enqueue((), for: "DOM", method: "highlightNode")
     await enqueueCSSStyleReplies(on: runtime.backend)
     await gate.open()
 
@@ -435,6 +453,13 @@ func domInspectBeforeDocumentArrivesRequestsSubtreeAfterRootApplies() async thro
     )
 
     try await waitUntil { context.selectedNode?.id == DOMNode.ID(elementID) }
+    try await waitUntil {
+        await runtime.backend.recordedCommands().contains { command in
+            command.domain == "DOM"
+                && command.method == "highlightNode"
+                && command.payload.cast(as: DOM.HighlightNodePayload.self)?.id == elementID
+        }
+    }
     let selected = try #require(context.selectedNode)
     let styles = try #require(selected.elementStyles)
     try await waitUntil { styles.phase == .loaded }

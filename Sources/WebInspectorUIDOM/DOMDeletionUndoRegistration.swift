@@ -90,16 +90,18 @@ private final class DOMUndoCommandTarget: NSObject {
         guard let undoManager else {
             return
         }
-        let createsGroup = undoManager.groupingLevel == 0
-        if createsGroup {
-            undoManager.beginUndoGrouping()
-        }
-        undoManager.registerUndo(withTarget: self) { target in
-            handler(target)
-        }
-        undoManager.setActionName(actionName)
-        if createsGroup {
-            undoManager.endUndoGrouping()
+        undoManager.domUndoCommandTargetStore.registerInternalUndoAction {
+            let createsGroup = undoManager.groupingLevel == 0
+            if createsGroup {
+                undoManager.beginUndoGrouping()
+            }
+            undoManager.registerUndo(withTarget: self) { target in
+                handler(target)
+            }
+            undoManager.setActionName(actionName)
+            if createsGroup {
+                undoManager.endUndoGrouping()
+            }
         }
     }
 
@@ -120,10 +122,40 @@ private final class DOMUndoCommandTarget: NSObject {
     }
 }
 
+private final class DOMUndoGroupCloseObserver {
+    private let observer: NSObjectProtocol
+
+    init(undoManager: UndoManager, onGroupClosed: @escaping @MainActor @Sendable () -> Void) {
+        observer = NotificationCenter.default.addObserver(
+            forName: Notification.Name.NSUndoManagerDidCloseUndoGroup,
+            object: undoManager,
+            queue: nil
+        ) { _ in
+            Task { @MainActor in
+                onGroupClosed()
+            }
+        }
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(observer)
+    }
+}
+
 @MainActor
 private final class DOMUndoCommandTargetStore {
+    private weak var undoManager: UndoManager?
+    private var groupCloseObserver: DOMUndoGroupCloseObserver?
     private var retainedTargets: [DOMUndoCommandTarget] = []
     private var redoTargets: [DOMUndoCommandTarget] = []
+    private var internalUndoRegistrationDepth = 0
+
+    init(undoManager: UndoManager) {
+        self.undoManager = undoManager
+        groupCloseObserver = DOMUndoGroupCloseObserver(undoManager: undoManager) { [weak self] in
+            self?.clearRedoTargetsIfExternalUndoGroupClosed()
+        }
+    }
 
     var canRedo: Bool {
         !redoTargets.isEmpty
@@ -152,6 +184,25 @@ private final class DOMUndoCommandTargetStore {
         target.redo()
     }
 
+    func registerInternalUndoAction(_ body: () -> Void) {
+        internalUndoRegistrationDepth += 1
+        defer {
+            internalUndoRegistrationDepth -= 1
+        }
+        body()
+    }
+
+    private func clearRedoTargetsIfExternalUndoGroupClosed() {
+        // UndoManager.canRedo also posts checkpoints, so mirror native redo
+        // invalidation from group-close notifications instead.
+        guard internalUndoRegistrationDepth == 0,
+              undoManager?.isUndoing != true,
+              undoManager?.isRedoing != true else {
+            return
+        }
+        clearRedoTargets()
+    }
+
     func clearRedoTargets() {
         let staleRedoTargets = redoTargets
         redoTargets.removeAll(keepingCapacity: true)
@@ -169,7 +220,7 @@ private enum DOMUndoCommandTargetStores {
         if let store = stores.object(forKey: undoManager) {
             return store
         }
-        let store = DOMUndoCommandTargetStore()
+        let store = DOMUndoCommandTargetStore(undoManager: undoManager)
         stores.setObject(store, forKey: undoManager)
         return store
     }
