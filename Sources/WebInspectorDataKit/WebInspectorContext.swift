@@ -185,6 +185,7 @@ public final class WebInspectorContext {
     public func start(isolation: isolated (any Actor) = #isolation) {
         requireOwner(isolation)
         let previousStartupTask = startupTask
+        let previousCurrentPageLifecycleTask = currentPageRetargetTask
         previousStartupTask?.cancel()
         state = .attaching
         notifyStatusChanged()
@@ -192,6 +193,7 @@ public final class WebInspectorContext {
         startupTask = Task { [weak self, previousStartupTask] in
             _ = isolation
             await previousStartupTask?.value
+            await previousCurrentPageLifecycleTask?.value
             guard Task.isCancelled == false else {
                 return
             }
@@ -1322,8 +1324,9 @@ extension WebInspectorContext {
             applyCurrentPageTargetCommit(commit, isolation: isolation)
         case let .frameNavigated(frame):
             applyCurrentPageFrameNavigated(frame, isolation: isolation)
-        case .targetDestroyed,
-             .frameDetached,
+        case let .targetDestroyed(targetID):
+            applyCurrentPageTargetDestroyed(targetID, isolation: isolation)
+        case .frameDetached,
              .unknown:
             break
         }
@@ -1438,6 +1441,58 @@ extension WebInspectorContext {
             return
         }
         reloadDocument(isolation: isolation)
+    }
+
+    private func applyCurrentPageTargetDestroyed(
+        _ targetID: WebInspectorTarget.ID,
+        isolation: isolated (any Actor)
+    ) {
+        guard targetID == .currentPage else {
+            return
+        }
+        guard let target = currentPage else {
+            skipEvent("Target.targetDestroyed ignored: no current page target")
+            return
+        }
+
+        startupTask?.cancel()
+        startupTask = nil
+        currentPageRetargetTask?.cancel()
+        documentReloadTask?.cancel()
+        documentReloadTask = nil
+        for task in styleToggleTasks.values {
+            task.cancel()
+        }
+        styleToggleTasks = [:]
+        consoleObjectGroupReleaseTask?.cancel()
+        consoleObjectGroupReleaseTask = nil
+        stopEventPumps()
+        currentPage = nil
+        runtimeTrackingTarget = nil
+        networkTrackingTarget = nil
+        consoleTrackingTarget = nil
+        let generation = advanceCurrentPageGeneration(isolation: isolation)
+        advanceDOMDocumentGeneration(isolation: isolation)
+        resetCurrentPageLifecycleModels(isolation: isolation)
+        transition(to: .detached)
+
+        currentPageRetargetTask = Task { [weak self, target, generation] in
+            _ = isolation
+            await self?.invalidateDestroyedCurrentPage(target, generation: generation, isolation: isolation)
+        }
+    }
+
+    private func invalidateDestroyedCurrentPage(
+        _ target: WebInspectorTarget,
+        generation: Int,
+        isolation: isolated (any Actor)
+    ) async {
+        defer {
+            if isCurrentPageGeneration(generation, isolation: isolation) {
+                currentPageRetargetTask = nil
+            }
+        }
+        await domainEnablement.invalidate([.runtime, .network, .console], on: target)
     }
 }
 
