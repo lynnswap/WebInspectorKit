@@ -488,9 +488,14 @@ func transportBackedCurrentPageRouteFollowsCommittedMainPageTarget() async throw
 func transportBackendDeliversCurrentPageTargetCommitLifecycleAfterRetarget() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
-    await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-old"))
+    await installPageTarget(
+        in: transport,
+        targetID: ProtocolTarget.ID("page-old"),
+        frameID: nil
+    )
     let proxy = try await WebInspectorProxy(transport: transport)
     let target = try await proxy.waitForCurrentPage()
+    #expect(target.frameID == nil)
 
     let eventTask = Task<WebInspectorTargetLifecycleEvent?, Never> {
         var iterator = target.lifecycleEvents.makeAsyncIterator()
@@ -503,8 +508,10 @@ func transportBackendDeliversCurrentPageTargetCommitLifecycleAfterRetarget() asy
     }
 
     await waitForEventSubscription(target, domain: .target)
-    await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-new","type":"page","isProvisional":true}}}"#
+    await installPageTarget(
+        in: transport,
+        targetID: ProtocolTarget.ID("page-new"),
+        frameID: "new-main-frame"
     )
     await transport.receiveRootMessage(
         #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-old","newTargetId":"page-new"}}"#
@@ -521,8 +528,11 @@ func transportBackendDeliversCurrentPageTargetCommitLifecycleAfterRetarget() asy
         Issue.record("Expected committed target to remain a page.")
         return
     }
-    #expect(commit.newTarget.frameID == FrameID("main-frame"))
+    #expect(commit.newTarget.frameID == FrameID("new-main-frame"))
     #expect(commit.newTarget.isProvisional == false)
+    let cachedTarget = try await proxy.waitForCurrentPage()
+    #expect(cachedTarget.frameID == FrameID("new-main-frame"))
+    #expect(cachedTarget.isProvisional == false)
     #expect(await transport.snapshot().currentMainPageTargetID == ProtocolTarget.ID("page-new"))
 }
 
@@ -1031,11 +1041,15 @@ private func pageTarget(proxy: WebInspectorProxy) -> WebInspectorTarget {
 
 private func installPageTarget(
     in transport: TransportSession,
-    targetID: ProtocolTarget.ID = ProtocolTarget.ID("page-main")
+    targetID: ProtocolTarget.ID = ProtocolTarget.ID("page-main"),
+    frameID: String? = "main-frame"
 ) async {
     let targetID = jsonEscapedString(targetID.rawValue)
+    let frameIDField = frameID.map {
+        #","frameId":"\#(jsonEscapedString($0))""#
+    } ?? ""
     await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"\#(targetID)","type":"page","frameId":"main-frame","isProvisional":false}}}"#
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"\#(targetID)","type":"page"\#(frameIDField),"isProvisional":false}}}"#
     )
 }
 

@@ -445,6 +445,8 @@ public actor WebInspectorProxy {
 
     private func applyTargetLifecycleEventToProxyState(_ event: WebInspectorTargetLifecycleEvent) {
         switch event {
+        case let .didCommitProvisionalTarget(commit) where commit.newTarget.id == .currentPage:
+            pageTarget = currentPageTarget(from: commit.newTarget)
         case let .targetDestroyed(targetID) where targetID == .currentPage:
             pageTarget = nil
         default:
@@ -501,6 +503,17 @@ public actor WebInspectorProxy {
             kind: kind,
             frameID: record.frameID.map { FrameID($0.rawValue) },
             isProvisional: record.isProvisional,
+            proxy: self,
+            route: .currentPage
+        )
+    }
+
+    private func currentPageTarget(from target: WebInspectorLifecycleTarget) -> WebInspectorTarget {
+        WebInspectorTarget(
+            id: target.id,
+            kind: target.kind,
+            frameID: target.frameID,
+            isProvisional: target.isProvisional,
             proxy: self,
             route: .currentPage
         )
