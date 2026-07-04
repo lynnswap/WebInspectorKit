@@ -152,6 +152,10 @@ public actor WebInspectorTestBackend {
         emit(.runtime(event), target: target.id, route: target.route, domain: .runtime)
     }
 
+    package func emit(_ event: WebInspectorTargetLifecycleEvent, target: WebInspectorTarget) async {
+        emit(.targetLifecycle(event), target: target.id, route: target.route, domain: lifecycleDomain(for: event))
+    }
+
     public func recordedCommands() async -> [RecordedCommand] {
         commands
     }
@@ -296,6 +300,17 @@ public actor WebInspectorTestBackend {
             }
         }
         subscriberWaiters = unresolved
+    }
+}
+
+private func lifecycleDomain(for event: WebInspectorTargetLifecycleEvent) -> WebInspectorProxyEventDomain {
+    switch event {
+    case .didCommitProvisionalTarget, .targetDestroyed:
+        .target
+    case .frameNavigated, .frameDetached:
+        .page
+    case .unknown:
+        .target
     }
 }
 

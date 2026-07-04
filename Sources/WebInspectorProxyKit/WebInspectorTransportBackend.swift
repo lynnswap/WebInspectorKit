@@ -55,7 +55,12 @@ package struct WebInspectorTransportBackend: WebInspectorProxyBackend {
                         continue
                     }
                     do {
-                        continuation.yield(try WebInspectorTransportEventDecoder.proxyEvent(from: event, targetID: targetID))
+                        let lifecycleTarget = await lifecycleTarget(for: event, route: route, targetID: targetID)
+                        continuation.yield(try WebInspectorTransportEventDecoder.proxyEvent(
+                            from: event,
+                            targetID: targetID,
+                            lifecycleTarget: lifecycleTarget
+                        ))
                     } catch {
                         preconditionFailure("Failed to decode \(event.method): \(error)")
                     }
@@ -102,6 +107,12 @@ package struct WebInspectorTransportBackend: WebInspectorProxyBackend {
             return snapshot.currentMainPageTargetID?.rawValue == rawValue
         case .currentPage:
             let snapshot = await transport.snapshot()
+            if event.domain == .target,
+               event.method == "Target.targetDestroyed",
+               snapshot.currentMainPageTargetID == nil,
+               event.targetID != nil {
+                return true
+            }
             guard let currentMainPageTargetID = snapshot.currentMainPageTargetID else {
                 return false
             }
@@ -111,10 +122,44 @@ package struct WebInspectorTransportBackend: WebInspectorProxyBackend {
             return targetID == currentMainPageTargetID
         }
     }
+
+    private nonisolated func lifecycleTarget(
+        for event: ProtocolEvent,
+        route: RoutingTargetID,
+        targetID: WebInspectorTarget.ID
+    ) async -> WebInspectorLifecycleTarget? {
+        guard event.domain == .target,
+              event.method == "Target.didCommitProvisionalTarget",
+              let protocolTargetID = event.targetID else {
+            return nil
+        }
+        let snapshot = await transport.snapshot()
+        guard let record = snapshot.targetsByID[protocolTargetID] else {
+            return nil
+        }
+        return WebInspectorLifecycleTarget(
+            semanticID: semanticTargetID(for: route, targetID: targetID),
+            record: record
+        )
+    }
+
+    private nonisolated func semanticTargetID(
+        for route: RoutingTargetID,
+        targetID: WebInspectorTarget.ID
+    ) -> WebInspectorTarget.ID {
+        switch route.storage {
+        case .currentPage:
+            .currentPage
+        case .target:
+            targetID
+        }
+    }
 }
 
 private func protocolDomain(for domain: WebInspectorProxyEventDomain) -> ProtocolDomain {
     switch domain {
+    case .target:
+        .target
     case .dom:
         .dom
     case .inspector:
@@ -127,6 +172,8 @@ private func protocolDomain(for domain: WebInspectorProxyEventDomain) -> Protoco
         .console
     case .runtime:
         .runtime
+    case .page:
+        .page
     }
 }
 
@@ -463,6 +510,22 @@ private enum WebInspectorTransportCommandDecoder {
             let payload = try decode(CSSSetStyleTextResult.self, from: result.resultData)
             return payload.style.proxyStyle() as! Result
         }
+        if Result.self == Runtime.EvaluationResult.self {
+            let payload = try decode(RuntimeEvaluationResultPayload.self, from: result.resultData)
+            return payload.proxyResult as! Result
+        }
+        if Result.self == [Runtime.PropertyDescriptor].self {
+            let payload = try decode(RuntimePropertiesResultPayload.self, from: result.resultData)
+            return payload.proxyProperties as! Result
+        }
+        if Result.self == Runtime.ObjectPreview.self {
+            let payload = try decode(RuntimePreviewResultPayload.self, from: result.resultData)
+            return payload.preview.proxyPreview as! Result
+        }
+        if Result.self == [Runtime.CollectionEntry].self {
+            let payload = try decode(RuntimeCollectionEntriesResultPayload.self, from: result.resultData)
+            return payload.proxyEntries as! Result
+        }
 
         throw WebInspectorProxyError.commandFailed(
             domain: command.domain.rawValue,
@@ -534,6 +597,84 @@ private struct CSSComputedStyleResult: Decodable {
 
 private struct CSSSetStyleTextResult: Decodable {
     var style: CSSStylePayload
+}
+
+private struct RuntimeEvaluationResultPayload: Decodable {
+    var result: RuntimeRemoteObjectPayload
+    var wasThrown: Bool?
+    var savedResultIndex: Int?
+
+    var proxyResult: Runtime.EvaluationResult {
+        Runtime.EvaluationResult(
+            object: result.proxyObject,
+            wasThrown: wasThrown ?? false,
+            savedResultIndex: savedResultIndex
+        )
+    }
+}
+
+private struct RuntimePropertiesResultPayload: Decodable {
+    var properties: [RuntimePropertyDescriptorPayload]?
+
+    var proxyProperties: [Runtime.PropertyDescriptor] {
+        properties?.map(\.proxyProperty) ?? []
+    }
+}
+
+private struct RuntimePropertyDescriptorPayload: Decodable {
+    var name: String
+    var value: RuntimeRemoteObjectPayload?
+    var writable: Bool?
+    var get: RuntimeRemoteObjectPayload?
+    var set: RuntimeRemoteObjectPayload?
+    var wasThrown: Bool?
+    var configurable: Bool?
+    var enumerable: Bool?
+    var isOwn: Bool?
+    var symbol: RuntimeRemoteObjectPayload?
+    var isPrivate: Bool?
+    var nativeGetter: Bool?
+
+    var proxyProperty: Runtime.PropertyDescriptor {
+        Runtime.PropertyDescriptor(
+            name: name,
+            value: value?.proxyObject,
+            writable: writable,
+            get: get?.proxyObject,
+            set: set?.proxyObject,
+            wasThrown: wasThrown,
+            configurable: configurable,
+            enumerable: enumerable,
+            isOwn: isOwn,
+            symbol: symbol?.proxyObject,
+            isPrivate: isPrivate,
+            nativeGetter: nativeGetter
+        )
+    }
+}
+
+private struct RuntimePreviewResultPayload: Decodable {
+    var preview: ObjectPreviewPayload
+}
+
+private struct RuntimeCollectionEntriesResultPayload: Decodable {
+    var entries: [RuntimeCollectionEntryPayload]?
+
+    var proxyEntries: [Runtime.CollectionEntry] {
+        entries?.map(\.proxyEntry) ?? []
+    }
+}
+
+private struct RuntimeCollectionEntryPayload: Decodable {
+    var key: RuntimeRemoteObjectPayload?
+    var value: RuntimeRemoteObjectPayload
+
+    var proxyEntry: Runtime.CollectionEntry {
+        Runtime.CollectionEntry(
+            key: key?.proxyObject,
+            value: value.proxyObject
+        )
+    }
 }
 
 private struct CSSRuleMatchPayload: Decodable {

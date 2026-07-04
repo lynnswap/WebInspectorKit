@@ -2497,6 +2497,22 @@ extension DOMTreeTextView {
         localMarkupTextByNodeID(for: nodeIDs)
     }
 
+    func deleteRowFromMenuForTesting(containing text: String, undoManager: UndoManager?) async {
+        guard let row = rows.first(where: { $0.text.contains(text) }) else {
+            return
+        }
+        menuModel.configure(
+            nodeIDs: [row.nodeID],
+            selectedText: nil,
+            undoManager: undoManager,
+            localMarkupTextByNodeID: localMarkupTextByNodeID(for: [row.nodeID]),
+            clearLocalSelection: {}
+        )
+        if let task = menuModel.deleteSelection() {
+            await task.value
+        }
+    }
+
     private func rowSnapshot(for row: DOMTreeRowRenderPlan) -> RowSnapshot {
         let line = row.text as NSString
         return RowSnapshot(

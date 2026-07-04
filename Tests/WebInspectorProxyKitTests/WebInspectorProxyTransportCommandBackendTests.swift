@@ -397,6 +397,26 @@ func transportBackedProxyCloseDetachesTransportAndFinishesEventStreams() async t
 }
 
 @Test
+func transportBackedProxyWaitUntilClosedSuspendsUntilClose() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+
+    let waitTask = Task {
+        try await proxy.waitUntilClosed()
+    }
+
+    await proxy.waitForCloseWaiterForTesting()
+    #expect(await backend.isDetached() == false)
+
+    await proxy.close()
+
+    try await waitTask.value
+    #expect(await backend.isDetached())
+}
+
+@Test
 func transportBackedCurrentPageRouteFollowsCommittedMainPageTarget() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
@@ -436,6 +456,119 @@ func transportBackedCurrentPageRouteFollowsCommittedMainPageTarget() async throw
         result: "{}"
     )
     try await secondReloadTask.value
+}
+
+@Test
+func transportBackendDeliversCurrentPageTargetCommitLifecycleAfterRetarget() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-old"))
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+
+    let eventTask = Task<WebInspectorTargetLifecycleEvent?, Never> {
+        var iterator = target.lifecycleEvents.makeAsyncIterator()
+        while let event = await iterator.next() {
+            if case .didCommitProvisionalTarget = event {
+                return event
+            }
+        }
+        return nil
+    }
+
+    await waitForEventSubscription(target, domain: .target)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-new","type":"page","isProvisional":true}}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-old","newTargetId":"page-new"}}"#
+    )
+
+    let event = try #require(try await value(of: eventTask))
+    guard case let .didCommitProvisionalTarget(commit) = event else {
+        Issue.record("Expected Target.didCommitProvisionalTarget lifecycle event.")
+        return
+    }
+    #expect(commit.oldTargetID == WebInspectorTarget.ID.currentPage)
+    #expect(commit.newTarget.id == WebInspectorTarget.ID.currentPage)
+    guard case .page = commit.newTarget.kind else {
+        Issue.record("Expected committed target to remain a page.")
+        return
+    }
+    #expect(commit.newTarget.frameID == FrameID("main-frame"))
+    #expect(commit.newTarget.isProvisional == false)
+    #expect(await transport.snapshot().currentMainPageTargetID == ProtocolTarget.ID("page-new"))
+}
+
+@Test
+func transportBackendDeliversCurrentPageTargetDestroyedLifecycle() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-main"))
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+
+    let eventTask = Task {
+        var iterator = target.lifecycleEvents.makeAsyncIterator()
+        return await iterator.next()
+    }
+
+    await waitForEventSubscription(target, domain: .target)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetDestroyed","params":{"targetId":"page-main"}}"#
+    )
+
+    let event = try #require(try await value(of: eventTask))
+    guard case let .targetDestroyed(targetID) = event else {
+        Issue.record("Expected Target.targetDestroyed lifecycle event.")
+        return
+    }
+    #expect(targetID == .currentPage)
+    #expect(await transport.snapshot().currentMainPageTargetID == nil)
+}
+
+@Test
+func transportBackendDeliversCurrentPagePageFrameLifecycle() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-main"))
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+
+    let eventTask = Task {
+        var iterator = target.lifecycleEvents.makeAsyncIterator()
+        let first = await iterator.next()
+        let second = await iterator.next()
+        return [first, second].compactMap { $0 }
+    }
+
+    await waitForEventSubscription(target, domain: .page)
+    await transport.receiveRootMessage(
+        #"{"method":"Page.frameNavigated","params":{"frame":{"id":"main-frame","loaderId":"loader-1","name":"Main","url":"https://example.test/","securityOrigin":"https://example.test","mimeType":"text/html"}}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Page.frameDetached","params":{"frameId":"child-frame"}}"#
+    )
+
+    let events = try await value(of: eventTask)
+    #expect(events.count == 2)
+    guard case let .frameNavigated(frame) = events[0] else {
+        Issue.record("Expected Page.frameNavigated lifecycle event.")
+        return
+    }
+    #expect(frame.id == FrameID("main-frame"))
+    #expect(frame.parentID == nil)
+    #expect(frame.loaderID == "loader-1")
+    #expect(frame.name == "Main")
+    #expect(frame.url == "https://example.test/")
+    #expect(frame.securityOrigin == "https://example.test")
+    #expect(frame.mimeType == "text/html")
+
+    guard case let .frameDetached(frameID) = events[1] else {
+        Issue.record("Expected Page.frameDetached lifecycle event.")
+        return
+    }
+    #expect(frameID == FrameID("child-frame"))
 }
 
 @Test
@@ -749,6 +882,104 @@ func transportBackendRuntimeClearedUsesSemanticTargetID() async throws {
         return
     }
     #expect(target == WebInspectorTarget.ID("semantic-page"))
+}
+
+@Test
+func transportCommandBackendDecodesRuntimeEvaluationResult() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let target = pageTarget(proxy: WebInspectorProxy(backend: WebInspectorTransportBackend(transport: transport)))
+
+    let evaluateTask = Task {
+        try await target.runtime.evaluate("document.title", in: Runtime.ExecutionContext.ID("7"))
+    }
+
+    let sent = try await waitForTargetMessage(backend, method: "Runtime.evaluate")
+    #expect(sent.targetIdentifier == ProtocolTarget.ID("page-main"))
+    #expect(try messageMethod(sent.message) == "Runtime.evaluate")
+    let parameters = try messageParameters(sent.message)
+    #expect(parameters["expression"] as? String == "document.title")
+    #expect((parameters["contextId"] as? NSNumber)?.intValue == 7)
+
+    await receiveTargetReply(
+        transport,
+        targetID: sent.targetIdentifier,
+        messageID: try messageID(sent.message),
+        result: #"{"result":{"type":"string","value":"Title","description":"Title"},"wasThrown":true,"savedResultIndex":3}"#
+    )
+
+    let result = try await evaluateTask.value
+    #expect(result.object.kind == .string)
+    #expect(result.object.value == .string("Title"))
+    #expect(result.object.description == "Title")
+    #expect(result.wasThrown == true)
+    #expect(result.savedResultIndex == 3)
+}
+
+@Test
+func transportCommandBackendDecodesRuntimePropertiesPreviewAndCollectionEntries() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let target = pageTarget(proxy: WebInspectorProxy(backend: WebInspectorTransportBackend(transport: transport)))
+    let objectID = Runtime.RemoteObject.ID("object-1")
+
+    let propertiesTask = Task {
+        try await target.runtime.properties(of: objectID)
+    }
+    let propertiesCommand = try await waitForTargetMessage(backend, method: "Runtime.getProperties")
+    await receiveTargetReply(
+        transport,
+        targetID: propertiesCommand.targetIdentifier,
+        messageID: try messageID(propertiesCommand.message),
+        result: #"{"properties":[{"name":"answer","value":{"type":"number","value":42,"description":"42"},"writable":true,"isOwn":true}]}"#
+    )
+
+    let properties = try await propertiesTask.value
+    #expect(properties.count == 1)
+    #expect(properties[0].name == "answer")
+    #expect(properties[0].value?.kind == .number)
+    #expect(properties[0].value?.value == .number(42))
+    #expect(properties[0].writable == true)
+    #expect(properties[0].isOwn == true)
+
+    let previewTask = Task {
+        try await target.runtime.preview(of: objectID)
+    }
+    let previewCommand = try await waitForTargetMessage(backend, method: "Runtime.getPreview")
+    await receiveTargetReply(
+        transport,
+        targetID: previewCommand.targetIdentifier,
+        messageID: try messageID(previewCommand.message),
+        result: #"{"preview":{"type":"object","description":"Object","lossless":true,"overflow":false,"properties":[{"name":"answer","value":"42"}],"size":1}}"#
+    )
+
+    let preview = try await previewTask.value
+    #expect(preview.kind == .object)
+    #expect(preview.description == "Object")
+    #expect(preview.lossless == true)
+    #expect(preview.overflow == false)
+    #expect(preview.properties.first?.name == "answer")
+    #expect(preview.properties.first?.value == "42")
+    #expect(preview.size == 1)
+
+    let entriesTask = Task {
+        try await target.runtime.collectionEntries(of: objectID)
+    }
+    let entriesCommand = try await waitForTargetMessage(backend, method: "Runtime.getCollectionEntries")
+    await receiveTargetReply(
+        transport,
+        targetID: entriesCommand.targetIdentifier,
+        messageID: try messageID(entriesCommand.message),
+        result: #"{"entries":[{"key":{"type":"string","value":"key","description":"key"},"value":{"type":"object","objectId":"entry-value","description":"entry value"}}]}"#
+    )
+
+    let entries = try await entriesTask.value
+    #expect(entries.count == 1)
+    #expect(entries[0].key?.value == .string("key"))
+    #expect(entries[0].value.id == Runtime.RemoteObject.ID("entry-value"))
+    #expect(entries[0].value.description == "entry value")
 }
 
 private func pageTarget(proxy: WebInspectorProxy) -> WebInspectorTarget {

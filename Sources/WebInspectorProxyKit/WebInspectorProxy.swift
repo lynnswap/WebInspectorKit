@@ -25,6 +25,10 @@ public actor WebInspectorProxy {
     private let closeConnection: (@Sendable () async -> Void)?
     private var pageTarget: WebInspectorTarget?
     private var nextTargetOrdinal: UInt64
+    private var nextCloseWaiterID: UInt64
+    private var closeWaiters: [UInt64: CheckedContinuation<Void, any Error>]
+    private var closeWaiterRegistrationWaiters: [CheckedContinuation<Void, Never>]
+    private var cancelledCloseWaiterIDs: Set<UInt64>
     private var closed: Bool
 
     @MainActor
@@ -52,6 +56,10 @@ public actor WebInspectorProxy {
         }
         pageTarget = nil
         nextTargetOrdinal = 0
+        nextCloseWaiterID = 0
+        closeWaiters = [:]
+        closeWaiterRegistrationWaiters = []
+        cancelledCloseWaiterIDs = []
         closed = false
 
         do {
@@ -71,6 +79,10 @@ public actor WebInspectorProxy {
         closeConnection = nil
         pageTarget = nil
         nextTargetOrdinal = 0
+        nextCloseWaiterID = 0
+        closeWaiters = [:]
+        closeWaiterRegistrationWaiters = []
+        cancelledCloseWaiterIDs = []
         closed = false
     }
 
@@ -85,6 +97,10 @@ public actor WebInspectorProxy {
         }
         pageTarget = nil
         nextTargetOrdinal = 0
+        nextCloseWaiterID = 0
+        closeWaiters = [:]
+        closeWaiterRegistrationWaiters = []
+        cancelledCloseWaiterIDs = []
         closed = false
 
         do {
@@ -130,11 +146,23 @@ public actor WebInspectorProxy {
         closed = true
         pageTarget = nil
         await closeConnection?()
+        resumeCloseWaiters()
     }
 
     public func waitUntilClosed() async throws {
-        guard closed else {
-            throw WebInspectorProxyError.disconnected("WebInspectorProxyKit shell is not connected.")
+        guard closed == false else {
+            return
+        }
+        nextCloseWaiterID &+= 1
+        let waiterID = nextCloseWaiterID
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                registerCloseWaiter(id: waiterID, continuation: continuation)
+            }
+        } onCancel: {
+            Task {
+                await self.cancelCloseWaiter(waiterID)
+            }
         }
     }
 
@@ -157,6 +185,18 @@ public actor WebInspectorProxy {
             pageTarget = target
         }
         return target
+    }
+
+    package func waitForCloseWaiterForTesting() async {
+        guard closed == false else {
+            preconditionFailure("Cannot wait for a close waiter after WebInspectorProxy closed.")
+        }
+        guard closeWaiters.isEmpty else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            closeWaiterRegistrationWaiters.append(continuation)
+        }
     }
 
     package func dispatchCommand<Payload: Sendable, Result: Sendable>(
@@ -271,6 +311,36 @@ public actor WebInspectorProxy {
         }
     }
 
+    package nonisolated func targetLifecycleEvents(
+        targetID: WebInspectorTarget.ID,
+        route: RoutingTargetID
+    ) -> AsyncStream<WebInspectorTargetLifecycleEvent> {
+        guard let backend else {
+            preconditionFailure("WebInspectorProxy has no backend for lifecycle events.")
+        }
+        return AsyncStream<WebInspectorTargetLifecycleEvent> { continuation in
+            let task = Task {
+                await withTaskGroup(of: Void.self) { group in
+                    for domain in [WebInspectorProxyEventDomain.target, .page] {
+                        group.addTask {
+                            for await event in backend.events(route: route, targetID: targetID, domain: domain) {
+                                guard case let .targetLifecycle(value) = event else {
+                                    preconditionFailure("Backend emitted a mismatched event for lifecycle.")
+                                }
+                                continuation.yield(value)
+                            }
+                        }
+                    }
+                    await group.waitForAll()
+                    continuation.finish()
+                }
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
+        }
+    }
+
     package nonisolated func waitForEventSubscription(
         targetID: WebInspectorTarget.ID,
         route: RoutingTargetID,
@@ -344,6 +414,46 @@ public actor WebInspectorProxy {
         pageTarget = try currentPageTarget(from: record)
     }
 
+    private func registerCloseWaiter(id: UInt64, continuation: CheckedContinuation<Void, any Error>) {
+        guard closed == false else {
+            continuation.resume()
+            return
+        }
+        guard cancelledCloseWaiterIDs.remove(id) == nil else {
+            continuation.resume(throwing: CancellationError())
+            return
+        }
+        closeWaiters[id] = continuation
+        resumeCloseWaiterRegistrationWaiters()
+    }
+
+    private func cancelCloseWaiter(_ id: UInt64) {
+        guard let continuation = closeWaiters.removeValue(forKey: id) else {
+            if closed == false {
+                cancelledCloseWaiterIDs.insert(id)
+            }
+            return
+        }
+        continuation.resume(throwing: CancellationError())
+    }
+
+    private func resumeCloseWaiters() {
+        let waiters = closeWaiters.values
+        closeWaiters.removeAll()
+        cancelledCloseWaiterIDs.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
+    private func resumeCloseWaiterRegistrationWaiters() {
+        let waiters = closeWaiterRegistrationWaiters
+        closeWaiterRegistrationWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
     private func currentPageTarget(from record: ProtocolTarget.Record) throws -> WebInspectorTarget {
         guard let kind = WebInspectorTarget.Kind(protocolKind: record.kind) else {
             throw WebInspectorProxyError.disconnected("Current page target has unsupported kind.")
@@ -400,22 +510,5 @@ public actor WebInspectorProxy {
             }
         }
         return WebInspectorProxyError.attachFailed(String(describing: error))
-    }
-}
-
-private extension WebInspectorTarget.Kind {
-    init?(protocolKind: ProtocolTarget.Kind) {
-        switch protocolKind {
-        case .page:
-            self = .page
-        case .frame:
-            self = .frame
-        case .worker:
-            self = .worker
-        case .serviceWorker:
-            self = .serviceWorker
-        case .other:
-            return nil
-        }
     }
 }

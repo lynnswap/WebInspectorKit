@@ -44,16 +44,15 @@ package final class DOMTreeViewController: UIViewController {
                 }
                 return try? await context.copyText(kind, for: nodeID)
             },
-            deleteNodesAction: { [weak context] nodeIDs, _ in
+            deleteNodesAction: { [weak context] nodeIDs, undoManager in
                 guard let context else {
                     return false
                 }
-                do {
-                    try await context.delete(nodeIDs: nodeIDs)
-                    return true
-                } catch {
-                    return false
-                }
+                return await Self.deleteNodeIDs(
+                    nodeIDs,
+                    context: context,
+                    undoManager: undoManager
+                )
             }
         )
         super.init(nibName: nil, bundle: nil)
@@ -82,6 +81,25 @@ package final class DOMTreeViewController: UIViewController {
 
     private func applyBackgroundFromTraits() {
         treeView.backgroundColor = webInspectorBackgroundPolicy.backgroundColor
+    }
+
+    private static func deleteNodeIDs(
+        _ nodeIDs: [DOMNode.ID],
+        context: WebInspectorContext,
+        undoManager: UndoManager?
+    ) async -> Bool {
+        do {
+            let undoCommands = try context.domUndoRedoCommands()
+            try await context.delete(nodeIDs: nodeIDs)
+            DOMDeletionUndoRegistration.registerDeleteUndo(
+                on: undoManager,
+                commands: undoCommands,
+                deletedNodeCount: Set(nodeIDs).count
+            )
+            return true
+        } catch {
+            return false
+        }
     }
 
     override package func viewIsAppearing(_ animated: Bool) {

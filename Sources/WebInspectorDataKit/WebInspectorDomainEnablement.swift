@@ -129,6 +129,18 @@ actor WebInspectorDomainEnablementRegistry {
         }
     }
 
+    func invalidate(_ domains: some Sequence<WebInspectorEnabledDomain>, on target: WebInspectorTarget) {
+        for domain in domains {
+            let key = WebInspectorDomainEnablementKey(targetID: target.id, domain: domain)
+            if entries[key] != nil {
+                entries[key] = nil
+                WebInspectorDataKitLog.debug(
+                    "domain lease invalidated domain=\(domain.rawValue) target=\(target.id.rawValue)"
+                )
+            }
+        }
+    }
+
     private func finishEnabling(
         key: WebInspectorDomainEnablementKey,
         domain: WebInspectorEnabledDomain,

@@ -3,6 +3,7 @@ import Testing
 import WebInspectorTestSupport
 import WebInspectorTransport
 import WebInspectorProxyKit
+import WebInspectorProxyKitTesting
 import UIKit
 @testable import WebInspectorDataKit
 @testable import WebInspectorUIDOM
@@ -890,6 +891,188 @@ struct DOMContainerTests {
     }
 
     @Test
+    func navigationDeleteRegistersDOMUndoRedoAfterSuccessfulBackendDelete() async throws {
+        let fixture = try await makeLiveDOMContext()
+        let input = try #require(fixture.context.node(for: DOMNode.ID(DOM.Node.ID("input"))))
+        fixture.context.select(input)
+        let undoManager = UndoManager()
+        undoManager.groupsByEvent = false
+        let navigationItems = DOMNavigationItems(context: fixture.context)
+
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "removeNode")
+        await navigationItems.deleteSelectedNodeForTesting(undoManager: undoManager)
+
+        #expect(undoManager.canUndo)
+
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "undo")
+        undoManager.undo()
+        _ = await recordedDOMCommands(on: fixture.runtime.backend, method: "undo", count: 1)
+
+        let didEnableRedo = await waitUntil {
+            navigationItems.canRedoForTesting(undoManager: undoManager)
+        }
+        #expect(didEnableRedo)
+
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "redo")
+        navigationItems.redoForTesting(undoManager: undoManager)
+        _ = await recordedDOMCommands(on: fixture.runtime.backend, method: "redo", count: 1)
+
+        let commands = await fixture.runtime.backend.recordedCommands()
+        #expect(commands.domMutationUndoMethods == ["removeNode", "undo", "redo"])
+    }
+
+    @Test
+    func navigationDeleteDoesNotRegisterUndoWhenBackendDeleteFails() async throws {
+        let fixture = try await makeLiveDOMContext()
+        let input = try #require(fixture.context.node(for: DOMNode.ID(DOM.Node.ID("input"))))
+        fixture.context.select(input)
+        let undoManager = UndoManager()
+        undoManager.groupsByEvent = false
+        let navigationItems = DOMNavigationItems(context: fixture.context)
+
+        await navigationItems.deleteSelectedNodeForTesting(undoManager: undoManager)
+
+        let commands = await fixture.runtime.backend.recordedCommands()
+        #expect(commands.domMutationUndoMethods == ["removeNode"])
+        #expect(!undoManager.canUndo)
+    }
+
+    @Test
+    func navigationUndoDoesNotRegisterRedoWhenBackendUndoFails() async throws {
+        let fixture = try await makeLiveDOMContext()
+        let input = try #require(fixture.context.node(for: DOMNode.ID(DOM.Node.ID("input"))))
+        fixture.context.select(input)
+        let undoManager = UndoManager()
+        undoManager.groupsByEvent = false
+        let navigationItems = DOMNavigationItems(context: fixture.context)
+
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "removeNode")
+        await navigationItems.deleteSelectedNodeForTesting(undoManager: undoManager)
+
+        undoManager.undo()
+        _ = await recordedDOMCommands(on: fixture.runtime.backend, method: "undo", count: 1)
+
+        let commands = await fixture.runtime.backend.recordedCommands()
+        #expect(commands.domMutationUndoMethods == ["removeNode", "undo"])
+        #expect(!navigationItems.canRedoForTesting(undoManager: undoManager))
+    }
+
+    @Test
+    func navigationRedoDoesNotRegisterUndoWhenBackendRedoFails() async throws {
+        let fixture = try await makeLiveDOMContext()
+        let input = try #require(fixture.context.node(for: DOMNode.ID(DOM.Node.ID("input"))))
+        fixture.context.select(input)
+        let undoManager = UndoManager()
+        undoManager.groupsByEvent = false
+        let navigationItems = DOMNavigationItems(context: fixture.context)
+
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "removeNode")
+        await navigationItems.deleteSelectedNodeForTesting(undoManager: undoManager)
+
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "undo")
+        undoManager.undo()
+        _ = await recordedDOMCommands(on: fixture.runtime.backend, method: "undo", count: 1)
+        let didEnableRedo = await waitUntil {
+            navigationItems.canRedoForTesting(undoManager: undoManager)
+        }
+        #expect(didEnableRedo)
+
+        navigationItems.redoForTesting(undoManager: undoManager)
+        _ = await recordedDOMCommands(on: fixture.runtime.backend, method: "redo", count: 1)
+
+        let commands = await fixture.runtime.backend.recordedCommands()
+        #expect(commands.domMutationUndoMethods == ["removeNode", "undo", "redo"])
+        #expect(!undoManager.canUndo)
+    }
+
+    @Test
+    func treeMenuDeleteUsesControllerUndoManagerWiring() async throws {
+        let fixture = try await makeLiveDOMContext()
+        let undoManager = UndoManager()
+        undoManager.groupsByEvent = false
+        let navigationItems = DOMNavigationItems(context: fixture.context)
+        let viewController = DOMTreeViewController(context: fixture.context)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        let treeView = viewController.displayedDOMTreeTextViewForTesting
+        await treeView.waitForRowDocumentForTesting()
+
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "removeNode")
+        await treeView.deleteRowFromMenuForTesting(containing: "<input", undoManager: undoManager)
+
+        #expect(undoManager.canUndo)
+
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "undo")
+        undoManager.undo()
+        _ = await recordedDOMCommands(on: fixture.runtime.backend, method: "undo", count: 1)
+        let didEnableRedo = await waitUntil {
+            navigationItems.canRedoForTesting(undoManager: undoManager)
+        }
+        #expect(didEnableRedo)
+
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "redo")
+        navigationItems.redoForTesting(undoManager: undoManager)
+        _ = await recordedDOMCommands(on: fixture.runtime.backend, method: "redo", count: 1)
+
+        let commands = await fixture.runtime.backend.recordedCommands()
+        #expect(commands.domMutationUndoMethods == ["removeNode", "undo", "redo"])
+    }
+
+    @Test
+    func treeControllerPageHighlightCommandsFollowSelectionAndHoverPolicy() async throws {
+        let selectionFixture = try await makeLiveDOMContext()
+        let selectionViewController = DOMTreeViewController(context: selectionFixture.context)
+        let selectionWindow = showInWindow(selectionViewController)
+        defer { selectionWindow.isHidden = true }
+        let selectionTreeView = selectionViewController.displayedDOMTreeTextViewForTesting
+        await selectionTreeView.waitForRowDocumentForTesting()
+
+        await selectionFixture.runtime.backend.enqueue((), for: "DOM", method: "highlightNode")
+        selectionTreeView.primaryClickRowForTesting(containing: "<input")
+        _ = await recordedDOMCommands(on: selectionFixture.runtime.backend, method: "highlightNode", count: 1)
+        let selectionHighlightNodeIDs = await selectionFixture.runtime.backend.recordedCommands()
+            .filter { $0.domain == "DOM" && $0.method == "highlightNode" }
+            .compactMap { $0.payload.cast(as: DOM.HighlightNodePayload.self)?.id }
+        #expect(selectionHighlightNodeIDs.contains(DOM.Node.ID("input")))
+        #expect(selectionHighlightNodeIDs.last == DOM.Node.ID("input"))
+
+        let hoverFixture = try await makeLiveDOMContext()
+        let input = try #require(hoverFixture.context.node(for: DOMNode.ID(DOM.Node.ID("input"))))
+        hoverFixture.context.select(input)
+        let hoverViewController = DOMTreeViewController(context: hoverFixture.context)
+        let hoverWindow = showInWindow(hoverViewController)
+        defer { hoverWindow.isHidden = true }
+        let hoverTreeView = hoverViewController.displayedDOMTreeTextViewForTesting
+        await hoverTreeView.waitForRowDocumentForTesting()
+        let hoverBaselineCount = await hoverFixture.runtime.backend.recordedCommands()
+            .filter { $0.domain == "DOM" && $0.method == "highlightNode" }
+            .count
+
+        await hoverFixture.runtime.backend.enqueue((), for: "DOM", method: "highlightNode")
+        hoverTreeView.hoverRowForTesting(containing: "<body")
+        _ = await recordedDOMCommands(
+            on: hoverFixture.runtime.backend,
+            method: "highlightNode",
+            count: hoverBaselineCount + 1
+        )
+
+        await hoverFixture.runtime.backend.enqueue((), for: "DOM", method: "highlightNode")
+        hoverTreeView.endHoverForTesting()
+        _ = await recordedDOMCommands(
+            on: hoverFixture.runtime.backend,
+            method: "highlightNode",
+            count: hoverBaselineCount + 2
+        )
+
+        let highlightNodeIDs = await hoverFixture.runtime.backend.recordedCommands()
+            .filter { $0.domain == "DOM" && $0.method == "highlightNode" }
+            .compactMap { $0.payload.cast(as: DOM.HighlightNodePayload.self)?.id }
+        let hoverHighlightNodeIDs = Array(highlightNodeIDs.dropFirst(hoverBaselineCount))
+        #expect(hoverHighlightNodeIDs.contains(DOM.Node.ID("body")))
+        #expect(hoverHighlightNodeIDs.last == DOM.Node.ID("input"))
+    }
+
+    @Test
     func testBackendTargetMessageWaiterTimesOutWhenMethodIsMissing() async throws {
         let backend = RecordingTransportBackend()
         let timeout = ManualResponseTimeout()
@@ -973,6 +1156,78 @@ struct DOMContainerTests {
 
     private func makeWebInspectorContext() -> WebInspectorContext {
         WebInspectorContext.preview(isolation: MainActor.shared)
+    }
+
+    private struct LiveDOMContextFixture {
+        var runtime: WebInspectorProxyTestRuntime
+        var context: WebInspectorContext
+    }
+
+    private func makeLiveDOMContext(document: DOM.Node? = nil) async throws -> LiveDOMContextFixture {
+        let runtime = try await WebInspectorProxyTestRuntime.start()
+        let target = try await runtime.proxy.waitForCurrentPage()
+        await enqueueLiveStartupReplies(on: runtime.backend, document: document ?? documentNode())
+        let container = WebInspectorContainer(proxy: runtime.proxy)
+        let context = container.mainContext
+        try await waitForLiveStartupSubscribers(runtime: runtime, target: target)
+        let didAttach = await waitUntil { context.state == .attached }
+        try #require(didAttach)
+        return LiveDOMContextFixture(runtime: runtime, context: context)
+    }
+
+    private func enqueueLiveStartupReplies(on backend: WebInspectorTestBackend, document: DOM.Node) async {
+        await backend.enqueue((), for: "Runtime", method: "enable")
+        await backend.enqueue((), for: "Network", method: "enable")
+        await backend.enqueue(document, for: "DOM", method: "getDocument")
+        await backend.enqueue((), for: "Console", method: "enable")
+    }
+
+    private func waitForLiveStartupSubscribers(
+        runtime: WebInspectorProxyTestRuntime,
+        target: WebInspectorTarget
+    ) async throws {
+        try await runtime.backend.waitForSubscribers(domain: "DOM", target: target, count: 1)
+        try await runtime.backend.waitForSubscribers(domain: "Inspector", target: target, count: 1)
+        try await runtime.backend.waitForSubscribers(domain: "CSS", target: target, count: 1)
+        try await runtime.backend.waitForSubscribers(domain: "Network", target: target, count: 1)
+        try await runtime.backend.waitForSubscribers(domain: "Console", target: target, count: 1)
+        try await runtime.backend.waitForSubscribers(domain: "Runtime", target: target, count: 1)
+    }
+
+    private func waitUntil(
+        timeout: Duration = .seconds(1),
+        condition: @escaping @MainActor () -> Bool
+    ) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while clock.now < deadline {
+            if condition() {
+                return true
+            }
+            await Task.yield()
+        }
+        return condition()
+    }
+
+    private func recordedDOMCommands(
+        on backend: WebInspectorTestBackend,
+        method: String,
+        count: Int,
+        timeout: Duration = .seconds(1)
+    ) async -> [RecordedCommand] {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        var matches: [RecordedCommand] = []
+        while clock.now < deadline {
+            matches = await backend.recordedCommands()
+                .filter { $0.domain == "DOM" && $0.method == method }
+            if matches.count >= count {
+                return matches
+            }
+            await Task.yield()
+        }
+        return await backend.recordedCommands()
+            .filter { $0.domain == "DOM" && $0.method == method }
     }
 
     private func makeElementContext() -> WebInspectorContext {
@@ -1413,5 +1668,14 @@ struct DOMContainerTests {
     }
 
 }
+}
+
+private extension Array where Element == RecordedCommand {
+    var domMutationUndoMethods: [String] {
+        filter { command in
+            command.domain == "DOM" && ["removeNode", "undo", "redo"].contains(command.method)
+        }
+        .map(\.method)
+    }
 }
 #endif

@@ -101,14 +101,26 @@ package final class DOMNavigationItems: NSObject {
         return UIAction(
             title: String(localized: "redo", bundle: WebInspectorUILocalization.bundle),
             image: UIImage(systemName: "arrow.uturn.forward"),
-            attributes: undoManager?.canRedo == true ? [] : [.disabled]
+            attributes: canRedo(undoManager: undoManager) ? [] : [.disabled]
         ) { _ in
-            Task { @MainActor in
-                guard let undoManager = undoManagerProvider(), undoManager.canRedo else {
-                    return
-                }
-                undoManager.redo()
+            Task { @MainActor [weak self] in
+                self?.performRedo(undoManager: undoManagerProvider())
             }
+        }
+    }
+
+    private func canRedo(undoManager: UndoManager?) -> Bool {
+        undoManager?.canRedo == true || DOMDeletionUndoRegistration.canRedo(on: undoManager)
+    }
+
+    private func performRedo(undoManager: UndoManager?) {
+        guard let undoManager else {
+            return
+        }
+        if undoManager.canRedo {
+            undoManager.redo()
+        } else {
+            DOMDeletionUndoRegistration.redo(on: undoManager)
         }
     }
 
@@ -129,14 +141,29 @@ package final class DOMNavigationItems: NSObject {
             title: String(localized: "inspector.delete_node", bundle: WebInspectorUILocalization.bundle),
             image: UIImage(systemName: "trash"),
             attributes: context.status.selectedNodeID == nil ? [.disabled, .destructive] : [.destructive]
-        ) { [weak context] _ in
-            Task { @MainActor in
-                guard let selectedNode = context?.selectedNode else {
-                    return
-                }
-                _ = undoManagerProvider
-                try? await context?.delete(selectedNode)
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                await self?.deleteSelectedNodeFromNavigation(
+                    undoManager: undoManagerProvider()
+                )
             }
+        }
+    }
+
+    private func deleteSelectedNodeFromNavigation(undoManager: UndoManager?) async {
+        guard let selectedNode = context.selectedNode else {
+            return
+        }
+        do {
+            let undoCommands = try context.domUndoRedoCommands()
+            try await context.delete(selectedNode)
+            DOMDeletionUndoRegistration.registerDeleteUndo(
+                on: undoManager,
+                commands: undoCommands,
+                deletedNodeCount: 1
+            )
+        } catch {
+            return
         }
     }
 
@@ -182,6 +209,18 @@ extension DOMNavigationItems {
 
     var pickItemForTesting: UIBarButtonItem {
         pickItem
+    }
+
+    func deleteSelectedNodeForTesting(undoManager: UndoManager?) async {
+        await deleteSelectedNodeFromNavigation(undoManager: undoManager)
+    }
+
+    func canRedoForTesting(undoManager: UndoManager?) -> Bool {
+        canRedo(undoManager: undoManager)
+    }
+
+    func redoForTesting(undoManager: UndoManager?) {
+        performRedo(undoManager: undoManager)
     }
 }
 #endif

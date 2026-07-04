@@ -2,8 +2,14 @@ import Foundation
 import WebInspectorTransport
 
 enum WebInspectorTransportEventDecoder {
-    static func proxyEvent(from event: ProtocolEvent, targetID: WebInspectorTarget.ID) throws -> WebInspectorProxyEvent {
+    static func proxyEvent(
+        from event: ProtocolEvent,
+        targetID: WebInspectorTarget.ID,
+        lifecycleTarget: WebInspectorLifecycleTarget? = nil
+    ) throws -> WebInspectorProxyEvent {
         switch event.domain {
+        case .target:
+            return try .targetLifecycle(targetLifecycleEvent(from: event, targetID: targetID, target: lifecycleTarget))
         case .dom:
             return try .dom(domEvent(from: event))
         case .inspector:
@@ -16,8 +22,44 @@ enum WebInspectorTransportEventDecoder {
             return try .console(consoleEvent(from: event))
         case .runtime:
             return try .runtime(runtimeEvent(from: event, targetID: targetID))
-        case .target, .page, .storage, .other:
+        case .page:
+            return try .targetLifecycle(pageLifecycleEvent(from: event))
+        case .storage, .other:
             return .dom(.unknown(rawEvent(from: event)))
+        }
+    }
+
+    private static func targetLifecycleEvent(
+        from event: ProtocolEvent,
+        targetID: WebInspectorTarget.ID,
+        target: WebInspectorLifecycleTarget?
+    ) throws -> WebInspectorTargetLifecycleEvent {
+        switch event.method {
+        case "Target.didCommitProvisionalTarget":
+            let params = try decode(TargetCommittedParams.self, from: event)
+            let lifecycleTarget = try requireLifecycleTarget(target, for: event)
+            return .didCommitProvisionalTarget(WebInspectorTargetCommitLifecycle(
+                oldTargetID: params.oldTargetId.map { _ in targetID },
+                newTarget: lifecycleTarget
+            ))
+        case "Target.targetDestroyed":
+            _ = try decode(TargetDestroyedParams.self, from: event)
+            return .targetDestroyed(targetID: targetID)
+        default:
+            return .unknown(rawEvent(from: event))
+        }
+    }
+
+    private static func pageLifecycleEvent(from event: ProtocolEvent) throws -> WebInspectorTargetLifecycleEvent {
+        switch event.method {
+        case "Page.frameNavigated":
+            let params = try decode(PageFrameNavigatedParams.self, from: event)
+            return .frameNavigated(params.frame.proxyFrame)
+        case "Page.frameDetached":
+            let params = try decode(PageFrameDetachedParams.self, from: event)
+            return .frameDetached(frameID: FrameID(params.frameId))
+        default:
+            return .unknown(rawEvent(from: event))
         }
     }
 
@@ -239,8 +281,60 @@ enum WebInspectorTransportEventDecoder {
         RawEvent(domain: event.domain.description, method: shortMethodName(event.method), params: event.paramsData)
     }
 
+    private static func requireLifecycleTarget(
+        _ target: WebInspectorLifecycleTarget?,
+        for event: ProtocolEvent
+    ) throws -> WebInspectorLifecycleTarget {
+        if let target {
+            return target
+        }
+        throw DecodingError.dataCorrupted(.init(
+            codingPath: [],
+            debugDescription: "Missing lifecycle target for \(event.method)."
+        ))
+    }
+
     private static func shortMethodName(_ method: String) -> String {
         method.split(separator: ".", maxSplits: 1).last.map(String.init) ?? method
+    }
+}
+
+private struct TargetCommittedParams: Decodable {
+    var oldTargetId: String?
+    var newTargetId: String
+}
+
+private struct TargetDestroyedParams: Decodable {
+    var targetId: String
+}
+
+private struct PageFrameNavigatedParams: Decodable {
+    var frame: PageFramePayload
+}
+
+private struct PageFrameDetachedParams: Decodable {
+    var frameId: String
+}
+
+private struct PageFramePayload: Decodable {
+    var id: String
+    var parentId: String?
+    var loaderId: String?
+    var name: String?
+    var url: String
+    var securityOrigin: String?
+    var mimeType: String?
+
+    var proxyFrame: WebInspectorPageFrameLifecycle {
+        WebInspectorPageFrameLifecycle(
+            id: FrameID(id),
+            parentID: parentId.map(FrameID.init),
+            loaderID: loaderId,
+            name: name,
+            url: url,
+            securityOrigin: securityOrigin,
+            mimeType: mimeType
+        )
     }
 }
 
@@ -785,7 +879,7 @@ private struct ExecutionContextPayload: Decodable {
     }
 }
 
-private struct RuntimeRemoteObjectPayload: Decodable {
+struct RuntimeRemoteObjectPayload: Decodable {
     var objectId: String?
     var type: String
     var subtype: String?
@@ -809,7 +903,7 @@ private struct RuntimeRemoteObjectPayload: Decodable {
     }
 }
 
-private struct ObjectPreviewPayload: Decodable {
+struct ObjectPreviewPayload: Decodable {
     var type: String?
     var subtype: String?
     var description: String?
@@ -833,7 +927,7 @@ private struct ObjectPreviewPayload: Decodable {
     }
 }
 
-private struct PropertyPreviewPayload: Decodable {
+struct PropertyPreviewPayload: Decodable {
     var name: String
     var value: String?
 
@@ -842,7 +936,7 @@ private struct PropertyPreviewPayload: Decodable {
     }
 }
 
-private struct EntryPreviewPayload: Decodable {
+struct EntryPreviewPayload: Decodable {
     var key: RuntimeRemoteObjectPayload?
     var value: RuntimeRemoteObjectPayload?
 
@@ -851,7 +945,7 @@ private struct EntryPreviewPayload: Decodable {
     }
 }
 
-private indirect enum RuntimeJSONValuePayload: Decodable {
+indirect enum RuntimeJSONValuePayload: Decodable {
     case string(String)
     case number(Double)
     case bool(Bool)

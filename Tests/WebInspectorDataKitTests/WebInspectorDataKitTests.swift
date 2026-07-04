@@ -261,6 +261,12 @@ func domCommandsDispatchThroughDataKitContext() async throws {
     await runtime.backend.enqueue((), for: "DOM", method: "hideHighlight")
     try await context.hideHighlight()
 
+    await runtime.backend.enqueue((), for: "DOM", method: "undo")
+    try await context.undoDOMChange()
+
+    await runtime.backend.enqueue((), for: "DOM", method: "redo")
+    try await context.redoDOMChange()
+
     await runtime.backend.enqueue((), for: "DOM", method: "setInspectModeEnabled")
     try await context.setElementPickerEnabled(true)
     #expect(context.isElementPickerEnabled)
@@ -286,6 +292,9 @@ func domCommandsDispatchThroughDataKitContext() async throws {
 
     let highlight = try #require(commands.first { $0.domain == "DOM" && $0.method == "highlightNode" })
     #expect(highlight.payload.cast(as: DOM.HighlightNodePayload.self)?.id == childID)
+
+    #expect(commands.contains { $0.domain == "DOM" && $0.method == "undo" })
+    #expect(commands.contains { $0.domain == "DOM" && $0.method == "redo" })
 
     let inspectMode = try #require(commands.first { $0.domain == "DOM" && $0.method == "setInspectModeEnabled" })
     #expect(inspectMode.payload.cast(as: DOM.SetInspectModeEnabledPayload.self)?.enabled == true)
@@ -891,6 +900,235 @@ func transportBackedStartupCapturesRuntimeAndConsoleReplayBeforeEnableReplies() 
     #expect(context.rootNode?.id == DOMNode.ID(DOM.Node.ID("1")))
     #expect(context.selectedContext?.id == RuntimeContext.ID(Runtime.ExecutionContext.ID("11")))
     #expect(consoleResults.items.map(\.text) == ["replayed"])
+}
+
+@MainActor
+@Test
+func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
+    let oldTargetID = ProtocolTarget.ID("page-old")
+    let newTargetID = ProtocolTarget.ID("page-new")
+    let oldRootID = DOMNode.ID(DOM.Node.ID("old-root"))
+    let newRootID = DOMNode.ID(DOM.Node.ID("new-root"))
+    let oldRouteChildID = DOMNode.ID(DOM.Node.ID("old-route-child"))
+    let (backend, transport, context) = try await startTransportBackedContext(
+        targetID: oldTargetID,
+        documentID: "old-root"
+    )
+    let startupMessageCount = await backend.sentTargetMessages().count
+
+    #expect(context.state == .attached)
+    #expect(context.rootNode?.id == oldRootID)
+    #expect(context.node(for: oldRootID) != nil)
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-new","type":"page","frameId":"main-frame","isProvisional":true}}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-old","newTargetId":"page-new"}}"#
+    )
+
+    let runtimeEnable = try await waitForTransportTargetMessage(
+        backend,
+        method: "Runtime.enable",
+        after: startupMessageCount
+    )
+    #expect(runtimeEnable.targetIdentifier == newTargetID)
+    await receiveTransportTargetReply(
+        transport,
+        targetID: runtimeEnable.targetIdentifier,
+        messageID: try transportMessageID(runtimeEnable.message),
+        result: "{}"
+    )
+
+    let networkEnable = try await waitForTransportTargetMessage(
+        backend,
+        method: "Network.enable",
+        after: startupMessageCount
+    )
+    #expect(networkEnable.targetIdentifier == newTargetID)
+    await receiveTransportTargetReply(
+        transport,
+        targetID: networkEnable.targetIdentifier,
+        messageID: try transportMessageID(networkEnable.message),
+        result: "{}"
+    )
+
+    let getDocument = try await waitForTransportTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: startupMessageCount
+    )
+    #expect(getDocument.targetIdentifier == newTargetID)
+    await receiveTransportTargetReply(
+        transport,
+        targetID: getDocument.targetIdentifier,
+        messageID: try transportMessageID(getDocument.message),
+        result: transportDocumentResult(nodeID: "new-root")
+    )
+
+    let consoleEnable = try await waitForTransportTargetMessage(
+        backend,
+        method: "Console.enable",
+        after: startupMessageCount
+    )
+    #expect(consoleEnable.targetIdentifier == newTargetID)
+    await receiveTransportTargetReply(
+        transport,
+        targetID: consoleEnable.targetIdentifier,
+        messageID: try transportMessageID(consoleEnable.message),
+        result: "{}"
+    )
+
+    try await waitUntil { context.rootNode?.id == newRootID }
+    #expect(context.state == .attached)
+    #expect(context.node(for: oldRootID) == nil)
+    #expect(context.node(for: newRootID) != nil)
+
+    let sentMessages = await backend.sentTargetMessages()
+    let retargetMessages = Array(sentMessages.dropFirst(startupMessageCount))
+    #expect(try retargetMessages.map { try transportTargetMessageMethod($0.message) } == [
+        "Runtime.enable",
+        "Network.enable",
+        "DOM.getDocument",
+        "Console.enable",
+    ])
+    #expect(retargetMessages.allSatisfy { $0.targetIdentifier == newTargetID })
+
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: oldTargetID,
+        method: "DOM.childNodeInserted",
+        params: ##"{"parentNodeId":"new-root","previousNodeId":null,"node":{"nodeId":"old-route-child","nodeType":1,"nodeName":"DIV","localName":"div","nodeValue":"","childNodeCount":0}}"##
+    )
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: newTargetID,
+        method: "DOM.attributeModified",
+        params: #"{"nodeId":"new-root","name":"data-probe","value":"new"}"#
+    )
+    try await waitUntil { context.rootNode?.attributes["data-probe"] == "new" }
+    #expect(context.rootNode?.childNodeCount == 0)
+    #expect(context.node(for: oldRouteChildID) == nil)
+}
+
+@MainActor
+@Test
+func domUndoRedoCommandsFailAfterCurrentPageRetarget() async throws {
+    let oldTargetID = ProtocolTarget.ID("page-undo-old")
+    let newTargetID = ProtocolTarget.ID("page-undo-new")
+    let (backend, transport, context) = try await startTransportBackedContext(
+        targetID: oldTargetID,
+        documentID: "undo-old-root"
+    )
+    let undoCommands = try context.domUndoRedoCommands()
+    let startupMessageCount = await backend.sentTargetMessages().count
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-undo-new","type":"page","frameId":"main-frame","isProvisional":true}}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-undo-old","newTargetId":"page-undo-new"}}"#
+    )
+
+    let runtimeEnable = try await waitForTransportTargetMessage(
+        backend,
+        method: "Runtime.enable",
+        after: startupMessageCount
+    )
+    await receiveTransportTargetReply(
+        transport,
+        targetID: runtimeEnable.targetIdentifier,
+        messageID: try transportMessageID(runtimeEnable.message),
+        result: "{}"
+    )
+
+    let networkEnable = try await waitForTransportTargetMessage(
+        backend,
+        method: "Network.enable",
+        after: startupMessageCount
+    )
+    await receiveTransportTargetReply(
+        transport,
+        targetID: networkEnable.targetIdentifier,
+        messageID: try transportMessageID(networkEnable.message),
+        result: "{}"
+    )
+
+    let getDocument = try await waitForTransportTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: startupMessageCount
+    )
+    #expect(getDocument.targetIdentifier == newTargetID)
+    await receiveTransportTargetReply(
+        transport,
+        targetID: getDocument.targetIdentifier,
+        messageID: try transportMessageID(getDocument.message),
+        result: transportDocumentResult(nodeID: "undo-new-root")
+    )
+
+    let consoleEnable = try await waitForTransportTargetMessage(
+        backend,
+        method: "Console.enable",
+        after: startupMessageCount
+    )
+    await receiveTransportTargetReply(
+        transport,
+        targetID: consoleEnable.targetIdentifier,
+        messageID: try transportMessageID(consoleEnable.message),
+        result: "{}"
+    )
+
+    try await waitUntil { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("undo-new-root")) }
+    await #expect(throws: WebInspectorProxyError.disconnected("DOM undo/redo target is no longer current.")) {
+        try await undoCommands.undo()
+    }
+
+    let sentMethods = try await backend.sentTargetMessages().map { message in
+        try transportTargetMessageMethod(message.message)
+    }
+    #expect(!sentMethods.contains("DOM.undo"))
+}
+
+@MainActor
+@Test
+func mainFrameNavigatedReloadsDOMAndClearsRuntimeContexts() async throws {
+    let targetID = ProtocolTarget.ID("page-main")
+    let navigatedRootID = DOMNode.ID(DOM.Node.ID("navigated-root"))
+    let (backend, transport, context) = try await startTransportBackedContext(
+        targetID: targetID,
+        documentID: "initial-root"
+    )
+    let startupMessageCount = await backend.sentTargetMessages().count
+
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: targetID,
+        method: "Runtime.executionContextCreated",
+        params: #"{"context":{"id":21,"name":"Main","frameId":"main-frame","type":"normal"}}"#
+    )
+    try await waitUntil { context.executionContexts.map(\.id) == [RuntimeContext.ID(Runtime.ExecutionContext.ID("21"))] }
+
+    await transport.receiveRootMessage(
+        #"{"method":"Page.frameNavigated","params":{"frame":{"id":"main-frame","loaderId":"loader-2","name":"Main","url":"https://example.test/next","securityOrigin":"https://example.test","mimeType":"text/html"}}}"#
+    )
+
+    let getDocument = try await waitForTransportTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: startupMessageCount
+    )
+    #expect(getDocument.targetIdentifier == targetID)
+    #expect(context.executionContexts.isEmpty)
+    await receiveTransportTargetReply(
+        transport,
+        targetID: getDocument.targetIdentifier,
+        messageID: try transportMessageID(getDocument.message),
+        result: transportDocumentResult(nodeID: "navigated-root")
+    )
+
+    try await waitUntil { context.rootNode?.id == navigatedRootID }
+    #expect(context.executionContexts.isEmpty)
 }
 
 @MainActor
@@ -3907,6 +4145,58 @@ private func emitFinishedRequest(
     await backend.emit(.loadingFinished(id: id, timestamp: 3, sourceMapURL: nil, metrics: nil), target: target)
 }
 
+@MainActor
+private func startTransportBackedContext(
+    targetID: ProtocolTarget.ID,
+    documentID: String
+) async throws -> (FakeTransportBackend, TransportSession, WebInspectorContext) {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installTransportPageTarget(in: transport, targetID: targetID)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let container = WebInspectorContainer(proxy: proxy)
+    let context = container.mainContext
+
+    let runtimeEnable = try await waitForTransportTargetMessage(backend, method: "Runtime.enable")
+    #expect(runtimeEnable.targetIdentifier == targetID)
+    await receiveTransportTargetReply(
+        transport,
+        targetID: runtimeEnable.targetIdentifier,
+        messageID: try transportMessageID(runtimeEnable.message),
+        result: "{}"
+    )
+
+    let networkEnable = try await waitForTransportTargetMessage(backend, method: "Network.enable")
+    #expect(networkEnable.targetIdentifier == targetID)
+    await receiveTransportTargetReply(
+        transport,
+        targetID: networkEnable.targetIdentifier,
+        messageID: try transportMessageID(networkEnable.message),
+        result: "{}"
+    )
+
+    let getDocument = try await waitForTransportTargetMessage(backend, method: "DOM.getDocument")
+    #expect(getDocument.targetIdentifier == targetID)
+    await receiveTransportTargetReply(
+        transport,
+        targetID: getDocument.targetIdentifier,
+        messageID: try transportMessageID(getDocument.message),
+        result: transportDocumentResult(nodeID: documentID)
+    )
+
+    let consoleEnable = try await waitForTransportTargetMessage(backend, method: "Console.enable")
+    #expect(consoleEnable.targetIdentifier == targetID)
+    await receiveTransportTargetReply(
+        transport,
+        targetID: consoleEnable.targetIdentifier,
+        messageID: try transportMessageID(consoleEnable.message),
+        result: "{}"
+    )
+
+    try await waitUntil { context.state == .attached }
+    return (backend, transport, context)
+}
+
 private func installTransportPageTarget(
     in transport: TransportSession,
     targetID: ProtocolTarget.ID,
@@ -3922,11 +4212,13 @@ private func installTransportPageTarget(
 private func waitForTransportTargetMessage(
     _ backend: FakeTransportBackend,
     method: String,
+    ordinal: Int = 0,
+    after count: Int = 0,
     timeout: Duration = .seconds(1)
 ) async throws -> SentTargetMessage {
     try await withThrowingTaskGroup(of: SentTargetMessage.self) { group in
         group.addTask {
-            try await backend.waitForTargetMessage(method: method)
+            try await backend.waitForTargetMessage(method: method, ordinal: ordinal, after: count)
         }
         group.addTask {
             try await Task.sleep(for: timeout)
@@ -3964,6 +4256,11 @@ private func receiveTransportTargetEvent(
     ))
 }
 
+private func transportDocumentResult(nodeID: String) -> String {
+    let escapedNodeID = jsonEscapedString(nodeID)
+    return ##"{"root":{"nodeId":"\##(escapedNodeID)","nodeType":9,"nodeName":"#document","localName":"","nodeValue":"","frameId":"main-frame","childNodeCount":0}}"##
+}
+
 private func transportTargetDispatchMessage(targetID: ProtocolTarget.ID, message: String) -> String {
     let escapedTargetID = jsonEscapedString(targetID.rawValue)
     let escapedMessage = jsonEscapedString(message)
@@ -3986,6 +4283,14 @@ private func transportMessageID(_ message: String) throws -> UInt64 {
         return id
     }
     throw TransportSession.Error.malformedMessage
+}
+
+private func transportTargetMessageMethod(_ message: String) throws -> String {
+    let object = try transportMessageObject(message)
+    guard let method = object["method"] as? String else {
+        throw TransportSession.Error.malformedMessage
+    }
+    return method
 }
 
 private func transportMessageObject(_ message: String) throws -> [String: Any] {
