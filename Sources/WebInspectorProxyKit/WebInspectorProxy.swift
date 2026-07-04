@@ -132,9 +132,7 @@ public actor WebInspectorProxy {
     }
 
     public func waitForCurrentPage() async throws -> WebInspectorTarget {
-        guard closeState == .open else {
-            throw WebInspectorProxyError.closed
-        }
+        try ensureOpenForCurrentPageAccess()
         if let pageTarget {
             return pageTarget
         }
@@ -437,14 +435,28 @@ public actor WebInspectorProxy {
     }
 
     private func refreshCurrentPage(from transport: TransportSession) async throws {
-        let transportTarget = try await transport.waitForCurrentMainPageTarget(
-            timeout: configuration.bootstrapTimeout
-        )
+        let transportTarget: TransportSession.MainPageTarget
+        do {
+            transportTarget = try await transport.waitForCurrentMainPageTarget(
+                timeout: configuration.bootstrapTimeout
+            )
+        } catch {
+            try ensureOpenForCurrentPageAccess()
+            throw error
+        }
         let snapshot = await transport.snapshot()
+        try ensureOpenForCurrentPageAccess()
         guard let record = snapshot.targetsByID[transportTarget.targetID] else {
             throw WebInspectorProxyError.disconnected("Current page target disappeared during bootstrap.")
         }
         pageTarget = try currentPageTarget(from: record)
+    }
+
+    private func ensureOpenForCurrentPageAccess() throws {
+        guard closeState == .open else {
+            pageTarget = nil
+            throw WebInspectorProxyError.closed
+        }
     }
 
     private func applyTargetLifecycleEventToProxyState(_ event: WebInspectorTargetLifecycleEvent) {
