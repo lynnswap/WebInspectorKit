@@ -5,12 +5,12 @@ public final class WebInspectorContext {
     package struct DOMUndoRedoCommands {
         private weak var context: WebInspectorContext?
         private let target: WebInspectorTarget
-        private let generation: Int
+        private let documentGeneration: Int
 
-        fileprivate init(context: WebInspectorContext, target: WebInspectorTarget, generation: Int) {
+        fileprivate init(context: WebInspectorContext, target: WebInspectorTarget, documentGeneration: Int) {
             self.context = context
             self.target = target
-            self.generation = generation
+            self.documentGeneration = documentGeneration
         }
 
         package func undo(isolation: isolated (any Actor) = #isolation) async throws {
@@ -28,7 +28,7 @@ public final class WebInspectorContext {
                 throw WebInspectorProxyError.disconnected("WebInspectorDataKit context was released before DOM undo/redo.")
             }
             context.requireOwner(isolation)
-            guard context.currentPageGeneration == generation else {
+            guard context.domDocumentGeneration == documentGeneration else {
                 throw WebInspectorProxyError.disconnected("DOM undo/redo target is no longer current.")
             }
         }
@@ -66,6 +66,7 @@ public final class WebInspectorContext {
 
     private var currentPage: WebInspectorTarget?
     private var currentPageGeneration: Int
+    private var domDocumentGeneration: Int
     private var startupTask: Task<Void, Never>?
     private var currentPageRetargetTask: Task<Void, Never>?
     private var documentReloadTask: Task<Void, Never>?
@@ -113,6 +114,7 @@ public final class WebInspectorContext {
         selectedContext = nil
         currentPage = nil
         currentPageGeneration = 0
+        domDocumentGeneration = 0
         startupTask = nil
         currentPageRetargetTask = nil
         documentReloadTask = nil
@@ -353,7 +355,7 @@ public final class WebInspectorContext {
         return DOMUndoRedoCommands(
             context: self,
             target: try currentPageOrThrow(),
-            generation: currentPageGeneration
+            documentGeneration: domDocumentGeneration
         )
     }
 
@@ -810,6 +812,7 @@ public final class WebInspectorContext {
         isElementPickerEnabled = false
         currentPage = nil
         advanceCurrentPageGeneration(isolation: isolation)
+        advanceDOMDocumentGeneration(isolation: isolation)
         teardownError = nil
         teardownError = await disableEnabledDomains(isolation: isolation)
         transition(to: .detached)
@@ -1134,11 +1137,26 @@ public final class WebInspectorContext {
         return currentPageGeneration == generation
     }
 
+    private func isDOMDocumentGeneration(
+        _ generation: Int,
+        isolation: isolated (any Actor)
+    ) -> Bool {
+        _ = isolation
+        return domDocumentGeneration == generation
+    }
+
     @discardableResult
     private func advanceCurrentPageGeneration(isolation: isolated (any Actor)) -> Int {
         _ = isolation
         currentPageGeneration += 1
         return currentPageGeneration
+    }
+
+    @discardableResult
+    private func advanceDOMDocumentGeneration(isolation: isolated (any Actor)) -> Int {
+        _ = isolation
+        domDocumentGeneration += 1
+        return domDocumentGeneration
     }
 
     private func pruneReleasedTreeStates() {
@@ -1206,7 +1224,7 @@ public final class WebInspectorContext {
             return
         }
 
-        let generation = currentPageGeneration
+        let generation = domDocumentGeneration
         documentReloadTask?.cancel()
         documentReloadTask = Task { [weak self, currentPage, generation] in
             _ = isolation
@@ -1215,7 +1233,7 @@ public final class WebInspectorContext {
                 guard Task.isCancelled == false else {
                     return
                 }
-                guard self?.isCurrentPageGeneration(generation, isolation: isolation) == true else {
+                guard self?.isDOMDocumentGeneration(generation, isolation: isolation) == true else {
                     return
                 }
                 self?.applyDocument(document, isolation: isolation)
@@ -1287,6 +1305,7 @@ extension WebInspectorContext {
         documentReloadTask?.cancel()
         documentReloadTask = nil
         let generation = advanceCurrentPageGeneration(isolation: isolation)
+        advanceDOMDocumentGeneration(isolation: isolation)
         resetCurrentPageLifecycleModels(isolation: isolation)
         consoleObjectGroupReleaseTask?.cancel()
         consoleObjectGroupReleaseTask = nil
@@ -1306,6 +1325,11 @@ extension WebInspectorContext {
         generation: Int,
         isolation: isolated (any Actor)
     ) async {
+        defer {
+            if isCurrentPageGeneration(generation, isolation: isolation) {
+                currentPageRetargetTask = nil
+            }
+        }
         runtimeTrackingTarget = nil
         networkTrackingTarget = nil
         consoleTrackingTarget = nil
@@ -1356,9 +1380,12 @@ extension WebInspectorContext {
         guard frame.parentID == nil || frame.id == currentPage.frameID else {
             return
         }
-        advanceCurrentPageGeneration(isolation: isolation)
+        advanceDOMDocumentGeneration(isolation: isolation)
         resetDOM(isolation: isolation)
         clearExecutionContexts()
+        guard currentPageRetargetTask == nil else {
+            return
+        }
         reloadDocument(isolation: isolation)
     }
 }
@@ -1368,7 +1395,7 @@ extension WebInspectorContext {
         requireOwner(isolation)
         switch event {
         case .documentUpdated:
-            advanceCurrentPageGeneration(isolation: isolation)
+            advanceDOMDocumentGeneration(isolation: isolation)
             resetDOM(isolation: isolation)
             reloadDocument(isolation: isolation)
         case let .setChildNodes(parent, nodes):

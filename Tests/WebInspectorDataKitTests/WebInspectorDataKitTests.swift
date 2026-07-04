@@ -926,6 +926,9 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
     await transport.receiveRootMessage(
         #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-old","newTargetId":"page-new"}}"#
     )
+    await transport.receiveRootMessage(
+        #"{"method":"Page.frameNavigated","params":{"frame":{"id":"main-frame","loaderId":"loader-2","name":"Main","url":"https://example.test/next","securityOrigin":"https://example.test","mimeType":"text/html"}}}"#
+    )
 
     let runtimeEnable = try await waitForTransportTargetMessage(
         backend,
