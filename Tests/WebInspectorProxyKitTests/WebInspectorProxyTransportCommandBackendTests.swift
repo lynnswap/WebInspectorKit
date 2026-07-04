@@ -417,6 +417,32 @@ func transportBackedProxyWaitUntilClosedSuspendsUntilClose() async throws {
 }
 
 @Test
+func proxyWaitUntilClosedWaitsForInFlightCloseConnection() async throws {
+    let closeGate = CloseConnectionGate()
+    let proxy = WebInspectorProxy(closeConnection: {
+        await closeGate.waitUntilReleased()
+    })
+
+    let closeTask = Task {
+        await proxy.close()
+    }
+    await closeGate.waitUntilStarted()
+
+    let waitCompletion = CompletionProbe()
+    let waitTask = Task {
+        try await proxy.waitUntilClosed()
+        await waitCompletion.finish()
+    }
+    await proxy.waitForCloseWaiterForTesting()
+    #expect(await waitCompletion.isFinished() == false)
+
+    await closeGate.release()
+    try await waitTask.value
+    await closeTask.value
+    #expect(await waitCompletion.isFinished())
+}
+
+@Test
 func transportBackedCurrentPageRouteFollowsCommittedMainPageTarget() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
@@ -1101,6 +1127,55 @@ private func messageParameters(_ message: String) throws -> [String: Any] {
 private func messageObject(_ message: String) throws -> [String: Any] {
     let data = try #require(message.data(using: .utf8))
     return try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+}
+
+private actor CloseConnectionGate {
+    private var started = false
+    private var released = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    func waitUntilReleased() async {
+        started = true
+        let waiters = startWaiters
+        startWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+        guard released == false else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            releaseContinuation = continuation
+        }
+    }
+
+    func waitUntilStarted() async {
+        guard started == false else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            startWaiters.append(continuation)
+        }
+    }
+
+    func release() {
+        released = true
+        releaseContinuation?.resume()
+        releaseContinuation = nil
+    }
+}
+
+private actor CompletionProbe {
+    private var finished = false
+
+    func finish() {
+        finished = true
+    }
+
+    func isFinished() -> Bool {
+        finished
+    }
 }
 
 private struct TimedOut: Error {}

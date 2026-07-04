@@ -29,7 +29,13 @@ public actor WebInspectorProxy {
     private var closeWaiters: [UInt64: CheckedContinuation<Void, any Error>]
     private var closeWaiterRegistrationWaiters: [CheckedContinuation<Void, Never>]
     private var cancelledCloseWaiterIDs: Set<UInt64>
-    private var closed: Bool
+    private var closeState: CloseState
+
+    private enum CloseState {
+        case open
+        case closing
+        case closed
+    }
 
     @MainActor
     public init(
@@ -60,7 +66,7 @@ public actor WebInspectorProxy {
         closeWaiters = [:]
         closeWaiterRegistrationWaiters = []
         cancelledCloseWaiterIDs = []
-        closed = false
+        closeState = .open
 
         do {
             try await bootstrapCurrentPage(from: nativeConnection.transport)
@@ -72,18 +78,19 @@ public actor WebInspectorProxy {
 
     package init(
         configuration: Configuration = .init(),
-        backend: (any WebInspectorProxyBackend)? = nil
+        backend: (any WebInspectorProxyBackend)? = nil,
+        closeConnection: (@Sendable () async -> Void)? = nil
     ) {
         self.configuration = configuration
         self.backend = backend
-        closeConnection = nil
+        self.closeConnection = closeConnection
         pageTarget = nil
         nextTargetOrdinal = 0
         nextCloseWaiterID = 0
         closeWaiters = [:]
         closeWaiterRegistrationWaiters = []
         cancelledCloseWaiterIDs = []
-        closed = false
+        closeState = .open
     }
 
     package init(
@@ -101,7 +108,7 @@ public actor WebInspectorProxy {
         closeWaiters = [:]
         closeWaiterRegistrationWaiters = []
         cancelledCloseWaiterIDs = []
-        closed = false
+        closeState = .open
 
         do {
             try await bootstrapCurrentPage(from: transport)
@@ -116,7 +123,7 @@ public actor WebInspectorProxy {
     }
 
     public var canReload: Bool {
-        pageTarget != nil && closed == false
+        pageTarget != nil && closeState == .open
     }
 
     public func waitForCurrentPage() async throws -> WebInspectorTarget {
@@ -140,17 +147,24 @@ public actor WebInspectorProxy {
     }
 
     public func close() async {
-        guard closed == false else {
+        switch closeState {
+        case .open:
+            break
+        case .closing:
+            try? await waitUntilClosed()
+            return
+        case .closed:
             return
         }
-        closed = true
+        closeState = .closing
         pageTarget = nil
         await closeConnection?()
+        closeState = .closed
         resumeCloseWaiters()
     }
 
     public func waitUntilClosed() async throws {
-        guard closed == false else {
+        guard closeState != .closed else {
             return
         }
         nextCloseWaiterID &+= 1
@@ -188,7 +202,7 @@ public actor WebInspectorProxy {
     }
 
     package func waitForCloseWaiterForTesting() async {
-        guard closed == false else {
+        guard closeState != .closed else {
             preconditionFailure("Cannot wait for a close waiter after WebInspectorProxy closed.")
         }
         guard closeWaiters.isEmpty else {
@@ -206,7 +220,7 @@ public actor WebInspectorProxy {
         method: String,
         payload: Payload
     ) async throws -> Result {
-        guard closed == false else {
+        guard closeState == .open else {
             throw WebInspectorProxyError.closed
         }
         guard let backend else {
@@ -415,7 +429,7 @@ public actor WebInspectorProxy {
     }
 
     private func registerCloseWaiter(id: UInt64, continuation: CheckedContinuation<Void, any Error>) {
-        guard closed == false else {
+        guard closeState != .closed else {
             continuation.resume()
             return
         }
@@ -429,7 +443,7 @@ public actor WebInspectorProxy {
 
     private func cancelCloseWaiter(_ id: UInt64) {
         guard let continuation = closeWaiters.removeValue(forKey: id) else {
-            if closed == false {
+            if closeState != .closed {
                 cancelledCloseWaiterIDs.insert(id)
             }
             return
