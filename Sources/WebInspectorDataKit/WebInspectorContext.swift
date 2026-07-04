@@ -809,7 +809,7 @@ public final class WebInspectorContext {
         pendingInspectedNodeID = nil
         isElementPickerEnabled = false
         currentPage = nil
-        currentPageGeneration += 1
+        advanceCurrentPageGeneration(isolation: isolation)
         teardownError = nil
         teardownError = await disableEnabledDomains(isolation: isolation)
         transition(to: .detached)
@@ -1134,6 +1134,13 @@ public final class WebInspectorContext {
         return currentPageGeneration == generation
     }
 
+    @discardableResult
+    private func advanceCurrentPageGeneration(isolation: isolated (any Actor)) -> Int {
+        _ = isolation
+        currentPageGeneration += 1
+        return currentPageGeneration
+    }
+
     private func pruneReleasedTreeStates() {
         treeStates.removeAll { $0.tree == nil }
     }
@@ -1279,8 +1286,7 @@ extension WebInspectorContext {
         currentPageRetargetTask?.cancel()
         documentReloadTask?.cancel()
         documentReloadTask = nil
-        currentPageGeneration += 1
-        let generation = currentPageGeneration
+        let generation = advanceCurrentPageGeneration(isolation: isolation)
         resetCurrentPageLifecycleModels(isolation: isolation)
         consoleObjectGroupReleaseTask?.cancel()
         consoleObjectGroupReleaseTask = nil
@@ -1350,6 +1356,7 @@ extension WebInspectorContext {
         guard frame.parentID == nil || frame.id == currentPage.frameID else {
             return
         }
+        advanceCurrentPageGeneration(isolation: isolation)
         resetDOM(isolation: isolation)
         clearExecutionContexts()
         reloadDocument(isolation: isolation)
@@ -1361,6 +1368,7 @@ extension WebInspectorContext {
         requireOwner(isolation)
         switch event {
         case .documentUpdated:
+            advanceCurrentPageGeneration(isolation: isolation)
             resetDOM(isolation: isolation)
             reloadDocument(isolation: isolation)
         case let .setChildNodes(parent, nodes):

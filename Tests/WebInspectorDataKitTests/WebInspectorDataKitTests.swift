@@ -1099,6 +1099,7 @@ func mainFrameNavigatedReloadsDOMAndClearsRuntimeContexts() async throws {
         targetID: targetID,
         documentID: "initial-root"
     )
+    let undoCommands = try context.domUndoRedoCommands()
     let startupMessageCount = await backend.sentTargetMessages().count
 
     await receiveTransportTargetEvent(
@@ -1129,6 +1130,14 @@ func mainFrameNavigatedReloadsDOMAndClearsRuntimeContexts() async throws {
 
     try await waitUntil { context.rootNode?.id == navigatedRootID }
     #expect(context.executionContexts.isEmpty)
+    await #expect(throws: WebInspectorProxyError.disconnected("DOM undo/redo target is no longer current.")) {
+        try await undoCommands.undo()
+    }
+
+    let sentMethods = try await backend.sentTargetMessages().map { message in
+        try transportTargetMessageMethod(message.message)
+    }
+    #expect(!sentMethods.contains("DOM.undo"))
 }
 
 @MainActor
@@ -1228,6 +1237,7 @@ func restartClearsConsoleMessagesBeforeConsoleReplay() async throws {
 func documentUpdatedReloadsRootDocument() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
+    let undoCommands = try context.domUndoRedoCommands()
     let replacementID = DOM.Node.ID("replacement-document")
 
     await runtime.backend.enqueue(
@@ -1241,6 +1251,12 @@ func documentUpdatedReloadsRootDocument() async throws {
     try await waitUntil {
         context.rootNode?.id == DOMNode.ID(replacementID)
     }
+    await #expect(throws: WebInspectorProxyError.disconnected("DOM undo/redo target is no longer current.")) {
+        try await undoCommands.undo()
+    }
+
+    let commands = await runtime.backend.recordedCommands()
+    #expect(!commands.contains { $0.domain == "DOM" && $0.method == "undo" })
 }
 
 @MainActor
