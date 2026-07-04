@@ -1019,6 +1019,52 @@ struct DOMContainerTests {
     }
 
     @Test
+    func treeMenuMultiDeleteUndoRedoCoversEveryRemovedNode() async throws {
+        let fixture = try await makeLiveDOMContext(document: multiDeleteDocumentNode())
+        let undoManager = UndoManager()
+        undoManager.groupsByEvent = false
+        let navigationItems = DOMNavigationItems(context: fixture.context)
+        let viewController = DOMTreeViewController(context: fixture.context)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        let treeView = viewController.displayedDOMTreeTextViewForTesting
+        await treeView.waitForRowDocumentForTesting()
+
+        treeView.primaryClickRowForTesting(containing: "<input")
+        treeView.primaryClickRowForTesting(containing: "<button", modifiers: .command)
+
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "removeNode")
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "removeNode")
+        await treeView.deleteMultiSelectionFromMenuForTesting(undoManager: undoManager)
+
+        #expect(undoManager.canUndo)
+
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "undo")
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "undo")
+        undoManager.undo()
+        _ = await recordedDOMCommands(on: fixture.runtime.backend, method: "undo", count: 2)
+        let didEnableRedo = await waitUntil {
+            navigationItems.canRedoForTesting(undoManager: undoManager)
+        }
+        #expect(didEnableRedo)
+
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "redo")
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "redo")
+        navigationItems.redoForTesting(undoManager: undoManager)
+        _ = await recordedDOMCommands(on: fixture.runtime.backend, method: "redo", count: 2)
+
+        let commands = await fixture.runtime.backend.recordedCommands()
+        #expect(commands.domMutationUndoMethods == [
+            "removeNode",
+            "removeNode",
+            "undo",
+            "undo",
+            "redo",
+            "redo",
+        ])
+    }
+
+    @Test
     func treeControllerPageHighlightCommandsFollowSelectionAndHoverPolicy() async throws {
         let selectionFixture = try await makeLiveDOMContext()
         let selectionViewController = DOMTreeViewController(context: selectionFixture.context)
@@ -1428,6 +1474,56 @@ struct DOMContainerTests {
                                     nodeType: 1,
                                     nodeName: "INPUT",
                                     localName: "input"
+                                ),
+                            ]
+                        ),
+                    ]
+                ),
+            ]
+        )
+    }
+
+    private func multiDeleteDocumentNode() -> DOM.Node {
+        DOM.Node(
+            id: DOM.Node.ID("document"),
+            nodeType: 9,
+            nodeName: "#document",
+            childNodeCount: 1,
+            children: [
+                DOM.Node(
+                    id: DOM.Node.ID("html"),
+                    nodeType: 1,
+                    nodeName: "HTML",
+                    localName: "html",
+                    childNodeCount: 1,
+                    children: [
+                        DOM.Node(
+                            id: DOM.Node.ID("body"),
+                            nodeType: 1,
+                            nodeName: "BODY",
+                            localName: "body",
+                            childNodeCount: 2,
+                            children: [
+                                DOM.Node(
+                                    id: DOM.Node.ID("input"),
+                                    nodeType: 1,
+                                    nodeName: "INPUT",
+                                    localName: "input"
+                                ),
+                                DOM.Node(
+                                    id: DOM.Node.ID("button"),
+                                    nodeType: 1,
+                                    nodeName: "BUTTON",
+                                    localName: "button",
+                                    childNodeCount: 1,
+                                    children: [
+                                        DOM.Node(
+                                            id: DOM.Node.ID("button-text"),
+                                            nodeType: 3,
+                                            nodeName: "#text",
+                                            nodeValue: "Save"
+                                        ),
+                                    ]
                                 ),
                             ]
                         ),

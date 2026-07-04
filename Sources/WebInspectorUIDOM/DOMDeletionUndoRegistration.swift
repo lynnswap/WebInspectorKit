@@ -16,6 +16,7 @@ enum DOMDeletionUndoRegistration {
         let target = DOMUndoCommandTarget(
             commands: commands,
             undoManager: undoManager,
+            commandCount: deletedNodeCount,
             actionName: deletedNodeCount == 1
                 ? String(localized: "inspector.delete_node", bundle: WebInspectorUILocalization.bundle)
                 : String(localized: "inspector.delete_nodes", bundle: WebInspectorUILocalization.bundle)
@@ -38,11 +39,18 @@ enum DOMDeletionUndoRegistration {
 private final class DOMUndoCommandTarget: NSObject {
     private let commands: WebInspectorContext.DOMUndoRedoCommands
     private weak var undoManager: UndoManager?
+    private let commandCount: Int
     private let actionName: String
 
-    init(commands: WebInspectorContext.DOMUndoRedoCommands, undoManager: UndoManager, actionName: String) {
+    init(
+        commands: WebInspectorContext.DOMUndoRedoCommands,
+        undoManager: UndoManager,
+        commandCount: Int,
+        actionName: String
+    ) {
         self.commands = commands
         self.undoManager = undoManager
+        self.commandCount = commandCount
         self.actionName = actionName
     }
 
@@ -55,7 +63,7 @@ private final class DOMUndoCommandTarget: NSObject {
     private func performUndo() {
         Task { @MainActor [self] in
             do {
-                try await commands.undo()
+                try await undoDeletedNodes()
                 registerRedo()
             } catch {
                 undoManager?.domUndoCommandTargetStore.release(self)
@@ -66,7 +74,7 @@ private final class DOMUndoCommandTarget: NSObject {
     private func performRedo() {
         Task { @MainActor [self] in
             do {
-                try await commands.redo()
+                try await redoDeletedNodes()
                 registerUndo()
             } catch {
                 undoManager?.domUndoCommandTargetStore.release(self)
@@ -92,6 +100,18 @@ private final class DOMUndoCommandTarget: NSObject {
         undoManager.setActionName(actionName)
         if createsGroup {
             undoManager.endUndoGrouping()
+        }
+    }
+
+    private func undoDeletedNodes() async throws {
+        for _ in 0..<commandCount {
+            try await commands.undo()
+        }
+    }
+
+    private func redoDeletedNodes() async throws {
+        for _ in 0..<commandCount {
+            try await commands.redo()
         }
     }
 

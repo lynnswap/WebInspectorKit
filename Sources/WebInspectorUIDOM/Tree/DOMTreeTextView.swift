@@ -2513,6 +2513,23 @@ extension DOMTreeTextView {
         }
     }
 
+    func deleteMultiSelectionFromMenuForTesting(undoManager: UndoManager?) async {
+        let nodeIDs = multiSelectedNodeIDsInDisplayOrder()
+        guard !nodeIDs.isEmpty else {
+            return
+        }
+        menuModel.configure(
+            nodeIDs: nodeIDs,
+            selectedText: nil,
+            undoManager: undoManager,
+            localMarkupTextByNodeID: localMarkupTextByNodeID(for: nodeIDs),
+            clearLocalSelection: {}
+        )
+        if let task = menuModel.deleteSelection() {
+            await task.value
+        }
+    }
+
     private func rowSnapshot(for row: DOMTreeRowRenderPlan) -> RowSnapshot {
         let line = row.text as NSString
         return RowSnapshot(
