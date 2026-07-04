@@ -837,6 +837,58 @@ func consoleEnableReplayIsCapturedBeforeCommandReturns() async throws {
 
 @MainActor
 @Test
+func startupRefetchesDocumentWhenMainFrameNavigatesBeforeAttach() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+    let consoleGate = WebInspectorTestGate()
+    let staleDocumentID = DOM.Node.ID("stale-startup-document")
+    let freshDocumentID = DOM.Node.ID("fresh-startup-document")
+
+    await runtime.backend.hold(domain: "Console", method: "enable", gate: consoleGate)
+    await runtime.backend.enqueue((), for: "Runtime", method: "enable")
+    await runtime.backend.enqueue((), for: "Network", method: "enable")
+    await runtime.backend.enqueue(
+        DOM.Node(id: staleDocumentID, nodeType: 9, nodeName: "#document"),
+        for: "DOM",
+        method: "getDocument"
+    )
+    await runtime.backend.enqueue(
+        DOM.Node(id: freshDocumentID, nodeType: 9, nodeName: "#document"),
+        for: "DOM",
+        method: "getDocument"
+    )
+    await runtime.backend.enqueue((), for: "Console", method: "enable")
+
+    let container = WebInspectorContainer(proxy: runtime.proxy)
+    let context = container.mainContext
+    try await waitUntil {
+        await runtime.backend.recordedCommands() == startupCommands
+    }
+
+    await runtime.backend.emit(
+        .frameNavigated(WebInspectorPageFrameLifecycle(
+            id: FrameID("main-frame"),
+            parentID: nil,
+            loaderID: "loader-2",
+            name: "Main",
+            url: "https://example.test/next",
+            securityOrigin: "https://example.test",
+            mimeType: "text/html"
+        )),
+        target: target
+    )
+    await consoleGate.open()
+
+    try await waitUntil { context.rootNode?.id == DOMNode.ID(freshDocumentID) }
+    #expect(context.state == .attached)
+    #expect(context.node(for: DOMNode.ID(staleDocumentID)) == nil)
+    #expect(await runtime.backend.recordedCommands() == startupCommands + [
+        RecordedCommand(domain: "DOM", method: "getDocument")
+    ])
+}
+
+@MainActor
+@Test
 func transportBackedStartupCapturesRuntimeAndConsoleReplayBeforeEnableReplies() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))

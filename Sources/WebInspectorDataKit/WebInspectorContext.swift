@@ -39,6 +39,8 @@ public final class WebInspectorContext {
         case console
     }
 
+    private typealias LoadedDOMDocument = (node: DOM.Node, generation: Int)
+
     public enum State: Equatable, Sendable {
         case attaching
         case attached
@@ -857,7 +859,7 @@ public final class WebInspectorContext {
             guard isCurrentPageGeneration(generation, isolation: isolation) else {
                 return
             }
-            let document = try await target.dom.getDocument()
+            var document = try await loadCurrentDOMDocument(on: target, isolation: isolation)
             guard Task.isCancelled == false else {
                 await disableEnabledDomainsAfterCancellation(isolation: isolation)
                 return
@@ -873,7 +875,15 @@ public final class WebInspectorContext {
             guard isCurrentPageGeneration(generation, isolation: isolation) else {
                 return
             }
-            applyDocument(document, isolation: isolation)
+            document = try await reloadDOMDocumentIfNeeded(document, on: target, isolation: isolation)
+            guard Task.isCancelled == false else {
+                await disableEnabledDomainsAfterCancellation(isolation: isolation)
+                return
+            }
+            guard isCurrentPageGeneration(generation, isolation: isolation) else {
+                return
+            }
+            applyDocument(document.node, isolation: isolation)
             transition(to: .attached)
         } catch is CancellationError {
             await disableEnabledDomainsAfterCancellation(isolation: isolation)
@@ -942,6 +952,35 @@ public final class WebInspectorContext {
         _ = isolation
         try await domainEnablement.acquire(.network, on: target)
         networkTrackingTarget = target
+    }
+
+    private func loadCurrentDOMDocument(
+        on target: WebInspectorTarget,
+        isolation: isolated (any Actor)
+    ) async throws -> LoadedDOMDocument {
+        _ = isolation
+        while true {
+            let generation = domDocumentGeneration
+            let document = try await target.dom.getDocument()
+            guard Task.isCancelled == false else {
+                throw CancellationError()
+            }
+            guard isDOMDocumentGeneration(generation, isolation: isolation) else {
+                continue
+            }
+            return (node: document, generation: generation)
+        }
+    }
+
+    private func reloadDOMDocumentIfNeeded(
+        _ document: LoadedDOMDocument,
+        on target: WebInspectorTarget,
+        isolation: isolated (any Actor)
+    ) async throws -> LoadedDOMDocument {
+        if isDOMDocumentGeneration(document.generation, isolation: isolation) {
+            return document
+        }
+        return try await loadCurrentDOMDocument(on: target, isolation: isolation)
     }
 
     private func resetReplayBackedModelsBeforeEnable() {
@@ -1347,7 +1386,7 @@ extension WebInspectorContext {
             guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
                 return
             }
-            let document = try await target.dom.getDocument()
+            var document = try await loadCurrentDOMDocument(on: target, isolation: isolation)
             guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
                 return
             }
@@ -1355,7 +1394,11 @@ extension WebInspectorContext {
             guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
                 return
             }
-            applyDocument(document, isolation: isolation)
+            document = try await reloadDOMDocumentIfNeeded(document, on: target, isolation: isolation)
+            guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
+                return
+            }
+            applyDocument(document.node, isolation: isolation)
             if case .attaching = state {
                 transition(to: .attached)
             }
@@ -1383,7 +1426,8 @@ extension WebInspectorContext {
         advanceDOMDocumentGeneration(isolation: isolation)
         resetDOM(isolation: isolation)
         clearExecutionContexts()
-        guard currentPageRetargetTask == nil else {
+        guard currentPageRetargetTask == nil,
+              state != .attaching else {
             return
         }
         reloadDocument(isolation: isolation)
@@ -1397,6 +1441,9 @@ extension WebInspectorContext {
         case .documentUpdated:
             advanceDOMDocumentGeneration(isolation: isolation)
             resetDOM(isolation: isolation)
+            guard state != .attaching else {
+                return
+            }
             reloadDocument(isolation: isolation)
         case let .setChildNodes(parent, nodes):
             applySetChildNodes(parent: parent, nodes: nodes, isolation: isolation)

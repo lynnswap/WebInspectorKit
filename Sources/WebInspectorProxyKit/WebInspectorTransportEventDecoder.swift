@@ -37,7 +37,9 @@ enum WebInspectorTransportEventDecoder {
         switch event.method {
         case "Target.didCommitProvisionalTarget":
             let params = try decode(TargetCommittedParams.self, from: event)
-            let lifecycleTarget = try requireLifecycleTarget(target, for: event)
+            guard let lifecycleTarget = target else {
+                return .unknown(rawEvent(from: event))
+            }
             return .didCommitProvisionalTarget(WebInspectorTargetCommitLifecycle(
                 oldTargetID: params.oldTargetId.map { _ in targetID },
                 newTarget: lifecycleTarget
@@ -279,19 +281,6 @@ enum WebInspectorTransportEventDecoder {
 
     private static func rawEvent(from event: ProtocolEvent) -> RawEvent {
         RawEvent(domain: event.domain.description, method: shortMethodName(event.method), params: event.paramsData)
-    }
-
-    private static func requireLifecycleTarget(
-        _ target: WebInspectorLifecycleTarget?,
-        for event: ProtocolEvent
-    ) throws -> WebInspectorLifecycleTarget {
-        if let target {
-            return target
-        }
-        throw DecodingError.dataCorrupted(.init(
-            codingPath: [],
-            debugDescription: "Missing lifecycle target for \(event.method)."
-        ))
     }
 
     private static func shortMethodName(_ method: String) -> String {
