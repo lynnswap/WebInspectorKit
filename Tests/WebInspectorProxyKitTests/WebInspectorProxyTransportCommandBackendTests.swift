@@ -551,6 +551,16 @@ func transportBackendDeliversCurrentPageTargetDestroyedLifecycle() async throws 
     }
     #expect(targetID == .currentPage)
     #expect(await transport.snapshot().currentMainPageTargetID == nil)
+    #expect(await proxy.currentPage == nil)
+
+    let replacementTask = Task {
+        try await proxy.waitForCurrentPage()
+    }
+    await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-replacement"))
+    let replacement = try await throwingValue(of: replacementTask)
+    #expect(replacement.id == .currentPage)
+    #expect(replacement.route == .currentPage)
+    #expect(await transport.snapshot().currentMainPageTargetID == ProtocolTarget.ID("page-replacement"))
 }
 
 @Test

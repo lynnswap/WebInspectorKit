@@ -22,6 +22,7 @@ public actor WebInspectorProxy {
 
     private let configuration: Configuration
     private let backend: (any WebInspectorProxyBackend)?
+    private let transport: TransportSession?
     private let closeConnection: (@Sendable () async -> Void)?
     private var pageTarget: WebInspectorTarget?
     private var nextTargetOrdinal: UInt64
@@ -57,6 +58,7 @@ public actor WebInspectorProxy {
 
         self.configuration = configuration
         backend = WebInspectorTransportBackend(transport: nativeConnection.transport)
+        transport = nativeConnection.transport
         closeConnection = {
             await nativeConnection.close()
         }
@@ -83,6 +85,7 @@ public actor WebInspectorProxy {
     ) {
         self.configuration = configuration
         self.backend = backend
+        transport = nil
         self.closeConnection = closeConnection
         pageTarget = nil
         nextTargetOrdinal = 0
@@ -98,6 +101,7 @@ public actor WebInspectorProxy {
         configuration: Configuration = .init()
     ) async throws {
         self.configuration = configuration
+        self.transport = transport
         backend = WebInspectorTransportBackend(transport: transport)
         closeConnection = {
             await transport.detach()
@@ -129,6 +133,12 @@ public actor WebInspectorProxy {
     public func waitForCurrentPage() async throws -> WebInspectorTarget {
         if let pageTarget {
             return pageTarget
+        }
+        if let transport {
+            try await refreshCurrentPage(from: transport)
+            if let pageTarget {
+                return pageTarget
+            }
         }
         throw WebInspectorProxyError.disconnected("WebInspectorProxyKit shell has no current page target.")
     }
@@ -341,6 +351,7 @@ public actor WebInspectorProxy {
                                 guard case let .targetLifecycle(value) = event else {
                                     preconditionFailure("Backend emitted a mismatched event for lifecycle.")
                                 }
+                                await self.applyTargetLifecycleEventToProxyState(value)
                                 continuation.yield(value)
                             }
                         }
@@ -418,6 +429,10 @@ public actor WebInspectorProxy {
     }
 
     private func bootstrapCurrentPage(from transport: TransportSession) async throws {
+        try await refreshCurrentPage(from: transport)
+    }
+
+    private func refreshCurrentPage(from transport: TransportSession) async throws {
         let transportTarget = try await transport.waitForCurrentMainPageTarget(
             timeout: configuration.bootstrapTimeout
         )
@@ -426,6 +441,15 @@ public actor WebInspectorProxy {
             throw WebInspectorProxyError.disconnected("Current page target disappeared during bootstrap.")
         }
         pageTarget = try currentPageTarget(from: record)
+    }
+
+    private func applyTargetLifecycleEventToProxyState(_ event: WebInspectorTargetLifecycleEvent) {
+        switch event {
+        case let .targetDestroyed(targetID) where targetID == .currentPage:
+            pageTarget = nil
+        default:
+            break
+        }
     }
 
     private func registerCloseWaiter(id: UInt64, continuation: CheckedContinuation<Void, any Error>) {
