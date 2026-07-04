@@ -1172,6 +1172,95 @@ func currentPageTargetDestroyedDetachesAndInvalidatesDomainLeases() async throws
 
 @MainActor
 @Test
+func startCancelsInFlightCurrentPageRetargetBeforeRestarting() async throws {
+    let oldTargetID = ProtocolTarget.ID("page-restart-old")
+    let newTargetID = ProtocolTarget.ID("page-restart-new")
+    let (backend, transport, context) = try await startTransportBackedContext(
+        targetID: oldTargetID,
+        documentID: "restart-old-root"
+    )
+    let startupMessageCount = await backend.sentTargetMessages().count
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-restart-new","type":"page","frameId":"main-frame","isProvisional":true}}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-restart-old","newTargetId":"page-restart-new"}}"#
+    )
+
+    let retargetRuntimeEnable = try await waitForTransportTargetMessage(
+        backend,
+        method: "Runtime.enable",
+        after: startupMessageCount,
+        timeout: .seconds(3)
+    )
+    #expect(retargetRuntimeEnable.targetIdentifier == newTargetID)
+
+    let restartMessageCount = await backend.sentTargetMessages().count
+    context.start()
+
+    let runtimeEnable = try await waitForTransportTargetMessage(
+        backend,
+        method: "Runtime.enable",
+        after: restartMessageCount,
+        timeout: .seconds(3)
+    )
+    #expect(runtimeEnable.targetIdentifier == newTargetID)
+    await receiveTransportTargetReply(
+        transport,
+        targetID: runtimeEnable.targetIdentifier,
+        messageID: try transportMessageID(runtimeEnable.message),
+        result: "{}"
+    )
+
+    let networkEnable = try await waitForTransportTargetMessage(
+        backend,
+        method: "Network.enable",
+        after: restartMessageCount,
+        timeout: .seconds(3)
+    )
+    #expect(networkEnable.targetIdentifier == newTargetID)
+    await receiveTransportTargetReply(
+        transport,
+        targetID: networkEnable.targetIdentifier,
+        messageID: try transportMessageID(networkEnable.message),
+        result: "{}"
+    )
+
+    let getDocument = try await waitForTransportTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: restartMessageCount,
+        timeout: .seconds(3)
+    )
+    #expect(getDocument.targetIdentifier == newTargetID)
+    await receiveTransportTargetReply(
+        transport,
+        targetID: getDocument.targetIdentifier,
+        messageID: try transportMessageID(getDocument.message),
+        result: transportDocumentResult(nodeID: "restart-new-root")
+    )
+
+    let consoleEnable = try await waitForTransportTargetMessage(
+        backend,
+        method: "Console.enable",
+        after: restartMessageCount,
+        timeout: .seconds(3)
+    )
+    #expect(consoleEnable.targetIdentifier == newTargetID)
+    await receiveTransportTargetReply(
+        transport,
+        targetID: consoleEnable.targetIdentifier,
+        messageID: try transportMessageID(consoleEnable.message),
+        result: "{}"
+    )
+
+    try await waitUntil { context.state == .attached }
+    #expect(context.rootNode?.id == DOMNode.ID(DOM.Node.ID("restart-new-root")))
+}
+
+@MainActor
+@Test
 func domUndoRedoCommandsFailAfterCurrentPageRetarget() async throws {
     let oldTargetID = ProtocolTarget.ID("page-undo-old")
     let newTargetID = ProtocolTarget.ID("page-undo-new")

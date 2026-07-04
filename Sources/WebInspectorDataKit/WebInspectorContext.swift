@@ -71,6 +71,7 @@ public final class WebInspectorContext {
     private var domDocumentGeneration: Int
     private var startupTask: Task<Void, Never>?
     private var currentPageRetargetTask: Task<Void, Never>?
+    private var currentPageCleanupTask: Task<Void, Never>?
     private var documentReloadTask: Task<Void, Never>?
     private var inspectResolutionTask: Task<Void, Never>?
     private var inspectedNodeHighlightTask: Task<Void, Never>?
@@ -120,6 +121,7 @@ public final class WebInspectorContext {
         domDocumentGeneration = 0
         startupTask = nil
         currentPageRetargetTask = nil
+        currentPageCleanupTask = nil
         documentReloadTask = nil
         inspectResolutionTask = nil
         inspectedNodeHighlightTask = nil
@@ -171,6 +173,7 @@ public final class WebInspectorContext {
     deinit {
         startupTask?.cancel()
         currentPageRetargetTask?.cancel()
+        currentPageCleanupTask?.cancel()
         documentReloadTask?.cancel()
         inspectResolutionTask?.cancel()
         inspectedNodeHighlightTask?.cancel()
@@ -185,15 +188,17 @@ public final class WebInspectorContext {
     public func start(isolation: isolated (any Actor) = #isolation) {
         requireOwner(isolation)
         let previousStartupTask = startupTask
-        let previousCurrentPageLifecycleTask = currentPageRetargetTask
+        let previousCurrentPageCleanupTask = currentPageCleanupTask
         previousStartupTask?.cancel()
+        currentPageRetargetTask?.cancel()
+        currentPageRetargetTask = nil
         state = .attaching
         notifyStatusChanged()
         teardownError = nil
-        startupTask = Task { [weak self, previousStartupTask] in
+        startupTask = Task { [weak self, previousStartupTask, previousCurrentPageCleanupTask] in
             _ = isolation
             await previousStartupTask?.value
-            await previousCurrentPageLifecycleTask?.value
+            await previousCurrentPageCleanupTask?.value
             guard Task.isCancelled == false else {
                 return
             }
@@ -803,6 +808,8 @@ public final class WebInspectorContext {
         startupTask = nil
         currentPageRetargetTask?.cancel()
         currentPageRetargetTask = nil
+        currentPageCleanupTask?.cancel()
+        currentPageCleanupTask = nil
         documentReloadTask?.cancel()
         documentReloadTask = nil
         inspectResolutionTask?.cancel()
@@ -933,7 +940,20 @@ public final class WebInspectorContext {
     private func disableEnabledDomainsBeforeRestart(
         isolation: isolated (any Actor)
     ) async -> WebInspectorProxyError? {
-        await disableEnabledDomains(isolation: isolation)
+        let error = await disableEnabledDomains(isolation: isolation)
+        await invalidateCurrentPageDomainLeases(isolation: isolation)
+        return error
+    }
+
+    private func invalidateCurrentPageDomainLeases(isolation: isolated (any Actor)) async {
+        _ = isolation
+        guard let currentPage else {
+            return
+        }
+        runtimeTrackingTarget = nil
+        networkTrackingTarget = nil
+        consoleTrackingTarget = nil
+        await domainEnablement.invalidate([.runtime, .network, .console], on: currentPage)
     }
 
     private func enableRuntimeTracking(
@@ -1458,6 +1478,8 @@ extension WebInspectorContext {
         startupTask?.cancel()
         startupTask = nil
         currentPageRetargetTask?.cancel()
+        currentPageRetargetTask = nil
+        currentPageCleanupTask?.cancel()
         documentReloadTask?.cancel()
         documentReloadTask = nil
         for task in styleToggleTasks.values {
@@ -1476,7 +1498,7 @@ extension WebInspectorContext {
         resetCurrentPageLifecycleModels(isolation: isolation)
         transition(to: .detached)
 
-        currentPageRetargetTask = Task { [weak self, target, generation] in
+        currentPageCleanupTask = Task { [weak self, target, generation] in
             _ = isolation
             await self?.invalidateDestroyedCurrentPage(target, generation: generation, isolation: isolation)
         }
@@ -1489,7 +1511,7 @@ extension WebInspectorContext {
     ) async {
         defer {
             if isCurrentPageGeneration(generation, isolation: isolation) {
-                currentPageRetargetTask = nil
+                currentPageCleanupTask = nil
             }
         }
         await domainEnablement.invalidate([.runtime, .network, .console], on: target)
