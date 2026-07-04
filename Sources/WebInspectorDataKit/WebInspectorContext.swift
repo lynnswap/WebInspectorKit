@@ -34,6 +34,16 @@ public final class WebInspectorContext {
         }
     }
 
+    package struct DOMDeletionPartialFailure: Error {
+        package let deletedNodeCount: Int
+        package let underlyingError: any Error
+
+        package init(deletedNodeCount: Int, underlyingError: any Error) {
+            self.deletedNodeCount = deletedNodeCount
+            self.underlyingError = underlyingError
+        }
+    }
+
     private enum RuntimeObjectOwner: Hashable {
         case client
         case console
@@ -322,6 +332,14 @@ public final class WebInspectorContext {
     }
 
     public func delete(_ nodes: [DOMNode], isolation: isolated (any Actor) = #isolation) async throws {
+        _ = try await deleteCountingRemovedNodes(nodes, isolation: isolation)
+    }
+
+    @discardableResult
+    private func deleteCountingRemovedNodes(
+        _ nodes: [DOMNode],
+        isolation: isolated (any Actor) = #isolation
+    ) async throws -> Int {
         requireOwner(isolation)
         let page = try currentPageOrThrow()
         var seenNodeIDs: Set<DOMNode.ID> = []
@@ -333,19 +351,47 @@ public final class WebInspectorContext {
             .sorted {
                 snapshot.ancestorNodeIDs(of: $0.id).count > snapshot.ancestorNodeIDs(of: $1.id).count
             }
+        var removedNodes: [DOMNode] = []
         for node in sortedNodes {
-            try await page.dom.removeNode(node.id.proxyID)
+            do {
+                try await page.dom.removeNode(node.id.proxyID)
+                removedNodes.append(node)
+            } catch {
+                if removedNodes.isEmpty == false {
+                    clearSelectionIfDeleted(removedNodes.map(\.id), snapshot: snapshot, isolation: isolation)
+                    throw DOMDeletionPartialFailure(
+                        deletedNodeCount: removedNodes.count,
+                        underlyingError: error
+                    )
+                }
+                throw error
+            }
         }
-        clearSelectionIfDeleted(sortedNodes.map(\.id), snapshot: snapshot, isolation: isolation)
+        clearSelectionIfDeleted(removedNodes.map(\.id), snapshot: snapshot, isolation: isolation)
+        return removedNodes.count
     }
 
     package func delete(nodeIDs: [DOMNode.ID], isolation: isolated (any Actor) = #isolation) async throws {
+        _ = try await deleteCountingRemovedNodes(nodeIDs: nodeIDs, isolation: isolation)
+    }
+
+    @discardableResult
+    package func deleteCountingRemovedNodes(
+        nodeIDs: [DOMNode.ID],
+        isolation: isolated (any Actor) = #isolation
+    ) async throws -> Int {
         var seenNodeIDs: Set<DOMNode.ID> = []
         let nodes = try nodeIDs
             .filter { seenNodeIDs.insert($0).inserted }
             .map { try requiredNode(for: $0, isolation: isolation) }
-        try await delete(nodes, isolation: isolation)
+        return try await deleteCountingRemovedNodes(nodes, isolation: isolation)
     }
+
+    #if DEBUG
+    package func installCurrentPageRetargetTaskForTesting(_ task: Task<Void, Never>) {
+        currentPageRetargetTask = task
+    }
+    #endif
 
     public func highlight(_ node: DOMNode, isolation: isolated (any Actor) = #isolation) async throws {
         requireOwner(isolation)

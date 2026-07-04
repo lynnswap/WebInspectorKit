@@ -88,18 +88,34 @@ package final class DOMTreeViewController: UIViewController {
         context: WebInspectorContext,
         undoManager: UndoManager?
     ) async -> Bool {
+        var undoCommands: WebInspectorContext.DOMUndoRedoCommands?
+        let deletedNodeCount: Int
         do {
-            let undoCommands = try context.domUndoRedoCommands()
-            try await context.delete(nodeIDs: nodeIDs)
+            let commands = try context.domUndoRedoCommands()
+            undoCommands = commands
+            deletedNodeCount = try await context.deleteCountingRemovedNodes(nodeIDs: nodeIDs)
+        } catch let error as WebInspectorContext.DOMDeletionPartialFailure {
+            guard let undoCommands else {
+                return false
+            }
             DOMDeletionUndoRegistration.registerDeleteUndo(
                 on: undoManager,
                 commands: undoCommands,
-                deletedNodeCount: Set(nodeIDs).count
+                deletedNodeCount: error.deletedNodeCount
             )
-            return true
+            return error.deletedNodeCount > 0
         } catch {
             return false
         }
+        guard let undoCommands else {
+            return false
+        }
+        DOMDeletionUndoRegistration.registerDeleteUndo(
+            on: undoManager,
+            commands: undoCommands,
+            deletedNodeCount: deletedNodeCount
+        )
+        return deletedNodeCount > 0
     }
 
     override package func viewIsAppearing(_ animated: Bool) {

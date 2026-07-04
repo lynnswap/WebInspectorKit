@@ -1101,6 +1101,42 @@ struct DOMContainerTests {
     }
 
     @Test
+    func treeMenuMultiDeleteRegistersUndoForSuccessfulRemovalsWhenLaterDeleteFails() async throws {
+        let fixture = try await makeLiveDOMContext(document: multiDeleteDocumentNode())
+        let undoManager = UndoManager()
+        undoManager.groupsByEvent = false
+        let navigationItems = DOMNavigationItems(context: fixture.context)
+        let viewController = DOMTreeViewController(context: fixture.context)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        let treeView = viewController.displayedDOMTreeTextViewForTesting
+        await treeView.waitForRowDocumentForTesting()
+
+        treeView.primaryClickRowForTesting(containing: "<input")
+        treeView.primaryClickRowForTesting(containing: "<button", modifiers: .command)
+
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "removeNode")
+        await treeView.deleteMultiSelectionFromMenuForTesting(undoManager: undoManager)
+
+        #expect(undoManager.canUndo)
+
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "undo")
+        undoManager.undo()
+        _ = await recordedDOMCommands(on: fixture.runtime.backend, method: "undo", count: 1)
+        let didEnableRedo = await waitUntil {
+            navigationItems.canRedoForTesting(undoManager: undoManager)
+        }
+        #expect(didEnableRedo)
+
+        let commands = await fixture.runtime.backend.recordedCommands()
+        #expect(commands.domMutationUndoMethods == [
+            "removeNode",
+            "removeNode",
+            "undo",
+        ])
+    }
+
+    @Test
     func treeControllerPageHighlightCommandsFollowSelectionAndHoverPolicy() async throws {
         let selectionFixture = try await makeLiveDOMContext()
         let selectionViewController = DOMTreeViewController(context: selectionFixture.context)

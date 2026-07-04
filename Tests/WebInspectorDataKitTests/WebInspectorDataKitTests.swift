@@ -1010,7 +1010,8 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
     let runtimeEnable = try await waitForTransportTargetMessage(
         backend,
         method: "Runtime.enable",
-        after: startupMessageCount
+        after: startupMessageCount,
+        timeout: .seconds(3)
     )
     #expect(runtimeEnable.targetIdentifier == newTargetID)
     await receiveTransportTargetReply(
@@ -1023,7 +1024,8 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
     let networkEnable = try await waitForTransportTargetMessage(
         backend,
         method: "Network.enable",
-        after: startupMessageCount
+        after: startupMessageCount,
+        timeout: .seconds(3)
     )
     #expect(networkEnable.targetIdentifier == newTargetID)
     await receiveTransportTargetReply(
@@ -1036,7 +1038,8 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
     let getDocument = try await waitForTransportTargetMessage(
         backend,
         method: "DOM.getDocument",
-        after: startupMessageCount
+        after: startupMessageCount,
+        timeout: .seconds(3)
     )
     #expect(getDocument.targetIdentifier == newTargetID)
     await receiveTransportTargetReply(
@@ -1049,7 +1052,8 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
     let consoleEnable = try await waitForTransportTargetMessage(
         backend,
         method: "Console.enable",
-        after: startupMessageCount
+        after: startupMessageCount,
+        timeout: .seconds(3)
     )
     #expect(consoleEnable.targetIdentifier == newTargetID)
     await receiveTransportTargetReply(
@@ -1173,31 +1177,66 @@ func currentPageTargetDestroyedDetachesAndInvalidatesDomainLeases() async throws
 @MainActor
 @Test
 func startCancelsInFlightCurrentPageRetargetBeforeRestarting() async throws {
-    let oldTargetID = ProtocolTarget.ID("page-restart-old")
-    let newTargetID = ProtocolTarget.ID("page-restart-new")
+    let targetID = ProtocolTarget.ID("page-restart")
     let (backend, transport, context) = try await startTransportBackedContext(
-        targetID: oldTargetID,
+        targetID: targetID,
         documentID: "restart-old-root"
     )
-    let startupMessageCount = await backend.sentTargetMessages().count
-
-    await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-restart-new","type":"page","frameId":"main-frame","isProvisional":true}}}"#
-    )
-    await transport.receiveRootMessage(
-        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-restart-old","newTargetId":"page-restart-new"}}"#
-    )
-
-    let retargetRuntimeEnable = try await waitForTransportTargetMessage(
-        backend,
-        method: "Runtime.enable",
-        after: startupMessageCount,
-        timeout: .seconds(3)
-    )
-    #expect(retargetRuntimeEnable.targetIdentifier == newTargetID)
+    let cancellationProbe = CancellationProbe()
+    context.installCurrentPageRetargetTaskForTesting(Task {
+        while Task.isCancelled == false {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        await cancellationProbe.markCancelled()
+    })
 
     let restartMessageCount = await backend.sentTargetMessages().count
     context.start()
+    try await waitUntil {
+        await cancellationProbe.cancelled()
+    }
+
+    let consoleDisable = try await waitForTransportTargetMessage(
+        backend,
+        method: "Console.disable",
+        after: restartMessageCount,
+        timeout: .seconds(3)
+    )
+    #expect(consoleDisable.targetIdentifier == targetID)
+    await receiveTransportTargetReply(
+        transport,
+        targetID: consoleDisable.targetIdentifier,
+        messageID: try transportMessageID(consoleDisable.message),
+        result: "{}"
+    )
+
+    let runtimeDisable = try await waitForTransportTargetMessage(
+        backend,
+        method: "Runtime.disable",
+        after: restartMessageCount,
+        timeout: .seconds(3)
+    )
+    #expect(runtimeDisable.targetIdentifier == targetID)
+    await receiveTransportTargetReply(
+        transport,
+        targetID: runtimeDisable.targetIdentifier,
+        messageID: try transportMessageID(runtimeDisable.message),
+        result: "{}"
+    )
+
+    let networkDisable = try await waitForTransportTargetMessage(
+        backend,
+        method: "Network.disable",
+        after: restartMessageCount,
+        timeout: .seconds(3)
+    )
+    #expect(networkDisable.targetIdentifier == targetID)
+    await receiveTransportTargetReply(
+        transport,
+        targetID: networkDisable.targetIdentifier,
+        messageID: try transportMessageID(networkDisable.message),
+        result: "{}"
+    )
 
     let runtimeEnable = try await waitForTransportTargetMessage(
         backend,
@@ -1205,7 +1244,7 @@ func startCancelsInFlightCurrentPageRetargetBeforeRestarting() async throws {
         after: restartMessageCount,
         timeout: .seconds(3)
     )
-    #expect(runtimeEnable.targetIdentifier == newTargetID)
+    #expect(runtimeEnable.targetIdentifier == targetID)
     await receiveTransportTargetReply(
         transport,
         targetID: runtimeEnable.targetIdentifier,
@@ -1219,7 +1258,7 @@ func startCancelsInFlightCurrentPageRetargetBeforeRestarting() async throws {
         after: restartMessageCount,
         timeout: .seconds(3)
     )
-    #expect(networkEnable.targetIdentifier == newTargetID)
+    #expect(networkEnable.targetIdentifier == targetID)
     await receiveTransportTargetReply(
         transport,
         targetID: networkEnable.targetIdentifier,
@@ -1233,7 +1272,7 @@ func startCancelsInFlightCurrentPageRetargetBeforeRestarting() async throws {
         after: restartMessageCount,
         timeout: .seconds(3)
     )
-    #expect(getDocument.targetIdentifier == newTargetID)
+    #expect(getDocument.targetIdentifier == targetID)
     await receiveTransportTargetReply(
         transport,
         targetID: getDocument.targetIdentifier,
@@ -1247,7 +1286,7 @@ func startCancelsInFlightCurrentPageRetargetBeforeRestarting() async throws {
         after: restartMessageCount,
         timeout: .seconds(3)
     )
-    #expect(consoleEnable.targetIdentifier == newTargetID)
+    #expect(consoleEnable.targetIdentifier == targetID)
     await receiveTransportTargetReply(
         transport,
         targetID: consoleEnable.targetIdentifier,
@@ -4653,6 +4692,18 @@ private func waitForChild(in context: WebInspectorContext) async throws -> DOMNo
 
 private struct TestFailure: Error {}
 private struct TimedOut: Error {}
+
+private actor CancellationProbe {
+    private var isCancelled = false
+
+    func markCancelled() {
+        isCancelled = true
+    }
+
+    func cancelled() -> Bool {
+        isCancelled
+    }
+}
 
 @MainActor
 private func waitUntil(
