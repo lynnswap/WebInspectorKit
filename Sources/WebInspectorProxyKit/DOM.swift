@@ -326,3 +326,27 @@ public enum DOM {
         }
     }
 }
+
+package extension DOM.Node.ID {
+    private static var targetScopeSeparator: Character { "\u{1E}" }
+
+    init(_ rawValue: String, scopedToTargetRawValue targetRawValue: String) {
+        self.init("\(targetRawValue)\(Self.targetScopeSeparator)\(rawValue)")
+    }
+
+    var targetScopeRawValue: String? {
+        let parts = rawValue.split(separator: Self.targetScopeSeparator, maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2 else {
+            return nil
+        }
+        return String(parts[0])
+    }
+
+    var unscopedRawValue: String {
+        let parts = rawValue.split(separator: Self.targetScopeSeparator, maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2 else {
+            return rawValue
+        }
+        return String(parts[1])
+    }
+}

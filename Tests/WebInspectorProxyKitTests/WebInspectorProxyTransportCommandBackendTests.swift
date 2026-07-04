@@ -782,6 +782,156 @@ func transportBackendNormalizesInspectorInspectToDOMInspectEvent() async throws 
 }
 
 @Test
+func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+
+    let eventTask = Task {
+        var iterator = target.dom.events.makeAsyncIterator()
+        let first = await iterator.next()
+        let second = await iterator.next()
+        return [first, second].compactMap { $0 }
+    }
+
+    await waitForEventSubscription(target, domain: .dom)
+    await waitForEventSubscription(target, domain: .inspector)
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("frame-target"),
+        method: "Inspector.inspect",
+        params: #"{"object":{"objectId":"remote-frame-node","type":"object","subtype":"node"},"hints":{}}"#
+    )
+
+    let requestNode = try await waitForTargetMessage(backend, method: "DOM.requestNode")
+    #expect(requestNode.targetIdentifier == ProtocolTarget.ID("frame-target"))
+    #expect(try messageParameters(requestNode.message)["objectId"] as? String == "remote-frame-node")
+    await receiveTargetReply(
+        transport,
+        targetID: requestNode.targetIdentifier,
+        messageID: try messageID(requestNode.message),
+        result: #"{"nodeId":42}"#
+    )
+
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("frame-target"),
+        method: "DOM.setChildNodes",
+        params: #"{"parentId":42,"nodes":[{"nodeId":43,"nodeType":1,"nodeName":"SPAN","localName":"span","nodeValue":"","childNodeCount":0}]}"#
+    )
+
+    let events = try await value(of: eventTask)
+    #expect(events.count == 2)
+    guard case let .inspect(nodeID)? = events.first else {
+        Issue.record("Expected frame Inspector.inspect to normalize to DOM.inspect.")
+        return
+    }
+    #expect(nodeID == DOM.Node.ID("42", scopedToTargetRawValue: "frame-target"))
+    guard case let .setChildNodes(parentID, nodes)? = events.last else {
+        Issue.record("Expected frame DOM.setChildNodes to be projected into the current page DOM stream.")
+        return
+    }
+    #expect(parentID == DOM.Node.ID("42", scopedToTargetRawValue: "frame-target"))
+    #expect(nodes.first?.id == DOM.Node.ID("43", scopedToTargetRawValue: "frame-target"))
+
+    let highlightTask = Task {
+        try await target.dom.highlightNode(nodeID)
+    }
+    let highlight = try await waitForTargetMessage(backend, method: "DOM.highlightNode")
+    #expect(highlight.targetIdentifier == ProtocolTarget.ID("frame-target"))
+    #expect((try messageParameters(highlight.message)["nodeId"] as? NSNumber)?.intValue == 42)
+    await receiveTargetReply(
+        transport,
+        targetID: highlight.targetIdentifier,
+        messageID: try messageID(highlight.message),
+        result: "{}"
+    )
+    try await highlightTask.value
+
+    let messageCountAfterFrameHighlight = await backend.sentTargetMessages().count
+    let mainHighlightTask = Task {
+        try await target.dom.highlightNode(DOM.Node.ID("42"))
+    }
+    let mainHighlight = try await waitForTargetMessage(
+        backend,
+        method: "DOM.highlightNode",
+        after: messageCountAfterFrameHighlight
+    )
+    #expect(mainHighlight.targetIdentifier == ProtocolTarget.ID("page-main"))
+    #expect((try messageParameters(mainHighlight.message)["nodeId"] as? NSNumber)?.intValue == 42)
+    await receiveTargetReply(
+        transport,
+        targetID: mainHighlight.targetIdentifier,
+        messageID: try messageID(mainHighlight.message),
+        result: "{}"
+    )
+    try await mainHighlightTask.value
+
+    let matchedStylesTask = Task {
+        try await target.css.matchedStyles(for: nodeID)
+    }
+    let matchedStyles = try await waitForTargetMessage(backend, method: "CSS.getMatchedStylesForNode")
+    #expect(matchedStyles.targetIdentifier == ProtocolTarget.ID("frame-target"))
+    #expect((try messageParameters(matchedStyles.message)["nodeId"] as? NSNumber)?.intValue == 42)
+    await receiveTargetReply(
+        transport,
+        targetID: matchedStyles.targetIdentifier,
+        messageID: try messageID(matchedStyles.message),
+        result: """
+        {
+          "matchedCSSRules": [
+            {
+              "rule": {
+                "selectorList": {"selectors": [{"text": ".frame"}], "text": ".frame"},
+                "origin": "author",
+                "style": {
+                  "styleId": {"styleSheetId": "frame-sheet", "ordinal": 7},
+                  "cssProperties": [{"name": "color", "value": "red"}],
+                  "cssText": "color: red;"
+                }
+              },
+              "matchingSelectors": [0]
+            }
+          ],
+          "inherited": [],
+          "pseudoElements": []
+        }
+        """
+    )
+    let frameStyles = try await matchedStylesTask.value
+    let frameStyle = try #require(frameStyles.matchedRules.first?.style)
+    #expect(frameStyle.id.targetScopeRawValue == "frame-target")
+    #expect(frameStyle.id.unscopedRawValue != frameStyle.id.rawValue)
+
+    let setStyleTextTask = Task {
+        try await target.css.setStyleText(frameStyle.id, text: "color: blue;")
+    }
+    let setStyleText = try await waitForTargetMessage(backend, method: "CSS.setStyleText")
+    #expect(setStyleText.targetIdentifier == ProtocolTarget.ID("frame-target"))
+    await receiveTargetReply(
+        transport,
+        targetID: setStyleText.targetIdentifier,
+        messageID: try messageID(setStyleText.message),
+        result: """
+        {
+          "style": {
+            "styleId": {"styleSheetId": "frame-sheet", "ordinal": 7},
+            "cssProperties": [{"name": "color", "value": "blue"}],
+            "cssText": "color: blue;"
+          }
+        }
+        """
+    )
+    let updatedFrameStyle = try await setStyleTextTask.value
+    #expect(updatedFrameStyle.id.targetScopeRawValue == "frame-target")
+}
+
+@Test
 func transportBackendDecodesNetworkResponseEventForTargetRoute() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
@@ -813,6 +963,130 @@ func transportBackendDecodesNetworkResponseEventForTargetRoute() async throws {
     #expect(response.source == Network.Source(rawValue: "network"))
     #expect(resourceType == .document)
     #expect(timestamp == 12.5)
+}
+
+@Test
+func transportBackendDeliversFrameNetworkEventsToCurrentPageRoute() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+    #expect(target.route == .currentPage)
+
+    let eventTask = Task {
+        var iterator = target.network.events.makeAsyncIterator()
+        return await iterator.next()
+    }
+
+    await waitForEventSubscription(target, domain: .network)
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("frame-target"),
+        method: "Network.requestWillBeSent",
+        params: #"{"requestId":"frame-request","frameId":"child-frame","request":{"url":"https://frame.example.test/","method":"GET"},"timestamp":7.5,"type":"Document"}"#
+    )
+
+    let event = try #require(try await value(of: eventTask))
+    guard case let .requestWillBeSent(id, request, resourceType, _, timestamp) = event else {
+        Issue.record("Expected current-page route to receive frame Network.requestWillBeSent.")
+        return
+    }
+    #expect(id == Network.Request.ID("frame-request", scopedToTargetRawValue: "frame-target"))
+    #expect(request.id == id)
+    #expect(request.url == "https://frame.example.test/")
+    #expect(request.method == "GET")
+    #expect(resourceType == .document)
+    #expect(timestamp == 7.5)
+
+    let bodyTask = Task {
+        try await target.network.responseBody(for: id)
+    }
+    let bodyCommand = try await waitForTargetMessage(backend, method: "Network.getResponseBody")
+    #expect(bodyCommand.targetIdentifier == ProtocolTarget.ID("frame-target"))
+    #expect(try messageParameters(bodyCommand.message)["requestId"] as? String == "frame-request")
+    await receiveTargetReply(
+        transport,
+        targetID: bodyCommand.targetIdentifier,
+        messageID: try messageID(bodyCommand.message),
+        result: #"{"body":"frame body","base64Encoded":false}"#
+    )
+    let body = try await bodyTask.value
+    #expect(body.data == "frame body")
+    #expect(body.base64Encoded == false)
+}
+
+@Test
+func transportBackendDoesNotDeliverUnrelatedFrameNetworkEventsToCurrentPageRoute() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"other-frame-target","type":"frame","frameId":"other-child-frame","parentFrameId":"other-main-frame","isProvisional":false}}}"#
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+    #expect(target.route == .currentPage)
+
+    let eventProbe = CompletionProbe()
+    let eventTask = Task {
+        var iterator = target.network.events.makeAsyncIterator()
+        if await iterator.next() != nil {
+            await eventProbe.finish()
+        }
+    }
+    defer {
+        eventTask.cancel()
+    }
+
+    await waitForEventSubscription(target, domain: .network)
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("other-frame-target"),
+        method: "Network.requestWillBeSent",
+        params: #"{"requestId":"other-frame-request","frameId":"other-child-frame","request":{"url":"https://other-frame.example.test/","method":"GET"},"timestamp":8.5,"type":"Document"}"#
+    )
+
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(await eventProbe.isFinished() == false)
+}
+
+@Test
+func transportBackendDoesNotDeliverFrameDocumentUpdatedToCurrentPageDOMRoute() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+    #expect(target.route == .currentPage)
+
+    let eventProbe = CompletionProbe()
+    let eventTask = Task {
+        var iterator = target.dom.events.makeAsyncIterator()
+        if await iterator.next() != nil {
+            await eventProbe.finish()
+        }
+    }
+    defer {
+        eventTask.cancel()
+    }
+
+    await waitForEventSubscription(target, domain: .dom)
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("frame-target"),
+        method: "DOM.documentUpdated",
+        params: "{}"
+    )
+
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(await eventProbe.isFinished() == false)
 }
 
 @Test

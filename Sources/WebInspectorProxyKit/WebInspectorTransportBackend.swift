@@ -56,11 +56,12 @@ package struct WebInspectorTransportBackend: WebInspectorProxyBackend {
                     }
                     do {
                         let lifecycleTarget = await lifecycleTarget(for: event, route: route, targetID: targetID)
-                        continuation.yield(try WebInspectorTransportEventDecoder.proxyEvent(
+                        let proxyEvent = try WebInspectorTransportEventDecoder.proxyEvent(
                             from: event,
                             targetID: targetID,
                             lifecycleTarget: lifecycleTarget
-                        ))
+                        )
+                        continuation.yield(await projectedEvent(proxyEvent, from: event, route: route))
                     } catch {
                         preconditionFailure("Failed to decode \(event.method): \(error)")
                     }
@@ -119,8 +120,306 @@ package struct WebInspectorTransportBackend: WebInspectorProxyBackend {
             guard let targetID = event.targetID else {
                 return true
             }
-            return targetID == currentMainPageTargetID
+            if targetID == currentMainPageTargetID {
+                return true
+            }
+            guard let record = snapshot.targetsByID[targetID] else {
+                return false
+            }
+            // WebKit reports subframe picker and request activity on frame
+            // targets while WebInspectorKit exposes a semantic current page.
+            switch event.domain {
+            case .dom:
+                guard event.method != "DOM.documentUpdated" else {
+                    return false
+                }
+                return isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
+            case .inspector:
+                return isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
+            case .network:
+                // WebKit's page/ProxyingNetworkAgent owns process-wide
+                // Network.enable. This branch only projects target-wrapped
+                // frame Network events if WebKit emits them.
+                return isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
+            default:
+                return false
+            }
         }
+    }
+
+    private nonisolated func isCurrentPageFrameTarget(
+        _ record: ProtocolTarget.Record,
+        in snapshot: TransportSession.Snapshot,
+        currentMainPageTargetID: ProtocolTarget.ID
+    ) -> Bool {
+        guard record.kind == .frame,
+              let mainFrameID = snapshot.targetsByID[currentMainPageTargetID]?.frameID,
+              var parentFrameID = record.parentFrameID else {
+            return false
+        }
+
+        var visitedFrameIDs = Set<ProtocolFrame.ID>()
+        while visitedFrameIDs.insert(parentFrameID).inserted {
+            if parentFrameID == mainFrameID {
+                return true
+            }
+            guard let parentTargetID = snapshot.frameTargetIDsByFrameID[parentFrameID],
+                  let parentRecord = snapshot.targetsByID[parentTargetID],
+                  let nextParentFrameID = parentRecord.parentFrameID else {
+                return false
+            }
+            parentFrameID = nextParentFrameID
+        }
+        return false
+    }
+
+    private nonisolated func projectedEvent(
+        _ proxyEvent: WebInspectorProxyEvent,
+        from event: ProtocolEvent,
+        route: RoutingTargetID
+    ) async -> WebInspectorProxyEvent {
+        guard case .currentPage = route.storage,
+              let targetID = event.targetID else {
+            return proxyEvent
+        }
+        let snapshot = await transport.snapshot()
+        if event.domain == .inspector,
+           targetID == snapshot.currentMainPageTargetID {
+            return mainPageInspectorEvent(proxyEvent)
+        }
+        guard let currentMainPageTargetID = snapshot.currentMainPageTargetID,
+              targetID != currentMainPageTargetID,
+              let record = snapshot.targetsByID[targetID],
+              isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID) else {
+            return proxyEvent
+        }
+        switch proxyEvent {
+        case let .dom(domEvent):
+            return .dom(scopedDOMEvent(domEvent, targetRawValue: targetID.rawValue))
+        case let .network(networkEvent):
+            return .network(scopedNetworkEvent(networkEvent, targetRawValue: targetID.rawValue))
+        default:
+            return proxyEvent
+        }
+    }
+
+    private nonisolated func mainPageInspectorEvent(
+        _ proxyEvent: WebInspectorProxyEvent
+    ) -> WebInspectorProxyEvent {
+        guard case let .inspector(event) = proxyEvent,
+              case let .inspect(object, hints, _) = event else {
+            return proxyEvent
+        }
+        return .inspector(.inspect(object, hints: hints, origin: nil))
+    }
+
+    private nonisolated func scopedDOMEvent(
+        _ event: DOM.Event,
+        targetRawValue: String
+    ) -> DOM.Event {
+        switch event {
+        case .documentUpdated:
+            .documentUpdated
+        case let .setChildNodes(parent, nodes):
+            .setChildNodes(
+                parent: scopedDOMNodeID(parent, targetRawValue: targetRawValue),
+                nodes: nodes.map { scopedDOMNode($0, targetRawValue: targetRawValue) }
+            )
+        case let .detachedRoot(node):
+            .detachedRoot(scopedDOMNode(node, targetRawValue: targetRawValue))
+        case let .childNodeInserted(parent, previous, node):
+            .childNodeInserted(
+                parent: scopedDOMNodeID(parent, targetRawValue: targetRawValue),
+                previous: previous.map { scopedDOMNodeID($0, targetRawValue: targetRawValue) },
+                node: scopedDOMNode(node, targetRawValue: targetRawValue)
+            )
+        case let .childNodeRemoved(parent, node):
+            .childNodeRemoved(
+                parent: scopedDOMNodeID(parent, targetRawValue: targetRawValue),
+                node: scopedDOMNodeID(node, targetRawValue: targetRawValue)
+            )
+        case let .childNodeCountUpdated(node, count):
+            .childNodeCountUpdated(scopedDOMNodeID(node, targetRawValue: targetRawValue), count: count)
+        case let .attributeModified(node, name, value):
+            .attributeModified(scopedDOMNodeID(node, targetRawValue: targetRawValue), name: name, value: value)
+        case let .attributeRemoved(node, name):
+            .attributeRemoved(scopedDOMNodeID(node, targetRawValue: targetRawValue), name: name)
+        case let .characterDataModified(node, value):
+            .characterDataModified(scopedDOMNodeID(node, targetRawValue: targetRawValue), value: value)
+        case let .shadowRootPushed(host, root):
+            .shadowRootPushed(
+                host: scopedDOMNodeID(host, targetRawValue: targetRawValue),
+                root: scopedDOMNode(root, targetRawValue: targetRawValue)
+            )
+        case let .shadowRootPopped(host, root):
+            .shadowRootPopped(
+                host: scopedDOMNodeID(host, targetRawValue: targetRawValue),
+                root: scopedDOMNodeID(root, targetRawValue: targetRawValue)
+            )
+        case let .pseudoElementAdded(parent, element):
+            .pseudoElementAdded(
+                parent: scopedDOMNodeID(parent, targetRawValue: targetRawValue),
+                element: scopedDOMNode(element, targetRawValue: targetRawValue)
+            )
+        case let .pseudoElementRemoved(parent, element):
+            .pseudoElementRemoved(
+                parent: scopedDOMNodeID(parent, targetRawValue: targetRawValue),
+                element: scopedDOMNodeID(element, targetRawValue: targetRawValue)
+            )
+        case let .inspect(node):
+            .inspect(scopedDOMNodeID(node, targetRawValue: targetRawValue))
+        case let .unknown(rawEvent):
+            .unknown(rawEvent)
+        }
+    }
+
+    private nonisolated func scopedDOMNode(
+        _ node: DOM.Node,
+        targetRawValue: String
+    ) -> DOM.Node {
+        DOM.Node(
+            id: scopedDOMNodeID(node.id, targetRawValue: targetRawValue),
+            nodeType: node.nodeType,
+            nodeName: node.nodeName,
+            localName: node.localName,
+            nodeValue: node.nodeValue,
+            frameID: node.frameID,
+            documentURL: node.documentURL,
+            baseURL: node.baseURL,
+            attributes: node.attributes,
+            attributeList: node.attributeList,
+            childNodeCount: node.childNodeCount,
+            children: node.children?.map { scopedDOMNode($0, targetRawValue: targetRawValue) },
+            contentDocument: node.contentDocument.map { scopedDOMNode($0, targetRawValue: targetRawValue) },
+            shadowRoots: node.shadowRoots.map { scopedDOMNode($0, targetRawValue: targetRawValue) },
+            templateContent: node.templateContent.map { scopedDOMNode($0, targetRawValue: targetRawValue) },
+            beforePseudoElement: node.beforePseudoElement.map { scopedDOMNode($0, targetRawValue: targetRawValue) },
+            otherPseudoElements: node.otherPseudoElements.map { scopedDOMNode($0, targetRawValue: targetRawValue) },
+            afterPseudoElement: node.afterPseudoElement.map { scopedDOMNode($0, targetRawValue: targetRawValue) },
+            pseudoType: node.pseudoType,
+            shadowRootType: node.shadowRootType
+        )
+    }
+
+    private nonisolated func scopedDOMNodeID(
+        _ id: DOM.Node.ID,
+        targetRawValue: String
+    ) -> DOM.Node.ID {
+        guard id.targetScopeRawValue == nil else {
+            return id
+        }
+        return DOM.Node.ID(id.rawValue, scopedToTargetRawValue: targetRawValue)
+    }
+
+    private nonisolated func scopedNetworkEvent(
+        _ event: Network.Event,
+        targetRawValue: String
+    ) -> Network.Event {
+        switch event {
+        case let .requestWillBeSent(id, request, resourceType, redirectResponse, timestamp):
+            .requestWillBeSent(
+                id: scopedNetworkRequestID(id, targetRawValue: targetRawValue),
+                request: scopedNetworkRequest(request, targetRawValue: targetRawValue),
+                resourceType: resourceType,
+                redirectResponse: redirectResponse,
+                timestamp: timestamp
+            )
+        case let .responseReceived(id, response, resourceType, timestamp):
+            .responseReceived(
+                id: scopedNetworkRequestID(id, targetRawValue: targetRawValue),
+                response: response,
+                resourceType: resourceType,
+                timestamp: timestamp
+            )
+        case let .dataReceived(id, dataLength, encodedDataLength, timestamp):
+            .dataReceived(
+                id: scopedNetworkRequestID(id, targetRawValue: targetRawValue),
+                dataLength: dataLength,
+                encodedDataLength: encodedDataLength,
+                timestamp: timestamp
+            )
+        case let .loadingFinished(id, timestamp, sourceMapURL, metrics):
+            .loadingFinished(
+                id: scopedNetworkRequestID(id, targetRawValue: targetRawValue),
+                timestamp: timestamp,
+                sourceMapURL: sourceMapURL,
+                metrics: metrics
+            )
+        case let .loadingFailed(id, errorText, canceled, timestamp):
+            .loadingFailed(
+                id: scopedNetworkRequestID(id, targetRawValue: targetRawValue),
+                errorText: errorText,
+                canceled: canceled,
+                timestamp: timestamp
+            )
+        case let .requestServedFromMemoryCache(id, response, timestamp):
+            .requestServedFromMemoryCache(
+                id: scopedNetworkRequestID(id, targetRawValue: targetRawValue),
+                response: response,
+                timestamp: timestamp
+            )
+        case let .webSocket(event):
+            .webSocket(scopedWebSocketEvent(event, targetRawValue: targetRawValue))
+        case let .unknown(rawEvent):
+            .unknown(rawEvent)
+        }
+    }
+
+    private nonisolated func scopedWebSocketEvent(
+        _ event: Network.WebSocketEvent,
+        targetRawValue: String
+    ) -> Network.WebSocketEvent {
+        switch event {
+        case let .created(id, url):
+            .created(id: scopedNetworkRequestID(id, targetRawValue: targetRawValue), url: url)
+        case let .handshakeRequest(id, request, timestamp):
+            .handshakeRequest(
+                id: scopedNetworkRequestID(id, targetRawValue: targetRawValue),
+                request: scopedNetworkRequest(request, targetRawValue: targetRawValue),
+                timestamp: timestamp
+            )
+        case let .handshakeResponse(id, response, timestamp):
+            .handshakeResponse(
+                id: scopedNetworkRequestID(id, targetRawValue: targetRawValue),
+                response: response,
+                timestamp: timestamp
+            )
+        case let .closed(id, timestamp):
+            .closed(id: scopedNetworkRequestID(id, targetRawValue: targetRawValue), timestamp: timestamp)
+        case let .frameSent(id, frame, timestamp):
+            .frameSent(id: scopedNetworkRequestID(id, targetRawValue: targetRawValue), frame: frame, timestamp: timestamp)
+        case let .frameReceived(id, frame, timestamp):
+            .frameReceived(id: scopedNetworkRequestID(id, targetRawValue: targetRawValue), frame: frame, timestamp: timestamp)
+        case let .error(id, message, timestamp):
+            .error(id: scopedNetworkRequestID(id, targetRawValue: targetRawValue), message: message, timestamp: timestamp)
+        case let .other(rawEvent):
+            .other(rawEvent)
+        }
+    }
+
+    private nonisolated func scopedNetworkRequest(
+        _ request: Network.Request,
+        targetRawValue: String
+    ) -> Network.Request {
+        Network.Request(
+            id: scopedNetworkRequestID(request.id, targetRawValue: targetRawValue),
+            url: request.url,
+            method: request.method,
+            headers: request.headers,
+            postData: request.postData,
+            referrerPolicy: request.referrerPolicy,
+            integrity: request.integrity
+        )
+    }
+
+    private nonisolated func scopedNetworkRequestID(
+        _ id: Network.Request.ID,
+        targetRawValue: String
+    ) -> Network.Request.ID {
+        guard id.targetScopeRawValue == nil else {
+            return id
+        }
+        return Network.Request.ID(id.rawValue, scopedToTargetRawValue: targetRawValue)
     }
 
     private nonisolated func lifecycleTarget(
@@ -314,7 +613,7 @@ private enum WebInspectorTransportCommandEncoder {
 
         case (.network, "getResponseBody"):
             let payload = try payload(command.payload, as: Network.GetResponseBodyPayload.self, command: command)
-            return try data(["requestId": payload.id.rawValue])
+            return try data(["requestId": payload.id.unscopedRawValue])
 
         case (.console, "setLoggingChannelLevel"):
             let payload = try payload(command.payload, as: Console.SetLoggingChannelLevelPayload.self, command: command)
@@ -403,6 +702,7 @@ private enum WebInspectorTransportCommandEncoder {
     }
 
     private static func nodeIDValue(_ rawValue: String) -> Any {
+        let rawValue = DOM.Node.ID(rawValue).unscopedRawValue
         if let value = Int(rawValue) {
             return value
         }
@@ -413,7 +713,8 @@ private enum WebInspectorTransportCommandEncoder {
         _ id: CSS.Style.ID,
         command: WebInspectorProxyCommand<Payload, Result>
     ) throws -> [String: Any] {
-        let components = id.rawValue.split(separator: CSSStyleIDPayload.separator, omittingEmptySubsequences: false)
+        let rawValue = id.unscopedRawValue
+        let components = rawValue.split(separator: CSSStyleIDPayload.separator, omittingEmptySubsequences: false)
         guard components.count == 2,
               let ordinal = Int(components[1]) else {
             throw WebInspectorProxyError.commandFailed(
@@ -496,11 +797,11 @@ private enum WebInspectorTransportCommandDecoder {
         }
         if Result.self == CSS.MatchedStyles.self {
             let payload = try decode(CSSMatchedStylesResult.self, from: result.resultData)
-            return payload.proxyMatchedStyles() as! Result
+            return payload.proxyMatchedStyles(targetScopeRawValue: targetScopeRawValue(for: command)) as! Result
         }
         if Result.self == CSS.InlineStyles.self {
             let payload = try decode(CSSInlineStylesResult.self, from: result.resultData)
-            return payload.proxyInlineStyles as! Result
+            return payload.proxyInlineStyles(targetScopeRawValue: targetScopeRawValue(for: command)) as! Result
         }
         if Result.self == [CSS.ComputedProperty].self {
             let payload = try decode(CSSComputedStyleResult.self, from: result.resultData)
@@ -508,7 +809,7 @@ private enum WebInspectorTransportCommandDecoder {
         }
         if Result.self == CSS.Style.self {
             let payload = try decode(CSSSetStyleTextResult.self, from: result.resultData)
-            return payload.style.proxyStyle() as! Result
+            return payload.style.proxyStyle(targetScopeRawValue: targetScopeRawValue(for: command)) as! Result
         }
         if Result.self == Runtime.EvaluationResult.self {
             let payload = try decode(RuntimeEvaluationResultPayload.self, from: result.resultData)
@@ -536,6 +837,15 @@ private enum WebInspectorTransportCommandDecoder {
 
     private static func decode<Payload: Decodable>(_ type: Payload.Type, from data: Data) throws -> Payload {
         try JSONDecoder().decode(type, from: data)
+    }
+
+    private static func targetScopeRawValue<Payload: Sendable, Result: Sendable>(
+        for command: WebInspectorProxyCommand<Payload, Result>
+    ) -> String? {
+        guard case let .target(rawValue) = command.route.storage else {
+            return nil
+        }
+        return rawValue
     }
 
     private struct DocumentResult: Decodable {
@@ -570,11 +880,11 @@ private struct CSSMatchedStylesResult: Decodable {
     var pseudoElements: [CSSPseudoIDMatchesPayload]?
     var inherited: [CSSInheritedStyleEntryPayload]?
 
-    func proxyMatchedStyles() -> CSS.MatchedStyles {
+    func proxyMatchedStyles(targetScopeRawValue: String?) -> CSS.MatchedStyles {
         CSS.MatchedStyles(
-            matchedRules: matchedCSSRules?.map { $0.rule.proxyRule() } ?? [],
-            inherited: inherited?.map(\.proxyEntry) ?? [],
-            pseudoElements: pseudoElements?.map(\.proxyMatches) ?? []
+            matchedRules: matchedCSSRules?.map { $0.rule.proxyRule(targetScopeRawValue: targetScopeRawValue) } ?? [],
+            inherited: inherited?.map { $0.proxyEntry(targetScopeRawValue: targetScopeRawValue) } ?? [],
+            pseudoElements: pseudoElements?.map { $0.proxyMatches(targetScopeRawValue: targetScopeRawValue) } ?? []
         )
     }
 }
@@ -583,10 +893,16 @@ private struct CSSInlineStylesResult: Decodable {
     var inlineStyle: CSSStylePayload?
     var attributesStyle: CSSStylePayload?
 
-    var proxyInlineStyles: CSS.InlineStyles {
+    func proxyInlineStyles(targetScopeRawValue: String?) -> CSS.InlineStyles {
         CSS.InlineStyles(
-            inlineStyle: inlineStyle?.proxyStyle(fallbackID: "anonymous:inline"),
-            attributesStyle: attributesStyle?.proxyStyle(fallbackID: "anonymous:attributes")
+            inlineStyle: inlineStyle?.proxyStyle(
+                fallbackID: "anonymous:inline",
+                targetScopeRawValue: targetScopeRawValue
+            ),
+            attributesStyle: attributesStyle?.proxyStyle(
+                fallbackID: "anonymous:attributes",
+                targetScopeRawValue: targetScopeRawValue
+            )
         )
     }
 }
@@ -685,10 +1001,10 @@ private struct CSSPseudoIDMatchesPayload: Decodable {
     var pseudoId: FlexibleStringPayload
     var matches: [CSSRuleMatchPayload]
 
-    var proxyMatches: CSS.MatchedStyles.PseudoElementMatches {
+    func proxyMatches(targetScopeRawValue: String?) -> CSS.MatchedStyles.PseudoElementMatches {
         CSS.MatchedStyles.PseudoElementMatches(
             pseudoID: pseudoId.stringValue,
-            matchedRules: matches.map { $0.rule.proxyRule() }
+            matchedRules: matches.map { $0.rule.proxyRule(targetScopeRawValue: targetScopeRawValue) }
         )
     }
 }
@@ -712,10 +1028,13 @@ private struct CSSInheritedStyleEntryPayload: Decodable {
     var inlineStyle: CSSStylePayload?
     var matchedCSSRules: [CSSRuleMatchPayload]?
 
-    var proxyEntry: CSS.MatchedStyles.InheritedEntry {
+    func proxyEntry(targetScopeRawValue: String?) -> CSS.MatchedStyles.InheritedEntry {
         CSS.MatchedStyles.InheritedEntry(
-            inlineStyle: inlineStyle?.proxyStyle(fallbackID: "anonymous:inherited-inline"),
-            matchedRules: matchedCSSRules?.map { $0.rule.proxyRule() } ?? []
+            inlineStyle: inlineStyle?.proxyStyle(
+                fallbackID: "anonymous:inherited-inline",
+                targetScopeRawValue: targetScopeRawValue
+            ),
+            matchedRules: matchedCSSRules?.map { $0.rule.proxyRule(targetScopeRawValue: targetScopeRawValue) } ?? []
         )
     }
 }
@@ -731,7 +1050,7 @@ private struct CSSRulePayload: Decodable {
     var groupings: [CSSGroupingPayload]?
     var isImplicitlyNested: Bool?
 
-    func proxyRule() -> CSS.Rule {
+    func proxyRule(targetScopeRawValue: String?) -> CSS.Rule {
         let fallbackStyleID = "anonymous:rule:\(origin):\(selectorList.text):\(sourceURL ?? ""):\(sourceLine ?? -1)"
         return CSS.Rule(
             id: ruleId.map { CSS.Rule.ID($0.rawValue) },
@@ -740,7 +1059,7 @@ private struct CSSRulePayload: Decodable {
             sourceLine: sourceLine,
             sourceLocation: sourceLocation?.proxyRange,
             origin: CSS.Origin(rawValue: origin),
-            style: style.proxyStyle(fallbackID: fallbackStyleID),
+            style: style.proxyStyle(fallbackID: fallbackStyleID, targetScopeRawValue: targetScopeRawValue),
             groupings: groupings?.map(\.proxyGrouping) ?? [],
             isImplicitlyNested: isImplicitlyNested ?? false
         )
@@ -782,13 +1101,19 @@ private struct CSSStylePayload: Decodable {
     var width: String?
     var height: String?
 
-    func proxyStyle(fallbackID: String = "anonymous:style") -> CSS.Style {
+    func proxyStyle(
+        fallbackID: String = "anonymous:style",
+        targetScopeRawValue: String? = nil
+    ) -> CSS.Style {
         let rawStyleID = styleId?.rawValue ?? fallbackID
+        let styleID = targetScopeRawValue.map {
+            CSS.Style.ID(rawStyleID, scopedToTargetRawValue: $0)
+        } ?? CSS.Style.ID(rawStyleID)
         let isEditable = styleId != nil
         return CSS.Style(
-            id: CSS.Style.ID(rawStyleID),
+            id: styleID,
             properties: cssProperties.enumerated().map { offset, payload in
-                payload.proxyProperty(styleID: rawStyleID, index: offset, isEditable: isEditable)
+                payload.proxyProperty(styleID: styleID.rawValue, index: offset, isEditable: isEditable)
             },
             shorthandEntries: shorthandEntries?.map(\.proxyEntry) ?? [],
             cssText: cssText ?? "",

@@ -6,6 +6,11 @@ import WebInspectorTransport
 
 private let logger = Logger(subsystem: "WebInspectorKit", category: "WebInspectorProxy")
 
+private struct ProtocolCommandTarget: Sendable {
+    var targetID: WebInspectorTarget.ID
+    var route: RoutingTargetID
+}
+
 public actor WebInspectorProxy {
     public struct Configuration: Equatable, Sendable {
         public var responseTimeout: Duration
@@ -238,9 +243,15 @@ public actor WebInspectorProxy {
         guard let backend else {
             throw unimplementedCommand(domain: domain.rawValue, method: method)
         }
-        let command = WebInspectorProxyCommand<Payload, Result>(
+        let commandTarget = resolvedCommandTarget(
             targetID: targetID,
             route: route,
+            domain: domain,
+            payload: payload
+        )
+        let command = WebInspectorProxyCommand<Payload, Result>(
+            targetID: commandTarget.targetID,
+            route: commandTarget.route,
             domain: domain,
             method: method,
             payload: payload
@@ -410,24 +421,130 @@ public actor WebInspectorProxy {
         route: RoutingTargetID,
         continuation: AsyncStream<DOM.Event>.Continuation
     ) async {
-        guard case let .inspect(object, _) = event else {
+        guard case let .inspect(object, _, origin) = event else {
             return
         }
         guard object.subtype?.rawValue == "node", let objectID = object.id else {
             return
         }
+        let commandTargetID = origin?.targetID ?? targetID
+        let commandRoute = origin?.route ?? route
         do {
             let nodeID: DOM.Node.ID = try await dispatchCommand(
-                targetID: targetID,
-                route: route,
+                targetID: commandTargetID,
+                route: commandRoute,
                 domain: .dom,
                 method: "requestNode",
                 payload: DOM.RequestNodePayload(objectID: objectID)
             )
-            continuation.yield(.inspect(nodeID))
+            let projectedNodeID = Self.projectedDOMNodeID(nodeID, targetID: commandTargetID, route: route)
+            continuation.yield(.inspect(projectedNodeID))
         } catch {
             continuation.yield(.unknown(RawEvent(domain: "Inspector", method: "inspect")))
         }
+    }
+
+    private func resolvedCommandTarget<Payload: Sendable>(
+        targetID: WebInspectorTarget.ID,
+        route: RoutingTargetID,
+        domain: WebInspectorProxyDomain,
+        payload: Payload
+    ) -> ProtocolCommandTarget {
+        guard route == .currentPage else {
+            return ProtocolCommandTarget(targetID: targetID, route: route)
+        }
+        if let nodeID = Self.nodeID(from: payload, domain: domain) {
+            if let scopedTargetRawValue = nodeID.targetScopeRawValue {
+                return ProtocolCommandTarget(
+                    targetID: WebInspectorTarget.ID(scopedTargetRawValue),
+                    route: RoutingTargetID(scopedTargetRawValue)
+                )
+            }
+        }
+        if let styleID = Self.styleID(from: payload, domain: domain),
+           let scopedTargetRawValue = styleID.targetScopeRawValue {
+            return ProtocolCommandTarget(
+                targetID: WebInspectorTarget.ID(scopedTargetRawValue),
+                route: RoutingTargetID(scopedTargetRawValue)
+            )
+        }
+        if let requestID = Self.networkRequestID(from: payload, domain: domain),
+           let scopedTargetRawValue = requestID.targetScopeRawValue {
+            return ProtocolCommandTarget(
+                targetID: WebInspectorTarget.ID(scopedTargetRawValue),
+                route: RoutingTargetID(scopedTargetRawValue)
+            )
+        }
+        return ProtocolCommandTarget(targetID: targetID, route: route)
+    }
+
+    private nonisolated static func projectedDOMNodeID(
+        _ nodeID: DOM.Node.ID,
+        targetID: WebInspectorTarget.ID,
+        route: RoutingTargetID
+    ) -> DOM.Node.ID {
+        guard route == .currentPage,
+              targetID != .currentPage,
+              nodeID.targetScopeRawValue == nil else {
+            return nodeID
+        }
+        return DOM.Node.ID(nodeID.rawValue, scopedToTargetRawValue: targetID.rawValue)
+    }
+
+    private nonisolated static func nodeID<Payload: Sendable>(
+        from payload: Payload,
+        domain: WebInspectorProxyDomain
+    ) -> DOM.Node.ID? {
+        switch domain {
+        case .dom:
+            switch payload {
+            case let payload as DOM.RequestChildNodesPayload:
+                return payload.id
+            case let payload as DOM.GetOuterHTMLPayload:
+                return payload.id
+            case let payload as DOM.RemoveNodePayload:
+                return payload.id
+            case let payload as DOM.HighlightNodePayload:
+                return payload.id
+            default:
+                return nil
+            }
+        case .css:
+            switch payload {
+            case let payload as CSS.GetMatchedStylesForNodePayload:
+                return payload.node
+            case let payload as CSS.GetComputedStyleForNodePayload:
+                return payload.node
+            case let payload as CSS.GetInlineStylesForNodePayload:
+                return payload.node
+            default:
+                return nil
+            }
+        case .network, .console, .runtime, .page:
+            return nil
+        }
+    }
+
+    private nonisolated static func styleID<Payload: Sendable>(
+        from payload: Payload,
+        domain: WebInspectorProxyDomain
+    ) -> CSS.Style.ID? {
+        guard domain == .css,
+              let payload = payload as? CSS.SetStyleTextPayload else {
+            return nil
+        }
+        return payload.id
+    }
+
+    private nonisolated static func networkRequestID<Payload: Sendable>(
+        from payload: Payload,
+        domain: WebInspectorProxyDomain
+    ) -> Network.Request.ID? {
+        guard domain == .network,
+              let payload = payload as? Network.GetResponseBodyPayload else {
+            return nil
+        }
+        return payload.id
     }
 
     private func bootstrapCurrentPage(from transport: TransportSession) async throws {

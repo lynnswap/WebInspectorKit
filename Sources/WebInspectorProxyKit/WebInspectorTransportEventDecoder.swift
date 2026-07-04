@@ -122,7 +122,13 @@ enum WebInspectorTransportEventDecoder {
         switch event.method {
         case "Inspector.inspect":
             let params = try decode(InspectorInspectParams.self, from: event)
-            return .inspect(params.object.proxyObject, hints: params.hints?.proxyValue)
+            let origin = event.targetID.map {
+                Inspector.EventOrigin(
+                    targetID: WebInspectorTarget.ID($0.rawValue),
+                    route: RoutingTargetID($0.rawValue)
+                )
+            }
+            return .inspect(params.object.proxyObject, hints: params.hints?.proxyValue, origin: origin)
         default:
             return .unknown(rawEvent(from: event))
         }
