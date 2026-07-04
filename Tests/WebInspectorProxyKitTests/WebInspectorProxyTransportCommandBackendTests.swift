@@ -443,6 +443,37 @@ func proxyWaitUntilClosedWaitsForInFlightCloseConnection() async throws {
 }
 
 @Test
+func transportBackedProxyDoesNotRefreshCurrentPageWhileClosing() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let closeGate = CloseConnectionGate()
+    let proxy = try await WebInspectorProxy(transport: transport, closeConnection: {
+        await closeGate.waitUntilReleased()
+    })
+
+    _ = try await proxy.waitForCurrentPage()
+    let closeTask = Task {
+        await proxy.close()
+    }
+    await closeGate.waitUntilStarted()
+
+    do {
+        _ = try await proxy.waitForCurrentPage()
+        Issue.record("Expected waitForCurrentPage to fail after close started.")
+    } catch WebInspectorProxyError.closed {
+        // Expected: closing proxies must not refresh and republish current-page targets.
+    } catch {
+        Issue.record("Expected WebInspectorProxyError.closed, got \(error).")
+    }
+    #expect(await proxy.currentPage?.id == nil)
+
+    await closeGate.release()
+    await closeTask.value
+    #expect(await proxy.currentPage?.id == nil)
+}
+
+@Test
 func transportBackedCurrentPageRouteFollowsCommittedMainPageTarget() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))

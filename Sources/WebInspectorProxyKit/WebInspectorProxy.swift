@@ -98,12 +98,13 @@ public actor WebInspectorProxy {
 
     package init(
         transport: TransportSession,
-        configuration: Configuration = .init()
+        configuration: Configuration = .init(),
+        closeConnection: (@Sendable () async -> Void)? = nil
     ) async throws {
         self.configuration = configuration
         self.transport = transport
         backend = WebInspectorTransportBackend(transport: transport)
-        closeConnection = {
+        self.closeConnection = closeConnection ?? {
             await transport.detach()
         }
         pageTarget = nil
@@ -131,6 +132,9 @@ public actor WebInspectorProxy {
     }
 
     public func waitForCurrentPage() async throws -> WebInspectorTarget {
+        guard closeState == .open else {
+            throw WebInspectorProxyError.closed
+        }
         if let pageTarget {
             return pageTarget
         }
@@ -444,6 +448,9 @@ public actor WebInspectorProxy {
     }
 
     private func applyTargetLifecycleEventToProxyState(_ event: WebInspectorTargetLifecycleEvent) {
+        guard closeState == .open else {
+            return
+        }
         switch event {
         case let .didCommitProvisionalTarget(commit) where commit.newTarget.id == .currentPage:
             pageTarget = currentPageTarget(from: commit.newTarget)
