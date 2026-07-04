@@ -994,6 +994,43 @@ struct DOMContainerTests {
     }
 
     @Test
+    func navigationPendingDOMRedoClearsWhenUndoManagerRegistersAnotherActionBeforeUndoCompletes() async throws {
+        let fixture = try await makeLiveDOMContext()
+        let input = try #require(fixture.context.node(for: DOMNode.ID(DOM.Node.ID("input"))))
+        fixture.context.select(input)
+        let undoManager = UndoManager()
+        undoManager.groupsByEvent = false
+        let navigationItems = DOMNavigationItems(context: fixture.context)
+
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "removeNode")
+        await navigationItems.deleteSelectedNodeForTesting(undoManager: undoManager)
+
+        let undoGate = WebInspectorTestGate()
+        await fixture.runtime.backend.hold(domain: "DOM", method: "undo", gate: undoGate)
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "undo")
+        undoManager.undo()
+        _ = await recordedDOMCommands(on: fixture.runtime.backend, method: "undo", count: 1)
+        await Task.yield()
+
+        let marker = UndoRegistrationMarker()
+        undoManager.beginUndoGrouping()
+        undoManager.registerUndo(withTarget: marker) { _ in }
+        undoManager.endUndoGrouping()
+
+        await undoGate.open()
+        let didReenableRedo = await waitUntil(timeout: .milliseconds(100)) {
+            navigationItems.canRedoForTesting(undoManager: undoManager)
+        }
+        #expect(!didReenableRedo)
+
+        navigationItems.redoForTesting(undoManager: undoManager)
+        await Task.yield()
+
+        let commands = await fixture.runtime.backend.recordedCommands()
+        #expect(commands.domMutationUndoMethods == ["removeNode", "undo"])
+    }
+
+    @Test
     func navigationRedoDoesNotRegisterUndoWhenBackendRedoFails() async throws {
         let fixture = try await makeLiveDOMContext()
         let input = try #require(fixture.context.node(for: DOMNode.ID(DOM.Node.ID("input"))))

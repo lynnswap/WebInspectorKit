@@ -61,6 +61,7 @@ private final class DOMUndoCommandTarget: NSObject {
     }
 
     private func performUndo() {
+        undoManager?.domUndoCommandTargetStore.markRedoPending(self)
         Task { @MainActor [self] in
             do {
                 try await undoDeletedNodes()
@@ -147,6 +148,7 @@ private final class DOMUndoCommandTargetStore {
     private weak var undoManager: UndoManager?
     private var groupCloseObserver: DOMUndoGroupCloseObserver?
     private var retainedTargets: [DOMUndoCommandTarget] = []
+    private var pendingRedoTargets: [DOMUndoCommandTarget] = []
     private var redoTargets: [DOMUndoCommandTarget] = []
     private var internalUndoRegistrationDepth = 0
 
@@ -167,13 +169,24 @@ private final class DOMUndoCommandTargetStore {
 
     func release(_ target: DOMUndoCommandTarget) {
         retainedTargets.removeAll { $0 === target }
+        pendingRedoTargets.removeAll { $0 === target }
         redoTargets.removeAll { $0 === target }
     }
 
-    func registerRedo(_ target: DOMUndoCommandTarget) {
-        guard retainedTargets.contains(where: { $0 === target }) else {
+    func markRedoPending(_ target: DOMUndoCommandTarget) {
+        guard retainedTargets.contains(where: { $0 === target }),
+              pendingRedoTargets.contains(where: { $0 === target }) == false else {
             return
         }
+        pendingRedoTargets.append(target)
+    }
+
+    func registerRedo(_ target: DOMUndoCommandTarget) {
+        guard retainedTargets.contains(where: { $0 === target }),
+              pendingRedoTargets.contains(where: { $0 === target }) else {
+            return
+        }
+        pendingRedoTargets.removeAll { $0 === target }
         redoTargets.append(target)
     }
 
@@ -204,8 +217,9 @@ private final class DOMUndoCommandTargetStore {
     }
 
     func clearRedoTargets() {
-        let staleRedoTargets = redoTargets
+        let staleRedoTargets = redoTargets + pendingRedoTargets
         redoTargets.removeAll(keepingCapacity: true)
+        pendingRedoTargets.removeAll(keepingCapacity: true)
         retainedTargets.removeAll { target in
             staleRedoTargets.contains { $0 === target }
         }
