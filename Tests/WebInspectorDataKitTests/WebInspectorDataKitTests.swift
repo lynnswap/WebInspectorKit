@@ -1184,16 +1184,20 @@ func startCancelsInFlightCurrentPageRetargetBeforeRestarting() async throws {
     )
     let cancellationProbe = CancellationProbe()
     context.installCurrentPageRetargetTaskForTesting(Task {
-        while Task.isCancelled == false {
-            try? await Task.sleep(for: .milliseconds(10))
+        await withTaskCancellationHandler {
+            while Task.isCancelled == false {
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+            cancellationProbe.markCancelled()
+        } onCancel: {
+            cancellationProbe.markCancelled()
         }
-        await cancellationProbe.markCancelled()
     })
 
     let restartMessageCount = await backend.sentTargetMessages().count
     context.start()
     try await waitUntil(timeout: .seconds(5)) {
-        await cancellationProbe.cancelled()
+        cancellationProbe.cancelled()
     }
 
     let consoleDisable = try await waitForTransportTargetMessage(
@@ -4693,15 +4697,24 @@ private func waitForChild(in context: WebInspectorContext) async throws -> DOMNo
 private struct TestFailure: Error {}
 private struct TimedOut: Error {}
 
-private actor CancellationProbe {
+private final class CancellationProbe: @unchecked Sendable {
+    private let lock = NSLock()
     private var isCancelled = false
 
     func markCancelled() {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
         isCancelled = true
     }
 
     func cancelled() -> Bool {
-        isCancelled
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        return isCancelled
     }
 }
 
