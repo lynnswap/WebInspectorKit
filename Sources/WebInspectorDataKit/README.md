@@ -6,9 +6,9 @@ WebInspectorProxyKit.
 Use this package when app or UI code needs DOM, Network, Console, Runtime, and
 CSS state without rendering directly from WebKit protocol payloads.
 
-This README is the package contract for the rearchitecture. Code in this target
-should converge to this surface. UIKit/AppKit rendering, diffable data source
-snapshots, and protocol transport internals are outside this package's contract.
+This README is the package contract. UIKit/AppKit rendering, diffable data
+source snapshots, and protocol transport internals are outside this package's
+contract.
 
 ## Main Types
 

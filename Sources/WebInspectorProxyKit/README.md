@@ -7,9 +7,9 @@ Use this package when app or framework code wants to build a custom inspector UI
 directly on WebKit's inspector protocol. Use WebInspectorDataKit instead when
 you want identity-preserving DOM, Network, Console, Runtime, and CSS models.
 
-This README is the package contract for the rearchitecture. Transport sessions,
-native symbol lookup, protocol routing, and WebKit private attachment details are
-implementation details of this package unless explicitly listed here.
+This README is the package contract. Transport sessions, native symbol lookup,
+protocol routing, and WebKit private attachment details are implementation
+details of this package unless explicitly listed here.
 
 ## Main Types
 
