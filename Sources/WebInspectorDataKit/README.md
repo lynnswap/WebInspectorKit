@@ -25,10 +25,10 @@ snapshots, and protocol transport internals are outside this package's contract.
   It owns `items`, optional `sections`, and transaction emission.
 - `WebInspectorFetchedResultsController`: Non-UI fetched-results controller that
   forwards current values from `WebInspectorFetchedResults` and exposes ordered
-  transactions for UIKit/AppKit list owners.
+  topology transactions for UIKit/AppKit list owners.
 - `WebInspectorFetchedResultsSnapshot`, `WebInspectorFetchedResultsTransaction`:
   Section and item ID snapshots plus ordered section/item changes suitable for
-  conversion to native UI update APIs.
+  conversion to native UI insertion, removal, move, and reset APIs.
 - `DOMTreeController`: Current DOM tree value plus document-bound update streams.
 - `DOMTreeSnapshot`, `DOMTreeUpdate`, `DOMTreeDelta`: Initial/page-switch DOM
   snapshots and normal DOM event deltas.
@@ -95,9 +95,10 @@ request.fetchLimit = 1000
 let controller = context.fetchedResultsController(for: request)
 ```
 
-Changing a fetch descriptor is a query-boundary operation. It may re-evaluate the
-registered model index once and emit an ordered transaction. Normal protocol
-events must not re-run every query from scratch.
+Changing a fetch descriptor is a query-boundary operation. It re-evaluates the
+registered model index once off the main actor and emits a reset transaction for
+the new result set. Normal protocol events must not re-run every query from
+scratch.
 
 ```swift
 var descriptor = controller.fetchDescriptor
@@ -154,6 +155,23 @@ WebInspectorDataKit. The built-in UI can map `NetworkRequest.ResourceCategory`
 to localized filter labels such as "CSS", "JS", or "XHR / Fetch", but it must not
 own Network query semantics.
 
+Network fetch, sort, and filter work runs against Sendable index records, not by
+reading UI-facing observable model objects. A model-context-owned worker actor
+may keep `NetworkRequestRecord` values for predicate evaluation, sort keys,
+section keys, and query membership:
+
+```swift
+public actor NetworkRequestIndex {
+    public func apply(_ event: NetworkProtocolEvent) async -> NetworkMutationBatch
+    public func updateFetchDescriptor(_ descriptor: WebInspectorFetchDescriptor<NetworkRequest>) async -> NetworkMutationBatch
+}
+```
+
+`NetworkMutationBatch` crosses back to the main context as values: inserted IDs,
+removed result IDs, moved result IDs, optional reset snapshots, and patches for
+existing requests. It must not carry `NetworkRequest` object references across
+actor boundaries.
+
 ## Fetched Results Transactions
 
 Use `WebInspectorFetchedResultsController` when non-SwiftUI UI code needs ordered
@@ -180,25 +198,83 @@ Task {
 
 The controller does not fetch or store a second copy of the model graph. Its
 `items`, `sections`, `snapshot`, and transactions are forwarded from the
-underlying `WebInspectorFetchedResults`, and transactions are emitted from the
-same state updates that mutate those current values.
+underlying `WebInspectorFetchedResults`.
 
 Snapshots contain section IDs, optional titles, and item IDs only. Convert
 `WebInspectorFetchedResultsTransaction` into `UICollectionView`,
-`NSCollectionView`, diffable data source, table, or outline updates in the UI
-layer.
+`NSCollectionView`, diffable data source, table, or outline topology updates in
+the UI layer.
+
+For Network lists, fetched-results transactions are not a content-rendering
+mechanism. They represent result membership and ordering only:
+
+- Initial fetch, descriptor changes, page switches, and clears emit reset
+  transactions.
+- Request creation emits insertion transactions when the request is visible for
+  the active descriptor.
+- Network request object deletion is not expected during normal protocol event
+  handling. If a still-existing request stops matching the active predicate, the
+  result set may emit a removal transaction.
+- Mutable sort-key, section-key, or grouping-key changes may emit move
+  transactions when the request remains visible but its result position or group
+  changes. Resource category/grouping changes, such as media grouping, are
+  examples of this path.
+- Ordinary request content updates mutate the existing `NetworkRequest` object
+  and do not cause collection-view item reloads, reconfigures, or snapshot
+  applies.
+
+UIKit/AppKit cells should observe the row model directly. A `UICollectionView`
+backed by DataKit should update its item topology only when cells are inserted,
+removed, moved, or reset:
+
+```swift
+final class NetworkRequestCell: UICollectionViewListCell {
+    private var observation: PortableObservationTracking.Token?
+
+    func bind(_ request: NetworkRequest) {
+        observation?.cancel()
+        observation = withPortableContinuousObservation { [weak self] _ in
+            guard let self else { return }
+
+            var content = self.defaultContentConfiguration()
+            content.text = request.displayName
+            content.secondaryText = request.statusText
+            self.contentConfiguration = content
+        }
+    }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        observation?.cancel()
+        observation = nil
+    }
+}
+```
 
 ## Live Network Event Semantics
 
-`WebInspectorContext` owns the Network request index and preserves
-`NetworkRequest` identity. When WebKit protocol events arrive:
+`WebInspectorContext` owns the UI-facing Network model context and preserves
+`NetworkRequest` identity. A dedicated index actor may do protocol classification,
+predicate evaluation, sorting, filtering, batching, and descriptor requery work
+off the main actor using Sendable records.
+
+When WebKit protocol events arrive:
 
 - A new request inserts one `NetworkRequest` instance into the context index.
-- Later events mutate the same `NetworkRequest` instance in place.
+- Later events produce patches for the same request ID.
+- The main context applies patches by mutating the same `NetworkRequest` instance
+  in place.
 - Registered fetched results revalidate only the affected request for normal
-  insert/update/delete events.
-- A descriptor change may re-evaluate the full local index once.
-- Clearing requests is a reset boundary and may emit delete/reset transactions.
+  insert/update/classification events in the index actor.
+- Content-only patches update the observable model instance and do not emit list
+  topology transactions.
+- Predicate leave removes the request from a result set without deleting the
+  `NetworkRequest` model object.
+- Sort, section, or grouping key changes may move the request within a result
+  set.
+- A descriptor change re-evaluates the full local index once off the main actor
+  and then publishes a reset transaction for the new result set.
+- Clearing requests is a reset boundary.
 
 The following shape is not allowed on the hot path:
 
@@ -206,6 +282,24 @@ The following shape is not allowed on the hot path:
 // Do not do this for every Network event.
 let items = currentNetworkRequests()
 results.setItems(items, updatedItemIDs: [changedID])
+```
+
+The following shape is also not allowed for content-only request updates:
+
+```swift
+// Do not drive row content by forcing collection-view updates.
+snapshot.reconfigureItems([changedID])
+dataSource.apply(snapshot, animatingDifferences: false)
+collectionView.reloadItems(at: [indexPath])
+```
+
+The allowed content path is:
+
+```swift
+let batch = await networkRequestIndex.apply(event)
+await context.apply(batch)
+// Cells already bound to affected NetworkRequest instances redraw through
+// Observation. The collection view is not told about content-only changes.
 ```
 
 ## DOM Tree Updates
@@ -315,8 +409,18 @@ Native UI packages may keep transient render artifacts:
 
 Those artifacts must be rebuildable from DataKit models or update streams and
 must not become semantic state. UI code must not implement Network query
-membership, DOM graph ownership, page highlight lifecycle, or protocol event
-ordering.
+membership, DOM graph ownership, page highlight lifecycle, protocol event
+ordering, or Network row-content propagation.
+
+For Network collection views, UI code owns only native topology application and
+cell lifecycle:
+
+- Parent list owners apply fetched-results topology transactions.
+- Cells observe `NetworkRequest` instances directly and render their own content.
+- Content-only request mutations must not call collection-view reload,
+  reconfigure, or diffable snapshot apply.
+- Result removals and moves are topology changes, not content rendering.
+- The model context is responsible for updating observable request models.
 
 ## Isolation and Identity
 
@@ -329,18 +433,67 @@ model objects:
 - Pass semantic IDs or value DTOs across concurrency domains.
 - Do not make UI-owned mirrors of model properties just to observe changes.
 
+The UI-facing `WebInspectorContext` is the model context that owns observable
+model identity. Dedicated actors may own Sendable indexes, records, query caches,
+and protocol event processors, but they do not own or mutate UI-facing
+`@Observable` model objects directly.
+
+The boundary is:
+
+```swift
+// Off main actor: Sendable values only.
+public struct NetworkRequestRecord: Sendable, Hashable {
+    public var id: NetworkRequest.ID
+    public var url: URL
+    public var method: String
+    public var resourceCategory: NetworkRequest.ResourceCategory
+    public var searchableText: String
+    public var statusCode: Int?
+    public var requestSentTimestamp: Date
+}
+
+public struct NetworkRequestPatch: Sendable, Hashable {
+    public var id: NetworkRequest.ID
+    public var statusCode: Int?
+    public var transferSize: Int?
+    public var state: NetworkRequest.State?
+}
+
+// Main context: observable identity and in-place mutation.
+@MainActor
+@Observable
+public final class NetworkRequest {
+    public let id: ID
+
+    public private(set) var url: URL
+    public private(set) var statusCode: Int?
+    public private(set) var transferSize: Int
+    public private(set) var state: State
+
+    package func apply(_ patch: NetworkRequestPatch)
+}
+```
+
 Future background contexts or model actors should own their own model instances
 and merge by semantic IDs, not share mutable observable model objects across
-actors.
+actors. If an actor performs fetch, sort, or filter work, it returns value
+batches for the main model context to apply.
 
 ## Testing
 
 Test DataKit owners without the built-in UI:
 
 - Fetch descriptor predicates and sort descriptors.
-- Network event insert/update/delete/reset transaction behavior.
-- Predicate enter/leave and sort-key move behavior for a single changed request.
+- Network event insert/update/move/reset transaction behavior.
+- Predicate enter/leave behavior for a single changed request without deleting
+  the model object.
+- Sort-key, section-key, and grouping-key move behavior for a single changed
+  request.
 - Descriptor changes performing one full local requery.
+- Content-only Network events mutating the same observable `NetworkRequest`
+  instance without emitting collection-view topology transactions.
+- Off-main Network index work returning Sendable batches and never returning
+  observable model objects.
 - DOM document/page switch emitting snapshots.
 - DOM attribute/text/count/child events emitting deltas.
 - Picker inspect selecting, revealing, and restoring highlight for the resolved
@@ -349,4 +502,6 @@ Test DataKit owners without the built-in UI:
 
 UI tests should verify native rendering and lifecycle only: diffable apply,
 selection presentation, scroll/reveal behavior, hover decoration, throttling, and
-hidden-view deferral.
+hidden-view deferral. Network UI tests should verify that cells update by
+observing `NetworkRequest` in place and that content-only changes do not trigger
+collection-view reload, reconfigure, or snapshot apply.
