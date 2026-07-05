@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-find .build -type d -name symbolgraph -prune -exec rm -rf {} +
+if [[ -d .build ]]; then
+  find .build -type d -name symbolgraph -prune -exec rm -rf {} +
+fi
 
 dump_log="$(mktemp)"
 trap 'rm -f "${dump_log}"' EXIT
