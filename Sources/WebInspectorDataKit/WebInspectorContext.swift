@@ -85,6 +85,7 @@ public final class WebInspectorContext {
     private var documentReloadTask: Task<Void, Never>?
     private var inspectResolutionTask: Task<Void, Never>?
     private var inspectedNodeHighlightTask: Task<Void, Never>?
+    private var frameDocumentLoadTasks: [WebInspectorTarget.ID: Task<Void, Never>]
     private var styleRefreshTask: Task<Void, Never>?
     private var styleRefreshGeneration: Int
     private var isStyleHydrationActive: Bool
@@ -94,6 +95,7 @@ public final class WebInspectorContext {
     private var runtimeTrackingTarget: WebInspectorTarget?
     private var consoleTrackingTarget: WebInspectorTarget?
     private var nodesByID: [DOMNode.ID: DOMNode]
+    private var frameDocumentProjectionIndex: FrameDocumentProjectionIndex
     private var treeStates: [WeakDOMTreeState]
     private let statusRelay: WebInspectorAsyncStreamRelay<Status>
     private var requestsByID: [NetworkRequest.ID: NetworkRequest]
@@ -135,6 +137,7 @@ public final class WebInspectorContext {
         documentReloadTask = nil
         inspectResolutionTask = nil
         inspectedNodeHighlightTask = nil
+        frameDocumentLoadTasks = [:]
         styleRefreshTask = nil
         styleRefreshGeneration = 0
         isStyleHydrationActive = false
@@ -144,6 +147,7 @@ public final class WebInspectorContext {
         runtimeTrackingTarget = nil
         consoleTrackingTarget = nil
         nodesByID = [:]
+        frameDocumentProjectionIndex = FrameDocumentProjectionIndex()
         treeStates = []
         statusRelay = WebInspectorAsyncStreamRelay()
         requestsByID = [:]
@@ -187,6 +191,7 @@ public final class WebInspectorContext {
         documentReloadTask?.cancel()
         inspectResolutionTask?.cancel()
         inspectedNodeHighlightTask?.cancel()
+        cancelFrameDocumentLoadTasks()
         styleRefreshTask?.cancel()
         for task in styleToggleTasks.values {
             task.cancel()
@@ -863,6 +868,7 @@ public final class WebInspectorContext {
         inspectResolutionTask = nil
         inspectedNodeHighlightTask?.cancel()
         inspectedNodeHighlightTask = nil
+        cancelFrameDocumentLoadTasks()
         styleRefreshTask?.cancel()
         styleRefreshTask = nil
         styleRefreshGeneration += 1
@@ -1395,8 +1401,9 @@ extension WebInspectorContext {
             applyCurrentPageFrameNavigated(frame, isolation: isolation)
         case let .targetDestroyed(targetID):
             applyCurrentPageTargetDestroyed(targetID, isolation: isolation)
-        case .frameDetached,
-             .unknown:
+        case let .frameDetached(frameID):
+            applyCurrentPageFrameDetached(frameID, isolation: isolation)
+        case .unknown:
             break
         }
     }
@@ -1500,6 +1507,7 @@ extension WebInspectorContext {
             return
         }
         guard frame.parentID == nil || frame.id == currentPage.frameID else {
+            detachProjectedFrameDocument(forFrameID: frame.id, isolation: isolation)
             return
         }
         advanceDOMDocumentGeneration(isolation: isolation)
@@ -1510,6 +1518,13 @@ extension WebInspectorContext {
             return
         }
         reloadDocument(isolation: isolation)
+    }
+
+    private func applyCurrentPageFrameDetached(
+        _ frameID: FrameID,
+        isolation: isolated (any Actor)
+    ) {
+        detachProjectedFrameDocument(forFrameID: frameID, isolation: isolation)
     }
 
     private func applyCurrentPageTargetDestroyed(
@@ -1596,6 +1611,7 @@ extension WebInspectorContext {
             applyChildNodeRemoved(parent: parent, node: node, isolation: isolation)
         case let .childNodeCountUpdated(id, count):
             guard let node = nodesByID[DOMNode.ID(id)] else {
+                loadFrameDocumentIfNeeded(forNodeID: DOMNode.ID(id), reason: "DOM.childNodeCountUpdated", isolation: isolation)
                 skipEvent("DOM.childNodeCountUpdated referenced an unmaterialized node")
                 return
             }
@@ -1603,6 +1619,7 @@ extension WebInspectorContext {
             notifyDOMTreeControllers(changes: [.childCountChanged(nodeID: DOMNode.ID(id))], isolation: isolation)
         case let .attributeModified(id, name, value):
             guard let node = nodesByID[DOMNode.ID(id)] else {
+                loadFrameDocumentIfNeeded(forNodeID: DOMNode.ID(id), reason: "DOM.attributeModified", isolation: isolation)
                 skipEvent("DOM.attributeModified referenced an unmaterialized node")
                 return
             }
@@ -1611,6 +1628,7 @@ extension WebInspectorContext {
             notifyDOMTreeControllers(changes: [.nodeChanged(nodeID: DOMNode.ID(id))], isolation: isolation)
         case let .attributeRemoved(id, name):
             guard let node = nodesByID[DOMNode.ID(id)] else {
+                loadFrameDocumentIfNeeded(forNodeID: DOMNode.ID(id), reason: "DOM.attributeRemoved", isolation: isolation)
                 skipEvent("DOM.attributeRemoved referenced an unmaterialized node")
                 return
             }
@@ -1619,6 +1637,7 @@ extension WebInspectorContext {
             notifyDOMTreeControllers(changes: [.nodeChanged(nodeID: DOMNode.ID(id))], isolation: isolation)
         case let .characterDataModified(id, value):
             guard let node = nodesByID[DOMNode.ID(id)] else {
+                loadFrameDocumentIfNeeded(forNodeID: DOMNode.ID(id), reason: "DOM.characterDataModified", isolation: isolation)
                 skipEvent("DOM.characterDataModified referenced an unmaterialized node")
                 return
             }
@@ -1630,9 +1649,16 @@ extension WebInspectorContext {
             notifyStatusChanged()
             let inspectedNodeID = DOMNode.ID(id)
             guard let node = nodesByID[inspectedNodeID] else {
+                loadFrameDocumentIfNeeded(forNodeID: inspectedNodeID, reason: "DOM.inspect", isolation: isolation)
                 WebInspectorDataKitLog.debug(
                     "DOM.inspect pending nodeID=\(String(describing: inspectedNodeID)) materialized=false root=\(String(describing: rootNode?.id))"
                 )
+                pendingInspectedNodeID = inspectedNodeID
+                resolvePendingInspectedNode(requestSubtreeIfNeeded: true, isolation: isolation)
+                return
+            }
+            guard currentDOMTreeSnapshot().node(for: inspectedNodeID) != nil else {
+                loadFrameDocumentIfNeeded(forNodeID: inspectedNodeID, reason: "DOM.inspect", isolation: isolation)
                 pendingInspectedNodeID = inspectedNodeID
                 resolvePendingInspectedNode(requestSubtreeIfNeeded: true, isolation: isolation)
                 return
@@ -1709,11 +1735,13 @@ extension WebInspectorContext {
         styleRefreshGeneration += 1
         inspectedNodeHighlightTask?.cancel()
         inspectedNodeHighlightTask = nil
+        cancelFrameDocumentLoadTasks()
         rootNode = nil
         selectedNode = nil
         isElementPickerEnabled = false
         pendingInspectedNodeID = nil
         nodesByID = [:]
+        frameDocumentProjectionIndex.removeAll()
         notifyDOMTreeControllers(changes: [.rootChanged(rootNodeID: nil)], isolation: isolation)
         notifyStatusChanged()
     }
@@ -1724,6 +1752,7 @@ extension WebInspectorContext {
         isolation: isolated (any Actor) = #isolation
     ) {
         guard let parentNode = nodesByID[DOMNode.ID(parent)] else {
+            loadFrameDocumentIfNeeded(forNodeID: DOMNode.ID(parent), reason: "DOM.setChildNodes", isolation: isolation)
             skipEvent("DOM.setChildNodes referenced an unmaterialized parent node")
             return
         }
@@ -1754,6 +1783,7 @@ extension WebInspectorContext {
         isolation: isolated (any Actor) = #isolation
     ) {
         guard let parentNode = nodesByID[DOMNode.ID(parent)] else {
+            loadFrameDocumentIfNeeded(forNodeID: DOMNode.ID(parent), reason: "DOM.childNodeInserted", isolation: isolation)
             skipEvent("DOM.childNodeInserted referenced an unmaterialized parent node")
             return
         }
@@ -1782,12 +1812,14 @@ extension WebInspectorContext {
         isolation: isolated (any Actor)
     ) {
         guard let parentNode = nodesByID[DOMNode.ID(parent)] else {
+            loadFrameDocumentIfNeeded(forNodeID: DOMNode.ID(parent), reason: "DOM.childNodeRemoved", isolation: isolation)
             skipEvent("DOM.childNodeRemoved referenced an unmaterialized parent node")
             return
         }
 
         let removedID = DOMNode.ID(node)
         guard let removedNode = nodesByID[removedID] else {
+            loadFrameDocumentIfNeeded(forNodeID: removedID, reason: "DOM.childNodeRemoved", isolation: isolation)
             skipEvent("DOM.childNodeRemoved referenced an unmaterialized child node")
             return
         }
@@ -1813,6 +1845,7 @@ extension WebInspectorContext {
         var removedIDs = Set<DOMNode.ID>()
         collectSubtreeIDs(root, into: &removedIDs)
         removedIDs.subtract(preservedIDs)
+        frameDocumentProjectionIndex.removeProjections(containing: removedIDs)
         for id in removedIDs {
             nodesByID[id] = nil
         }
@@ -1871,12 +1904,13 @@ extension WebInspectorContext {
             nodesByID[id] = node
         }
 
-        let contentDocument = payload.contentDocument.map { model(for: $0, preserving: materializedPayloadIDs) }
+        let payloadContentDocument = payload.contentDocument.map { model(for: $0, preserving: materializedPayloadIDs) }
         let shadowRoots = payload.shadowRoots.map { model(for: $0, preserving: materializedPayloadIDs) }
         let templateContent = payload.templateContent.map { model(for: $0, preserving: materializedPayloadIDs) }
         let beforePseudoElement = payload.beforePseudoElement.map { model(for: $0, preserving: materializedPayloadIDs) }
         let otherPseudoElements = payload.otherPseudoElements.map { model(for: $0, preserving: materializedPayloadIDs) }
         let afterPseudoElement = payload.afterPseudoElement.map { model(for: $0, preserving: materializedPayloadIDs) }
+        let contentDocument = projectedFrameDocument(for: node, payloadContentDocument: payloadContentDocument)
         node.setAssociatedNodes(
             contentDocument: contentDocument,
             shadowRoots: shadowRoots,
@@ -1919,6 +1953,248 @@ extension WebInspectorContext {
             .compactMap { $0 }
     }
 
+    private func projectedFrameDocument(
+        for owner: DOMNode,
+        payloadContentDocument: DOMNode?
+    ) -> DOMNode? {
+        guard owner.isFrameOwner else {
+            return payloadContentDocument
+        }
+
+        if let attachedRootID = frameDocumentProjectionIndex.projectedFrameDocumentRootID(forOwnerNodeID: owner.id) {
+            guard let attachedRoot = nodesByID[attachedRootID],
+                  frameOwner(owner, matchesFrameDocumentRoot: attachedRoot) else {
+                frameDocumentProjectionIndex.detachProjection(attachedTo: owner.id)
+                return payloadContentDocument
+            }
+            return attachedRoot
+        }
+
+        guard let frameTargetID = frameTargetIDForFrameDocument(matching: owner),
+              let rootID = frameDocumentProjectionIndex.frameDocumentRootID(for: frameTargetID),
+              let root = nodesByID[rootID] else {
+            return payloadContentDocument
+        }
+        frameDocumentProjectionIndex.attach(frameTargetID: frameTargetID, to: owner.id)
+        return root
+    }
+
+    private func frameTargetIDForFrameDocument(matching owner: DOMNode) -> WebInspectorTarget.ID? {
+        let matches = frameDocumentProjectionIndex.frameTargetIDs.filter { frameTargetID in
+            guard frameDocumentProjectionIndex.ownerNodeID(for: frameTargetID) == nil,
+                  let rootID = frameDocumentProjectionIndex.frameDocumentRootID(for: frameTargetID),
+                  let root = nodesByID[rootID] else {
+                return false
+            }
+            return frameOwner(owner, matchesFrameDocumentRoot: root)
+        }
+        guard matches.count <= 1 else {
+            WebInspectorDataKitLog.debug(
+                "frame document projection ambiguous owner=\(String(describing: owner.id))"
+            )
+            return nil
+        }
+        return matches.first
+    }
+
+    private func frameOwner(_ owner: DOMNode, matchesFrameDocumentRoot root: DOMNode) -> Bool {
+        guard owner.isFrameOwner,
+              let ownerFrameID = owner.frameID,
+              let rootFrameID = root.frameID else {
+            return false
+        }
+        return ownerFrameID == rootFrameID
+    }
+
+    private func loadFrameDocumentIfNeeded(
+        forNodeID nodeID: DOMNode.ID,
+        reason: String,
+        isolation: isolated (any Actor)
+    ) {
+        guard let frameTargetID = frameTargetID(for: nodeID) else {
+            return
+        }
+        if let rootID = frameDocumentProjectionIndex.frameDocumentRootID(for: frameTargetID),
+           let root = nodesByID[rootID] {
+            if let owner = attachProjectedFrameDocumentRoot(root, frameTargetID: frameTargetID) {
+                notifyDOMTreeControllers(changes: [.childrenReplaced(parentID: owner.id)], isolation: isolation)
+            }
+            return
+        }
+        loadFrameDocumentIfNeeded(forFrameTargetID: frameTargetID, reason: reason, isolation: isolation)
+    }
+
+    private func loadFrameDocumentIfNeeded(
+        forFrameTargetID frameTargetID: WebInspectorTarget.ID,
+        reason: String,
+        isolation: isolated (any Actor)
+    ) {
+        guard frameDocumentLoadTasks[frameTargetID] == nil else {
+            return
+        }
+        let generation = domDocumentGeneration
+        let target = WebInspectorTarget(
+            id: frameTargetID,
+            kind: .frame,
+            frameID: nil,
+            isProvisional: false,
+            proxy: proxy,
+            route: RoutingTargetID(frameTargetID.rawValue)
+        )
+        WebInspectorDataKitLog.debug(
+            "frame document projection loading target=\(frameTargetID.rawValue) reason=\(reason)"
+        )
+        frameDocumentLoadTasks[frameTargetID] = Task { [weak self, target, frameTargetID, generation] in
+            _ = isolation
+            do {
+                let document = try await target.dom.getDocument()
+                guard Task.isCancelled == false,
+                      self?.isDOMDocumentGeneration(generation, isolation: isolation) == true else {
+                    return
+                }
+                self?.applyFrameDocument(document, frameTargetID: frameTargetID, isolation: isolation)
+            } catch is CancellationError {
+                return
+            } catch {
+                guard self?.isDOMDocumentGeneration(generation, isolation: isolation) == true else {
+                    return
+                }
+                self?.failIfTerminal(error, operation: "frame DOM.getDocument")
+            }
+            if self?.isDOMDocumentGeneration(generation, isolation: isolation) == true {
+                self?.frameDocumentLoadTasks[frameTargetID] = nil
+            }
+        }
+    }
+
+    private func applyFrameDocument(
+        _ document: DOM.Node,
+        frameTargetID: WebInspectorTarget.ID,
+        isolation: isolated (any Actor)
+    ) {
+        let scopedDocument = scopedFrameDocument(document, to: frameTargetID)
+        var materializedPayloadIDs = Set<DOMNode.ID>()
+        collectMaterializedPayloadIDs(scopedDocument, into: &materializedPayloadIDs)
+        let previousRootID = frameDocumentProjectionIndex.setFrameDocumentRootID(
+            DOMNode.ID(scopedDocument.id),
+            for: frameTargetID
+        )
+        let frameRoot = model(for: scopedDocument, preserving: materializedPayloadIDs)
+        if let previousRootID,
+           previousRootID != frameRoot.id,
+           let previousRoot = nodesByID[previousRootID] {
+            removeSubtreeFromIndex(previousRoot, preserving: materializedPayloadIDs)
+        }
+
+        if let owner = attachProjectedFrameDocumentRoot(frameRoot, frameTargetID: frameTargetID) {
+            notifyDOMTreeControllers(changes: [.childrenReplaced(parentID: owner.id)], isolation: isolation)
+        }
+        resolvePendingInspectedNode(requestSubtreeIfNeeded: true, isolation: isolation)
+    }
+
+    private func attachProjectedFrameDocumentRoot(
+        _ frameRoot: DOMNode,
+        frameTargetID: WebInspectorTarget.ID
+    ) -> DOMNode? {
+        guard let owner = frameOwner(forFrameDocumentRoot: frameRoot, frameTargetID: frameTargetID) else {
+            frameDocumentProjectionIndex.detach(frameTargetID: frameTargetID)
+            return nil
+        }
+        let didChange = frameDocumentProjectionIndex.attach(frameTargetID: frameTargetID, to: owner.id)
+        owner.setContentDocument(frameRoot)
+        return didChange ? owner : nil
+    }
+
+    private func frameOwner(
+        forFrameDocumentRoot frameRoot: DOMNode,
+        frameTargetID: WebInspectorTarget.ID
+    ) -> DOMNode? {
+        if let ownerID = frameDocumentProjectionIndex.ownerNodeID(for: frameTargetID),
+           let owner = nodesByID[ownerID],
+           frameOwner(owner, matchesFrameDocumentRoot: frameRoot) {
+            return owner
+        }
+        let candidates = nodesByID.values.filter { node in
+            guard frameOwner(node, matchesFrameDocumentRoot: frameRoot) else {
+                return false
+            }
+            guard let attachedRootID = frameDocumentProjectionIndex.projectedFrameDocumentRootID(forOwnerNodeID: node.id) else {
+                return true
+            }
+            return attachedRootID == frameRoot.id
+        }
+        guard candidates.count <= 1 else {
+            WebInspectorDataKitLog.debug(
+                "frame document projection ambiguous frameID=\(String(describing: frameRoot.frameID))"
+            )
+            return nil
+        }
+        return candidates.first
+    }
+
+    private func detachProjectedFrameDocument(
+        forFrameID frameID: FrameID,
+        isolation: isolated (any Actor)
+    ) {
+        let owners = nodesByID.values.filter { $0.isFrameOwner && $0.frameID == frameID }
+        for owner in owners {
+            guard let rootID = frameDocumentProjectionIndex.projectedFrameDocumentRootID(forOwnerNodeID: owner.id) else {
+                continue
+            }
+            let root = nodesByID[rootID]
+            frameDocumentProjectionIndex.detachProjection(attachedTo: owner.id)
+            owner.setContentDocument(nil)
+            let selectedNodeWasRemoved = root.map { removeSubtreeFromIndex($0) } ?? false
+            notifyDOMTreeControllers(changes: [.childrenReplaced(parentID: owner.id)], isolation: isolation)
+            if selectedNodeWasRemoved {
+                notifyStatusChanged()
+            }
+        }
+    }
+
+    private func frameTargetID(for nodeID: DOMNode.ID) -> WebInspectorTarget.ID? {
+        nodeID.proxyID.targetScopeRawValue.map(WebInspectorTarget.ID.init)
+    }
+
+    private func scopedFrameDocument(_ node: DOM.Node, to frameTargetID: WebInspectorTarget.ID) -> DOM.Node {
+        DOM.Node(
+            id: scopedNodeID(node.id, to: frameTargetID),
+            nodeType: node.nodeType,
+            nodeName: node.nodeName,
+            localName: node.localName,
+            nodeValue: node.nodeValue,
+            frameID: node.frameID,
+            documentURL: node.documentURL,
+            baseURL: node.baseURL,
+            attributes: node.attributes,
+            attributeList: node.attributeList,
+            childNodeCount: node.childNodeCount,
+            children: node.children?.map { scopedFrameDocument($0, to: frameTargetID) },
+            contentDocument: node.contentDocument.map { scopedFrameDocument($0, to: frameTargetID) },
+            shadowRoots: node.shadowRoots.map { scopedFrameDocument($0, to: frameTargetID) },
+            templateContent: node.templateContent.map { scopedFrameDocument($0, to: frameTargetID) },
+            beforePseudoElement: node.beforePseudoElement.map { scopedFrameDocument($0, to: frameTargetID) },
+            otherPseudoElements: node.otherPseudoElements.map { scopedFrameDocument($0, to: frameTargetID) },
+            afterPseudoElement: node.afterPseudoElement.map { scopedFrameDocument($0, to: frameTargetID) },
+            pseudoType: node.pseudoType,
+            shadowRootType: node.shadowRootType
+        )
+    }
+
+    private func scopedNodeID(_ id: DOM.Node.ID, to frameTargetID: WebInspectorTarget.ID) -> DOM.Node.ID {
+        guard id.targetScopeRawValue == nil else {
+            return id
+        }
+        return DOM.Node.ID(id.rawValue, scopedToTargetRawValue: frameTargetID.rawValue)
+    }
+
+    private func cancelFrameDocumentLoadTasks() {
+        for task in frameDocumentLoadTasks.values {
+            task.cancel()
+        }
+        frameDocumentLoadTasks = [:]
+    }
+
     private func resolvePendingInspectedNode(
         requestSubtreeIfNeeded: Bool,
         isolation: isolated (any Actor) = #isolation
@@ -1928,14 +2204,17 @@ extension WebInspectorContext {
         }
         guard let inspectedNode = nodesByID[pendingInspectedNodeID] else {
             if requestSubtreeIfNeeded, let rootNode {
-                WebInspectorDataKitLog.debug(
-                    "DOM.inspect unresolved nodeID=\(String(describing: pendingInspectedNodeID)); requesting root subtree"
-                )
-                requestInspectionSubtree(from: rootNode, isolation: isolation)
+                requestInspectionSubtreeForPendingNode(pendingInspectedNodeID, fallbackRoot: rootNode, isolation: isolation)
             } else if requestSubtreeIfNeeded {
                 WebInspectorDataKitLog.debug(
                     "DOM.inspect unresolved nodeID=\(String(describing: pendingInspectedNodeID)); no root node"
                 )
+            }
+            return
+        }
+        guard currentDOMTreeSnapshot().node(for: inspectedNode.id) != nil else {
+            if requestSubtreeIfNeeded, let rootNode {
+                requestInspectionSubtreeForPendingNode(pendingInspectedNodeID, fallbackRoot: rootNode, isolation: isolation)
             }
             return
         }
@@ -1946,6 +2225,29 @@ extension WebInspectorContext {
         inspectResolutionTask?.cancel()
         inspectResolutionTask = nil
         selectInspectedNode(inspectedNode, isolation: isolation)
+    }
+
+    private func requestInspectionSubtreeForPendingNode(
+        _ nodeID: DOMNode.ID,
+        fallbackRoot: DOMNode,
+        isolation: isolated (any Actor)
+    ) {
+        if let frameTargetID = frameTargetID(for: nodeID) {
+            if let rootID = frameDocumentProjectionIndex.frameDocumentRootID(for: frameTargetID),
+               let frameRoot = nodesByID[rootID] {
+                WebInspectorDataKitLog.debug(
+                    "DOM.inspect unresolved nodeID=\(String(describing: nodeID)); requesting frame subtree"
+                )
+                requestInspectionSubtree(from: frameRoot, isolation: isolation)
+            } else {
+                loadFrameDocumentIfNeeded(forFrameTargetID: frameTargetID, reason: "DOM.inspect", isolation: isolation)
+            }
+            return
+        }
+        WebInspectorDataKitLog.debug(
+            "DOM.inspect unresolved nodeID=\(String(describing: nodeID)); requesting root subtree"
+        )
+        requestInspectionSubtree(from: fallbackRoot, isolation: isolation)
     }
 
     private func selectInspectedNode(_ node: DOMNode, isolation: isolated (any Actor)) {

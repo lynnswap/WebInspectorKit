@@ -1099,6 +1099,119 @@ func transportBackedInspectorInspectMaterializesSelectionAndRestoresHighlight() 
 
 @MainActor
 @Test
+func transportBackedFrameInspectProjectsFrameDocumentUnderIframeOwner() async throws {
+    let pageTargetID = ProtocolTarget.ID("page-main")
+    let frameTargetID = ProtocolTarget.ID("frame-child")
+    let iframeOwnerID = DOMNode.ID(DOM.Node.ID("iframe-owner"))
+    let scopedFrameDocumentID = DOMNode.ID(DOM.Node.ID("frame-document", scopedToTargetRawValue: frameTargetID.rawValue))
+    let scopedInspectedID = DOMNode.ID(DOM.Node.ID("42", scopedToTargetRawValue: frameTargetID.rawValue))
+    let (backend, transport, context) = try await startTransportBackedContext(
+        targetID: pageTargetID,
+        documentID: "1"
+    )
+    let controller = try await context.treeController()
+    let startupMessageCount = await backend.sentTargetMessages().count
+
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: pageTargetID,
+        method: "DOM.setChildNodes",
+        params: ##"{"parentId":"1","nodes":[{"nodeId":"iframe-owner","nodeType":1,"nodeName":"IFRAME","localName":"iframe","nodeValue":"","frameId":"child-frame","childNodeCount":0,"attributes":["src","https://child.example.test/"]}]}"##
+    )
+    try await waitUntil { context.node(for: iframeOwnerID) != nil }
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-child","type":"page","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
+    )
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: frameTargetID,
+        method: "Inspector.inspect",
+        params: #"{"object":{"type":"object","subtype":"node","objectId":"frame-node-object"}}"#
+    )
+
+    let requestNode = try await waitForTransportTargetMessage(
+        backend,
+        method: "DOM.requestNode",
+        after: startupMessageCount
+    )
+    #expect(requestNode.targetIdentifier == pageTargetID)
+    #expect(try transportTargetMessageParameters(requestNode.message)["objectId"] as? String == "frame-node-object")
+    let afterRequestNodeCount = await backend.sentTargetMessages().count
+    await receiveTransportTargetReply(
+        transport,
+        targetID: requestNode.targetIdentifier,
+        messageID: try transportMessageID(requestNode.message),
+        result: #"{"nodeId":42}"#
+    )
+
+    let frameGetDocument = try await waitForTransportTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: afterRequestNodeCount
+    )
+    #expect(frameGetDocument.targetIdentifier == frameTargetID)
+    await receiveTransportTargetReply(
+        transport,
+        targetID: frameGetDocument.targetIdentifier,
+        messageID: try transportMessageID(frameGetDocument.message),
+        result: ##"{"root":{"nodeId":"frame-document","nodeType":9,"nodeName":"#document","localName":"","nodeValue":"","frameId":"child-frame","documentURL":"https://child.example.test/","childNodeCount":1,"children":[{"nodeId":"frame-html","nodeType":1,"nodeName":"HTML","localName":"html","nodeValue":"","childNodeCount":1,"children":[{"nodeId":"frame-body","nodeType":1,"nodeName":"BODY","localName":"body","nodeValue":"","childNodeCount":1,"children":[{"nodeId":42,"nodeType":1,"nodeName":"BUTTON","localName":"button","nodeValue":"","childNodeCount":0}]}]}]}}"##
+    )
+
+    try await waitUntil {
+        controller.snapshot.selectedNodeID == scopedInspectedID
+            && controller.snapshot.parent(of: scopedFrameDocumentID) == iframeOwnerID
+    }
+    let snapshot = controller.snapshot
+    let iframe = try #require(context.node(for: iframeOwnerID))
+    #expect(iframe.contentDocument?.id == scopedFrameDocumentID)
+    #expect(snapshot.visibleChildren(of: iframeOwnerID).nodeIDs == [scopedFrameDocumentID])
+    #expect(snapshot.ancestorNodeIDs(of: scopedInspectedID).contains(iframeOwnerID))
+
+    let matchedStyles = try await waitForTransportTargetMessage(
+        backend,
+        method: "CSS.getMatchedStylesForNode",
+        after: startupMessageCount
+    )
+    #expect(matchedStyles.targetIdentifier == frameTargetID)
+    await receiveTransportTargetReply(
+        transport,
+        targetID: matchedStyles.targetIdentifier,
+        messageID: try transportMessageID(matchedStyles.message),
+        result: #"{"matchedCSSRules":[],"inherited":[],"pseudoElements":[]}"#
+    )
+
+    let inlineStyles = try await waitForTransportTargetMessage(
+        backend,
+        method: "CSS.getInlineStylesForNode",
+        after: startupMessageCount
+    )
+    #expect(inlineStyles.targetIdentifier == frameTargetID)
+    await receiveTransportTargetReply(
+        transport,
+        targetID: inlineStyles.targetIdentifier,
+        messageID: try transportMessageID(inlineStyles.message),
+        result: "{}"
+    )
+
+    let computedStyle = try await waitForTransportTargetMessage(
+        backend,
+        method: "CSS.getComputedStyleForNode",
+        after: startupMessageCount
+    )
+    #expect(computedStyle.targetIdentifier == frameTargetID)
+    await receiveTransportTargetReply(
+        transport,
+        targetID: computedStyle.targetIdentifier,
+        messageID: try transportMessageID(computedStyle.message),
+        result: #"{"computedStyle":[]}"#
+    )
+
+    try await waitUntil { context.selectedNode?.elementStyles?.phase == .loaded }
+}
+
+@MainActor
+@Test
 func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
     let oldTargetID = ProtocolTarget.ID("page-old")
     let newTargetID = ProtocolTarget.ID("page-new")

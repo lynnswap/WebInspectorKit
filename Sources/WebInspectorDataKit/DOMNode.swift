@@ -78,6 +78,11 @@ public final class DOMNode: WebInspectorPersistentModel {
     public private(set) var pseudoType: DOM.PseudoType?
     public private(set) var shadowRootType: DOM.ShadowRootType?
     public private(set) var elementStyles: CSSStyles?
+    var isFrameOwner: Bool {
+        let name = localName.isEmpty ? nodeName : localName
+        let normalizedName = name.lowercased()
+        return normalizedName == "iframe" || normalizedName == "frame"
+    }
 
     @ObservationIgnored weak var modelContext: WebInspectorContext?
 
@@ -208,6 +213,10 @@ public final class DOMNode: WebInspectorPersistentModel {
         self.beforePseudoElement = beforePseudoElement
         self.otherPseudoElements = otherPseudoElements
         self.afterPseudoElement = afterPseudoElement
+    }
+
+    func setContentDocument(_ node: DOMNode?) {
+        contentDocument = node
     }
 
     func associatedSubtreeRoots() -> [DOMNode] {
