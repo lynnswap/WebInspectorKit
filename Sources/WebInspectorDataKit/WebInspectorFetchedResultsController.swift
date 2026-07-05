@@ -90,21 +90,24 @@ public struct WebInspectorFetchedResultsTransaction<Model: WebInspectorFetchable
 
     public let oldSnapshot: WebInspectorFetchedResultsSnapshot<ItemID>
     public let newSnapshot: WebInspectorFetchedResultsSnapshot<ItemID>
+    public let isReset: Bool
     public let sectionChanges: [WebInspectorFetchedResultsSectionChange]
     public let itemChanges: [WebInspectorFetchedResultsItemChange<ItemID>]
 
     public var hasChanges: Bool {
-        sectionChanges.isEmpty == false || itemChanges.isEmpty == false
+        isReset || sectionChanges.isEmpty == false || itemChanges.isEmpty == false
     }
 
     public init(
         oldSnapshot: WebInspectorFetchedResultsSnapshot<ItemID>,
         newSnapshot: WebInspectorFetchedResultsSnapshot<ItemID>,
+        isReset: Bool = false,
         sectionChanges: [WebInspectorFetchedResultsSectionChange] = [],
         itemChanges: [WebInspectorFetchedResultsItemChange<ItemID>]
     ) {
         self.oldSnapshot = oldSnapshot
         self.newSnapshot = newSnapshot
+        self.isReset = isReset
         self.sectionChanges = sectionChanges
         self.itemChanges = itemChanges
     }
@@ -117,6 +120,7 @@ public struct WebInspectorFetchedResultsTransaction<Model: WebInspectorFetchable
         self.init(
             oldSnapshot: oldSnapshot,
             newSnapshot: newSnapshot,
+            isReset: false,
             sectionChanges: Self.sectionChanges(from: oldSnapshot, to: newSnapshot),
             itemChanges: Self.itemChanges(from: oldSnapshot, to: newSnapshot, updatedItemIDs: updatedItemIDs)
         )
@@ -285,6 +289,10 @@ extension WebInspectorFetchedResultsIndexPath: Comparable {
 public final class WebInspectorFetchedResultsController<Model: WebInspectorFetchableModel> {
     public let fetchedResults: WebInspectorFetchedResults<Model>
 
+    public var fetchDescriptor: WebInspectorFetchDescriptor<Model> {
+        fetchedResults.fetchDescriptor
+    }
+
     public var items: [Model] {
         fetchedResults.items
     }
@@ -299,5 +307,12 @@ public final class WebInspectorFetchedResultsController<Model: WebInspectorFetch
 
     public init(fetchedResults: WebInspectorFetchedResults<Model>) {
         self.fetchedResults = fetchedResults
+    }
+
+    public func updateFetchDescriptor(
+        _ descriptor: WebInspectorFetchDescriptor<Model>,
+        isolation: isolated (any Actor) = #isolation
+    ) {
+        fetchedResults.updateFetchDescriptor(descriptor, isolation: isolation)
     }
 }

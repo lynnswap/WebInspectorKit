@@ -540,6 +540,18 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         case failed(errorText: String, canceled: Bool)
     }
 
+    public enum ResourceCategory: String, Codable, CaseIterable, Sendable, Hashable {
+        case document
+        case stylesheet
+        case script
+        case image
+        case font
+        case xhrFetch
+        case media
+        case webSocket
+        case other
+    }
+
     public let id: ID
     public private(set) var url: String
     public private(set) var method: String
@@ -636,6 +648,30 @@ public final class NetworkRequest: WebInspectorFetchableModel {
 
     public var hasResponseBody: Bool {
         hasResponse && resourceType != .webSocket
+    }
+
+    public var resourceCategory: ResourceCategory {
+        Self.resourceCategory(resourceType: resourceType, mimeType: mimeType, url: responseURL ?? url)
+    }
+
+    public var searchableText: String {
+        Self.uniqueNonEmpty([
+            url,
+            responseURL,
+            Self.urlSearchText(url),
+            responseURL.map(Self.urlSearchText),
+            method,
+            status.map(String.init),
+            statusText,
+            mimeType,
+            resourceType?.rawValue,
+            resourceCategory.rawValue,
+        ])
+        .joined(separator: "\n")
+    }
+
+    public var statusCode: Int? {
+        status
     }
 
     public func fetchResponseBody(isolation: isolated (any Actor) = #isolation) async {
@@ -898,5 +934,108 @@ public final class NetworkRequest: WebInspectorFetchableModel {
             role: .request
         )
         requestBody.updateHints(kind: hints.kind, sourceSyntaxKind: hints.syntaxKind)
+    }
+
+    private static func resourceCategory(
+        resourceType: Network.ResourceType?,
+        mimeType: String?,
+        url: String
+    ) -> ResourceCategory {
+        if let resourceType {
+            switch resourceType.rawValue.lowercased() {
+            case "document":
+                return .document
+            case "stylesheet":
+                return .stylesheet
+            case "script":
+                return .script
+            case "image":
+                return .image
+            case "font":
+                return .font
+            case "xhr", "fetch", "ping", "beacon", "eventsource":
+                return .xhrFetch
+            case "media":
+                return .media
+            case "websocket":
+                return .webSocket
+            default:
+                break
+            }
+        }
+
+        let normalizedMIMEType = normalizedMIMEType(mimeType)
+        let pathExtension = pathExtension(in: url)
+        if normalizedMIMEType == "text/css" || pathExtension == "css" {
+            return .stylesheet
+        }
+        if normalizedMIMEType.contains("javascript") || ["js", "mjs", "cjs"].contains(pathExtension) {
+            return .script
+        }
+        if normalizedMIMEType.hasPrefix("image/") {
+            return .image
+        }
+        if normalizedMIMEType.hasPrefix("font/") || ["woff", "woff2", "ttf", "otf"].contains(pathExtension) {
+            return .font
+        }
+        if normalizedMIMEType.hasPrefix("audio/")
+            || normalizedMIMEType.hasPrefix("video/")
+            || ["mp3", "mp4", "m4a", "mov", "webm", "m3u8"].contains(pathExtension) {
+            return .media
+        }
+        if normalizedMIMEType.contains("html") {
+            return .document
+        }
+        return .other
+    }
+
+    private static func normalizedMIMEType(_ mimeType: String?) -> String {
+        mimeType?
+            .split(separator: ";", maxSplits: 1, omittingEmptySubsequences: true)
+            .first?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+    }
+
+    private static func urlSearchText(_ rawURL: String) -> String {
+        guard rawURL.range(of: "data:", options: [.anchored, .caseInsensitive]) == nil,
+              let components = URLComponents(string: rawURL, encodingInvalidCharacters: false)
+                ?? URLComponents(string: rawURL, encodingInvalidCharacters: true) else {
+            return rawURL
+        }
+        return uniqueNonEmpty([
+            components.host,
+            components.percentEncodedPath.removingPercentEncoding,
+            pathExtension(in: rawURL),
+        ])
+        .joined(separator: "\n")
+    }
+
+    private static func pathExtension(in rawURL: String) -> String {
+        guard rawURL.range(of: "data:", options: [.anchored, .caseInsensitive]) == nil else {
+            return ""
+        }
+        if let components = URLComponents(string: rawURL, encodingInvalidCharacters: false)
+            ?? URLComponents(string: rawURL, encodingInvalidCharacters: true) {
+            let path = components.percentEncodedPath.removingPercentEncoding ?? components.percentEncodedPath
+            return URL(fileURLWithPath: path).pathExtension.lowercased()
+        }
+        return URL(fileURLWithPath: rawURL).pathExtension.lowercased()
+    }
+
+    private static func uniqueNonEmpty(_ values: [String?]) -> [String] {
+        var seen = Set<String>()
+        var results: [String] = []
+        for value in values {
+            guard let value else {
+                continue
+            }
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.isEmpty == false, seen.insert(trimmed).inserted else {
+                continue
+            }
+            results.append(trimmed)
+        }
+        return results
     }
 }

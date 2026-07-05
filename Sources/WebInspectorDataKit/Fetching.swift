@@ -1,16 +1,39 @@
 import Foundation
 import Observation
 
-public struct WebInspectorFetchDescriptor<Model: WebInspectorFetchableModel>: Hashable, Sendable {
+public struct WebInspectorFetchDescriptor<Model: WebInspectorFetchableModel>: Sendable {
     enum Kind: Hashable, Sendable {
         case networkRequests
         case consoleMessages
     }
 
     let kind: Kind
+    public var predicate: Predicate<Model>?
+    public var sortBy: [SortDescriptor<Model>]
+    public var fetchLimit: Int? {
+        didSet {
+            Self.validate(fetchLimit: fetchLimit)
+        }
+    }
+    public var fetchOffset: Int {
+        didSet {
+            Self.validate(fetchOffset: fetchOffset)
+        }
+    }
 
-    public init() {
-        kind = Self.requireKnownKind()
+    public init(
+        predicate: Predicate<Model>? = nil,
+        sortBy: [SortDescriptor<Model>] = [],
+        fetchLimit: Int? = nil,
+        fetchOffset: Int = 0
+    ) {
+        Self.validate(fetchLimit: fetchLimit)
+        Self.validate(fetchOffset: fetchOffset)
+        self.kind = Self.requireKnownKind()
+        self.predicate = predicate
+        self.sortBy = sortBy
+        self.fetchLimit = fetchLimit
+        self.fetchOffset = fetchOffset
     }
 
     private static func requireKnownKind() -> Kind {
@@ -21,6 +44,68 @@ public struct WebInspectorFetchDescriptor<Model: WebInspectorFetchableModel>: Ha
             return .consoleMessages
         }
         preconditionFailure("WebInspectorFetchDescriptor does not support fetching \(Model.self).")
+    }
+
+    private static func validate(fetchLimit: Int?) {
+        if let fetchLimit {
+            precondition(fetchLimit >= 0, "WebInspectorFetchDescriptor fetchLimit must be non-negative.")
+        }
+    }
+
+    private static func validate(fetchOffset: Int) {
+        precondition(fetchOffset >= 0, "WebInspectorFetchDescriptor fetchOffset must be non-negative.")
+    }
+
+    var requiresRecordBackedQuery: Bool {
+        predicate != nil || sortBy.isEmpty == false || fetchLimit != nil || fetchOffset > 0
+    }
+}
+
+public final class WebInspectorFetchRequest<Model: WebInspectorFetchableModel> {
+    public var predicate: Predicate<Model>?
+    public var sortDescriptors: [SortDescriptor<Model>]
+    public var fetchLimit: Int? {
+        didSet {
+            Self.validate(fetchLimit: fetchLimit)
+        }
+    }
+    public var fetchOffset: Int {
+        didSet {
+            Self.validate(fetchOffset: fetchOffset)
+        }
+    }
+
+    public init(
+        predicate: Predicate<Model>? = nil,
+        sortDescriptors: [SortDescriptor<Model>] = [],
+        fetchLimit: Int? = nil,
+        fetchOffset: Int = 0
+    ) {
+        Self.validate(fetchLimit: fetchLimit)
+        Self.validate(fetchOffset: fetchOffset)
+        self.predicate = predicate
+        self.sortDescriptors = sortDescriptors
+        self.fetchLimit = fetchLimit
+        self.fetchOffset = fetchOffset
+    }
+
+    public var fetchDescriptor: WebInspectorFetchDescriptor<Model> {
+        WebInspectorFetchDescriptor(
+            predicate: predicate,
+            sortBy: sortDescriptors,
+            fetchLimit: fetchLimit,
+            fetchOffset: fetchOffset
+        )
+    }
+
+    private static func validate(fetchLimit: Int?) {
+        if let fetchLimit {
+            precondition(fetchLimit >= 0, "WebInspectorFetchRequest fetchLimit must be non-negative.")
+        }
+    }
+
+    private static func validate(fetchOffset: Int) {
+        precondition(fetchOffset >= 0, "WebInspectorFetchRequest fetchOffset must be non-negative.")
     }
 }
 
@@ -67,6 +152,7 @@ public struct WebInspectorFetchSection<Model: WebInspectorFetchableModel>: Ident
 enum WebInspectorSectionKey: Hashable, Sendable {
     case networkMethod
     case networkResourceType
+    case networkResourceCategory
     case networkMIMEType
     case consoleSource
     case consoleLevel
@@ -130,6 +216,9 @@ private enum WebInspectorKnownKeyPaths {
         if keyPath == (\NetworkRequest.resourceType as AnyKeyPath) {
             return .networkResourceType
         }
+        if keyPath == (\NetworkRequest.resourceCategory as AnyKeyPath) {
+            return .networkResourceCategory
+        }
         if keyPath == (\NetworkRequest.mimeType as AnyKeyPath) {
             return .networkMIMEType
         }
@@ -165,16 +254,19 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
     @ObservationIgnored private let transactionRelay = WebInspectorAsyncStreamRelay<
         WebInspectorFetchedResultsTransaction<Model>
     >()
+    @ObservationIgnored weak var modelContext: WebInspectorContext?
 
     init(
         fetchDescriptor: WebInspectorFetchDescriptor<Model>,
         sectionBy: WebInspectorSectionDescriptor<Model>? = nil,
-        items: [Model] = []
+        items: [Model] = [],
+        modelContext: WebInspectorContext? = nil
     ) {
         self.fetchDescriptor = fetchDescriptor
         self.sectionBy = sectionBy
         self.items = items
         sections = Self.sections(for: items, sectionBy: sectionBy)
+        self.modelContext = modelContext
     }
 
     deinit {
@@ -190,6 +282,36 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
         self.items = items
         sections = Self.sections(for: items, sectionBy: sectionBy)
         yieldTransaction(oldSnapshot: oldSnapshot, updatedItemIDs: updatedItemIDs)
+    }
+
+    func insertItem(_ item: Model) {
+        precondition(items.contains { $0.id == item.id } == false, "WebInspectorFetchedResults cannot insert a duplicate item ID.")
+        let oldSnapshot = currentSnapshot
+        items.append(item)
+        sections = Self.sections(for: items, sectionBy: sectionBy)
+        yieldTransaction(oldSnapshot: oldSnapshot, updatedItemIDs: [])
+    }
+
+    func resetItems(_ items: [Model]) {
+        let oldSnapshot = currentSnapshot
+        self.items = items
+        sections = Self.sections(for: items, sectionBy: sectionBy)
+        yieldResetTransaction(oldSnapshot: oldSnapshot)
+    }
+
+    func applyFetchDescriptor(_ descriptor: WebInspectorFetchDescriptor<Model>, items: [Model]) {
+        fetchDescriptor = descriptor
+        resetItems(items)
+    }
+
+    public func updateFetchDescriptor(
+        _ descriptor: WebInspectorFetchDescriptor<Model>,
+        isolation: isolated (any Actor) = #isolation
+    ) {
+        guard let modelContext else {
+            preconditionFailure("WebInspectorFetchedResults is not registered in a WebInspectorContext.")
+        }
+        modelContext.updateFetchDescriptor(descriptor, for: self, isolation: isolation)
     }
 
     private var currentSnapshot: WebInspectorFetchedResultsSnapshot<Model.ID> {
@@ -211,6 +333,21 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
         guard transaction.hasChanges else {
             return
         }
+        transactionRelay.yield(transaction)
+    }
+
+    private func yieldResetTransaction(
+        oldSnapshot: WebInspectorFetchedResultsSnapshot<Model.ID>
+    ) {
+        guard transactionRelay.hasContinuations else {
+            return
+        }
+        let transaction = WebInspectorFetchedResultsTransaction<Model>(
+            oldSnapshot: oldSnapshot,
+            newSnapshot: currentSnapshot,
+            isReset: true,
+            itemChanges: []
+        )
         transactionRelay.yield(transaction)
     }
 
@@ -255,6 +392,8 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
             value = (item as? NetworkRequest)?.method
         case .networkResourceType:
             value = (item as? NetworkRequest)?.resourceType?.rawValue
+        case .networkResourceCategory:
+            value = (item as? NetworkRequest)?.resourceCategory.rawValue
         case .networkMIMEType:
             value = (item as? NetworkRequest)?.mimeType
         case .consoleSource:

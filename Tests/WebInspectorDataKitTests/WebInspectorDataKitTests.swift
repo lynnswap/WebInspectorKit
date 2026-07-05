@@ -2194,7 +2194,7 @@ func domTreeControllerPublishesSelectionTransactionsWithoutOwningExpansion() asy
 
 @MainActor
 @Test
-func fetchedResultsControllerPublishesNetworkInsertAndUpdateTransactions() async throws {
+func fetchedResultsControllerPublishesNetworkTopologyTransactionsOnly() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
@@ -2222,35 +2222,39 @@ func fetchedResultsControllerPublishesNetworkInsertAndUpdateTransactions() async
     #expect(inserted.oldSnapshot.itemIDs == [])
     #expect(inserted.newSnapshot.itemIDs == [modelID])
     #expect(controller.snapshot.itemIDs == [modelID])
+    let request = try #require(results.items.first)
 
     await runtime.backend.emit(
         .responseReceived(
             id: requestID,
-            response: Network.Response(status: 200, mimeType: "text/plain"),
+            response: Network.Response(status: 200, statusText: "OK", mimeType: "text/plain"),
             resourceType: .fetch,
             timestamp: 2
         ),
         target: target
     )
 
-    try await recorder.waitForTransactionCount(2)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: modelID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0))])
+    try await waitUntil { request.status == 200 }
+    #expect(results.items.first === request)
+    #expect(recorder.transactions.count == 1)
 
     await runtime.backend.emit(
         .dataReceived(id: requestID, dataLength: 7, encodedDataLength: 3, timestamp: 3),
         target: target
     )
 
-    try await recorder.waitForTransactionCount(3)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: modelID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0))])
+    try await waitUntil { request.decodedDataLength == 7 && request.encodedDataLength == 3 }
+    #expect(results.items.first === request)
+    #expect(recorder.transactions.count == 1)
 
     await runtime.backend.emit(
         .loadingFinished(id: requestID, timestamp: 4, sourceMapURL: nil, metrics: nil),
         target: target
     )
 
-    try await recorder.waitForTransactionCount(4)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: modelID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0))])
+    try await waitUntil { request.state == .finished }
+    #expect(results.items.first === request)
+    #expect(recorder.transactions.count == 1)
 
     await runtime.backend.emit(
         .requestServedFromMemoryCache(
@@ -2261,11 +2265,9 @@ func fetchedResultsControllerPublishesNetworkInsertAndUpdateTransactions() async
         target: target
     )
 
-    try await recorder.waitForTransactionCount(5)
-    let updated = try #require(recorder.transactions.last)
-    #expect(updated.itemChanges == [.update(itemID: modelID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0))])
-    #expect(updated.oldSnapshot.itemIDs == [modelID])
-    #expect(updated.newSnapshot.itemIDs == [modelID])
+    try await waitUntil { request.finishedOrFailedTimestamp == 5 }
+    #expect(results.items.first === request)
+    #expect(recorder.transactions.count == 1)
 
     let failedRequestID = Network.Request.ID("controller-failed-request")
     let failedModelID = NetworkRequest.ID(failedRequestID)
@@ -2280,16 +2282,23 @@ func fetchedResultsControllerPublishesNetworkInsertAndUpdateTransactions() async
         target: target
     )
 
-    try await recorder.waitForTransactionCount(6)
+    try await recorder.waitForTransactionCount(2)
     #expect(recorder.transactions.last?.itemChanges == [.insert(itemID: failedModelID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 1))])
+    let failedRequest = try #require(results.items.last)
 
     await runtime.backend.emit(
         .loadingFailed(id: failedRequestID, errorText: "cancelled", canceled: true, timestamp: 7),
         target: target
     )
 
-    try await recorder.waitForTransactionCount(7)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: failedModelID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 1))])
+    try await waitUntil {
+        if case .failed(errorText: "cancelled", canceled: true) = failedRequest.state {
+            return true
+        }
+        return false
+    }
+    #expect(results.items.last === failedRequest)
+    #expect(recorder.transactions.count == 2)
 
     let socketRequestID = Network.Request.ID("controller-socket-request")
     let socketModelID = NetworkRequest.ID(socketRequestID)
@@ -2298,8 +2307,9 @@ func fetchedResultsControllerPublishesNetworkInsertAndUpdateTransactions() async
         target: target
     )
 
-    try await recorder.waitForTransactionCount(8)
+    try await recorder.waitForTransactionCount(3)
     #expect(recorder.transactions.last?.itemChanges == [.insert(itemID: socketModelID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 2))])
+    let socketRequest = try #require(results.items.last)
 
     await runtime.backend.emit(
         .webSocket(.handshakeRequest(
@@ -2315,8 +2325,9 @@ func fetchedResultsControllerPublishesNetworkInsertAndUpdateTransactions() async
         target: target
     )
 
-    try await recorder.waitForTransactionCount(9)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: socketModelID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 2))])
+    try await waitUntil { socketRequest.webSocket?.handshakeRequest?.headers["Upgrade"] == "websocket" }
+    #expect(results.items.last === socketRequest)
+    #expect(recorder.transactions.count == 3)
 
     await runtime.backend.emit(
         .webSocket(.handshakeResponse(
@@ -2327,8 +2338,9 @@ func fetchedResultsControllerPublishesNetworkInsertAndUpdateTransactions() async
         target: target
     )
 
-    try await recorder.waitForTransactionCount(10)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: socketModelID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 2))])
+    try await waitUntil { socketRequest.status == 101 }
+    #expect(results.items.last === socketRequest)
+    #expect(recorder.transactions.count == 3)
 
     await runtime.backend.emit(
         .webSocket(.frameSent(
@@ -2339,8 +2351,9 @@ func fetchedResultsControllerPublishesNetworkInsertAndUpdateTransactions() async
         target: target
     )
 
-    try await recorder.waitForTransactionCount(11)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: socketModelID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 2))])
+    try await waitUntil { socketRequest.webSocket?.frames.count == 1 }
+    #expect(results.items.last === socketRequest)
+    #expect(recorder.transactions.count == 3)
 
     await runtime.backend.emit(
         .webSocket(.frameReceived(
@@ -2351,29 +2364,32 @@ func fetchedResultsControllerPublishesNetworkInsertAndUpdateTransactions() async
         target: target
     )
 
-    try await recorder.waitForTransactionCount(12)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: socketModelID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 2))])
+    try await waitUntil { socketRequest.webSocket?.frames.count == 2 }
+    #expect(results.items.last === socketRequest)
+    #expect(recorder.transactions.count == 3)
 
     await runtime.backend.emit(
         .webSocket(.error(id: socketRequestID, message: "decode failed", timestamp: 12)),
         target: target
     )
 
-    try await recorder.waitForTransactionCount(13)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: socketModelID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 2))])
+    try await waitUntil { socketRequest.webSocket?.frames.count == 3 }
+    #expect(results.items.last === socketRequest)
+    #expect(recorder.transactions.count == 3)
 
     await runtime.backend.emit(
         .webSocket(.closed(id: socketRequestID, timestamp: 13)),
         target: target
     )
 
-    try await recorder.waitForTransactionCount(14)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: socketModelID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 2))])
+    try await waitUntil { socketRequest.state == .finished && socketRequest.webSocket?.readyState == .closed }
+    #expect(results.items.last === socketRequest)
+    #expect(recorder.transactions.count == 3)
 }
 
 @MainActor
 @Test
-func clearNetworkRequestsPublishesDeletesAndIgnoresClearedEvents() async throws {
+func clearNetworkRequestsPublishesResetAndIgnoresClearedEvents() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
@@ -2414,10 +2430,12 @@ func clearNetworkRequestsPublishesDeletesAndIgnoresClearedEvents() async throws 
     context.clearNetworkRequests()
 
     try await recorder.waitForTransactionCount(3)
-    #expect(recorder.transactions.last?.itemChanges == [
-        .delete(itemID: secondModelID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 1)),
-        .delete(itemID: firstModelID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)),
-    ])
+    let reset = try #require(recorder.transactions.last)
+    #expect(reset.isReset)
+    #expect(reset.oldSnapshot.itemIDs == [firstModelID, secondModelID])
+    #expect(reset.newSnapshot.itemIDs == [])
+    #expect(reset.sectionChanges == [])
+    #expect(reset.itemChanges == [])
     #expect(controller.snapshot.itemIDs == [])
     #expect(results.items.isEmpty)
     #expect(context.registeredRequest(for: firstModelID) == nil)
@@ -2467,6 +2485,74 @@ func clearNetworkRequestsPublishesDeletesAndIgnoresClearedEvents() async throws 
     #expect(reusedRequest.id == firstModelID)
     #expect(reusedRequest.url == "https://example.com/reused")
     #expect(context.registeredRequest(for: firstModelID) === reusedRequest)
+}
+
+@MainActor
+@Test
+func networkRequestExposesDataKitQueryableProperties() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+
+    let apiRequestID = Network.Request.ID("queryable-api-request")
+    await runtime.backend.emit(
+        .requestWillBeSent(
+            id: apiRequestID,
+            request: Network.Request(
+                id: apiRequestID,
+                url: "https://api.example.test/graphql?operation=Feed",
+                method: "POST"
+            ),
+            resourceType: .fetch,
+            redirectResponse: nil,
+            timestamp: 1
+        ),
+        target: target
+    )
+    await runtime.backend.emit(
+        .responseReceived(
+            id: apiRequestID,
+            response: Network.Response(
+                url: "https://api.example.test/graphql?operation=Feed",
+                status: 201,
+                statusText: "Created",
+                mimeType: "application/json"
+            ),
+            resourceType: .fetch,
+            timestamp: 2
+        ),
+        target: target
+    )
+
+    try await waitUntil { results.items.first?.statusCode == 201 }
+    let apiRequest = try #require(results.items.first)
+    #expect(apiRequest.resourceCategory == .xhrFetch)
+    #expect(apiRequest.statusCode == 201)
+    #expect(apiRequest.searchableText.localizedStandardContains("graphql"))
+    #expect(apiRequest.searchableText.localizedStandardContains("POST"))
+    #expect(apiRequest.searchableText.localizedStandardContains("201"))
+    #expect(apiRequest.searchableText.localizedStandardContains("Created"))
+
+    let cssRequestID = Network.Request.ID("queryable-css-request")
+    await runtime.backend.emit(
+        .responseReceived(
+            id: cssRequestID,
+            response: Network.Response(
+                url: "https://example.test/app.css",
+                status: 200,
+                mimeType: "text/css; charset=utf-8"
+            ),
+            resourceType: .other,
+            timestamp: 3
+        ),
+        target: target
+    )
+
+    try await waitUntil { results.items.count == 2 }
+    let cssRequest = try #require(results.items.last)
+    #expect(cssRequest.resourceCategory == .stylesheet)
+    #expect(cssRequest.searchableText.localizedStandardContains("app.css"))
+    #expect(cssRequest.statusCode == 200)
 }
 
 @MainActor

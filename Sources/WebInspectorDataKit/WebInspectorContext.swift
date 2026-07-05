@@ -560,7 +560,8 @@ public final class WebInspectorContext {
         isolation: isolated (any Actor) = #isolation
     ) -> WebInspectorFetchedResults<Model> {
         requireOwner(isolation)
-        let results = WebInspectorFetchedResults(fetchDescriptor: descriptor, sectionBy: sectionBy)
+        requireSupportedFetchDescriptor(descriptor)
+        let results = WebInspectorFetchedResults(fetchDescriptor: descriptor, sectionBy: sectionBy, modelContext: self)
         switch descriptor.kind {
         case .networkRequests:
             guard let networkResults = results as? WebInspectorFetchedResults<NetworkRequest> else {
@@ -576,6 +577,14 @@ public final class WebInspectorContext {
             consoleFetchedResults.append(WeakWebInspectorFetchedResults(consoleResults))
         }
         return results
+    }
+
+    public func fetchedResults<Model: WebInspectorFetchableModel>(
+        for request: WebInspectorFetchRequest<Model>,
+        sectionBy: WebInspectorSectionDescriptor<Model>? = nil,
+        isolation: isolated (any Actor) = #isolation
+    ) -> WebInspectorFetchedResults<Model> {
+        fetchedResults(for: request.fetchDescriptor, sectionBy: sectionBy, isolation: isolation)
     }
 
     public func fetchedResults<Model: WebInspectorFetchableModel>(
@@ -644,6 +653,16 @@ public final class WebInspectorContext {
     }
 
     public func fetchedResultsController<Model: WebInspectorFetchableModel>(
+        for request: WebInspectorFetchRequest<Model>,
+        sectionBy: WebInspectorSectionDescriptor<Model>? = nil,
+        isolation: isolated (any Actor) = #isolation
+    ) -> WebInspectorFetchedResultsController<Model> {
+        WebInspectorFetchedResultsController(
+            fetchedResults: fetchedResults(for: request, sectionBy: sectionBy, isolation: isolation)
+        )
+    }
+
+    public func fetchedResultsController<Model: WebInspectorFetchableModel>(
         for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
         sectionBy keyPath: KeyPath<Model, String>,
         isolation: isolated (any Actor) = #isolation
@@ -687,6 +706,42 @@ public final class WebInspectorContext {
         WebInspectorFetchedResultsController(
             fetchedResults: fetchedResults(for: descriptor, sectionBy: keyPath, isolation: isolation)
         )
+    }
+
+    func updateFetchDescriptor<Model: WebInspectorFetchableModel>(
+        _ descriptor: WebInspectorFetchDescriptor<Model>,
+        for results: WebInspectorFetchedResults<Model>,
+        isolation: isolated (any Actor) = #isolation
+    ) {
+        requireOwner(isolation)
+        requireSupportedFetchDescriptor(descriptor)
+        guard results.modelContext === self else {
+            preconditionFailure("WebInspectorFetchedResults is not registered in this WebInspectorContext.")
+        }
+        switch descriptor.kind {
+        case .networkRequests:
+            guard let networkDescriptor = descriptor as? WebInspectorFetchDescriptor<NetworkRequest>,
+                  let networkResults = results as? WebInspectorFetchedResults<NetworkRequest> else {
+                preconditionFailure("NetworkRequest descriptors can only update NetworkRequest fetched results.")
+            }
+            networkResults.applyFetchDescriptor(networkDescriptor, items: currentNetworkRequests())
+        case .consoleMessages:
+            guard let consoleDescriptor = descriptor as? WebInspectorFetchDescriptor<ConsoleMessage>,
+                  let consoleResults = results as? WebInspectorFetchedResults<ConsoleMessage> else {
+                preconditionFailure("ConsoleMessage descriptors can only update ConsoleMessage fetched results.")
+            }
+            consoleResults.applyFetchDescriptor(consoleDescriptor, items: currentConsoleMessages())
+        }
+    }
+
+    private func requireSupportedFetchDescriptor<Model: WebInspectorFetchableModel>(
+        _ descriptor: WebInspectorFetchDescriptor<Model>
+    ) {
+        guard descriptor.requiresRecordBackedQuery == false else {
+            preconditionFailure(
+                "Predicate, sort, limit, and offset fetch descriptors require a record-backed DataKit query index."
+            )
+        }
     }
 
     func fetchResponseBody(
@@ -2669,7 +2724,6 @@ extension WebInspectorContext {
         }
         if let responseBody {
             request.responseBody.load(Network.Body(data: responseBody, base64Encoded: false))
-            refreshAllRequests(updatedItemIDs: [request.id])
         }
         return request.id
     }
@@ -2692,7 +2746,6 @@ extension WebInspectorContext {
             size: size,
             isTruncated: isTruncated
         ))
-        refreshAllRequests(updatedItemIDs: [requestID])
     }
 
     package func apply(_ event: Network.Event, isolation: isolated (any Actor) = #isolation) {
@@ -2717,19 +2770,16 @@ extension WebInspectorContext {
                 encodedDataLength: encodedDataLength,
                 timestamp: timestamp
             )
-            refreshAllRequests(updatedItemIDs: [request.id])
         case let .loadingFinished(id, timestamp, sourceMapURL, metrics):
             guard let request = networkRequest(for: id, method: "loadingFinished") else {
                 return
             }
             request.finish(timestamp: timestamp, sourceMapURL: sourceMapURL, metrics: metrics)
-            refreshAllRequests(updatedItemIDs: [request.id])
         case let .loadingFailed(id, errorText, canceled, timestamp):
             guard let request = networkRequest(for: id, method: "loadingFailed") else {
                 return
             }
             request.fail(errorText: errorText, canceled: canceled, timestamp: timestamp)
-            refreshAllRequests(updatedItemIDs: [request.id])
         case let .webSocket(event):
             apply(event)
         case let .requestServedFromMemoryCache(id, response, timestamp):
@@ -2749,7 +2799,7 @@ extension WebInspectorContext {
         let id = NetworkRequest.ID(proxyID)
         clearedNetworkRequestIDs.remove(id)
         let request: NetworkRequest
-        var updatedItemIDs = Set<NetworkRequest.ID>()
+        var inserted = false
         if let existing = requestsByID[id] {
             request = existing
             if let redirectResponse, existing.isActive {
@@ -2759,17 +2809,18 @@ extension WebInspectorContext {
                     timestamp: timestamp,
                     resourceType: resourceType
                 )
-                updatedItemIDs.insert(id)
             } else if existing.isActive == false {
                 request.applyRequestWillBeSent(request: payload, resourceType: resourceType, timestamp: timestamp)
-                updatedItemIDs.insert(id)
             }
         } else {
             request = NetworkRequest(request: payload, resourceType: resourceType, timestamp: timestamp, modelContext: self)
             requestsByID[id] = request
             orderedRequestIDs.append(id)
+            inserted = true
         }
-        refreshAllRequests(updatedItemIDs: updatedItemIDs)
+        if inserted {
+            notifyNetworkRequestInserted(request)
+        }
     }
 
     private func applyRequestServedFromMemoryCache(
@@ -2798,9 +2849,11 @@ extension WebInspectorContext {
             request = NetworkRequest(request: payload, resourceType: nil, timestamp: timestamp, modelContext: self)
             requestsByID[id] = request
             orderedRequestIDs.append(id)
+            request.applyMemoryCache(response: response, timestamp: timestamp)
+            notifyNetworkRequestInserted(request)
+            return
         }
         request.applyMemoryCache(response: response, timestamp: timestamp)
-        refreshAllRequests(updatedItemIDs: [id])
     }
 
     private func applyResponseReceived(
@@ -2838,7 +2891,9 @@ extension WebInspectorContext {
             inserted = true
         }
         request.applyResponse(response, resourceType: resourceType, timestamp: timestamp)
-        refreshAllRequests(updatedItemIDs: inserted ? [] : [id])
+        if inserted {
+            notifyNetworkRequestInserted(request)
+        }
     }
 
     private func apply(_ event: Network.WebSocketEvent) {
@@ -2850,37 +2905,31 @@ extension WebInspectorContext {
                 return
             }
             networkRequest.applyWebSocketHandshakeRequest(request, timestamp: timestamp)
-            refreshAllRequests(updatedItemIDs: [networkRequest.id])
         case let .handshakeResponse(id, response, timestamp):
             guard let networkRequest = networkRequest(for: id, method: "webSocketHandshakeResponseReceived") else {
                 return
             }
             networkRequest.applyWebSocketHandshakeResponse(response, timestamp: timestamp)
-            refreshAllRequests(updatedItemIDs: [networkRequest.id])
         case let .frameSent(id, frame, timestamp):
             guard let networkRequest = networkRequest(for: id, method: "webSocketFrameSent") else {
                 return
             }
             networkRequest.appendWebSocketFrame(frame, direction: .sent, timestamp: timestamp)
-            refreshAllRequests(updatedItemIDs: [networkRequest.id])
         case let .frameReceived(id, frame, timestamp):
             guard let networkRequest = networkRequest(for: id, method: "webSocketFrameReceived") else {
                 return
             }
             networkRequest.appendWebSocketFrame(frame, direction: .received, timestamp: timestamp)
-            refreshAllRequests(updatedItemIDs: [networkRequest.id])
         case let .error(id, message, timestamp):
             guard let networkRequest = networkRequest(for: id, method: "webSocketFrameError") else {
                 return
             }
             networkRequest.appendWebSocketError(message, timestamp: timestamp)
-            refreshAllRequests(updatedItemIDs: [networkRequest.id])
         case let .closed(id, timestamp):
             guard let networkRequest = networkRequest(for: id, method: "webSocketClosed") else {
                 return
             }
             networkRequest.closeWebSocket(timestamp: timestamp)
-            refreshAllRequests(updatedItemIDs: [networkRequest.id])
         case .other:
             break
         }
@@ -2890,6 +2939,7 @@ extension WebInspectorContext {
         let id = NetworkRequest.ID(proxyID)
         clearedNetworkRequestIDs.remove(id)
         let request: NetworkRequest
+        var inserted = false
         if let existing = requestsByID[id] {
             request = existing
         } else {
@@ -2897,9 +2947,12 @@ extension WebInspectorContext {
             request = NetworkRequest(request: payload, resourceType: .webSocket, timestamp: nil, modelContext: self)
             requestsByID[id] = request
             orderedRequestIDs.append(id)
+            inserted = true
         }
         request.applyWebSocketCreated(url: url)
-        refreshAllRequests(updatedItemIDs: [id])
+        if inserted {
+            notifyNetworkRequestInserted(request)
+        }
     }
 
     private func networkRequest(
@@ -2920,18 +2973,24 @@ extension WebInspectorContext {
         clearedNetworkRequestIDs.formUnion(requestsByID.keys)
         requestsByID = [:]
         orderedRequestIDs = []
-        refreshAllRequests()
+        resetNetworkFetchedResults()
     }
 
     private func currentNetworkRequests() -> [NetworkRequest] {
         orderedRequestIDs.compactMap { requestsByID[$0] }
     }
 
-    private func refreshAllRequests(updatedItemIDs: Set<NetworkRequest.ID> = []) {
+    private func notifyNetworkRequestInserted(_ request: NetworkRequest) {
         networkFetchedResults.removeAll { $0.value == nil }
-        let items = currentNetworkRequests()
         for registration in networkFetchedResults {
-            registration.value?.setItems(items, updatedItemIDs: updatedItemIDs)
+            registration.value?.insertItem(request)
+        }
+    }
+
+    private func resetNetworkFetchedResults() {
+        networkFetchedResults.removeAll { $0.value == nil }
+        for registration in networkFetchedResults {
+            registration.value?.resetItems([])
         }
     }
 }
