@@ -351,7 +351,7 @@ func domInspectSelectsKnownNodeAndLoadsStyles() async throws {
 
 @MainActor
 @Test
-func domInspectRequestsSubtreeBeforeSelectingUnresolvedNode() async throws {
+func domInspectWaitsForRequestNodePathBeforeSelectingUnresolvedNode() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let document = try #require(context.rootNode)
@@ -366,23 +366,10 @@ func domInspectRequestsSubtreeBeforeSelectingUnresolvedNode() async throws {
     )
     try await waitUntil { context.node(for: DOMNode.ID(staleID)) != nil }
 
-    await runtime.backend.enqueue((), for: "DOM", method: "requestChildNodes")
     await enqueueCSSStyleReplies(on: runtime.backend)
     await runtime.backend.enqueue((), for: "DOM", method: "highlightNode")
     await runtime.backend.emit(.inspect(elementID), target: target)
-    try await waitUntil {
-        await runtime.backend.recordedCommands().contains(
-            RecordedCommand(domain: "DOM", method: "requestChildNodes")
-        )
-    }
-
-    let commands = await runtime.backend.recordedCommands()
-    let command = try #require(commands.last {
-        $0.domain == "DOM" && $0.method == "requestChildNodes"
-    })
-    let payload = try #require(command.payload.cast(as: DOM.RequestChildNodesPayload.self))
-    #expect(payload.id == document.id.proxyID)
-    #expect(payload.depth == -1)
+    #expect(context.selectedNode == nil)
 
     await runtime.backend.emit(
         .setChildNodes(parent: document.id.proxyID, nodes: [
@@ -400,6 +387,9 @@ func domInspectRequestsSubtreeBeforeSelectingUnresolvedNode() async throws {
         }
     }
     #expect(context.state == .attached)
+    #expect(await runtime.backend.recordedCommands().contains(
+        RecordedCommand(domain: "DOM", method: "requestChildNodes")
+    ) == false)
     #expect(context.node(for: DOMNode.ID(staleID)) == nil)
     let selected = try #require(context.selectedNode)
     let styles = try #require(selected.elementStyles)
@@ -408,7 +398,7 @@ func domInspectRequestsSubtreeBeforeSelectingUnresolvedNode() async throws {
 
 @MainActor
 @Test
-func domInspectBeforeDocumentArrivesRequestsSubtreeAfterRootApplies() async throws {
+func domInspectBeforeDocumentArrivesWaitsForRequestNodePathAfterRootApplies() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
     let gate = WebInspectorTestGate()
@@ -430,23 +420,12 @@ func domInspectBeforeDocumentArrivesRequestsSubtreeAfterRootApplies() async thro
     }
 
     await runtime.backend.emit(.inspect(elementID), target: target)
-    await runtime.backend.enqueue((), for: "DOM", method: "requestChildNodes")
     await runtime.backend.enqueue((), for: "DOM", method: "highlightNode")
     await enqueueCSSStyleReplies(on: runtime.backend)
     await gate.open()
 
-    try await waitUntil {
-        await runtime.backend.recordedCommands().contains(
-            RecordedCommand(domain: "DOM", method: "requestChildNodes")
-        )
-    }
-    let commands = await runtime.backend.recordedCommands()
-    let command = try #require(commands.last {
-        $0.domain == "DOM" && $0.method == "requestChildNodes"
-    })
-    let payload = try #require(command.payload.cast(as: DOM.RequestChildNodesPayload.self))
-    #expect(payload.id == documentID)
-    #expect(payload.depth == -1)
+    try await waitUntil { context.rootNode?.id == DOMNode.ID(documentID) }
+    #expect(context.selectedNode == nil)
 
     await runtime.backend.emit(
         .setChildNodes(parent: documentID, nodes: [
@@ -466,6 +445,9 @@ func domInspectBeforeDocumentArrivesRequestsSubtreeAfterRootApplies() async thro
     let selected = try #require(context.selectedNode)
     let styles = try #require(selected.elementStyles)
     try await waitUntil { styles.phase == .loaded }
+    #expect(await runtime.backend.recordedCommands().contains(
+        RecordedCommand(domain: "DOM", method: "requestChildNodes")
+    ) == false)
 }
 
 @MainActor
@@ -485,13 +467,7 @@ func explicitSelectionSupersedesPendingDOMInspectResolution() async throws {
     )
     let manualSelection = try await waitForChild(in: context)
 
-    await runtime.backend.enqueue((), for: "DOM", method: "requestChildNodes")
-    await runtime.backend.emit(.inspect(inspectedID), target: target)
-    try await waitUntil {
-        await runtime.backend.recordedCommands().contains(
-            RecordedCommand(domain: "DOM", method: "requestChildNodes")
-        )
-    }
+    context.apply(.inspect(inspectedID))
 
     await enqueueCSSStyleReplies(on: runtime.backend)
     context.select(manualSelection)
@@ -507,6 +483,9 @@ func explicitSelectionSupersedesPendingDOMInspectResolution() async throws {
     try await waitUntil { context.node(for: DOMNode.ID(inspectedID)) != nil }
 
     #expect(context.selectedNode === manualSelection)
+    #expect(await runtime.backend.recordedCommands().contains(
+        RecordedCommand(domain: "DOM", method: "requestChildNodes")
+    ) == false)
 }
 
 @MainActor
@@ -1477,6 +1456,19 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
             return snapshot.rootNodeID == newRootID
         }
     }
+    let resetUpdateIndex = try #require(domUpdates.updates.firstIndex { update in
+        guard case let .snapshot(snapshot, .reset) = update else {
+            return false
+        }
+        return snapshot.rootNodeID == nil
+    })
+    let pageChangedUpdateIndex = try #require(domUpdates.updates.firstIndex { update in
+        guard case let .snapshot(snapshot, .pageChanged) = update else {
+            return false
+        }
+        return snapshot.rootNodeID == newRootID
+    })
+    #expect(resetUpdateIndex < pageChangedUpdateIndex)
     #expect(context.state == .attached)
     #expect(context.node(for: oldRootID) == nil)
     #expect(context.node(for: newRootID) != nil)
@@ -1537,6 +1529,15 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
         params: #"{"nodeId":"new-root","name":"data-probe","value":"new"}"#
     )
     try await waitUntil { context.rootNode?.attributes["data-probe"] == "new" }
+    try await waitUntil {
+        domUpdates.updates.last == .delta(.nodeChanged(nodeID: newRootID))
+    }
+    #expect(domUpdates.updates[(pageChangedUpdateIndex + 1)...].allSatisfy { update in
+        guard case .delta = update else {
+            return false
+        }
+        return true
+    })
     #expect(context.rootNode?.childNodeCount == 0)
     #expect(context.node(for: oldRouteChildID) == nil)
 }
@@ -1968,6 +1969,19 @@ func documentUpdatedReloadsRootDocument() async throws {
             return snapshot.rootNodeID == DOMNode.ID(replacementID)
         }
     }
+    let resetUpdateIndex = try #require(recorder.updates.firstIndex { update in
+        guard case let .snapshot(snapshot, .reset) = update else {
+            return false
+        }
+        return snapshot.rootNodeID == nil
+    })
+    let documentUpdatedIndex = try #require(recorder.updates.firstIndex { update in
+        guard case let .snapshot(snapshot, .documentUpdated) = update else {
+            return false
+        }
+        return snapshot.rootNodeID == DOMNode.ID(replacementID)
+    })
+    #expect(resetUpdateIndex < documentUpdatedIndex)
     await #expect(throws: WebInspectorProxyError.disconnected("DOM undo/redo target is no longer current.")) {
         try await undoCommands.undo()
     }
@@ -2100,6 +2114,100 @@ func domTreeControllerPublishesAssociatedSubtreeDeltas() async throws {
     #expect(controller.snapshot.visibleChildren(of: DOMNode.ID(iframeID)).nodeIDs == [DOMNode.ID(frameDocumentID)])
     #expect(controller.snapshot.parent(of: DOMNode.ID(frameDocumentID)) == DOMNode.ID(iframeID))
     #expect(controller.snapshot.parent(of: DOMNode.ID(frameBodyID)) == DOMNode.ID(frameDocumentID))
+}
+
+@MainActor
+@Test
+func domTreeControllerPublishesOnlyDeltasForSameDocumentMutations() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(
+        runtime: runtime,
+        document: DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document", childNodeCount: 1)
+    )
+    let document = try #require(context.rootNode)
+    let controller = try await context.treeController()
+    let recorder = DOMTreeUpdateRecorder(stream: controller.updates)
+    defer { recorder.cancel() }
+    try await recorder.waitUntilStarted()
+    try await recorder.waitForUpdateCount(1)
+
+    let elementID = DOM.Node.ID("element")
+    let textID = DOM.Node.ID("text")
+    let insertedID = DOM.Node.ID("inserted")
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div", childNodeCount: 1)
+        ]),
+        target: target
+    )
+    try await recorder.waitForUpdateCount(2)
+
+    await runtime.backend.emit(
+        .attributeModified(elementID, name: "class", value: "selected"),
+        target: target
+    )
+    try await waitUntil { context.node(for: DOMNode.ID(elementID))?.attributes["class"] == "selected" }
+    try await recorder.waitForUpdateCount(3)
+
+    await runtime.backend.emit(
+        .childNodeCountUpdated(elementID, count: 1),
+        target: target
+    )
+    try await waitUntil { context.node(for: DOMNode.ID(elementID))?.childNodeCount == 1 }
+    try await recorder.waitForUpdateCount(4)
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: elementID, nodes: [
+            DOM.Node(id: textID, nodeType: 3, nodeName: "#text", nodeValue: "old")
+        ]),
+        target: target
+    )
+    try await recorder.waitForUpdateCount(5)
+
+    await runtime.backend.emit(
+        .characterDataModified(textID, value: "new"),
+        target: target
+    )
+    try await waitUntil { context.node(for: DOMNode.ID(textID))?.nodeValue == "new" }
+    try await recorder.waitForUpdateCount(6)
+
+    await runtime.backend.emit(
+        .childNodeInserted(
+            parent: document.id.proxyID,
+            previous: elementID,
+            node: DOM.Node(id: insertedID, nodeType: 1, nodeName: "SPAN", localName: "span")
+        ),
+        target: target
+    )
+    try await recorder.waitForUpdateCount(7)
+
+    await runtime.backend.emit(
+        .childNodeRemoved(parent: document.id.proxyID, node: insertedID),
+        target: target
+    )
+    try await recorder.waitForUpdateCount(8)
+
+    let mutationUpdates = Array(recorder.updates.dropFirst())
+    #expect(mutationUpdates.allSatisfy { update in
+        guard case .delta = update else {
+            return false
+        }
+        return true
+    })
+    #expect(mutationUpdates == [
+        .delta(.childrenReplaced(parentID: document.id, childIDs: [DOMNode.ID(elementID)])),
+        .delta(.nodeChanged(nodeID: DOMNode.ID(elementID))),
+        .delta(.childCountChanged(nodeID: DOMNode.ID(elementID))),
+        .delta(.childrenReplaced(parentID: DOMNode.ID(elementID), childIDs: [DOMNode.ID(textID)])),
+        .delta(.nodeChanged(nodeID: DOMNode.ID(textID))),
+        .delta(.childInserted(
+            parentID: document.id,
+            nodeID: DOMNode.ID(insertedID),
+            previousSiblingID: DOMNode.ID(elementID)
+        )),
+        .delta(.childRemoved(parentID: document.id, nodeID: DOMNode.ID(insertedID))),
+    ])
 }
 
 @MainActor

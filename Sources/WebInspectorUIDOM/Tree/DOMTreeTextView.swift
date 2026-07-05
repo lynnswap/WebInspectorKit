@@ -194,7 +194,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         let treeController = context.rootTreeController()
         self.treeController = treeController
         self.currentTreeSnapshot = treeController.snapshot
-        self.selectionRevision = treeController.snapshot.revision
+        self.selectionRevision = currentTreeSnapshot.revision
         self.requestChildrenAction = requestChildrenAction
         self.highlightNodeAction = highlightNodeAction
         self.restoreHighlightAction = restoreHighlightAction
@@ -569,14 +569,18 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
                     isSelectionChange = previousSnapshot.selectedNodeID != snapshot.selectedNodeID
                     isInitial = reason == .initialDocument && lastRoutedTreeRevision == nil
                 case let .delta(delta):
-                    currentTreeSnapshot = treeController.snapshot
+                    let currentRevision = treeController.revision
+                    let currentSelectedNodeID = treeController.selectedNodeID
                     invalidation = DOMTreeRenderInvalidation(
                         delta: delta,
-                        revision: currentTreeSnapshot.revision,
+                        revision: currentRevision,
                         startRevision: previousSnapshot.revision
                     )
                     isSelectionChange = delta.isSelectionChange
-                        || previousSnapshot.selectedNodeID != currentTreeSnapshot.selectedNodeID
+                        || previousSnapshot.selectedNodeID != currentSelectedNodeID
+                    if isSelectionChange {
+                        currentTreeSnapshot = treeController.snapshot
+                    }
                     isInitial = false
                 }
                 if !isSelectionChange || invalidation.kind != .content {
@@ -614,6 +618,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         guard isRenderingActive else {
             return
         }
+        synchronizeCurrentTreeSnapshotIfNeeded()
 
         let latestInvalidation = DOMTreeRenderInvalidation.initial(snapshot: currentTreeSnapshot)
         let treeRevision = latestInvalidation.revision
@@ -673,6 +678,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         guard let pendingInvalidation else {
             return
         }
+        synchronizeCurrentTreeSnapshotIfNeeded(for: pendingInvalidation.revision)
         routeDOMInvalidation(
             pendingInvalidation,
             isInitial: pendingIsInitial,
@@ -691,6 +697,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             pendingDOMTreeRenderInvalidationRequiresRoute = pendingDOMTreeRenderInvalidationRequiresRoute || forceRoute
             return
         }
+        synchronizeCurrentTreeSnapshotIfNeeded(for: invalidation.revision)
         guard forceRoute || shouldRouteDOMInvalidation(invalidation, isInitial: isInitial) else {
             return
         }
@@ -716,6 +723,14 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
                 return treeChanged
             }
         )
+    }
+
+    private func synchronizeCurrentTreeSnapshotIfNeeded(for revision: UInt64? = nil) {
+        let targetRevision = revision ?? treeController.revision
+        guard currentTreeSnapshot.revision < targetRevision else {
+            return
+        }
+        currentTreeSnapshot = treeController.snapshot
     }
 
     private func shouldRouteDOMInvalidation(

@@ -1581,30 +1581,6 @@ public final class WebInspectorContext {
         }
     }
 
-    private func requestInspectionSubtree(
-        from rootNode: DOMNode,
-        isolation: isolated (any Actor) = #isolation
-    ) {
-        guard let currentPage else {
-            skipEvent("requestInspectionSubtree ignored: no current page target")
-            return
-        }
-
-        inspectResolutionTask?.cancel()
-        inspectResolutionTask = Task { [weak self, currentPage, rootID = rootNode.id.proxyID] in
-            _ = isolation
-            do {
-                WebInspectorDataKitLog.debug(
-                    "DOM.inspect requesting subtree root=\(String(describing: rootID)) depth=-1"
-                )
-                try await currentPage.dom.requestChildNodes(rootID, depth: -1)
-            } catch is CancellationError {
-                return
-            } catch {
-                self?.failIfTerminal(error, operation: "DOM.requestChildNodes")
-            }
-        }
-    }
 }
 
 extension WebInspectorContext {
@@ -2491,18 +2467,14 @@ extension WebInspectorContext {
             return
         }
         guard let inspectedNode = nodesByID[pendingInspectedNodeID] else {
-            if requestSubtreeIfNeeded, let rootNode {
-                requestInspectionSubtreeForPendingNode(pendingInspectedNodeID, fallbackRoot: rootNode, isolation: isolation)
-            } else if requestSubtreeIfNeeded {
-                WebInspectorDataKitLog.debug(
-                    "DOM.inspect unresolved nodeID=\(String(describing: pendingInspectedNodeID)); no root node"
-                )
+            if requestSubtreeIfNeeded {
+                requestMaterializationForPendingInspectedNode(pendingInspectedNodeID, isolation: isolation)
             }
             return
         }
         guard isNodeAttachedToCurrentDOMTree(inspectedNode) else {
-            if requestSubtreeIfNeeded, let rootNode {
-                requestInspectionSubtreeForPendingNode(pendingInspectedNodeID, fallbackRoot: rootNode, isolation: isolation)
+            if requestSubtreeIfNeeded {
+                requestMaterializationForPendingInspectedNode(pendingInspectedNodeID, isolation: isolation)
             }
             return
         }
@@ -2515,27 +2487,27 @@ extension WebInspectorContext {
         selectInspectedNode(inspectedNode, isolation: isolation)
     }
 
-    private func requestInspectionSubtreeForPendingNode(
+    private func requestMaterializationForPendingInspectedNode(
         _ nodeID: DOMNode.ID,
-        fallbackRoot: DOMNode,
         isolation: isolated (any Actor)
     ) {
         if let frameTargetID = frameTargetID(for: nodeID) {
             if let rootID = frameDocumentProjectionIndex.frameDocumentRootID(for: frameTargetID),
                let frameRoot = nodesByID[rootID] {
                 WebInspectorDataKitLog.debug(
-                    "DOM.inspect unresolved nodeID=\(String(describing: nodeID)); requesting frame subtree"
+                    "DOM.inspect unresolved nodeID=\(String(describing: nodeID)); reattaching frame document root"
                 )
-                requestInspectionSubtree(from: frameRoot, isolation: isolation)
+                if let owner = attachProjectedFrameDocumentRoot(frameRoot, frameTargetID: frameTargetID) {
+                    notifyDOMTreeChildrenReplaced(parent: owner, isolation: isolation)
+                }
             } else {
                 loadFrameDocumentIfNeeded(forFrameTargetID: frameTargetID, reason: "DOM.inspect", isolation: isolation)
             }
             return
         }
         WebInspectorDataKitLog.debug(
-            "DOM.inspect unresolved nodeID=\(String(describing: nodeID)); requesting root subtree"
+            "DOM.inspect unresolved nodeID=\(String(describing: nodeID)); waiting for DOM.requestNode path materialization"
         )
-        requestInspectionSubtree(from: fallbackRoot, isolation: isolation)
     }
 
     private func selectInspectedNode(_ node: DOMNode, isolation: isolated (any Actor)) {

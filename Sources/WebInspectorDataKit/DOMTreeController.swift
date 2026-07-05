@@ -176,6 +176,14 @@ public final class DOMTreeController {
         tree.snapshot
     }
 
+    public var revision: UInt64 {
+        tree.revision
+    }
+
+    public var selectedNodeID: DOMNode.ID? {
+        tree.selectedNodeID
+    }
+
     public var updates: AsyncStream<DOMTreeUpdate> {
         tree.updates
     }
@@ -192,9 +200,15 @@ public final class DOMTreeController {
 }
 
 final class DOMTreeState {
-    private(set) var snapshot: DOMTreeSnapshot
+    var snapshot: DOMTreeSnapshot {
+        makeSnapshotFromIndex()
+    }
 
-    private var revision: UInt64
+    private(set) var revision: UInt64
+    private var rootNodeID: DOMNode.ID?
+    private(set) var selectedNodeID: DOMNode.ID?
+    private var nodesByID: [DOMNode.ID: DOMTreeSnapshot.Node]
+    private var parentByNodeID: [DOMNode.ID: DOMNode.ID]
     private let updateRelay = WebInspectorAsyncStreamRelay<DOMTreeUpdate>()
     private let revealRequestRelay = WebInspectorAsyncStreamRelay<DOMTreeRevealRequest>()
 
@@ -208,7 +222,11 @@ final class DOMTreeState {
 
     init(rootNode: DOMNode?, selectedNode: DOMNode?) {
         revision = 0
-        snapshot = Self.makeSnapshot(revision: revision, rootNode: rootNode, selectedNode: selectedNode)
+        let snapshot = DOMTreeSnapshot.make(revision: revision, rootNode: rootNode, selectedNode: selectedNode)
+        rootNodeID = snapshot.rootNodeID
+        selectedNodeID = snapshot.selectedNodeID
+        nodesByID = snapshot.nodesByID
+        parentByNodeID = snapshot.parentByNodeID
     }
 
     deinit {
@@ -222,23 +240,24 @@ final class DOMTreeState {
         reason: DOMTreeSnapshotReason
     ) {
         revision &+= 1
-        snapshot = Self.makeSnapshot(revision: revision, rootNode: rootNode, selectedNode: selectedNode)
-        updateRelay.yield(.snapshot(snapshot, reason: reason))
+        let nextSnapshot = DOMTreeSnapshot.make(revision: revision, rootNode: rootNode, selectedNode: selectedNode)
+        rootNodeID = nextSnapshot.rootNodeID
+        selectedNodeID = nextSnapshot.selectedNodeID
+        nodesByID = nextSnapshot.nodesByID
+        parentByNodeID = nextSnapshot.parentByNodeID
+        updateRelay.yield(.snapshot(makeSnapshotFromIndex(), reason: reason))
     }
 
     func applyChildrenReplaced(parent: DOMNode) {
         let visibleChildIDs = visibleChildIDs(of: parent)
 
-        var nodesByID = snapshot.nodesByID
-        var parentByNodeID = snapshot.parentByNodeID
-        let previousChildIDs = snapshot
-            .node(for: parent.id)
+        let previousChildIDs = nodesByID[parent.id]
             .map(indexedSubtreeChildIDs(of:)) ?? []
         let nextChildIDs = Set(indexedSubtreeChildIDs(of: parent))
         for previousChildID in previousChildIDs where nextChildIDs.contains(previousChildID) == false {
             removeSubtree(previousChildID, nodesByID: &nodesByID, parentByNodeID: &parentByNodeID)
         }
-        upsertNode(parent, parentID: snapshot.parent(of: parent.id), nodesByID: &nodesByID, parentByNodeID: &parentByNodeID)
+        upsertNode(parent, parentID: parentByNodeID[parent.id], nodesByID: &nodesByID, parentByNodeID: &parentByNodeID)
         for associatedRoot in parent.associatedSubtreeRoots() {
             upsertSubtree(associatedRoot, parentID: parent.id, nodesByID: &nodesByID, parentByNodeID: &parentByNodeID)
         }
@@ -247,31 +266,25 @@ final class DOMTreeState {
                 upsertSubtree(child, parentID: parent.id, nodesByID: &nodesByID, parentByNodeID: &parentByNodeID)
             }
         }
-        replaceSnapshot(nodesByID: nodesByID, parentByNodeID: parentByNodeID)
+        replaceSnapshot()
         publish(.childrenReplaced(parentID: parent.id, childIDs: visibleChildIDs))
     }
 
     func applyChildInserted(parent: DOMNode, node: DOMNode, previousSiblingID: DOMNode.ID?) {
-        var nodesByID = snapshot.nodesByID
-        var parentByNodeID = snapshot.parentByNodeID
-        upsertNode(parent, parentID: snapshot.parent(of: parent.id), nodesByID: &nodesByID, parentByNodeID: &parentByNodeID)
+        upsertNode(parent, parentID: parentByNodeID[parent.id], nodesByID: &nodesByID, parentByNodeID: &parentByNodeID)
         upsertSubtree(node, parentID: parent.id, nodesByID: &nodesByID, parentByNodeID: &parentByNodeID)
-        replaceSnapshot(nodesByID: nodesByID, parentByNodeID: parentByNodeID)
+        replaceSnapshot()
         publish(.childInserted(parentID: parent.id, nodeID: node.id, previousSiblingID: previousSiblingID))
     }
 
     func applyChildRemoved(parent: DOMNode, nodeID: DOMNode.ID) {
-        let selectedNodeWasRemoved = snapshot.selectedNodeID.map { selectedNodeID in
-            selectedNodeID == nodeID || snapshot.ancestorNodeIDs(of: selectedNodeID).contains(nodeID)
+        let selectedNodeWasRemoved = selectedNodeID.map { selectedNodeID in
+            selectedNodeID == nodeID || ancestorNodeIDs(of: selectedNodeID).contains(nodeID)
         } ?? false
-        var nodesByID = snapshot.nodesByID
-        var parentByNodeID = snapshot.parentByNodeID
         removeSubtree(nodeID, nodesByID: &nodesByID, parentByNodeID: &parentByNodeID)
-        upsertNode(parent, parentID: snapshot.parent(of: parent.id), nodesByID: &nodesByID, parentByNodeID: &parentByNodeID)
+        upsertNode(parent, parentID: parentByNodeID[parent.id], nodesByID: &nodesByID, parentByNodeID: &parentByNodeID)
         replaceSnapshot(
-            selectedNodeID: selectedNodeWasRemoved ? nil : snapshot.selectedNodeID,
-            nodesByID: nodesByID,
-            parentByNodeID: parentByNodeID
+            selectedNodeID: selectedNodeWasRemoved ? .some(nil) : nil
         )
         publish(.childRemoved(parentID: parent.id, nodeID: nodeID))
         if selectedNodeWasRemoved {
@@ -280,72 +293,70 @@ final class DOMTreeState {
     }
 
     func applyChildCountChanged(node: DOMNode) {
-        var nodesByID = snapshot.nodesByID
-        var parentByNodeID = snapshot.parentByNodeID
-        upsertNode(node, parentID: snapshot.parent(of: node.id), nodesByID: &nodesByID, parentByNodeID: &parentByNodeID)
-        replaceSnapshot(nodesByID: nodesByID, parentByNodeID: parentByNodeID)
+        upsertNode(node, parentID: parentByNodeID[node.id], nodesByID: &nodesByID, parentByNodeID: &parentByNodeID)
+        replaceSnapshot()
         publish(.childCountChanged(nodeID: node.id))
     }
 
     func applyNodeChanged(_ node: DOMNode) {
-        var nodesByID = snapshot.nodesByID
-        var parentByNodeID = snapshot.parentByNodeID
-        upsertNode(node, parentID: snapshot.parent(of: node.id), nodesByID: &nodesByID, parentByNodeID: &parentByNodeID)
-        replaceSnapshot(nodesByID: nodesByID, parentByNodeID: parentByNodeID)
+        upsertNode(node, parentID: parentByNodeID[node.id], nodesByID: &nodesByID, parentByNodeID: &parentByNodeID)
+        replaceSnapshot()
         publish(.nodeChanged(nodeID: node.id))
     }
 
     func applySelectionChanged(nodeID: DOMNode.ID?) {
-        let nextSelectedNodeID = nodeID.flatMap { snapshot.nodesByID[$0] == nil ? nil : $0 }
-        guard snapshot.selectedNodeID != nextSelectedNodeID else {
+        let nextSelectedNodeID = nodeID.flatMap { nodesByID[$0] == nil ? nil : $0 }
+        guard selectedNodeID != nextSelectedNodeID else {
             return
         }
-        replaceSnapshot(selectedNodeID: nextSelectedNodeID)
+        replaceSnapshot(selectedNodeID: .some(nextSelectedNodeID))
         publish(.selectionChanged(nodeID: nextSelectedNodeID))
         if let nextSelectedNodeID {
             revealRequestRelay.yield(DOMTreeRevealRequest(
                 nodeID: nextSelectedNodeID,
-                ancestorNodeIDs: snapshot.ancestorNodeIDs(of: nextSelectedNodeID),
+                ancestorNodeIDs: ancestorNodeIDs(of: nextSelectedNodeID),
                 shouldSelect: true,
                 shouldScroll: true
             ))
         }
     }
 
-    private static func makeSnapshot(
-        revision: UInt64,
-        rootNode: DOMNode?,
-        selectedNode: DOMNode?
-    ) -> DOMTreeSnapshot {
-        DOMTreeSnapshot.make(revision: revision, rootNode: rootNode, selectedNode: selectedNode)
+    private func makeSnapshotFromIndex() -> DOMTreeSnapshot {
+        DOMTreeSnapshot(
+            revision: revision,
+            rootNodeID: rootNodeID,
+            selectedNodeID: selectedNodeID,
+            nodesByID: Dictionary(uniqueKeysWithValues: nodesByID.map { ($0.key, $0.value) }),
+            parentByNodeID: Dictionary(uniqueKeysWithValues: parentByNodeID.map { ($0.key, $0.value) })
+        )
     }
 
     private func replaceSnapshot(
-        selectedNodeID: DOMNode.ID?? = nil,
-        nodesByID: [DOMNode.ID: DOMTreeSnapshot.Node]? = nil,
-        parentByNodeID: [DOMNode.ID: DOMNode.ID]? = nil
+        selectedNodeID: DOMNode.ID?? = nil
     ) {
         revision &+= 1
-        let nextSelectedNodeID: DOMNode.ID?
         if let selectedNodeID {
-            nextSelectedNodeID = selectedNodeID
-        } else if let currentSelectedNodeID = snapshot.selectedNodeID,
-                  (nodesByID ?? snapshot.nodesByID)[currentSelectedNodeID] != nil {
-            nextSelectedNodeID = currentSelectedNodeID
-        } else {
-            nextSelectedNodeID = nil
+            self.selectedNodeID = selectedNodeID
+        } else if let currentSelectedNodeID = self.selectedNodeID,
+                  nodesByID[currentSelectedNodeID] == nil {
+            self.selectedNodeID = nil
         }
-        snapshot = DOMTreeSnapshot(
-            revision: revision,
-            rootNodeID: snapshot.rootNodeID,
-            selectedNodeID: nextSelectedNodeID,
-            nodesByID: nodesByID ?? snapshot.nodesByID,
-            parentByNodeID: parentByNodeID ?? snapshot.parentByNodeID
-        )
     }
 
     private func publish(_ delta: DOMTreeDelta) {
         updateRelay.yield(.delta(delta))
+    }
+
+    private func ancestorNodeIDs(of id: DOMNode.ID) -> [DOMNode.ID] {
+        var ancestors: [DOMNode.ID] = []
+        var visited = Set<DOMNode.ID>()
+        var current = parentByNodeID[id]
+        while let ancestorID = current,
+              visited.insert(ancestorID).inserted {
+            ancestors.append(ancestorID)
+            current = parentByNodeID[ancestorID]
+        }
+        return ancestors
     }
 
     private func upsertSubtree(
