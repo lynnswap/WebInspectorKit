@@ -1,6 +1,6 @@
 import Foundation
 
-package struct WebInspectorTransportBackend: WebInspectorProxyBackend {
+package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
     private let transport: TransportSession
     private let eventSubscriptions: WebInspectorTransportEventSubscriptions
 

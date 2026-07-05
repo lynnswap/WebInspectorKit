@@ -1,149 +1,149 @@
 # WebInspector Architecture Overview
 
-This document is an orientation map for the current WebInspector inspector stack. It
-focuses on module boundaries, runtime ownership, and transport flow. Detailed
-UIKit containment and view-controller wiring lives in
+This document is an orientation map for the current WebInspectorKit stack. It
+focuses on public product boundaries, runtime ownership, and the flow between a
+host `WKWebView`, WebKit's private inspector backend, and native inspector UI.
+Detailed UIKit containment and view-controller wiring lives in
 [`UIIntegration.md`](../Sources/WebInspectorUI/Docs/UIIntegration.md).
 
-The package now exposes the same WebInspector-named modules and types internally
-and publicly. There is no parallel legacy implementation target and no
-compatibility alias layer between the public API and the active implementation.
+The current architecture has no public `WebInspectorCore`,
+`WebInspectorTransport`, or `WebInspectorNativeTransport` layer. The SDK surface
+is intentionally split between a typed proxy layer, an optional model layer, and
+the built-in UIKit UI.
 
-## Naming Surface
+## Public Products
 
-| Public / final name | Role |
+| Product | Role |
 | --- | --- |
-| `WebInspectorSession` | UI-facing session and lifecycle owner |
-| `WebInspectorViewController` | UIKit inspector container |
-| `WebInspectorTab` | Public tab descriptor |
-| `WebInspectorCore` | Inspector attachment, protocol dispatching, and semantic domain models |
-| `WebInspectorTransport` | Protocol primitives, command/reply, and target multiplexing |
-| `WebInspectorNativeBridge` | Raw native inspector JSON bridge |
-| `WebInspectorNativeSymbols` | Native symbol resolution for attach bootstrap |
+| `WebInspectorProxyKit` | Attach to a `WKWebView`, hide WebKit private attach details, and expose typed domain commands/events. |
+| `WebInspectorDataKit` | Build observable DOM, Network, Console, Runtime, and CSS models from a `WebInspectorProxyKit` connection. |
+| `WebInspectorKit` | Built-in UIKit inspector UI backed by `WebInspectorDataKit`. |
+| `WebInspectorProxyKitTesting` | Public test runtime for exercising ProxyKit/DataKit consumers without the native WebKit bridge. |
 
-`WebInspectorUI` is the UIKit implementation target. `WebInspectorKit` is the
-app-facing umbrella product that re-exports the UI surface.
+`WebInspectorNativeBridge` and `WebInspectorNativeSymbols` remain package
+support targets for ObjC++ and private symbol-resolution build mechanics. They
+are not SDK layers and should not be imported by consumers. Internal transport
+types such as `TransportSession`, `TransportBackend`, and protocol envelopes are
+owned by `WebInspectorProxyKit`.
 
 ## Layer Overview
 
 ```mermaid
 flowchart TD
     Host["Host app / WKWebView"]
-    UI["WebInspectorUI<br/>current UIKit UI"]
-    PublicSession["WebInspectorSession<br/>public session owner"]
-    Core["WebInspectorCore<br/>InspectorSession + semantic sessions"]
-    Transport["WebInspectorTransport<br/>target multiplexing + replies"]
-    Bridge["WebInspectorNativeBridge<br/>raw JSON bridge"]
-    Symbols["WebInspectorNativeSymbols<br/>symbol addresses for attach"]
+    Proxy["WebInspectorProxyKit<br/>WebInspectorProxy + WebInspectorTarget"]
+    Data["WebInspectorDataKit<br/>WebInspectorContainer + WebInspectorContext"]
+    UI["WebInspectorKit / WebInspectorUI<br/>UIKit inspector"]
+    Native["ProxyKit internals<br/>native attach + protocol routing"]
+    Bridge["Support targets<br/>NativeBridge + NativeSymbols"]
     WebKit["WebKit private inspector backend"]
 
+    Host --> Proxy
+    Host --> Data
     Host --> UI
-    UI --> PublicSession
-    PublicSession --> Core
-    Core --> Transport
-    Transport --> Bridge
+    UI --> Data
+    Data --> Proxy
+    Proxy --> Native
+    Native --> Bridge
     Bridge --> WebKit
-    Symbols --> Bridge
 ```
 
-Responsibilities stay intentionally narrow:
+Responsibilities stay narrow:
 
-- `WebInspectorNativeBridge`: attach, send raw JSON, receive raw JSON, detach.
-- `WebInspectorNativeSymbols`: resolve private WebKit attach bootstrap
-  addresses. Its MachOKit/dyld shared cache fallback chain is
-  loaded image symbols, loaded dyld shared cache local symbols,
-  file-backed `.symbols` local symbols, and host `FullDyldCache` as the final
-  fallback. It owns redacted fallback diagnostics and does not expose mangled
-  symbol names or framework paths to callers.
-- `WebInspectorTransport`: parse protocol envelopes, unwrap target messages,
-  route commands, manage replies, track protocol targets, and preserve
-  execution-context owner/source target identity.
-- `WebInspectorCore`: bootstrap domains, own event pumps, dispatch protocol
-  events through domain handlers, perform command intents, and hold
-  `@MainActor @Observable` model state for DOM, element styles, Runtime,
-  Console, and Network.
-- `WebInspectorUI`: render and interact with native UIKit/TextKit2 views.
+- `WebInspectorProxyKit`: owns `WKWebView` attachment, `isInspectable`
+  preservation, private inspector bootstrap, target routing, reply correlation,
+  raw WebKit JSON decoding, and typed domain command/event clients.
+- `WebInspectorDataKit`: owns semantic current-page state, DOM document
+  generation, node identity, selection materialization, selected-node highlight
+  restore, Network retention, Console/Runtime/CSS models, and fetched-results
+  style transactions.
+- `WebInspectorKit` / `WebInspectorUI`: owns native UIKit rendering, tab and
+  split presentation, DOM row expansion, selection scrolling, keyboard commands,
+  and view-local interaction state.
+- `WebInspectorNativeBridge` / `WebInspectorNativeSymbols`: own only the native
+  C/ObjC++ bridge and private symbol lookup needed by ProxyKit internals.
 
 ## Event And Command Flow
 
 ```mermaid
 sequenceDiagram
     participant WK as WebKit backend
-    participant Bridge as WebInspectorNativeBridge
-    participant Transport as WebInspectorTransport
-    participant Core as WebInspectorCore
-    participant UI as WebInspectorUI
+    participant Bridge as Native support targets
+    participant Proxy as WebInspectorProxyKit
+    participant Data as WebInspectorDataKit
+    participant UI as WebInspectorKit UI
 
-    WK->>Bridge: raw JSON message
-    Bridge->>Transport: raw JSON
-    Transport->>Transport: parse envelope and target routing
-    Transport->>Core: ordered domain event
-    Core->>Core: apply decoded semantic event
-    Core-->>UI: Observation update
+    WK->>Bridge: raw inspector message
+    Bridge->>Proxy: raw JSON
+    Proxy->>Proxy: parse envelope, unwrap target dispatch, match replies
+    Proxy->>Data: typed domain event
+    Data->>Data: apply semantic model transaction
+    Data-->>UI: model/status/controller update
 
-    UI->>Core: command intent
-    Core->>Transport: protocol command
-    Transport->>Bridge: raw JSON command
-    Bridge->>WK: raw JSON command
+    UI->>Data: model command or selection intent
+    Data->>Proxy: typed domain command
+    Proxy->>Bridge: raw JSON command
+    Bridge->>WK: private inspector dispatch
     WK-->>Bridge: raw JSON reply
-    Bridge-->>Transport: raw JSON reply
-    Transport-->>Core: command result with sequence
-    Core->>Core: apply result if still current
+    Bridge-->>Proxy: raw JSON reply
+    Proxy-->>Data: decoded command result
+    Data->>Data: apply result if generation is still current
 ```
 
 The native bridge is deliberately not target-aware. Target wrapping,
 `Target.dispatchMessageFromTarget` unwrapping, reply matching, and domain fan-out
-belong to transport.
+belong to `WebInspectorProxyKit`. DOM selection, materialization, and highlight
+restore belong to `WebInspectorDataKit`; row expansion and scroll-to-selection
+belong to UI.
 
-## Session Shape
+## Model Shape
 
-`WebInspectorSession` is the UI-facing lifecycle owner. Package-internal UI
-controllers observe the semantic sessions through the runtime owner:
+`WebInspectorContainer` is the DataKit composition root. Its `mainContext`
+convenience creates a `WebInspectorContext` on `MainActor`; other context owners
+can use the explicit isolated initializer.
 
 ```mermaid
 flowchart TD
-    Session["WebInspectorSession<br/>@MainActor @Observable"]
-    CoreSession["InspectorSession<br/>connection lifecycle"]
-    Attachment["AttachedInspection<br/>target graph + domain models"]
-    Target["TargetGraph"]
-    DOM["DOMSession"]
-    Styles["DOMSession.elementStyles"]
-    Runtime["RuntimeState"]
-    Console["ConsoleSession"]
-    Network["NetworkSession"]
+    Container["WebInspectorContainer"]
+    Context["WebInspectorContext"]
+    Proxy["WebInspectorProxy"]
+    Page["WebInspectorTarget<br/>current page"]
+    DOM["DOMNode graph + DOMTreeController"]
+    CSS["CSSStyles"]
+    Runtime["RuntimeContext + RuntimeObject"]
+    Console["ConsoleMessage"]
+    Network["NetworkRequest + fetched results"]
 
-    Session --> CoreSession
-    CoreSession --> Attachment
-    Attachment --> Target
-    Attachment --> DOM
-    DOM --> Styles
-    Attachment --> Runtime
-    Attachment --> Console
-    Attachment --> Network
+    Container --> Proxy
+    Container --> Context
+    Context --> Page
+    Context --> DOM
+    DOM --> CSS
+    Context --> Runtime
+    Context --> Console
+    Context --> Network
 ```
 
-The UI should receive one session object and avoid direct ownership of
-transport/backend objects. Expensive work still stays outside the observable
-model boundary:
+The UI should receive DataKit models or the existing UIKit facade and avoid
+direct ownership of native bridge, protocol-envelope, or raw transport objects.
+Expensive work stays outside view controllers:
 
-- raw transport I/O
+- raw inspector I/O
 - JSON parsing
 - protocol payload decoding
+- DOM materialization
 - DOM markup/tokenization
 - search indexing
 - response body decoding
 
-Protocol implementation is domain-local. Command/result/event decoding belongs
-in files named like `DOMProtocolDispatching.swift`,
-`TargetProtocolDispatching.swift`, or `NetworkProtocolDispatching.swift`.
-`InspectorSession` owns connection lifecycle and event pumping; it does not
-hold per-domain event parsers.
+Protocol implementation is ProxyKit-owned. Semantic state is DataKit-owned.
+Presentation artifacts are UI-owned.
 
 ## UI Integration Boundary
 
 `WebInspectorUI` owns the current UIKit/TextKit2 presentation. The root
-container observes `WebInspectorSession`; DOM and Network controllers observe
-the semantic sessions exposed from it.
+container observes `WebInspectorContainer` / `WebInspectorContext`; DOM and
+Network controllers observe DataKit models and controller transactions.
 
 Detailed UI diagrams are intentionally kept with the UI source:
 
@@ -152,27 +152,44 @@ Detailed UI diagrams are intentionally kept with the UI source:
 
 ## Public Surface Direction
 
-The current public shape is intentionally small:
+Custom UI without DataKit imports only `WebInspectorProxyKit`:
 
 ```swift
-let session = WebInspectorSession()
-let viewController = WebInspectorViewController(session: session)
+let proxy = try await WebInspectorProxy(attachingTo: webView)
+let page = try await proxy.waitForCurrentPage()
+let document = try await page.dom.getDocument()
 
-try await session.attach(to: webView)
+for await event in page.dom.events {
+    // Update your own model.
+}
 ```
 
-The important boundary is that the container observes `WebInspectorSession`;
-UIKit controllers do not own transport/backend objects directly.
+Custom UI with DataKit imports `WebInspectorDataKit`:
+
+```swift
+let container = try await WebInspectorContainer(attachingTo: webView)
+let context = container.mainContext
+```
+
+The built-in inspector imports `WebInspectorKit`:
+
+```swift
+let inspector = WebInspectorViewController()
+try await inspector.attach(to: webView)
+```
 
 ## Maintenance Rules
 
-1. Keep README, migration notes, and architecture notes pointed at the
-   WebInspector public API.
-2. Keep WebInspector regression tests for DOM, Network, transport, runtime, and
-   UI behavior.
-3. Keep `WebInspectorKit` as the small umbrella export surface.
-4. Keep domain routing in runtime/transport and semantic state in
-   `WebInspectorCore`.
+1. Keep README, migration notes, and architecture notes pointed at the current
+   public products: `WebInspectorProxyKit`, `WebInspectorDataKit`, and
+   `WebInspectorKit`.
+2. Do not publish raw transport or native attach vocabulary as a consumer API.
+3. Keep WebInspector regression tests for DOM, Network, Runtime, Console, CSS,
+   ProxyKit routing, and UI behavior.
+4. Keep protocol routing and command result decoding in ProxyKit.
+5. Keep semantic model state and lifecycle recovery in DataKit.
+6. Keep visual row state, keyboard commands, hover/click affordances, and scroll
+   behavior in UI.
 
 ## Avoided Shapes
 
@@ -181,8 +198,7 @@ UIKit controllers do not own transport/backend objects directly.
 - Do not keep two long-term UI implementation targets.
 - Do not let UI parse raw protocol messages.
 - Do not let the native bridge understand target routing.
-- Do not move MachOKit or dyld shared cache resolution out of
-  `WebInspectorNativeSymbols`; transport and bridge code should only receive
-  resolved native symbol addresses.
+- Do not make `TransportSession`, `TransportBackend`, or native bridge symbols
+  part of the SDK surface.
 - Do not store iframe documents as regular DOM children.
 - Do not make redirect hops separate top-level network requests.

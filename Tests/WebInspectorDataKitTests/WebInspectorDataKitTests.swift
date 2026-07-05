@@ -1356,6 +1356,20 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
     #expect(context.node(for: newRootID) != nil)
     #expect(networkResults.items.map(\.id) == [NetworkRequest.ID(retainedRequestID)])
 
+    let postCommitRequestID = Network.Request.ID("commit-post-request")
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: newTargetID,
+        method: "Network.requestWillBeSent",
+        params: #"{"requestId":"commit-post-request","request":{"url":"https://example.test/after-commit","method":"GET"},"type":"Fetch","timestamp":2}"#
+    )
+    try await waitUntil {
+        Set(networkResults.items.map(\.id)) == [
+            NetworkRequest.ID(retainedRequestID),
+            NetworkRequest.ID(postCommitRequestID),
+        ]
+    }
+
     let sentMessages = await backend.sentTargetMessages()
     let retargetMessages = Array(sentMessages.dropFirst(startupMessageCount))
     let staleRouteMethods = try retargetMessages
@@ -1646,10 +1660,12 @@ func domUndoRedoCommandsFailAfterCurrentPageRetarget() async throws {
 func mainFrameNavigatedReloadsDOMAndClearsRuntimeContexts() async throws {
     let targetID = ProtocolTarget.ID("page-main")
     let navigatedRootID = DOMNode.ID(DOM.Node.ID("navigated-root"))
+    let navigatedRequestID = Network.Request.ID("navigated-request")
     let (backend, transport, context) = try await startTransportBackedContext(
         targetID: targetID,
         documentID: "initial-root"
     )
+    let networkResults: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
     let undoCommands = try context.domUndoRedoCommands()
     let startupMessageCount = await backend.sentTargetMessages().count
 
@@ -1681,6 +1697,15 @@ func mainFrameNavigatedReloadsDOMAndClearsRuntimeContexts() async throws {
 
     try await waitUntil { context.rootNode?.id == navigatedRootID }
     #expect(context.executionContexts.isEmpty)
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: targetID,
+        method: "Network.requestWillBeSent",
+        params: #"{"requestId":"navigated-request","request":{"url":"https://example.test/after-frame-navigation","method":"GET"},"type":"Document","timestamp":3}"#
+    )
+    try await waitUntil {
+        networkResults.items.map(\.id) == [NetworkRequest.ID(navigatedRequestID)]
+    }
     await #expect(throws: WebInspectorProxyError.disconnected("DOM undo/redo target is no longer current.")) {
         try await undoCommands.undo()
     }
@@ -3391,6 +3416,60 @@ func networkEventsPopulateAllRequestsInOrder() async throws {
     #expect(request.decodedDataLength == 12)
     #expect(request.encodedDataLength == 5)
     #expect(context.registeredRequest(for: request.id) === request)
+}
+
+@MainActor
+@Test
+func responseReceivedWithoutRequestWillBeSentCreatesRequest() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let requestID = Network.Request.ID("response-first-request")
+
+    await runtime.backend.emit(
+        .responseReceived(
+            id: requestID,
+            response: Network.Response(
+                url: "https://example.com/late.css",
+                status: 200,
+                statusText: "OK",
+                mimeType: "text/css",
+                headers: ["Content-Type": "text/css"],
+                source: Network.Source(rawValue: "network"),
+                requestHeaders: ["Accept": "text/css"]
+            ),
+            resourceType: .stylesheet,
+            timestamp: 2
+        ),
+        target: target
+    )
+    await runtime.backend.emit(
+        .dataReceived(id: requestID, dataLength: 9, encodedDataLength: 4, timestamp: 3),
+        target: target
+    )
+    await runtime.backend.emit(
+        .loadingFinished(id: requestID, timestamp: 4, sourceMapURL: nil, metrics: nil),
+        target: target
+    )
+
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    try await waitUntil {
+        results.items.first?.state == .finished
+    }
+    let request = try #require(results.items.first)
+    #expect(request.id == NetworkRequest.ID(requestID))
+    #expect(request.url == "https://example.com/late.css")
+    #expect(request.method == "GET")
+    #expect(request.resourceType == .stylesheet)
+    #expect(request.status == 200)
+    #expect(request.mimeType == "text/css")
+    #expect(request.requestSentTimestamp == 2)
+    #expect(request.responseReceivedTimestamp == 2)
+    #expect(request.lastDataReceivedTimestamp == 3)
+    #expect(request.finishedOrFailedTimestamp == 4)
+    #expect(request.requestHeaders["Accept"] == "text/css")
+    #expect(request.responseHeaders["Content-Type"] == "text/css")
+    #expect(request.decodedDataLength == 9)
+    #expect(request.encodedDataLength == 4)
 }
 
 @MainActor

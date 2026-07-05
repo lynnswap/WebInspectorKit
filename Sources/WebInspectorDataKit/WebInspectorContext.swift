@@ -2661,11 +2661,7 @@ extension WebInspectorContext {
                 timestamp: timestamp
             )
         case let .responseReceived(id, response, resourceType, timestamp):
-            guard let request = networkRequest(for: id, method: "responseReceived") else {
-                return
-            }
-            request.applyResponse(response, resourceType: resourceType, timestamp: timestamp)
-            refreshAllRequests(updatedItemIDs: [request.id])
+            applyResponseReceived(id: id, response: response, resourceType: resourceType, timestamp: timestamp)
         case let .dataReceived(id, dataLength, encodedDataLength, timestamp):
             guard let request = networkRequest(for: id, method: "dataReceived") else {
                 return
@@ -2759,6 +2755,44 @@ extension WebInspectorContext {
         }
         request.applyMemoryCache(response: response, timestamp: timestamp)
         refreshAllRequests(updatedItemIDs: [id])
+    }
+
+    private func applyResponseReceived(
+        id proxyID: Network.Request.ID,
+        response: Network.Response,
+        resourceType: Network.ResourceType,
+        timestamp: Double
+    ) {
+        let id = NetworkRequest.ID(proxyID)
+        guard clearedNetworkRequestIDs.contains(id) == false else {
+            return
+        }
+        let request: NetworkRequest
+        var inserted = false
+        if let existing = requestsByID[id] {
+            request = existing
+        } else {
+            guard let url = response.url else {
+                skipEvent("Network.responseReceived omitted response URL for an untracked request")
+                return
+            }
+            // WebKit's frontend creates a resource here when inspection starts
+            // after Network.requestWillBeSent. The response event has no method,
+            // so keep the same GET default WebKit uses when serializing such a
+            // resource later.
+            let payload = Network.Request(
+                id: proxyID,
+                url: url,
+                method: "GET",
+                headers: response.requestHeaders ?? [:]
+            )
+            request = NetworkRequest(request: payload, resourceType: resourceType, timestamp: timestamp, modelContext: self)
+            requestsByID[id] = request
+            orderedRequestIDs.append(id)
+            inserted = true
+        }
+        request.applyResponse(response, resourceType: resourceType, timestamp: timestamp)
+        refreshAllRequests(updatedItemIDs: inserted ? [] : [id])
     }
 
     private func apply(_ event: Network.WebSocketEvent) {

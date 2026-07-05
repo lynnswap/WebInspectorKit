@@ -60,7 +60,7 @@ public actor WebInspectorProxy {
         }
 
         self.configuration = configuration
-        backend = WebInspectorTransportBackend(transport: nativeConnection.transport)
+        backend = LiveWebInspectorProxyBackend(transport: nativeConnection.transport)
         transport = nativeConnection.transport
         closeConnection = {
             await nativeConnection.close()
@@ -106,7 +106,7 @@ public actor WebInspectorProxy {
     ) async throws {
         self.configuration = configuration
         self.transport = transport
-        backend = WebInspectorTransportBackend(transport: transport)
+        backend = LiveWebInspectorProxyBackend(transport: transport)
         self.closeConnection = closeConnection ?? {
             await transport.detach()
         }
