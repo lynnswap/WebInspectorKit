@@ -1,3 +1,4 @@
+import ObservationBridge
 import Testing
 import WebInspectorDataKit
 import WebInspectorProxyKit
@@ -43,6 +44,46 @@ func displayRequestsApplySearchFilterAndNewestFirstOrder() async throws {
     model.setResourceFilter(.script, enabled: true)
 
     #expect(model.displayRequests.map(\.id) == [scriptID])
+}
+
+@Test
+@MainActor
+func clearAvailabilityUsesUnfilteredRequestsWhenFiltersHideEveryRequest() async throws {
+    let context = makeContext()
+    let requestID = applyRequest(
+        to: context,
+        requestID: "1",
+        url: "https://cdn.example.com/app.js",
+        resourceType: .script,
+        mimeType: "text/javascript",
+        timestamp: 1
+    )
+    let model = NetworkPanelModel(context: context)
+    let observation = withPortableContinuousObservation { _ in
+        _ = model.hasClearableRequests
+    }
+    let observedValues = await observation.values {
+        model.hasClearableRequests
+    }
+    defer {
+        observedValues.cancel()
+        observation.cancel()
+    }
+
+    #expect(model.hasClearableRequests)
+    #expect(observedValues.latestValue == true)
+
+    model.setSearchText("does-not-match")
+
+    #expect(model.isEmpty)
+    #expect(model.displayRequestIDs.isEmpty)
+    #expect(model.hasClearableRequests)
+
+    model.clearRequests()
+
+    #expect(model.hasClearableRequests == false)
+    #expect(await observedValues.waitUntilValue(false))
+    #expect(context.registeredRequest(for: requestID) == nil)
 }
 
 @Test(
