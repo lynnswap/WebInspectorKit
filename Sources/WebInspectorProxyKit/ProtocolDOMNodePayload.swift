@@ -1,6 +1,6 @@
 import Foundation
 
-final class WebInspectorTransportDOMNodePayload: Decodable {
+final class ProtocolDOMNodePayload: Decodable {
     var nodeId: String
     var nodeType: Int
     var nodeName: String
@@ -8,16 +8,16 @@ final class WebInspectorTransportDOMNodePayload: Decodable {
     var nodeValue: String
     var frameId: String?
     var childNodeCount: Int?
-    var children: [WebInspectorTransportDOMNodePayload]?
+    var children: [ProtocolDOMNodePayload]?
     var attributes: [String]?
     var documentURL: String?
     var baseURL: String?
     var pseudoType: String?
     var shadowRootType: String?
-    var contentDocument: WebInspectorTransportDOMNodePayload?
-    var shadowRoots: [WebInspectorTransportDOMNodePayload]?
-    var templateContent: WebInspectorTransportDOMNodePayload?
-    var pseudoElements: [WebInspectorTransportDOMNodePayload]?
+    var contentDocument: ProtocolDOMNodePayload?
+    var shadowRoots: [ProtocolDOMNodePayload]?
+    var templateContent: ProtocolDOMNodePayload?
+    var pseudoElements: [ProtocolDOMNodePayload]?
 
     private enum CodingKeys: String, CodingKey {
         case nodeId
@@ -48,16 +48,16 @@ final class WebInspectorTransportDOMNodePayload: Decodable {
         nodeValue = try container.decode(String.self, forKey: .nodeValue)
         frameId = try container.decodeIfPresent(String.self, forKey: .frameId)
         childNodeCount = try container.decodeIfPresent(Int.self, forKey: .childNodeCount)
-        children = try container.decodeIfPresent([WebInspectorTransportDOMNodePayload].self, forKey: .children)
+        children = try container.decodeIfPresent([ProtocolDOMNodePayload].self, forKey: .children)
         attributes = try container.decodeIfPresent([String].self, forKey: .attributes)
         documentURL = try container.decodeIfPresent(String.self, forKey: .documentURL)
         baseURL = try container.decodeIfPresent(String.self, forKey: .baseURL)
         pseudoType = try container.decodeIfPresent(String.self, forKey: .pseudoType)
         shadowRootType = try container.decodeIfPresent(String.self, forKey: .shadowRootType)
-        contentDocument = try container.decodeIfPresent(WebInspectorTransportDOMNodePayload.self, forKey: .contentDocument)
-        shadowRoots = try container.decodeIfPresent([WebInspectorTransportDOMNodePayload].self, forKey: .shadowRoots)
-        templateContent = try container.decodeIfPresent(WebInspectorTransportDOMNodePayload.self, forKey: .templateContent)
-        pseudoElements = try container.decodeIfPresent([WebInspectorTransportDOMNodePayload].self, forKey: .pseudoElements)
+        contentDocument = try container.decodeIfPresent(ProtocolDOMNodePayload.self, forKey: .contentDocument)
+        shadowRoots = try container.decodeIfPresent([ProtocolDOMNodePayload].self, forKey: .shadowRoots)
+        templateContent = try container.decodeIfPresent(ProtocolDOMNodePayload.self, forKey: .templateContent)
+        pseudoElements = try container.decodeIfPresent([ProtocolDOMNodePayload].self, forKey: .pseudoElements)
     }
 
     func proxyNode() throws -> DOM.Node {

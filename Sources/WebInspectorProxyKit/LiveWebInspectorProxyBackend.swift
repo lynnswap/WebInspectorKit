@@ -2,24 +2,24 @@ import Foundation
 
 package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
     private let transport: TransportSession
-    private let eventSubscriptions: WebInspectorTransportEventSubscriptions
+    private let eventSubscriptions: LiveProxyEventSubscriptions
 
     package init(transport: TransportSession) {
         self.transport = transport
-        eventSubscriptions = WebInspectorTransportEventSubscriptions()
+        eventSubscriptions = LiveProxyEventSubscriptions()
     }
 
     package func dispatchCommand<Payload: Sendable, Result: Sendable>(
         _ command: WebInspectorProxyCommand<Payload, Result>
     ) async throws -> Result {
-        let protocolCommand = try WebInspectorTransportCommandEncoder.protocolCommand(for: command)
+        let protocolCommand = try LiveProxyCommandEncoder.protocolCommand(for: command)
         let result: ProtocolCommand.Result
         do {
             result = try await transport.send(protocolCommand)
         } catch {
             throw mapTransportError(error, domain: command.domain.rawValue, method: command.method)
         }
-        return try WebInspectorTransportCommandDecoder.decode(Result.self, for: command, from: result)
+        return try LiveProxyCommandDecoder.decode(Result.self, for: command, from: result)
     }
 
     package func waitForEventSubscription(
@@ -28,7 +28,7 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         domain: WebInspectorProxyEventDomain
     ) async {
         await eventSubscriptions.waitForActiveSubscriber(
-            WebInspectorTransportEventSubscriptionKey(route: route, targetID: targetID, domain: domain)
+            LiveProxyEventSubscriptionKey(route: route, targetID: targetID, domain: domain)
         )
     }
 
@@ -38,7 +38,7 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         domain: WebInspectorProxyEventDomain
     ) -> AsyncStream<WebInspectorProxyEvent> {
         AsyncStream<WebInspectorProxyEvent> { continuation in
-            let key = WebInspectorTransportEventSubscriptionKey(route: route, targetID: targetID, domain: domain)
+            let key = LiveProxyEventSubscriptionKey(route: route, targetID: targetID, domain: domain)
             let task = Task {
                 let stream = await transport.events(for: protocolDomain(for: domain))
                 guard Task.isCancelled == false else {
@@ -55,7 +55,7 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
                     }
                     do {
                         let lifecycleTarget = await lifecycleTarget(for: event, route: route, targetID: targetID)
-                        let proxyEvent = try WebInspectorTransportEventDecoder.proxyEvent(
+                        let proxyEvent = try LiveProxyEventDecoder.proxyEvent(
                             from: event,
                             targetID: targetID,
                             lifecycleTarget: lifecycleTarget
@@ -486,17 +486,17 @@ private func protocolDomain(for domain: WebInspectorProxyEventDomain) -> Protoco
     }
 }
 
-private struct WebInspectorTransportEventSubscriptionKey: Hashable, Sendable {
+private struct LiveProxyEventSubscriptionKey: Hashable, Sendable {
     var route: RoutingTargetID
     var targetID: WebInspectorTarget.ID
     var domain: WebInspectorProxyEventDomain
 }
 
-private actor WebInspectorTransportEventSubscriptions {
-    private var activeSubscriberCounts: [WebInspectorTransportEventSubscriptionKey: Int] = [:]
-    private var waiters: [WebInspectorTransportEventSubscriptionKey: [CheckedContinuation<Void, Never>]] = [:]
+private actor LiveProxyEventSubscriptions {
+    private var activeSubscriberCounts: [LiveProxyEventSubscriptionKey: Int] = [:]
+    private var waiters: [LiveProxyEventSubscriptionKey: [CheckedContinuation<Void, Never>]] = [:]
 
-    func register(_ key: WebInspectorTransportEventSubscriptionKey) {
+    func register(_ key: LiveProxyEventSubscriptionKey) {
         activeSubscriberCounts[key, default: 0] += 1
         let continuations = waiters.removeValue(forKey: key) ?? []
         for continuation in continuations {
@@ -504,7 +504,7 @@ private actor WebInspectorTransportEventSubscriptions {
         }
     }
 
-    func unregister(_ key: WebInspectorTransportEventSubscriptionKey) {
+    func unregister(_ key: LiveProxyEventSubscriptionKey) {
         guard let count = activeSubscriberCounts[key] else {
             return
         }
@@ -515,7 +515,7 @@ private actor WebInspectorTransportEventSubscriptions {
         }
     }
 
-    func waitForActiveSubscriber(_ key: WebInspectorTransportEventSubscriptionKey) async {
+    func waitForActiveSubscriber(_ key: LiveProxyEventSubscriptionKey) async {
         guard activeSubscriberCounts[key, default: 0] == 0 else {
             return
         }
@@ -525,7 +525,7 @@ private actor WebInspectorTransportEventSubscriptions {
     }
 }
 
-private enum WebInspectorTransportCommandEncoder {
+private enum LiveProxyCommandEncoder {
     static func protocolCommand<Payload: Sendable, Result: Sendable>(
         for command: WebInspectorProxyCommand<Payload, Result>
     ) throws -> ProtocolCommand {
@@ -702,7 +702,7 @@ private enum WebInspectorTransportCommandEncoder {
             throw WebInspectorProxyError.commandFailed(
                 domain: command.domain.rawValue,
                 method: command.method,
-                message: "Transport command bridge expected \(Expected.self), got \(Payload.self)."
+                message: "Live proxy command bridge expected \(Expected.self), got \(Payload.self)."
             )
         }
         return value
@@ -781,12 +781,12 @@ private enum WebInspectorTransportCommandEncoder {
         .commandFailed(
             domain: command.domain.rawValue,
             method: command.method,
-            message: "Transport command bridge does not support \(command.domain.rawValue).\(command.method)."
+            message: "Live proxy command bridge does not support \(command.domain.rawValue).\(command.method)."
         )
     }
 }
 
-private enum WebInspectorTransportCommandDecoder {
+private enum LiveProxyCommandDecoder {
     static func decode<Payload: Sendable, Result: Sendable>(
         _ type: Result.Type,
         for command: WebInspectorProxyCommand<Payload, Result>,
@@ -847,7 +847,7 @@ private enum WebInspectorTransportCommandDecoder {
         throw WebInspectorProxyError.commandFailed(
             domain: command.domain.rawValue,
             method: command.method,
-            message: "Transport command bridge does not decode \(Result.self) for \(command.domain.rawValue).\(command.method)."
+            message: "Live proxy command bridge does not decode \(Result.self) for \(command.domain.rawValue).\(command.method)."
         )
     }
 
@@ -865,7 +865,7 @@ private enum WebInspectorTransportCommandDecoder {
     }
 
     private struct DocumentResult: Decodable {
-        var root: WebInspectorTransportDOMNodePayload
+        var root: ProtocolDOMNodePayload
     }
 
     private struct RequestNodeResult: Decodable {

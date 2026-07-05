@@ -1,6 +1,6 @@
 import Foundation
 
-enum WebInspectorTransportEventDecoder {
+enum LiveProxyEventDecoder {
     static func proxyEvent(
         from event: ProtocolEvent,
         targetID: WebInspectorTarget.ID,
@@ -281,7 +281,7 @@ enum WebInspectorTransportEventDecoder {
     }
 
     private static func decode<T: Decodable>(_ type: T.Type, from event: ProtocolEvent) throws -> T {
-        try webInspectorTransportDecode(type, from: event.paramsData)
+        try liveProxyDecode(type, from: event.paramsData)
     }
 
     private static func rawEvent(from event: ProtocolEvent) -> RawEvent {
@@ -347,7 +347,7 @@ private struct DOMInspectParams: Decodable {
 
 private struct SetChildNodesParams: Decodable {
     var parentId: String
-    var nodes: [WebInspectorTransportDOMNodePayload]
+    var nodes: [ProtocolDOMNodePayload]
 
     private enum CodingKeys: String, CodingKey {
         case parentId
@@ -357,14 +357,14 @@ private struct SetChildNodesParams: Decodable {
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         parentId = try container.decodeStringOrInteger(forKey: .parentId)
-        nodes = try container.decode([WebInspectorTransportDOMNodePayload].self, forKey: .nodes)
+        nodes = try container.decode([ProtocolDOMNodePayload].self, forKey: .nodes)
     }
 }
 
 private struct ChildNodeInsertedParams: Decodable {
     var parentNodeId: String
     var previousNodeId: String?
-    var node: WebInspectorTransportDOMNodePayload
+    var node: ProtocolDOMNodePayload
 
     private enum CodingKeys: String, CodingKey {
         case parentNodeId
@@ -376,7 +376,7 @@ private struct ChildNodeInsertedParams: Decodable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         parentNodeId = try container.decodeStringOrInteger(forKey: .parentNodeId)
         previousNodeId = try container.decodeStringOrIntegerIfPresent(forKey: .previousNodeId)
-        node = try container.decode(WebInspectorTransportDOMNodePayload.self, forKey: .node)
+        node = try container.decode(ProtocolDOMNodePayload.self, forKey: .node)
     }
 }
 
@@ -465,7 +465,7 @@ private struct CharacterDataModifiedParams: Decodable {
 
 private struct ShadowRootPushedParams: Decodable {
     var hostId: String
-    var root: WebInspectorTransportDOMNodePayload
+    var root: ProtocolDOMNodePayload
 
     private enum CodingKeys: String, CodingKey {
         case hostId
@@ -475,7 +475,7 @@ private struct ShadowRootPushedParams: Decodable {
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         hostId = try container.decodeStringOrInteger(forKey: .hostId)
-        root = try container.decode(WebInspectorTransportDOMNodePayload.self, forKey: .root)
+        root = try container.decode(ProtocolDOMNodePayload.self, forKey: .root)
     }
 }
 
@@ -497,7 +497,7 @@ private struct ShadowRootPoppedParams: Decodable {
 
 private struct PseudoElementAddedParams: Decodable {
     var parentId: String
-    var pseudoElement: WebInspectorTransportDOMNodePayload
+    var pseudoElement: ProtocolDOMNodePayload
 
     private enum CodingKeys: String, CodingKey {
         case parentId
@@ -507,7 +507,7 @@ private struct PseudoElementAddedParams: Decodable {
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         parentId = try container.decodeStringOrInteger(forKey: .parentId)
-        pseudoElement = try container.decode(WebInspectorTransportDOMNodePayload.self, forKey: .pseudoElement)
+        pseudoElement = try container.decode(ProtocolDOMNodePayload.self, forKey: .pseudoElement)
     }
 }
 

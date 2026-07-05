@@ -29,6 +29,6 @@ extension KeyedDecodingContainer {
     }
 }
 
-func webInspectorTransportDecode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
+func liveProxyDecode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
     try JSONDecoder().decode(type, from: data)
 }
