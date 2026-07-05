@@ -1072,6 +1072,88 @@ func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async 
     #expect(nodes.first?.id == DOM.Node.ID("43", scopedToTargetRawValue: "frame-target"))
 
     let frameNodeID = DOM.Node.ID("42", scopedToTargetRawValue: "frame-target")
+    let frameAttributesTask = Task {
+        try await target.dom.attributes(of: frameNodeID)
+    }
+    let frameAttributes = try await waitForTargetMessage(backend, method: "DOM.getAttributes")
+    #expect(frameAttributes.targetIdentifier == ProtocolTarget.ID("frame-target"))
+    #expect((try messageParameters(frameAttributes.message)["nodeId"] as? NSNumber)?.intValue == 42)
+    await receiveTargetReply(
+        transport,
+        targetID: frameAttributes.targetIdentifier,
+        messageID: try messageID(frameAttributes.message),
+        result: #"{"attributes":["class","frame-card"]}"#
+    )
+    #expect(try await frameAttributesTask.value == [
+        DOM.Attribute(name: "class", value: "frame-card"),
+    ])
+
+    let frameSetAttributeTask = Task {
+        try await target.dom.setAttributeValue(frameNodeID, name: "class", value: "frame-card selected")
+    }
+    let frameSetAttribute = try await waitForTargetMessage(backend, method: "DOM.setAttributeValue")
+    #expect(frameSetAttribute.targetIdentifier == ProtocolTarget.ID("frame-target"))
+    var parameters = try messageParameters(frameSetAttribute.message)
+    #expect((parameters["nodeId"] as? NSNumber)?.intValue == 42)
+    #expect(parameters["name"] as? String == "class")
+    #expect(parameters["value"] as? String == "frame-card selected")
+    await receiveTargetReply(
+        transport,
+        targetID: frameSetAttribute.targetIdentifier,
+        messageID: try messageID(frameSetAttribute.message),
+        result: "{}"
+    )
+    try await frameSetAttributeTask.value
+
+    let frameSetAttributesTask = Task {
+        try await target.dom.setAttributesAsText(frameNodeID, text: #"class="frame-card""#, name: "class")
+    }
+    let frameSetAttributes = try await waitForTargetMessage(backend, method: "DOM.setAttributesAsText")
+    #expect(frameSetAttributes.targetIdentifier == ProtocolTarget.ID("frame-target"))
+    parameters = try messageParameters(frameSetAttributes.message)
+    #expect((parameters["nodeId"] as? NSNumber)?.intValue == 42)
+    #expect(parameters["text"] as? String == #"class="frame-card""#)
+    #expect(parameters["name"] as? String == "class")
+    await receiveTargetReply(
+        transport,
+        targetID: frameSetAttributes.targetIdentifier,
+        messageID: try messageID(frameSetAttributes.message),
+        result: "{}"
+    )
+    try await frameSetAttributesTask.value
+
+    let frameRemoveAttributeTask = Task {
+        try await target.dom.removeAttribute(frameNodeID, name: "hidden")
+    }
+    let frameRemoveAttribute = try await waitForTargetMessage(backend, method: "DOM.removeAttribute")
+    #expect(frameRemoveAttribute.targetIdentifier == ProtocolTarget.ID("frame-target"))
+    parameters = try messageParameters(frameRemoveAttribute.message)
+    #expect((parameters["nodeId"] as? NSNumber)?.intValue == 42)
+    #expect(parameters["name"] as? String == "hidden")
+    await receiveTargetReply(
+        transport,
+        targetID: frameRemoveAttribute.targetIdentifier,
+        messageID: try messageID(frameRemoveAttribute.message),
+        result: "{}"
+    )
+    try await frameRemoveAttributeTask.value
+
+    let frameSetOuterHTMLTask = Task {
+        try await target.dom.setOuterHTML(frameNodeID, html: #"<article class="frame-card"></article>"#)
+    }
+    let frameSetOuterHTML = try await waitForTargetMessage(backend, method: "DOM.setOuterHTML")
+    #expect(frameSetOuterHTML.targetIdentifier == ProtocolTarget.ID("frame-target"))
+    parameters = try messageParameters(frameSetOuterHTML.message)
+    #expect((parameters["nodeId"] as? NSNumber)?.intValue == 42)
+    #expect(parameters["outerHTML"] as? String == #"<article class="frame-card"></article>"#)
+    await receiveTargetReply(
+        transport,
+        targetID: frameSetOuterHTML.targetIdentifier,
+        messageID: try messageID(frameSetOuterHTML.message),
+        result: "{}"
+    )
+    try await frameSetOuterHTMLTask.value
+
     let messageCountBeforeFrameHighlight = await backend.sentTargetMessages().count
     try await target.dom.highlightNode(frameNodeID)
     #expect(await backend.sentTargetMessages().count == messageCountBeforeFrameHighlight)
@@ -1109,6 +1191,7 @@ func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async 
           "matchedCSSRules": [
             {
               "rule": {
+                "ruleId": {"styleSheetId": "frame-sheet", "ordinal": 7},
                 "selectorList": {"selectors": [{"text": ".frame"}], "text": ".frame"},
                 "origin": "author",
                 "style": {
@@ -1126,7 +1209,9 @@ func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async 
         """
     )
     let frameStyles = try await matchedStylesTask.value
+    let frameRuleID = try #require(frameStyles.matchedRules.first?.id)
     let frameStyle = try #require(frameStyles.matchedRules.first?.style)
+    #expect(frameRuleID.targetScopeRawValue == "frame-target")
     #expect(frameStyle.id.targetScopeRawValue == "frame-target")
     #expect(frameStyle.id.unscopedRawValue != frameStyle.id.rawValue)
 
@@ -1151,6 +1236,60 @@ func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async 
     )
     let updatedFrameStyle = try await setStyleTextTask.value
     #expect(updatedFrameStyle.id.targetScopeRawValue == "frame-target")
+
+    let frameSetRuleSelectorTask = Task {
+        try await target.css.setRuleSelector(frameRuleID, selector: ".frame-card")
+    }
+    let frameSetRuleSelector = try await waitForTargetMessage(backend, method: "CSS.setRuleSelector")
+    #expect(frameSetRuleSelector.targetIdentifier == ProtocolTarget.ID("frame-target"))
+    parameters = try messageParameters(frameSetRuleSelector.message)
+    let frameRuleSelectorPayload = try #require(parameters["ruleId"] as? [String: Any])
+    #expect(frameRuleSelectorPayload["styleSheetId"] as? String == "frame-sheet")
+    #expect((frameRuleSelectorPayload["ordinal"] as? NSNumber)?.intValue == 7)
+    #expect(parameters["selector"] as? String == ".frame-card")
+    await receiveTargetReply(
+        transport,
+        targetID: frameSetRuleSelector.targetIdentifier,
+        messageID: try messageID(frameSetRuleSelector.message),
+        result: """
+        {
+          "rule": {
+            "ruleId": {"styleSheetId": "frame-sheet", "ordinal": 7},
+            "selectorList": {"selectors": [{"text": ".frame-card"}], "text": ".frame-card"},
+            "origin": "author",
+            "style": {
+              "styleId": {"styleSheetId": "frame-sheet", "ordinal": 7},
+              "cssProperties": [{"name": "color", "value": "blue"}],
+              "cssText": "color: blue;"
+            }
+          }
+        }
+        """
+    )
+    let updatedFrameRule = try await frameSetRuleSelectorTask.value
+    #expect(updatedFrameRule.id?.targetScopeRawValue == "frame-target")
+    #expect(updatedFrameRule.selectorList.text == ".frame-card")
+
+    let frameSetGroupingHeaderTask = Task {
+        try await target.css.setGroupingHeaderText(frameRuleID, text: "@media (min-width: 600px)")
+    }
+    let frameSetGroupingHeader = try await waitForTargetMessage(
+        backend,
+        method: "CSS.setGroupingHeaderText"
+    )
+    #expect(frameSetGroupingHeader.targetIdentifier == ProtocolTarget.ID("frame-target"))
+    parameters = try messageParameters(frameSetGroupingHeader.message)
+    let frameGroupingRulePayload = try #require(parameters["ruleId"] as? [String: Any])
+    #expect(frameGroupingRulePayload["styleSheetId"] as? String == "frame-sheet")
+    #expect((frameGroupingRulePayload["ordinal"] as? NSNumber)?.intValue == 7)
+    #expect(parameters["headerText"] as? String == "@media (min-width: 600px)")
+    await receiveTargetReply(
+        transport,
+        targetID: frameSetGroupingHeader.targetIdentifier,
+        messageID: try messageID(frameSetGroupingHeader.message),
+        result: #"{"grouping":{"text":"@media (min-width: 600px)"}}"#
+    )
+    #expect(try await frameSetGroupingHeaderTask.value.text == "@media (min-width: 600px)")
 
     let cssEventTask = Task {
         var iterator = target.css.events.makeAsyncIterator()

@@ -519,6 +519,13 @@ public actor WebInspectorProxy {
                 route: RoutingTargetID(scopedTargetRawValue)
             )
         }
+        if let ruleID = Self.ruleID(from: payload, domain: domain),
+           let scopedTargetRawValue = ruleID.targetScopeRawValue {
+            return ProtocolCommandTarget(
+                targetID: WebInspectorTarget.ID(scopedTargetRawValue),
+                route: RoutingTargetID(scopedTargetRawValue)
+            )
+        }
         if let requestID = Self.networkRequestID(from: payload, domain: domain),
            let scopedTargetRawValue = requestID.targetScopeRawValue {
             return ProtocolCommandTarget(
@@ -553,6 +560,16 @@ public actor WebInspectorProxy {
                 return payload.id
             case let payload as DOM.GetOuterHTMLPayload:
                 return payload.id
+            case let payload as DOM.GetAttributesPayload:
+                return payload.id
+            case let payload as DOM.SetAttributeValuePayload:
+                return payload.id
+            case let payload as DOM.SetAttributesAsTextPayload:
+                return payload.id
+            case let payload as DOM.RemoveAttributePayload:
+                return payload.id
+            case let payload as DOM.SetOuterHTMLPayload:
+                return payload.id
             case let payload as DOM.RemoveNodePayload:
                 return payload.id
             default:
@@ -583,6 +600,23 @@ public actor WebInspectorProxy {
             return nil
         }
         return payload.id
+    }
+
+    private nonisolated static func ruleID<Payload: Sendable>(
+        from payload: Payload,
+        domain: WebInspectorProxyDomain
+    ) -> CSS.Rule.ID? {
+        guard domain == .css else {
+            return nil
+        }
+        switch payload {
+        case let payload as CSS.SetRuleSelectorPayload:
+            return payload.id
+        case let payload as CSS.SetGroupingHeaderTextPayload:
+            return payload.id
+        default:
+            return nil
+        }
     }
 
     private nonisolated static func networkRequestID<Payload: Sendable>(
