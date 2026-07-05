@@ -4163,6 +4163,29 @@ func domainEnablementReleaseDuringPendingEnableDisablesAfterEnableCompletes() as
 
 @MainActor
 @Test
+func domainEnablementDiscardLeasePreservesSharedEnabledLease() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+    let registry = WebInspectorDomainEnablementRegistry()
+
+    await runtime.backend.enqueue((), for: "Runtime", method: "enable")
+    try await registry.acquire(.runtime, on: target)
+    try await registry.acquire(.runtime, on: target)
+
+    await registry.discardLease(.runtime, on: target)
+
+    await runtime.backend.enqueue((), for: "Runtime", method: "disable")
+    #expect(await registry.release(.runtime, on: target) == nil)
+
+    let commands = await runtime.backend.recordedCommands()
+    #expect(commands == [
+        RecordedCommand(domain: "Runtime", method: "enable"),
+        RecordedCommand(domain: "Runtime", method: "disable"),
+    ])
+}
+
+@MainActor
+@Test
 func networkEventsPopulateAllRequestsInOrder() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)

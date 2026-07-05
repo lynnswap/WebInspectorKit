@@ -137,15 +137,38 @@ actor WebInspectorDomainEnablementRegistry {
         }
     }
 
-    func invalidate(_ domains: some Sequence<WebInspectorEnabledDomain>, on target: WebInspectorTarget) {
-        for domain in domains {
-            let key = WebInspectorDomainEnablementKey(targetID: target.id, domain: domain)
-            if entries[key] != nil {
+    func discardLease(_ domain: WebInspectorEnabledDomain, on target: WebInspectorTarget) {
+        let key = WebInspectorDomainEnablementKey(targetID: target.id, domain: domain)
+
+        switch entries[key] {
+        case let .enabled(count):
+            precondition(count > 0, "WebInspector domain enablement count must be positive.")
+            if count > 1 {
+                entries[key] = .enabled(count: count - 1)
+                WebInspectorDataKitLog.debug(
+                    "domain lease discarded shared domain=\(domain.rawValue) target=\(target.id.rawValue) count=\(count - 1)"
+                )
+            } else {
                 entries[key] = nil
                 WebInspectorDataKitLog.debug(
-                    "domain lease invalidated domain=\(domain.rawValue) target=\(target.id.rawValue)"
+                    "domain lease discarded domain=\(domain.rawValue) target=\(target.id.rawValue)"
                 )
             }
+        case let .enabling(count, generation, task):
+            precondition(count > 0, "WebInspector domain enablement count must be positive.")
+            if count > 1 {
+                entries[key] = .enabling(count: count - 1, generation: generation, task: task)
+                WebInspectorDataKitLog.debug(
+                    "domain lease discarded pending domain=\(domain.rawValue) target=\(target.id.rawValue) count=\(count - 1)"
+                )
+            } else {
+                entries[key] = nil
+                WebInspectorDataKitLog.debug(
+                    "domain lease discarded pending domain=\(domain.rawValue) target=\(target.id.rawValue)"
+                )
+            }
+        case nil:
+            preconditionFailure("Discarding WebInspector domain enablement without a matching acquire.")
         }
     }
 

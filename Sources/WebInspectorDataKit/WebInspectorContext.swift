@@ -1175,20 +1175,28 @@ public final class WebInspectorContext {
         isolation: isolated (any Actor)
     ) async -> WebInspectorProxyError? {
         let error = await disableEnabledDomains(isolation: isolation)
-        await invalidateCurrentPageDomainLeases(isolation: isolation)
+        await discardCurrentPageDomainLeases(isolation: isolation)
         return error
     }
 
-    private func invalidateCurrentPageDomainLeases(isolation: isolated (any Actor)) async {
+    private func discardCurrentPageDomainLeases(isolation: isolated (any Actor)) async {
         _ = isolation
-        guard let currentPage else {
-            return
+        if let target = inspectorTrackingTarget {
+            inspectorTrackingTarget = nil
+            await domainEnablement.discardLease(.inspector, on: target)
         }
-        inspectorTrackingTarget = nil
-        runtimeTrackingTarget = nil
-        networkTrackingTarget = nil
-        consoleTrackingTarget = nil
-        await domainEnablement.invalidate([.inspector, .runtime, .network, .console], on: currentPage)
+        if let target = runtimeTrackingTarget {
+            runtimeTrackingTarget = nil
+            await domainEnablement.discardLease(.runtime, on: target)
+        }
+        if let target = networkTrackingTarget {
+            networkTrackingTarget = nil
+            await domainEnablement.discardLease(.network, on: target)
+        }
+        if let target = consoleTrackingTarget {
+            consoleTrackingTarget = nil
+            await domainEnablement.discardLease(.console, on: target)
+        }
     }
 
     private func enableInspectorTracking(
@@ -1743,11 +1751,7 @@ extension WebInspectorContext {
                 currentPageRetargetTask = nil
             }
         }
-        inspectorTrackingTarget = nil
-        runtimeTrackingTarget = nil
-        networkTrackingTarget = nil
-        consoleTrackingTarget = nil
-        await domainEnablement.invalidate([.inspector, .runtime, .network, .console], on: target)
+        await discardCurrentPageDomainLeases(isolation: isolation)
 
         do {
             guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
