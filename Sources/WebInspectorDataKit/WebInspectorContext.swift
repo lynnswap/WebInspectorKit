@@ -91,6 +91,7 @@ public final class WebInspectorContext {
     private var isStyleHydrationActive: Bool
     private var styleToggleTasks: [CSS.Property.ID: Task<Void, Never>]
     private var eventPumps: [WebInspectorEventPump]
+    private var inspectorTrackingTarget: WebInspectorTarget?
     private var networkTrackingTarget: WebInspectorTarget?
     private var runtimeTrackingTarget: WebInspectorTarget?
     private var consoleTrackingTarget: WebInspectorTarget?
@@ -143,6 +144,7 @@ public final class WebInspectorContext {
         isStyleHydrationActive = false
         styleToggleTasks = [:]
         eventPumps = []
+        inspectorTrackingTarget = nil
         networkTrackingTarget = nil
         runtimeTrackingTarget = nil
         consoleTrackingTarget = nil
@@ -439,9 +441,22 @@ public final class WebInspectorContext {
     ) async throws {
         requireOwner(isolation)
         let page = try currentPageOrThrow()
-        try await page.dom.setInspectMode(enabled: isEnabled)
+        WebInspectorDataKitLog.debug(
+            "DOM picker setInspectMode start enabled=\(isEnabled) target=\(page.id.rawValue)"
+        )
+        do {
+            try await page.dom.setInspectMode(enabled: isEnabled)
+        } catch {
+            WebInspectorDataKitLog.debug(
+                "DOM picker setInspectMode failed enabled=\(isEnabled) target=\(page.id.rawValue): \(String(describing: error))"
+            )
+            throw error
+        }
         isElementPickerEnabled = isEnabled
         notifyStatusChanged()
+        WebInspectorDataKitLog.debug(
+            "DOM picker setInspectMode finished enabled=\(isEnabled) target=\(page.id.rawValue)"
+        )
     }
 
     public func reloadPage(
@@ -912,6 +927,14 @@ public final class WebInspectorContext {
                 return
             }
             resetReplayBackedModelsBeforeEnable()
+            try await enableInspectorTracking(on: target, isolation: isolation)
+            guard Task.isCancelled == false else {
+                await disableEnabledDomainsAfterCancellation(isolation: isolation)
+                return
+            }
+            guard isCurrentPageGeneration(generation, isolation: isolation) else {
+                return
+            }
             try await enableRuntimeTracking(on: target, isolation: isolation)
             guard Task.isCancelled == false else {
                 await disableEnabledDomainsAfterCancellation(isolation: isolation)
@@ -1003,10 +1026,20 @@ public final class WebInspectorContext {
         guard let currentPage else {
             return
         }
+        inspectorTrackingTarget = nil
         runtimeTrackingTarget = nil
         networkTrackingTarget = nil
         consoleTrackingTarget = nil
-        await domainEnablement.invalidate([.runtime, .network, .console], on: currentPage)
+        await domainEnablement.invalidate([.inspector, .runtime, .network, .console], on: currentPage)
+    }
+
+    private func enableInspectorTracking(
+        on target: WebInspectorTarget,
+        isolation: isolated (any Actor)
+    ) async throws {
+        _ = isolation
+        try await domainEnablement.acquire(.inspector, on: target)
+        inspectorTrackingTarget = target
     }
 
     private func enableRuntimeTracking(
@@ -1085,7 +1118,19 @@ public final class WebInspectorContext {
         let consoleError = await disableConsoleTracking(isolation: isolation)
         let runtimeError = await disableRuntimeTracking(isolation: isolation)
         let networkError = await disableNetworkTracking(isolation: isolation)
-        return consoleError ?? runtimeError ?? networkError
+        let inspectorError = await disableInspectorTracking(isolation: isolation)
+        return consoleError ?? runtimeError ?? networkError ?? inspectorError
+    }
+
+    private func disableInspectorTracking(
+        isolation: isolated (any Actor)
+    ) async -> WebInspectorProxyError? {
+        _ = isolation
+        guard let target = inspectorTrackingTarget else {
+            return nil
+        }
+        inspectorTrackingTarget = nil
+        return await domainEnablement.release(.inspector, on: target)
     }
 
     private func disableConsoleTracking(
@@ -1463,12 +1508,17 @@ extension WebInspectorContext {
                 currentPageRetargetTask = nil
             }
         }
+        inspectorTrackingTarget = nil
         runtimeTrackingTarget = nil
         networkTrackingTarget = nil
         consoleTrackingTarget = nil
-        await domainEnablement.invalidate([.runtime, .network, .console], on: target)
+        await domainEnablement.invalidate([.inspector, .runtime, .network, .console], on: target)
 
         do {
+            guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
+                return
+            }
+            try await enableInspectorTracking(on: target, isolation: isolation)
             guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
                 return
             }

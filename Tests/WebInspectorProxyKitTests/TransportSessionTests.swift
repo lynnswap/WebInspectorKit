@@ -514,6 +514,26 @@ func pageTargetWithoutFrameIDCanCommitAsCurrentPage() async throws {
 }
 
 @Test
+func provisionalPageTargetWithChangedFrameIDCommitsAsCurrentPage() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend)
+
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-old","type":"page","frameId":"old-main-frame","isProvisional":false}}}"#)
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-new","type":"page","frameId":"new-main-frame","isProvisional":true}}}"#)
+    await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-old","newTargetId":"page-new"}}"#)
+    await session.receiveRootMessage(#"{"method":"Target.targetDestroyed","params":{"targetId":"page-old"}}"#)
+    let snapshot = await session.snapshot()
+
+    #expect(snapshot.currentMainPageTargetID == ProtocolTarget.ID("page-new"))
+    #expect(snapshot.targetsByID[ProtocolTarget.ID("page-new")]?.kind == .page)
+    #expect(snapshot.targetsByID[ProtocolTarget.ID("page-new")]?.frameID == ProtocolFrame.ID("new-main-frame"))
+    #expect(snapshot.targetsByID[ProtocolTarget.ID("page-new")]?.isProvisional == false)
+    #expect(snapshot.targetsByID[ProtocolTarget.ID("page-old")] == nil)
+    #expect(snapshot.frameTargetIDsByFrameID[ProtocolFrame.ID("old-main-frame")] == nil)
+    #expect(snapshot.frameTargetIDsByFrameID[ProtocolFrame.ID("new-main-frame")] == ProtocolTarget.ID("page-new"))
+}
+
+@Test
 func targetCommitMergesFrameMetadataAndClearsOldFrameMapping() async throws {
     let backend = FakeTransportBackend()
     let session = TransportSession(backend: backend)

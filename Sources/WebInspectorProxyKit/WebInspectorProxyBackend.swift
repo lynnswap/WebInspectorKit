@@ -7,6 +7,7 @@ package enum WebInspectorProxyDomain: String, Hashable, Sendable {
     case console = "Console"
     case runtime = "Runtime"
     case page = "Page"
+    case inspector = "Inspector"
 }
 
 package enum WebInspectorProxyEventDomain: String, Hashable, Sendable {

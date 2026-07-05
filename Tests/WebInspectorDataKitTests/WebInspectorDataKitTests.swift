@@ -568,8 +568,11 @@ func networkEnableFailureFailsStartupBeforeDocumentFetch() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
 
+    await runtime.backend.enqueue((), for: "Inspector", method: "enable")
+    await runtime.backend.enqueue((), for: "Inspector", method: "initialized")
     await runtime.backend.enqueue((), for: "Runtime", method: "enable")
     await runtime.backend.enqueue((), for: "Runtime", method: "disable")
+    await runtime.backend.enqueue((), for: "Inspector", method: "disable")
 
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
@@ -592,9 +595,12 @@ func networkEnableFailureFailsStartupBeforeDocumentFetch() async throws {
 
     let commands = await runtime.backend.recordedCommands()
     #expect(commands == [
+        RecordedCommand(domain: "Inspector", method: "enable"),
+        RecordedCommand(domain: "Inspector", method: "initialized"),
         RecordedCommand(domain: "Runtime", method: "enable"),
         RecordedCommand(domain: "Network", method: "enable"),
         RecordedCommand(domain: "Runtime", method: "disable"),
+        RecordedCommand(domain: "Inspector", method: "disable"),
     ])
     #expect(context.rootNode == nil)
 }
@@ -605,6 +611,8 @@ func consoleEnableFailureFailsStartupBeforeAttachingDocument() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
 
+    await runtime.backend.enqueue((), for: "Inspector", method: "enable")
+    await runtime.backend.enqueue((), for: "Inspector", method: "initialized")
     await runtime.backend.enqueue((), for: "Runtime", method: "enable")
     await runtime.backend.enqueue((), for: "Network", method: "enable")
     await runtime.backend.enqueue(
@@ -614,6 +622,7 @@ func consoleEnableFailureFailsStartupBeforeAttachingDocument() async throws {
     )
     await runtime.backend.enqueue((), for: "Runtime", method: "disable")
     await runtime.backend.enqueue((), for: "Network", method: "disable")
+    await runtime.backend.enqueue((), for: "Inspector", method: "disable")
 
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
@@ -636,12 +645,15 @@ func consoleEnableFailureFailsStartupBeforeAttachingDocument() async throws {
 
     let commands = await runtime.backend.recordedCommands()
     #expect(commands == [
+        RecordedCommand(domain: "Inspector", method: "enable"),
+        RecordedCommand(domain: "Inspector", method: "initialized"),
         RecordedCommand(domain: "Runtime", method: "enable"),
         RecordedCommand(domain: "Network", method: "enable"),
         RecordedCommand(domain: "DOM", method: "getDocument"),
         RecordedCommand(domain: "Console", method: "enable"),
         RecordedCommand(domain: "Runtime", method: "disable"),
         RecordedCommand(domain: "Network", method: "disable"),
+        RecordedCommand(domain: "Inspector", method: "disable"),
     ])
     #expect(context.rootNode == nil)
 }
@@ -651,6 +663,10 @@ func consoleEnableFailureFailsStartupBeforeAttachingDocument() async throws {
 func runtimeEnableFailureFailsStartupBeforeConsoleNetworkAndDocumentFetch() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
+
+    await runtime.backend.enqueue((), for: "Inspector", method: "enable")
+    await runtime.backend.enqueue((), for: "Inspector", method: "initialized")
+    await runtime.backend.enqueue((), for: "Inspector", method: "disable")
 
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
@@ -673,7 +689,10 @@ func runtimeEnableFailureFailsStartupBeforeConsoleNetworkAndDocumentFetch() asyn
 
     let commands = await runtime.backend.recordedCommands()
     #expect(commands == [
+        RecordedCommand(domain: "Inspector", method: "enable"),
+        RecordedCommand(domain: "Inspector", method: "initialized"),
         RecordedCommand(domain: "Runtime", method: "enable"),
+        RecordedCommand(domain: "Inspector", method: "disable"),
     ])
     #expect(context.rootNode == nil)
 }
@@ -769,6 +788,8 @@ func restartWaitsForPreviousStartupCleanupBeforeReenable() async throws {
     try await waitForStartupSubscribers(runtime: runtime, target: target)
     try await waitUntil {
         await runtime.backend.recordedCommands() == [
+            RecordedCommand(domain: "Inspector", method: "enable"),
+            RecordedCommand(domain: "Inspector", method: "initialized"),
             RecordedCommand(domain: "Runtime", method: "enable"),
             RecordedCommand(domain: "Network", method: "enable"),
         ]
@@ -785,6 +806,8 @@ func restartWaitsForPreviousStartupCleanupBeforeReenable() async throws {
         await Task.yield()
     }
     #expect(await runtime.backend.recordedCommands() == [
+        RecordedCommand(domain: "Inspector", method: "enable"),
+        RecordedCommand(domain: "Inspector", method: "initialized"),
         RecordedCommand(domain: "Runtime", method: "enable"),
         RecordedCommand(domain: "Network", method: "enable")
     ])
@@ -793,9 +816,10 @@ func restartWaitsForPreviousStartupCleanupBeforeReenable() async throws {
     try await waitUntil { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("restarted-document")) }
 
     let commands = await runtime.backend.recordedCommands()
-    #expect(commands == Array(startupCommands.prefix(2)) + [
+    #expect(commands == Array(startupCommands.prefix(4)) + [
         RecordedCommand(domain: "Runtime", method: "disable"),
         RecordedCommand(domain: "Network", method: "disable"),
+        RecordedCommand(domain: "Inspector", method: "disable"),
     ] + startupCommands)
 }
 
@@ -814,6 +838,8 @@ func runtimeEnableReplayIsCapturedBeforeCommandReturns() async throws {
     let context = container.mainContext
     try await waitUntil {
         await runtime.backend.recordedCommands() == [
+            RecordedCommand(domain: "Inspector", method: "enable"),
+            RecordedCommand(domain: "Inspector", method: "initialized"),
             RecordedCommand(domain: "Runtime", method: "enable")
         ]
     }
@@ -873,6 +899,8 @@ func startupRefetchesDocumentWhenMainFrameNavigatesBeforeAttach() async throws {
     let freshDocumentID = DOM.Node.ID("fresh-startup-document")
 
     await runtime.backend.hold(domain: "Console", method: "enable", gate: consoleGate)
+    await runtime.backend.enqueue((), for: "Inspector", method: "enable")
+    await runtime.backend.enqueue((), for: "Inspector", method: "initialized")
     await runtime.backend.enqueue((), for: "Runtime", method: "enable")
     await runtime.backend.enqueue((), for: "Network", method: "enable")
     await runtime.backend.enqueue(
@@ -927,6 +955,8 @@ func transportBackedStartupCapturesRuntimeAndConsoleReplayBeforeEnableReplies() 
     let container = WebInspectorContainer(proxy: proxy)
     let context = container.mainContext
     let consoleResults: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
+
+    try await replyTransportInspectorInitialization(backend, transport: transport, targetID: ProtocolTarget.ID("page-main"))
 
     let runtimeEnable = try await waitForTransportTargetMessage(backend, method: "Runtime.enable")
     await receiveTransportTargetEvent(
@@ -1240,13 +1270,24 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
     }
 
     await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-new","type":"page","frameId":"main-frame","isProvisional":true}}}"#
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-new","type":"page","frameId":"new-main-frame","isProvisional":true}}}"#
     )
     await transport.receiveRootMessage(
         #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-old","newTargetId":"page-new"}}"#
     )
     await transport.receiveRootMessage(
-        #"{"method":"Page.frameNavigated","params":{"frame":{"id":"main-frame","loaderId":"loader-2","name":"Main","url":"https://example.test/next","securityOrigin":"https://example.test","mimeType":"text/html"}}}"#
+        #"{"method":"Target.targetDestroyed","params":{"targetId":"page-old"}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Page.frameNavigated","params":{"frame":{"id":"new-main-frame","loaderId":"loader-2","name":"Main","url":"https://example.test/next","securityOrigin":"https://example.test","mimeType":"text/html"}}}"#
+    )
+
+    try await replyTransportInspectorInitialization(
+        backend,
+        transport: transport,
+        targetID: newTargetID,
+        after: startupMessageCount,
+        timeout: .seconds(30)
     )
 
     let runtimeEnable = try await waitForTransportTargetMessage(
@@ -1325,7 +1366,8 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
     let newTargetMessages = retargetMessages.filter { $0.targetIdentifier == newTargetID }
     let newTargetMethods = try newTargetMessages.map { try transportTargetMessageMethod($0.message) }
     let runtimeEnableIndex = try #require(newTargetMethods.firstIndex(of: "Runtime.enable"))
-    #expect(newTargetMethods[..<runtimeEnableIndex].allSatisfy { $0 == "DOM.getDocument" })
+    let preRuntimeMethods = Array(newTargetMethods[..<runtimeEnableIndex])
+    #expect(preRuntimeMethods.allSatisfy { $0 == "DOM.getDocument" || $0 == "Inspector.enable" || $0 == "Inspector.initialized" })
     let trackingMethods = Array(newTargetMethods[runtimeEnableIndex...])
     #expect(Array(trackingMethods.prefix(3)) == [
         "Runtime.enable",
@@ -1334,6 +1376,8 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
     ])
     #expect(trackingMethods.contains("Console.enable"))
     #expect(Set(newTargetMethods).isSubset(of: [
+        "Inspector.enable",
+        "Inspector.initialized",
         "Runtime.enable",
         "Network.enable",
         "DOM.getDocument",
@@ -1389,6 +1433,14 @@ func currentPageTargetDestroyedDuringRetargetDoesNotDetachOrClearNetwork() async
     #expect(context.rootNode?.id == DOMNode.ID(DOM.Node.ID("destroyed-root")))
     #expect(networkResults.items.map(\.id) == [NetworkRequest.ID(retainedRequestID)])
     await installTransportPageTarget(in: transport, targetID: newTargetID)
+
+    try await replyTransportInspectorInitialization(
+        backend,
+        transport: transport,
+        targetID: newTargetID,
+        after: startupMessageCount,
+        timeout: .seconds(30)
+    )
 
     let runtimeEnable = try await waitForTransportTargetMessage(
         backend,
@@ -1520,6 +1572,13 @@ func domUndoRedoCommandsFailAfterCurrentPageRetarget() async throws {
     )
     await transport.receiveRootMessage(
         #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-undo-old","newTargetId":"page-undo-new"}}"#
+    )
+
+    try await replyTransportInspectorInitialization(
+        backend,
+        transport: transport,
+        targetID: newTargetID,
+        after: startupMessageCount
     )
 
     let runtimeEnable = try await waitForTransportTargetMessage(
@@ -1659,7 +1718,9 @@ func restartClearsRuntimeContextsBeforeEnableReplay() async throws {
     context.start()
     try await waitUntil {
         await runtime.backend.recordedCommands() == startupCommands + shutdownCommands + [
-            RecordedCommand(domain: "Runtime", method: "enable")
+            RecordedCommand(domain: "Inspector", method: "enable"),
+            RecordedCommand(domain: "Inspector", method: "initialized"),
+            RecordedCommand(domain: "Runtime", method: "enable"),
         ]
     }
     #expect(context.executionContexts.isEmpty)
@@ -3214,9 +3275,10 @@ func closeDuringStartupKeepsContextDetached() async throws {
     #expect(context.rootNode == nil)
 
     let commands = await runtime.backend.recordedCommands()
-    #expect(commands == Array(startupCommands.prefix(3)) + [
+    #expect(commands == Array(startupCommands.prefix(5)) + [
         RecordedCommand(domain: "Runtime", method: "disable"),
         RecordedCommand(domain: "Network", method: "disable"),
+        RecordedCommand(domain: "Inspector", method: "disable"),
     ])
 }
 
@@ -4533,6 +4595,8 @@ private func startContext(
 
 private var startupCommands: [RecordedCommand] {
     [
+        RecordedCommand(domain: "Inspector", method: "enable"),
+        RecordedCommand(domain: "Inspector", method: "initialized"),
         RecordedCommand(domain: "Runtime", method: "enable"),
         RecordedCommand(domain: "Network", method: "enable"),
         RecordedCommand(domain: "DOM", method: "getDocument"),
@@ -4545,6 +4609,7 @@ private var shutdownCommands: [RecordedCommand] {
         RecordedCommand(domain: "Console", method: "disable"),
         RecordedCommand(domain: "Runtime", method: "disable"),
         RecordedCommand(domain: "Network", method: "disable"),
+        RecordedCommand(domain: "Inspector", method: "disable"),
     ]
 }
 
@@ -4557,6 +4622,8 @@ private func enqueueStartupReplies(
 }
 
 private func enqueueDomainEnableReplies(on backend: WebInspectorTestBackend) async {
+    await backend.enqueue((), for: "Inspector", method: "enable")
+    await backend.enqueue((), for: "Inspector", method: "initialized")
     await backend.enqueue((), for: "Runtime", method: "enable")
     await backend.enqueue((), for: "Network", method: "enable")
     await backend.enqueue((), for: "Console", method: "enable")
@@ -4566,6 +4633,7 @@ private func enqueueDomainDisableReplies(on backend: WebInspectorTestBackend) as
     await backend.enqueue((), for: "Console", method: "disable")
     await backend.enqueue((), for: "Runtime", method: "disable")
     await backend.enqueue((), for: "Network", method: "disable")
+    await backend.enqueue((), for: "Inspector", method: "disable")
 }
 
 private func enqueueCSSStyleReplies(on backend: WebInspectorTestBackend) async {
@@ -4665,6 +4733,8 @@ private func startTransportBackedContext(
     let container = WebInspectorContainer(proxy: proxy)
     let context = container.mainContext
 
+    try await replyTransportInspectorInitialization(backend, transport: transport, targetID: targetID)
+
     let runtimeEnable = try await waitForTransportTargetMessage(backend, method: "Runtime.enable")
     #expect(runtimeEnable.targetIdentifier == targetID)
     await receiveTransportTargetReply(
@@ -4703,6 +4773,45 @@ private func startTransportBackedContext(
 
     try await waitUntil { context.state == .attached }
     return (backend, transport, context)
+}
+
+@discardableResult
+private func replyTransportInspectorInitialization(
+    _ backend: FakeTransportBackend,
+    transport: TransportSession,
+    targetID: ProtocolTarget.ID,
+    after count: Int = 0,
+    timeout: Duration = .seconds(1)
+) async throws -> (enable: SentTargetMessage, initialized: SentTargetMessage) {
+    let inspectorEnable = try await waitForTransportTargetMessage(
+        backend,
+        method: "Inspector.enable",
+        after: count,
+        timeout: timeout
+    )
+    #expect(inspectorEnable.targetIdentifier == targetID)
+    await receiveTransportTargetReply(
+        transport,
+        targetID: inspectorEnable.targetIdentifier,
+        messageID: try transportMessageID(inspectorEnable.message),
+        result: "{}"
+    )
+
+    let inspectorInitialized = try await waitForTransportTargetMessage(
+        backend,
+        method: "Inspector.initialized",
+        after: count,
+        timeout: timeout
+    )
+    #expect(inspectorInitialized.targetIdentifier == targetID)
+    await receiveTransportTargetReply(
+        transport,
+        targetID: inspectorInitialized.targetIdentifier,
+        messageID: try transportMessageID(inspectorInitialized.message),
+        result: "{}"
+    )
+
+    return (enable: inspectorEnable, initialized: inspectorInitialized)
 }
 
 private func installTransportPageTarget(

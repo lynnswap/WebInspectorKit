@@ -102,6 +102,10 @@ public struct WebInspectorTarget: Identifiable, Sendable {
         Page.Client(context: DomainClientContext(proxy: proxy, targetID: id, route: route))
     }
 
+    package var inspector: Inspector.Client {
+        Inspector.Client(context: DomainClientContext(proxy: proxy, targetID: id, route: route))
+    }
+
     package var lifecycleEvents: AsyncStream<WebInspectorTargetLifecycleEvent> {
         proxy.targetLifecycleEvents(targetID: id, route: route)
     }

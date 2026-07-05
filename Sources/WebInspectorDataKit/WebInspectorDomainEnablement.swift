@@ -2,12 +2,15 @@ import Foundation
 import WebInspectorProxyKit
 
 enum WebInspectorEnabledDomain: Hashable, Sendable {
+    case inspector
     case console
     case network
     case runtime
 
     var rawValue: String {
         switch self {
+        case .inspector:
+            return "Inspector"
         case .console:
             return "Console"
         case .network:
@@ -19,6 +22,9 @@ enum WebInspectorEnabledDomain: Hashable, Sendable {
 
     fileprivate func enable(on target: WebInspectorTarget) async throws {
         switch self {
+        case .inspector:
+            try await target.inspector.enable()
+            try await target.inspector.initialized()
         case .console:
             try await target.console.enable()
         case .network:
@@ -30,6 +36,8 @@ enum WebInspectorEnabledDomain: Hashable, Sendable {
 
     fileprivate func disable(on target: WebInspectorTarget) async throws {
         switch self {
+        case .inspector:
+            try await target.inspector.disable()
         case .console:
             try await target.console.disable()
         case .network:

@@ -561,6 +561,8 @@ private enum WebInspectorTransportCommandEncoder {
             .runtime
         case .page:
             .page
+        case .inspector:
+            .inspector
         }
     }
 
@@ -584,6 +586,9 @@ private enum WebInspectorTransportCommandEncoder {
              (.console, "clearMessages"),
              (.runtime, "enable"),
              (.runtime, "disable"),
+             (.inspector, "enable"),
+             (.inspector, "disable"),
+             (.inspector, "initialized"),
              (.css, "enable"),
              (.css, "disable"):
             return emptyData()

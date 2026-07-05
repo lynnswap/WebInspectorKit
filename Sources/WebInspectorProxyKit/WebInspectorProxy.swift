@@ -565,7 +565,7 @@ public actor WebInspectorProxy {
             default:
                 return nil
             }
-        case .network, .console, .runtime, .page:
+        case .network, .console, .runtime, .page, .inspector:
             return nil
         }
     }

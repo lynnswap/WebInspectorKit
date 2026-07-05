@@ -173,7 +173,11 @@ package final class DOMNavigationItems: NSObject {
             guard let context else {
                 return
             }
-            try? await context.setElementPickerEnabled(!context.isElementPickerEnabled)
+            do {
+                try await context.setElementPickerEnabled(!context.isElementPickerEnabled)
+            } catch {
+                WebInspectorUIDOMLog.debug("DOM picker toggle failed: \(String(describing: error))")
+            }
         }
     }
 

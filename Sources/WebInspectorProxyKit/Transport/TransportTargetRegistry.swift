@@ -34,13 +34,12 @@ struct TransportTargetRegistry: Sendable {
         if parentFrameID != nil {
             return .frame
         }
+        if isProvisional == true {
+            return .page
+        }
         if let currentMainFrameID,
            let frameID,
            frameID != currentMainFrameID {
-            return .frame
-        }
-        if currentMainFrameID == nil,
-           isProvisional == true {
             return .frame
         }
         return .page
