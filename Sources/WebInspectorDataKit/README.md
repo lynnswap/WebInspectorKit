@@ -13,10 +13,19 @@ snapshots, and protocol transport internals are outside this package's contract.
 ## Main Types
 
 - `WebInspectorContainer`: Attaches to a `WKWebView`, owns a `WebInspectorProxy`,
-  and vends the main `WebInspectorContext`.
+  and vends the primary `WebInspectorContext`.
 - `WebInspectorContext`: The identity-preserving model context. It owns the live
   DOM graph, Network request index, Console messages, Runtime contexts/objects,
-  CSS style state, page lifecycle, selection, and page highlight lifecycle.
+  CSS style state, page lifecycle, selection, and page highlight lifecycle. It is
+  not globally `@MainActor`; UIKit/AppKit renderers are main-actor clients of the
+  context, while DataKit may use worker actors for indexing, rewriting, and
+  protocol event processing.
+- `DOMModelController`, `CSSModelController`, `NetworkModelController`,
+  `RuntimeModelController`, `ConsoleModelController`, `PageModelController`:
+  Domain operation surfaces vended by `WebInspectorContext`. Package users call
+  these typed methods to request inspector side effects.
+- `WebInspectorEditHistory`: Undo/redo operation surface for DOM/CSS edits that
+  participate in WebKit's inspector undo history.
 - `WebInspectorFetchDescriptor`: SwiftData-style value description of predicate,
   sort order, limit, and offset for fetchable inspector models.
 - `WebInspectorFetchRequest`: CoreData-style mutable request object for building
@@ -54,7 +63,7 @@ for request in network.items {
     print(request.url)
 }
 
-let domTree = context.treeController()
+let domTree = context.dom.treeController
 render(domTree.snapshot)
 ```
 
@@ -63,6 +72,104 @@ Close the container when inspection is no longer needed:
 ```swift
 await container.close()
 ```
+
+## Context Isolation and Operation Surfaces
+
+`WebInspectorContext` is a context-bound model owner, not a UI object and not a
+global-actor singleton. Attaching to a `WKWebView` may require the caller to be on
+the main actor because WebKit view APIs are UI APIs, but once attached, DataKit
+operation APIs must not require every caller or every internal pipeline to run on
+`MainActor`.
+
+The context exposes domain controllers for user-requested side effects:
+
+```swift
+public final class WebInspectorContext {
+    public var dom: DOMModelController { get }
+    public var css: CSSModelController { get }
+    public var network: NetworkModelController { get }
+    public var runtime: RuntimeModelController { get }
+    public var console: ConsoleModelController { get }
+    public var page: PageModelController { get }
+    public var editHistory: WebInspectorEditHistory { get }
+}
+```
+
+Package users should call typed domain methods instead of constructing protocol
+payloads, routing targets, or generic action enums:
+
+```swift
+try await context.dom.select(node.id, reveal: .selectAndScroll)
+try await context.dom.setAttribute("class", value: "selected", on: node.id)
+try await context.css.setProperty(property.id, enabled: false)
+try await context.editHistory.undo()
+```
+
+Do not expose a broad public `Action` enum as the primary API. Recording,
+coalescing, tracing, or testing may use an internal mutation command type, but
+public API should stay domain-specific and typed so each operation has a clear
+owner, argument model, error behavior, and return type.
+
+Mutation options are shared across domains where they describe the same concern:
+
+```swift
+public struct WebInspectorMutationOptions: Sendable, Hashable {
+    public static let automatic = WebInspectorMutationOptions(
+        undo: .automatic,
+        staleModel: .fail
+    )
+
+    public var undo: WebInspectorUndoPolicy
+    public var staleModel: WebInspectorStaleModelPolicy
+
+    public init(
+        undo: WebInspectorUndoPolicy = .automatic,
+        staleModel: WebInspectorStaleModelPolicy = .fail
+    )
+}
+
+public enum WebInspectorUndoPolicy: Sendable, Hashable {
+    case automatic
+    case disabled
+}
+
+public enum WebInspectorStaleModelPolicy: Sendable, Hashable {
+    case fail
+}
+```
+
+`automatic` undo means DataKit records the concrete WebKit target that accepted
+the edit and marks the backend undo boundary at the correct time. Stale model
+references, stale page generations, missing targets, and impossible protocol
+states fail fast. DataKit must not silently reroute edits to a guessed current
+page or recreate missing semantic state from UI mirrors.
+
+`WebInspectorEditHistory` is the package-user surface for edits that participate
+in WebKit's inspector history:
+
+```swift
+public final class WebInspectorEditHistory {
+    public func undo() async throws
+    public func redo() async throws
+}
+```
+
+The edit-history owner is DataKit. DOM/CSS operations that use `.automatic` undo
+record the concrete target that accepted the mutation. `undo()` and `redo()` use
+that target and fail if it is no longer current; they do not blindly dispatch to
+whatever page is active at call time.
+
+Internal worker actors may perform expensive or protocol-facing work off the main
+actor using Sendable values only:
+
+- Network predicate evaluation, sorting, grouping, and membership diffing.
+- CSS declaration text rewriting before `CSS.setStyleText`.
+- DOM tree projection, ancestor-chain calculation, and delta batching.
+- Protocol event classification and generation checks.
+
+Observable model instances remain owned by the context that vended them. Cross an
+actor boundary with IDs, records, patches, snapshots, or deltas, then let the
+context apply those values to same-identity observable objects.
 
 ## Fetching
 
@@ -181,7 +288,7 @@ public actor NetworkRequestIndex {
 }
 ```
 
-`NetworkMutationBatch` crosses back to the main context as values: inserted IDs,
+`NetworkMutationBatch` crosses back to the owning context as values: inserted IDs,
 removed result IDs, moved result IDs, optional reset snapshots, and patches for
 existing requests. It must not carry `NetworkRequest` object references across
 actor boundaries.
@@ -276,7 +383,7 @@ When WebKit protocol events arrive:
 
 - A new request inserts one `NetworkRequest` instance into the context index.
 - Later events produce patches for the same request ID.
-- The main context applies patches by mutating the same `NetworkRequest` instance
+- The owning context applies patches by mutating the same `NetworkRequest` instance
   in place.
 - Registered fetched results revalidate only the affected request for normal
   insert/update/classification events in the index actor.
@@ -349,9 +456,13 @@ Initial document load, page target switching, and document reset emit
 publish a full `DOMTreeSnapshot` for every attribute, text, count, or child
 mutation.
 
-`DOMTreeController` exposes the current document value and update stream:
+`DOMModelController` vends the current tree controller:
 
 ```swift
+public final class DOMModelController {
+    public var treeController: DOMTreeController { get }
+}
+
 public final class DOMTreeController {
     public var snapshot: DOMTreeSnapshot { get }
     public var updates: AsyncStream<DOMTreeUpdate> { get }
@@ -370,6 +481,67 @@ Expansion state, scroll position, text layout, row diffing, and native highlight
 decoration are UI-owned view state. DataKit owns DOM graph materialization,
 selection, reveal requests, and page highlight lifecycle.
 
+## DOM Operations
+
+DOM operations are DataKit-owned semantic requests. They validate that the node
+belongs to the current context and document generation, choose the correct
+`WebInspectorTarget`, dispatch ProxyKit DOM commands, update selection/reveal
+state, and rely on DOM protocol events as the source of truth for final graph
+changes.
+
+```swift
+public final class DOMModelController {
+    public func requestChildren(of nodeID: DOMNode.ID, depth: Int = 1) async throws
+
+    public func select(
+        _ nodeID: DOMNode.ID?,
+        reveal: DOMRevealPolicy = .selectAndScroll
+    ) async throws
+
+    public func setAttribute(
+        _ name: String,
+        value: String,
+        on nodeID: DOMNode.ID,
+        options: WebInspectorMutationOptions = .automatic
+    ) async throws
+
+    public func setOuterHTML(
+        _ html: String,
+        of nodeID: DOMNode.ID,
+        options: WebInspectorMutationOptions = .automatic
+    ) async throws
+
+    public func remove(
+        _ nodeIDs: [DOMNode.ID],
+        options: WebInspectorMutationOptions = .automatic
+    ) async throws -> DOMMutationResult
+
+    public func highlight(_ nodeID: DOMNode.ID) async throws
+    public func hideHighlight() async throws
+    public func setInspectMode(enabled: Bool) async throws
+}
+
+public enum DOMRevealPolicy: Sendable, Hashable {
+    case none
+    case selectOnly
+    case selectAndScroll
+}
+
+public struct DOMMutationResult: Sendable, Hashable {
+    public var requestedNodeIDs: [DOMNode.ID]
+    public var acceptedNodeIDs: [DOMNode.ID]
+}
+```
+
+`setOuterHTML` must not depend on a command result to identify the replacement
+node. WebKit reports the actual replacement through DOM removal/insertion events,
+so DataKit reconciles the tree from events and emits DOM deltas or reveal
+requests after materialization.
+
+Convenience methods on `DOMNode` may forward to `context.dom`, but the owner of
+edit routing, stale-model checks, undo marking, and page highlight lifecycle is
+`DOMModelController`, not the model object and not the UI layer.
+
 ## DOM Selection and Highlight
 
 Picker selection follows this DataKit-owned flow:
@@ -384,47 +556,99 @@ Picker selection follows this DataKit-owned flow:
 Tree hover and tree selection should call DataKit highlight APIs:
 
 ```swift
-try await context.highlight(node)
-try await context.hideHighlight()
+try await context.dom.highlight(node.id)
+try await context.dom.hideHighlight()
 ```
 
 Page/document generation changes clear stale page highlights in DataKit. UI code
 must not resurrect an old page highlight after navigation.
 
-## Runtime, Console, and CSS
+## CSS Operations
 
-Runtime evaluation, console messages, and CSS state are context-attached model
-operations:
+CSS style state is DataKit-owned, observable, and identity-preserving. WebKit has
+no `CSS.setPropertyText` or `CSS.toggleProperty` command; property edits rewrite
+the owning declaration text and dispatch `CSS.setStyleText`. DataKit owns that
+rewrite and validation so package users do not construct CSS protocol payloads.
 
 ```swift
-let evaluation = try await context.evaluate("document.title")
-let messages = context.fetchedResultsController(
+public final class CSSModelController {
+    public func styles(for nodeID: DOMNode.ID) async throws -> CSSStyles
+    public func refreshStyles(for nodeID: DOMNode.ID) async throws
+
+    public func setProperty(
+        _ propertyID: CSS.Property.ID,
+        enabled: Bool,
+        options: WebInspectorMutationOptions = .automatic
+    ) async throws
+
+    public func setDeclarationText(
+        _ text: String,
+        for propertyID: CSS.Property.ID,
+        options: WebInspectorMutationOptions = .automatic
+    ) async throws
+
+    public func setRuleSelector(
+        _ selector: String,
+        for ruleID: CSS.Rule.ID,
+        options: WebInspectorMutationOptions = .automatic
+    ) async throws
+
+    public func setStyleSheetText(
+        _ text: String,
+        for styleSheetID: CSS.StyleSheet.ID,
+        options: WebInspectorMutationOptions = .automatic
+    ) async throws
+}
+```
+
+`CSS.setStyleText` returns a new protocol `CSS.Style`, but the returned value is
+not the long-lived source of truth by itself. DataKit applies the immediate style
+result to the existing `CSSStyles` object for responsive rendering, marks the
+style state stale, and refreshes matched, inline, and computed styles from WebKit
+events such as `CSS.styleSheetChanged` and `DOM.inlineStyleInvalidated`.
+
+`CSSStyles` and `CSSStyleSection` are observable/readable model surfaces. They may
+provide convenience methods that forward to `context.css`, but they must not own
+target routing, undo state, or protocol text rewriting across actors.
+
+## Runtime, Console, Page, and Other Operations
+
+Other user-requested side effects follow the same rule: package users call typed
+DataKit domain operations; ProxyKit remains a protocol layer; UI code owns only
+interaction state.
+
+```swift
+let evaluation = try await context.runtime.evaluate("document.title")
+let messages = context.console.fetchedResultsController(
     for: WebInspectorFetchDescriptor<ConsoleMessage>()
 )
 
-context.select(node)
-context.setStyleHydrationActive(true)
+try await context.dom.select(node.id, reveal: .selectAndScroll)
+context.css.setStyleHydrationActive(true)
 let styles = node.elementStyles
 ```
 
 Models preserve identity within the context. If the same semantic entity appears
 again, DataKit mutates the existing observable object instead of replacing it.
 
-## UI Boundary
+## Package User and UI Boundary
 
 WebInspectorDataKit does not import UIKit, AppKit, or SwiftUI for list rendering.
-Native UI packages may keep transient render artifacts:
+Package users and native UI packages may keep transient interaction and render
+artifacts:
 
 - `NSDiffableDataSourceSnapshot` / `NSDiffableDataSourceSectionSnapshot`
 - visible row text/layout caches
 - scroll position and expansion state
 - selected menu state
+- draft text, focus, validation messages, and commit/cancel interaction state
 - throttled native apply tasks
 
 Those artifacts must be rebuildable from DataKit models or update streams and
 must not become semantic state. UI code must not implement Network query
-membership, DOM graph ownership, page highlight lifecycle, protocol event
-ordering, or Network row-content propagation.
+membership, DOM graph ownership, CSS declaration rewriting, edit undo routing,
+page highlight lifecycle, protocol event ordering, or Network row-content
+propagation.
 
 For Network collection views, UI code owns only native topology application and
 cell lifecycle:
@@ -438,24 +662,32 @@ cell lifecycle:
 
 ## Isolation and Identity
 
-The main context is the UI-facing context, similar to SwiftData's
-`ModelContainer.mainContext`. Treat model instances like SwiftData/Core Data
-model objects:
+The primary context is the UI-facing context, but it is not synonymous with
+`MainActor`. Treat model instances like SwiftData/Core Data model objects that
+belong to the context that vended them:
 
 - Keep them inside the context that vended them.
 - Mutate same-identity objects in place.
 - Pass semantic IDs or value DTOs across concurrency domains.
 - Do not make UI-owned mirrors of model properties just to observe changes.
 
-The UI-facing `WebInspectorContext` is the model context that owns observable
-model identity. Dedicated actors may own Sendable indexes, records, query caches,
-and protocol event processors, but they do not own or mutate UI-facing
-`@Observable` model objects directly.
+`WebInspectorContext` owns observable model identity and serializes application of
+model patches to those objects. Dedicated actors may own Sendable indexes,
+records, query caches, CSS rewrite contexts, DOM projection state, and protocol
+event processors, but they do not own UI-facing `@Observable` model objects and
+do not mutate them directly.
+
+UIKit/AppKit code usually observes the context's models from the main actor
+because native rendering is main-actor work. That does not make DataKit operation
+APIs main-actor-only. A package user may request an edit, fetch, or runtime
+operation from another actor by passing IDs and Sendable request values; DataKit
+then hops internally to the correct owner for protocol I/O, worker computation,
+and context model mutation.
 
 The boundary is:
 
 ```swift
-// Off main actor: Sendable values only.
+// Worker actors and protocol processors: Sendable values only.
 public struct NetworkRequestRecord: Sendable, Hashable {
     public var id: NetworkRequest.ID
     public var url: URL
@@ -473,8 +705,7 @@ public struct NetworkRequestPatch: Sendable, Hashable {
     public var state: NetworkRequest.State?
 }
 
-// Main context: observable identity and in-place mutation.
-@MainActor
+// Context-owned observable identity and in-place mutation.
 @Observable
 public final class NetworkRequest {
     public let id: ID
@@ -491,7 +722,7 @@ public final class NetworkRequest {
 Future background contexts or model actors should own their own model instances
 and merge by semantic IDs, not share mutable observable model objects across
 actors. If an actor performs fetch, sort, or filter work, it returns value
-batches for the main model context to apply.
+batches for the owning model context to apply.
 
 ## Testing
 
@@ -513,6 +744,14 @@ Test DataKit owners without the built-in UI:
 - Picker inspect selecting, revealing, and restoring highlight for the resolved
   node.
 - Page navigation clearing stale highlights.
+- DOM mutation operations failing on stale model generations and routing edits to
+  the target that owns the node.
+- DOM undo/redo using the last successful edit target instead of blindly using
+  the current page.
+- CSS property toggles and declaration edits rewriting style text off the main
+  actor and applying only Sendable command inputs/results across boundaries.
+- CSS edit invalidation refreshing matched, inline, and computed styles without
+  replacing the `CSSStyles` object.
 
 UI tests should verify native rendering and lifecycle only: diffable apply,
 selection presentation, scroll/reveal behavior, hover decoration, throttling, and

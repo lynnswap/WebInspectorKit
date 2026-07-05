@@ -110,6 +110,25 @@ try await page.dom.hideHighlight()
 try await page.dom.setInspectMode(enabled: true)
 ```
 
+DOM editing commands stay protocol-level in ProxyKit:
+
+```swift
+try await page.dom.setAttributeValue(document.id, name: "class", value: "selected")
+try await page.dom.setAttributesAsText(document.id, text: #"class="selected""#)
+try await page.dom.removeAttribute(document.id, name: "hidden")
+try await page.dom.setOuterHTML(document.id, html: "<main></main>")
+try await page.dom.removeNode(document.id)
+
+try await page.dom.markUndoableState()
+try await page.dom.undo()
+try await page.dom.redo()
+```
+
+ProxyKit does not decide whether an edit should be undoable, which node should
+be selected after replacement, or how stale DOM generations should be handled.
+Those are DataKit responsibilities. ProxyKit only routes the typed command to
+the target represented by `WebInspectorTarget`.
+
 DOM events are typed:
 
 ```swift
@@ -122,6 +141,10 @@ Task {
             applyInsertion(parent: parent, previous: previous, node: node)
         case let .inspect(nodeID):
             reveal(nodeID)
+        case let .inlineStyleInvalidated(nodeIDs):
+            reloadAttributesAndStyles(for: nodeIDs)
+        case let .willDestroyDOMNode(nodeID):
+            releaseNodeState(nodeID)
         default:
             break
         }
@@ -190,6 +213,32 @@ CSS:
 try await page.css.enable()
 let styles = try await page.css.matchedStyles(for: nodeID)
 try await page.css.setStyleText(styleID, text: "display: none;")
+try await page.css.setStyleSheetText(styleSheetID, text: stylesheetText)
+try await page.css.setRuleSelector(ruleID, selector: ".card.selected")
+try await page.css.setGroupingHeaderText(ruleID, text: "@media (width > 600px)")
+```
+
+WebKit has no protocol command for "toggle CSS property" or "set CSS property
+text". Higher layers rewrite the owning declaration and call `CSS.setStyleText`.
+ProxyKit exposes only the protocol commands and typed results.
+
+CSS events are typed:
+
+```swift
+Task {
+    for await event in page.css.events {
+        switch event {
+        case let .styleSheetChanged(styleSheetID):
+            refreshStyles(for: styleSheetID)
+        case let .styleSheetAdded(header):
+            registerStyleSheet(header)
+        case let .styleSheetRemoved(styleSheetID):
+            unregisterStyleSheet(styleSheetID)
+        default:
+            break
+        }
+    }
+}
 ```
 
 Console:
@@ -242,10 +291,13 @@ ProxyKit does not own:
 
 - DOM graph materialization or tree snapshots.
 - DOM selection, reveal, or page highlight policy.
+- DOM/CSS edit semantics, stale generation policy, or undo grouping decisions.
 - Network request accumulation.
 - Network filtering, searching, sorting, or resource-category classification.
 - Console message lists.
 - Runtime object identity beyond protocol object IDs.
+- CSS style hydration, declaration rewriting, property toggling, matched-style
+  refresh policy, or inspector modification baselines.
 - UIKit/AppKit/SwiftUI rendering.
 
 Use WebInspectorDataKit for those model responsibilities.
@@ -275,5 +327,8 @@ ProxyKit tests should verify protocol behavior without DataKit or UI:
 - command routing to page and frame targets
 - typed decoding of Runtime, DOM, CSS, Network, Console, and Page payloads
 - `Inspector.inspect` projection into DOM events
+- DOM edit command payloads and edit-related events such as
+  `DOM.inlineStyleInvalidated` and `DOM.willDestroyDOMNode`
+- CSS edit command payloads/results and typed `CSS.styleSheetChanged` routing
 - transport-backed command result decoding
 - disconnect and command-failure error mapping
