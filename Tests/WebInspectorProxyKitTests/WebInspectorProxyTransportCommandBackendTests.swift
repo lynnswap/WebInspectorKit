@@ -1660,6 +1660,55 @@ func transportBackendFiltersEventsByRoute() async throws {
 }
 
 @Test
+func transportBackendKeepsPeerSubscriberActiveWhenOneStreamTerminates() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let page = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+    let probe = EventDeliveryProbe()
+
+    let firstSubscriber = Task {
+        var iterator = page.network.events.makeAsyncIterator()
+        if await iterator.next() != nil {
+            await probe.recordFirst()
+        }
+    }
+    let secondSubscriber = Task {
+        var iterator = page.network.events.makeAsyncIterator()
+        while await iterator.next() != nil {
+            await probe.recordSecond()
+        }
+    }
+
+    await waitForEventSubscription(page, domain: .network)
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        method: "Network.loadingFinished",
+        params: #"{"requestId":"first","timestamp":1}"#
+    )
+
+    try await value(of: Task { await probe.waitForFirstCount(1) }, timeout: transportCommandBackendWaitTimeout)
+    try await value(of: Task { await probe.waitForSecondCount(1) }, timeout: transportCommandBackendWaitTimeout)
+    try await value(of: firstSubscriber, timeout: transportCommandBackendWaitTimeout)
+
+    try await value(
+        of: Task { await waitForEventSubscription(page, domain: .network) },
+        timeout: transportCommandBackendWaitTimeout
+    )
+
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        method: "Network.loadingFinished",
+        params: #"{"requestId":"second","timestamp":2}"#
+    )
+    try await value(of: Task { await probe.waitForSecondCount(2) }, timeout: transportCommandBackendWaitTimeout)
+
+    secondSubscriber.cancel()
+}
+
+@Test
 func transportBackendRuntimeClearedUsesSemanticTargetID() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
@@ -1980,6 +2029,51 @@ private actor CompletionProbe {
 
     func isFinished() -> Bool {
         finished
+    }
+}
+
+private actor EventDeliveryProbe {
+    private var firstCount = 0
+    private var secondCount = 0
+    private var firstWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+    private var secondWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+
+    func recordFirst() {
+        firstCount += 1
+        resumeSatisfiedWaiters()
+    }
+
+    func recordSecond() {
+        secondCount += 1
+        resumeSatisfiedWaiters()
+    }
+
+    func waitForFirstCount(_ count: Int) async {
+        guard firstCount < count else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            firstWaiters.append((count, continuation))
+        }
+    }
+
+    func waitForSecondCount(_ count: Int) async {
+        guard secondCount < count else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            secondWaiters.append((count, continuation))
+        }
+    }
+
+    private func resumeSatisfiedWaiters() {
+        let readyFirstWaiters = firstWaiters.filter { firstCount >= $0.count }
+        firstWaiters.removeAll { firstCount >= $0.count }
+        let readySecondWaiters = secondWaiters.filter { secondCount >= $0.count }
+        secondWaiters.removeAll { secondCount >= $0.count }
+        for waiter in readyFirstWaiters + readySecondWaiters {
+            waiter.continuation.resume()
+        }
     }
 }
 

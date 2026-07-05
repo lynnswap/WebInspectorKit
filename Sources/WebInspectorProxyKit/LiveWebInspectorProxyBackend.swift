@@ -39,13 +39,14 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
     ) -> AsyncStream<WebInspectorProxyEvent> {
         AsyncStream<WebInspectorProxyEvent> { continuation in
             let key = LiveProxyEventSubscriptionKey(route: route, targetID: targetID, domain: domain)
+            let subscriptionID = LiveProxyEventSubscriptionID()
             let task = Task {
                 let stream = await transport.events(for: protocolDomain(for: domain))
                 guard Task.isCancelled == false else {
                     continuation.finish()
                     return
                 }
-                await eventSubscriptions.register(key)
+                await eventSubscriptions.register(key, id: subscriptionID)
                 for await event in stream {
                     guard Task.isCancelled == false else {
                         break
@@ -65,13 +66,13 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
                         preconditionFailure("Failed to decode \(event.method): \(error)")
                     }
                 }
-                await eventSubscriptions.unregister(key)
+                await eventSubscriptions.unregister(key, id: subscriptionID)
                 continuation.finish()
             }
             continuation.onTermination = { _ in
                 task.cancel()
                 Task {
-                    await eventSubscriptions.unregister(key)
+                    await eventSubscriptions.unregister(key, id: subscriptionID)
                 }
             }
         }
@@ -498,31 +499,39 @@ private struct LiveProxyEventSubscriptionKey: Hashable, Sendable {
     var domain: WebInspectorProxyEventDomain
 }
 
+private struct LiveProxyEventSubscriptionID: Hashable, Sendable {
+    var rawValue = UUID()
+}
+
 private actor LiveProxyEventSubscriptions {
-    private var activeSubscriberCounts: [LiveProxyEventSubscriptionKey: Int] = [:]
+    private var activeSubscriberIDs: [LiveProxyEventSubscriptionKey: Set<LiveProxyEventSubscriptionID>] = [:]
     private var waiters: [LiveProxyEventSubscriptionKey: [CheckedContinuation<Void, Never>]] = [:]
 
-    func register(_ key: LiveProxyEventSubscriptionKey) {
-        activeSubscriberCounts[key, default: 0] += 1
+    func register(_ key: LiveProxyEventSubscriptionKey, id: LiveProxyEventSubscriptionID) {
+        let inserted = activeSubscriberIDs[key, default: []].insert(id).inserted
+        guard inserted else {
+            return
+        }
         let continuations = waiters.removeValue(forKey: key) ?? []
         for continuation in continuations {
             continuation.resume()
         }
     }
 
-    func unregister(_ key: LiveProxyEventSubscriptionKey) {
-        guard let count = activeSubscriberCounts[key] else {
+    func unregister(_ key: LiveProxyEventSubscriptionKey, id: LiveProxyEventSubscriptionID) {
+        guard var ids = activeSubscriberIDs[key],
+              ids.remove(id) != nil else {
             return
         }
-        if count <= 1 {
-            activeSubscriberCounts[key] = nil
+        if ids.isEmpty {
+            activeSubscriberIDs[key] = nil
         } else {
-            activeSubscriberCounts[key] = count - 1
+            activeSubscriberIDs[key] = ids
         }
     }
 
     func waitForActiveSubscriber(_ key: LiveProxyEventSubscriptionKey) async {
-        guard activeSubscriberCounts[key, default: 0] == 0 else {
+        guard activeSubscriberIDs[key, default: []].isEmpty else {
             return
         }
         await withCheckedContinuation { continuation in
