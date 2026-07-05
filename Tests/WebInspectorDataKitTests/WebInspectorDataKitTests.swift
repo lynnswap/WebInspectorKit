@@ -279,6 +279,8 @@ func domCommandsDispatchThroughDataKitContext() async throws {
 
     await runtime.backend.enqueue((), for: "DOM", method: "removeNode")
     await runtime.backend.enqueue((), for: "DOM", method: "removeNode")
+    await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
+    await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
     try await context.delete([parent, child])
     #expect(context.selectedNode == nil)
     #expect(child.elementStyles == nil)
@@ -303,6 +305,8 @@ func domCommandsDispatchThroughDataKitContext() async throws {
     #expect(removals.count == 2)
     #expect(removals.first?.payload.cast(as: DOM.RemoveNodePayload.self)?.id == childID)
     #expect(removals.last?.payload.cast(as: DOM.RemoveNodePayload.self)?.id == parentID)
+    let undoMarks = commands.filter { $0.domain == "DOM" && $0.method == "markUndoableState" }
+    #expect(undoMarks.count == 2)
 
     let reload = try #require(commands.first { $0.domain == "Page" && $0.method == "reload" })
     #expect(reload.payload.cast(as: Page.ReloadPayload.self)?.ignoringCache == true)

@@ -898,7 +898,7 @@ struct DOMContainerTests {
         undoManager.groupsByEvent = false
         let navigationItems = DOMNavigationItems(context: fixture.context)
 
-        await fixture.runtime.backend.enqueue((), for: "DOM", method: "removeNode")
+        await enqueueDOMRemoveNodeWithUndoMark(on: fixture.runtime.backend)
         await navigationItems.deleteSelectedNodeForTesting(undoManager: undoManager)
 
         #expect(undoManager.canUndo)
@@ -945,7 +945,7 @@ struct DOMContainerTests {
         undoManager.groupsByEvent = false
         let navigationItems = DOMNavigationItems(context: fixture.context)
 
-        await fixture.runtime.backend.enqueue((), for: "DOM", method: "removeNode")
+        await enqueueDOMRemoveNodeWithUndoMark(on: fixture.runtime.backend)
         await navigationItems.deleteSelectedNodeForTesting(undoManager: undoManager)
 
         undoManager.undo()
@@ -965,7 +965,7 @@ struct DOMContainerTests {
         undoManager.groupsByEvent = false
         let navigationItems = DOMNavigationItems(context: fixture.context)
 
-        await fixture.runtime.backend.enqueue((), for: "DOM", method: "removeNode")
+        await enqueueDOMRemoveNodeWithUndoMark(on: fixture.runtime.backend)
         await navigationItems.deleteSelectedNodeForTesting(undoManager: undoManager)
 
         await fixture.runtime.backend.enqueue((), for: "DOM", method: "undo")
@@ -1001,7 +1001,7 @@ struct DOMContainerTests {
         undoManager.groupsByEvent = false
         let navigationItems = DOMNavigationItems(context: fixture.context)
 
-        await fixture.runtime.backend.enqueue((), for: "DOM", method: "removeNode")
+        await enqueueDOMRemoveNodeWithUndoMark(on: fixture.runtime.backend)
         await navigationItems.deleteSelectedNodeForTesting(undoManager: undoManager)
 
         let undoGate = WebInspectorTestGate()
@@ -1038,7 +1038,7 @@ struct DOMContainerTests {
         undoManager.groupsByEvent = false
         let navigationItems = DOMNavigationItems(context: fixture.context)
 
-        await fixture.runtime.backend.enqueue((), for: "DOM", method: "removeNode")
+        await enqueueDOMRemoveNodeWithUndoMark(on: fixture.runtime.backend)
         await navigationItems.deleteSelectedNodeForTesting(undoManager: undoManager)
 
         await fixture.runtime.backend.enqueue((), for: "DOM", method: "undo")
@@ -1069,7 +1069,7 @@ struct DOMContainerTests {
         let treeView = viewController.displayedDOMTreeTextViewForTesting
         await treeView.waitForRowDocumentForTesting()
 
-        await fixture.runtime.backend.enqueue((), for: "DOM", method: "removeNode")
+        await enqueueDOMRemoveNodeWithUndoMark(on: fixture.runtime.backend)
         await treeView.deleteRowFromMenuForTesting(containing: "<input", undoManager: undoManager)
 
         #expect(undoManager.canUndo)
@@ -1105,8 +1105,8 @@ struct DOMContainerTests {
         treeView.primaryClickRowForTesting(containing: "<input")
         treeView.primaryClickRowForTesting(containing: "<button", modifiers: .command)
 
-        await fixture.runtime.backend.enqueue((), for: "DOM", method: "removeNode")
-        await fixture.runtime.backend.enqueue((), for: "DOM", method: "removeNode")
+        await enqueueDOMRemoveNodeWithUndoMark(on: fixture.runtime.backend)
+        await enqueueDOMRemoveNodeWithUndoMark(on: fixture.runtime.backend)
         await treeView.deleteMultiSelectionFromMenuForTesting(undoManager: undoManager)
 
         #expect(undoManager.canUndo)
@@ -1151,7 +1151,7 @@ struct DOMContainerTests {
         treeView.primaryClickRowForTesting(containing: "<input")
         treeView.primaryClickRowForTesting(containing: "<button", modifiers: .command)
 
-        await fixture.runtime.backend.enqueue((), for: "DOM", method: "removeNode")
+        await enqueueDOMRemoveNodeWithUndoMark(on: fixture.runtime.backend)
         await treeView.deleteMultiSelectionFromMenuForTesting(undoManager: undoManager)
 
         #expect(undoManager.canUndo)
@@ -1420,6 +1420,11 @@ struct DOMContainerTests {
         }
         return await backend.recordedCommands()
             .filter { $0.domain == "DOM" && $0.method == method }
+    }
+
+    private func enqueueDOMRemoveNodeWithUndoMark(on backend: WebInspectorTestBackend) async {
+        await backend.enqueue((), for: "DOM", method: "removeNode")
+        await backend.enqueue((), for: "DOM", method: "markUndoableState")
     }
 
     private func makeElementContext() -> WebInspectorContext {

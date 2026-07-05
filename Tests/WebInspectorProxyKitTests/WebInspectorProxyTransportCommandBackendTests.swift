@@ -140,6 +140,21 @@ func transportCommandBackendEncodesDOMHighlightAndInspectModeCommands() async th
         result: "{}"
     )
     try await disableTask.value
+
+    let markTask = Task {
+        try await target.dom.markUndoableState()
+    }
+
+    let mark = try await waitForTargetMessage(backend, method: "DOM.markUndoableState")
+    #expect(mark.targetIdentifier == ProtocolTarget.ID("page-main"))
+    #expect(try messageParameters(mark.message).isEmpty)
+    await receiveTargetReply(
+        transport,
+        targetID: mark.targetIdentifier,
+        messageID: try messageID(mark.message),
+        result: "{}"
+    )
+    try await markTask.value
 }
 
 @Test

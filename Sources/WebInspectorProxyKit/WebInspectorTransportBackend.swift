@@ -563,6 +563,7 @@ private enum WebInspectorTransportCommandEncoder {
 
         case (.dom, "getDocument"),
              (.dom, "hideHighlight"),
+             (.dom, "markUndoableState"),
              (.dom, "undo"),
              (.dom, "redo"),
              (.network, "enable"),

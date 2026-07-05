@@ -355,6 +355,7 @@ public final class WebInspectorContext {
         for node in sortedNodes {
             do {
                 try await page.dom.removeNode(node.id.proxyID)
+                try await page.dom.markUndoableState()
                 removedNodes.append(node)
             } catch {
                 if removedNodes.isEmpty == false {

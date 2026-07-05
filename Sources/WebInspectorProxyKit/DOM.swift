@@ -61,6 +61,14 @@ public enum DOM {
             )
         }
 
+        public func markUndoableState() async throws {
+            try await context.dispatchVoid(
+                domain: .dom,
+                method: "markUndoableState",
+                payload: MarkUndoableStatePayload()
+            )
+        }
+
         public func highlightNode(_ id: Node.ID) async throws {
             // WebKit cannot highlight frame-owned DOM nodes from frame targets
             // yet; its frontend intentionally no-ops these nodes instead of
@@ -150,6 +158,10 @@ public enum DOM {
         package init(id: Node.ID) {
             self.id = id
         }
+    }
+
+    package struct MarkUndoableStatePayload: Sendable {
+        package init() {}
     }
 
     package struct HighlightNodePayload: Sendable {
