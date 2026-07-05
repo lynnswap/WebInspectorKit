@@ -96,21 +96,25 @@ public final class WebInspectorSession {
     }
 
     public func detach() async {
+        await detach(invalidateVisibleContent: true)
+    }
+
+    private func detach(invalidateVisibleContent: Bool) async {
         advanceAttachmentGeneration()
         #if DEBUG
         detachCountForTesting += 1
         #endif
         stopPageUserInterfaceStyleObservation()
-        await stopContainer(replaceContextWithDetached: true)
+        await stopContainer(replaceContextWithDetached: true, invalidateVisibleContent: invalidateVisibleContent)
     }
 
     package func retireRootPresentation(detach: Bool) async {
-        interface.removeContentCache()
         guard detach else {
+            interface.removeContentCache()
             await suspendBackendInteractionForPresentationEnd()
             return
         }
-        await self.detach()
+        await self.detach(invalidateVisibleContent: false)
     }
 
     /// Mirrors the legacy presentation-end retirement: without tearing down the
@@ -158,12 +162,19 @@ public final class WebInspectorSession {
     }
 
     package func installDataContext(_ context: WebInspectorContext) {
-        dataContext = context
-        interface.removeContextBoundContent()
+        installDataContext(context, invalidateVisibleContent: true)
     }
 
-    private func stopContainer(replaceContextWithDetached: Bool) async {
-        interface.removeContextBoundContent()
+    private func installDataContext(_ context: WebInspectorContext, invalidateVisibleContent: Bool) {
+        dataContext = context
+        removeContextBoundContent(invalidateVisibleContent: invalidateVisibleContent)
+    }
+
+    private func stopContainer(
+        replaceContextWithDetached: Bool,
+        invalidateVisibleContent: Bool = true
+    ) async {
+        removeContextBoundContent(invalidateVisibleContent: invalidateVisibleContent)
         if let container {
             self.container = nil
             await container.close()
@@ -171,7 +182,16 @@ public final class WebInspectorSession {
             await dataContext.stop()
         }
         if replaceContextWithDetached {
-            installDataContext(Self.makeDetachedDataContext())
+            installDataContext(Self.makeDetachedDataContext(), invalidateVisibleContent: invalidateVisibleContent)
+        }
+    }
+
+    private func removeContextBoundContent(invalidateVisibleContent: Bool) {
+        if invalidateVisibleContent {
+            interface.removeContextBoundContent()
+        } else {
+            interface.removeNetworkPanelModel()
+            interface.removeContentCache()
         }
     }
 
@@ -193,6 +213,7 @@ extension WebInspectorSession {
 package final class InterfaceModel {
     package private(set) var tabs: [WebInspectorTab]
     package private(set) var selectedItemID: WebInspectorTab.DisplayItem.ID?
+    package private(set) var contextBoundContentRevision = 0
     @ObservationIgnored private let projection = WebInspectorTab.DisplayProjection()
     @ObservationIgnored private let contentCache = WebInspectorTab.ContentCache()
     @ObservationIgnored private var networkPanelModel: NetworkPanelModel?
@@ -285,6 +306,7 @@ package final class InterfaceModel {
     package func removeContextBoundContent() {
         removeNetworkPanelModel()
         removeContentCache()
+        contextBoundContentRevision &+= 1
     }
 
     package func pruneContentCache(retaining keys: Set<WebInspectorTab.ContentKey>) {

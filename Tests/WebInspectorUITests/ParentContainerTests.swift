@@ -262,6 +262,49 @@ struct ParentContainerTests {
     }
 
     @Test
+    func compactHostRebuildsActiveTabsWhenDataContextChanges() async throws {
+        let session = makeSessionWithNoOpAttachment()
+        let viewController = WebInspectorViewController(session: session)
+        viewController.horizontalSizeClassOverrideForTesting = .compact
+        viewController.loadViewIfNeeded()
+        let compactHost = try #require(viewController.activeHostViewControllerForTesting as? CompactTabBarController)
+        let initialTabs = compactHost.currentUITabsForTesting
+        let initialTabIdentities = initialTabs.map(ObjectIdentifier.init)
+        #expect(initialTabs.isEmpty == false)
+
+        session.installDataContext(makeContext())
+
+        let didRebuildTabs = await waitUntil {
+            let rebuiltTabs = compactHost.currentUITabsForTesting
+            return rebuiltTabs.count == initialTabs.count
+                && rebuiltTabs.map(ObjectIdentifier.init) != initialTabIdentities
+        }
+        #expect(didRebuildTabs)
+    }
+
+    @Test
+    func regularHostRebuildsVisibleContentWhenDataContextChanges() async throws {
+        let session = makeSessionWithNoOpAttachment()
+        let viewController = WebInspectorViewController(session: session)
+        viewController.horizontalSizeClassOverrideForTesting = .regular
+        viewController.loadViewIfNeeded()
+        let regularHost = try #require(
+            viewController.activeHostViewControllerForTesting as? RegularTabContentViewController
+        )
+        let initialRootViewController = try #require(regularHost.viewControllers.first)
+
+        session.installDataContext(makeContext())
+
+        let didRebuildContent = await waitUntil {
+            guard let currentRootViewController = regularHost.viewControllers.first else {
+                return false
+            }
+            return currentRootViewController !== initialRootViewController
+        }
+        #expect(didRebuildContent)
+    }
+
+    @Test
     func viewControllerDoesNotApplyPageUserInterfaceStyle() async throws {
         let observerRecorder = PageUserInterfaceStyleObserverRecorder(styleOnStart: .dark)
         let session = makeSessionWithNoOpAttachment(
