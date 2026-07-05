@@ -53,7 +53,7 @@ import WebKit
 let container = try await WebInspectorContainer(attachingTo: webView)
 let context = container.mainContext
 
-let network = context.fetchedResultsController(
+let network = context.network.fetchedResultsController(
     for: WebInspectorFetchDescriptor<NetworkRequest>(
         sortBy: [SortDescriptor(\.requestSentTimestamp, order: .reverse)]
     )
@@ -63,7 +63,7 @@ for request in network.items {
     print(request.url)
 }
 
-let domTree = context.dom.treeController
+let domTree = context.dom.treeController()
 render(domTree.snapshot)
 ```
 
@@ -99,7 +99,7 @@ Package users should call typed domain methods instead of constructing protocol
 payloads, routing targets, or generic action enums:
 
 ```swift
-try await context.dom.select(node.id, reveal: .selectAndScroll)
+try context.dom.select(node.id, reveal: .selectAndScroll)
 try await context.dom.setAttribute("class", value: "selected", on: node.id)
 try await context.css.setProperty(property.id, enabled: false)
 try await context.editHistory.undo()
@@ -187,7 +187,7 @@ let descriptor = WebInspectorFetchDescriptor<NetworkRequest>(
     fetchLimit: 500
 )
 
-let results = context.fetchedResults(for: descriptor)
+let results = context.network.fetchedResults(for: descriptor)
 ```
 
 Use `WebInspectorFetchRequest` when request construction reads better as a
@@ -199,7 +199,9 @@ request.predicate = #Predicate { $0.method == "POST" }
 request.sortDescriptors = [SortDescriptor(\.requestSentTimestamp, order: .reverse)]
 request.fetchLimit = 1000
 
-let controller = context.fetchedResultsController(for: request)
+let controller = WebInspectorFetchedResultsController(
+    fetchedResults: context.network.fetchedResults(for: request.fetchDescriptor)
+)
 ```
 
 Changing a fetch descriptor is a query-boundary operation. It re-evaluates the
@@ -299,7 +301,7 @@ Use `WebInspectorFetchedResultsController` when non-SwiftUI UI code needs ordere
 changes instead of only the observable current value:
 
 ```swift
-let controller = context.fetchedResultsController(
+let controller = context.network.fetchedResultsController(
     for: WebInspectorFetchDescriptor<NetworkRequest>(
         sortBy: [SortDescriptor(\.requestSentTimestamp, order: .reverse)]
     )
@@ -460,7 +462,7 @@ mutation.
 
 ```swift
 public final class DOMModelController {
-    public var treeController: DOMTreeController { get }
+    public func treeController() -> DOMTreeController
 }
 
 public final class DOMTreeController {
@@ -491,12 +493,14 @@ changes.
 
 ```swift
 public final class DOMModelController {
+    public func treeController() -> DOMTreeController
+
     public func requestChildren(of nodeID: DOMNode.ID, depth: Int = 1) async throws
 
     public func select(
         _ nodeID: DOMNode.ID?,
         reveal: DOMRevealPolicy = .selectAndScroll
-    ) async throws
+    ) throws
 
     public func setAttribute(
         _ name: String,
@@ -572,14 +576,19 @@ rewrite and validation so package users do not construct CSS protocol payloads.
 
 ```swift
 public final class CSSModelController {
-    public func styles(for nodeID: DOMNode.ID) async throws -> CSSStyles
-    public func refreshStyles(for nodeID: DOMNode.ID) async throws
+    public func styles(for nodeID: DOMNode.ID) throws -> CSSStyles
+    public func refreshStyles(for nodeID: DOMNode.ID) throws
 
     public func setProperty(
         _ propertyID: CSS.Property.ID,
         enabled: Bool,
         options: WebInspectorMutationOptions = .automatic
     ) async throws
+
+    public func requestSetProperty(
+        _ propertyID: CSS.Property.ID,
+        enabled: Bool
+    ) -> Bool
 
     public func setDeclarationText(
         _ text: String,
@@ -619,11 +628,11 @@ interaction state.
 
 ```swift
 let evaluation = try await context.runtime.evaluate("document.title")
-let messages = context.console.fetchedResultsController(
+let messages = context.console.fetchedResults(
     for: WebInspectorFetchDescriptor<ConsoleMessage>()
 )
 
-try await context.dom.select(node.id, reveal: .selectAndScroll)
+try context.dom.select(node.id, reveal: .selectAndScroll)
 context.css.setStyleHydrationActive(true)
 let styles = node.elementStyles
 ```

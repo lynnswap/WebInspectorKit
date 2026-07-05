@@ -304,19 +304,20 @@ final class DOMTreeState {
         publish(.nodeChanged(nodeID: node.id))
     }
 
-    func applySelectionChanged(nodeID: DOMNode.ID?) {
+    func applySelectionChanged(nodeID: DOMNode.ID?, reveal: DOMRevealPolicy) {
         let nextSelectedNodeID = nodeID.flatMap { nodesByID[$0] == nil ? nil : $0 }
         guard selectedNodeID != nextSelectedNodeID else {
             return
         }
         replaceSnapshot(selectedNodeID: .some(nextSelectedNodeID))
         publish(.selectionChanged(nodeID: nextSelectedNodeID))
-        if let nextSelectedNodeID {
+        if let nextSelectedNodeID,
+           reveal != .none {
             revealRequestRelay.yield(DOMTreeRevealRequest(
                 nodeID: nextSelectedNodeID,
                 ancestorNodeIDs: ancestorNodeIDs(of: nextSelectedNodeID),
                 shouldSelect: true,
-                shouldScroll: true
+                shouldScroll: reveal == .selectAndScroll
             ))
         }
     }

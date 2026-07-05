@@ -283,6 +283,14 @@ public final class WebInspectorContext {
     }
 
     public func select(_ node: DOMNode?, isolation: isolated (any Actor) = #isolation) {
+        select(node, reveal: .selectAndScroll, isolation: isolation)
+    }
+
+    private func select(
+        _ node: DOMNode?,
+        reveal: DOMRevealPolicy,
+        isolation: isolated (any Actor)
+    ) {
         requireOwner(isolation)
         if let node, nodesByID[node.id] !== node {
             preconditionFailure("DOMNode is not registered in this WebInspectorContext.")
@@ -293,7 +301,7 @@ public final class WebInspectorContext {
         inspectedNodeHighlightTask?.cancel()
         inspectedNodeHighlightTask = nil
         selectedNode = node
-        notifyDOMTreeSelectionChanged(node, isolation: isolation)
+        notifyDOMTreeSelectionChanged(node, reveal: reveal, isolation: isolation)
         notifyStatusChanged()
         refreshSelectedStyles(isolation: isolation)
     }
@@ -302,12 +310,87 @@ public final class WebInspectorContext {
         select(try requiredNode(for: id, isolation: isolation), isolation: isolation)
     }
 
+    package func selectNode(
+        _ id: DOMNode.ID?,
+        reveal: DOMRevealPolicy,
+        isolation: isolated (any Actor) = #isolation
+    ) throws {
+        guard let id else {
+            select(nil, reveal: reveal, isolation: isolation)
+            return
+        }
+        select(try requiredNode(for: id, isolation: isolation), reveal: reveal, isolation: isolation)
+    }
+
     package func requestChildren(
         for id: DOMNode.ID,
         depth: Int = 1,
         isolation: isolated (any Actor) = #isolation
     ) async throws {
         try await requiredNode(for: id, isolation: isolation).requestChildren(depth: depth, isolation: isolation)
+    }
+
+    package func setDOMAttribute(
+        _ name: String,
+        value: String,
+        on id: DOMNode.ID,
+        options: WebInspectorMutationOptions,
+        isolation: isolated (any Actor) = #isolation
+    ) async throws {
+        requireOwner(isolation)
+        let node = try requiredNode(for: id, isolation: isolation)
+        let page = try currentPageOrThrow()
+        try await page.dom.setAttributeValue(node.id.proxyID, name: name, value: value)
+        try await Self.markDOMUndoableStateIfNeeded(on: page, options: options)
+    }
+
+    package func setDOMOuterHTML(
+        _ html: String,
+        of id: DOMNode.ID,
+        options: WebInspectorMutationOptions,
+        isolation: isolated (any Actor) = #isolation
+    ) async throws {
+        requireOwner(isolation)
+        let node = try requiredNode(for: id, isolation: isolation)
+        let page = try currentPageOrThrow()
+        try await page.dom.setOuterHTML(node.id.proxyID, html: html)
+        try await Self.markDOMUndoableStateIfNeeded(on: page, options: options)
+    }
+
+    package func removeDOMNodes(
+        _ nodeIDs: [DOMNode.ID],
+        options: WebInspectorMutationOptions,
+        isolation: isolated (any Actor) = #isolation
+    ) async throws -> DOMMutationResult {
+        requireOwner(isolation)
+        let page = try currentPageOrThrow()
+        var seenNodeIDs: Set<DOMNode.ID> = []
+        let uniqueNodes = try nodeIDs
+            .map { try requiredNode(for: $0, isolation: isolation) }
+            .filter { seenNodeIDs.insert($0.id).inserted }
+        let snapshot = try currentDOMTreeSnapshot(containing: uniqueNodes)
+        let sortedNodes = uniqueNodes.sorted {
+            snapshot.ancestorNodeIDs(of: $0.id).count > snapshot.ancestorNodeIDs(of: $1.id).count
+        }
+        var acceptedNodeIDs: [DOMNode.ID] = []
+        for node in sortedNodes {
+            do {
+                try await page.dom.removeNode(node.id.proxyID)
+                try await Self.markDOMUndoableStateIfNeeded(on: page, options: options)
+                acceptedNodeIDs.append(node.id)
+            } catch {
+                if acceptedNodeIDs.isEmpty == false {
+                    clearSelectionIfDeleted(acceptedNodeIDs, snapshot: snapshot, isolation: isolation)
+                    throw DOMDeletionPartialFailure(
+                        deletedNodeCount: acceptedNodeIDs.count,
+                        underlyingError: error
+                    )
+                }
+                throw error
+            }
+        }
+        clearSelectionIfDeleted(acceptedNodeIDs, snapshot: snapshot, isolation: isolation)
+        return DOMMutationResult(requestedNodeIDs: nodeIDs, acceptedNodeIDs: acceptedNodeIDs)
     }
 
     public func copyText(
@@ -1362,12 +1445,13 @@ public final class WebInspectorContext {
 
     private func notifyDOMTreeSelectionChanged(
         _ node: DOMNode?,
+        reveal: DOMRevealPolicy = .selectAndScroll,
         isolation: isolated (any Actor)
     ) {
         _ = isolation
         pruneReleasedTreeStates()
         for reference in treeStates {
-            reference.tree?.applySelectionChanged(nodeID: node?.id)
+            reference.tree?.applySelectionChanged(nodeID: node?.id, reveal: reveal)
         }
     }
 
@@ -1408,6 +1492,18 @@ public final class WebInspectorContext {
             throw WebInspectorProxyError.disconnected("WebInspectorDataKit has no current page target.")
         }
         return currentPage
+    }
+
+    private static func markDOMUndoableStateIfNeeded(
+        on page: WebInspectorTarget,
+        options: WebInspectorMutationOptions
+    ) async throws {
+        switch options.undo {
+        case .automatic:
+            try await page.dom.markUndoableState()
+        case .disabled:
+            break
+        }
     }
 
     private func currentDOMTreeSnapshot() -> DOMTreeSnapshot {
@@ -2664,6 +2760,88 @@ extension WebInspectorContext {
         case .loading, .loaded, .unavailable:
             break
         }
+    }
+
+    package func styles(for nodeID: DOMNode.ID, isolation: isolated (any Actor) = #isolation) throws -> CSSStyles {
+        requireOwner(isolation)
+        let node = try requiredNode(for: nodeID, isolation: isolation)
+        guard node.nodeType == 1 else {
+            throw WebInspectorProxyError.commandFailed(
+                domain: "CSS",
+                method: "getMatchedStylesForNode",
+                message: "CSS styles are only available for element DOM nodes."
+            )
+        }
+        if selectedNode !== node {
+            select(node, isolation: isolation)
+        }
+        guard let styles = node.elementStyles else {
+            throw WebInspectorProxyError.disconnected("CSS styles were not created for the selected node.")
+        }
+        return styles
+    }
+
+    package func refreshStyles(for nodeID: DOMNode.ID, isolation: isolated (any Actor) = #isolation) throws -> CSSStyles {
+        let styles = try styles(for: nodeID, isolation: isolation)
+        refreshSelectedStyles(isolation: isolation)
+        return styles
+    }
+
+    package func setCSSProperty(
+        _ id: CSS.Property.ID,
+        enabled: Bool,
+        options: WebInspectorMutationOptions,
+        isolation: isolated (any Actor) = #isolation
+    ) async throws {
+        requireOwner(isolation)
+        guard let currentPage,
+              styleToggleTasks[id] == nil,
+              let styles = selectedNode?.elementStyles,
+              let intent = styles.setStyleTextIntent(for: id, enabled: enabled) else {
+            throw WebInspectorProxyError.commandFailed(
+                domain: "CSS",
+                method: "setStyleText",
+                message: "CSS property is stale, already mutating, or not editable."
+            )
+        }
+
+        let marker = Task<Void, Never> {}
+        styleToggleTasks[id] = marker
+        defer {
+            marker.cancel()
+            styleToggleTasks[id] = nil
+        }
+
+        let result = try await currentPage.css.setStyleText(intent.styleID, text: intent.text)
+        styles.applySetStyleText(result: result, for: id)
+        refreshSelectedStylesIfHydrationActive(isolation: isolation)
+        _ = options
+    }
+
+    package func setCSSRuleSelector(
+        _ selector: String,
+        for id: CSS.Rule.ID,
+        options: WebInspectorMutationOptions,
+        isolation: isolated (any Actor) = #isolation
+    ) async throws {
+        requireOwner(isolation)
+        let page = try currentPageOrThrow()
+        _ = try await page.css.setRuleSelector(id, selector: selector)
+        refreshSelectedStylesIfHydrationActive(isolation: isolation)
+        _ = options
+    }
+
+    package func setCSSStyleSheetText(
+        _ text: String,
+        for id: CSS.StyleSheet.ID,
+        options: WebInspectorMutationOptions,
+        isolation: isolated (any Actor) = #isolation
+    ) async throws {
+        requireOwner(isolation)
+        let page = try currentPageOrThrow()
+        try await page.css.setStyleSheetText(id, text: text)
+        refreshSelectedStylesIfHydrationActive(isolation: isolation)
+        _ = options
     }
 
     /// Toggles a CSS declaration on or off by rewriting its owning style

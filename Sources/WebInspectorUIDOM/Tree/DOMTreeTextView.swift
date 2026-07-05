@@ -191,7 +191,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         deleteNodesAction: DeleteNodesAction? = nil
     ) {
         self.context = context
-        let treeController = context.rootTreeController()
+        let treeController = context.dom.treeController()
         self.treeController = treeController
         self.currentTreeSnapshot = treeController.snapshot
         self.selectionRevision = currentTreeSnapshot.revision
@@ -1057,7 +1057,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     @discardableResult
     private func select(_ nodeID: DOMNode.ID) -> Bool {
         do {
-            try context.selectNode(nodeID)
+            try context.dom.select(nodeID, reveal: .selectAndScroll)
         } catch {
             WebInspectorUIDOMLog.debug("DOM tree selection failed nodeID=\(String(describing: nodeID)): \(String(describing: error))")
             return false

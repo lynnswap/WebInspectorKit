@@ -255,19 +255,19 @@ func domCommandsDispatchThroughDataKitContext() async throws {
     #expect(try context.xPath(for: child) == "/html/body/div/span")
 
     await runtime.backend.enqueue((), for: "DOM", method: "highlightNode")
-    try await child.highlight()
+    try await context.dom.highlight(child.id)
 
     await runtime.backend.enqueue((), for: "DOM", method: "hideHighlight")
-    try await context.hideHighlight()
+    try await context.dom.hideHighlight()
 
     await runtime.backend.enqueue((), for: "DOM", method: "undo")
-    try await context.undoDOMChange()
+    try await context.editHistory.undo()
 
     await runtime.backend.enqueue((), for: "DOM", method: "redo")
-    try await context.redoDOMChange()
+    try await context.editHistory.redo()
 
     await runtime.backend.enqueue((), for: "DOM", method: "setInspectModeEnabled")
-    try await context.setElementPickerEnabled(true)
+    try await context.dom.setInspectMode(enabled: true)
     #expect(context.isElementPickerEnabled)
 
     await enqueueCSSStyleReplies(on: runtime.backend)
@@ -277,16 +277,25 @@ func domCommandsDispatchThroughDataKitContext() async throws {
     try await waitUntil { child.elementStyles?.phase == .loaded }
     #expect(context.isElementPickerEnabled == false)
 
+    await runtime.backend.enqueue((), for: "DOM", method: "setAttributeValue")
+    await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
+    try await context.dom.setAttribute("class", value: "updated", on: parent.id)
+
+    await runtime.backend.enqueue((), for: "DOM", method: "setOuterHTML")
+    await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
+    try await context.dom.setOuterHTML("<span id=\"title\"></span>", of: child.id)
+
     await runtime.backend.enqueue((), for: "DOM", method: "removeNode")
     await runtime.backend.enqueue((), for: "DOM", method: "removeNode")
     await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
     await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
-    try await context.delete([parent, child])
+    let deletion = try await context.dom.remove([parent.id, child.id])
+    #expect(deletion.acceptedNodeIDs == [child.id, parent.id])
     #expect(context.selectedNode == nil)
     #expect(child.elementStyles == nil)
 
     await runtime.backend.enqueue((), for: "Page", method: "reload")
-    try await context.reloadPage(ignoringCache: true)
+    try await context.page.reload(ignoringCache: true)
 
     let commands = await runtime.backend.recordedCommands()
     let outerHTML = try #require(commands.first { $0.domain == "DOM" && $0.method == "getOuterHTML" })
@@ -301,12 +310,21 @@ func domCommandsDispatchThroughDataKitContext() async throws {
     let inspectMode = try #require(commands.first { $0.domain == "DOM" && $0.method == "setInspectModeEnabled" })
     #expect(inspectMode.payload.cast(as: DOM.SetInspectModeEnabledPayload.self)?.enabled == true)
 
+    let setAttribute = try #require(commands.first { $0.domain == "DOM" && $0.method == "setAttributeValue" })
+    #expect(setAttribute.payload.cast(as: DOM.SetAttributeValuePayload.self)?.id == parentID)
+    #expect(setAttribute.payload.cast(as: DOM.SetAttributeValuePayload.self)?.name == "class")
+    #expect(setAttribute.payload.cast(as: DOM.SetAttributeValuePayload.self)?.value == "updated")
+
+    let setOuterHTML = try #require(commands.first { $0.domain == "DOM" && $0.method == "setOuterHTML" })
+    #expect(setOuterHTML.payload.cast(as: DOM.SetOuterHTMLPayload.self)?.id == childID)
+    #expect(setOuterHTML.payload.cast(as: DOM.SetOuterHTMLPayload.self)?.html == "<span id=\"title\"></span>")
+
     let removals = commands.filter { $0.domain == "DOM" && $0.method == "removeNode" }
     #expect(removals.count == 2)
     #expect(removals.first?.payload.cast(as: DOM.RemoveNodePayload.self)?.id == childID)
     #expect(removals.last?.payload.cast(as: DOM.RemoveNodePayload.self)?.id == parentID)
     let undoMarks = commands.filter { $0.domain == "DOM" && $0.method == "markUndoableState" }
-    #expect(undoMarks.count == 2)
+    #expect(undoMarks.count == 4)
 
     let reload = try #require(commands.first { $0.domain == "Page" && $0.method == "reload" })
     #expect(reload.payload.cast(as: Page.ReloadPayload.self)?.ignoringCache == true)
@@ -2368,8 +2386,11 @@ func domTreeControllerPublishesSelectionDeltasWithoutOwningExpansion() async thr
     let child = try #require(context.node(for: DOMNode.ID(childID)))
     let controller = try await context.treeController()
     let recorder = DOMTreeUpdateRecorder(stream: controller.updates)
+    let revealRecorder = DOMTreeRevealRequestRecorder(stream: controller.revealRequests)
     defer { recorder.cancel() }
+    defer { revealRecorder.cancel() }
     try await recorder.waitUntilStarted()
+    try await revealRecorder.waitUntilStarted()
     try await recorder.waitForUpdateCount(1)
 
     #expect(controller.snapshot.children(of: document.id) == [parent.id])
@@ -2377,15 +2398,22 @@ func domTreeControllerPublishesSelectionDeltasWithoutOwningExpansion() async thr
     #expect(controller.snapshot.ancestorNodeIDs(of: child.id) == [parent.id, document.id])
 
     await enqueueCSSStyleReplies(on: runtime.backend)
-    context.select(child)
+    try context.dom.select(child.id, reveal: .selectOnly)
 
     try await recorder.waitForUpdateCount(2)
+    try await revealRecorder.waitForRequestCount(1)
     guard case let .delta(selection) = recorder.updates.last else {
         Issue.record("Expected DOM selection delta.")
         return
     }
     #expect(selection == .selectionChanged(nodeID: child.id))
     #expect(controller.snapshot.selectedNodeID == child.id)
+    #expect(revealRecorder.requests.last == DOMTreeRevealRequest(
+        nodeID: child.id,
+        ancestorNodeIDs: [parent.id, document.id],
+        shouldSelect: true,
+        shouldScroll: false
+    ))
 
     context.select(nil)
 
@@ -2396,6 +2424,13 @@ func domTreeControllerPublishesSelectionDeltasWithoutOwningExpansion() async thr
     }
     #expect(selectionCleared == .selectionChanged(nodeID: nil))
     #expect(controller.snapshot.selectedNodeID == nil)
+
+    try context.dom.select(document.id, reveal: .none)
+    try await recorder.waitForUpdateCount(4)
+    for _ in 0..<10 {
+        await Task.yield()
+    }
+    #expect(revealRecorder.requests.count == 1)
 }
 
 
@@ -3513,7 +3548,7 @@ func styleSheetChangedWhileHydrationActiveTriggersImmediateRefetch() async throw
     )
     let element = try await waitForChild(in: context)
 
-    context.setStyleHydrationActive(true)
+    context.css.setStyleHydrationActive(true)
     await enqueueCSSStyleReplies(on: runtime.backend)
     context.select(element)
     let styles = try #require(element.elementStyles)
@@ -3558,7 +3593,7 @@ func styleSheetChangedWhileHydrationInactiveDefersRefetchUntilActivation() async
     #expect(await matchedStylesCommandCount(on: runtime.backend) == 1)
 
     await enqueueCSSStyleReplies(on: runtime.backend)
-    context.setStyleHydrationActive(true)
+    context.css.setStyleHydrationActive(true)
 
     try await waitUntil { styles.phase == .loaded }
     #expect(await matchedStylesCommandCount(on: runtime.backend) == 2)
@@ -3580,7 +3615,7 @@ func requestSetCSSPropertyTogglesDeclarationAndRefreshesStyles() async throws {
     )
     let element = try await waitForChild(in: context)
 
-    context.setStyleHydrationActive(true)
+    context.css.setStyleHydrationActive(true)
     await enqueueCSSStyleReplies(on: runtime.backend)
     context.select(element)
     let styles = try #require(element.elementStyles)
@@ -3621,7 +3656,7 @@ func requestSetCSSPropertyTogglesDeclarationAndRefreshesStyles() async throws {
     )
 
     let propertyID = try #require(styles.sections.first?.style.properties.first?.id)
-    #expect(context.requestSetCSSProperty(propertyID, enabled: false))
+    #expect(context.css.requestSetProperty(propertyID, enabled: false))
 
     try await waitUntil {
         await matchedStylesCommandCount(on: runtime.backend) == 2
@@ -3710,14 +3745,14 @@ func requestSetCSSPropertyRefusesStaleAndNonEditableProperties() async throws {
     let userAgentSection = try #require(styles.sections.first { $0.title == "div" })
     #expect(userAgentSection.isEditable == false)
     let userAgentPropertyID = try #require(userAgentSection.style.properties.first?.id)
-    #expect(context.requestSetCSSProperty(userAgentPropertyID, enabled: false) == false)
+    #expect(context.css.requestSetProperty(userAgentPropertyID, enabled: false) == false)
 
     let editableSection = try #require(styles.sections.first { $0.title == ".card" })
     let editablePropertyID = try #require(editableSection.style.properties.first?.id)
 
     await runtime.backend.emit(.styleSheetChanged(CSS.StyleSheet.ID("sheet-1")), target: target)
     try await waitUntil { styles.phase == .needsRefresh }
-    #expect(context.requestSetCSSProperty(editablePropertyID, enabled: false) == false)
+    #expect(context.css.requestSetProperty(editablePropertyID, enabled: false) == false)
 
     for _ in 0..<10 {
         await Task.yield()
@@ -5772,6 +5807,39 @@ private final class DOMTreeUpdateRecorder {
     }
 }
 
+@MainActor
+private final class DOMTreeRevealRequestRecorder {
+    private(set) var requests: [DOMTreeRevealRequest] = []
+
+    private var task: Task<Void, Never>?
+    private var hasStarted = false
+
+    init(stream: AsyncStream<DOMTreeRevealRequest>) {
+        task = Task { @MainActor [weak self] in
+            self?.hasStarted = true
+            for await request in stream {
+                self?.requests.append(request)
+            }
+        }
+    }
+
+    func waitUntilStarted() async throws {
+        try await waitUntil { self.hasStarted }
+    }
+
+    func waitForRequestCount(_ count: Int) async throws {
+        try await waitUntil { self.requests.count >= count }
+    }
+
+    func cancel() {
+        task?.cancel()
+        task = nil
+    }
+
+    deinit {
+        task?.cancel()
+    }
+}
 
 @MainActor
 private final class FetchedResultsTransactionRecorder<Model: WebInspectorFetchableModel> {

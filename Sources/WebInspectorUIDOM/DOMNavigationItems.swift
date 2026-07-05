@@ -209,7 +209,7 @@ package final class DOMNavigationItems: NSObject {
                 return
             }
             do {
-                try await context.reloadPage()
+                try await context.page.reload()
             } catch {
                 WebInspectorUIDOMLog.debug("DOM reload failed: \(String(describing: error))")
             }
@@ -241,11 +241,11 @@ package final class DOMNavigationItems: NSObject {
         }
         do {
             let undoCommands = try context.domUndoRedoCommands()
-            try await context.delete(selectedNode)
+            let result = try await context.dom.remove([selectedNode.id])
             DOMDeletionUndoRegistration.registerDeleteUndo(
                 on: undoManager,
                 commands: undoCommands,
-                deletedNodeCount: 1
+                deletedNodeCount: result.acceptedNodeIDs.count
             )
         } catch {
             return
@@ -267,7 +267,7 @@ package final class DOMNavigationItems: NSObject {
                 return
             }
             do {
-                try await context.setElementPickerEnabled(!context.isElementPickerEnabled)
+                try await context.dom.setInspectMode(enabled: !context.isElementPickerEnabled)
             } catch {
                 WebInspectorUIDOMLog.debug("DOM picker toggle failed: \(String(describing: error))")
             }
