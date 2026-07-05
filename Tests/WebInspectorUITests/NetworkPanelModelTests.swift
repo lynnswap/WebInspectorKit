@@ -738,6 +738,33 @@ func clearRequestsClearsSelectionButPreservesDisplayCriteria() async throws {
 
 @Test
 @MainActor
+func displayRowsInvalidationIgnoresContentUpdatesWhenUnfiltered() async throws {
+    let context = makeContext()
+    applyRequest(
+        to: context,
+        requestID: "1",
+        url: "https://media.example.com/clip",
+        resourceType: .fetch,
+        mimeType: "application/octet-stream",
+        timestamp: 1
+    )
+    let model = NetworkPanelModel(context: context)
+
+    let initialRevision = model.displayRowsInvalidationRevision
+    applyResponseReceived(
+        to: context,
+        requestID: "1",
+        url: "https://media.example.com/clip.mp4",
+        resourceType: .fetch,
+        mimeType: "video/mp4",
+        timestamp: 2
+    )
+
+    #expect(model.displayRowsInvalidationRevision == initialRevision)
+}
+
+@Test
+@MainActor
 func responseBodyFetchMovesUnavailablePreviewContextToFailedPhase() async throws {
     let context = makeContext()
     let requestID = applyRequest(

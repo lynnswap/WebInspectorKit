@@ -81,10 +81,14 @@ package final class NetworkPanelModel {
     package var displayRowsInvalidationRevision: DisplayRowsInvalidationRevision {
         let query = normalizedSearchText
         let resourceFilters = effectiveResourceFilters
+        let criteria = NetworkPanelDisplayCriteria(
+            searchText: query,
+            resourceFilters: resourceFilters
+        )
         let entries = requests.items.map { request in
             DisplayRowsInvalidationEntry(
                 requestID: request.id,
-                signature: request.displayInvalidationSignature
+                signature: criteria.requiresEntries ? request.displayInvalidationSignature : nil
             )
         }
         return DisplayRowsInvalidationRevision(
@@ -178,7 +182,7 @@ extension NetworkPanelModel {
 extension NetworkPanelModel {
     package struct DisplayRowsInvalidationEntry: Equatable {
         package var requestID: NetworkRequest.ID
-        package var signature: NetworkRequest.DisplayInvalidationSignature
+        package var signature: NetworkRequest.DisplayInvalidationSignature?
     }
 
     package struct DisplayRowsInvalidationRevision: Equatable {
