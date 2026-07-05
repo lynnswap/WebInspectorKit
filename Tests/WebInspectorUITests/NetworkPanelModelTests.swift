@@ -506,13 +506,11 @@ func displayRequestsIgnoreContentOnlyUpdatesDuringActiveFiltering() async throws
     model.setResourceFilter(.media, enabled: true)
 
     #expect(model.displayRequestIDs == [requestID])
-    let initialRevision = model.displayRowsInvalidationRevision
 
     applyDataReceived(to: context, requestID: "1", dataLength: 1024, encodedDataLength: 512, timestamp: 2)
     applyLoadingFinished(to: context, requestID: "1", timestamp: 3)
 
     #expect(model.displayRequestIDs == [requestID])
-    #expect(model.displayRowsInvalidationRevision == initialRevision)
 }
 
 @Test
@@ -564,58 +562,6 @@ func displayRequestsClearAfterReset() async throws {
     context.clearNetworkRequests()
 
     #expect(model.displayRequestIDs.isEmpty)
-}
-
-@Test
-@MainActor
-func displayRowsInvalidationIgnoresByteCountUpdates() async throws {
-    let context = makeContext()
-    let requestID = applyRequest(
-        to: context,
-        requestID: "1",
-        url: "https://media.example.com/clip",
-        resourceType: .fetch,
-        mimeType: "application/octet-stream",
-        timestamp: 1
-    )
-    let model = NetworkPanelModel(context: context)
-    model.setResourceFilter(.media, enabled: true)
-
-    let initialRevision = model.displayRowsInvalidationRevision
-    applyDataReceived(to: context, requestID: "1", dataLength: 1024, encodedDataLength: 512, timestamp: 2)
-    #expect(model.displayRowsInvalidationRevision == initialRevision)
-
-    applyResponseReceived(
-        to: context,
-        requestID: "1",
-        url: "https://media.example.com/clip.mp4",
-        resourceType: .fetch,
-        mimeType: "video/mp4",
-        timestamp: 3
-    )
-    #expect(model.displayRowsInvalidationRevision != initialRevision)
-    #expect(context.registeredRequest(for: requestID) != nil)
-}
-
-@Test
-@MainActor
-func displayRowsInvalidationRevisionHasNoPerRequestEntries() async throws {
-    let context = makeContext()
-    let requestID = applyRequest(
-        to: context,
-        requestID: "1",
-        url: "https://media.example.com/clip.mp4",
-        resourceType: .fetch,
-        mimeType: "application/octet-stream",
-        timestamp: 1
-    )
-    let model = NetworkPanelModel(context: context)
-    model.setResourceFilter(.media, enabled: true)
-
-    let revision = model.displayRowsInvalidationRevision
-    #expect(revision.entries.isEmpty)
-
-    #expect(model.displayRequestIDs == [requestID])
 }
 
 @Test
@@ -706,34 +652,6 @@ func clearRequestsClearsSelectionButPreservesDisplayCriteria() async throws {
     #expect(model.activeResourceFilters == [.script])
     #expect(model.displayRequests.isEmpty)
     #expect(context.registeredRequest(for: requestID) == nil)
-}
-
-@Test
-@MainActor
-func displayRowsInvalidationIgnoresContentUpdatesWhenUnfiltered() async throws {
-    let context = makeContext()
-    applyRequest(
-        to: context,
-        requestID: "1",
-        url: "https://media.example.com/clip",
-        resourceType: .fetch,
-        mimeType: "application/octet-stream",
-        timestamp: 1
-    )
-    let model = NetworkPanelModel(context: context)
-
-    let initialRevision = model.displayRowsInvalidationRevision
-    #expect(initialRevision.entries.isEmpty)
-    applyResponseReceived(
-        to: context,
-        requestID: "1",
-        url: "https://media.example.com/clip.mp4",
-        resourceType: .fetch,
-        mimeType: "video/mp4",
-        timestamp: 2
-    )
-
-    #expect(model.displayRowsInvalidationRevision == initialRevision)
 }
 
 @Test

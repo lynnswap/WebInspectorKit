@@ -2729,6 +2729,54 @@ func networkFetchDescriptorAppliesPredicateSortAndLimit() async throws {
 
 @MainActor
 @Test
+func networkFetchDescriptorOrdersEqualTimestampsByNewestInsertionFirst() async throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let descriptor = WebInspectorFetchDescriptor<NetworkRequest>(
+        sortBy: [SortDescriptor(\.requestSentTimestamp, order: .reverse)]
+    )
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: descriptor)
+    let controller = WebInspectorFetchedResultsController(fetchedResults: results)
+    let recorder = FetchedResultsTransactionRecorder(stream: controller.transactions)
+    defer { recorder.cancel() }
+    try await recorder.waitUntilStarted()
+
+    let firstID = Network.Request.ID("same-timestamp-first")
+    let secondID = Network.Request.ID("same-timestamp-second")
+    let firstModelID = NetworkRequest.ID(firstID)
+    let secondModelID = NetworkRequest.ID(secondID)
+
+    context.apply(.requestWillBeSent(
+        id: firstID,
+        request: Network.Request(id: firstID, url: "https://example.com/first", method: "GET"),
+        resourceType: .fetch,
+        redirectResponse: nil,
+        timestamp: 1
+    ))
+    try await recorder.waitForTransactionCount(1)
+    #expect(results.items.map(\.id) == [firstModelID])
+
+    context.apply(.requestWillBeSent(
+        id: secondID,
+        request: Network.Request(id: secondID, url: "https://example.com/second", method: "GET"),
+        resourceType: .fetch,
+        redirectResponse: nil,
+        timestamp: 1
+    ))
+
+    try await recorder.waitForTransactionCount(2)
+    #expect(results.items.map(\.id) == [secondModelID, firstModelID])
+    #expect(recorder.transactions.last?.itemChanges == [
+        .insert(itemID: secondModelID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)),
+        .move(
+            itemID: firstModelID,
+            from: WebInspectorFetchedResultsIndexPath(section: 0, item: 0),
+            to: WebInspectorFetchedResultsIndexPath(section: 0, item: 1)
+        ),
+    ])
+}
+
+@MainActor
+@Test
 func networkFetchDescriptorPublishesPredicateEnterAndLeave() async throws {
     let context = WebInspectorContext.preview(isolation: MainActor.shared)
     let descriptor = WebInspectorFetchDescriptor<NetworkRequest>(

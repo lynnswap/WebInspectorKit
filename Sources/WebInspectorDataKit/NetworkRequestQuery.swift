@@ -73,6 +73,9 @@ package struct NetworkRequestQueryPlan: Sendable {
                 continue
             }
         }
+        if sortComparators.first?.usesReverseOrder == true {
+            return lhs.orderIndex > rhs.orderIndex
+        }
         return lhs.orderIndex < rhs.orderIndex
     }
 }
@@ -169,6 +172,10 @@ package struct NetworkRequestRecordSortComparator: Sendable {
         case .reverse:
             return result.reversed
         }
+    }
+
+    fileprivate var usesReverseOrder: Bool {
+        order == .reverse
     }
 
     private static func key(

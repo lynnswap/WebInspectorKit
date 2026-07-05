@@ -128,10 +128,6 @@ struct NetworkDetailViewControllerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        #expect(viewController.displayRequestIDsEvaluationCountForTesting == 0)
-        #expect(viewController.displayedRequestIDsForTesting.isEmpty)
-        #expect(viewController.hasScheduledDisplayRowsReloadForTesting)
-
         await viewController.flushPendingSnapshotUpdateForTesting()
 
         #expect(viewController.displayedRequestIDsForTesting == model.displayRequestIDs)
@@ -1860,15 +1856,8 @@ struct NetworkDetailViewControllerTests {
         let window = showInWindow(navigationController, makeVisible: true)
         defer { window.isHidden = true }
 
-        let didRenderList = await waitForObservedCondition(
-            deliveries: {
-                [listViewController.displayRowsObservationDeliveryForTesting].compactMap { $0 }
-            },
-            sample: {
-                listViewController.displayedRequestIDsForTesting.count == 1
-            }
-        )
-        #expect(didRenderList)
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+        #expect(listViewController.displayedRequestIDsForTesting.count == 1)
 
         selectListItem(at: IndexPath(item: 0, section: 0), in: listViewController)
         let didPush = await waitUntilNavigationStackSynced(in: navigationController) {
@@ -1988,7 +1977,40 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func listDefersDisplayRequestEvaluationUntilThrottledReload() async throws {
+    func visibleListAppliesLiveInsertThroughFetchedResultsTransactions() async throws {
+        let context = makeContext()
+        let firstRequest = try #require(applyRequest(
+            to: context,
+            requestID: "1",
+            url: "https://example.com/first.js"
+        ))
+        let model = NetworkPanelModel(context: context)
+        let listViewController = NetworkListViewController(model: model)
+        let window = showInWindow(listViewController, makeVisible: true)
+        defer { window.isHidden = true }
+
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+        #expect(listViewController.displayedRequestIDsForTesting == [firstRequest.id])
+
+        let evaluationCountBeforeInsert = listViewController.displayRequestIDsEvaluationCountForTesting
+        let snapshotApplyCountBeforeInsert = listViewController.snapshotApplyCountForTesting
+        let secondRequest = try #require(applyRequest(
+            to: context,
+            requestID: "2",
+            url: "https://example.com/second.js"
+        ))
+
+        let didRenderInsert = await waitUntilListShows(
+            [secondRequest.id, firstRequest.id],
+            in: listViewController
+        )
+        #expect(didRenderInsert)
+        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeInsert)
+        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeInsert + 1)
+    }
+
+    @Test
+    func visibleListAppliesDescriptorResetThroughFetchedResultsTransactions() async throws {
         let context = makeContext()
         _ = try #require(applyRequest(
             to: context,
@@ -2007,20 +2029,16 @@ struct NetworkDetailViewControllerTests {
         #expect(listViewController.displayedRequestIDsForTesting.count == 1)
 
         let evaluationCountBeforeUpdate = listViewController.displayRequestIDsEvaluationCountForTesting
-        let observation = try #require(listViewController.displayRowsObservationDeliveryForTesting)
-        let observedSearchText = await observation.values {
-            model.searchText
-        }
+        let snapshotApplyCountBeforeUpdate = listViewController.snapshotApplyCountForTesting
 
         model.setSearchText("does-not-match")
-        #expect(await observedSearchText.waitUntilValue("does-not-match"))
-        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeUpdate)
+        let didRenderReset = await waitUntilListShows([], in: listViewController)
 
-        await listViewController.flushThrottledDisplayRowsReloadForTesting()
-
+        #expect(didRenderReset)
         #expect(model.displayRequestIDs.isEmpty)
         #expect(listViewController.displayedRequestIDsForTesting.isEmpty)
-        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeUpdate + 1)
+        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeUpdate)
+        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeUpdate + 1)
     }
 
     @Test
@@ -2041,32 +2059,16 @@ struct NetworkDetailViewControllerTests {
         #expect(listViewController.displayedRequestIDsForTesting.count == 1)
 
         let evaluationCountBeforeHiddenUpdate = listViewController.displayRequestIDsEvaluationCountForTesting
-        let observation = try #require(listViewController.displayRowsObservationDeliveryForTesting)
-        let observedInvalidations = await observation.values {
-            model.displayRowsInvalidationRevision
-        }
-        defer {
-            observedInvalidations.cancel()
-        }
 
-        listViewController.beginAppearanceTransition(false, animated: false)
-        listViewController.endAppearanceTransition()
+        listViewController.suspendRenderingForTesting()
         model.setSearchText("does-not-match")
-        let hiddenInvalidationRevision = model.displayRowsInvalidationRevision
-        #expect(await observedInvalidations.waitUntil { $0 == hiddenInvalidationRevision } != nil)
-        await listViewController.flushThrottledDisplayRowsReloadForTesting()
+        await settleNetworkListTransactions()
 
         #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
         #expect(listViewController.displayedRequestIDsForTesting.count == 1)
 
-        listViewController.beginAppearanceTransition(true, animated: false)
-        listViewController.endAppearanceTransition()
-
-        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
-        #expect(listViewController.displayedRequestIDsForTesting.count == 1)
-        #expect(listViewController.hasScheduledDisplayRowsReloadForTesting)
-
-        await listViewController.flushThrottledDisplayRowsReloadForTesting()
+        listViewController.resumeRenderingForTesting()
+        await listViewController.flushPendingSnapshotUpdateForTesting()
         #expect(listViewController.displayedRequestIDsForTesting.isEmpty)
         #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate + 1)
     }
@@ -2093,8 +2095,7 @@ struct NetworkDetailViewControllerTests {
         listViewController.queueSnapshotUpdateForTesting(requestIDs: [])
         #expect(listViewController.hasPendingSnapshotUpdateForTesting)
 
-        listViewController.beginAppearanceTransition(false, animated: false)
-        listViewController.endAppearanceTransition()
+        listViewController.suspendRenderingForTesting()
         #expect(listViewController.hasPendingSnapshotUpdateForTesting == false)
 
         model.setSearchText("does-not-match")
@@ -2104,14 +2105,8 @@ struct NetworkDetailViewControllerTests {
         #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
         #expect(listViewController.displayedRequestIDsForTesting == [request.id])
 
-        listViewController.beginAppearanceTransition(true, animated: false)
-        listViewController.endAppearanceTransition()
-
-        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
-        #expect(listViewController.displayedRequestIDsForTesting == [request.id])
-        #expect(listViewController.hasScheduledDisplayRowsReloadForTesting)
-
-        await listViewController.flushThrottledDisplayRowsReloadForTesting()
+        listViewController.resumeRenderingForTesting()
+        await listViewController.flushPendingSnapshotUpdateForTesting()
         #expect(listViewController.displayedRequestIDsForTesting.isEmpty)
         #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate + 1)
     }
@@ -2141,13 +2136,6 @@ struct NetworkDetailViewControllerTests {
 
         let evaluationCountBeforeHiddenUpdate = listViewController.displayRequestIDsEvaluationCountForTesting
         let snapshotApplyCountBeforeHiddenUpdate = listViewController.snapshotApplyCountForTesting
-        let observation = try #require(listViewController.displayRowsObservationDeliveryForTesting)
-        let observedInvalidations = await observation.values {
-            model.displayRowsInvalidationRevision
-        }
-        defer {
-            observedInvalidations.cancel()
-        }
 
         listViewController.beginAppearanceTransition(false, animated: false)
         listViewController.endAppearanceTransition()
@@ -2159,9 +2147,7 @@ struct NetworkDetailViewControllerTests {
             responseMimeType: "image/png",
             timestamp: 4
         )
-        let hiddenInvalidationRevision = model.displayRowsInvalidationRevision
-        #expect(await observedInvalidations.waitUntil { $0 == hiddenInvalidationRevision } != nil)
-        await listViewController.flushThrottledDisplayRowsReloadForTesting()
+        await settleNetworkListTransactions()
 
         #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
         #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeHiddenUpdate)
@@ -2174,10 +2160,9 @@ struct NetworkDetailViewControllerTests {
         #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
         #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeHiddenUpdate)
         #expect(listViewController.displayedRequestIDsForTesting == [request.id])
-        #expect(listViewController.hasScheduledDisplayRowsReloadForTesting == false)
         #expect(cell.fileTypeLabelForTesting == "png")
 
-        await listViewController.flushThrottledDisplayRowsReloadForTesting()
+        await listViewController.flushPendingSnapshotUpdateForTesting()
 
         #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
         #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeHiddenUpdate)
@@ -2227,12 +2212,11 @@ struct NetworkDetailViewControllerTests {
 
         #expect(cell.hasActiveRequestObservationForTesting)
         #expect(cell.fileTypeLabelForTesting == "css")
-        #expect(listViewController.hasScheduledDisplayRowsReloadForTesting == false)
         #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeHiddenContentUpdate)
     }
 
     @Test
-    func listControllerDeallocatesWhileDisplayRequestObservationIsActive() async throws {
+    func listControllerDeallocatesWhileFetchedResultsTransactionTaskIsActive() async throws {
         let model = NetworkPanelModel(context: makeContext())
         let deinitProbe = UITestDeinitProbe()
         weak var weakViewController: NetworkListViewController?
@@ -2488,6 +2472,29 @@ struct NetworkDetailViewControllerTests {
             try? await Task.sleep(for: .milliseconds(10))
         }
         return true
+    }
+
+    private func waitUntilListShows(
+        _ requestIDs: [NetworkRequest.ID],
+        in viewController: NetworkListViewController,
+        timeout: Duration = .seconds(1)
+    ) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now + timeout
+        while viewController.displayedRequestIDsForTesting != requestIDs {
+            guard clock.now < deadline else {
+                return false
+            }
+            await viewController.flushPendingSnapshotUpdateForTesting()
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return true
+    }
+
+    private func settleNetworkListTransactions() async {
+        for _ in 0..<5 {
+            await Task.yield()
+        }
     }
 
     private func waitUntilMediaPreviewPrepared(

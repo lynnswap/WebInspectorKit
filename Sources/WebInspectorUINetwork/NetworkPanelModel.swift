@@ -61,17 +61,6 @@ package final class NetworkPanelModel {
         requests.items.isEmpty
     }
 
-    package var displayRowsInvalidationRevision: DisplayRowsInvalidationRevision {
-        let query = normalizedSearchText
-        let resourceFilters = effectiveResourceFilters
-        return DisplayRowsInvalidationRevision(
-            searchText: query,
-            resourceFilters: resourceFilters,
-            topologyRevision: requests.topologyRevision,
-            entries: []
-        )
-    }
-
     package var selectedRequest: NetworkRequest? {
         guard let selectedRequestID else {
             return nil
@@ -165,20 +154,6 @@ package final class NetworkPanelModel {
             predicate: predicate,
             sortBy: [SortDescriptor(\.requestSentTimestamp, order: .reverse)]
         )
-    }
-}
-
-extension NetworkPanelModel {
-    package struct DisplayRowsInvalidationEntry: Equatable {
-        package var requestID: NetworkRequest.ID
-        package var signature: NetworkRequest.DisplayInvalidationSignature
-    }
-
-    package struct DisplayRowsInvalidationRevision: Equatable {
-        package var searchText: String
-        package var resourceFilters: Set<NetworkDisplay.ResourceFilter>
-        package var topologyRevision: Int
-        package var entries: [DisplayRowsInvalidationEntry]
     }
 }
 
