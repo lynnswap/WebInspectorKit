@@ -1101,15 +1101,26 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
     let oldRootID = DOMNode.ID(DOM.Node.ID("old-root"))
     let newRootID = DOMNode.ID(DOM.Node.ID("new-root"))
     let oldRouteChildID = DOMNode.ID(DOM.Node.ID("old-route-child"))
+    let retainedRequestID = Network.Request.ID("commit-retained-request")
     let (backend, transport, context) = try await startTransportBackedContext(
         targetID: oldTargetID,
         documentID: "old-root"
     )
+    let networkResults: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
     let startupMessageCount = await backend.sentTargetMessages().count
 
     #expect(context.state == .attached)
     #expect(context.rootNode?.id == oldRootID)
     #expect(context.node(for: oldRootID) != nil)
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: oldTargetID,
+        method: "Network.requestWillBeSent",
+        params: #"{"requestId":"commit-retained-request","request":{"url":"https://example.test/retained","method":"GET"},"type":"Fetch","timestamp":1}"#
+    )
+    try await waitUntil {
+        networkResults.items.map(\.id) == [NetworkRequest.ID(retainedRequestID)]
+    }
 
     await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-new","type":"page","frameId":"main-frame","isProvisional":true}}}"#
@@ -1185,6 +1196,7 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
     #expect(context.state == .attached)
     #expect(context.node(for: oldRootID) == nil)
     #expect(context.node(for: newRootID) != nil)
+    #expect(networkResults.items.map(\.id) == [NetworkRequest.ID(retainedRequestID)])
 
     let sentMessages = await backend.sentTargetMessages()
     let retargetMessages = Array(sentMessages.dropFirst(startupMessageCount))
@@ -1230,33 +1242,44 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
 
 @MainActor
 @Test
-func currentPageTargetDestroyedDetachesAndInvalidatesDomainLeases() async throws {
-    let targetID = ProtocolTarget.ID("page-destroyed")
+func currentPageTargetDestroyedDuringRetargetDoesNotDetachOrClearNetwork() async throws {
+    let oldTargetID = ProtocolTarget.ID("page-old")
+    let newTargetID = ProtocolTarget.ID("page-new-after-destroy")
+    let retainedRequestID = Network.Request.ID("destroy-retained-request")
     let (backend, transport, context) = try await startTransportBackedContext(
-        targetID: targetID,
+        targetID: oldTargetID,
         documentID: "destroyed-root"
+    )
+    let networkResults: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let startupMessageCount = await backend.sentTargetMessages().count
+
+    #expect(context.state == .attached)
+    #expect(context.rootNode?.id == DOMNode.ID(DOM.Node.ID("destroyed-root")))
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: oldTargetID,
+        method: "Network.requestWillBeSent",
+        params: #"{"requestId":"destroy-retained-request","request":{"url":"https://example.test/retained","method":"GET"},"type":"Fetch","timestamp":1}"#
+    )
+    try await waitUntil {
+        networkResults.items.map(\.id) == [NetworkRequest.ID(retainedRequestID)]
+    }
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetDestroyed","params":{"targetId":"page-old"}}"#
     )
     #expect(context.state == .attached)
     #expect(context.rootNode?.id == DOMNode.ID(DOM.Node.ID("destroyed-root")))
-
-    await transport.receiveRootMessage(
-        #"{"method":"Target.targetDestroyed","params":{"targetId":"page-destroyed"}}"#
-    )
-
-    try await waitUntil { context.state == .detached }
-    #expect(context.rootNode == nil)
-    #expect(context.status.selectedNodeID == nil)
-
-    let restartMessageCount = await backend.sentTargetMessages().count
-    context.start()
-    await installTransportPageTarget(in: transport, targetID: targetID)
+    #expect(networkResults.items.map(\.id) == [NetworkRequest.ID(retainedRequestID)])
+    await installTransportPageTarget(in: transport, targetID: newTargetID)
 
     let runtimeEnable = try await waitForTransportTargetMessage(
         backend,
         method: "Runtime.enable",
-        after: restartMessageCount
+        after: startupMessageCount,
+        timeout: .seconds(30)
     )
-    #expect(runtimeEnable.targetIdentifier == targetID)
+    #expect(runtimeEnable.targetIdentifier == newTargetID)
     await receiveTransportTargetReply(
         transport,
         targetID: runtimeEnable.targetIdentifier,
@@ -1267,9 +1290,10 @@ func currentPageTargetDestroyedDetachesAndInvalidatesDomainLeases() async throws
     let networkEnable = try await waitForTransportTargetMessage(
         backend,
         method: "Network.enable",
-        after: restartMessageCount
+        after: startupMessageCount,
+        timeout: .seconds(30)
     )
-    #expect(networkEnable.targetIdentifier == targetID)
+    #expect(networkEnable.targetIdentifier == newTargetID)
     await receiveTransportTargetReply(
         transport,
         targetID: networkEnable.targetIdentifier,
@@ -1280,9 +1304,10 @@ func currentPageTargetDestroyedDetachesAndInvalidatesDomainLeases() async throws
     let getDocument = try await waitForTransportTargetMessage(
         backend,
         method: "DOM.getDocument",
-        after: restartMessageCount
+        after: startupMessageCount,
+        timeout: .seconds(30)
     )
-    #expect(getDocument.targetIdentifier == targetID)
+    #expect(getDocument.targetIdentifier == newTargetID)
     await receiveTransportTargetReply(
         transport,
         targetID: getDocument.targetIdentifier,
@@ -1293,9 +1318,10 @@ func currentPageTargetDestroyedDetachesAndInvalidatesDomainLeases() async throws
     let consoleEnable = try await waitForTransportTargetMessage(
         backend,
         method: "Console.enable",
-        after: restartMessageCount
+        after: startupMessageCount,
+        timeout: .seconds(30)
     )
-    #expect(consoleEnable.targetIdentifier == targetID)
+    #expect(consoleEnable.targetIdentifier == newTargetID)
     await receiveTransportTargetReply(
         transport,
         targetID: consoleEnable.targetIdentifier,
@@ -1303,8 +1329,31 @@ func currentPageTargetDestroyedDetachesAndInvalidatesDomainLeases() async throws
         result: "{}"
     )
 
-    try await waitUntil { context.state == .attached }
+    try await waitUntil {
+        context.rootNode?.id == DOMNode.ID(DOM.Node.ID("reattached-root"))
+    }
+    #expect(context.state == .attached)
     #expect(context.rootNode?.id == DOMNode.ID(DOM.Node.ID("reattached-root")))
+    #expect(networkResults.items.map(\.id) == [NetworkRequest.ID(retainedRequestID)])
+
+    let pickerMessageCount = await backend.sentTargetMessages().count
+    let pickerTask = Task { @MainActor in
+        try await context.setElementPickerEnabled(true)
+    }
+    let inspectMode = try await waitForTransportTargetMessage(
+        backend,
+        method: "DOM.setInspectModeEnabled",
+        after: pickerMessageCount
+    )
+    #expect(inspectMode.targetIdentifier == newTargetID)
+    await receiveTransportTargetReply(
+        transport,
+        targetID: inspectMode.targetIdentifier,
+        messageID: try transportMessageID(inspectMode.message),
+        result: "{}"
+    )
+    try await pickerTask.value
+    #expect(context.isElementPickerEnabled)
 }
 
 @MainActor

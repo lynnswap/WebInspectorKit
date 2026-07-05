@@ -1070,7 +1070,6 @@ public final class WebInspectorContext {
         resetDOM(isolation: isolation)
         clearExecutionContexts()
         clearConsoleMessages()
-        clearNetworkRequests()
     }
 
     private func disableEnabledDomains(
@@ -1516,16 +1515,19 @@ extension WebInspectorContext {
         guard targetID == .currentPage else {
             return
         }
-        guard let target = currentPage else {
+        guard currentPage != nil else {
             skipEvent("Target.targetDestroyed ignored: no current page target")
             return
         }
 
+        // A current-page Target.targetDestroyed is a physical route loss during
+        // retarget, not a clean SDK close signal. Real close is owned by the
+        // proxy connection close path.
         startupTask?.cancel()
         startupTask = nil
         currentPageRetargetTask?.cancel()
-        currentPageRetargetTask = nil
         currentPageCleanupTask?.cancel()
+        currentPageCleanupTask = nil
         documentReloadTask?.cancel()
         documentReloadTask = nil
         for task in styleToggleTasks.values {
@@ -1534,33 +1536,40 @@ extension WebInspectorContext {
         styleToggleTasks = [:]
         consoleObjectGroupReleaseTask?.cancel()
         consoleObjectGroupReleaseTask = nil
-        stopEventPumps()
-        currentPage = nil
-        runtimeTrackingTarget = nil
-        networkTrackingTarget = nil
-        consoleTrackingTarget = nil
         let generation = advanceCurrentPageGeneration(isolation: isolation)
         advanceDOMDocumentGeneration(isolation: isolation)
-        resetCurrentPageLifecycleModels(isolation: isolation)
-        transition(to: .detached)
 
-        currentPageCleanupTask = Task { [weak self, target, generation] in
+        currentPageRetargetTask = Task { [weak self, generation] in
             _ = isolation
-            await self?.invalidateDestroyedCurrentPage(target, generation: generation, isolation: isolation)
+            await self?.retargetDestroyedCurrentPage(generation: generation, isolation: isolation)
         }
     }
 
-    private func invalidateDestroyedCurrentPage(
-        _ target: WebInspectorTarget,
+    private func retargetDestroyedCurrentPage(
         generation: Int,
         isolation: isolated (any Actor)
     ) async {
         defer {
             if isCurrentPageGeneration(generation, isolation: isolation) {
-                currentPageCleanupTask = nil
+                currentPageRetargetTask = nil
             }
         }
-        await domainEnablement.invalidate([.runtime, .network, .console], on: target)
+        do {
+            let replacement = try await proxy.waitForCurrentPage()
+            guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
+                return
+            }
+            currentPage = replacement
+            resetCurrentPageLifecycleModels(isolation: isolation)
+            await retargetCurrentPage(replacement, generation: generation, isolation: isolation)
+        } catch is CancellationError {
+            return
+        } catch {
+            guard isCurrentPageGeneration(generation, isolation: isolation) else {
+                return
+            }
+            failIfTerminal(error, operation: "current page replacement")
+        }
     }
 }
 
