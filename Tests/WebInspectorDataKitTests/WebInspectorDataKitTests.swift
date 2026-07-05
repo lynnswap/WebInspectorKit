@@ -3120,7 +3120,7 @@ func cssEventsAndSelectedDOMMutationsMarkSelectedStylesStale() async throws {
         try await waitUntil { styles.phase == .loaded }
     }
 
-    await runtime.backend.emit(.styleSheetChanged, target: target)
+    await runtime.backend.emit(.styleSheetChanged(CSS.StyleSheet.ID("sheet-1")), target: target)
     try await waitUntil { styles.phase == .needsRefresh }
 
     try await reloadSelectedStyles()
@@ -3211,7 +3211,7 @@ func cssInvalidationDuringStyleFetchIsNotOverwrittenByStaleResult() async throws
         )
     }
 
-    await runtime.backend.emit(.styleSheetChanged, target: target)
+    await runtime.backend.emit(.styleSheetChanged(CSS.StyleSheet.ID("sheet-1")), target: target)
     try await waitUntil { styles.phase == .needsRefresh }
 
     await computedGate.open()
@@ -3313,7 +3313,7 @@ func styleSheetChangedWhileHydrationActiveTriggersImmediateRefetch() async throw
     try await waitUntil { styles.phase == .loaded }
 
     await enqueueCSSStyleReplies(on: runtime.backend)
-    await runtime.backend.emit(.styleSheetChanged, target: target)
+    await runtime.backend.emit(.styleSheetChanged(CSS.StyleSheet.ID("sheet-1")), target: target)
 
     try await waitUntil {
         await matchedStylesCommandCount(on: runtime.backend) == 2
@@ -3342,7 +3342,7 @@ func styleSheetChangedWhileHydrationInactiveDefersRefetchUntilActivation() async
     let styles = try #require(element.elementStyles)
     try await waitUntil { styles.phase == .loaded }
 
-    await runtime.backend.emit(.styleSheetChanged, target: target)
+    await runtime.backend.emit(.styleSheetChanged(CSS.StyleSheet.ID("sheet-1")), target: target)
     try await waitUntil { styles.phase == .needsRefresh }
     for _ in 0..<10 {
         await Task.yield()
@@ -3508,7 +3508,7 @@ func requestSetCSSPropertyRefusesStaleAndNonEditableProperties() async throws {
     let editableSection = try #require(styles.sections.first { $0.title == ".card" })
     let editablePropertyID = try #require(editableSection.style.properties.first?.id)
 
-    await runtime.backend.emit(.styleSheetChanged, target: target)
+    await runtime.backend.emit(.styleSheetChanged(CSS.StyleSheet.ID("sheet-1")), target: target)
     try await waitUntil { styles.phase == .needsRefresh }
     #expect(context.requestSetCSSProperty(editablePropertyID, enabled: false) == false)
 

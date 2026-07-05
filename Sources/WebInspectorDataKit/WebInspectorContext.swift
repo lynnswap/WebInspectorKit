@@ -1771,6 +1771,14 @@ extension WebInspectorContext {
             node.removeAttribute(name: name)
             markSelectedStylesNeedsRefresh(for: DOMNode.ID(id))
             notifyDOMTreeControllers(changes: [.nodeChanged(nodeID: DOMNode.ID(id))], isolation: isolation)
+        case let .inlineStyleInvalidated(ids):
+            if ids.isEmpty {
+                markSelectedStylesNeedsRefresh()
+            } else {
+                for id in ids {
+                    markSelectedStylesNeedsRefresh(for: DOMNode.ID(id))
+                }
+            }
         case let .characterDataModified(id, value):
             guard let node = nodesByID[DOMNode.ID(id)] else {
                 let nodeID = DOMNode.ID(id)
@@ -1812,6 +1820,7 @@ extension WebInspectorContext {
              .shadowRootPopped,
              .pseudoElementAdded,
              .pseudoElementRemoved,
+             .willDestroyDOMNode,
              .unknown:
             break
         }

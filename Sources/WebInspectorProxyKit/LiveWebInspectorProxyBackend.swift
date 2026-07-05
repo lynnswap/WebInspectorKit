@@ -254,6 +254,8 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
             .attributeModified(scopedDOMNodeID(node, targetRawValue: targetRawValue), name: name, value: value)
         case let .attributeRemoved(node, name):
             .attributeRemoved(scopedDOMNodeID(node, targetRawValue: targetRawValue), name: name)
+        case let .inlineStyleInvalidated(nodes):
+            .inlineStyleInvalidated(nodes.map { scopedDOMNodeID($0, targetRawValue: targetRawValue) })
         case let .characterDataModified(node, value):
             .characterDataModified(scopedDOMNodeID(node, targetRawValue: targetRawValue), value: value)
         case let .shadowRootPushed(host, root):
@@ -276,6 +278,8 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
                 parent: scopedDOMNodeID(parent, targetRawValue: targetRawValue),
                 element: scopedDOMNodeID(element, targetRawValue: targetRawValue)
             )
+        case let .willDestroyDOMNode(node):
+            .willDestroyDOMNode(scopedDOMNodeID(node, targetRawValue: targetRawValue))
         case let .inspect(node):
             .inspect(scopedDOMNodeID(node, targetRawValue: targetRawValue))
         case let .unknown(rawEvent):
@@ -608,6 +612,43 @@ private enum LiveProxyCommandEncoder {
             let payload = try payload(command.payload, as: DOM.GetOuterHTMLPayload.self, command: command)
             return try data(["nodeId": nodeIDValue(payload.id.rawValue)])
 
+        case (.dom, "getAttributes"):
+            let payload = try payload(command.payload, as: DOM.GetAttributesPayload.self, command: command)
+            return try data(["nodeId": nodeIDValue(payload.id.rawValue)])
+
+        case (.dom, "setAttributeValue"):
+            let payload = try payload(command.payload, as: DOM.SetAttributeValuePayload.self, command: command)
+            return try data([
+                "nodeId": nodeIDValue(payload.id.rawValue),
+                "name": payload.name,
+                "value": payload.value,
+            ])
+
+        case (.dom, "setAttributesAsText"):
+            let payload = try payload(command.payload, as: DOM.SetAttributesAsTextPayload.self, command: command)
+            var object: [String: Any] = [
+                "nodeId": nodeIDValue(payload.id.rawValue),
+                "text": payload.text,
+            ]
+            if let name = payload.name {
+                object["name"] = name
+            }
+            return try data(object)
+
+        case (.dom, "removeAttribute"):
+            let payload = try payload(command.payload, as: DOM.RemoveAttributePayload.self, command: command)
+            return try data([
+                "nodeId": nodeIDValue(payload.id.rawValue),
+                "name": payload.name,
+            ])
+
+        case (.dom, "setOuterHTML"):
+            let payload = try payload(command.payload, as: DOM.SetOuterHTMLPayload.self, command: command)
+            return try data([
+                "nodeId": nodeIDValue(payload.id.rawValue),
+                "outerHTML": payload.html,
+            ])
+
         case (.dom, "removeNode"):
             let payload = try payload(command.payload, as: DOM.RemoveNodePayload.self, command: command)
             return try data(["nodeId": nodeIDValue(payload.id.rawValue)])
@@ -688,6 +729,27 @@ private enum LiveProxyCommandEncoder {
                 "text": payload.text,
             ])
 
+        case (.css, "setStyleSheetText"):
+            let payload = try payload(command.payload, as: CSS.SetStyleSheetTextPayload.self, command: command)
+            return try data([
+                "styleSheetId": payload.id.unscopedRawValue,
+                "text": payload.text,
+            ])
+
+        case (.css, "setRuleSelector"):
+            let payload = try payload(command.payload, as: CSS.SetRuleSelectorPayload.self, command: command)
+            return try data([
+                "ruleId": try ruleIDPayload(payload.id, command: command),
+                "selector": payload.selector,
+            ])
+
+        case (.css, "setGroupingHeaderText"):
+            let payload = try payload(command.payload, as: CSS.SetGroupingHeaderTextPayload.self, command: command)
+            return try data([
+                "ruleId": try ruleIDPayload(payload.id, command: command),
+                "headerText": payload.text,
+            ])
+
         default:
             throw unsupported(command)
         }
@@ -737,6 +799,26 @@ private enum LiveProxyCommandEncoder {
                 domain: command.domain.rawValue,
                 method: command.method,
                 message: "CSS style identifier is not backed by a WebKit CSSStyleId."
+            )
+        }
+        return [
+            "styleSheetId": String(components[0]),
+            "ordinal": ordinal,
+        ]
+    }
+
+    private static func ruleIDPayload<Payload: Sendable, Result: Sendable>(
+        _ id: CSS.Rule.ID,
+        command: WebInspectorProxyCommand<Payload, Result>
+    ) throws -> [String: Any] {
+        let rawValue = id.unscopedRawValue
+        let components = rawValue.split(separator: CSSStyleIDPayload.separator, omittingEmptySubsequences: false)
+        guard components.count == 2,
+              let ordinal = Int(components[1]) else {
+            throw WebInspectorProxyError.commandFailed(
+                domain: command.domain.rawValue,
+                method: command.method,
+                message: "CSS rule identifier is not backed by a WebKit CSSRuleId."
             )
         }
         return [
@@ -807,6 +889,10 @@ private enum LiveProxyCommandDecoder {
             let payload = try decode(OuterHTMLResult.self, from: result.resultData)
             return payload.outerHTML as! Result
         }
+        if Result.self == [DOM.Attribute].self {
+            let payload = try decode(DOMAttributesResult.self, from: result.resultData)
+            return try payload.proxyAttributes() as! Result
+        }
         if Result.self == Network.Body.self {
             let payload = try decode(ResponseBodyResult.self, from: result.resultData)
             return Network.Body(data: payload.body, base64Encoded: payload.base64Encoded) as! Result
@@ -826,6 +912,14 @@ private enum LiveProxyCommandDecoder {
         if Result.self == CSS.Style.self {
             let payload = try decode(CSSSetStyleTextResult.self, from: result.resultData)
             return payload.style.proxyStyle(targetScopeRawValue: targetScopeRawValue(for: command)) as! Result
+        }
+        if Result.self == CSS.Rule.self {
+            let payload = try decode(CSSSetRuleSelectorResult.self, from: result.resultData)
+            return payload.rule.proxyRule(targetScopeRawValue: targetScopeRawValue(for: command)) as! Result
+        }
+        if Result.self == CSS.Rule.Grouping.self {
+            let payload = try decode(CSSSetGroupingHeaderTextResult.self, from: result.resultData)
+            return payload.grouping.proxyGrouping as! Result
         }
         if Result.self == Runtime.EvaluationResult.self {
             let payload = try decode(RuntimeEvaluationResultPayload.self, from: result.resultData)
@@ -885,6 +979,24 @@ private enum LiveProxyCommandDecoder {
         var outerHTML: String
     }
 
+    private struct DOMAttributesResult: Decodable {
+        var attributes: [String]
+
+        func proxyAttributes() throws -> [DOM.Attribute] {
+            guard attributes.count.isMultiple(of: 2) else {
+                throw DecodingError.dataCorrupted(
+                    DecodingError.Context(
+                        codingPath: [],
+                        debugDescription: "DOM.getAttributes returned an odd number of attribute entries."
+                    )
+                )
+            }
+            return stride(from: 0, to: attributes.count, by: 2).map { index in
+                DOM.Attribute(name: attributes[index], value: attributes[index + 1])
+            }
+        }
+    }
+
     private struct ResponseBodyResult: Decodable {
         var body: String
         var base64Encoded: Bool
@@ -929,6 +1041,14 @@ private struct CSSComputedStyleResult: Decodable {
 
 private struct CSSSetStyleTextResult: Decodable {
     var style: CSSStylePayload
+}
+
+private struct CSSSetRuleSelectorResult: Decodable {
+    var rule: CSSRulePayload
+}
+
+private struct CSSSetGroupingHeaderTextResult: Decodable {
+    var grouping: CSSGroupingPayload
 }
 
 private struct RuntimeEvaluationResultPayload: Decodable {
@@ -1069,7 +1189,11 @@ private struct CSSRulePayload: Decodable {
     func proxyRule(targetScopeRawValue: String?) -> CSS.Rule {
         let fallbackStyleID = "anonymous:rule:\(origin):\(selectorList.text):\(sourceURL ?? ""):\(sourceLine ?? -1)"
         return CSS.Rule(
-            id: ruleId.map { CSS.Rule.ID($0.rawValue) },
+            id: ruleId.map { payload in
+                targetScopeRawValue.map {
+                    CSS.Rule.ID(payload.rawValue, scopedToTargetRawValue: $0)
+                } ?? CSS.Rule.ID(payload.rawValue)
+            },
             selectorList: selectorList.proxySelectorList,
             sourceURL: sourceURL,
             sourceLine: sourceLine,

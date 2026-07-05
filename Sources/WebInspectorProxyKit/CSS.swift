@@ -60,6 +60,32 @@ public enum CSS {
             )
         }
 
+        public func setStyleSheetText(_ id: StyleSheet.ID, text: String) async throws {
+            try await context.dispatchVoid(
+                domain: .css,
+                method: "setStyleSheetText",
+                payload: SetStyleSheetTextPayload(id: id, text: text)
+            )
+        }
+
+        public func setRuleSelector(_ id: Rule.ID, selector: String) async throws -> Rule {
+            try await context.dispatch(
+                domain: .css,
+                method: "setRuleSelector",
+                payload: SetRuleSelectorPayload(id: id, selector: selector),
+                returning: Rule.self
+            )
+        }
+
+        public func setGroupingHeaderText(_ id: Rule.ID, text: String) async throws -> Rule.Grouping {
+            try await context.dispatch(
+                domain: .css,
+                method: "setGroupingHeaderText",
+                payload: SetGroupingHeaderTextPayload(id: id, text: text),
+                returning: Rule.Grouping.self
+            )
+        }
+
         public var events: EventStream {
             EventStream {
                 context.cssEvents()
@@ -104,6 +130,36 @@ public enum CSS {
         package let text: String
 
         package init(id: Style.ID, text: String) {
+            self.id = id
+            self.text = text
+        }
+    }
+
+    package struct SetStyleSheetTextPayload: Sendable {
+        package let id: StyleSheet.ID
+        package let text: String
+
+        package init(id: StyleSheet.ID, text: String) {
+            self.id = id
+            self.text = text
+        }
+    }
+
+    package struct SetRuleSelectorPayload: Sendable {
+        package let id: Rule.ID
+        package let selector: String
+
+        package init(id: Rule.ID, selector: String) {
+            self.id = id
+            self.selector = selector
+        }
+    }
+
+    package struct SetGroupingHeaderTextPayload: Sendable {
+        package let id: Rule.ID
+        package let text: String
+
+        package init(id: Rule.ID, text: String) {
             self.id = id
             self.text = text
         }
@@ -404,7 +460,7 @@ public enum CSS {
     }
 
     public enum Event: Sendable {
-        case styleSheetChanged
+        case styleSheetChanged(StyleSheet.ID)
         case styleSheetAdded(StyleSheetHeader)
         case styleSheetRemoved(StyleSheet.ID)
         case mediaQueryResultChanged
@@ -429,6 +485,36 @@ public enum CSS {
         public func makeAsyncIterator() -> AsyncIterator {
             makeStream().makeAsyncIterator()
         }
+    }
+}
+
+package extension CSS.StyleSheet.ID {
+    var unscopedRawValue: String {
+        rawValue
+    }
+}
+
+package extension CSS.Rule.ID {
+    private static var targetScopeSeparator: Character { "\u{1E}" }
+
+    init(_ rawValue: String, scopedToTargetRawValue targetRawValue: String) {
+        self.init("\(targetRawValue)\(Self.targetScopeSeparator)\(rawValue)")
+    }
+
+    var targetScopeRawValue: String? {
+        let parts = rawValue.split(separator: Self.targetScopeSeparator, maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2 else {
+            return nil
+        }
+        return String(parts[0])
+    }
+
+    var unscopedRawValue: String {
+        let parts = rawValue.split(separator: Self.targetScopeSeparator, maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2 else {
+            return rawValue
+        }
+        return String(parts[1])
     }
 }
 

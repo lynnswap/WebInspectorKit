@@ -97,6 +97,9 @@ enum LiveProxyEventDecoder {
         case "DOM.attributeRemoved":
             let params = try decode(AttributeRemovedParams.self, from: event)
             return .attributeRemoved(DOM.Node.ID(params.nodeId), name: params.name)
+        case "DOM.inlineStyleInvalidated":
+            let params = try decode(InlineStyleInvalidatedParams.self, from: event)
+            return .inlineStyleInvalidated(params.nodeIds.map(DOM.Node.ID.init))
         case "DOM.characterDataModified":
             let params = try decode(CharacterDataModifiedParams.self, from: event)
             return .characterDataModified(DOM.Node.ID(params.nodeId), value: params.characterData)
@@ -112,6 +115,9 @@ enum LiveProxyEventDecoder {
         case "DOM.pseudoElementRemoved":
             let params = try decode(PseudoElementRemovedParams.self, from: event)
             return .pseudoElementRemoved(parent: DOM.Node.ID(params.parentId), element: DOM.Node.ID(params.pseudoElementId))
+        case "DOM.willDestroyDOMNode":
+            let params = try decode(WillDestroyDOMNodeParams.self, from: event)
+            return .willDestroyDOMNode(DOM.Node.ID(params.nodeId))
         default:
             return .unknown(rawEvent(from: event))
         }
@@ -136,7 +142,8 @@ enum LiveProxyEventDecoder {
     private static func cssEvent(from event: ProtocolEvent) throws -> CSS.Event {
         switch event.method {
         case "CSS.styleSheetChanged":
-            return .styleSheetChanged
+            let params = try decode(StyleSheetChangedParams.self, from: event)
+            return .styleSheetChanged(CSS.StyleSheet.ID(params.styleSheetId))
         case "CSS.styleSheetRemoved":
             let params = try decode(StyleSheetRemovedParams.self, from: event)
             return .styleSheetRemoved(CSS.StyleSheet.ID(params.styleSheetId))
@@ -447,6 +454,33 @@ private struct AttributeRemovedParams: Decodable {
     }
 }
 
+private struct InlineStyleInvalidatedParams: Decodable {
+    var nodeIds: [String]
+
+    private enum CodingKeys: String, CodingKey {
+        case nodeIds
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let values = try container.decode([FlexibleStringPayload].self, forKey: .nodeIds)
+        nodeIds = values.map(\.stringValue)
+    }
+}
+
+private struct FlexibleStringPayload: Decodable {
+    var stringValue: String
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let string = try? container.decode(String.self) {
+            stringValue = string
+        } else {
+            stringValue = String(try container.decode(Int.self))
+        }
+    }
+}
+
 private struct CharacterDataModifiedParams: Decodable {
     var nodeId: String
     var characterData: String
@@ -527,9 +561,26 @@ private struct PseudoElementRemovedParams: Decodable {
     }
 }
 
+private struct WillDestroyDOMNodeParams: Decodable {
+    var nodeId: String
+
+    private enum CodingKeys: String, CodingKey {
+        case nodeId
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        nodeId = try container.decodeStringOrInteger(forKey: .nodeId)
+    }
+}
+
 private struct InspectorInspectParams: Decodable {
     var object: RuntimeRemoteObjectPayload
     var hints: RuntimeJSONValuePayload?
+}
+
+private struct StyleSheetChangedParams: Decodable {
+    var styleSheetId: String
 }
 
 private struct StyleSheetRemovedParams: Decodable {

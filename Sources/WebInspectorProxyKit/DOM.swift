@@ -53,6 +53,47 @@ public enum DOM {
             )
         }
 
+        public func attributes(of id: Node.ID) async throws -> [Attribute] {
+            try await context.dispatch(
+                domain: .dom,
+                method: "getAttributes",
+                payload: GetAttributesPayload(id: id),
+                returning: [Attribute].self
+            )
+        }
+
+        public func setAttributeValue(_ id: Node.ID, name: String, value: String) async throws {
+            try await context.dispatchVoid(
+                domain: .dom,
+                method: "setAttributeValue",
+                payload: SetAttributeValuePayload(id: id, name: name, value: value)
+            )
+        }
+
+        public func setAttributesAsText(_ id: Node.ID, text: String, name: String? = nil) async throws {
+            try await context.dispatchVoid(
+                domain: .dom,
+                method: "setAttributesAsText",
+                payload: SetAttributesAsTextPayload(id: id, text: text, name: name)
+            )
+        }
+
+        public func removeAttribute(_ id: Node.ID, name: String) async throws {
+            try await context.dispatchVoid(
+                domain: .dom,
+                method: "removeAttribute",
+                payload: RemoveAttributePayload(id: id, name: name)
+            )
+        }
+
+        public func setOuterHTML(_ id: Node.ID, html: String) async throws {
+            try await context.dispatchVoid(
+                domain: .dom,
+                method: "setOuterHTML",
+                payload: SetOuterHTMLPayload(id: id, html: html)
+            )
+        }
+
         public func removeNode(_ id: Node.ID) async throws {
             try await context.dispatchVoid(
                 domain: .dom,
@@ -149,6 +190,58 @@ public enum DOM {
 
         package init(id: Node.ID) {
             self.id = id
+        }
+    }
+
+    package struct GetAttributesPayload: Sendable {
+        package let id: Node.ID
+
+        package init(id: Node.ID) {
+            self.id = id
+        }
+    }
+
+    package struct SetAttributeValuePayload: Sendable {
+        package let id: Node.ID
+        package let name: String
+        package let value: String
+
+        package init(id: Node.ID, name: String, value: String) {
+            self.id = id
+            self.name = name
+            self.value = value
+        }
+    }
+
+    package struct SetAttributesAsTextPayload: Sendable {
+        package let id: Node.ID
+        package let text: String
+        package let name: String?
+
+        package init(id: Node.ID, text: String, name: String?) {
+            self.id = id
+            self.text = text
+            self.name = name
+        }
+    }
+
+    package struct RemoveAttributePayload: Sendable {
+        package let id: Node.ID
+        package let name: String
+
+        package init(id: Node.ID, name: String) {
+            self.id = id
+            self.name = name
+        }
+    }
+
+    package struct SetOuterHTMLPayload: Sendable {
+        package let id: Node.ID
+        package let html: String
+
+        package init(id: Node.ID, html: String) {
+            self.id = id
+            self.html = html
         }
     }
 
@@ -316,11 +409,13 @@ public enum DOM {
         case childNodeCountUpdated(Node.ID, count: Int)
         case attributeModified(Node.ID, name: String, value: String)
         case attributeRemoved(Node.ID, name: String)
+        case inlineStyleInvalidated([Node.ID])
         case characterDataModified(Node.ID, value: String)
         case shadowRootPushed(host: Node.ID, root: Node)
         case shadowRootPopped(host: Node.ID, root: Node.ID)
         case pseudoElementAdded(parent: Node.ID, element: Node)
         case pseudoElementRemoved(parent: Node.ID, element: Node.ID)
+        case willDestroyDOMNode(Node.ID)
         case inspect(Node.ID)
         case unknown(RawEvent)
     }

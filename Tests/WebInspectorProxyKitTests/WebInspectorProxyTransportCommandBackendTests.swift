@@ -84,6 +84,93 @@ func transportCommandBackendPreservesDOMRequestChildNodesRecursiveDepth() async 
 }
 
 @Test
+func transportCommandBackendEncodesDOMEditingCommandsAndDecodesAttributes() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+
+    let attributesTask = Task {
+        try await target.dom.attributes(of: DOM.Node.ID("42"))
+    }
+    let attributes = try await waitForTargetMessage(backend, method: "DOM.getAttributes")
+    var parameters = try messageParameters(attributes.message)
+    #expect((parameters["nodeId"] as? NSNumber)?.intValue == 42)
+    await receiveTargetReply(
+        transport,
+        targetID: attributes.targetIdentifier,
+        messageID: try messageID(attributes.message),
+        result: #"{"attributes":["class","card","data-id","42"]}"#
+    )
+    #expect(try await attributesTask.value == [
+        DOM.Attribute(name: "class", value: "card"),
+        DOM.Attribute(name: "data-id", value: "42"),
+    ])
+
+    let setAttributeTask = Task {
+        try await target.dom.setAttributeValue(DOM.Node.ID("42"), name: "class", value: "card selected")
+    }
+    let setAttribute = try await waitForTargetMessage(backend, method: "DOM.setAttributeValue")
+    parameters = try messageParameters(setAttribute.message)
+    #expect((parameters["nodeId"] as? NSNumber)?.intValue == 42)
+    #expect(parameters["name"] as? String == "class")
+    #expect(parameters["value"] as? String == "card selected")
+    await receiveTargetReply(
+        transport,
+        targetID: setAttribute.targetIdentifier,
+        messageID: try messageID(setAttribute.message),
+        result: "{}"
+    )
+    try await setAttributeTask.value
+
+    let setAttributesTask = Task {
+        try await target.dom.setAttributesAsText(DOM.Node.ID("42"), text: #"class="card" hidden"#, name: "class")
+    }
+    let setAttributes = try await waitForTargetMessage(backend, method: "DOM.setAttributesAsText")
+    parameters = try messageParameters(setAttributes.message)
+    #expect((parameters["nodeId"] as? NSNumber)?.intValue == 42)
+    #expect(parameters["text"] as? String == #"class="card" hidden"#)
+    #expect(parameters["name"] as? String == "class")
+    await receiveTargetReply(
+        transport,
+        targetID: setAttributes.targetIdentifier,
+        messageID: try messageID(setAttributes.message),
+        result: "{}"
+    )
+    try await setAttributesTask.value
+
+    let removeAttributeTask = Task {
+        try await target.dom.removeAttribute(DOM.Node.ID("42"), name: "hidden")
+    }
+    let removeAttribute = try await waitForTargetMessage(backend, method: "DOM.removeAttribute")
+    parameters = try messageParameters(removeAttribute.message)
+    #expect((parameters["nodeId"] as? NSNumber)?.intValue == 42)
+    #expect(parameters["name"] as? String == "hidden")
+    await receiveTargetReply(
+        transport,
+        targetID: removeAttribute.targetIdentifier,
+        messageID: try messageID(removeAttribute.message),
+        result: "{}"
+    )
+    try await removeAttributeTask.value
+
+    let setOuterHTMLTask = Task {
+        try await target.dom.setOuterHTML(DOM.Node.ID("42"), html: #"<section class="card"></section>"#)
+    }
+    let setOuterHTML = try await waitForTargetMessage(backend, method: "DOM.setOuterHTML")
+    parameters = try messageParameters(setOuterHTML.message)
+    #expect((parameters["nodeId"] as? NSNumber)?.intValue == 42)
+    #expect(parameters["outerHTML"] as? String == #"<section class="card"></section>"#)
+    await receiveTargetReply(
+        transport,
+        targetID: setOuterHTML.targetIdentifier,
+        messageID: try messageID(setOuterHTML.message),
+        result: "{}"
+    )
+    try await setOuterHTMLTask.value
+}
+
+@Test
 func transportCommandBackendEncodesDOMHighlightAndInspectModeCommands() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
@@ -367,6 +454,75 @@ func transportCommandBackendEncodesAndDecodesCSSStyleCommands() async throws {
     let updatedStyle = try await setStyleTextTask.value
     #expect(updatedStyle.properties.first?.value == "1px")
     #expect(updatedStyle.properties.first?.status == .disabled)
+
+    let setStyleSheetTextTask = Task {
+        try await target.css.setStyleSheetText(CSS.StyleSheet.ID("sheet"), text: "body { color: blue; }")
+    }
+    let setStyleSheetTextCommand = try await waitForTargetMessage(backend, method: "CSS.setStyleSheetText")
+    parameters = try messageParameters(setStyleSheetTextCommand.message)
+    #expect(parameters["styleSheetId"] as? String == "sheet")
+    #expect(parameters["text"] as? String == "body { color: blue; }")
+    await receiveTargetReply(
+        transport,
+        targetID: setStyleSheetTextCommand.targetIdentifier,
+        messageID: try messageID(setStyleSheetTextCommand.message),
+        result: "{}"
+    )
+    try await setStyleSheetTextTask.value
+
+    let ruleID = try #require(rule.id)
+    let setRuleSelectorTask = Task {
+        try await target.css.setRuleSelector(ruleID, selector: ".card")
+    }
+    let setRuleSelectorCommand = try await waitForTargetMessage(backend, method: "CSS.setRuleSelector")
+    parameters = try messageParameters(setRuleSelectorCommand.message)
+    let ruleIDPayload = try #require(parameters["ruleId"] as? [String: Any])
+    #expect(ruleIDPayload["styleSheetId"] as? String == "sheet")
+    #expect((ruleIDPayload["ordinal"] as? NSNumber)?.intValue == 1)
+    #expect(parameters["selector"] as? String == ".card")
+    await receiveTargetReply(
+        transport,
+        targetID: setRuleSelectorCommand.targetIdentifier,
+        messageID: try messageID(setRuleSelectorCommand.message),
+        result: """
+        {
+          "rule": {
+            "ruleId": {"styleSheetId": "sheet", "ordinal": 1},
+            "selectorList": {"selectors": [{"text": ".card"}], "text": ".card"},
+            "origin": "author",
+            "style": {
+              "styleId": {"styleSheetId": "sheet", "ordinal": 1},
+              "cssProperties": [{"name": "margin", "value": "1px"}],
+              "cssText": "margin: 1px;"
+            }
+          }
+        }
+        """
+    )
+    let updatedRule = try await setRuleSelectorTask.value
+    #expect(updatedRule.selectorList.text == ".card")
+    #expect(updatedRule.id?.targetScopeRawValue == "page-main")
+    #expect(updatedRule.id?.unscopedRawValue == "sheet\u{1F}1")
+
+    let setGroupingHeaderTextTask = Task {
+        try await target.css.setGroupingHeaderText(ruleID, text: "@media (width > 600px)")
+    }
+    let setGroupingHeaderTextCommand = try await waitForTargetMessage(
+        backend,
+        method: "CSS.setGroupingHeaderText"
+    )
+    parameters = try messageParameters(setGroupingHeaderTextCommand.message)
+    let groupingRuleIDPayload = try #require(parameters["ruleId"] as? [String: Any])
+    #expect(groupingRuleIDPayload["styleSheetId"] as? String == "sheet")
+    #expect((groupingRuleIDPayload["ordinal"] as? NSNumber)?.intValue == 1)
+    #expect(parameters["headerText"] as? String == "@media (width > 600px)")
+    await receiveTargetReply(
+        transport,
+        targetID: setGroupingHeaderTextCommand.targetIdentifier,
+        messageID: try messageID(setGroupingHeaderTextCommand.message),
+        result: #"{"grouping":{"text":"@media (width > 600px)"}}"#
+    )
+    #expect(try await setGroupingHeaderTextTask.value.text == "@media (width > 600px)")
 }
 
 @Test
