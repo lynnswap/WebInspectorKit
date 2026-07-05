@@ -4653,7 +4653,7 @@ func webSocketCreatedPreservesExistingNetworkLifecycleMetadata() async throws {
             id: requestID,
             request: Network.Request(
                 id: requestID,
-                url: "wss://example.com/socket?created",
+                url: "",
                 method: "GET",
                 headers: ["Upgrade": "websocket"]
             ),
@@ -4678,8 +4678,10 @@ func webSocketCreatedPreservesExistingNetworkLifecycleMetadata() async throws {
 
     let currentWebSocket = try #require(request.webSocket)
     #expect(currentWebSocket === webSocket)
+    #expect(request.url == "wss://example.com/socket?created")
     #expect(request.method == "GET")
     #expect(request.requestHeaders["Upgrade"] == "websocket")
+    #expect(currentWebSocket.handshakeRequest?.url == "wss://example.com/socket?created")
     #expect(request.status == 101)
     #expect(request.responseHeaders["Upgrade"] == "websocket")
     #expect(request.requestSentTimestamp == 1)

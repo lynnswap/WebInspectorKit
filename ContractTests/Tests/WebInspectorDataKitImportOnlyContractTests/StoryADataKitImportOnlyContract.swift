@@ -31,7 +31,10 @@ private actor DataKitImportOnlyActor {
         _ = treeSnapshot.nodesByID.values.first?.attributeList.first?.value
         _ = treeSnapshot.rootNodeID.map { treeSnapshot.selectorPath(for: $0) }
         _ = treeSnapshot.rootNodeID.map { treeSnapshot.xPath(for: $0) }
-        _ = treeController.transactions
+        _ = treeController.revision
+        _ = treeController.selectedNodeID
+        _ = treeController.updates
+        _ = treeController.revealRequests
         if let selectedNode = context.selectedNode {
             _ = try context.selectorPath(for: selectedNode)
             _ = try context.xPath(for: selectedNode)

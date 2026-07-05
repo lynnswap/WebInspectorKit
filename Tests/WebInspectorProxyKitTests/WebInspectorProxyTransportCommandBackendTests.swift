@@ -811,6 +811,32 @@ func transportBackendDeliversCurrentPageTargetDestroyedLifecycle() async throws 
 }
 
 @Test
+func transportBackedWaitForCurrentPageRefreshesDestroyedTargetWithoutLifecycleSubscription() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-old"), frameID: "old-frame")
+    let proxy = try await WebInspectorProxy(transport: transport)
+
+    let cachedTarget = try await proxy.waitForCurrentPage()
+    #expect(cachedTarget.frameID == FrameID("old-frame"))
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetDestroyed","params":{"targetId":"page-old"}}"#
+    )
+
+    let replacementTask = Task {
+        try await proxy.waitForCurrentPage()
+    }
+    await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-new"), frameID: "new-frame")
+
+    let replacement = try await throwingValue(of: replacementTask)
+    #expect(replacement.id == .currentPage)
+    #expect(replacement.route == .currentPage)
+    #expect(replacement.frameID == FrameID("new-frame"))
+    #expect(await proxy.currentPage?.frameID == FrameID("new-frame"))
+}
+
+@Test
 func transportBackendDeliversCurrentPagePageFrameLifecycle() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
@@ -1125,6 +1151,24 @@ func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async 
     )
     let updatedFrameStyle = try await setStyleTextTask.value
     #expect(updatedFrameStyle.id.targetScopeRawValue == "frame-target")
+
+    let cssEventTask = Task {
+        var iterator = target.css.events.makeAsyncIterator()
+        return await iterator.next()
+    }
+    await waitForEventSubscription(target, domain: .css)
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("frame-target"),
+        method: "CSS.styleSheetChanged",
+        params: #"{"styleSheetId":"frame-sheet"}"#
+    )
+    let cssEvent = try #require(try await value(of: cssEventTask))
+    guard case let .styleSheetChanged(styleSheetID) = cssEvent else {
+        Issue.record("Expected frame CSS.styleSheetChanged to be projected into the current page CSS stream.")
+        return
+    }
+    #expect(styleSheetID == CSS.StyleSheet.ID("frame-sheet"))
 }
 
 @Test

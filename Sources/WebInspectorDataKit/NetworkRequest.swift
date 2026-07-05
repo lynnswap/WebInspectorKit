@@ -856,11 +856,13 @@ public final class NetworkRequest: WebInspectorFetchableModel {
 
     func applyWebSocketCreated(url: String) {
         self.url = url
+        currentRequest = requestWithURL(url)
         resourceType = .webSocket
         _ = ensureWebSocketState()
     }
 
     func applyWebSocketHandshakeRequest(_ request: Network.Request, timestamp: Double?) {
+        let request = requestPreservingCurrentURLIfNeeded(request)
         currentRequest = request
         url = request.url
         method = request.method
@@ -904,6 +906,33 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         ensureWebSocketState().markClosed()
         finishedOrFailedTimestamp = timestamp
         state = .finished
+    }
+
+    private func requestPreservingCurrentURLIfNeeded(_ request: Network.Request) -> Network.Request {
+        guard request.url.isEmpty, currentRequest.url.isEmpty == false else {
+            return request
+        }
+        return Network.Request(
+            id: request.id,
+            url: currentRequest.url,
+            method: request.method,
+            headers: request.headers,
+            postData: request.postData,
+            referrerPolicy: request.referrerPolicy,
+            integrity: request.integrity
+        )
+    }
+
+    private func requestWithURL(_ url: String) -> Network.Request {
+        Network.Request(
+            id: currentRequest.id,
+            url: url,
+            method: currentRequest.method,
+            headers: currentRequest.headers,
+            postData: currentRequest.postData,
+            referrerPolicy: currentRequest.referrerPolicy,
+            integrity: currentRequest.integrity
+        )
     }
 
     private func ensureWebSocketState() -> WebSocketState {

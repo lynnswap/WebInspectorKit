@@ -136,14 +136,18 @@ public actor WebInspectorProxy {
 
     public func waitForCurrentPage() async throws -> WebInspectorTarget {
         try ensureOpenForCurrentPageAccess()
-        if let pageTarget {
-            return pageTarget
-        }
         if let transport {
-            try await refreshCurrentPage(from: transport)
+            do {
+                try await refreshCurrentPage(from: transport)
+            } catch {
+                throw Self.mapBootstrapTargetError(error)
+            }
             if let pageTarget {
                 return pageTarget
             }
+        }
+        if let pageTarget {
+            return pageTarget
         }
         throw WebInspectorProxyError.disconnected("WebInspectorProxyKit shell has no current page target.")
     }
@@ -603,6 +607,7 @@ public actor WebInspectorProxy {
                 timeout: configuration.bootstrapTimeout
             )
         } catch {
+            pageTarget = nil
             try ensureOpenForCurrentPageAccess()
             throw error
         }

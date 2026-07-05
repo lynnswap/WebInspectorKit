@@ -140,6 +140,8 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
                 // Network.enable. This branch only projects target-wrapped
                 // frame Network events if WebKit emits them.
                 return isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
+            case .css:
+                return isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
             default:
                 return false
             }

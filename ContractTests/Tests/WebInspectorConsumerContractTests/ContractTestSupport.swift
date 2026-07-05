@@ -9,6 +9,8 @@ enum ContractTestSupport {
         on backend: WebInspectorTestBackend,
         document: DOM.Node = WebInspectorProxyTestFixtures.domDocument()
     ) async {
+        await backend.enqueue((), for: "Inspector", method: "enable")
+        await backend.enqueue((), for: "Inspector", method: "initialized")
         await backend.enqueue((), for: "Runtime", method: "enable")
         await backend.enqueue((), for: "Network", method: "enable")
         await backend.enqueue(document, for: "DOM", method: "getDocument")
@@ -19,6 +21,7 @@ enum ContractTestSupport {
         await backend.enqueue((), for: "Console", method: "disable")
         await backend.enqueue((), for: "Runtime", method: "disable")
         await backend.enqueue((), for: "Network", method: "disable")
+        await backend.enqueue((), for: "Inspector", method: "disable")
     }
 
     @MainActor
@@ -218,7 +221,10 @@ actor ContractDataKitActor {
         let treeSnapshot: DOMTreeSnapshot = treeController.snapshot
         #expect(treeSnapshot.rootNodeID == root.id)
         #expect(treeSnapshot.node(for: root.id)?.nodeName == "#document")
-        _ = treeController.transactions
+        _ = treeController.revision
+        _ = treeController.selectedNodeID
+        _ = treeController.updates
+        _ = treeController.revealRequests
 
         context.select(root)
         #expect(context.selectedNode === root)
@@ -291,6 +297,7 @@ actor ContractDataKitActor {
         try await context.setElementPickerEnabled(false)
         #expect(context.isElementPickerEnabled == false)
         await runtime.backend.enqueue((), for: "DOM", method: "removeNode")
+        await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
         try await child.delete()
         await runtime.backend.enqueue((), for: "Page", method: "reload")
         try await context.reloadPage()
@@ -301,6 +308,7 @@ actor ContractDataKitActor {
         #expect(domCommands.contains(RecordedCommand(domain: "DOM", method: "hideHighlight")))
         #expect(domCommands.contains(RecordedCommand(domain: "DOM", method: "setInspectModeEnabled")))
         #expect(domCommands.contains(RecordedCommand(domain: "DOM", method: "removeNode")))
+        #expect(domCommands.contains(RecordedCommand(domain: "DOM", method: "markUndoableState")))
         #expect(domCommands.contains(RecordedCommand(domain: "Page", method: "reload")))
 
         let request = WebInspectorProxyTestFixtures.networkRequest(

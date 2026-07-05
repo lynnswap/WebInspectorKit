@@ -54,16 +54,6 @@
             skipped = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "WebInspectorTransportTests"
-               BuildableName = "WebInspectorTransportTests"
-               BlueprintName = "WebInspectorTransportTests"
-               ReferencedContainer = "container:">
-            </BuildableReference>
-         </TestableReference>
-         <TestableReference
-            skipped = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
                BlueprintIdentifier = "WebInspectorNativeSymbolsTests"
                BuildableName = "WebInspectorNativeSymbolsTests"
                BlueprintName = "WebInspectorNativeSymbolsTests"
@@ -77,16 +67,6 @@
                BlueprintIdentifier = "WebInspectorNativeBridgeTests"
                BuildableName = "WebInspectorNativeBridgeTests"
                BlueprintName = "WebInspectorNativeBridgeTests"
-               ReferencedContainer = "container:">
-            </BuildableReference>
-         </TestableReference>
-         <TestableReference
-            skipped = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "WebInspectorNativeTransportTests"
-               BuildableName = "WebInspectorNativeTransportTests"
-               BlueprintName = "WebInspectorNativeTransportTests"
                ReferencedContainer = "container:">
             </BuildableReference>
          </TestableReference>
