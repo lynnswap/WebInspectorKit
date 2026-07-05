@@ -213,6 +213,55 @@ struct ParentContainerTests {
     }
 
     @Test
+    func attachClearsCachedTabContentForPreviousContext() async throws {
+        let session = makeSessionWithNoOpAttachment()
+        _ = WebInspectorTab.ContentFactory.makeViewController(
+            for: .dom,
+            session: session,
+            hostLayout: .compact
+        )
+        _ = WebInspectorTab.ContentFactory.makeViewController(
+            for: .network,
+            session: session,
+            hostLayout: .regular
+        )
+        #expect(session.interface.contentCacheCountForTesting > 0)
+
+        var installedContext: WebInspectorContext?
+        try await session.attach(to: WKWebView(frame: .zero)) { [self] _ in
+            let container = try await makeFakeContainer()
+            installedContext = container.mainContext
+            return container
+        }
+
+        let context = try #require(installedContext)
+        #expect(session.context === context)
+        #expect(session.interface.contentCacheCountForTesting == 0)
+    }
+
+    @Test
+    func installingDataContextClearsCachedTabContent() {
+        let session = makeSessionWithNoOpAttachment()
+        _ = WebInspectorTab.ContentFactory.makeViewController(
+            for: .dom,
+            session: session,
+            hostLayout: .compact
+        )
+        _ = WebInspectorTab.ContentFactory.makeViewController(
+            for: .network,
+            session: session,
+            hostLayout: .regular
+        )
+        #expect(session.interface.contentCacheCountForTesting > 0)
+
+        let context = makeContext()
+        session.installDataContext(context)
+
+        #expect(session.context === context)
+        #expect(session.interface.contentCacheCountForTesting == 0)
+    }
+
+    @Test
     func viewControllerDoesNotApplyPageUserInterfaceStyle() async throws {
         let observerRecorder = PageUserInterfaceStyleObserverRecorder(styleOnStart: .dark)
         let session = makeSessionWithNoOpAttachment(

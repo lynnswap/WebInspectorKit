@@ -159,11 +159,11 @@ public final class WebInspectorSession {
 
     package func installDataContext(_ context: WebInspectorContext) {
         dataContext = context
-        interface.removeNetworkPanelModel()
+        interface.removeContextBoundContent()
     }
 
     private func stopContainer(replaceContextWithDetached: Bool) async {
-        interface.removeNetworkPanelModel()
+        interface.removeContextBoundContent()
         if let container {
             self.container = nil
             await container.close()
@@ -280,6 +280,11 @@ package final class InterfaceModel {
 
     package func removeNetworkPanelModel() {
         networkPanelModel = nil
+    }
+
+    package func removeContextBoundContent() {
+        removeNetworkPanelModel()
+        removeContentCache()
     }
 
     package func pruneContentCache(retaining keys: Set<WebInspectorTab.ContentKey>) {
