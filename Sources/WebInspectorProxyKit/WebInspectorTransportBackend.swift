@@ -152,9 +152,20 @@ package struct WebInspectorTransportBackend: WebInspectorProxyBackend {
         currentMainPageTargetID: ProtocolTarget.ID
     ) -> Bool {
         guard record.kind == .frame,
-              let mainFrameID = snapshot.targetsByID[currentMainPageTargetID]?.frameID,
-              var parentFrameID = record.parentFrameID else {
+              let mainFrameID = snapshot.targetsByID[currentMainPageTargetID]?.frameID else {
             return false
+        }
+
+        guard var parentFrameID = record.parentFrameID else {
+            // WebKit may omit parentFrameId for a cross-origin frame target even
+            // though its frameId differs from the current page's main frame.
+            // TransportTargetRegistry already classifies that target as .frame;
+            // the current-page route must preserve the same semantic boundary
+            // or picker, DOM, and Network events are silently filtered.
+            guard let frameID = record.frameID else {
+                return false
+            }
+            return frameID != mainFrameID
         }
 
         var visitedFrameIDs = Set<ProtocolFrame.ID>()

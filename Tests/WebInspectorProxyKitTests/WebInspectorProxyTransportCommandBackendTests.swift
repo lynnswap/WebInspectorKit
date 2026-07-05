@@ -972,6 +972,49 @@ func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async 
 }
 
 @Test
+func transportBackendNormalizesParentlessFrameInspectorInspectForCurrentPageRoute() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-page-target","type":"page","frameId":"child-frame","isProvisional":false}}}"#
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+
+    let eventTask = Task {
+        var iterator = target.dom.events.makeAsyncIterator()
+        return await iterator.next()
+    }
+
+    await waitForEventSubscription(target, domain: .dom)
+    await waitForEventSubscription(target, domain: .inspector)
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("frame-page-target"),
+        method: "Inspector.inspect",
+        params: #"{"object":{"objectId":"remote-frame-node","type":"object","subtype":"node"},"hints":{}}"#
+    )
+
+    let requestNode = try await waitForTargetMessage(backend, method: "DOM.requestNode")
+    #expect(requestNode.targetIdentifier == ProtocolTarget.ID("page-main"))
+    #expect(try messageParameters(requestNode.message)["objectId"] as? String == "remote-frame-node")
+    await receiveTargetReply(
+        transport,
+        targetID: requestNode.targetIdentifier,
+        messageID: try messageID(requestNode.message),
+        result: #"{"nodeId":42}"#
+    )
+
+    let event = try #require(try await value(of: eventTask))
+    guard case let .inspect(nodeID) = event else {
+        Issue.record("Expected parentless frame Inspector.inspect to normalize to DOM.inspect.")
+        return
+    }
+    #expect(nodeID == DOM.Node.ID("42", scopedToTargetRawValue: "frame-page-target"))
+}
+
+@Test
 func transportBackendDecodesNetworkResponseEventForTargetRoute() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
@@ -1057,6 +1100,44 @@ func transportBackendDeliversFrameNetworkEventsToCurrentPageRoute() async throws
     let body = try await bodyTask.value
     #expect(body.data == "frame body")
     #expect(body.base64Encoded == false)
+}
+
+@Test
+func transportBackendDeliversParentlessFrameNetworkEventsToCurrentPageRoute() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-page-target","type":"page","frameId":"child-frame","isProvisional":false}}}"#
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+    #expect(target.route == .currentPage)
+
+    let eventTask = Task {
+        var iterator = target.network.events.makeAsyncIterator()
+        return await iterator.next()
+    }
+
+    await waitForEventSubscription(target, domain: .network)
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("frame-page-target"),
+        method: "Network.requestWillBeSent",
+        params: #"{"requestId":"frame-request","frameId":"child-frame","request":{"url":"https://frame.example.test/","method":"GET"},"timestamp":7.5,"type":"Document"}"#
+    )
+
+    let event = try #require(try await value(of: eventTask))
+    guard case let .requestWillBeSent(id, request, resourceType, _, timestamp) = event else {
+        Issue.record("Expected current-page route to receive parentless frame Network.requestWillBeSent.")
+        return
+    }
+    #expect(id == Network.Request.ID("frame-request", scopedToTargetRawValue: "frame-page-target"))
+    #expect(request.id == id)
+    #expect(request.url == "https://frame.example.test/")
+    #expect(request.method == "GET")
+    #expect(resourceType == .document)
+    #expect(timestamp == 7.5)
 }
 
 @Test

@@ -1301,6 +1301,14 @@ public final class WebInspectorContext {
         WebInspectorDataKitLog.debug("event skipped: \(reason)")
     }
 
+    private func logDescription(_ id: DOMNode.ID) -> String {
+        logDescription(id.proxyID)
+    }
+
+    private func logDescription(_ id: DOM.Node.ID) -> String {
+        "\(id.unscopedRawValue)@\(id.targetScopeRawValue ?? "current-page")"
+    }
+
     /// Command failures surface at their call site (thrown, or a per-model
     /// phase such as `NetworkBody.Phase.failed`); only terminal connection
     /// loss moves the whole context to `.failed`.
@@ -1611,16 +1619,18 @@ extension WebInspectorContext {
             applyChildNodeRemoved(parent: parent, node: node, isolation: isolation)
         case let .childNodeCountUpdated(id, count):
             guard let node = nodesByID[DOMNode.ID(id)] else {
-                loadFrameDocumentIfNeeded(forNodeID: DOMNode.ID(id), reason: "DOM.childNodeCountUpdated", isolation: isolation)
-                skipEvent("DOM.childNodeCountUpdated referenced an unmaterialized node")
+                let nodeID = DOMNode.ID(id)
+                loadFrameDocumentIfNeeded(forNodeID: nodeID, reason: "DOM.childNodeCountUpdated", isolation: isolation)
+                skipEvent("DOM.childNodeCountUpdated referenced unmaterialized node id=\(logDescription(nodeID))")
                 return
             }
             node.updateChildNodeCount(count)
             notifyDOMTreeControllers(changes: [.childCountChanged(nodeID: DOMNode.ID(id))], isolation: isolation)
         case let .attributeModified(id, name, value):
             guard let node = nodesByID[DOMNode.ID(id)] else {
-                loadFrameDocumentIfNeeded(forNodeID: DOMNode.ID(id), reason: "DOM.attributeModified", isolation: isolation)
-                skipEvent("DOM.attributeModified referenced an unmaterialized node")
+                let nodeID = DOMNode.ID(id)
+                loadFrameDocumentIfNeeded(forNodeID: nodeID, reason: "DOM.attributeModified", isolation: isolation)
+                skipEvent("DOM.attributeModified referenced unmaterialized node id=\(logDescription(nodeID))")
                 return
             }
             node.setAttribute(name: name, value: value)
@@ -1628,8 +1638,9 @@ extension WebInspectorContext {
             notifyDOMTreeControllers(changes: [.nodeChanged(nodeID: DOMNode.ID(id))], isolation: isolation)
         case let .attributeRemoved(id, name):
             guard let node = nodesByID[DOMNode.ID(id)] else {
-                loadFrameDocumentIfNeeded(forNodeID: DOMNode.ID(id), reason: "DOM.attributeRemoved", isolation: isolation)
-                skipEvent("DOM.attributeRemoved referenced an unmaterialized node")
+                let nodeID = DOMNode.ID(id)
+                loadFrameDocumentIfNeeded(forNodeID: nodeID, reason: "DOM.attributeRemoved", isolation: isolation)
+                skipEvent("DOM.attributeRemoved referenced unmaterialized node id=\(logDescription(nodeID))")
                 return
             }
             node.removeAttribute(name: name)
@@ -1637,8 +1648,9 @@ extension WebInspectorContext {
             notifyDOMTreeControllers(changes: [.nodeChanged(nodeID: DOMNode.ID(id))], isolation: isolation)
         case let .characterDataModified(id, value):
             guard let node = nodesByID[DOMNode.ID(id)] else {
-                loadFrameDocumentIfNeeded(forNodeID: DOMNode.ID(id), reason: "DOM.characterDataModified", isolation: isolation)
-                skipEvent("DOM.characterDataModified referenced an unmaterialized node")
+                let nodeID = DOMNode.ID(id)
+                loadFrameDocumentIfNeeded(forNodeID: nodeID, reason: "DOM.characterDataModified", isolation: isolation)
+                skipEvent("DOM.characterDataModified referenced unmaterialized node id=\(logDescription(nodeID))")
                 return
             }
             node.setNodeValue(value)
@@ -1752,8 +1764,9 @@ extension WebInspectorContext {
         isolation: isolated (any Actor) = #isolation
     ) {
         guard let parentNode = nodesByID[DOMNode.ID(parent)] else {
-            loadFrameDocumentIfNeeded(forNodeID: DOMNode.ID(parent), reason: "DOM.setChildNodes", isolation: isolation)
-            skipEvent("DOM.setChildNodes referenced an unmaterialized parent node")
+            let parentID = DOMNode.ID(parent)
+            loadFrameDocumentIfNeeded(forNodeID: parentID, reason: "DOM.setChildNodes", isolation: isolation)
+            skipEvent("DOM.setChildNodes referenced unmaterialized parent id=\(logDescription(parentID))")
             return
         }
         let previousChildren: [DOMNode]
@@ -1783,8 +1796,9 @@ extension WebInspectorContext {
         isolation: isolated (any Actor) = #isolation
     ) {
         guard let parentNode = nodesByID[DOMNode.ID(parent)] else {
-            loadFrameDocumentIfNeeded(forNodeID: DOMNode.ID(parent), reason: "DOM.childNodeInserted", isolation: isolation)
-            skipEvent("DOM.childNodeInserted referenced an unmaterialized parent node")
+            let parentID = DOMNode.ID(parent)
+            loadFrameDocumentIfNeeded(forNodeID: parentID, reason: "DOM.childNodeInserted", isolation: isolation)
+            skipEvent("DOM.childNodeInserted referenced unmaterialized parent id=\(logDescription(parentID))")
             return
         }
 
@@ -1812,15 +1826,16 @@ extension WebInspectorContext {
         isolation: isolated (any Actor)
     ) {
         guard let parentNode = nodesByID[DOMNode.ID(parent)] else {
-            loadFrameDocumentIfNeeded(forNodeID: DOMNode.ID(parent), reason: "DOM.childNodeRemoved", isolation: isolation)
-            skipEvent("DOM.childNodeRemoved referenced an unmaterialized parent node")
+            let parentID = DOMNode.ID(parent)
+            loadFrameDocumentIfNeeded(forNodeID: parentID, reason: "DOM.childNodeRemoved", isolation: isolation)
+            skipEvent("DOM.childNodeRemoved referenced unmaterialized parent id=\(logDescription(parentID))")
             return
         }
 
         let removedID = DOMNode.ID(node)
         guard let removedNode = nodesByID[removedID] else {
             loadFrameDocumentIfNeeded(forNodeID: removedID, reason: "DOM.childNodeRemoved", isolation: isolation)
-            skipEvent("DOM.childNodeRemoved referenced an unmaterialized child node")
+            skipEvent("DOM.childNodeRemoved referenced unmaterialized child id=\(logDescription(removedID))")
             return
         }
         let selectedNodeWasRemoved = removeSubtreeFromIndex(removedNode)
