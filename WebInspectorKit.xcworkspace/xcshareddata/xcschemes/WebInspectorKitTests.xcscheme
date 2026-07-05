@@ -43,34 +43,6 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "WebInspectorNativeBridgeTests"
-               BuildableName = "WebInspectorNativeBridgeTests"
-               BlueprintName = "WebInspectorNativeBridgeTests"
-               ReferencedContainer = "container:">
-            </BuildableReference>
-         </BuildActionEntry>
-         <BuildActionEntry
-            buildForTesting = "YES"
-            buildForRunning = "NO"
-            buildForProfiling = "NO"
-            buildForArchiving = "NO"
-            buildForAnalyzing = "YES">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "WebInspectorNativeSymbolsTests"
-               BuildableName = "WebInspectorNativeSymbolsTests"
-               BlueprintName = "WebInspectorNativeSymbolsTests"
-               ReferencedContainer = "container:">
-            </BuildableReference>
-         </BuildActionEntry>
-         <BuildActionEntry
-            buildForTesting = "YES"
-            buildForRunning = "NO"
-            buildForProfiling = "NO"
-            buildForArchiving = "NO"
-            buildForAnalyzing = "YES">
-            <BuildableReference
-               BuildableIdentifier = "primary"
                BlueprintIdentifier = "WebInspectorUITests"
                BuildableName = "WebInspectorUITests"
                BlueprintName = "WebInspectorUITests"
@@ -103,26 +75,6 @@
                BlueprintIdentifier = "WebInspectorDataKitTests"
                BuildableName = "WebInspectorDataKitTests"
                BlueprintName = "WebInspectorDataKitTests"
-               ReferencedContainer = "container:">
-            </BuildableReference>
-         </TestableReference>
-         <TestableReference
-            skipped = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "WebInspectorNativeBridgeTests"
-               BuildableName = "WebInspectorNativeBridgeTests"
-               BlueprintName = "WebInspectorNativeBridgeTests"
-               ReferencedContainer = "container:">
-            </BuildableReference>
-         </TestableReference>
-         <TestableReference
-            skipped = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "WebInspectorNativeSymbolsTests"
-               BuildableName = "WebInspectorNativeSymbolsTests"
-               BlueprintName = "WebInspectorNativeSymbolsTests"
                ReferencedContainer = "container:">
             </BuildableReference>
          </TestableReference>
