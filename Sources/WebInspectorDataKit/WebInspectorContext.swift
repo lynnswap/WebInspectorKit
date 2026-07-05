@@ -567,7 +567,12 @@ public final class WebInspectorContext {
             guard let networkResults = results as? WebInspectorFetchedResults<NetworkRequest> else {
                 preconditionFailure("NetworkRequest descriptors can only fetch NetworkRequest models.")
             }
-            networkResults.setItems(currentNetworkRequests())
+            let plan = NetworkRequestQueryPlan(descriptor: networkResults.fetchDescriptor, context: self)
+            networkResults.setNetworkItems(
+                currentNetworkRequests(),
+                plan: plan,
+                lookup: { id in self.requestsByID[id] }
+            )
             networkFetchedResults.append(WeakWebInspectorFetchedResults(networkResults))
         case .consoleMessages:
             guard let consoleResults = results as? WebInspectorFetchedResults<ConsoleMessage> else {
@@ -724,7 +729,13 @@ public final class WebInspectorContext {
                   let networkResults = results as? WebInspectorFetchedResults<NetworkRequest> else {
                 preconditionFailure("NetworkRequest descriptors can only update NetworkRequest fetched results.")
             }
-            networkResults.applyFetchDescriptor(networkDescriptor, items: currentNetworkRequests())
+            let plan = NetworkRequestQueryPlan(descriptor: networkDescriptor, context: self)
+            networkResults.applyNetworkFetchDescriptor(
+                networkDescriptor,
+                plan: plan,
+                requests: currentNetworkRequests(),
+                lookup: { id in self.requestsByID[id] }
+            )
         case .consoleMessages:
             guard let consoleDescriptor = descriptor as? WebInspectorFetchDescriptor<ConsoleMessage>,
                   let consoleResults = results as? WebInspectorFetchedResults<ConsoleMessage> else {
@@ -737,6 +748,9 @@ public final class WebInspectorContext {
     private func requireSupportedFetchDescriptor<Model: WebInspectorFetchableModel>(
         _ descriptor: WebInspectorFetchDescriptor<Model>
     ) {
+        if descriptor.kind == .networkRequests {
+            return
+        }
         guard descriptor.requiresRecordBackedQuery == false else {
             preconditionFailure(
                 "Predicate, sort, limit, and offset fetch descriptors require a record-backed DataKit query index."
@@ -2993,14 +3007,20 @@ extension WebInspectorContext {
     private func notifyNetworkRequestInserted(_ request: NetworkRequest) {
         networkFetchedResults.removeAll { $0.value == nil }
         for registration in networkFetchedResults {
-            registration.value?.insertItem(request)
+            registration.value?.insertNetworkRequest(
+                request,
+                lookup: { id in self.requestsByID[id] }
+            )
         }
     }
 
     private func notifyNetworkRequestTopologyMayHaveChanged(_ request: NetworkRequest) {
         networkFetchedResults.removeAll { $0.value == nil }
         for registration in networkFetchedResults {
-            registration.value?.refreshTopologyAfterItemMutation(request)
+            registration.value?.refreshNetworkRequestAfterMutation(
+                request,
+                lookup: { id in self.requestsByID[id] }
+            )
         }
     }
 

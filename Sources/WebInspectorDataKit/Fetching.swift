@@ -256,6 +256,7 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
         WebInspectorFetchedResultsTransaction<Model>
     >()
     @ObservationIgnored weak var modelContext: WebInspectorContext?
+    @ObservationIgnored private var networkQueryState: NetworkRequestQueryState?
 
     init(
         fetchDescriptor: WebInspectorFetchDescriptor<Model>,
@@ -269,6 +270,7 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
         sections = Self.sections(for: items, sectionBy: sectionBy)
         self.modelContext = modelContext
         topologyRevision = 0
+        networkQueryState = nil
     }
 
     deinit {
@@ -435,5 +437,65 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
 
         let title = value ?? ""
         return (WebInspectorFetchSectionID(rawValue: title), title)
+    }
+}
+
+extension WebInspectorFetchedResults where Model == NetworkRequest {
+    func setNetworkItems(
+        _ requests: [NetworkRequest],
+        plan: NetworkRequestQueryPlan,
+        lookup: (NetworkRequest.ID) -> NetworkRequest?
+    ) {
+        if plan.requiresQuery {
+            let state = NetworkRequestQueryState(plan: plan, requests: requests)
+            networkQueryState = state
+            setItems(state.visibleRequests(lookup: lookup))
+        } else {
+            networkQueryState = nil
+            setItems(requests)
+        }
+    }
+
+    func applyNetworkFetchDescriptor(
+        _ descriptor: WebInspectorFetchDescriptor<NetworkRequest>,
+        plan: NetworkRequestQueryPlan,
+        requests: [NetworkRequest],
+        lookup: (NetworkRequest.ID) -> NetworkRequest?
+    ) {
+        fetchDescriptor = descriptor
+        if plan.requiresQuery {
+            let state = NetworkRequestQueryState(plan: plan, requests: requests)
+            networkQueryState = state
+            resetItems(state.visibleRequests(lookup: lookup))
+        } else {
+            networkQueryState = nil
+            resetItems(requests)
+        }
+    }
+
+    func insertNetworkRequest(
+        _ request: NetworkRequest,
+        lookup: (NetworkRequest.ID) -> NetworkRequest?
+    ) {
+        guard var state = networkQueryState else {
+            insertItem(request)
+            return
+        }
+        state.upsert(request: request)
+        networkQueryState = state
+        setItems(state.visibleRequests(lookup: lookup))
+    }
+
+    func refreshNetworkRequestAfterMutation(
+        _ request: NetworkRequest,
+        lookup: (NetworkRequest.ID) -> NetworkRequest?
+    ) {
+        guard var state = networkQueryState else {
+            refreshTopologyAfterItemMutation(request)
+            return
+        }
+        state.upsert(request: request)
+        networkQueryState = state
+        setItems(state.visibleRequests(lookup: lookup))
     }
 }

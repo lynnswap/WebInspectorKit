@@ -102,7 +102,7 @@ scratch.
 
 ```swift
 var descriptor = controller.fetchDescriptor
-descriptor.predicate = #Predicate { $0.statusCode >= 400 }
+descriptor.predicate = #Predicate { ($0.statusCode ?? 0) >= 400 }
 controller.updateFetchDescriptor(descriptor)
 ```
 

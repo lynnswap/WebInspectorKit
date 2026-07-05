@@ -2445,6 +2445,106 @@ func sectionedNetworkResultsPublishTopologyWhenSectionKeyChanges() async throws 
 
 @MainActor
 @Test
+func networkFetchDescriptorAppliesPredicateSortAndLimit() async throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    context.apply(.requestWillBeSent(
+        id: Network.Request.ID("graphql-old"),
+        request: Network.Request(id: Network.Request.ID("graphql-old"), url: "https://api.example.com/graphql?older", method: "POST"),
+        resourceType: .fetch,
+        redirectResponse: nil,
+        timestamp: 1
+    ))
+    context.apply(.requestWillBeSent(
+        id: Network.Request.ID("image"),
+        request: Network.Request(id: Network.Request.ID("image"), url: "https://static.example.com/photo.png", method: "GET"),
+        resourceType: .image,
+        redirectResponse: nil,
+        timestamp: 2
+    ))
+    context.apply(.requestWillBeSent(
+        id: Network.Request.ID("graphql-new"),
+        request: Network.Request(id: Network.Request.ID("graphql-new"), url: "https://api.example.com/graphql?newer", method: "POST"),
+        resourceType: .fetch,
+        redirectResponse: nil,
+        timestamp: 3
+    ))
+
+    let xhrFetch = NetworkRequest.ResourceCategory.xhrFetch
+    let search = "graphql"
+    let descriptor = WebInspectorFetchDescriptor<NetworkRequest>(
+        predicate: #Predicate { request in
+            request.resourceCategory == xhrFetch
+                && request.searchableText.localizedStandardContains(search)
+        },
+        sortBy: [SortDescriptor(\.requestSentTimestamp, order: .reverse)],
+        fetchLimit: 1
+    )
+
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: descriptor)
+
+    #expect(results.items.map(\.id) == [NetworkRequest.ID(Network.Request.ID("graphql-new"))])
+}
+
+@MainActor
+@Test
+func networkFetchDescriptorPublishesPredicateEnterAndLeave() async throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let descriptor = WebInspectorFetchDescriptor<NetworkRequest>(
+        predicate: #Predicate { request in
+            (request.statusCode ?? 0) >= 400
+        }
+    )
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: descriptor)
+    let controller = WebInspectorFetchedResultsController(fetchedResults: results)
+    let recorder = FetchedResultsTransactionRecorder(stream: controller.transactions)
+    defer { recorder.cancel() }
+    try await recorder.waitUntilStarted()
+
+    let requestID = Network.Request.ID("status-request")
+    let modelID = NetworkRequest.ID(requestID)
+    context.apply(.requestWillBeSent(
+        id: requestID,
+        request: Network.Request(id: requestID, url: "https://api.example.com/status", method: "GET"),
+        resourceType: .fetch,
+        redirectResponse: nil,
+        timestamp: 1
+    ))
+    for _ in 0..<10 {
+        await Task.yield()
+    }
+    #expect(results.items.isEmpty)
+    #expect(recorder.transactions.isEmpty)
+
+    context.apply(.responseReceived(
+        id: requestID,
+        response: Network.Response(url: "https://api.example.com/status", status: 500),
+        resourceType: .fetch,
+        timestamp: 2
+    ))
+
+    try await recorder.waitForTransactionCount(1)
+    #expect(results.items.map(\.id) == [modelID])
+    #expect(recorder.transactions.last?.itemChanges == [
+        .insert(itemID: modelID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)),
+    ])
+
+    context.apply(.responseReceived(
+        id: requestID,
+        response: Network.Response(url: "https://api.example.com/status", status: 200),
+        resourceType: .fetch,
+        timestamp: 3
+    ))
+
+    try await recorder.waitForTransactionCount(2)
+    #expect(results.items.isEmpty)
+    #expect(recorder.transactions.last?.itemChanges == [
+        .delete(itemID: modelID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)),
+    ])
+    #expect(context.registeredRequest(for: modelID) != nil)
+}
+
+@MainActor
+@Test
 func clearNetworkRequestsPublishesResetAndIgnoresClearedEvents() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
