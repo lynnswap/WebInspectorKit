@@ -9,8 +9,8 @@ import UIKit
 @MainActor
 final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegate {
     typealias RequestChildrenAction = @MainActor (DOMNode.ID) async -> Bool
-    typealias HighlightNodeAction = @MainActor (DOMNode.ID, DOMTreePageHighlightOwner) async -> Void
-    typealias RestoreHighlightAction = @MainActor () async -> Void
+    typealias HighlightNodeAction = @MainActor (DOMNode.ID, DOMTreePageHighlightOwner) async throws -> Void
+    typealias RestoreHighlightAction = @MainActor () async throws -> Void
     typealias CopyNodeTextAction = DOMTreeMenuCopyNodeTextAction
     typealias DeleteNodesAction = DOMTreeMenuDeleteNodesAction
 
@@ -341,9 +341,8 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             extendMultiSelection(to: row)
         } else if modifiers.contains(.command) || modifiers.contains(.control) {
             toggleMultiSelection(row: row)
-        } else {
+        } else if select(row.nodeID) {
             clearMultiSelection(keepingLast: row.nodeID)
-            select(row.nodeID)
         }
     }
 
@@ -378,9 +377,11 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         if multiSelection.selectedCount > 1, multiSelection.contains(row.nodeID) {
             nodeIDs = multiSelectedNodeIDsInDisplayOrder()
         } else {
-            clearMultiSelection(keepingLast: row.nodeID)
-            nodeIDs = (try? context.requiredNode(for: row.nodeID)).map { _ in [row.nodeID] } ?? []
-            select(row.nodeID)
+            guard (try? context.requiredNode(for: row.nodeID)) != nil,
+                  select(row.nodeID) else {
+                return
+            }
+            nodeIDs = [row.nodeID]
         }
         presentDOMMenu(for: nodeIDs, at: recognizer.location(in: self))
     }
@@ -1021,9 +1022,15 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         reloadTree(resetFragments: false)
     }
 
-    private func select(_ nodeID: DOMNode.ID) {
+    @discardableResult
+    private func select(_ nodeID: DOMNode.ID) -> Bool {
+        do {
+            try context.selectNode(nodeID)
+        } catch {
+            WebInspectorUIDOMLog.debug("DOM tree selection failed nodeID=\(String(describing: nodeID)): \(String(describing: error))")
+            return false
+        }
         multiSelection.notePrimarySelection(nodeID)
-        try? context.selectNode(nodeID)
         currentTreeSnapshot = treeController.snapshot
         selectionRevision = currentTreeSnapshot.revision
         if isRenderingActive {
@@ -1032,6 +1039,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             selectionReconciliationState.recordSelectionObservation(revision: selectionRevision)
         }
         queuePageSelectionHighlight(for: nodeID)
+        return true
     }
 
     private func toggleMultiSelection(row: DOMTreeRowRenderPlan) {
@@ -1225,10 +1233,18 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             guard !Task.isCancelled else {
                 return
             }
-            await highlightNodeAction?(nodeID, reason.owner)
-            if reason == .selection,
-               self.pageHighlightIntent == .selection(nodeID) {
-                self.pageHighlightIntent = nil
+            do {
+                if let highlightNodeAction {
+                    try await highlightNodeAction(nodeID, reason.owner)
+                }
+                if reason == .selection,
+                   self.pageHighlightIntent == .selection(nodeID) {
+                    self.pageHighlightIntent = nil
+                }
+            } catch {
+                WebInspectorUIDOMLog.debug(
+                    "DOM tree page highlight failed nodeID=\(String(describing: nodeID)) owner=\(reason.owner): \(String(describing: error))"
+                )
             }
         }
     }
@@ -1249,9 +1265,15 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
                 }
                 return
             }
-            await restoreHighlightAction?()
-            if self.pageHighlightIntent == .restoreSelectionAfterHover {
-                self.pageHighlightIntent = nil
+            do {
+                if let restoreHighlightAction {
+                    try await restoreHighlightAction()
+                }
+                if self.pageHighlightIntent == .restoreSelectionAfterHover {
+                    self.pageHighlightIntent = nil
+                }
+            } catch {
+                WebInspectorUIDOMLog.debug("DOM tree page highlight restore failed: \(String(describing: error))")
             }
         }
     }
@@ -2681,11 +2703,12 @@ extension DOMTreeTextView {
         findDecorationState.highlightedRanges
     }
 
-    func selectRowForTesting(containing text: String) {
+    @discardableResult
+    func selectRowForTesting(containing text: String) -> Bool {
         guard let row = rows.first(where: { $0.text.contains(text) }) else {
-            return
+            return false
         }
-        select(row.nodeID)
+        return select(row.nodeID)
     }
 
     func toggleRowForTesting(containing text: String) {
@@ -2695,19 +2718,25 @@ extension DOMTreeTextView {
         toggle(row: row)
     }
 
-    func primaryClickRowForTesting(containing text: String, modifiers: UIKeyModifierFlags = []) {
+    @discardableResult
+    func primaryClickRowForTesting(containing text: String, modifiers: UIKeyModifierFlags = []) -> Bool {
         guard let row = rows.first(where: { $0.text.contains(text) }) else {
-            return
+            return false
         }
         dismissDOMMenuAnchor()
         clearTextSelection()
         if modifiers.contains(.shift) {
             extendMultiSelection(to: row)
+            return true
         } else if modifiers.contains(.command) || modifiers.contains(.control) {
             toggleMultiSelection(row: row)
+            return true
         } else {
-            clearMultiSelection(keepingLast: row.nodeID)
-            select(row.nodeID)
+            if select(row.nodeID) {
+                clearMultiSelection(keepingLast: row.nodeID)
+                return true
+            }
+            return false
         }
     }
 

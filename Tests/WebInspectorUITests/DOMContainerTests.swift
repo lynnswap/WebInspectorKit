@@ -1224,6 +1224,44 @@ struct DOMContainerTests {
         let hoverHighlightNodeIDs = Array(highlightNodeIDs.dropFirst(hoverBaselineCount))
         #expect(hoverHighlightNodeIDs.contains(DOM.Node.ID("body")))
         #expect(hoverHighlightNodeIDs.last == DOM.Node.ID("input"))
+
+        let hideFixture = try await makeLiveDOMContext()
+        let hideViewController = DOMTreeViewController(context: hideFixture.context)
+        let hideWindow = showInWindow(hideViewController)
+        defer { hideWindow.isHidden = true }
+        let hideTreeView = hideViewController.displayedDOMTreeTextViewForTesting
+        await hideTreeView.waitForRowDocumentForTesting()
+
+        await hideFixture.runtime.backend.enqueue((), for: "DOM", method: "highlightNode")
+        hideTreeView.hoverRowForTesting(containing: "<body")
+        _ = await recordedDOMCommands(on: hideFixture.runtime.backend, method: "highlightNode", count: 1)
+
+        await hideFixture.runtime.backend.enqueue((), for: "DOM", method: "hideHighlight")
+        hideTreeView.endHoverForTesting()
+        _ = await recordedDOMCommands(on: hideFixture.runtime.backend, method: "hideHighlight", count: 1)
+    }
+
+    @Test
+    func treeControllerRetriesSelectionHighlightAfterBackendFailure() async throws {
+        let fixture = try await makeLiveDOMContext()
+        let viewController = DOMTreeViewController(context: fixture.context)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        let treeView = viewController.displayedDOMTreeTextViewForTesting
+        await treeView.waitForRowDocumentForTesting()
+
+        treeView.primaryClickRowForTesting(containing: "<input")
+        _ = await recordedDOMCommands(on: fixture.runtime.backend, method: "highlightNode", count: 1)
+        await treeView.waitForPageHighlightTaskForTesting()
+
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "highlightNode")
+        treeView.routeCurrentSelectionInvalidationForTesting()
+        _ = await recordedDOMCommands(on: fixture.runtime.backend, method: "highlightNode", count: 2)
+
+        let highlightNodeIDs = await fixture.runtime.backend.recordedCommands()
+            .filter { $0.domain == "DOM" && $0.method == "highlightNode" }
+            .compactMap { $0.payload.cast(as: DOM.HighlightNodePayload.self)?.id }
+        #expect(highlightNodeIDs == [DOM.Node.ID("input"), DOM.Node.ID("input")])
     }
 
     @Test

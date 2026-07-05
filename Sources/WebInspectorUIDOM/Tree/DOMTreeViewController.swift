@@ -22,27 +22,36 @@ package final class DOMTreeViewController: UIViewController {
                     try await context.requestChildren(for: nodeID)
                     return true
                 } catch {
+                    WebInspectorUIDOMLog.debug("DOM tree request children failed nodeID=\(String(describing: nodeID)): \(String(describing: error))")
                     return false
                 }
             },
             highlightNodeAction: { [weak context] nodeID, _ in
-                try? await context?.highlightNode(for: nodeID)
+                guard let context else {
+                    return
+                }
+                try await context.highlightNode(for: nodeID)
             },
             restoreHighlightAction: { [weak context] in
                 guard let context else {
                     return
                 }
                 if let selectedNode = context.selectedNode {
-                    try? await selectedNode.highlight()
+                    try await selectedNode.highlight()
                 } else {
-                    try? await context.hideHighlight()
+                    try await context.hideHighlight()
                 }
             },
             copyNodeTextAction: { [weak context] nodeID, kind in
                 guard let context else {
                     return nil
                 }
-                return try? await context.copyText(kind, for: nodeID)
+                do {
+                    return try await context.copyText(kind, for: nodeID)
+                } catch {
+                    WebInspectorUIDOMLog.debug("DOM tree copy text failed nodeID=\(String(describing: nodeID)): \(String(describing: error))")
+                    return nil
+                }
             },
             deleteNodesAction: { [weak context] nodeIDs, undoManager in
                 guard let context else {
@@ -105,6 +114,7 @@ package final class DOMTreeViewController: UIViewController {
             )
             return error.deletedNodeCount > 0
         } catch {
+            WebInspectorUIDOMLog.debug("DOM tree delete failed nodeIDs=\(nodeIDs.map { String(describing: $0) }): \(String(describing: error))")
             return false
         }
         guard let undoCommands else {
