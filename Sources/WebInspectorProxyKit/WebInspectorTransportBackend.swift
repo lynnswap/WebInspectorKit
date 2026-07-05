@@ -930,10 +930,10 @@ private struct RuntimeEvaluationResultPayload: Decodable {
 }
 
 private struct RuntimePropertiesResultPayload: Decodable {
-    var properties: [RuntimePropertyDescriptorPayload]?
+    var properties: [RuntimePropertyDescriptorPayload]
 
     var proxyProperties: [Runtime.PropertyDescriptor] {
-        properties?.map(\.proxyProperty) ?? []
+        properties.map(\.proxyProperty)
     }
 }
 
@@ -974,10 +974,10 @@ private struct RuntimePreviewResultPayload: Decodable {
 }
 
 private struct RuntimeCollectionEntriesResultPayload: Decodable {
-    var entries: [RuntimeCollectionEntryPayload]?
+    var entries: [RuntimeCollectionEntryPayload]
 
     var proxyEntries: [Runtime.CollectionEntry] {
-        entries?.map(\.proxyEntry) ?? []
+        entries.map(\.proxyEntry)
     }
 }
 
