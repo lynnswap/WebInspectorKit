@@ -42,6 +42,7 @@ extension DOMTreeTextView {
         }
 
         func cancel() {
+            generation &+= 1
             task?.cancel()
             task = nil
             currentRequest = nil
