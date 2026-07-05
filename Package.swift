@@ -58,6 +58,7 @@ let package = Package(
                 "WebInspectorNativeBridge",
                 "WebInspectorNativeSymbols"
             ],
+            exclude: ["README.md"],
             swiftSettings: strictSwiftSettings
         ),
         .target(
@@ -72,6 +73,7 @@ let package = Package(
             dependencies: [
                 "WebInspectorProxyKit"
             ],
+            exclude: ["README.md"],
             swiftSettings: strictSwiftSettings
         ),
         .target(
