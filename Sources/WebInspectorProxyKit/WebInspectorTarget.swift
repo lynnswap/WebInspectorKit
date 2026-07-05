@@ -117,6 +117,19 @@ public struct WebInspectorTarget: Identifiable, Sendable {
     }
 }
 
+package extension WebInspectorProxy {
+    nonisolated func frameTarget(id: WebInspectorTarget.ID) -> WebInspectorTarget {
+        WebInspectorTarget(
+            id: id,
+            kind: .frame,
+            frameID: nil,
+            isProvisional: false,
+            proxy: self,
+            route: RoutingTargetID(id.rawValue)
+        )
+    }
+}
+
 package struct DomainClientContext: Sendable {
     package let proxy: WebInspectorProxy
     package let targetID: WebInspectorTarget.ID

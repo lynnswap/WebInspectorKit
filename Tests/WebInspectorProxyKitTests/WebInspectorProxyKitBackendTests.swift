@@ -27,6 +27,31 @@ func domGetDocumentDispatchesToTargetRoute() async throws {
 }
 
 @Test
+func frameTargetFactoryDispatchesDOMCommandsToFrameRoute() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let frameTarget = runtime.proxy.frameTarget(id: WebInspectorTarget.ID("frame-target"))
+    let expectedNode = DOM.Node(
+        id: DOM.Node.ID("frame-document"),
+        nodeType: 9,
+        nodeName: "#document"
+    )
+
+    await runtime.backend.enqueue(expectedNode, for: "DOM", method: "getDocument")
+
+    let node = try await frameTarget.dom.getDocument()
+    #expect(node.id == expectedNode.id)
+    #expect(frameTarget.kind == .frame)
+
+    let commands = await runtime.backend.recordedCommands()
+    let command = try #require(commands.first)
+    #expect(command.targetID == frameTarget.id)
+    #expect(command.route == frameTarget.route)
+    #expect(command.domain == "DOM")
+    #expect(command.method == "getDocument")
+    #expect(command.payload.cast(as: DOM.GetDocumentPayload.self) != nil)
+}
+
+@Test
 func domRequestNodeDispatchesToTargetRoute() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()

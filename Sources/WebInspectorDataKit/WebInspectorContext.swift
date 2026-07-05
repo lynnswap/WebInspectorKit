@@ -2147,14 +2147,7 @@ extension WebInspectorContext {
             return
         }
         let generation = domDocumentGeneration
-        let target = WebInspectorTarget(
-            id: frameTargetID,
-            kind: .frame,
-            frameID: nil,
-            isProvisional: false,
-            proxy: proxy,
-            route: RoutingTargetID(frameTargetID.rawValue)
-        )
+        let target = proxy.frameTarget(id: frameTargetID)
         WebInspectorDataKitLog.debug(
             "frame document projection loading target=\(frameTargetID.rawValue) reason=\(reason)"
         )
