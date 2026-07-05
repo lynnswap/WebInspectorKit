@@ -1,5 +1,4 @@
 import Foundation
-import WebInspectorTransport
 
 package struct WebInspectorTransportBackend: WebInspectorProxyBackend {
     private let transport: TransportSession

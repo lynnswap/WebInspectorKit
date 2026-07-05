@@ -1,7 +1,6 @@
 #if canImport(UIKit)
 import Testing
 import WebInspectorTestSupport
-import WebInspectorTransport
 import WebInspectorProxyKit
 import WebInspectorProxyKitTesting
 import UIKit

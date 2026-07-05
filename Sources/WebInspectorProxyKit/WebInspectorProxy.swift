@@ -1,8 +1,6 @@
 import Foundation
 import OSLog
 import WebKit
-import WebInspectorNativeTransport
-import WebInspectorTransport
 
 private let logger = Logger(subsystem: "WebInspectorKit", category: "WebInspectorProxy")
 

@@ -1,5 +1,4 @@
 import Foundation
-import WebInspectorTransport
 
 package struct WebInspectorLifecycleTarget: Sendable {
     package let id: WebInspectorTarget.ID

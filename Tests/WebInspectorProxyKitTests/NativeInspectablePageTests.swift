@@ -2,7 +2,7 @@
 import Testing
 import UIKit
 import WebKit
-@testable import WebInspectorNativeTransport
+@testable import WebInspectorProxyKit
 
 @MainActor
 @Test

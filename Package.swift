@@ -55,8 +55,8 @@ let package = Package(
         .target(
             name: "WebInspectorProxyKit",
             dependencies: [
-                "WebInspectorNativeTransport",
-                "WebInspectorTransport"
+                "WebInspectorNativeBridge",
+                "WebInspectorNativeSymbols"
             ],
             swiftSettings: strictSwiftSettings
         ),
@@ -92,20 +92,6 @@ let package = Package(
             swiftSettings: strictSwiftSettings
         ),
         .target(
-            name: "WebInspectorTransport",
-            dependencies: [],
-            swiftSettings: strictSwiftSettings
-        ),
-        .target(
-            name: "WebInspectorNativeTransport",
-            dependencies: [
-                "WebInspectorTransport",
-                "WebInspectorNativeBridge",
-                "WebInspectorNativeSymbols"
-            ],
-            swiftSettings: strictSwiftSettings
-        ),
-        .target(
             name: "WebInspectorUIBase",
             dependencies: [],
             resources: [
@@ -128,7 +114,6 @@ let package = Package(
             name: "WebInspectorUINetwork",
             dependencies: [
                 "WebInspectorDataKit",
-                "WebInspectorTransport",
                 "WebInspectorUIBase",
                 .product(name: "ObservationBridge", package: "ObservationBridge"),
                 .product(name: "UIHostingMenu", package: "UIHostingMenu", condition: .when(platforms: [.iOS]))
@@ -169,19 +154,10 @@ let package = Package(
             ],
             swiftSettings: strictSwiftSettings
         ),
-        .testTarget(
-            name: "WebInspectorTransportTests",
-            dependencies: [
-                "WebInspectorTransport",
-                "WebInspectorTestSupport"
-            ],
-            path: "Tests/WebInspectorTransportTests",
-            swiftSettings: strictSwiftSettings
-        ),
         .target(
             name: "WebInspectorTestSupport",
             dependencies: [
-                "WebInspectorTransport"
+                "WebInspectorProxyKit"
             ],
             path: "Tests/WebInspectorTestSupport",
             swiftSettings: strictSwiftSettings
@@ -209,19 +185,10 @@ let package = Package(
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(
-            name: "WebInspectorNativeTransportTests",
-            dependencies: [
-                "WebInspectorNativeTransport"
-            ],
-            path: "Tests/WebInspectorNativeTransportTests",
-            swiftSettings: strictSwiftSettings
-        ),
-        .testTarget(
             name: "WebInspectorProxyKitTests",
             dependencies: [
                 "WebInspectorProxyKit",
                 "WebInspectorProxyKitTesting",
-                "WebInspectorTransport",
                 "WebInspectorTestSupport"
             ],
             path: "Tests/WebInspectorProxyKitTests",
@@ -232,7 +199,7 @@ let package = Package(
             dependencies: [
                 "WebInspectorDataKit",
                 "WebInspectorProxyKitTesting",
-                "WebInspectorTransport",
+                "WebInspectorProxyKit",
                 "WebInspectorTestSupport"
             ],
             path: "Tests/WebInspectorDataKitTests",
@@ -244,7 +211,6 @@ let package = Package(
                 "WebInspectorDataKit",
                 "WebInspectorProxyKit",
                 "WebInspectorProxyKitTesting",
-                "WebInspectorTransport",
                 "WebInspectorUIBase",
                 "WebInspectorUIDOM",
                 "WebInspectorUINetwork",

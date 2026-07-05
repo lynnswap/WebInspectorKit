@@ -1,6 +1,5 @@
 import WebKit
 import WebInspectorNativeBridge
-import WebInspectorTransport
 
 package struct NativeInspectorConnection: Sendable {
     package let transport: TransportSession

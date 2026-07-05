@@ -2,7 +2,6 @@ import Foundation
 import Testing
 import WebInspectorProxyKit
 import WebInspectorTestSupport
-import WebInspectorTransport
 
 private let transportCommandBackendWaitTimeout: Duration = .milliseconds(750)
 

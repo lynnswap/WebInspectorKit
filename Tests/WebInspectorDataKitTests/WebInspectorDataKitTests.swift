@@ -4,7 +4,6 @@ import Testing
 import WebInspectorProxyKit
 import WebInspectorProxyKitTesting
 import WebInspectorTestSupport
-import WebInspectorTransport
 
 @MainActor
 @Test

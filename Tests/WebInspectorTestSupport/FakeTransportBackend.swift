@@ -1,5 +1,5 @@
 import Foundation
-import WebInspectorTransport
+import WebInspectorProxyKit
 
 package struct SentTargetMessage: Equatable, Sendable {
     package var message: String

@@ -43,9 +43,9 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "WebInspectorNativeTransportTests"
-               BuildableName = "WebInspectorNativeTransportTests"
-               BlueprintName = "WebInspectorNativeTransportTests"
+               BlueprintIdentifier = "WebInspectorProxyKitTests"
+               BuildableName = "WebInspectorProxyKitTests"
+               BlueprintName = "WebInspectorProxyKitTests"
                ReferencedContainer = "container:">
             </BuildableReference>
          </BuildActionEntry>
@@ -82,9 +82,9 @@
             skipped = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "WebInspectorNativeTransportTests"
-               BuildableName = "WebInspectorNativeTransportTests"
-               BlueprintName = "WebInspectorNativeTransportTests"
+               BlueprintIdentifier = "WebInspectorProxyKitTests"
+               BuildableName = "WebInspectorProxyKitTests"
+               BlueprintName = "WebInspectorProxyKitTests"
                ReferencedContainer = "container:">
             </BuildableReference>
          </TestableReference>

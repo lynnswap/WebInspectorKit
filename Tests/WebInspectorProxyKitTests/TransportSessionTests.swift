@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import WebInspectorTestSupport
-@testable import WebInspectorTransport
+@testable import WebInspectorProxyKit
 
 private let testResponseTimeout: Duration = .milliseconds(750)
 private let testWaitTimeout: Duration = .milliseconds(750)

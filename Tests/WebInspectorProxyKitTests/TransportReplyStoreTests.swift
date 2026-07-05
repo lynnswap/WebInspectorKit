@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import WebInspectorTransport
+@testable import WebInspectorProxyKit
 
 @Test
 func replyStoreRetargetsWrapperIndexWithPendingTargetReply() {

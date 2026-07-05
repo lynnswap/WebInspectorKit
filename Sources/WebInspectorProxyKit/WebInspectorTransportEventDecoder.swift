@@ -1,5 +1,4 @@
 import Foundation
-import WebInspectorTransport
 
 enum WebInspectorTransportEventDecoder {
     static func proxyEvent(
