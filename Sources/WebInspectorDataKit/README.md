@@ -150,6 +150,20 @@ let descriptor = WebInspectorFetchDescriptor<NetworkRequest>(
 )
 ```
 
+Built-in UI resource filters should map to one or more DataKit categories and
+pass that membership as a predicate:
+
+```swift
+let mediaCategories: [NetworkRequest.ResourceCategory] = [.image, .media]
+
+let descriptor = WebInspectorFetchDescriptor<NetworkRequest>(
+    predicate: #Predicate { request in
+        mediaCategories.contains(request.resourceCategory)
+    },
+    sortBy: [SortDescriptor(\.requestSentTimestamp, order: .reverse)]
+)
+```
+
 Resource-category classification, search tokens, and query membership belong in
 WebInspectorDataKit. The built-in UI can map `NetworkRequest.ResourceCategory`
 to localized filter labels such as "CSS", "JS", or "XHR / Fetch", but it must not

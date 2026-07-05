@@ -1,4 +1,3 @@
-import Synchronization
 import Testing
 import WebInspectorDataKit
 import WebInspectorProxyKit
@@ -492,7 +491,7 @@ func requestFileTypeAndSearchUpdateWhenRawMIMETypeAppears() async throws {
 
 @Test
 @MainActor
-func displayIndexIgnoresContentOnlyUpdatesDuringActiveFiltering() async throws {
+func displayRequestsIgnoreContentOnlyUpdatesDuringActiveFiltering() async throws {
     let context = makeContext()
     let requestID = applyRequest(
         to: context,
@@ -518,7 +517,7 @@ func displayIndexIgnoresContentOnlyUpdatesDuringActiveFiltering() async throws {
 
 @Test
 @MainActor
-func displayIndexReusesEntriesWhenCriteriaChanges() async throws {
+func displayRequestsUpdateWhenCriteriaChanges() async throws {
     let context = makeContext()
     let scriptID = applyRequest(
         to: context,
@@ -540,16 +539,14 @@ func displayIndexReusesEntriesWhenCriteriaChanges() async throws {
     model.setSearchText("cdn")
 
     #expect(model.displayRequestIDs.count == 2)
-    model.resetDisplayIndexTestingCounters()
 
     model.setResourceFilter(.script, enabled: true)
     #expect(model.displayRequestIDs == [scriptID])
-    #expect(model.fullMembershipEvaluationCountForTesting == 1)
 }
 
 @Test
 @MainActor
-func displayIndexClearsStaleCacheAfterReset() async throws {
+func displayRequestsClearAfterReset() async throws {
     let context = makeContext()
     applyRequest(
         to: context,
@@ -563,12 +560,10 @@ func displayIndexClearsStaleCacheAfterReset() async throws {
     model.setSearchText("cdn")
 
     #expect(model.displayRequestIDs.count == 1)
-    #expect(model.displayEntryCacheCountForTesting == 1)
 
     context.clearNetworkRequests()
 
     #expect(model.displayRequestIDs.isEmpty)
-    #expect(model.displayEntryCacheCountForTesting == 0)
 }
 
 @Test
@@ -604,7 +599,7 @@ func displayRowsInvalidationIgnoresByteCountUpdates() async throws {
 
 @Test
 @MainActor
-func displayRowsInvalidationRevisionSkipsMediaClassification() async throws {
+func displayRowsInvalidationRevisionHasNoPerRequestEntries() async throws {
     let context = makeContext()
     let requestID = applyRequest(
         to: context,
@@ -614,26 +609,18 @@ func displayRowsInvalidationRevisionSkipsMediaClassification() async throws {
         mimeType: "application/octet-stream",
         timestamp: 1
     )
-    let classificationCount = Mutex(0)
-    let model = NetworkPanelModel(
-        context: context,
-        mediaPreviewClassifier: { mimeType, url in
-            classificationCount.withLock { $0 += 1 }
-            return NetworkDisplay.MediaPreviewSupport.classification(mimeType: mimeType, url: url)
-        }
-    )
+    let model = NetworkPanelModel(context: context)
     model.setResourceFilter(.media, enabled: true)
 
-    _ = model.displayRowsInvalidationRevision
-    #expect(classificationCount.withLock { $0 } == 0)
+    let revision = model.displayRowsInvalidationRevision
+    #expect(revision.entries.isEmpty)
 
     #expect(model.displayRequestIDs == [requestID])
-    #expect(classificationCount.withLock { $0 } > 0)
 }
 
 @Test
 @MainActor
-func displayIndexReusesEntriesWhenDisplaySignatureIsUnchanged() async throws {
+func displayRequestsUpdateWhenResourceCategoryChanges() async throws {
     let context = makeContext()
     let jsonID = applyRequest(
         to: context,
@@ -655,12 +642,9 @@ func displayIndexReusesEntriesWhenDisplaySignatureIsUnchanged() async throws {
     model.setResourceFilter(.media, enabled: true)
 
     #expect(model.displayRequestIDs == [mediaID])
-    model.resetDisplayIndexTestingCounters()
 
     applyDataReceived(to: context, requestID: "1", dataLength: 1024, encodedDataLength: 512, timestamp: 3)
     #expect(model.displayRequestIDs == [mediaID])
-    #expect(model.displayEntryBuildCountForTesting == 0)
-    #expect(model.rebuiltDisplayRequestIDsForTesting.isEmpty)
 
     applyResponseReceived(
         to: context,
@@ -671,13 +655,11 @@ func displayIndexReusesEntriesWhenDisplaySignatureIsUnchanged() async throws {
         timestamp: 4
     )
     #expect(model.displayRequestIDs == [mediaID, jsonID])
-    #expect(model.displayEntryBuildCountForTesting == 1)
-    #expect(model.rebuiltDisplayRequestIDsForTesting == [jsonID])
 }
 
 @Test
 @MainActor
-func displayRequestIDsSkipsMediaClassificationWhenUnfilteredOrSearchOnly() async throws {
+func displayRequestIDsUseDataKitClassificationForMediaFiltering() async throws {
     let context = makeContext()
     let requestID = applyRequest(
         to: context,
@@ -687,27 +669,17 @@ func displayRequestIDsSkipsMediaClassificationWhenUnfilteredOrSearchOnly() async
         mimeType: "application/octet-stream",
         timestamp: 1
     )
-    let classificationCount = Mutex(0)
-    let model = NetworkPanelModel(
-        context: context,
-        mediaPreviewClassifier: { mimeType, url in
-            classificationCount.withLock { $0 += 1 }
-            return NetworkDisplay.MediaPreviewSupport.classification(mimeType: mimeType, url: url)
-        }
-    )
+    let model = NetworkPanelModel(context: context)
 
     #expect(model.displayRequestIDs == [requestID])
     let request = try #require(context.registeredRequest(for: requestID))
     #expect(request.displayName == "clip.mp4")
-    #expect(classificationCount.withLock { $0 } == 0)
 
     model.setSearchText("clip")
     #expect(model.displayRequestIDs == [requestID])
-    #expect(classificationCount.withLock { $0 } == 0)
 
     model.setResourceFilter(.media, enabled: true)
     #expect(model.displayRequestIDs == [requestID])
-    #expect(classificationCount.withLock { $0 } > 0)
 }
 
 @Test

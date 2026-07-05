@@ -2117,7 +2117,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func hiddenFilteredListSkipsSnapshotApplyWhenDeferredRowsMatchCurrentSnapshot() async throws {
+    func hiddenFilteredListSkipsSnapshotReloadWhenRowsRemainVisible() async throws {
         let context = makeContext()
         let request = try #require(applyRequest(
             to: context,
@@ -2174,12 +2174,12 @@ struct NetworkDetailViewControllerTests {
         #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
         #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeHiddenUpdate)
         #expect(listViewController.displayedRequestIDsForTesting == [request.id])
-        #expect(listViewController.hasScheduledDisplayRowsReloadForTesting)
+        #expect(listViewController.hasScheduledDisplayRowsReloadForTesting == false)
         #expect(cell.fileTypeLabelForTesting == "png")
 
         await listViewController.flushThrottledDisplayRowsReloadForTesting()
 
-        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate + 1)
+        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
         #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeHiddenUpdate)
         #expect(listViewController.displayedRequestIDsForTesting == [request.id])
     }

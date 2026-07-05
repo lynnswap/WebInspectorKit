@@ -651,11 +651,16 @@ public final class NetworkRequest: WebInspectorFetchableModel {
     }
 
     public var resourceCategory: ResourceCategory {
-        Self.resourceCategory(resourceType: resourceType, mimeType: mimeType, url: responseURL ?? url)
+        Self.resourceCategory(
+            resourceType: resourceType,
+            mimeType: Self.effectiveMIMEType(mimeType: mimeType, headers: responseHeaders),
+            url: responseURL ?? url,
+            hasResponse: hasResponse
+        )
     }
 
     public var searchableText: String {
-        Self.uniqueNonEmpty([
+        return Self.uniqueNonEmpty([
             url,
             responseURL,
             Self.urlSearchText(url),
@@ -939,40 +944,63 @@ public final class NetworkRequest: WebInspectorFetchableModel {
     private static func resourceCategory(
         resourceType: Network.ResourceType?,
         mimeType: String?,
-        url: String
+        url: String,
+        hasResponse: Bool
     ) -> ResourceCategory {
-        if let resourceType {
-            switch resourceType.rawValue.lowercased() {
-            case "document":
-                return .document
-            case "stylesheet":
-                return .stylesheet
-            case "script":
-                return .script
-            case "image":
+        let resourceTypeRawValue = resourceType?.rawValue.lowercased()
+        let normalizedMIMEType = normalizedMIMEType(mimeType)
+        let pathExtension = pathExtension(in: url)
+
+        if hasResponse {
+            if isPreviewableImage(mimeType: normalizedMIMEType, pathExtension: "") {
                 return .image
-            case "font":
-                return .font
-            case "xhr", "fetch", "ping", "beacon", "eventsource":
-                return .xhrFetch
-            case "media":
+            }
+            if isPreviewableMedia(mimeType: normalizedMIMEType, pathExtension: "") {
                 return .media
-            case "websocket":
-                return .webSocket
-            default:
-                break
             }
         }
 
-        let normalizedMIMEType = normalizedMIMEType(mimeType)
-        let pathExtension = pathExtension(in: url)
+        switch resourceTypeRawValue {
+        case "document":
+            return .document
+        case "stylesheet":
+            return .stylesheet
+        case "script":
+            return .script
+        case "font":
+            return .font
+        case "websocket":
+            return .webSocket
+        default:
+            break
+        }
+
+        if hasResponse || resourceTypeRawValue == nil {
+            if isPreviewableImage(mimeType: normalizedMIMEType, pathExtension: pathExtension) {
+                return .image
+            }
+            if isPreviewableMedia(mimeType: normalizedMIMEType, pathExtension: pathExtension) {
+                return .media
+            }
+        }
+        switch resourceTypeRawValue {
+        case "image":
+            return .image
+        case "media":
+            return .media
+        case "xhr", "fetch", "ping", "beacon", "eventsource":
+            return .xhrFetch
+        default:
+            break
+        }
+
         if normalizedMIMEType == "text/css" || pathExtension == "css" {
             return .stylesheet
         }
         if normalizedMIMEType.contains("javascript") || ["js", "mjs", "cjs"].contains(pathExtension) {
             return .script
         }
-        if normalizedMIMEType.hasPrefix("image/") {
+        if normalizedMIMEType.hasPrefix("image/"), normalizedMIMEType != "image/svg+xml" {
             return .image
         }
         if normalizedMIMEType.hasPrefix("font/") || ["woff", "woff2", "ttf", "otf"].contains(pathExtension) {
@@ -989,12 +1017,46 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         return .other
     }
 
+    private static func effectiveMIMEType(mimeType: String?, headers: [String: String]) -> String? {
+        if let mimeType, mimeType.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            return mimeType
+        }
+        guard let contentType = headers.first(where: { key, _ in
+            key.caseInsensitiveCompare("content-type") == .orderedSame
+        })?.value else {
+            return nil
+        }
+        return contentType
+    }
+
     private static func normalizedMIMEType(_ mimeType: String?) -> String {
         mimeType?
             .split(separator: ";", maxSplits: 1, omittingEmptySubsequences: true)
             .first?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased() ?? ""
+    }
+
+    private static func isPreviewableImage(mimeType: String, pathExtension: String) -> Bool {
+        knownPreviewableImageMIMETypes.contains(mimeType)
+            || knownPreviewableImagePathExtensions.contains(pathExtension)
+    }
+
+    private static func isPreviewableMedia(mimeType: String, pathExtension: String) -> Bool {
+        isHLSMIMEType(mimeType)
+            || knownPreviewableMediaMIMETypes.contains(mimeType)
+            || pathExtension == "m3u8"
+            || knownPreviewableMediaPathExtensions.contains(pathExtension)
+    }
+
+    private static func isHLSMIMEType(_ mimeType: String) -> Bool {
+        switch mimeType {
+        case "application/vnd.apple.mpegurl", "application/x-mpegurl", "application/mpegurl",
+             "audio/mpegurl", "audio/x-mpegurl":
+            true
+        default:
+            false
+        }
     }
 
     private static func urlSearchText(_ rawURL: String) -> String {
@@ -1022,6 +1084,65 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         }
         return URL(fileURLWithPath: rawURL).pathExtension.lowercased()
     }
+
+    private static let knownPreviewableImageMIMETypes: Set<String> = [
+        "image/apng",
+        "image/avif",
+        "image/bmp",
+        "image/gif",
+        "image/heic",
+        "image/heif",
+        "image/jpeg",
+        "image/jpg",
+        "image/pjpeg",
+        "image/png",
+        "image/tiff",
+        "image/webp",
+        "image/x-png",
+    ]
+
+    private static let knownPreviewableMediaMIMETypes: Set<String> = [
+        "audio/aac",
+        "audio/aiff",
+        "audio/mp3",
+        "audio/mp4",
+        "audio/mpeg",
+        "audio/wav",
+        "audio/x-aiff",
+        "audio/x-m4a",
+        "audio/x-wav",
+        "video/mp4",
+        "video/quicktime",
+        "video/x-m4v",
+    ]
+
+    private static let knownPreviewableImagePathExtensions: Set<String> = [
+        "apng",
+        "avif",
+        "bmp",
+        "gif",
+        "heic",
+        "heif",
+        "jpg",
+        "jpeg",
+        "png",
+        "tif",
+        "tiff",
+        "webp",
+    ]
+
+    private static let knownPreviewableMediaPathExtensions: Set<String> = [
+        "aac",
+        "aif",
+        "aiff",
+        "caf",
+        "m4a",
+        "m4v",
+        "mov",
+        "mp3",
+        "mp4",
+        "wav",
+    ]
 
     private static func uniqueNonEmpty(_ values: [String?]) -> [String] {
         var seen = Set<String>()

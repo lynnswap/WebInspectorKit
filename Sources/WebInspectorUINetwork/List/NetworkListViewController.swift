@@ -135,10 +135,6 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         super.viewWillAppear(animated)
         configureNavigationItem()
         navigationController?.setNavigationBarHidden(false, animated: animated)
-    }
-
-    override package func viewIsAppearing(_ animated: Bool) {
-        super.viewIsAppearing(animated)
         resumeRendering()
     }
 

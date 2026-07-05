@@ -2545,6 +2545,137 @@ func networkFetchDescriptorPublishesPredicateEnterAndLeave() async throws {
 
 @MainActor
 @Test
+func networkFetchDescriptorSupportsResourceCategorySets() async throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+
+    context.apply(.requestWillBeSent(
+        id: Network.Request.ID("pending-avatar"),
+        request: Network.Request(id: Network.Request.ID("pending-avatar"), url: "https://api.example.com/avatar.png", method: "GET"),
+        resourceType: .xhr,
+        redirectResponse: nil,
+        timestamp: 1
+    ))
+    context.apply(.requestWillBeSent(
+        id: Network.Request.ID("script"),
+        request: Network.Request(id: Network.Request.ID("script"), url: "https://cdn.example.com/app.js", method: "GET"),
+        resourceType: .script,
+        redirectResponse: nil,
+        timestamp: 2
+    ))
+    context.apply(.requestWillBeSent(
+        id: Network.Request.ID("image"),
+        request: Network.Request(id: Network.Request.ID("image"), url: "https://cdn.example.com/photo.png", method: "GET"),
+        resourceType: .image,
+        redirectResponse: nil,
+        timestamp: 3
+    ))
+    context.apply(.requestWillBeSent(
+        id: Network.Request.ID("movie"),
+        request: Network.Request(id: Network.Request.ID("movie"), url: "https://media.example.com/clip.mp4", method: "GET"),
+        resourceType: .fetch,
+        redirectResponse: nil,
+        timestamp: 4
+    ))
+
+    let mediaCategories: [NetworkRequest.ResourceCategory] = [.image, .media]
+    let descriptor = WebInspectorFetchDescriptor<NetworkRequest>(
+        predicate: #Predicate { request in
+            mediaCategories.contains(request.resourceCategory)
+        },
+        sortBy: [SortDescriptor(\.requestSentTimestamp, order: .reverse)]
+    )
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: descriptor)
+
+    #expect(results.items.map(\.id) == [
+        NetworkRequest.ID(Network.Request.ID("image")),
+    ])
+
+    context.apply(.responseReceived(
+        id: Network.Request.ID("pending-avatar"),
+        response: Network.Response(
+            url: "https://api.example.com/avatar.png",
+            status: 200,
+            mimeType: "image/png"
+        ),
+        resourceType: .xhr,
+        timestamp: 5
+    ))
+    context.apply(.responseReceived(
+        id: Network.Request.ID("movie"),
+        response: Network.Response(
+            url: "https://media.example.com/clip.mp4",
+            status: 200,
+            mimeType: "application/octet-stream"
+        ),
+        resourceType: .fetch,
+        timestamp: 6
+    ))
+
+    #expect(results.items.map(\.id) == [
+        NetworkRequest.ID(Network.Request.ID("movie")),
+        NetworkRequest.ID(Network.Request.ID("image")),
+        NetworkRequest.ID(Network.Request.ID("pending-avatar")),
+    ])
+}
+
+@MainActor
+@Test
+func networkRequestResourceCategoryUsesResponseHeadersWithoutPendingURLInference() async throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let requestID = Network.Request.ID("header-avatar")
+    context.apply(.requestWillBeSent(
+        id: requestID,
+        request: Network.Request(id: requestID, url: "https://api.example.com/avatar.png", method: "GET"),
+        resourceType: .xhr,
+        redirectResponse: nil,
+        timestamp: 1
+    ))
+    let request = try #require(context.registeredRequest(forProxyID: requestID))
+
+    #expect(request.resourceCategory == .xhrFetch)
+
+    context.apply(.responseReceived(
+        id: requestID,
+        response: Network.Response(
+            url: "https://api.example.com/avatar",
+            status: 200,
+            mimeType: nil,
+            headers: ["Content-Type": "image/png; charset=utf-8"]
+        ),
+        resourceType: .xhr,
+        timestamp: 2
+    ))
+
+    #expect(request.resourceCategory == .image)
+    #expect(request.searchableText.localizedStandardContains("image/png") == false)
+
+    let scriptVideoID = Network.Request.ID("script-video")
+    context.apply(.requestWillBeSent(
+        id: scriptVideoID,
+        request: Network.Request(id: scriptVideoID, url: "https://cdn.example.com/player.js", method: "GET"),
+        resourceType: .script,
+        redirectResponse: nil,
+        timestamp: 3
+    ))
+    let scriptVideoRequest = try #require(context.registeredRequest(forProxyID: scriptVideoID))
+    #expect(scriptVideoRequest.resourceCategory == .script)
+
+    context.apply(.responseReceived(
+        id: scriptVideoID,
+        response: Network.Response(
+            url: "https://cdn.example.com/player.js",
+            status: 200,
+            mimeType: "video/mp4"
+        ),
+        resourceType: .script,
+        timestamp: 4
+    ))
+
+    #expect(scriptVideoRequest.resourceCategory == .media)
+}
+
+@MainActor
+@Test
 func clearNetworkRequestsPublishesResetAndIgnoresClearedEvents() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)

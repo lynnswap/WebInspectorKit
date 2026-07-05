@@ -271,6 +271,10 @@ private protocol NetworkRequestRecordResourceCategoryExpression {
     func networkRequestResourceCategoryExpression() -> @Sendable (NetworkRequestRecord) -> NetworkRequest.ResourceCategory
 }
 
+private protocol NetworkRequestRecordResourceCategorySequenceExpression {
+    func networkRequestResourceCategorySequenceExpression() -> [NetworkRequest.ResourceCategory]
+}
+
 private enum NetworkRequestRecordPredicateValue: Equatable, Sendable {
     case string(String)
     case resourceCategory(NetworkRequest.ResourceCategory)
@@ -333,6 +337,19 @@ extension PredicateExpressions.StringLocalizedStandardContains: NetworkRequestRe
         let otherExpression = other.networkRequestStringExpression()
         return { record in
             rootExpression(record).localizedStandardContains(otherExpression(record))
+        }
+    }
+}
+
+extension PredicateExpressions.SequenceContains: NetworkRequestRecordPredicateExpression
+    where LHS: NetworkRequestRecordResourceCategorySequenceExpression,
+          RHS: NetworkRequestRecordResourceCategoryExpression
+{
+    fileprivate func networkRequestRecordPredicate() -> NetworkRequestQueryPlan.Predicate {
+        let categories = Set(sequence.networkRequestResourceCategorySequenceExpression())
+        let elementExpression = element.networkRequestResourceCategoryExpression()
+        return { record in
+            categories.contains(elementExpression(record))
         }
     }
 }
@@ -467,5 +484,13 @@ extension PredicateExpressions.Value: NetworkRequestRecordResourceCategoryExpres
     fileprivate func networkRequestResourceCategoryExpression() -> @Sendable (NetworkRequestRecord) -> NetworkRequest.ResourceCategory {
         let value = value
         return { _ in value }
+    }
+}
+
+extension PredicateExpressions.Value: NetworkRequestRecordResourceCategorySequenceExpression
+    where Output == [NetworkRequest.ResourceCategory]
+{
+    fileprivate func networkRequestResourceCategorySequenceExpression() -> [NetworkRequest.ResourceCategory] {
+        value
     }
 }

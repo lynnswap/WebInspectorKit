@@ -36,38 +36,21 @@ package final class NetworkPanelModel {
             let normalized = NetworkDisplay.ResourceFilter.normalizedSelection(activeResourceFilters)
             if effectiveResourceFilters != normalized {
                 effectiveResourceFilters = normalized
+                updateNetworkFetchDescriptor()
             }
         }
     }
     package private(set) var effectiveResourceFilters: Set<NetworkDisplay.ResourceFilter> = []
     @ObservationIgnored private let responseBodyFetchCoordinator: NetworkResponseBodyFetchCoordinator
-    @ObservationIgnored private let mediaPreviewClassifier: NetworkDisplay.MediaPreviewClassifier
-    @ObservationIgnored private var displayIndex: NetworkPanelDisplayIndex
 
-    package init(
-        context: WebInspectorContext,
-        mediaPreviewClassifier: @escaping NetworkDisplay.MediaPreviewClassifier = { mimeType, url in
-            NetworkDisplay.MediaPreviewSupport.classification(mimeType: mimeType, url: url)
-        }
-    ) {
+    package init(context: WebInspectorContext) {
         self.context = context
-        self.requests = context.fetchedResults()
+        self.requests = context.fetchedResults(for: Self.makeNetworkFetchDescriptor(searchText: "", filters: []))
         self.responseBodyFetchCoordinator = NetworkResponseBodyFetchCoordinator()
-        self.mediaPreviewClassifier = mediaPreviewClassifier
-        self.displayIndex = NetworkPanelDisplayIndex()
     }
 
     package var displayRequestIDs: [NetworkRequest.ID] {
-        let currentRequests = requests.items
-        let criteria = NetworkPanelDisplayCriteria(
-            searchText: normalizedSearchText,
-            resourceFilters: effectiveResourceFilters
-        )
-        return displayIndex.reconcile(
-            requests: currentRequests,
-            criteria: criteria,
-            mediaPreviewClassifier: mediaPreviewClassifier
-        )
+        requests.items.map(\.id)
     }
 
     package var displayRequests: [NetworkRequest] {
@@ -81,25 +64,11 @@ package final class NetworkPanelModel {
     package var displayRowsInvalidationRevision: DisplayRowsInvalidationRevision {
         let query = normalizedSearchText
         let resourceFilters = effectiveResourceFilters
-        let criteria = NetworkPanelDisplayCriteria(
-            searchText: query,
-            resourceFilters: resourceFilters
-        )
-        let entries: [DisplayRowsInvalidationEntry] = if criteria.requiresEntries {
-            requests.items.map { request in
-                DisplayRowsInvalidationEntry(
-                    requestID: request.id,
-                    signature: request.displayInvalidationSignature
-                )
-            }
-        } else {
-            []
-        }
         return DisplayRowsInvalidationRevision(
             searchText: query,
             resourceFilters: resourceFilters,
             topologyRevision: requests.topologyRevision,
-            entries: entries
+            entries: []
         )
     }
 
@@ -123,6 +92,7 @@ package final class NetworkPanelModel {
             return
         }
         searchText = text
+        updateNetworkFetchDescriptor()
     }
 
     package func setResourceFilter(_ filter: NetworkDisplay.ResourceFilter, enabled: Bool) {
@@ -158,31 +128,45 @@ package final class NetworkPanelModel {
     private var normalizedSearchText: String {
         searchText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
+    private func updateNetworkFetchDescriptor() {
+        requests.updateFetchDescriptor(
+            Self.makeNetworkFetchDescriptor(
+                searchText: normalizedSearchText,
+                filters: effectiveResourceFilters
+            )
+        )
+    }
+
+    private static func makeNetworkFetchDescriptor(
+        searchText: String,
+        filters: Set<NetworkDisplay.ResourceFilter>
+    ) -> WebInspectorFetchDescriptor<NetworkRequest> {
+        let categories = NetworkRequest.ResourceCategory.networkCategories(for: filters)
+        let normalizedSearchText = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let predicate: Predicate<NetworkRequest>?
+        if normalizedSearchText.isEmpty, categories.isEmpty {
+            predicate = nil
+        } else if categories.isEmpty {
+            predicate = #Predicate { request in
+                request.searchableText.localizedStandardContains(normalizedSearchText)
+            }
+        } else if normalizedSearchText.isEmpty {
+            predicate = #Predicate { request in
+                categories.contains(request.resourceCategory)
+            }
+        } else {
+            predicate = #Predicate { request in
+                categories.contains(request.resourceCategory)
+                    && request.searchableText.localizedStandardContains(normalizedSearchText)
+            }
+        }
+        return WebInspectorFetchDescriptor(
+            predicate: predicate,
+            sortBy: [SortDescriptor(\.requestSentTimestamp, order: .reverse)]
+        )
+    }
 }
-
-#if DEBUG
-extension NetworkPanelModel {
-    package var displayEntryBuildCountForTesting: Int {
-        displayIndex.displayEntryBuildCount
-    }
-
-    package var rebuiltDisplayRequestIDsForTesting: [NetworkRequest.ID] {
-        displayIndex.rebuiltDisplayRequestIDs
-    }
-
-    package var displayEntryCacheCountForTesting: Int {
-        displayIndex.displayEntryCacheCount
-    }
-
-    package var fullMembershipEvaluationCountForTesting: Int {
-        displayIndex.fullMembershipEvaluationCount
-    }
-
-    package func resetDisplayIndexTestingCounters() {
-        displayIndex.resetTestingCounters()
-    }
-}
-#endif
 
 extension NetworkPanelModel {
     package struct DisplayRowsInvalidationEntry: Equatable {
@@ -195,5 +179,40 @@ extension NetworkPanelModel {
         package var resourceFilters: Set<NetworkDisplay.ResourceFilter>
         package var topologyRevision: Int
         package var entries: [DisplayRowsInvalidationEntry]
+    }
+}
+
+private extension NetworkRequest.ResourceCategory {
+    static func networkCategories(
+        for filters: Set<NetworkDisplay.ResourceFilter>
+    ) -> [NetworkRequest.ResourceCategory] {
+        var categories: [NetworkRequest.ResourceCategory] = []
+        for filter in NetworkDisplay.ResourceFilter.pickerCases where filters.contains(filter) {
+            categories.append(contentsOf: filter.networkResourceCategories)
+        }
+        return categories
+    }
+}
+
+private extension NetworkDisplay.ResourceFilter {
+    var networkResourceCategories: [NetworkRequest.ResourceCategory] {
+        switch self {
+        case .all:
+            []
+        case .document:
+            [.document]
+        case .stylesheet:
+            [.stylesheet]
+        case .media:
+            [.image, .media]
+        case .font:
+            [.font]
+        case .script:
+            [.script]
+        case .xhrFetch:
+            [.xhrFetch]
+        case .other:
+            [.webSocket, .other]
+        }
     }
 }
