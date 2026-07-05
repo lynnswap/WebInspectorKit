@@ -751,6 +751,7 @@ func displayRowsInvalidationIgnoresContentUpdatesWhenUnfiltered() async throws {
     let model = NetworkPanelModel(context: context)
 
     let initialRevision = model.displayRowsInvalidationRevision
+    #expect(initialRevision.entries.isEmpty)
     applyResponseReceived(
         to: context,
         requestID: "1",

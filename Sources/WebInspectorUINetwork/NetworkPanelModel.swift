@@ -85,15 +85,20 @@ package final class NetworkPanelModel {
             searchText: query,
             resourceFilters: resourceFilters
         )
-        let entries = requests.items.map { request in
-            DisplayRowsInvalidationEntry(
-                requestID: request.id,
-                signature: criteria.requiresEntries ? request.displayInvalidationSignature : nil
-            )
+        let entries: [DisplayRowsInvalidationEntry] = if criteria.requiresEntries {
+            requests.items.map { request in
+                DisplayRowsInvalidationEntry(
+                    requestID: request.id,
+                    signature: request.displayInvalidationSignature
+                )
+            }
+        } else {
+            []
         }
         return DisplayRowsInvalidationRevision(
             searchText: query,
             resourceFilters: resourceFilters,
+            topologyRevision: requests.topologyRevision,
             entries: entries
         )
     }
@@ -182,12 +187,13 @@ extension NetworkPanelModel {
 extension NetworkPanelModel {
     package struct DisplayRowsInvalidationEntry: Equatable {
         package var requestID: NetworkRequest.ID
-        package var signature: NetworkRequest.DisplayInvalidationSignature?
+        package var signature: NetworkRequest.DisplayInvalidationSignature
     }
 
     package struct DisplayRowsInvalidationRevision: Equatable {
         package var searchText: String
         package var resourceFilters: Set<NetworkDisplay.ResourceFilter>
+        package var topologyRevision: Int
         package var entries: [DisplayRowsInvalidationEntry]
     }
 }

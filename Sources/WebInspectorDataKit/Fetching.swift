@@ -250,6 +250,7 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
     public private(set) var sectionBy: WebInspectorSectionDescriptor<Model>?
     public private(set) var items: [Model]
     public private(set) var sections: [WebInspectorFetchSection<Model>]
+    package private(set) var topologyRevision: Int
 
     @ObservationIgnored private let transactionRelay = WebInspectorAsyncStreamRelay<
         WebInspectorFetchedResultsTransaction<Model>
@@ -267,6 +268,7 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
         self.items = items
         sections = Self.sections(for: items, sectionBy: sectionBy)
         self.modelContext = modelContext
+        topologyRevision = 0
     }
 
     deinit {
@@ -281,6 +283,7 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
         let oldSnapshot = currentSnapshot
         self.items = items
         sections = Self.sections(for: items, sectionBy: sectionBy)
+        bumpTopologyRevisionIfNeeded(oldSnapshot: oldSnapshot)
         yieldTransaction(oldSnapshot: oldSnapshot, updatedItemIDs: updatedItemIDs)
     }
 
@@ -289,6 +292,18 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
         let oldSnapshot = currentSnapshot
         items.append(item)
         sections = Self.sections(for: items, sectionBy: sectionBy)
+        bumpTopologyRevisionIfNeeded(oldSnapshot: oldSnapshot)
+        yieldTransaction(oldSnapshot: oldSnapshot, updatedItemIDs: [])
+    }
+
+    func refreshTopologyAfterItemMutation(_ item: Model) {
+        guard sectionBy != nil,
+              items.contains(where: { $0.id == item.id }) else {
+            return
+        }
+        let oldSnapshot = currentSnapshot
+        sections = Self.sections(for: items, sectionBy: sectionBy)
+        bumpTopologyRevisionIfNeeded(oldSnapshot: oldSnapshot)
         yieldTransaction(oldSnapshot: oldSnapshot, updatedItemIDs: [])
     }
 
@@ -296,6 +311,7 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
         let oldSnapshot = currentSnapshot
         self.items = items
         sections = Self.sections(for: items, sectionBy: sectionBy)
+        bumpTopologyRevision()
         yieldResetTransaction(oldSnapshot: oldSnapshot)
     }
 
@@ -316,6 +332,17 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
 
     private var currentSnapshot: WebInspectorFetchedResultsSnapshot<Model.ID> {
         WebInspectorFetchedResultsSnapshot(sections: sections)
+    }
+
+    private func bumpTopologyRevisionIfNeeded(oldSnapshot: WebInspectorFetchedResultsSnapshot<Model.ID>) {
+        guard oldSnapshot != currentSnapshot else {
+            return
+        }
+        bumpTopologyRevision()
+    }
+
+    private func bumpTopologyRevision() {
+        topologyRevision &+= 1
     }
 
     private func yieldTransaction(

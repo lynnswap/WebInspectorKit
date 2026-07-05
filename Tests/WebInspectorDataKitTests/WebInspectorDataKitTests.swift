@@ -2389,6 +2389,62 @@ func fetchedResultsControllerPublishesNetworkTopologyTransactionsOnly() async th
 
 @MainActor
 @Test
+func sectionedNetworkResultsPublishTopologyWhenSectionKeyChanges() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(sectionBy: \.mimeType)
+    let controller = WebInspectorFetchedResultsController(fetchedResults: results)
+    let recorder = FetchedResultsTransactionRecorder(stream: controller.transactions)
+    defer { recorder.cancel() }
+    try await recorder.waitUntilStarted()
+
+    let requestID = Network.Request.ID("sectioned-controller-request")
+    let modelID = NetworkRequest.ID(requestID)
+    await runtime.backend.emit(
+        .requestWillBeSent(
+            id: requestID,
+            request: Network.Request(id: requestID, url: "https://media.example.com/clip.mp4", method: "GET"),
+            resourceType: .fetch,
+            redirectResponse: nil,
+            timestamp: 1
+        ),
+        target: target
+    )
+
+    try await recorder.waitForTransactionCount(1)
+    #expect(controller.snapshot.sectionIDs == [WebInspectorFetchSectionID(rawValue: "")])
+    #expect(controller.snapshot.itemIDs == [modelID])
+
+    await runtime.backend.emit(
+        .responseReceived(
+            id: requestID,
+            response: Network.Response(
+                url: "https://media.example.com/clip.mp4",
+                status: 200,
+                mimeType: "video/mp4"
+            ),
+            resourceType: .fetch,
+            timestamp: 2
+        ),
+        target: target
+    )
+
+    try await recorder.waitForTransactionCount(2)
+    let sectionChange = try #require(recorder.transactions.last)
+    #expect(sectionChange.isReset == false)
+    #expect(sectionChange.oldSnapshot.sectionIDs == [WebInspectorFetchSectionID(rawValue: "")])
+    #expect(sectionChange.newSnapshot.sectionIDs == [WebInspectorFetchSectionID(rawValue: "video/mp4")])
+    #expect(sectionChange.oldSnapshot.itemIDs == [modelID])
+    #expect(sectionChange.newSnapshot.itemIDs == [modelID])
+    #expect(sectionChange.sectionChanges == [
+        .delete(sectionID: WebInspectorFetchSectionID(rawValue: ""), index: 0),
+        .insert(sectionID: WebInspectorFetchSectionID(rawValue: "video/mp4"), index: 0),
+    ])
+    #expect(sectionChange.itemChanges == [])
+}
+
+@MainActor
+@Test
 func clearNetworkRequestsPublishesResetAndIgnoresClearedEvents() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)

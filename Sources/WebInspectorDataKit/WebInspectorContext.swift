@@ -2800,6 +2800,7 @@ extension WebInspectorContext {
         clearedNetworkRequestIDs.remove(id)
         let request: NetworkRequest
         var inserted = false
+        var topologyMayHaveChanged = false
         if let existing = requestsByID[id] {
             request = existing
             if let redirectResponse, existing.isActive {
@@ -2809,8 +2810,10 @@ extension WebInspectorContext {
                     timestamp: timestamp,
                     resourceType: resourceType
                 )
+                topologyMayHaveChanged = true
             } else if existing.isActive == false {
                 request.applyRequestWillBeSent(request: payload, resourceType: resourceType, timestamp: timestamp)
+                topologyMayHaveChanged = true
             }
         } else {
             request = NetworkRequest(request: payload, resourceType: resourceType, timestamp: timestamp, modelContext: self)
@@ -2820,6 +2823,8 @@ extension WebInspectorContext {
         }
         if inserted {
             notifyNetworkRequestInserted(request)
+        } else if topologyMayHaveChanged {
+            notifyNetworkRequestTopologyMayHaveChanged(request)
         }
     }
 
@@ -2854,6 +2859,7 @@ extension WebInspectorContext {
             return
         }
         request.applyMemoryCache(response: response, timestamp: timestamp)
+        notifyNetworkRequestTopologyMayHaveChanged(request)
     }
 
     private func applyResponseReceived(
@@ -2893,6 +2899,8 @@ extension WebInspectorContext {
         request.applyResponse(response, resourceType: resourceType, timestamp: timestamp)
         if inserted {
             notifyNetworkRequestInserted(request)
+        } else {
+            notifyNetworkRequestTopologyMayHaveChanged(request)
         }
     }
 
@@ -2952,6 +2960,8 @@ extension WebInspectorContext {
         request.applyWebSocketCreated(url: url)
         if inserted {
             notifyNetworkRequestInserted(request)
+        } else {
+            notifyNetworkRequestTopologyMayHaveChanged(request)
         }
     }
 
@@ -2984,6 +2994,13 @@ extension WebInspectorContext {
         networkFetchedResults.removeAll { $0.value == nil }
         for registration in networkFetchedResults {
             registration.value?.insertItem(request)
+        }
+    }
+
+    private func notifyNetworkRequestTopologyMayHaveChanged(_ request: NetworkRequest) {
+        networkFetchedResults.removeAll { $0.value == nil }
+        for registration in networkFetchedResults {
+            registration.value?.refreshTopologyAfterItemMutation(request)
         }
     }
 
