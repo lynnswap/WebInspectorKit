@@ -2,6 +2,34 @@ import Foundation
 import WebInspectorDataKit
 
 extension NetworkRequest {
+    package struct DisplayInvalidationSignature: Equatable {
+        package var requestID: NetworkRequest.ID
+        package var url: String
+        package var method: String
+        package var resourceTypeRawValue: String?
+        package var hasResponse: Bool
+        package var status: Int?
+        package var statusText: String?
+        package var responseURL: String?
+        package var mimeType: String?
+        package var responseContentTypeHeader: String?
+    }
+
+    package var displayInvalidationSignature: DisplayInvalidationSignature {
+        DisplayInvalidationSignature(
+            requestID: id,
+            url: url,
+            method: method,
+            resourceTypeRawValue: resourceType?.rawValue,
+            hasResponse: hasResponse,
+            status: status,
+            statusText: statusText,
+            responseURL: responseURL,
+            mimeType: mimeType,
+            responseContentTypeHeader: Self.responseContentTypeHeader(in: responseHeaders)
+        )
+    }
+
     package var displayName: String {
         NetworkDisplay.URLSummary(url: url).displayName
     }
@@ -113,6 +141,13 @@ extension NetworkRequest {
 
     package func sizeText(for length: Int) -> String {
         NetworkDisplay.sizeText(for: length)
+    }
+
+    private static func responseContentTypeHeader(in headers: [String: String]) -> String? {
+        if let value = headers["content-type"] {
+            return value
+        }
+        return headers.first { $0.key.caseInsensitiveCompare("content-type") == .orderedSame }?.value
     }
 }
 

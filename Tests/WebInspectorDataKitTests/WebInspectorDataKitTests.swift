@@ -1129,6 +1129,107 @@ func transportBackedInspectorInspectMaterializesSelectionAndRestoresHighlight() 
 
 @MainActor
 @Test
+func transportBackedFrameNavigationClearsRestoredPickerHighlight() async throws {
+    let targetID = ProtocolTarget.ID("page-main")
+    let inspectedID = DOM.Node.ID("42")
+    let (backend, transport, context) = try await startTransportBackedContext(
+        targetID: targetID,
+        documentID: "1"
+    )
+    let startupMessageCount = await backend.sentTargetMessages().count
+
+    let enablePickerTask = Task { @MainActor in
+        try await context.setElementPickerEnabled(true)
+    }
+    let inspectMode = try await waitForTransportTargetMessage(
+        backend,
+        method: "DOM.setInspectModeEnabled",
+        after: startupMessageCount
+    )
+    await receiveTransportTargetReply(
+        transport,
+        targetID: inspectMode.targetIdentifier,
+        messageID: try transportMessageID(inspectMode.message),
+        result: "{}"
+    )
+    try await enablePickerTask.value
+
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: targetID,
+        method: "Inspector.inspect",
+        params: #"{"object":{"type":"object","subtype":"node","objectId":"node-object"}}"#
+    )
+    let requestNode = try await waitForTransportTargetMessage(
+        backend,
+        method: "DOM.requestNode",
+        after: startupMessageCount
+    )
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: targetID,
+        method: "DOM.setChildNodes",
+        params: ##"{"parentId":"1","nodes":[{"nodeId":42,"nodeType":1,"nodeName":"DIV","localName":"div","nodeValue":"","childNodeCount":0}]}"##
+    )
+    await receiveTransportTargetReply(
+        transport,
+        targetID: requestNode.targetIdentifier,
+        messageID: try transportMessageID(requestNode.message),
+        result: #"{"nodeId":42}"#
+    )
+    try await waitUntil { context.selectedNode?.id == DOMNode.ID(inspectedID) }
+
+    let highlight = try await waitForTransportTargetMessage(
+        backend,
+        method: "DOM.highlightNode",
+        after: startupMessageCount
+    )
+    await receiveTransportTargetReply(
+        transport,
+        targetID: highlight.targetIdentifier,
+        messageID: try transportMessageID(highlight.message),
+        result: "{}"
+    )
+
+    let beforeNavigationMessageCount = await backend.sentTargetMessages().count
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: targetID,
+        method: "Page.frameNavigated",
+        params: #"{"frame":{"id":"main-frame","loaderId":"loader-2","name":"Main","url":"https://example.test/next","securityOrigin":"https://example.test","mimeType":"text/html"}}"#
+    )
+
+    let hideHighlight = try await waitForTransportTargetMessage(
+        backend,
+        method: "DOM.hideHighlight",
+        after: beforeNavigationMessageCount
+    )
+    #expect(hideHighlight.targetIdentifier == targetID)
+    await receiveTransportTargetReply(
+        transport,
+        targetID: hideHighlight.targetIdentifier,
+        messageID: try transportMessageID(hideHighlight.message),
+        result: "{}"
+    )
+
+    let getDocument = try await waitForTransportTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: beforeNavigationMessageCount
+    )
+    await receiveTransportTargetReply(
+        transport,
+        targetID: getDocument.targetIdentifier,
+        messageID: try transportMessageID(getDocument.message),
+        result: transportDocumentResult(nodeID: "2")
+    )
+
+    try await waitUntil { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("2")) }
+    #expect(context.selectedNode == nil)
+}
+
+@MainActor
+@Test
 func transportBackedFrameInspectProjectsFrameDocumentUnderIframeOwner() async throws {
     let pageTargetID = ProtocolTarget.ID("page-main")
     let frameTargetID = ProtocolTarget.ID("frame-child")

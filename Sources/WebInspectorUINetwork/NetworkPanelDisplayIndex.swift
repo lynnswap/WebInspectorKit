@@ -17,28 +17,36 @@ struct NetworkPanelDisplayCriteria: Equatable {
 @MainActor
 private struct NetworkPanelDisplayEntry: Equatable {
     var requestID: NetworkRequest.ID
+    var signature: NetworkRequest.DisplayInvalidationSignature
     var requestURLSummary: NetworkDisplay.URLSummary
     var responseURLSummary: NetworkDisplay.URLSummary?
     var fileTypeLabel: String
     var searchTokens: [String]
-    var resourceFilter: NetworkDisplay.ResourceFilter
+    var resourceFilter: NetworkDisplay.ResourceFilter?
 
     init(
         request: NetworkRequest,
+        signature: NetworkRequest.DisplayInvalidationSignature,
+        includeResourceFilter: Bool,
         mediaPreviewClassifier: NetworkDisplay.MediaPreviewClassifier
     ) {
         let projection = request.displayProjection()
         requestID = request.id
+        self.signature = signature
         requestURLSummary = projection.requestURLSummary
         responseURLSummary = projection.responseURLSummary
         fileTypeLabel = projection.fileTypeLabel
         searchTokens = projection.searchTokens
-        resourceFilter = request.displayResourceFilter(mediaPreviewClassifier: mediaPreviewClassifier)
+        resourceFilter = if includeResourceFilter {
+            request.displayResourceFilter(mediaPreviewClassifier: mediaPreviewClassifier)
+        } else {
+            nil
+        }
     }
 
     func matches(criteria: NetworkPanelDisplayCriteria) -> Bool {
         if criteria.requiresResourceFilter,
-           criteria.resourceFilters.contains(resourceFilter) == false {
+           resourceFilter.map(criteria.resourceFilters.contains) != true {
             return false
         }
 
@@ -113,6 +121,7 @@ struct NetworkPanelDisplayIndex {
 
         let dirtyRequestIDs = refreshEntries(
             requests: currentRequests,
+            criteria: currentCriteria,
             mediaPreviewClassifier: mediaPreviewClassifier
         )
 
@@ -179,15 +188,24 @@ struct NetworkPanelDisplayIndex {
 
     private mutating func refreshEntries(
         requests: [NetworkRequest],
+        criteria: NetworkPanelDisplayCriteria,
         mediaPreviewClassifier: NetworkDisplay.MediaPreviewClassifier
     ) -> Set<NetworkRequest.ID> {
         var dirtyRequestIDs: Set<NetworkRequest.ID> = []
         for request in requests {
-            let entry = makeEntry(for: request, mediaPreviewClassifier: mediaPreviewClassifier)
-            if entriesByID[request.id] != entry {
-                entriesByID[request.id] = entry
-                dirtyRequestIDs.insert(request.id)
+            let signature = request.displayInvalidationSignature
+            if let existingEntry = entriesByID[request.id],
+               existingEntry.signature == signature,
+               criteria.requiresResourceFilter == false || existingEntry.resourceFilter != nil {
+                continue
             }
+            entriesByID[request.id] = makeEntry(
+                for: request,
+                signature: signature,
+                includeResourceFilter: criteria.requiresResourceFilter,
+                mediaPreviewClassifier: mediaPreviewClassifier
+            )
+            dirtyRequestIDs.insert(request.id)
         }
         return dirtyRequestIDs
     }
@@ -237,6 +255,8 @@ struct NetworkPanelDisplayIndex {
 
     private mutating func makeEntry(
         for request: NetworkRequest,
+        signature: NetworkRequest.DisplayInvalidationSignature,
+        includeResourceFilter: Bool,
         mediaPreviewClassifier: NetworkDisplay.MediaPreviewClassifier
     ) -> NetworkPanelDisplayEntry {
 #if DEBUG
@@ -245,6 +265,8 @@ struct NetworkPanelDisplayIndex {
 #endif
         return NetworkPanelDisplayEntry(
             request: request,
+            signature: signature,
+            includeResourceFilter: includeResourceFilter,
             mediaPreviewClassifier: mediaPreviewClassifier
         )
     }

@@ -604,6 +604,79 @@ func displayRowsInvalidationIgnoresByteCountUpdates() async throws {
 
 @Test
 @MainActor
+func displayRowsInvalidationRevisionSkipsMediaClassification() async throws {
+    let context = makeContext()
+    let requestID = applyRequest(
+        to: context,
+        requestID: "1",
+        url: "https://media.example.com/clip.mp4",
+        resourceType: .fetch,
+        mimeType: "application/octet-stream",
+        timestamp: 1
+    )
+    let classificationCount = Mutex(0)
+    let model = NetworkPanelModel(
+        context: context,
+        mediaPreviewClassifier: { mimeType, url in
+            classificationCount.withLock { $0 += 1 }
+            return NetworkDisplay.MediaPreviewSupport.classification(mimeType: mimeType, url: url)
+        }
+    )
+    model.setResourceFilter(.media, enabled: true)
+
+    _ = model.displayRowsInvalidationRevision
+    #expect(classificationCount.withLock { $0 } == 0)
+
+    #expect(model.displayRequestIDs == [requestID])
+    #expect(classificationCount.withLock { $0 } > 0)
+}
+
+@Test
+@MainActor
+func displayIndexReusesEntriesWhenDisplaySignatureIsUnchanged() async throws {
+    let context = makeContext()
+    let jsonID = applyRequest(
+        to: context,
+        requestID: "1",
+        url: "https://api.example.com/data.json",
+        resourceType: .fetch,
+        mimeType: "application/json",
+        timestamp: 1
+    )
+    let mediaID = applyRequest(
+        to: context,
+        requestID: "2",
+        url: "https://media.example.com/clip.mp4",
+        resourceType: .fetch,
+        mimeType: "application/octet-stream",
+        timestamp: 2
+    )
+    let model = NetworkPanelModel(context: context)
+    model.setResourceFilter(.media, enabled: true)
+
+    #expect(model.displayRequestIDs == [mediaID])
+    model.resetDisplayIndexTestingCounters()
+
+    applyDataReceived(to: context, requestID: "1", dataLength: 1024, encodedDataLength: 512, timestamp: 3)
+    #expect(model.displayRequestIDs == [mediaID])
+    #expect(model.displayEntryBuildCountForTesting == 0)
+    #expect(model.rebuiltDisplayRequestIDsForTesting.isEmpty)
+
+    applyResponseReceived(
+        to: context,
+        requestID: "1",
+        url: "https://api.example.com/data.mp4",
+        resourceType: .fetch,
+        mimeType: "video/mp4",
+        timestamp: 4
+    )
+    #expect(model.displayRequestIDs == [mediaID, jsonID])
+    #expect(model.displayEntryBuildCountForTesting == 1)
+    #expect(model.rebuiltDisplayRequestIDsForTesting == [jsonID])
+}
+
+@Test
+@MainActor
 func displayRequestIDsSkipsMediaClassificationWhenUnfilteredOrSearchOnly() async throws {
     let context = makeContext()
     let requestID = applyRequest(
@@ -630,6 +703,7 @@ func displayRequestIDsSkipsMediaClassificationWhenUnfilteredOrSearchOnly() async
 
     model.setSearchText("clip")
     #expect(model.displayRequestIDs == [requestID])
+    #expect(classificationCount.withLock { $0 } == 0)
 
     model.setResourceFilter(.media, enabled: true)
     #expect(model.displayRequestIDs == [requestID])

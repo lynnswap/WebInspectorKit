@@ -84,8 +84,7 @@ package final class NetworkPanelModel {
         let entries = requests.items.map { request in
             DisplayRowsInvalidationEntry(
                 requestID: request.id,
-                projection: request.displayProjection(),
-                resourceFilter: request.displayResourceFilter(mediaPreviewClassifier: mediaPreviewClassifier)
+                signature: request.displayInvalidationSignature
             )
         }
         return DisplayRowsInvalidationRevision(
@@ -179,8 +178,7 @@ extension NetworkPanelModel {
 extension NetworkPanelModel {
     package struct DisplayRowsInvalidationEntry: Equatable {
         package var requestID: NetworkRequest.ID
-        package var projection: NetworkDisplay.Projection
-        package var resourceFilter: NetworkDisplay.ResourceFilter
+        package var signature: NetworkRequest.DisplayInvalidationSignature
     }
 
     package struct DisplayRowsInvalidationRevision: Equatable {

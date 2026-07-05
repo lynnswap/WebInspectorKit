@@ -116,6 +116,7 @@ public final class WebInspectorContext {
     private var nextRuntimeObjectOrdinal: Int
     private var pendingInspectedNodeID: DOMNode.ID?
     private var consoleObjectGroupReleaseTask: Task<Void, Never>?
+    private var pageHighlightDocumentGeneration: Int?
 
     public init(_ container: WebInspectorContainer, isolation: isolated (any Actor)) {
         self.container = container
@@ -169,6 +170,7 @@ public final class WebInspectorContext {
         nextRuntimeObjectOrdinal = 0
         pendingInspectedNodeID = nil
         consoleObjectGroupReleaseTask = nil
+        pageHighlightDocumentGeneration = nil
         WebInspectorDataKitLog.debug("context state=\(state.logDescription)")
     }
 
@@ -405,6 +407,9 @@ public final class WebInspectorContext {
         requireOwner(isolation)
         try registeredNode(node)
         let page = try currentPageOrThrow()
+        if node.id.proxyID.targetScopeRawValue == nil {
+            recordPageHighlight(documentGeneration: domDocumentGeneration, isolation: isolation)
+        }
         try await page.dom.highlightNode(node.id.proxyID)
     }
 
@@ -416,6 +421,7 @@ public final class WebInspectorContext {
         requireOwner(isolation)
         let page = try currentPageOrThrow()
         try await page.dom.hideHighlight()
+        pageHighlightDocumentGeneration = nil
     }
 
     package func domUndoRedoCommands(isolation: isolated (any Actor) = #isolation) throws -> DOMUndoRedoCommands {
@@ -1797,6 +1803,7 @@ extension WebInspectorContext {
         styleRefreshGeneration += 1
         inspectedNodeHighlightTask?.cancel()
         inspectedNodeHighlightTask = nil
+        clearPageHighlightForDOMReset(isolation: isolation)
         cancelFrameDocumentLoadTasks()
         rootNode = nil
         selectedNode = nil
@@ -1806,6 +1813,48 @@ extension WebInspectorContext {
         frameDocumentProjectionIndex.removeAll()
         notifyDOMTreeControllers(changes: [.rootChanged(rootNodeID: nil)], isolation: isolation)
         notifyStatusChanged()
+    }
+
+    private func recordPageHighlight(
+        documentGeneration: Int,
+        isolation: isolated (any Actor)
+    ) {
+        _ = isolation
+        pageHighlightDocumentGeneration = documentGeneration
+    }
+
+    private func clearPageHighlightForDOMReset(isolation: isolated (any Actor)) {
+        guard let currentPage else {
+            return
+        }
+        guard pageHighlightDocumentGeneration != nil else {
+            return
+        }
+        pageHighlightDocumentGeneration = nil
+        inspectedNodeHighlightTask = Task { [weak self, currentPage] in
+            _ = isolation
+            do {
+                guard Task.isCancelled == false else {
+                    return
+                }
+                guard self?.shouldSendPageHighlightClearAfterDOMReset(isolation: isolation) == true else {
+                    return
+                }
+                WebInspectorDataKitLog.debug("DOM reset clearing page highlight")
+                try await currentPage.dom.hideHighlight()
+            } catch is CancellationError {
+                return
+            } catch {
+                self?.failIfTerminal(error, operation: "DOM.hideHighlight after DOM reset")
+            }
+        }
+    }
+
+    private func shouldSendPageHighlightClearAfterDOMReset(
+        isolation: isolated (any Actor)
+    ) -> Bool {
+        _ = isolation
+        return pageHighlightDocumentGeneration == nil
     }
 
     private func applySetChildNodes(
@@ -2328,6 +2377,9 @@ extension WebInspectorContext {
         }
         let generation = domDocumentGeneration
         let nodeID = node.id.proxyID
+        guard nodeID.targetScopeRawValue == nil else {
+            return
+        }
         inspectedNodeHighlightTask?.cancel()
         // Web Inspector clears the picker overlay after inspect. On touch devices
         // WebInspectorKit keeps the picked node highlighted so the tap target remains visible.
@@ -2341,6 +2393,7 @@ extension WebInspectorContext {
                 WebInspectorDataKitLog.debug(
                     "DOM.inspect restoring highlight nodeID=\(String(describing: nodeID))"
                 )
+                self?.recordPageHighlight(documentGeneration: generation, isolation: isolation)
                 try await currentPage.dom.highlightNode(nodeID)
             } catch is CancellationError {
                 return
