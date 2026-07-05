@@ -553,20 +553,37 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func startObservingDocument() {
-        scheduleDOMInvalidation(.initial(snapshot: currentTreeSnapshot), isInitial: true)
         treeTransactionTask = Task { @MainActor [weak self, treeController] in
-            for await transaction in treeController.transactions {
+            for await update in treeController.updates {
                 guard let self else {
                     return
                 }
-                currentTreeSnapshot = transaction.newSnapshot
-                let invalidation = DOMTreeRenderInvalidation(transaction: transaction)
-                if transaction.changes.contains(where: { !$0.isSelectionChange }) {
-                    scheduleDOMInvalidation(invalidation, isInitial: false)
+                let previousSnapshot = currentTreeSnapshot
+                let invalidation: DOMTreeRenderInvalidation
+                let isSelectionChange: Bool
+                let isInitial: Bool
+                switch update {
+                case let .snapshot(snapshot, reason):
+                    currentTreeSnapshot = snapshot
+                    invalidation = .snapshot(snapshot, reason: reason)
+                    isSelectionChange = previousSnapshot.selectedNodeID != snapshot.selectedNodeID
+                    isInitial = reason == .initialDocument && lastRoutedTreeRevision == nil
+                case let .delta(delta):
+                    currentTreeSnapshot = treeController.snapshot
+                    invalidation = DOMTreeRenderInvalidation(
+                        delta: delta,
+                        revision: currentTreeSnapshot.revision,
+                        startRevision: previousSnapshot.revision
+                    )
+                    isSelectionChange = delta.isSelectionChange
+                        || previousSnapshot.selectedNodeID != currentTreeSnapshot.selectedNodeID
+                    isInitial = false
                 }
-                if transaction.oldSnapshot.selectedNodeID != transaction.newSnapshot.selectedNodeID
-                    || transaction.changes.contains(where: \.isSelectionChange) {
-                    selectionRevision = transaction.revision
+                if !isSelectionChange || invalidation.kind != .content {
+                    scheduleDOMInvalidation(invalidation, isInitial: isInitial)
+                }
+                if isSelectionChange {
+                    selectionRevision = currentTreeSnapshot.revision
                     routeSelectionInvalidation(selectionRevision: selectionRevision)
                 }
             }

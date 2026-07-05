@@ -131,21 +131,44 @@ public struct DOMTreeSnapshot: Hashable, Sendable {
     }
 }
 
-public struct DOMTreeTransaction: Hashable, Sendable {
-    public enum Change: Hashable, Sendable {
-        case rootChanged(rootNodeID: DOMNode.ID?)
-        case childrenReplaced(parentID: DOMNode.ID)
-        case childInserted(parentID: DOMNode.ID)
-        case childRemoved(parentID: DOMNode.ID)
-        case childCountChanged(nodeID: DOMNode.ID)
-        case nodeChanged(nodeID: DOMNode.ID)
-        case selectionChanged(nodeID: DOMNode.ID?)
-    }
+public enum DOMTreeUpdate: Hashable, Sendable {
+    case snapshot(DOMTreeSnapshot, reason: DOMTreeSnapshotReason)
+    case delta(DOMTreeDelta)
+}
 
-    public let revision: UInt64
-    public let oldSnapshot: DOMTreeSnapshot
-    public let newSnapshot: DOMTreeSnapshot
-    public let changes: [Change]
+public enum DOMTreeSnapshotReason: Hashable, Sendable {
+    case initialDocument
+    case pageChanged
+    case documentUpdated
+    case reset
+}
+
+public enum DOMTreeDelta: Hashable, Sendable {
+    case nodeChanged(nodeID: DOMNode.ID)
+    case childInserted(parentID: DOMNode.ID, nodeID: DOMNode.ID, previousSiblingID: DOMNode.ID?)
+    case childRemoved(parentID: DOMNode.ID, nodeID: DOMNode.ID)
+    case childrenReplaced(parentID: DOMNode.ID, childIDs: [DOMNode.ID])
+    case childCountChanged(nodeID: DOMNode.ID)
+    case selectionChanged(nodeID: DOMNode.ID?)
+}
+
+public struct DOMTreeRevealRequest: Hashable, Sendable {
+    public var nodeID: DOMNode.ID
+    public var ancestorNodeIDs: [DOMNode.ID]
+    public var shouldSelect: Bool
+    public var shouldScroll: Bool
+
+    public init(
+        nodeID: DOMNode.ID,
+        ancestorNodeIDs: [DOMNode.ID],
+        shouldSelect: Bool,
+        shouldScroll: Bool
+    ) {
+        self.nodeID = nodeID
+        self.ancestorNodeIDs = ancestorNodeIDs
+        self.shouldSelect = shouldSelect
+        self.shouldScroll = shouldScroll
+    }
 }
 
 public final class DOMTreeController {
@@ -153,8 +176,12 @@ public final class DOMTreeController {
         tree.snapshot
     }
 
-    public var transactions: AsyncStream<DOMTreeTransaction> {
-        tree.transactions
+    public var updates: AsyncStream<DOMTreeUpdate> {
+        tree.updates
+    }
+
+    public var revealRequests: AsyncStream<DOMTreeRevealRequest> {
+        tree.revealRequests
     }
 
     private let tree: DOMTreeState
@@ -168,10 +195,15 @@ final class DOMTreeState {
     private(set) var snapshot: DOMTreeSnapshot
 
     private var revision: UInt64
-    private let transactionRelay = WebInspectorAsyncStreamRelay<DOMTreeTransaction>()
+    private let updateRelay = WebInspectorAsyncStreamRelay<DOMTreeUpdate>()
+    private let revealRequestRelay = WebInspectorAsyncStreamRelay<DOMTreeRevealRequest>()
 
-    var transactions: AsyncStream<DOMTreeTransaction> {
-        transactionRelay.makeStream()
+    var updates: AsyncStream<DOMTreeUpdate> {
+        updateRelay.makeStream(initialElement: .snapshot(snapshot, reason: .initialDocument))
+    }
+
+    var revealRequests: AsyncStream<DOMTreeRevealRequest> {
+        revealRequestRelay.makeStream()
     }
 
     init(rootNode: DOMNode?, selectedNode: DOMNode?) {
@@ -180,28 +212,104 @@ final class DOMTreeState {
     }
 
     deinit {
-        transactionRelay.finish()
+        updateRelay.finish()
+        revealRequestRelay.finish()
     }
 
-    func apply(
-        changes: [DOMTreeTransaction.Change],
+    func applySnapshot(
         rootNode: DOMNode?,
-        selectedNode: DOMNode?
+        selectedNode: DOMNode?,
+        reason: DOMTreeSnapshotReason
     ) {
-        let oldSnapshot = snapshot
         revision &+= 1
-        let newSnapshot = Self.makeSnapshot(revision: revision, rootNode: rootNode, selectedNode: selectedNode)
-        snapshot = newSnapshot
-        guard transactionRelay.hasContinuations else {
+        snapshot = Self.makeSnapshot(revision: revision, rootNode: rootNode, selectedNode: selectedNode)
+        updateRelay.yield(.snapshot(snapshot, reason: reason))
+    }
+
+    func applyChildrenReplaced(parent: DOMNode) {
+        let visibleChildIDs = visibleChildIDs(of: parent)
+
+        var nodesByID = snapshot.nodesByID
+        var parentByNodeID = snapshot.parentByNodeID
+        let previousChildIDs = snapshot
+            .node(for: parent.id)
+            .map(indexedSubtreeChildIDs(of:)) ?? []
+        let nextChildIDs = Set(indexedSubtreeChildIDs(of: parent))
+        for previousChildID in previousChildIDs where nextChildIDs.contains(previousChildID) == false {
+            removeSubtree(previousChildID, nodesByID: &nodesByID, parentByNodeID: &parentByNodeID)
+        }
+        upsertNode(parent, parentID: snapshot.parent(of: parent.id), nodesByID: &nodesByID, parentByNodeID: &parentByNodeID)
+        for associatedRoot in parent.associatedSubtreeRoots() {
+            upsertSubtree(associatedRoot, parentID: parent.id, nodesByID: &nodesByID, parentByNodeID: &parentByNodeID)
+        }
+        if case let .loaded(children) = parent.children {
+            for child in children {
+                upsertSubtree(child, parentID: parent.id, nodesByID: &nodesByID, parentByNodeID: &parentByNodeID)
+            }
+        }
+        replaceSnapshot(nodesByID: nodesByID, parentByNodeID: parentByNodeID)
+        publish(.childrenReplaced(parentID: parent.id, childIDs: visibleChildIDs))
+    }
+
+    func applyChildInserted(parent: DOMNode, node: DOMNode, previousSiblingID: DOMNode.ID?) {
+        var nodesByID = snapshot.nodesByID
+        var parentByNodeID = snapshot.parentByNodeID
+        upsertNode(parent, parentID: snapshot.parent(of: parent.id), nodesByID: &nodesByID, parentByNodeID: &parentByNodeID)
+        upsertSubtree(node, parentID: parent.id, nodesByID: &nodesByID, parentByNodeID: &parentByNodeID)
+        replaceSnapshot(nodesByID: nodesByID, parentByNodeID: parentByNodeID)
+        publish(.childInserted(parentID: parent.id, nodeID: node.id, previousSiblingID: previousSiblingID))
+    }
+
+    func applyChildRemoved(parent: DOMNode, nodeID: DOMNode.ID) {
+        let selectedNodeWasRemoved = snapshot.selectedNodeID.map { selectedNodeID in
+            selectedNodeID == nodeID || snapshot.ancestorNodeIDs(of: selectedNodeID).contains(nodeID)
+        } ?? false
+        var nodesByID = snapshot.nodesByID
+        var parentByNodeID = snapshot.parentByNodeID
+        removeSubtree(nodeID, nodesByID: &nodesByID, parentByNodeID: &parentByNodeID)
+        upsertNode(parent, parentID: snapshot.parent(of: parent.id), nodesByID: &nodesByID, parentByNodeID: &parentByNodeID)
+        replaceSnapshot(
+            selectedNodeID: selectedNodeWasRemoved ? nil : snapshot.selectedNodeID,
+            nodesByID: nodesByID,
+            parentByNodeID: parentByNodeID
+        )
+        publish(.childRemoved(parentID: parent.id, nodeID: nodeID))
+        if selectedNodeWasRemoved {
+            publish(.selectionChanged(nodeID: nil))
+        }
+    }
+
+    func applyChildCountChanged(node: DOMNode) {
+        var nodesByID = snapshot.nodesByID
+        var parentByNodeID = snapshot.parentByNodeID
+        upsertNode(node, parentID: snapshot.parent(of: node.id), nodesByID: &nodesByID, parentByNodeID: &parentByNodeID)
+        replaceSnapshot(nodesByID: nodesByID, parentByNodeID: parentByNodeID)
+        publish(.childCountChanged(nodeID: node.id))
+    }
+
+    func applyNodeChanged(_ node: DOMNode) {
+        var nodesByID = snapshot.nodesByID
+        var parentByNodeID = snapshot.parentByNodeID
+        upsertNode(node, parentID: snapshot.parent(of: node.id), nodesByID: &nodesByID, parentByNodeID: &parentByNodeID)
+        replaceSnapshot(nodesByID: nodesByID, parentByNodeID: parentByNodeID)
+        publish(.nodeChanged(nodeID: node.id))
+    }
+
+    func applySelectionChanged(nodeID: DOMNode.ID?) {
+        let nextSelectedNodeID = nodeID.flatMap { snapshot.nodesByID[$0] == nil ? nil : $0 }
+        guard snapshot.selectedNodeID != nextSelectedNodeID else {
             return
         }
-        transactionRelay.yield(
-            DOMTreeTransaction(
-                revision: revision,
-                oldSnapshot: oldSnapshot,
-                newSnapshot: newSnapshot,
-                changes: changes
+        replaceSnapshot(selectedNodeID: nextSelectedNodeID)
+        publish(.selectionChanged(nodeID: nextSelectedNodeID))
+        if let nextSelectedNodeID {
+            revealRequestRelay.yield(DOMTreeRevealRequest(
+                nodeID: nextSelectedNodeID,
+                ancestorNodeIDs: snapshot.ancestorNodeIDs(of: nextSelectedNodeID),
+                shouldSelect: true,
+                shouldScroll: true
             ))
+        }
     }
 
     private static func makeSnapshot(
@@ -210,6 +318,140 @@ final class DOMTreeState {
         selectedNode: DOMNode?
     ) -> DOMTreeSnapshot {
         DOMTreeSnapshot.make(revision: revision, rootNode: rootNode, selectedNode: selectedNode)
+    }
+
+    private func replaceSnapshot(
+        selectedNodeID: DOMNode.ID?? = nil,
+        nodesByID: [DOMNode.ID: DOMTreeSnapshot.Node]? = nil,
+        parentByNodeID: [DOMNode.ID: DOMNode.ID]? = nil
+    ) {
+        revision &+= 1
+        let nextSelectedNodeID: DOMNode.ID?
+        if let selectedNodeID {
+            nextSelectedNodeID = selectedNodeID
+        } else if let currentSelectedNodeID = snapshot.selectedNodeID,
+                  (nodesByID ?? snapshot.nodesByID)[currentSelectedNodeID] != nil {
+            nextSelectedNodeID = currentSelectedNodeID
+        } else {
+            nextSelectedNodeID = nil
+        }
+        snapshot = DOMTreeSnapshot(
+            revision: revision,
+            rootNodeID: snapshot.rootNodeID,
+            selectedNodeID: nextSelectedNodeID,
+            nodesByID: nodesByID ?? snapshot.nodesByID,
+            parentByNodeID: parentByNodeID ?? snapshot.parentByNodeID
+        )
+    }
+
+    private func publish(_ delta: DOMTreeDelta) {
+        updateRelay.yield(.delta(delta))
+    }
+
+    private func upsertSubtree(
+        _ node: DOMNode,
+        parentID: DOMNode.ID?,
+        nodesByID: inout [DOMNode.ID: DOMTreeSnapshot.Node],
+        parentByNodeID: inout [DOMNode.ID: DOMNode.ID]
+    ) {
+        upsertNode(node, parentID: parentID, nodesByID: &nodesByID, parentByNodeID: &parentByNodeID)
+        for associatedRoot in node.associatedSubtreeRoots() {
+            upsertSubtree(
+                associatedRoot,
+                parentID: node.id,
+                nodesByID: &nodesByID,
+                parentByNodeID: &parentByNodeID
+            )
+        }
+        guard case let .loaded(children) = node.children else {
+            return
+        }
+        for child in children {
+            upsertSubtree(child, parentID: node.id, nodesByID: &nodesByID, parentByNodeID: &parentByNodeID)
+        }
+    }
+
+    private func upsertNode(
+        _ node: DOMNode,
+        parentID: DOMNode.ID?,
+        nodesByID: inout [DOMNode.ID: DOMTreeSnapshot.Node],
+        parentByNodeID: inout [DOMNode.ID: DOMNode.ID]
+    ) {
+        nodesByID[node.id] = DOMTreeSnapshot.Node(snapshotting: node)
+        if let parentID {
+            parentByNodeID[node.id] = parentID
+        } else {
+            parentByNodeID.removeValue(forKey: node.id)
+        }
+    }
+
+    private func removeSubtree(
+        _ rootID: DOMNode.ID,
+        nodesByID: inout [DOMNode.ID: DOMTreeSnapshot.Node],
+        parentByNodeID: inout [DOMNode.ID: DOMNode.ID]
+    ) {
+        guard let node = nodesByID[rootID] else {
+            parentByNodeID.removeValue(forKey: rootID)
+            return
+        }
+        for childID in indexedSubtreeChildIDs(of: node) {
+            removeSubtree(childID, nodesByID: &nodesByID, parentByNodeID: &parentByNodeID)
+        }
+        nodesByID.removeValue(forKey: rootID)
+        parentByNodeID.removeValue(forKey: rootID)
+    }
+
+    private func indexedSubtreeChildIDs(of node: DOMTreeSnapshot.Node) -> [DOMNode.ID] {
+        var childIDs: [DOMNode.ID] = []
+        if let templateContentID = node.templateContentID {
+            childIDs.append(templateContentID)
+        }
+        if let beforePseudoElementID = node.beforePseudoElementID {
+            childIDs.append(beforePseudoElementID)
+        }
+        childIDs.append(contentsOf: node.otherPseudoElementIDs)
+        if let contentDocumentID = node.contentDocumentID {
+            childIDs.append(contentDocumentID)
+        }
+        childIDs.append(contentsOf: node.shadowRootIDs)
+        if case let .loaded(children) = node.children {
+            childIDs.append(contentsOf: children)
+        }
+        if let afterPseudoElementID = node.afterPseudoElementID {
+            childIDs.append(afterPseudoElementID)
+        }
+        return childIDs
+    }
+
+    private func indexedSubtreeChildIDs(of node: DOMNode) -> [DOMNode.ID] {
+        var childIDs = node.associatedSubtreeRoots().map(\.id)
+        if case let .loaded(children) = node.children {
+            childIDs.append(contentsOf: children.map(\.id))
+        }
+        return childIDs
+    }
+
+    private func visibleChildIDs(of node: DOMNode) -> [DOMNode.ID] {
+        var childIDs: [DOMNode.ID] = []
+        if let templateContent = node.templateContent {
+            childIDs.append(templateContent.id)
+        }
+        if let beforePseudoElement = node.beforePseudoElement {
+            childIDs.append(beforePseudoElement.id)
+        }
+        childIDs.append(contentsOf: node.otherPseudoElements.map(\.id))
+        if let contentDocument = node.contentDocument {
+            childIDs.append(contentDocument.id)
+        } else {
+            childIDs.append(contentsOf: node.shadowRoots.map(\.id))
+            if case let .loaded(children) = node.children {
+                childIDs.append(contentsOf: children.map(\.id))
+            }
+        }
+        if let afterPseudoElement = node.afterPseudoElement {
+            childIDs.append(afterPseudoElement.id)
+        }
+        return childIDs
     }
 }
 
@@ -297,6 +539,40 @@ extension DOMTreeSnapshot {
 }
 
 extension DOMTreeSnapshot.Node {
+    init(snapshotting node: DOMNode) {
+        let children: Children
+        switch node.children {
+        case let .unrequested(count):
+            children = .unrequested(count: count)
+        case let .loaded(childNodes):
+            children = .loaded(childNodes.map(\.id))
+        }
+
+        self.init(
+            id: node.id,
+            nodeName: node.nodeName,
+            localName: node.localName,
+            nodeValue: node.nodeValue,
+            nodeType: node.nodeType,
+            kind: node.kind,
+            frameID: node.frameID,
+            documentURL: node.documentURL,
+            baseURL: node.baseURL,
+            attributes: node.attributes,
+            attributeList: node.attributeList,
+            childNodeCount: node.childNodeCount,
+            children: children,
+            contentDocumentID: node.contentDocument?.id,
+            shadowRootIDs: node.shadowRoots.map(\.id),
+            templateContentID: node.templateContent?.id,
+            beforePseudoElementID: node.beforePseudoElement?.id,
+            otherPseudoElementIDs: node.otherPseudoElements.map(\.id),
+            afterPseudoElementID: node.afterPseudoElement?.id,
+            pseudoType: node.pseudoType,
+            shadowRootType: node.shadowRootType
+        )
+    }
+
     var hasUnloadedRegularChildren: Bool {
         if case let .unrequested(count) = children {
             return count > 0

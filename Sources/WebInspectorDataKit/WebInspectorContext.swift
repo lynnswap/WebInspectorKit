@@ -1300,14 +1300,63 @@ public final class WebInspectorContext {
         eventPumps = []
     }
 
-    private func notifyDOMTreeControllers(
-        changes: [DOMTreeTransaction.Change],
+    private func notifyDOMTreeSnapshot(
+        reason: DOMTreeSnapshotReason,
         isolation: isolated (any Actor)
     ) {
         _ = isolation
         pruneReleasedTreeStates()
         for reference in treeStates {
-            reference.tree?.apply(changes: changes, rootNode: rootNode, selectedNode: selectedNode)
+            reference.tree?.applySnapshot(rootNode: rootNode, selectedNode: selectedNode, reason: reason)
+        }
+    }
+
+    private func notifyDOMTreeChildrenReplaced(parent: DOMNode, isolation: isolated (any Actor)) {
+        _ = isolation
+        pruneReleasedTreeStates()
+        for reference in treeStates {
+            reference.tree?.applyChildrenReplaced(parent: parent)
+        }
+    }
+
+    private func notifyDOMTreeChildInserted(
+        parent: DOMNode,
+        node: DOMNode,
+        previousSiblingID: DOMNode.ID?,
+        isolation: isolated (any Actor)
+    ) {
+        _ = isolation
+        pruneReleasedTreeStates()
+        for reference in treeStates {
+            reference.tree?.applyChildInserted(parent: parent, node: node, previousSiblingID: previousSiblingID)
+        }
+    }
+
+    private func notifyDOMTreeChildRemoved(
+        parent: DOMNode,
+        nodeID: DOMNode.ID,
+        isolation: isolated (any Actor)
+    ) {
+        _ = isolation
+        pruneReleasedTreeStates()
+        for reference in treeStates {
+            reference.tree?.applyChildRemoved(parent: parent, nodeID: nodeID)
+        }
+    }
+
+    private func notifyDOMTreeChildCountChanged(node: DOMNode, isolation: isolated (any Actor)) {
+        _ = isolation
+        pruneReleasedTreeStates()
+        for reference in treeStates {
+            reference.tree?.applyChildCountChanged(node: node)
+        }
+    }
+
+    private func notifyDOMTreeNodeChanged(_ node: DOMNode, isolation: isolated (any Actor)) {
+        _ = isolation
+        pruneReleasedTreeStates()
+        for reference in treeStates {
+            reference.tree?.applyNodeChanged(node)
         }
     }
 
@@ -1315,7 +1364,11 @@ public final class WebInspectorContext {
         _ node: DOMNode?,
         isolation: isolated (any Actor)
     ) {
-        notifyDOMTreeControllers(changes: [.selectionChanged(nodeID: node?.id)], isolation: isolation)
+        _ = isolation
+        pruneReleasedTreeStates()
+        for reference in treeStates {
+            reference.tree?.applySelectionChanged(nodeID: node?.id)
+        }
     }
 
     private func clearSelectionIfDeleted(
@@ -1367,6 +1420,41 @@ public final class WebInspectorContext {
             throw WebInspectorProxyError.disconnected("DOMNode is not in the current DOM tree.")
         }
         return snapshot
+    }
+
+    private func isNodeAttachedToCurrentDOMTree(_ node: DOMNode) -> Bool {
+        guard let rootNode else {
+            return false
+        }
+        var visitedNodeIDs = Set<DOMNode.ID>()
+        return subtree(rootNode, contains: node.id, visitedNodeIDs: &visitedNodeIDs)
+    }
+
+    private func subtree(
+        _ root: DOMNode,
+        contains nodeID: DOMNode.ID,
+        visitedNodeIDs: inout Set<DOMNode.ID>
+    ) -> Bool {
+        guard visitedNodeIDs.insert(root.id).inserted else {
+            return false
+        }
+        if root.id == nodeID {
+            return true
+        }
+        for associatedRoot in root.associatedSubtreeRoots() {
+            if subtree(associatedRoot, contains: nodeID, visitedNodeIDs: &visitedNodeIDs) {
+                return true
+            }
+        }
+        guard case let .loaded(children) = root.children else {
+            return false
+        }
+        for child in children {
+            if subtree(child, contains: nodeID, visitedNodeIDs: &visitedNodeIDs) {
+                return true
+            }
+        }
+        return false
     }
 
     private func isCurrentPageGeneration(
@@ -1484,7 +1572,7 @@ public final class WebInspectorContext {
                 guard self?.isDOMDocumentGeneration(generation, isolation: isolation) == true else {
                     return
                 }
-                self?.applyDocument(document, isolation: isolation)
+                self?.applyDocument(document, reason: .documentUpdated, isolation: isolation)
             } catch is CancellationError {
                 return
             } catch {
@@ -1617,7 +1705,7 @@ extension WebInspectorContext {
             guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
                 return
             }
-            applyDocument(document.node, isolation: isolation)
+            applyDocument(document.node, reason: .pageChanged, isolation: isolation)
             if case .attaching = state {
                 transition(to: .attached)
             }
@@ -1750,7 +1838,7 @@ extension WebInspectorContext {
                 return
             }
             node.updateChildNodeCount(count)
-            notifyDOMTreeControllers(changes: [.childCountChanged(nodeID: DOMNode.ID(id))], isolation: isolation)
+            notifyDOMTreeChildCountChanged(node: node, isolation: isolation)
         case let .attributeModified(id, name, value):
             guard let node = nodesByID[DOMNode.ID(id)] else {
                 let nodeID = DOMNode.ID(id)
@@ -1760,7 +1848,7 @@ extension WebInspectorContext {
             }
             node.setAttribute(name: name, value: value)
             markSelectedStylesNeedsRefresh(for: DOMNode.ID(id))
-            notifyDOMTreeControllers(changes: [.nodeChanged(nodeID: DOMNode.ID(id))], isolation: isolation)
+            notifyDOMTreeNodeChanged(node, isolation: isolation)
         case let .attributeRemoved(id, name):
             guard let node = nodesByID[DOMNode.ID(id)] else {
                 let nodeID = DOMNode.ID(id)
@@ -1770,7 +1858,7 @@ extension WebInspectorContext {
             }
             node.removeAttribute(name: name)
             markSelectedStylesNeedsRefresh(for: DOMNode.ID(id))
-            notifyDOMTreeControllers(changes: [.nodeChanged(nodeID: DOMNode.ID(id))], isolation: isolation)
+            notifyDOMTreeNodeChanged(node, isolation: isolation)
         case let .inlineStyleInvalidated(ids):
             if ids.isEmpty {
                 markSelectedStylesNeedsRefresh()
@@ -1788,7 +1876,7 @@ extension WebInspectorContext {
             }
             node.setNodeValue(value)
             markSelectedStylesNeedsRefresh(for: DOMNode.ID(id))
-            notifyDOMTreeControllers(changes: [.nodeChanged(nodeID: DOMNode.ID(id))], isolation: isolation)
+            notifyDOMTreeNodeChanged(node, isolation: isolation)
         case let .inspect(id):
             isElementPickerEnabled = false
             notifyStatusChanged()
@@ -1802,7 +1890,7 @@ extension WebInspectorContext {
                 resolvePendingInspectedNode(requestSubtreeIfNeeded: true, isolation: isolation)
                 return
             }
-            guard currentDOMTreeSnapshot().node(for: inspectedNodeID) != nil else {
+            guard isNodeAttachedToCurrentDOMTree(node) else {
                 loadFrameDocumentIfNeeded(forNodeID: inspectedNodeID, reason: "DOM.inspect", isolation: isolation)
                 pendingInspectedNodeID = inspectedNodeID
                 resolvePendingInspectedNode(requestSubtreeIfNeeded: true, isolation: isolation)
@@ -1826,17 +1914,25 @@ extension WebInspectorContext {
         }
     }
 
-    func applyDocument(_ node: DOM.Node, isolation: isolated (any Actor) = #isolation) {
+    func applyDocument(
+        _ node: DOM.Node,
+        reason: DOMTreeSnapshotReason = .initialDocument,
+        isolation: isolated (any Actor) = #isolation
+    ) {
         requireOwner(isolation)
         var materializedPayloadIDs = Set<DOMNode.ID>()
         collectMaterializedPayloadIDs(node, into: &materializedPayloadIDs)
         rootNode = model(for: node, preserving: materializedPayloadIDs)
-        notifyDOMTreeControllers(changes: [.rootChanged(rootNodeID: rootNode?.id)], isolation: isolation)
+        notifyDOMTreeSnapshot(reason: reason, isolation: isolation)
         resolvePendingInspectedNode(requestSubtreeIfNeeded: true, isolation: isolation)
     }
 
     package func seedDOMDocument(_ node: DOM.Node, isolation: isolated (any Actor) = #isolation) {
-        applyDocument(node, isolation: isolation)
+        applyDocument(
+            node,
+            reason: rootNode == nil ? .initialDocument : .documentUpdated,
+            isolation: isolation
+        )
     }
 
     package func seedElementPickerEnabled(_ isEnabled: Bool, isolation: isolated (any Actor) = #isolation) {
@@ -1889,7 +1985,7 @@ extension WebInspectorContext {
         pendingInspectedNodeID = nil
         nodesByID = [:]
         frameDocumentProjectionIndex.removeAll()
-        notifyDOMTreeControllers(changes: [.rootChanged(rootNodeID: nil)], isolation: isolation)
+        notifyDOMTreeSnapshot(reason: .reset, isolation: isolation)
         notifyStatusChanged()
     }
 
@@ -1962,7 +2058,7 @@ extension WebInspectorContext {
             removeSubtreeFromIndex(previousChild, preserving: newSubtreeIDs)
         }
         parentNode.setChildren(newChildren)
-        notifyDOMTreeControllers(changes: [.childrenReplaced(parentID: parentNode.id)], isolation: isolation)
+        notifyDOMTreeChildrenReplaced(parent: parentNode, isolation: isolation)
         resolvePendingInspectedNode(requestSubtreeIfNeeded: false, isolation: isolation)
     }
 
@@ -1981,7 +2077,7 @@ extension WebInspectorContext {
 
         guard case var .loaded(children) = parentNode.children else {
             parentNode.updateChildNodeCount(parentNode.childNodeCount + 1)
-            notifyDOMTreeControllers(changes: [.childCountChanged(nodeID: parentNode.id)], isolation: isolation)
+            notifyDOMTreeChildCountChanged(node: parentNode, isolation: isolation)
             return
         }
         var materializedPayloadIDs = Set<DOMNode.ID>()
@@ -1993,7 +2089,12 @@ extension WebInspectorContext {
             children.insert(inserted, at: 0)
         }
         parentNode.setChildren(children)
-        notifyDOMTreeControllers(changes: [.childInserted(parentID: parentNode.id)], isolation: isolation)
+        notifyDOMTreeChildInserted(
+            parent: parentNode,
+            node: inserted,
+            previousSiblingID: previous.map(DOMNode.ID.init),
+            isolation: isolation
+        )
         resolvePendingInspectedNode(requestSubtreeIfNeeded: false, isolation: isolation)
     }
 
@@ -2019,15 +2120,17 @@ extension WebInspectorContext {
 
         guard case let .loaded(children) = parentNode.children else {
             parentNode.updateChildNodeCount(max(0, parentNode.childNodeCount - 1))
-            notifyDOMTreeControllers(changes: [.childCountChanged(nodeID: parentNode.id)], isolation: isolation)
+            notifyDOMTreeChildCountChanged(node: parentNode, isolation: isolation)
             if selectedNodeWasRemoved {
+                notifyDOMTreeSelectionChanged(nil, isolation: isolation)
                 notifyStatusChanged()
             }
             return
         }
         parentNode.setChildren(children.filter { $0.id != removedID })
-        notifyDOMTreeControllers(changes: [.childRemoved(parentID: parentNode.id)], isolation: isolation)
+        notifyDOMTreeChildRemoved(parent: parentNode, nodeID: removedID, isolation: isolation)
         if selectedNodeWasRemoved {
+            notifyDOMTreeSelectionChanged(nil, isolation: isolation)
             notifyStatusChanged()
         }
     }
@@ -2209,7 +2312,7 @@ extension WebInspectorContext {
         if let rootID = frameDocumentProjectionIndex.frameDocumentRootID(for: frameTargetID),
            let root = nodesByID[rootID] {
             if let owner = attachProjectedFrameDocumentRoot(root, frameTargetID: frameTargetID) {
-                notifyDOMTreeControllers(changes: [.childrenReplaced(parentID: owner.id)], isolation: isolation)
+                notifyDOMTreeChildrenReplaced(parent: owner, isolation: isolation)
             }
             return
         }
@@ -2272,7 +2375,7 @@ extension WebInspectorContext {
         }
 
         if let owner = attachProjectedFrameDocumentRoot(frameRoot, frameTargetID: frameTargetID) {
-            notifyDOMTreeControllers(changes: [.childrenReplaced(parentID: owner.id)], isolation: isolation)
+            notifyDOMTreeChildrenReplaced(parent: owner, isolation: isolation)
         }
         resolvePendingInspectedNode(requestSubtreeIfNeeded: true, isolation: isolation)
     }
@@ -2285,9 +2388,9 @@ extension WebInspectorContext {
             frameDocumentProjectionIndex.detach(frameTargetID: frameTargetID)
             return nil
         }
-        let didChange = frameDocumentProjectionIndex.attach(frameTargetID: frameTargetID, to: owner.id)
+        frameDocumentProjectionIndex.attach(frameTargetID: frameTargetID, to: owner.id)
         owner.setContentDocument(frameRoot)
-        return didChange ? owner : nil
+        return owner
     }
 
     private func frameOwner(
@@ -2330,7 +2433,7 @@ extension WebInspectorContext {
             frameDocumentProjectionIndex.detachProjection(attachedTo: owner.id)
             owner.setContentDocument(nil)
             let selectedNodeWasRemoved = root.map { removeSubtreeFromIndex($0) } ?? false
-            notifyDOMTreeControllers(changes: [.childrenReplaced(parentID: owner.id)], isolation: isolation)
+            notifyDOMTreeChildrenReplaced(parent: owner, isolation: isolation)
             if selectedNodeWasRemoved {
                 notifyStatusChanged()
             }
@@ -2397,7 +2500,7 @@ extension WebInspectorContext {
             }
             return
         }
-        guard currentDOMTreeSnapshot().node(for: inspectedNode.id) != nil else {
+        guard isNodeAttachedToCurrentDOMTree(inspectedNode) else {
             if requestSubtreeIfNeeded, let rootNode {
                 requestInspectionSubtreeForPendingNode(pendingInspectedNodeID, fallbackRoot: rootNode, isolation: isolation)
             }

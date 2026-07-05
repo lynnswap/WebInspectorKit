@@ -1241,6 +1241,10 @@ func transportBackedFrameInspectProjectsFrameDocumentUnderIframeOwner() async th
         documentID: "1"
     )
     let controller = try await context.treeController()
+    let recorder = DOMTreeUpdateRecorder(stream: controller.updates)
+    defer { recorder.cancel() }
+    try await recorder.waitUntilStarted()
+    try await recorder.waitForUpdateCount(1)
     let startupMessageCount = await backend.sentTargetMessages().count
 
     await receiveTransportTargetEvent(
@@ -1292,6 +1296,14 @@ func transportBackedFrameInspectProjectsFrameDocumentUnderIframeOwner() async th
     try await waitUntil {
         controller.snapshot.selectedNodeID == scopedInspectedID
             && controller.snapshot.parent(of: scopedFrameDocumentID) == iframeOwnerID
+    }
+    try await waitUntil {
+        recorder.updates.contains { update in
+            guard case let .delta(delta) = update else {
+                return false
+            }
+            return delta == .childrenReplaced(parentID: iframeOwnerID, childIDs: [scopedFrameDocumentID])
+        }
     }
     let snapshot = controller.snapshot
     let iframe = try #require(context.node(for: iframeOwnerID))
@@ -1355,6 +1367,11 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
         documentID: "old-root"
     )
     let networkResults: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let domTreeController = try await context.treeController()
+    let domUpdates = DOMTreeUpdateRecorder(stream: domTreeController.updates)
+    defer { domUpdates.cancel() }
+    try await domUpdates.waitUntilStarted()
+    try await domUpdates.waitForUpdateCount(1)
     let startupMessageCount = await backend.sentTargetMessages().count
 
     #expect(context.state == .attached)
@@ -1452,6 +1469,14 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
     )
 
     try await waitUntil { context.rootNode?.id == newRootID }
+    try await waitUntil {
+        domUpdates.updates.contains { update in
+            guard case let .snapshot(snapshot, .pageChanged) = update else {
+                return false
+            }
+            return snapshot.rootNodeID == newRootID
+        }
+    }
     #expect(context.state == .attached)
     #expect(context.node(for: oldRootID) == nil)
     #expect(context.node(for: newRootID) != nil)
@@ -1917,6 +1942,11 @@ func documentUpdatedReloadsRootDocument() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let undoCommands = try context.domUndoRedoCommands()
+    let controller = try await context.treeController()
+    let recorder = DOMTreeUpdateRecorder(stream: controller.updates)
+    defer { recorder.cancel() }
+    try await recorder.waitUntilStarted()
+    try await recorder.waitForUpdateCount(1)
     let replacementID = DOM.Node.ID("replacement-document")
 
     await runtime.backend.enqueue(
@@ -1929,6 +1959,14 @@ func documentUpdatedReloadsRootDocument() async throws {
 
     try await waitUntil {
         context.rootNode?.id == DOMNode.ID(replacementID)
+    }
+    try await waitUntil {
+        recorder.updates.contains { update in
+            guard case let .snapshot(snapshot, .documentUpdated) = update else {
+                return false
+            }
+            return snapshot.rootNodeID == DOMNode.ID(replacementID)
+        }
     }
     await #expect(throws: WebInspectorProxyError.disconnected("DOM undo/redo target is no longer current.")) {
         try await undoCommands.undo()
@@ -1973,7 +2011,7 @@ func childInsertIntoUnrequestedParentDoesNotMarkChildrenLoaded() async throws {
 
 @MainActor
 @Test
-func domTreeControllerPublishesCurrentSnapshotAndChildTransactions() async throws {
+func domTreeControllerPublishesInitialSnapshotAndChildDeltas() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(
         runtime: runtime,
@@ -1981,13 +2019,19 @@ func domTreeControllerPublishesCurrentSnapshotAndChildTransactions() async throw
     )
     let document = try #require(context.rootNode)
     let controller = try await context.treeController()
-    let recorder = DOMTreeTransactionRecorder(stream: controller.transactions)
+    let recorder = DOMTreeUpdateRecorder(stream: controller.updates)
     defer { recorder.cancel() }
     try await recorder.waitUntilStarted()
+    try await recorder.waitForUpdateCount(1)
 
     #expect(controller.snapshot.rootNodeID == document.id)
     #expect(Set(controller.snapshot.nodesByID.keys) == Set([document.id]))
     #expect(controller.snapshot.node(for: document.id)?.children == .unrequested(count: 1))
+    guard case let .snapshot(initialSnapshot, .initialDocument) = recorder.updates.first else {
+        Issue.record("Expected initial DOM tree snapshot.")
+        return
+    }
+    #expect(initialSnapshot.node(for: document.id)?.children == .unrequested(count: 1))
 
     let childID = DOM.Node.ID("child")
     await runtime.backend.emit(
@@ -1997,13 +2041,65 @@ func domTreeControllerPublishesCurrentSnapshotAndChildTransactions() async throw
         target: target
     )
 
-    try await recorder.waitForTransactionCount(1)
-    let childrenChanged = try #require(recorder.transactions.last)
-    #expect(childrenChanged.changes == [.childrenReplaced(parentID: document.id)])
-    #expect(childrenChanged.oldSnapshot.node(for: document.id)?.children == .unrequested(count: 1))
-    #expect(childrenChanged.newSnapshot.children(of: document.id) == [DOMNode.ID(childID)])
-    #expect(childrenChanged.newSnapshot.parent(of: DOMNode.ID(childID)) == document.id)
+    try await recorder.waitForUpdateCount(2)
+    guard case let .delta(childrenChanged) = recorder.updates.last else {
+        Issue.record("Expected DOM children replacement delta.")
+        return
+    }
+    #expect(childrenChanged == .childrenReplaced(parentID: document.id, childIDs: [DOMNode.ID(childID)]))
     #expect(controller.snapshot.children(of: document.id) == [DOMNode.ID(childID)])
+    #expect(controller.snapshot.parent(of: DOMNode.ID(childID)) == document.id)
+}
+
+@MainActor
+@Test
+func domTreeControllerPublishesAssociatedSubtreeDeltas() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(
+        runtime: runtime,
+        document: DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document", childNodeCount: 1)
+    )
+    let document = try #require(context.rootNode)
+    let controller = try await context.treeController()
+    let recorder = DOMTreeUpdateRecorder(stream: controller.updates)
+    defer { recorder.cancel() }
+    try await recorder.waitUntilStarted()
+    try await recorder.waitForUpdateCount(1)
+
+    let iframeID = DOM.Node.ID("iframe")
+    let frameDocumentID = DOM.Node.ID("frame-document")
+    let frameBodyID = DOM.Node.ID("frame-body")
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(
+                id: iframeID,
+                nodeType: 1,
+                nodeName: "IFRAME",
+                localName: "iframe",
+                frameID: FrameID("child-frame"),
+                childNodeCount: 0,
+                contentDocument: DOM.Node(
+                    id: frameDocumentID,
+                    nodeType: 9,
+                    nodeName: "#document",
+                    children: [
+                        DOM.Node(id: frameBodyID, nodeType: 1, nodeName: "BODY", localName: "body")
+                    ]
+                )
+            )
+        ]),
+        target: target
+    )
+
+    try await recorder.waitForUpdateCount(2)
+    guard case let .delta(childrenChanged) = recorder.updates.last else {
+        Issue.record("Expected associated subtree replacement delta.")
+        return
+    }
+    #expect(childrenChanged == .childrenReplaced(parentID: document.id, childIDs: [DOMNode.ID(iframeID)]))
+    #expect(controller.snapshot.visibleChildren(of: DOMNode.ID(iframeID)).nodeIDs == [DOMNode.ID(frameDocumentID)])
+    #expect(controller.snapshot.parent(of: DOMNode.ID(frameDocumentID)) == DOMNode.ID(iframeID))
+    #expect(controller.snapshot.parent(of: DOMNode.ID(frameBodyID)) == DOMNode.ID(frameDocumentID))
 }
 
 @MainActor
@@ -2134,7 +2230,7 @@ func domTreeControllerSnapshotIncludesRecursiveDOMAssociations() async throws {
 
 @MainActor
 @Test
-func domTreeControllerPublishesSelectionTransactionsWithoutOwningExpansion() async throws {
+func domTreeControllerPublishesSelectionDeltasWithoutOwningExpansion() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(
         runtime: runtime,
@@ -2163,9 +2259,10 @@ func domTreeControllerPublishesSelectionTransactionsWithoutOwningExpansion() asy
     let parent = try #require(context.node(for: DOMNode.ID(parentID)))
     let child = try #require(context.node(for: DOMNode.ID(childID)))
     let controller = try await context.treeController()
-    let recorder = DOMTreeTransactionRecorder(stream: controller.transactions)
+    let recorder = DOMTreeUpdateRecorder(stream: controller.updates)
     defer { recorder.cancel() }
     try await recorder.waitUntilStarted()
+    try await recorder.waitForUpdateCount(1)
 
     #expect(controller.snapshot.children(of: document.id) == [parent.id])
     #expect(controller.snapshot.children(of: parent.id) == [child.id])
@@ -2174,20 +2271,22 @@ func domTreeControllerPublishesSelectionTransactionsWithoutOwningExpansion() asy
     await enqueueCSSStyleReplies(on: runtime.backend)
     context.select(child)
 
-    try await recorder.waitForTransactionCount(1)
-    let selection = try #require(recorder.transactions.last)
-    #expect(selection.changes == [.selectionChanged(nodeID: child.id)])
-    #expect(selection.oldSnapshot.selectedNodeID == nil)
-    #expect(selection.newSnapshot.selectedNodeID == child.id)
+    try await recorder.waitForUpdateCount(2)
+    guard case let .delta(selection) = recorder.updates.last else {
+        Issue.record("Expected DOM selection delta.")
+        return
+    }
+    #expect(selection == .selectionChanged(nodeID: child.id))
     #expect(controller.snapshot.selectedNodeID == child.id)
 
     context.select(nil)
 
-    try await recorder.waitForTransactionCount(2)
-    let selectionCleared = try #require(recorder.transactions.last)
-    #expect(selectionCleared.changes == [.selectionChanged(nodeID: nil)])
-    #expect(selectionCleared.oldSnapshot.selectedNodeID == child.id)
-    #expect(selectionCleared.newSnapshot.selectedNodeID == nil)
+    try await recorder.waitForUpdateCount(3)
+    guard case let .delta(selectionCleared) = recorder.updates.last else {
+        Issue.record("Expected DOM selection clear delta.")
+        return
+    }
+    #expect(selectionCleared == .selectionChanged(nodeID: nil))
     #expect(controller.snapshot.selectedNodeID == nil)
 }
 
@@ -5532,17 +5631,17 @@ private func transportMessageObject(_ message: String) throws -> [String: Any] {
 }
 
 @MainActor
-private final class DOMTreeTransactionRecorder {
-    private(set) var transactions: [DOMTreeTransaction] = []
+private final class DOMTreeUpdateRecorder {
+    private(set) var updates: [DOMTreeUpdate] = []
 
     private var task: Task<Void, Never>?
     private var hasStarted = false
 
-    init(stream: AsyncStream<DOMTreeTransaction>) {
+    init(stream: AsyncStream<DOMTreeUpdate>) {
         task = Task { @MainActor [weak self] in
             self?.hasStarted = true
-            for await transaction in stream {
-                self?.transactions.append(transaction)
+            for await update in stream {
+                self?.updates.append(update)
             }
         }
     }
@@ -5551,8 +5650,8 @@ private final class DOMTreeTransactionRecorder {
         try await waitUntil { self.hasStarted }
     }
 
-    func waitForTransactionCount(_ count: Int) async throws {
-        try await waitUntil { self.transactions.count >= count }
+    func waitForUpdateCount(_ count: Int) async throws {
+        try await waitUntil { self.updates.count >= count }
     }
 
     func cancel() {

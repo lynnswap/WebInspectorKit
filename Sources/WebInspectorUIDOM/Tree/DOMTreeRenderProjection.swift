@@ -67,51 +67,58 @@ extension DOMTreeRenderInvalidation {
         )
     }
 
-    init(transaction: DOMTreeTransaction) {
-        var kind: Kind = .content
+    static func snapshot(_ snapshot: DOMTreeSnapshot, reason: DOMTreeSnapshotReason) -> DOMTreeRenderInvalidation {
+        DOMTreeRenderInvalidation(
+            kind: .root,
+            revision: snapshot.revision,
+            startRevision: snapshot.revision,
+            affectedNodeIDs: Set(snapshot.rootNodeID.map { [$0] } ?? []),
+            parentNodeIDs: [],
+            resetsLocalDocumentState: reason != .initialDocument
+        )
+    }
+
+    init(delta: DOMTreeDelta, revision: UInt64, startRevision: UInt64) {
+        let kind: Kind
         var affectedNodeIDs: Set<DOMNode.ID> = []
         var parentNodeIDs: Set<DOMNode.ID> = []
-        var resetsLocalDocumentState = false
 
-        for change in transaction.changes {
-            switch change {
-            case let .rootChanged(rootNodeID):
-                kind = .root
-                resetsLocalDocumentState = true
-                if let rootNodeID {
-                    affectedNodeIDs.insert(rootNodeID)
-                }
-            case let .childrenReplaced(parentID),
-                 let .childInserted(parentID),
-                 let .childRemoved(parentID):
-                if kind != .root {
-                    kind = .structure
-                }
-                parentNodeIDs.insert(parentID)
-                affectedNodeIDs.insert(parentID)
-            case let .childCountChanged(nodeID),
-                 let .nodeChanged(nodeID):
-                if kind != .root, kind != .structure {
-                    kind = .content
-                }
-                affectedNodeIDs.insert(nodeID)
-            case .selectionChanged:
-                break
-            }
+        switch delta {
+        case let .childInserted(parentID, nodeID, _):
+            kind = .structure
+            parentNodeIDs.insert(parentID)
+            affectedNodeIDs.insert(parentID)
+            affectedNodeIDs.insert(nodeID)
+        case let .childRemoved(parentID, nodeID):
+            kind = .structure
+            parentNodeIDs.insert(parentID)
+            affectedNodeIDs.insert(parentID)
+            affectedNodeIDs.insert(nodeID)
+        case let .childrenReplaced(parentID, childIDs):
+            kind = .structure
+            parentNodeIDs.insert(parentID)
+            affectedNodeIDs.insert(parentID)
+            affectedNodeIDs.formUnion(childIDs)
+        case let .childCountChanged(nodeID),
+             let .nodeChanged(nodeID):
+            kind = .content
+            affectedNodeIDs.insert(nodeID)
+        case .selectionChanged:
+            kind = .content
         }
 
         self.init(
             kind: kind,
-            revision: transaction.revision,
-            startRevision: transaction.oldSnapshot.revision,
+            revision: revision,
+            startRevision: startRevision,
             affectedNodeIDs: affectedNodeIDs,
             parentNodeIDs: parentNodeIDs,
-            resetsLocalDocumentState: resetsLocalDocumentState
+            resetsLocalDocumentState: false
         )
     }
 }
 
-extension DOMTreeTransaction.Change {
+extension DOMTreeDelta {
     var isSelectionChange: Bool {
         if case .selectionChanged = self {
             return true
