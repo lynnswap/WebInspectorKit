@@ -423,25 +423,71 @@ public actor WebInspectorProxy {
             return
         }
         guard object.subtype?.rawValue == "node", let objectID = object.id else {
+            logger.debug(
+                "Inspector.inspect ignored reason=non-node route=\(Self.logDescription(route), privacy: .public) subtype=\(String(describing: object.subtype), privacy: .public)"
+            )
             return
         }
+        let targets = Self.inspectResolutionTargets(targetID: targetID, route: route, origin: origin)
+        logger.debug(
+            "Inspector.inspect resolving route=\(Self.logDescription(route), privacy: .public) objectID=\(objectID.rawValue, privacy: .public) commandTarget=\(targets.commandTargetID.rawValue, privacy: .public) commandRoute=\(Self.logDescription(targets.commandRoute), privacy: .public) projectionTarget=\(targets.projectionTargetID.rawValue, privacy: .public)"
+        )
         // WebKit's FrameDOMAgent does not implement requestNode. Even when an
         // Inspector.inspect event is target-wrapped for a frame, the frontend
         // asks the page DOM agent to translate the RemoteObject into a node id.
-        let commandTargetID = route == .currentPage ? targetID : origin?.targetID ?? targetID
-        let commandRoute = route == .currentPage ? route : origin?.route ?? route
+        // The returned node still belongs to the inspect origin for current-page
+        // projection, so keep that scope when emitting DOM.inspect.
         do {
             let nodeID: DOM.Node.ID = try await dispatchCommand(
-                targetID: commandTargetID,
-                route: commandRoute,
+                targetID: targets.commandTargetID,
+                route: targets.commandRoute,
                 domain: .dom,
                 method: "requestNode",
                 payload: DOM.RequestNodePayload(objectID: objectID)
             )
-            let projectedNodeID = Self.projectedDOMNodeID(nodeID, targetID: commandTargetID, route: route)
+            let projectedNodeID = Self.projectedDOMNodeID(nodeID, targetID: targets.projectionTargetID, route: route)
+            logger.debug(
+                "Inspector.inspect resolved objectID=\(objectID.rawValue, privacy: .public) nodeID=\(nodeID.rawValue, privacy: .public) projectedNodeID=\(projectedNodeID.rawValue, privacy: .public)"
+            )
             continuation.yield(.inspect(projectedNodeID))
         } catch {
+            logger.debug(
+                "Inspector.inspect requestNode failed objectID=\(objectID.rawValue, privacy: .public) commandTarget=\(targets.commandTargetID.rawValue, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
             continuation.yield(.unknown(RawEvent(domain: "Inspector", method: "inspect")))
+        }
+    }
+
+    private nonisolated static func inspectResolutionTargets(
+        targetID: WebInspectorTarget.ID,
+        route: RoutingTargetID,
+        origin: Inspector.EventOrigin?
+    ) -> (
+        commandTargetID: WebInspectorTarget.ID,
+        commandRoute: RoutingTargetID,
+        projectionTargetID: WebInspectorTarget.ID
+    ) {
+        guard route == .currentPage else {
+            let commandTargetID = origin?.targetID ?? targetID
+            return (
+                commandTargetID: commandTargetID,
+                commandRoute: origin?.route ?? route,
+                projectionTargetID: commandTargetID
+            )
+        }
+        return (
+            commandTargetID: targetID,
+            commandRoute: route,
+            projectionTargetID: origin?.targetID ?? targetID
+        )
+    }
+
+    private nonisolated static func logDescription(_ route: RoutingTargetID) -> String {
+        switch route.storage {
+        case .currentPage:
+            return "current-page"
+        case let .target(rawValue):
+            return rawValue
         }
     }
 

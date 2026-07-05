@@ -1371,6 +1371,9 @@ public final class WebInspectorContext {
         inspectResolutionTask = Task { [weak self, currentPage, rootID = rootNode.id.proxyID] in
             _ = isolation
             do {
+                WebInspectorDataKitLog.debug(
+                    "DOM.inspect requesting subtree root=\(String(describing: rootID)) depth=-1"
+                )
                 try await currentPage.dom.requestChildNodes(rootID, depth: -1)
             } catch is CancellationError {
                 return
@@ -1626,10 +1629,16 @@ extension WebInspectorContext {
             notifyStatusChanged()
             let inspectedNodeID = DOMNode.ID(id)
             guard let node = nodesByID[inspectedNodeID] else {
+                WebInspectorDataKitLog.debug(
+                    "DOM.inspect pending nodeID=\(String(describing: inspectedNodeID)) materialized=false root=\(String(describing: rootNode?.id))"
+                )
                 pendingInspectedNodeID = inspectedNodeID
                 resolvePendingInspectedNode(requestSubtreeIfNeeded: true, isolation: isolation)
                 return
             }
+            WebInspectorDataKitLog.debug(
+                "DOM.inspect selecting nodeID=\(String(describing: inspectedNodeID)) materialized=true"
+            )
             pendingInspectedNodeID = nil
             inspectResolutionTask?.cancel()
             inspectResolutionTask = nil
@@ -1918,10 +1927,20 @@ extension WebInspectorContext {
         }
         guard let inspectedNode = nodesByID[pendingInspectedNodeID] else {
             if requestSubtreeIfNeeded, let rootNode {
+                WebInspectorDataKitLog.debug(
+                    "DOM.inspect unresolved nodeID=\(String(describing: pendingInspectedNodeID)); requesting root subtree"
+                )
                 requestInspectionSubtree(from: rootNode, isolation: isolation)
+            } else if requestSubtreeIfNeeded {
+                WebInspectorDataKitLog.debug(
+                    "DOM.inspect unresolved nodeID=\(String(describing: pendingInspectedNodeID)); no root node"
+                )
             }
             return
         }
+        WebInspectorDataKitLog.debug(
+            "DOM.inspect resolved pending nodeID=\(String(describing: pendingInspectedNodeID))"
+        )
         self.pendingInspectedNodeID = nil
         inspectResolutionTask?.cancel()
         inspectResolutionTask = nil
@@ -1929,6 +1948,7 @@ extension WebInspectorContext {
     }
 
     private func selectInspectedNode(_ node: DOMNode, isolation: isolated (any Actor)) {
+        WebInspectorDataKitLog.debug("DOM.inspect selecting resolved nodeID=\(String(describing: node.id))")
         select(node, isolation: isolation)
         restoreElementPickerHighlight(for: node, isolation: isolation)
     }
@@ -1950,6 +1970,9 @@ extension WebInspectorContext {
                       self?.isDOMDocumentGeneration(generation, isolation: isolation) == true else {
                     return
                 }
+                WebInspectorDataKitLog.debug(
+                    "DOM.inspect restoring highlight nodeID=\(String(describing: nodeID))"
+                )
                 try await currentPage.dom.highlightNode(nodeID)
             } catch is CancellationError {
                 return

@@ -830,7 +830,7 @@ func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async 
         Issue.record("Expected frame Inspector.inspect to normalize to DOM.inspect.")
         return
     }
-    #expect(nodeID == DOM.Node.ID("42"))
+    #expect(nodeID == DOM.Node.ID("42", scopedToTargetRawValue: "frame-target"))
     guard case let .setChildNodes(parentID, nodes)? = events.last else {
         Issue.record("Expected frame DOM.setChildNodes to be projected into the current page DOM stream.")
         return
