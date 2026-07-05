@@ -62,6 +62,12 @@ public enum DOM {
         }
 
         public func highlightNode(_ id: Node.ID) async throws {
+            // WebKit cannot highlight frame-owned DOM nodes from frame targets
+            // yet; its frontend intentionally no-ops these nodes instead of
+            // routing a scoped id to the wrong page node.
+            guard id.targetScopeRawValue == nil else {
+                return
+            }
             try await context.dispatchVoid(
                 domain: .dom,
                 method: "highlightNode",

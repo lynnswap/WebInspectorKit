@@ -427,8 +427,11 @@ public actor WebInspectorProxy {
         guard object.subtype?.rawValue == "node", let objectID = object.id else {
             return
         }
-        let commandTargetID = origin?.targetID ?? targetID
-        let commandRoute = origin?.route ?? route
+        // WebKit's FrameDOMAgent does not implement requestNode. Even when an
+        // Inspector.inspect event is target-wrapped for a frame, the frontend
+        // asks the page DOM agent to translate the RemoteObject into a node id.
+        let commandTargetID = route == .currentPage ? targetID : origin?.targetID ?? targetID
+        let commandRoute = route == .currentPage ? route : origin?.route ?? route
         do {
             let nodeID: DOM.Node.ID = try await dispatchCommand(
                 targetID: commandTargetID,
@@ -503,8 +506,6 @@ public actor WebInspectorProxy {
             case let payload as DOM.GetOuterHTMLPayload:
                 return payload.id
             case let payload as DOM.RemoveNodePayload:
-                return payload.id
-            case let payload as DOM.HighlightNodePayload:
                 return payload.id
             default:
                 return nil

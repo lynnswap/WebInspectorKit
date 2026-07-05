@@ -512,7 +512,7 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
-    func pageHighlightActionsAreSuppressedWhileElementPickerIsActive() async throws {
+    func pageHighlightActionsOverrideElementPickerState() async throws {
         let session = makeDOMTreeFixture()
         session.isSelectingElement = true
         let highlightRecorder = NodeActionRecorder()
@@ -532,13 +532,24 @@ struct DOMTreeTextViewTests {
         await view.waitForRowDocumentForTesting()
 
         view.primaryClickRowForTesting(containing: "<input disabled>")
+        let selectionHighlightedNodeID = await highlightRecorder.nextNodeID()
+
+        #expect(session.selectedNode?.id == selectionHighlightedNodeID)
+        #expect(session.node(for: selectionHighlightedNodeID)?.localName == "input")
+        #expect(highlightRecorder.recordedOwners == [.selection])
+        highlightRecorder.removeAll()
+
         view.hoverRowForTesting(containing: "<article")
+        let hoverHighlightedNodeID = await highlightRecorder.nextNodeID()
+
+        #expect(session.node(for: hoverHighlightedNodeID)?.localName == "article")
+        #expect(highlightRecorder.recordedOwners == [.transient])
+
         view.endHoverForTesting()
-        await view.waitForPageHighlightTaskForTesting()
+        await restoreRecorder.next()
 
         #expect(session.selectedNode?.localName == "input")
-        #expect(highlightRecorder.recordedNodeIDs.isEmpty)
-        #expect(restoreRecorder.recordCount == 0)
+        #expect(restoreRecorder.recordCount == 1)
     }
 
     @Test

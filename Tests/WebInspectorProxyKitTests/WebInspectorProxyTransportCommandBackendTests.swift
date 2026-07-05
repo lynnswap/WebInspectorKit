@@ -809,7 +809,7 @@ func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async 
     )
 
     let requestNode = try await waitForTargetMessage(backend, method: "DOM.requestNode")
-    #expect(requestNode.targetIdentifier == ProtocolTarget.ID("frame-target"))
+    #expect(requestNode.targetIdentifier == ProtocolTarget.ID("page-main"))
     #expect(try messageParameters(requestNode.message)["objectId"] as? String == "remote-frame-node")
     await receiveTargetReply(
         transport,
@@ -831,7 +831,7 @@ func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async 
         Issue.record("Expected frame Inspector.inspect to normalize to DOM.inspect.")
         return
     }
-    #expect(nodeID == DOM.Node.ID("42", scopedToTargetRawValue: "frame-target"))
+    #expect(nodeID == DOM.Node.ID("42"))
     guard case let .setChildNodes(parentID, nodes)? = events.last else {
         Issue.record("Expected frame DOM.setChildNodes to be projected into the current page DOM stream.")
         return
@@ -839,11 +839,20 @@ func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async 
     #expect(parentID == DOM.Node.ID("42", scopedToTargetRawValue: "frame-target"))
     #expect(nodes.first?.id == DOM.Node.ID("43", scopedToTargetRawValue: "frame-target"))
 
-    let highlightTask = Task {
-        try await target.dom.highlightNode(nodeID)
+    let frameNodeID = DOM.Node.ID("42", scopedToTargetRawValue: "frame-target")
+    let messageCountBeforeFrameHighlight = await backend.sentTargetMessages().count
+    try await target.dom.highlightNode(frameNodeID)
+    #expect(await backend.sentTargetMessages().count == messageCountBeforeFrameHighlight)
+
+    let mainHighlightTask = Task {
+        try await target.dom.highlightNode(DOM.Node.ID("42"))
     }
-    let highlight = try await waitForTargetMessage(backend, method: "DOM.highlightNode")
-    #expect(highlight.targetIdentifier == ProtocolTarget.ID("frame-target"))
+    let highlight = try await waitForTargetMessage(
+        backend,
+        method: "DOM.highlightNode",
+        after: messageCountBeforeFrameHighlight
+    )
+    #expect(highlight.targetIdentifier == ProtocolTarget.ID("page-main"))
     #expect((try messageParameters(highlight.message)["nodeId"] as? NSNumber)?.intValue == 42)
     await receiveTargetReply(
         transport,
@@ -851,29 +860,10 @@ func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async 
         messageID: try messageID(highlight.message),
         result: "{}"
     )
-    try await highlightTask.value
-
-    let messageCountAfterFrameHighlight = await backend.sentTargetMessages().count
-    let mainHighlightTask = Task {
-        try await target.dom.highlightNode(DOM.Node.ID("42"))
-    }
-    let mainHighlight = try await waitForTargetMessage(
-        backend,
-        method: "DOM.highlightNode",
-        after: messageCountAfterFrameHighlight
-    )
-    #expect(mainHighlight.targetIdentifier == ProtocolTarget.ID("page-main"))
-    #expect((try messageParameters(mainHighlight.message)["nodeId"] as? NSNumber)?.intValue == 42)
-    await receiveTargetReply(
-        transport,
-        targetID: mainHighlight.targetIdentifier,
-        messageID: try messageID(mainHighlight.message),
-        result: "{}"
-    )
     try await mainHighlightTask.value
 
     let matchedStylesTask = Task {
-        try await target.css.matchedStyles(for: nodeID)
+        try await target.css.matchedStyles(for: frameNodeID)
     }
     let matchedStyles = try await waitForTargetMessage(backend, method: "CSS.getMatchedStylesForNode")
     #expect(matchedStyles.targetIdentifier == ProtocolTarget.ID("frame-target"))

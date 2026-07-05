@@ -981,6 +981,121 @@ func transportBackedStartupCapturesRuntimeAndConsoleReplayBeforeEnableReplies() 
 
 @MainActor
 @Test
+func transportBackedInspectorInspectMaterializesSelectionAndRestoresHighlight() async throws {
+    let targetID = ProtocolTarget.ID("page-main")
+    let inspectedID = DOM.Node.ID("42")
+    let (backend, transport, context) = try await startTransportBackedContext(
+        targetID: targetID,
+        documentID: "1"
+    )
+    let startupMessageCount = await backend.sentTargetMessages().count
+
+    let enablePickerTask = Task { @MainActor in
+        try await context.setElementPickerEnabled(true)
+    }
+    let inspectMode = try await waitForTransportTargetMessage(
+        backend,
+        method: "DOM.setInspectModeEnabled",
+        after: startupMessageCount
+    )
+    #expect(inspectMode.targetIdentifier == targetID)
+    await receiveTransportTargetReply(
+        transport,
+        targetID: inspectMode.targetIdentifier,
+        messageID: try transportMessageID(inspectMode.message),
+        result: "{}"
+    )
+    try await enablePickerTask.value
+    #expect(context.isElementPickerEnabled)
+
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: targetID,
+        method: "Inspector.inspect",
+        params: #"{"object":{"type":"object","subtype":"node","objectId":"node-object"}}"#
+    )
+    let requestNode = try await waitForTransportTargetMessage(
+        backend,
+        method: "DOM.requestNode",
+        after: startupMessageCount
+    )
+    #expect(requestNode.targetIdentifier == targetID)
+    #expect(try transportTargetMessageParameters(requestNode.message)["objectId"] as? String == "node-object")
+
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: targetID,
+        method: "DOM.setChildNodes",
+        params: ##"{"parentId":"1","nodes":[{"nodeId":42,"nodeType":1,"nodeName":"DIV","localName":"div","nodeValue":"","childNodeCount":0}]}"##
+    )
+    await receiveTransportTargetReply(
+        transport,
+        targetID: requestNode.targetIdentifier,
+        messageID: try transportMessageID(requestNode.message),
+        result: #"{"nodeId":42}"#
+    )
+
+    try await waitUntil { context.selectedNode?.id == DOMNode.ID(inspectedID) }
+    #expect(context.isElementPickerEnabled == false)
+
+    let highlight = try await waitForTransportTargetMessage(
+        backend,
+        method: "DOM.highlightNode",
+        after: startupMessageCount
+    )
+    #expect(highlight.targetIdentifier == targetID)
+    #expect((try transportTargetMessageParameters(highlight.message)["nodeId"] as? NSNumber)?.intValue == 42)
+    await receiveTransportTargetReply(
+        transport,
+        targetID: highlight.targetIdentifier,
+        messageID: try transportMessageID(highlight.message),
+        result: "{}"
+    )
+
+    let matchedStyles = try await waitForTransportTargetMessage(
+        backend,
+        method: "CSS.getMatchedStylesForNode",
+        after: startupMessageCount
+    )
+    #expect(matchedStyles.targetIdentifier == targetID)
+    await receiveTransportTargetReply(
+        transport,
+        targetID: matchedStyles.targetIdentifier,
+        messageID: try transportMessageID(matchedStyles.message),
+        result: #"{"matchedCSSRules":[],"inherited":[],"pseudoElements":[]}"#
+    )
+
+    let inlineStyles = try await waitForTransportTargetMessage(
+        backend,
+        method: "CSS.getInlineStylesForNode",
+        after: startupMessageCount
+    )
+    #expect(inlineStyles.targetIdentifier == targetID)
+    await receiveTransportTargetReply(
+        transport,
+        targetID: inlineStyles.targetIdentifier,
+        messageID: try transportMessageID(inlineStyles.message),
+        result: "{}"
+    )
+
+    let computedStyle = try await waitForTransportTargetMessage(
+        backend,
+        method: "CSS.getComputedStyleForNode",
+        after: startupMessageCount
+    )
+    #expect(computedStyle.targetIdentifier == targetID)
+    await receiveTransportTargetReply(
+        transport,
+        targetID: computedStyle.targetIdentifier,
+        messageID: try transportMessageID(computedStyle.message),
+        result: #"{"computedStyle":[]}"#
+    )
+
+    try await waitUntil { context.selectedNode?.elementStyles?.phase == .loaded }
+}
+
+@MainActor
+@Test
 func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
     let oldTargetID = ProtocolTarget.ID("page-old")
     let newTargetID = ProtocolTarget.ID("page-new")
@@ -1049,10 +1164,14 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
         result: transportDocumentResult(nodeID: "new-root")
     )
 
-    let consoleEnable = try await waitForTransportTargetMessage(
+    let consoleEnable = try await waitForTransportTargetMessageReplyingToInterleavedGetDocuments(
         backend,
+        transport: transport,
+        targetID: newTargetID,
         method: "Console.enable",
         after: startupMessageCount,
+        documentNodeID: "new-root",
+        repliedGetDocumentMessageIDs: [try transportMessageID(getDocument.message)],
         timeout: .seconds(30)
     )
     #expect(consoleEnable.targetIdentifier == newTargetID)
@@ -1070,13 +1189,28 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
 
     let sentMessages = await backend.sentTargetMessages()
     let retargetMessages = Array(sentMessages.dropFirst(startupMessageCount))
-    #expect(try retargetMessages.map { try transportTargetMessageMethod($0.message) } == [
+    let staleRouteMethods = try retargetMessages
+        .filter { $0.targetIdentifier == oldTargetID }
+        .map { try transportTargetMessageMethod($0.message) }
+    #expect(staleRouteMethods.allSatisfy { $0 == "DOM.getDocument" })
+
+    let newTargetMessages = retargetMessages.filter { $0.targetIdentifier == newTargetID }
+    let newTargetMethods = try newTargetMessages.map { try transportTargetMessageMethod($0.message) }
+    let runtimeEnableIndex = try #require(newTargetMethods.firstIndex(of: "Runtime.enable"))
+    #expect(newTargetMethods[..<runtimeEnableIndex].allSatisfy { $0 == "DOM.getDocument" })
+    let trackingMethods = Array(newTargetMethods[runtimeEnableIndex...])
+    #expect(Array(trackingMethods.prefix(3)) == [
+        "Runtime.enable",
+        "Network.enable",
+        "DOM.getDocument",
+    ])
+    #expect(trackingMethods.contains("Console.enable"))
+    #expect(Set(newTargetMethods).isSubset(of: [
         "Runtime.enable",
         "Network.enable",
         "DOM.getDocument",
         "Console.enable",
-    ])
-    #expect(retargetMessages.allSatisfy { $0.targetIdentifier == newTargetID })
+    ]))
 
     await receiveTransportTargetEvent(
         transport,
@@ -4448,6 +4582,57 @@ private func waitForTransportTargetMessage(
     }
 }
 
+private func waitForTransportTargetMessageReplyingToInterleavedGetDocuments(
+    _ backend: FakeTransportBackend,
+    transport: TransportSession,
+    targetID: ProtocolTarget.ID,
+    method expectedMethod: String,
+    after count: Int,
+    documentNodeID: String,
+    repliedGetDocumentMessageIDs: Set<UInt64>,
+    timeout: Duration = .seconds(1)
+) async throws -> SentTargetMessage {
+    let clock = ContinuousClock()
+    let deadline = clock.now + timeout
+    var repliedGetDocumentMessageIDs = repliedGetDocumentMessageIDs
+
+    while true {
+        let sentMessages = await backend.sentTargetMessages()
+        for sentMessage in sentMessages.dropFirst(count) where sentMessage.targetIdentifier == targetID {
+            let method = try transportTargetMessageMethod(sentMessage.message)
+            if method == expectedMethod {
+                return sentMessage
+            }
+            guard method == "DOM.getDocument" else {
+                continue
+            }
+
+            let messageID = try transportMessageID(sentMessage.message)
+            guard repliedGetDocumentMessageIDs.insert(messageID).inserted else {
+                continue
+            }
+            await receiveTransportTargetReply(
+                transport,
+                targetID: sentMessage.targetIdentifier,
+                messageID: messageID,
+                result: transportDocumentResult(nodeID: documentNodeID)
+            )
+        }
+
+        if clock.now >= deadline {
+            let sentMethods = try sentMessages.enumerated().map { index, message in
+                "#\(index):\(try transportTargetMessageMethod(message.message))@\(message.targetIdentifier.rawValue)"
+            }.joined(separator: ", ")
+            throw TimedOut(
+                "Timed out waiting for \(expectedMethod) after \(count) within \(timeout). "
+                    + "Sent target messages: [\(sentMethods)]"
+            )
+        }
+
+        await Task.yield()
+    }
+}
+
 private func receiveTransportTargetReply(
     _ transport: TransportSession,
     targetID: ProtocolTarget.ID,
@@ -4507,6 +4692,11 @@ private func transportTargetMessageMethod(_ message: String) throws -> String {
         throw TransportSession.Error.malformedMessage
     }
     return method
+}
+
+private func transportTargetMessageParameters(_ message: String) throws -> [String: Any] {
+    let object = try transportMessageObject(message)
+    return try #require(object["params"] as? [String: Any])
 }
 
 private func transportMessageObject(_ message: String) throws -> [String: Any] {

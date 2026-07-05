@@ -1212,9 +1212,6 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
                   let self else {
                 return
             }
-            guard !self.context.isElementPickerEnabled else {
-                return
-            }
             switch reason {
             case .selection:
                 guard self.currentTreeSnapshot.selectedNodeID == nodeID else {
@@ -1246,8 +1243,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
                   let self else {
                 return
             }
-            guard self.hoveredNodeID == nil,
-                  !self.context.isElementPickerEnabled else {
+            guard self.hoveredNodeID == nil else {
                 if self.pageHighlightIntent == .restoreSelectionAfterHover {
                     self.pageHighlightIntent = nil
                 }
