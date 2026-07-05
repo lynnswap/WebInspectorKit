@@ -1,6 +1,7 @@
 # Design Doc — Two-Layer SDK Surface (WebInspectorProxyKit + WebInspectorDataKit)
 
-Status: binding contract for the staged two-layer SDK (2026-07-03). This
+Status: binding contract for the staged two-layer SDK (2026-07-03; amended
+2026-07-05). This
 document supersedes the **public-surface direction** of
 [03-design-doc.md](03-design-doc.md). It keeps the scope outcomes of
 [01-scope-contract.md](01-scope-contract.md) and the measured findings of
@@ -88,20 +89,30 @@ flowchart TD
 | `WebInspectorProxyKitTesting` | iOS 18+, macOS 15+ | Tests that drive either kit deterministically over an in-memory backend with no `WKWebView` and no private symbols. |
 | `WebInspectorKit` | iOS 18+ (UIKit) | Apps wanting the built-in drop-in inspector container (Monocly). |
 
-The current `WebInspectorTransport` + `WebInspectorNativeTransport` +
-`WebInspectorNativeBridge` + `WebInspectorNativeSymbols` stack is no longer a
-public product surface. During migration these may remain separate internal
-targets used by the legacy UIKit product and tests, but external consumers only
-see the designed products above. The final ProxyKit implementation can fold or
-depend on those internal targets; it must not re-export them.
+The current `WebInspectorTransport` + `WebInspectorNativeTransport` stack is no
+longer a separate architectural layer. It must be folded into
+`WebInspectorProxyKit` as implementation code, not retained as independently
+importable package targets. Keeping them as targets leaves protocol routing,
+target lifecycle, command result decoding, and native attach ownership split
+across module boundaries, which is the owner ambiguity this rearchitecture is
+removing. `WebInspectorNativeBridge` and `WebInspectorNativeSymbols` may remain
+support targets only while SwiftPM/ObjC++/Mach-O build constraints require it;
+they are not semantic layers and only `WebInspectorProxyKit` may depend on them.
+External consumers only see the designed products above, and in-repo UI/DataKit
+targets must not import raw transport or native transport modules.
 
 ### 1.3 What moves where (from the current 16 targets)
 
-- `WebInspectorTransport`, `WebInspectorNativeTransport`, `WebInspectorNativeBridge`,
-  `WebInspectorNativeSymbols`, `WebInspectorCoreSupport` → **internal
-  implementation targets**, not library products. `TransportSession`,
-  `ProtocolCommand/Event`, `ProtocolCommandChannel`, `TransportReceiver`,
-  `NativeInspectorBackend`, symbol resolution — all stay `package`/internal.
+- `WebInspectorTransport`, `WebInspectorNativeTransport` → **deleted as package
+  targets and moved under `WebInspectorProxyKit` implementation ownership**.
+  `TransportSession`, `ProtocolCommand/Event`, `TransportReceiver`,
+  `NativeInspectorBackend`, and the native connection factory become package or
+  private ProxyKit declarations. `WebInspectorProxyKitTesting` remains the only
+  supported fake/backend seam exposed to tests and consumers.
+- `WebInspectorNativeBridge`, `WebInspectorNativeSymbols` → **support targets
+  only if required by ObjC++/Mach-O build mechanics**. They must expose no SDK
+  semantics, no target lifecycle, and no protocol-domain state. Their only
+  production consumer is `WebInspectorProxyKit`.
 - The domain `@Observable` classes (`DOMSession`, `NetworkSession`,
   `ConsoleSession`, `RuntimeState`, `CSSSession`) and their `apply*` pipelines
   (`WebInspectorCore*`) → **rewritten as `WebInspectorDataKit` models + a private
@@ -120,7 +131,7 @@ depend on those internal targets; it must not re-export them.
 | UI toolkit / platform | Product boundary: `WebInspectorProxyKit` and the core `WebInspectorDataKit` product are toolkit-free (Foundation + WebKit only). SwiftUI conveniences, if added later, live in an optional adapter target. | Add an AppKit UI: new module importing `WebInspectorDataKit`. **0 files edited in either kit.** |
 | Inspected target kind (page / frame / worker / service-worker) | The **`WebInspectorTarget`** object — each target owns its own routing and domain clients (owner answer: per-target sessions). Initial public surface exposes the current page target only; target lifecycle remains package/private until a real live stream exists. | Add a worker inspector view later by promoting a real target-change stream. No snapshot-only stream and no `targetID`-matching added anywhere. |
 | Protocol domain | One typed domain client per domain on `WebInspectorTarget`; one `apply` handler per domain in the data kit | Add a `Page`-domain consumer: 1 new client accessor + 1 event enum. No other domain touched. |
-| Transport backend (native / test fake) | `package protocol TransportBackend` inside `WebInspectorProxyKit` + the `WebInspectorProxy` composition root (unchanged from today, now internal) | 1 conformer + 1 root branch. Documented as internal. |
+| Transport backend (native / test fake) | One package-private backend seam inside `WebInspectorProxyKit`, with the production native backend and the test fake both entering through ProxyKit-owned composition roots | Add a backend for tests: one fake implementation in `WebInspectorProxyKitTesting`; no new public product and no import of raw transport from DataKit/UI. |
 | Run environment (live / preview / test) | Backend fake in `WebInspectorProxyKitTesting`, never a model-level branch | Production `WebInspectorProxy` / `WebInspectorContainer` run unmodified over the fake. |
 | List kind (network / console) | `WebInspectorFetchDescriptor<Model>` + a per-model known-key-path table | Add a "storage" list later: 1 model + 1 descriptor extension. |
 
@@ -131,6 +142,23 @@ a target session and calls `target.dom.getDocument()` — the active routing
 target is baked into the handle, never a parameter, and IDs it hands back are
 opaque. Public target identity and internal routing identity are deliberately
 separate because WebKit replaces the provisional/current route on commit.
+
+2026-07-05 owner amendment:
+
+- `TransportSession` may parse WebKit JSON, correlate replies, unwrap
+  `Target.dispatchMessageFromTarget`, and track raw route IDs needed to deliver
+  a command result. It must not be the semantic owner of "the current inspected
+  page" after a provisional commit.
+- `WebInspectorProxy` owns the semantic current-page handle and the hidden route
+  swap across `Target.didCommitProvisionalTarget`. `Target.targetDestroyed` for
+  an old physical route is not a clean SDK detach while a replacement page route
+  is pending or committed.
+- `WebInspectorDataKit` owns DOM document generation, DOM node identity,
+  selection materialization, highlight restore policy, and Network request
+  retention across process swaps.
+- UI targets own only rendered rows, expansion state, first-responder/key
+  command installation, and scroll position. They do not infer protocol
+  lifecycle or re-request DOM subtrees behind DataKit.
 
 ---
 

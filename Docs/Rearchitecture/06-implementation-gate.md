@@ -1,6 +1,6 @@
 # Implementation Gate — Coverage, Contract Tests, Delegation
 
-Status: implementation gate status (2026-07-03). This file keeps
+Status: implementation gate status (2026-07-03; amended 2026-07-05). This file keeps
 [05-two-layer-sdk-design.md](05-two-layer-sdk-design.md) implementation-ready by
 recording the measured status of coverage, DTO field lists, contract tests, and
 worker boundaries.
@@ -15,11 +15,12 @@ accepted architecture but not shipped public API.
 - No non-UI umbrella product. Consumers import `WebInspectorProxyKit` and/or
   `WebInspectorDataKit` explicitly.
 - Final public products are `WebInspectorProxyKit`, `WebInspectorProxyKitTesting`,
-  `WebInspectorDataKit`, and `WebInspectorKit`. Existing public
-  `WebInspectorCore`, `WebInspectorTransport`, `WebInspectorNativeBridge`,
-  `WebInspectorNativeSymbols`, and `WebInspectorUI` products are migration
-  artifacts and must be internalized or removed from the public package surface
-  before the rearchitecture contract is considered shipped.
+  `WebInspectorDataKit`, and `WebInspectorKit`. `WebInspectorTransport` and
+  `WebInspectorNativeTransport` are not merely hidden products; they must stop
+  being independently importable targets and be folded into
+  `WebInspectorProxyKit` implementation ownership. `WebInspectorNativeBridge`
+  and `WebInspectorNativeSymbols` may remain support targets only for ObjC++ and
+  symbol-resolution build mechanics; they must not expose SDK semantics.
 - Domain model names in `WebInspectorDataKit` stay unprefixed: `DOMNode`,
   `NetworkRequest`, `ConsoleMessage`, `RuntimeObject`, etc.
 - SwiftData/CoreData-style infrastructure stays `WebInspector`-prefixed:
@@ -30,6 +31,20 @@ accepted architecture but not shipped public API.
   sort/predicate, retention, refresh, and loading phases remain planned.
 - `currentPage` keeps semantic identity across provisional commit; ProxyKit owns
   the hidden route-ID swap.
+- Cross-origin/process-swap navigation is a retarget transition, not a detach:
+  DataKit may invalidate DOM document generation and selected-node materialized
+  rows, but it must reacquire the new document root and keep Network collection
+  live unless the SDK connection actually closes.
+- Picker inspection is a DataKit selection transaction: inspect event
+  normalization in ProxyKit, request-node/materialization in DataKit, UI
+  ancestor expansion/selection/scroll after the selected node becomes visible,
+  and selected-node highlight restore after touch picker selection.
+- DOM tree hover/click highlight intent must either reach ProxyKit
+  `DOM.highlightNode`/`hideHighlight` or fail with an observable/loggable reason;
+  UI-level `try?` or scoped-node no-op must not be the owner of failures.
+- `waitUntilClosed()` is a lifecycle wait contract. It must wait while open and
+  complete on clean close or throw on fatal failure; it must not throw merely
+  because the proxy is currently open.
 - `WebInspectorProxy.targets` is not part of the initial public surface. A future
   target-change API must be a real live stream that replays the current target
   set before yielding created/committed/destroyed changes; a one-shot snapshot
@@ -57,11 +72,11 @@ recorded in these rows.
 
 | Gate | Required artifact | Status |
 | --- | --- | --- |
-| G0 | Final public product/API surface is listed and legacy public products are marked migration-only | Implemented for product graph: `Package.swift` now exports only `WebInspectorProxyKit`, `WebInspectorProxyKitTesting`, `WebInspectorDataKit`, and `WebInspectorKit`; legacy targets remain internal implementation/test dependencies |
+| G0 | Final public product/API surface is listed and legacy transport targets are removed as independently importable modules | Reopened 2026-07-05: `Package.swift` exports only the final products, but `WebInspectorTransport` and `WebInspectorNativeTransport` still exist as targets and are imported by ProxyKit/tests/UI helpers. They must be folded into ProxyKit or replaced by ProxyKitTesting seams before this gate is closed. |
 | G1 | DTO / model field lists filled from current payload structs and model types | Implemented for the M3/M4 binding subset; remaining field expansion rows are marked planned/pending below |
 | G2 | Every typed Proxy event has exactly one DataKit destination or an explicit no-op owner | Implemented for the current DOM/CSS/Network/Console/Runtime subset; detached roots, shadow/pseudo binding, Target, and Page remain explicit planned/pending rows |
 | G3 | Story A/A2/B/C contract-test package shape is defined with validation commands | Implemented as standalone `ContractTests/` package over public products; Story B custom tabs compile against `WebInspectorSession`. Network now renders from the session-owned `WebInspectorContext`, but Runtime DataKit access from custom tabs remains intentionally unshipped until DOM/CSS/runtime built-in UI reads also stop using legacy Core; do not close this by adding `session.modelContext` as a side channel. |
-| G4 | Worker branches are split by owner boundary and write set, with no overlapping primary files | Binding split recorded below, with W1/W2/W3/W5 current-shell work completed, W4a/W4c implemented for the Network path, W4b implemented for DOM tree/menu/navigation, and W4d/W4e still pending |
+| G4 | Worker branches are split by owner boundary and write set, with no overlapping primary files | Reopened 2026-07-05: new worker split is package-boundary removal, ProxyKit lifecycle/runtime fixes, DataKit DOM/Network lifecycle fixes, and UI interaction/key/undo fixes. Workers must not introduce new raw transport imports outside ProxyKit. |
 | G5 | MainActor detachment owner map is fixed before stream/runtime refactors | Revised as owner map: native WebKit boundary remains `@MainActor`; protocol/domain stream detachment is M1/M2; DataKit selected owner-actor application is M3/M4 and must not be collapsed back into MainActor |
 | G6 | DataKit public isolation contract is fixed before W3 implementation | Implemented for current M3/M4 shell: unconditional DataKit `@MainActor` removed from the public context/models/results, `WebInspectorContext` is a non-observable ModelContext-style handle, `WebInspectorContainer` hides raw proxy storage and owns shared wire-domain enablement, `WebInspectorContext` hides container/proxy internals, fixes owner actor at init, model `modelContext` stays internal, current `WebInspectorFetchedResultsController` has a real context-owned transaction source, no public model-actor/executor, target-change stream, sort/predicate, refresh, phase, or retention compatibility layer is shipped, and non-MainActor Story A runtime coverage exists |
 
