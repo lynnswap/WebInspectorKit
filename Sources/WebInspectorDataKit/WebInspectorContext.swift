@@ -2647,6 +2647,12 @@ extension WebInspectorContext {
 }
 
 extension WebInspectorContext {
+    private struct SelectedStylePayloads {
+        var matchedStyles: CSS.MatchedStyles
+        var inlineStyles: CSS.InlineStyles
+        var computedProperties: [CSS.ComputedProperty]
+    }
+
     func apply(_ event: CSS.Event, isolation: isolated (any Actor) = #isolation) {
         requireOwner(isolation)
         switch event {
@@ -2704,22 +2710,16 @@ extension WebInspectorContext {
         }
 
         do {
-            let matchedStyles = try await currentPage.css.matchedStyles(for: node.id.proxyID)
-            guard isCurrentStyleRefresh(node: node, generation: generation) else {
-                return
-            }
-            let inlineStyles = try await currentPage.css.inlineStyles(for: node.id.proxyID)
-            guard isCurrentStyleRefresh(node: node, generation: generation) else {
-                return
-            }
-            let computedProperties = try await currentPage.css.computedStyle(for: node.id.proxyID)
-            guard isCurrentStyleRefresh(node: node, generation: generation) else {
-                return
-            }
+            guard let payloads = try await selectedStylePayloadsWithCSSAgentCompatibility(
+                for: node,
+                target: currentPage,
+                generation: generation,
+                isolation: isolation
+            ) else { return }
             styles.load(
-                matchedStyles: matchedStyles,
-                inlineStyles: inlineStyles,
-                computedProperties: computedProperties
+                matchedStyles: payloads.matchedStyles,
+                inlineStyles: payloads.inlineStyles,
+                computedProperties: payloads.computedProperties
             )
         } catch let error as WebInspectorProxyError {
             guard isCurrentStyleRefresh(node: node, generation: generation) else {
@@ -2736,6 +2736,80 @@ extension WebInspectorContext {
                 message: String(describing: error)
             ))
         }
+    }
+
+    private func selectedStylePayloadsWithCSSAgentCompatibility(
+        for node: DOMNode,
+        target: WebInspectorTarget,
+        generation: Int,
+        isolation: isolated (any Actor) = #isolation
+    ) async throws -> SelectedStylePayloads? {
+        _ = isolation
+        do {
+            return try await selectedStylePayloads(
+                for: node,
+                target: target,
+                generation: generation,
+                isolation: isolation
+            )
+        } catch let error as WebInspectorProxyError {
+            guard shouldRetrySelectedStyleLoadAfterEnablingCSSAgent(error) else {
+                throw error
+            }
+            guard isCurrentStyleRefresh(node: node, generation: generation) else {
+                return nil
+            }
+            try await target.css.enable()
+            guard isCurrentStyleRefresh(node: node, generation: generation) else {
+                return nil
+            }
+            return try await selectedStylePayloads(
+                for: node,
+                target: target,
+                generation: generation,
+                isolation: isolation
+            )
+        }
+    }
+
+    private func selectedStylePayloads(
+        for node: DOMNode,
+        target: WebInspectorTarget,
+        generation: Int,
+        isolation: isolated (any Actor) = #isolation
+    ) async throws -> SelectedStylePayloads? {
+        _ = isolation
+        let matchedStyles = try await target.css.matchedStyles(for: node.id.proxyID)
+        guard isCurrentStyleRefresh(node: node, generation: generation) else {
+            return nil
+        }
+        let inlineStyles = try await target.css.inlineStyles(for: node.id.proxyID)
+        guard isCurrentStyleRefresh(node: node, generation: generation) else {
+            return nil
+        }
+        let computedProperties = try await target.css.computedStyle(for: node.id.proxyID)
+        guard isCurrentStyleRefresh(node: node, generation: generation) else {
+            return nil
+        }
+        return SelectedStylePayloads(
+            matchedStyles: matchedStyles,
+            inlineStyles: inlineStyles,
+            computedProperties: computedProperties
+        )
+    }
+
+    private func shouldRetrySelectedStyleLoadAfterEnablingCSSAgent(_ error: WebInspectorProxyError) -> Bool {
+        guard case let .commandFailed(domain, method, message) = error,
+              domain == "CSS",
+              [
+                "getMatchedStylesForNode",
+                "getInlineStylesForNode",
+                "getComputedStyleForNode",
+              ].contains(method) else {
+            return false
+        }
+
+        return message.lowercased().contains("enable")
     }
 
     private func isCurrentStyleRefresh(node: DOMNode, generation: Int) -> Bool {

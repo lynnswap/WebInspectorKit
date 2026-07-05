@@ -54,11 +54,20 @@ private struct CommandKey: Hashable, Sendable {
     var method: String
 }
 
-private struct QueuedResult: @unchecked Sendable {
-    var value: Any
+private struct QueuedReply: @unchecked Sendable {
+    enum Storage {
+        case result(Any)
+        case failure(any Error)
+    }
+
+    var storage: Storage
 
     init(_ value: some Sendable) {
-        self.value = value
+        storage = .result(value)
+    }
+
+    init(failure error: any Error & Sendable) {
+        storage = .failure(error)
     }
 }
 
@@ -81,7 +90,7 @@ public enum WebInspectorTestBackendError: Error, Equatable, Sendable {
 }
 
 public actor WebInspectorTestBackend {
-    private var enqueuedReplies: [CommandKey: [QueuedResult]]
+    private var enqueuedReplies: [CommandKey: [QueuedReply]]
     private var commands: [RecordedCommand]
     private var heldCommands: [HeldCommand]
     private var eventContinuations: [EventSubscriptionKey: [UUID: AsyncStream<WebInspectorProxyEvent>.Continuation]]
@@ -101,7 +110,16 @@ public actor WebInspectorTestBackend {
         method: String
     ) async {
         let key = CommandKey(domain: domain, method: method)
-        enqueuedReplies[key, default: []].append(QueuedResult(result))
+        enqueuedReplies[key, default: []].append(QueuedReply(result))
+    }
+
+    public func enqueueFailure(
+        _ error: any Error & Sendable,
+        for domain: String,
+        method: String
+    ) async {
+        let key = CommandKey(domain: domain, method: method)
+        enqueuedReplies[key, default: []].append(QueuedReply(failure: error))
     }
 
     public func emit(_ event: Network.Event, target: WebInspectorTarget.ID) async {
@@ -338,12 +356,20 @@ extension WebInspectorTestBackend: WebInspectorProxyBackend {
         let queued = results.removeFirst()
         enqueuedReplies[key] = results.isEmpty ? nil : results
 
-        guard let result = queued.value as? Result else {
+        let value: Any
+        switch queued.storage {
+        case let .result(result):
+            value = result
+        case let .failure(error):
+            throw error
+        }
+
+        guard let result = value as? Result else {
             throw WebInspectorProxyError.commandFailed(
                 domain: command.domain.rawValue,
                 method: command.method,
                 message: "Enqueued result for \(command.domain.rawValue).\(command.method) has type "
-                    + "\(type(of: queued.value)); expected \(Result.self)."
+                    + "\(type(of: value)); expected \(Result.self)."
             )
         }
         return result

@@ -3355,6 +3355,58 @@ func selectingDOMNodeLoadsCSSStylesAndComputedProperties() async throws {
 
 @MainActor
 @Test
+func selectingDOMNodeRetriesCSSStyleLoadAfterEnablingAgent() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let document = try #require(context.rootNode)
+    let elementID = DOM.Node.ID("styled-node")
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(
+                id: elementID,
+                nodeType: 1,
+                nodeName: "DIV",
+                localName: "div",
+                childNodeCount: 0
+            )
+        ]),
+        target: target
+    )
+    let element = try await waitForChild(in: context)
+
+    await runtime.backend.enqueueFailure(
+        WebInspectorProxyError.commandFailed(
+            domain: "CSS",
+            method: "getMatchedStylesForNode",
+            message: "CSS agent is not enabled."
+        ),
+        for: "CSS",
+        method: "getMatchedStylesForNode"
+    )
+    await runtime.backend.enqueue((), for: "CSS", method: "enable")
+    await enqueueCSSStyleReplies(on: runtime.backend)
+
+    context.select(element)
+
+    let styles = try #require(element.elementStyles)
+    try await waitUntil { styles.phase == .loaded }
+    #expect(styles.sections.map(\.title) == [".card"])
+    #expect(styles.computedProperties.map(\.name) == ["display"])
+
+    let cssCommands = await runtime.backend.recordedCommands()
+        .filter { $0.domain == "CSS" }
+    #expect(cssCommands == [
+        RecordedCommand(domain: "CSS", method: "getMatchedStylesForNode"),
+        RecordedCommand(domain: "CSS", method: "enable"),
+        RecordedCommand(domain: "CSS", method: "getMatchedStylesForNode"),
+        RecordedCommand(domain: "CSS", method: "getInlineStylesForNode"),
+        RecordedCommand(domain: "CSS", method: "getComputedStyleForNode"),
+    ])
+}
+
+@MainActor
+@Test
 func selectingNonElementDOMNodeDoesNotRequestCSSStyles() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (_, context) = try await startContext(runtime: runtime)
