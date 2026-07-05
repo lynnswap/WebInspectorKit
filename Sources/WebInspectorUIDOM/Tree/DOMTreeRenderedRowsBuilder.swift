@@ -346,7 +346,7 @@ extension DOMTreeTextView {
         }
 
         private func mayRenderNode(_ nodeID: DOMNode.ID, displayRootIDs: Set<DOMNode.ID>) -> Bool {
-            guard let node = snapshot.node(for: nodeID) else {
+            guard snapshot.node(for: nodeID) != nil else {
                 return false
             }
             if displayRootIDs.contains(nodeID) {
