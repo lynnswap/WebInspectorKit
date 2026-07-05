@@ -431,6 +431,18 @@ func transportBackedProxyWaitUntilClosedSuspendsUntilClose() async throws {
 }
 
 @Test
+func proxyWaitUntilClosedReturnsImmediatelyAfterClose() async throws {
+    let proxy = WebInspectorProxy()
+
+    await proxy.close()
+
+    let waitTask = Task {
+        try await proxy.waitUntilClosed()
+    }
+    try await throwingValue(of: waitTask, timeout: .milliseconds(100))
+}
+
+@Test
 func proxyWaitUntilClosedWaitsForInFlightCloseConnection() async throws {
     let closeGate = CloseConnectionGate()
     let proxy = WebInspectorProxy(closeConnection: {
@@ -454,6 +466,30 @@ func proxyWaitUntilClosedWaitsForInFlightCloseConnection() async throws {
     try await waitTask.value
     await closeTask.value
     #expect(await waitCompletion.isFinished())
+}
+
+@Test
+func proxyWaitUntilClosedCancellationRemovesWaiter() async throws {
+    let proxy = WebInspectorProxy()
+
+    let waitTask = Task {
+        try await proxy.waitUntilClosed()
+    }
+    await proxy.waitForCloseWaiterForTesting()
+
+    waitTask.cancel()
+
+    do {
+        try await waitTask.value
+        Issue.record("Expected waitUntilClosed cancellation to throw.")
+    } catch is CancellationError {
+        // Expected: cancellation is the waiter's failure path while the proxy remains open.
+    } catch {
+        Issue.record("Expected CancellationError, got \(error).")
+    }
+
+    await proxy.close()
+    try await proxy.waitUntilClosed()
 }
 
 @Test
@@ -1288,16 +1324,27 @@ func transportCommandBackendDecodesRuntimePropertiesPreviewAndCollectionEntries(
         transport,
         targetID: propertiesCommand.targetIdentifier,
         messageID: try messageID(propertiesCommand.message),
-        result: #"{"properties":[{"name":"answer","value":{"type":"number","value":42,"description":"42"},"writable":true,"isOwn":true}]}"#
+        result: #"{"properties":[{"name":"answer","value":{"type":"number","value":42,"description":"42"},"writable":true,"isOwn":true},{"name":"accessor","get":{"type":"function","objectId":"getter-1","description":"get answer"},"set":{"type":"undefined","description":"undefined"},"wasThrown":false,"configurable":true,"enumerable":false,"symbol":{"type":"symbol","description":"Symbol(answer)"},"isPrivate":false,"nativeGetter":true}],"internalProperties":[{"name":"[[Prototype]]","value":{"type":"object","objectId":"prototype-1","description":"Object"}}]}"#
     )
 
     let properties = try await propertiesTask.value
-    #expect(properties.count == 1)
+    #expect(properties.count == 2)
     #expect(properties[0].name == "answer")
     #expect(properties[0].value?.kind == .number)
     #expect(properties[0].value?.value == .number(42))
     #expect(properties[0].writable == true)
     #expect(properties[0].isOwn == true)
+    #expect(properties[1].name == "accessor")
+    #expect(properties[1].get?.kind == .function)
+    #expect(properties[1].get?.id == Runtime.RemoteObject.ID("getter-1"))
+    #expect(properties[1].set?.kind == .undefined)
+    #expect(properties[1].wasThrown == false)
+    #expect(properties[1].configurable == true)
+    #expect(properties[1].enumerable == false)
+    #expect(properties[1].symbol?.kind == .symbol)
+    #expect(properties[1].symbol?.description == "Symbol(answer)")
+    #expect(properties[1].isPrivate == false)
+    #expect(properties[1].nativeGetter == true)
 
     let previewTask = Task {
         try await target.runtime.preview(of: objectID)
@@ -1307,16 +1354,19 @@ func transportCommandBackendDecodesRuntimePropertiesPreviewAndCollectionEntries(
         transport,
         targetID: previewCommand.targetIdentifier,
         messageID: try messageID(previewCommand.message),
-        result: #"{"preview":{"type":"object","description":"Object","lossless":true,"overflow":false,"properties":[{"name":"answer","value":"42"}],"size":1}}"#
+        result: #"{"preview":{"type":"object","subtype":"map","description":"Map(1)","lossless":true,"overflow":false,"properties":[{"name":"size","type":"number","value":"1"}],"entries":[{"key":{"type":"string","description":"key","lossless":true},"value":{"type":"number","description":"42","lossless":true}}],"size":1}}"#
     )
 
     let preview = try await previewTask.value
     #expect(preview.kind == .object)
-    #expect(preview.description == "Object")
+    #expect(preview.subtype == Runtime.Subtype(rawValue: "map"))
+    #expect(preview.description == "Map(1)")
     #expect(preview.lossless == true)
     #expect(preview.overflow == false)
-    #expect(preview.properties.first?.name == "answer")
-    #expect(preview.properties.first?.value == "42")
+    #expect(preview.properties.first?.name == "size")
+    #expect(preview.properties.first?.value == "1")
+    #expect(preview.entries.first?.key == "key")
+    #expect(preview.entries.first?.value == "42")
     #expect(preview.size == 1)
 
     let entriesTask = Task {
@@ -1327,14 +1377,16 @@ func transportCommandBackendDecodesRuntimePropertiesPreviewAndCollectionEntries(
         transport,
         targetID: entriesCommand.targetIdentifier,
         messageID: try messageID(entriesCommand.message),
-        result: #"{"entries":[{"key":{"type":"string","value":"key","description":"key"},"value":{"type":"object","objectId":"entry-value","description":"entry value"}}]}"#
+        result: #"{"entries":[{"key":{"type":"string","value":"key","description":"key"},"value":{"type":"object","objectId":"entry-value","description":"entry value"}},{"value":{"type":"number","value":42,"description":"42"}}]}"#
     )
 
     let entries = try await entriesTask.value
-    #expect(entries.count == 1)
+    #expect(entries.count == 2)
     #expect(entries[0].key?.value == .string("key"))
     #expect(entries[0].value.id == Runtime.RemoteObject.ID("entry-value"))
     #expect(entries[0].value.description == "entry value")
+    #expect(entries[1].key == nil)
+    #expect(entries[1].value.value == .number(42))
 }
 
 private func pageTarget(proxy: WebInspectorProxy) -> WebInspectorTarget {
