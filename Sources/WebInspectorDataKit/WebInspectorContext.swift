@@ -661,7 +661,7 @@ public final class WebInspectorContext {
             guard let consoleResults = results as? WebInspectorFetchedResults<ConsoleMessage> else {
                 preconditionFailure("ConsoleMessage descriptors can only fetch ConsoleMessage models.")
             }
-            consoleResults.setItems(currentConsoleMessages())
+            consoleResults.setItems(consoleMessages(for: consoleResults.fetchDescriptor))
             consoleFetchedResults.append(WeakWebInspectorFetchedResults(consoleResults))
         }
         return results
@@ -824,14 +824,14 @@ public final class WebInspectorContext {
                   let consoleResults = results as? WebInspectorFetchedResults<ConsoleMessage> else {
                 preconditionFailure("ConsoleMessage descriptors can only update ConsoleMessage fetched results.")
             }
-            consoleResults.applyFetchDescriptor(consoleDescriptor, items: currentConsoleMessages())
+            consoleResults.applyFetchDescriptor(consoleDescriptor, items: consoleMessages(for: consoleDescriptor))
         }
     }
 
     private func requireSupportedFetchDescriptor<Model: WebInspectorFetchableModel>(
         _ descriptor: WebInspectorFetchDescriptor<Model>
     ) {
-        if descriptor.kind == .networkRequests {
+        if descriptor.kind == .networkRequests || descriptor.kind == .consoleMessages {
             return
         }
         guard descriptor.requiresRecordBackedQuery == false else {
@@ -3435,11 +3435,49 @@ extension WebInspectorContext {
         orderedConsoleMessageIDs.compactMap { consoleMessagesByID[$0] }
     }
 
+    private func consoleMessages(for descriptor: WebInspectorFetchDescriptor<ConsoleMessage>) -> [ConsoleMessage] {
+        var items = currentConsoleMessages()
+        if let predicate = descriptor.predicate {
+            items = items.filter { message in
+                do {
+                    return try predicate.evaluate(message)
+                } catch {
+                    preconditionFailure("ConsoleMessage predicate evaluation failed: \(error)")
+                }
+            }
+        }
+        if descriptor.sortBy.isEmpty == false {
+            items.sort { lhs, rhs in
+                for sortDescriptor in descriptor.sortBy {
+                    switch sortDescriptor.compare(lhs, rhs) {
+                    case .orderedAscending:
+                        return true
+                    case .orderedDescending:
+                        return false
+                    case .orderedSame:
+                        continue
+                    }
+                }
+                return lhs.id < rhs.id
+            }
+        }
+        let lowerBound = min(descriptor.fetchOffset, items.count)
+        let upperBound: Int
+        if let fetchLimit = descriptor.fetchLimit {
+            upperBound = min(lowerBound + fetchLimit, items.count)
+        } else {
+            upperBound = items.count
+        }
+        return Array(items[lowerBound..<upperBound])
+    }
+
     private func refreshAllConsoleMessages(updatedItemIDs: Set<ConsoleMessage.ID> = []) {
         consoleFetchedResults.removeAll { $0.value == nil }
-        let items = currentConsoleMessages()
         for registration in consoleFetchedResults {
-            registration.value?.setItems(items, updatedItemIDs: updatedItemIDs)
+            guard let results = registration.value else {
+                continue
+            }
+            results.setItems(consoleMessages(for: results.fetchDescriptor), updatedItemIDs: updatedItemIDs)
         }
     }
 }

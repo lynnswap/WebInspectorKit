@@ -5197,6 +5197,73 @@ func consoleEventsPopulateRepeatAndClearFetchedMessages() async throws {
 
 @MainActor
 @Test
+func consoleFetchedResultsHonorDescriptorsForInitialUpdatesAndDescriptorChanges() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let allResults: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
+
+    await runtime.backend.emit(
+        .messageAdded(Console.Message(
+            source: Console.Source(rawValue: "console-api"),
+            level: Console.Level(rawValue: "warning"),
+            text: "middle"
+        )),
+        target: target
+    )
+    await runtime.backend.emit(
+        .messageAdded(Console.Message(
+            source: Console.Source(rawValue: "javascript"),
+            level: Console.Level(rawValue: "error"),
+            text: "zeta"
+        )),
+        target: target
+    )
+    await runtime.backend.emit(
+        .messageAdded(Console.Message(
+            source: Console.Source(rawValue: "console-api"),
+            level: Console.Level(rawValue: "warning"),
+            text: "omega"
+        )),
+        target: target
+    )
+    try await waitUntil { allResults.items.count == 3 }
+
+    let warningDescriptor = WebInspectorFetchDescriptor<ConsoleMessage>(
+        predicate: #Predicate { message in
+            message.level.rawValue == "warning"
+        },
+        sortBy: [SortDescriptor(\.text, order: .reverse)],
+        fetchLimit: 2
+    )
+    let warningResults: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults(for: warningDescriptor)
+
+    #expect(warningResults.items.map(\.text) == ["omega", "middle"])
+
+    await runtime.backend.emit(
+        .messageAdded(Console.Message(
+            source: Console.Source(rawValue: "console-api"),
+            level: Console.Level(rawValue: "warning"),
+            text: "zebra"
+        )),
+        target: target
+    )
+    try await waitUntil {
+        warningResults.items.map(\.text) == ["zebra", "omega"]
+    }
+
+    warningResults.updateFetchDescriptor(WebInspectorFetchDescriptor<ConsoleMessage>(
+        sortBy: [SortDescriptor(\.text)],
+        fetchLimit: 2,
+        fetchOffset: 1
+    ))
+
+    try await waitUntil {
+        warningResults.items.map(\.text) == ["omega", "zebra"]
+    }
+}
+
+@MainActor
+@Test
 func consoleMessageParametersRegisterRuntimeObjects() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
