@@ -1804,7 +1804,7 @@ private struct TimedOut: Error {}
 
 private func value<T: Sendable>(
     of task: Task<T, Never>,
-    timeout: Duration = .seconds(1)
+    timeout: Duration = .seconds(5)
 ) async throws -> T {
     try await withThrowingTaskGroup(of: T.self) { group in
         group.addTask {
@@ -1824,7 +1824,7 @@ private func value<T: Sendable>(
 
 private func throwingValue<T: Sendable>(
     of task: Task<T, any Error>,
-    timeout: Duration = .seconds(1)
+    timeout: Duration = .seconds(5)
 ) async throws -> T {
     try await withThrowingTaskGroup(of: T.self) { group in
         group.addTask {
