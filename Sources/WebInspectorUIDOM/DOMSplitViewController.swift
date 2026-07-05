@@ -40,6 +40,20 @@ package final class DOMSplitViewController: UISplitViewController {
         nil
     }
 
+    override package var canBecomeFirstResponder: Bool {
+        domNavigationItems != nil
+    }
+
+    override package var keyCommands: [UIKeyCommand]? {
+        domNavigationItems?.makeKeyCommands(actions: DOMNavigationItems.KeyCommandActions(
+            undo: #selector(performDOMUndoCommand),
+            redo: #selector(performDOMRedoCommand),
+            reload: #selector(performDOMReloadCommand),
+            delete: #selector(performDOMDeleteCommand),
+            pickElement: #selector(performDOMPickElementCommand)
+        ))
+    }
+
     override package func viewDidLoad() {
         super.viewDidLoad()
         applyBackgroundFromTraits()
@@ -88,6 +102,31 @@ package final class DOMSplitViewController: UISplitViewController {
             self?.treeViewController.domTreeUndoManager ?? self?.undoManager
         }
         domNavigationItems = navigationItems
+    }
+
+    @objc
+    private func performDOMUndoCommand(_ sender: UIKeyCommand) {
+        domNavigationItems?.performUndoCommand()
+    }
+
+    @objc
+    private func performDOMRedoCommand(_ sender: UIKeyCommand) {
+        domNavigationItems?.performRedoCommand()
+    }
+
+    @objc
+    private func performDOMReloadCommand(_ sender: UIKeyCommand) {
+        domNavigationItems?.performReloadCommand()
+    }
+
+    @objc
+    private func performDOMDeleteCommand(_ sender: UIKeyCommand) {
+        domNavigationItems?.performDeleteCommand()
+    }
+
+    @objc
+    private func performDOMPickElementCommand(_ sender: UIKeyCommand) {
+        domNavigationItems?.performToggleElementPickerCommand()
     }
 }
 

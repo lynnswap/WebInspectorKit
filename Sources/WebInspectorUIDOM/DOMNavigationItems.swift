@@ -11,6 +11,28 @@ package final class DOMNavigationItems: NSObject {
     private var statusTask: Task<Void, Never>?
     private var undoManagerProvider: UndoManagerProvider = { nil }
 
+    package struct KeyCommandActions {
+        package var undo: Selector
+        package var redo: Selector
+        package var reload: Selector
+        package var delete: Selector
+        package var pickElement: Selector
+
+        package init(
+            undo: Selector,
+            redo: Selector,
+            reload: Selector,
+            delete: Selector,
+            pickElement: Selector
+        ) {
+            self.undo = undo
+            self.redo = redo
+            self.reload = reload
+            self.delete = delete
+            self.pickElement = pickElement
+        }
+    }
+
     private lazy var pickItem: UIBarButtonItem = {
         let item = UIBarButtonItem(
             image: UIImage(systemName: "scope"),
@@ -45,6 +67,46 @@ package final class DOMNavigationItems: NSObject {
             ),
         ]
         navigationItem.additionalOverflowItems = makeDeferredOverflowItems()
+    }
+
+    package func makeKeyCommands(actions: KeyCommandActions) -> [UIKeyCommand] {
+        [
+            UIKeyCommand(
+                title: String(localized: "undo", bundle: WebInspectorUILocalization.bundle),
+                action: actions.undo,
+                input: "z",
+                modifierFlags: .command,
+                discoverabilityTitle: String(localized: "undo", bundle: WebInspectorUILocalization.bundle)
+            ),
+            UIKeyCommand(
+                title: String(localized: "redo", bundle: WebInspectorUILocalization.bundle),
+                action: actions.redo,
+                input: "z",
+                modifierFlags: [.command, .shift],
+                discoverabilityTitle: String(localized: "redo", bundle: WebInspectorUILocalization.bundle)
+            ),
+            UIKeyCommand(
+                title: String(localized: "reload", bundle: WebInspectorUILocalization.bundle),
+                action: actions.reload,
+                input: "r",
+                modifierFlags: .command,
+                discoverabilityTitle: String(localized: "reload", bundle: WebInspectorUILocalization.bundle)
+            ),
+            UIKeyCommand(
+                title: String(localized: "inspector.delete_node", bundle: WebInspectorUILocalization.bundle),
+                action: actions.delete,
+                input: UIKeyCommand.inputDelete,
+                modifierFlags: [],
+                discoverabilityTitle: String(localized: "inspector.delete_node", bundle: WebInspectorUILocalization.bundle)
+            ),
+            UIKeyCommand(
+                title: String(localized: "inspector.pick_element", defaultValue: "Pick Element", bundle: WebInspectorUILocalization.bundle),
+                action: actions.pickElement,
+                input: "c",
+                modifierFlags: [.command, .shift],
+                discoverabilityTitle: String(localized: "inspector.pick_element", defaultValue: "Pick Element", bundle: WebInspectorUILocalization.bundle)
+            ),
+        ]
     }
 
     private func startObservingInspection() {
@@ -86,13 +148,8 @@ package final class DOMNavigationItems: NSObject {
             title: String(localized: "undo", bundle: WebInspectorUILocalization.bundle),
             image: UIImage(systemName: "arrow.uturn.backward"),
             attributes: undoManager?.canUndo == true ? [] : [.disabled]
-        ) { _ in
-            Task { @MainActor in
-                guard let undoManager = undoManagerProvider(), undoManager.canUndo else {
-                    return
-                }
-                undoManager.undo()
-            }
+        ) { [weak self] _ in
+            self?.performUndo(undoManager: undoManagerProvider())
         }
     }
 
@@ -102,11 +159,20 @@ package final class DOMNavigationItems: NSObject {
             title: String(localized: "redo", bundle: WebInspectorUILocalization.bundle),
             image: UIImage(systemName: "arrow.uturn.forward"),
             attributes: canRedo(undoManager: undoManager) ? [] : [.disabled]
-        ) { _ in
-            Task { @MainActor [weak self] in
-                self?.performRedo(undoManager: undoManagerProvider())
-            }
+        ) { [weak self] _ in
+            self?.performRedo(undoManager: undoManagerProvider())
         }
+    }
+
+    package func performUndoCommand() {
+        performUndo(undoManager: undoManagerProvider())
+    }
+
+    private func performUndo(undoManager: UndoManager?) {
+        guard let undoManager, undoManager.canUndo else {
+            return
+        }
+        undoManager.undo()
     }
 
     private func canRedo(undoManager: UndoManager?) -> Bool {
@@ -129,9 +195,23 @@ package final class DOMNavigationItems: NSObject {
             title: String(localized: "reload", bundle: WebInspectorUILocalization.bundle),
             image: UIImage(systemName: "arrow.clockwise"),
             attributes: context.status.state == .attached ? [] : [.disabled]
-        ) { [weak context] _ in
-            Task { @MainActor in
-                try? await context?.reloadPage()
+        ) { [weak self] _ in
+            self?.performReloadCommand()
+        }
+    }
+
+    package func performReloadCommand() {
+        Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            guard context.status.state == .attached else {
+                return
+            }
+            do {
+                try await context.reloadPage()
+            } catch {
+                WebInspectorUIDOMLog.debug("DOM reload failed: \(String(describing: error))")
             }
         }
     }
@@ -142,11 +222,16 @@ package final class DOMNavigationItems: NSObject {
             image: UIImage(systemName: "trash"),
             attributes: context.status.selectedNodeID == nil ? [.disabled, .destructive] : [.destructive]
         ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                await self?.deleteSelectedNodeFromNavigation(
-                    undoManager: undoManagerProvider()
-                )
+            self?.performDeleteCommand()
+        }
+    }
+
+    package func performDeleteCommand() {
+        Task { @MainActor [weak self] in
+            guard let self else {
+                return
             }
+            await deleteSelectedNodeFromNavigation(undoManager: undoManagerProvider())
         }
     }
 
@@ -165,6 +250,14 @@ package final class DOMNavigationItems: NSObject {
         } catch {
             return
         }
+    }
+
+    package func performRedoCommand() {
+        performRedo(undoManager: undoManagerProvider())
+    }
+
+    package func performToggleElementPickerCommand() {
+        toggleElementPicker()
     }
 
     @objc

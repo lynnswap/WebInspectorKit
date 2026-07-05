@@ -887,6 +887,8 @@ struct DOMContainerTests {
         #expect(navigationController.viewControllers == [treeViewController])
         #expect(pickItem.accessibilityIdentifier == "WebInspector.DOM.PickButton")
         #expect(treeViewController.navigationItem.additionalOverflowItems != nil)
+        #expect(navigationController.canBecomeFirstResponder)
+        #expect(domNavigationKeyCommandSpecs(navigationController.keyCommands) == expectedDOMNavigationKeyCommandSpecs)
     }
 
     @Test
@@ -1331,6 +1333,8 @@ struct DOMContainerTests {
         let pickItem = try #require(splitViewController.navigationItem.trailingItemGroups.first?.barButtonItems.first)
         #expect(pickItem.accessibilityIdentifier == "WebInspector.DOM.PickButton")
         #expect(splitViewController.navigationItem.additionalOverflowItems != nil)
+        #expect(splitViewController.canBecomeFirstResponder)
+        #expect(domNavigationKeyCommandSpecs(splitViewController.keyCommands) == expectedDOMNavigationKeyCommandSpecs)
     }
 
     private struct PropertySpec {
@@ -1344,6 +1348,30 @@ struct DOMContainerTests {
         var margin: CSS.Property.ID
         var boxSizing: CSS.Property.ID
         var fontSize: CSS.Property.ID
+    }
+
+    private struct DOMNavigationKeyCommandSpec: Hashable {
+        var input: String?
+        var modifierFlags: UIKeyModifierFlags.RawValue
+    }
+
+    private var expectedDOMNavigationKeyCommandSpecs: Set<DOMNavigationKeyCommandSpec> {
+        [
+            DOMNavigationKeyCommandSpec(input: "z", modifierFlags: UIKeyModifierFlags.command.rawValue),
+            DOMNavigationKeyCommandSpec(input: "z", modifierFlags: UIKeyModifierFlags([.command, .shift]).rawValue),
+            DOMNavigationKeyCommandSpec(input: "r", modifierFlags: UIKeyModifierFlags.command.rawValue),
+            DOMNavigationKeyCommandSpec(input: UIKeyCommand.inputDelete, modifierFlags: UIKeyModifierFlags().rawValue),
+            DOMNavigationKeyCommandSpec(input: "c", modifierFlags: UIKeyModifierFlags([.command, .shift]).rawValue),
+        ]
+    }
+
+    private func domNavigationKeyCommandSpecs(_ commands: [UIKeyCommand]?) -> Set<DOMNavigationKeyCommandSpec> {
+        Set((commands ?? []).map { command in
+            DOMNavigationKeyCommandSpec(
+                input: command.input,
+                modifierFlags: command.modifierFlags.rawValue
+            )
+        })
     }
 
     private func makeWebInspectorContext() -> WebInspectorContext {
