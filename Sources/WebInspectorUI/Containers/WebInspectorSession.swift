@@ -16,6 +16,7 @@ public final class WebInspectorSession {
     public private(set) var pageUserInterfaceStyle: UIUserInterfaceStyle = .unspecified
     @ObservationIgnored private var container: WebInspectorContainer?
     @ObservationIgnored private var dataContext: WebInspectorContext
+    @ObservationIgnored private var attachmentGeneration: UInt64 = 0
     @ObservationIgnored private let makePageUserInterfaceStyleObserver: @MainActor (
         WKWebView,
         @escaping @MainActor (UIUserInterfaceStyle) -> Void
@@ -67,14 +68,27 @@ public final class WebInspectorSession {
         to webView: WKWebView,
         makeContainer: @MainActor (WKWebView) async throws -> WebInspectorContainer
     ) async throws {
+        let generation = advanceAttachmentGeneration()
         stopPageUserInterfaceStyleObservation()
         await stopContainer(replaceContextWithDetached: false)
+        try Task.checkCancellation()
+        guard isCurrentAttachmentGeneration(generation) else {
+            throw CancellationError()
+        }
         do {
             let container = try await makeContainer(webView)
+            try Task.checkCancellation()
+            guard isCurrentAttachmentGeneration(generation) else {
+                await container.close()
+                throw CancellationError()
+            }
             self.container = container
             installDataContext(container.mainContext)
             startPageUserInterfaceStyleObservation(for: webView)
         } catch {
+            guard isCurrentAttachmentGeneration(generation) else {
+                throw error
+            }
             installDataContext(Self.makeDetachedDataContext())
             stopPageUserInterfaceStyleObservation()
             throw error
@@ -82,6 +96,7 @@ public final class WebInspectorSession {
     }
 
     public func detach() async {
+        advanceAttachmentGeneration()
         #if DEBUG
         detachCountForTesting += 1
         #endif
@@ -130,6 +145,16 @@ public final class WebInspectorSession {
             return
         }
         pageUserInterfaceStyle = style
+    }
+
+    @discardableResult
+    private func advanceAttachmentGeneration() -> UInt64 {
+        attachmentGeneration &+= 1
+        return attachmentGeneration
+    }
+
+    private func isCurrentAttachmentGeneration(_ generation: UInt64) -> Bool {
+        attachmentGeneration == generation
     }
 
     package func installDataContext(_ context: WebInspectorContext) {

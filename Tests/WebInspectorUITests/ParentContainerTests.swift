@@ -135,6 +135,84 @@ struct ParentContainerTests {
     }
 
     @Test
+    func staleAttachCompletionDoesNotReplaceNewerAttach() async throws {
+        let observerRecorder = PageUserInterfaceStyleObserverRecorder(styleOnStart: .dark)
+        let session = makeSessionWithNoOpAttachment(
+            makePageUserInterfaceStyleObserver: observerRecorder.makeObserver
+        )
+        let firstWebView = WKWebView(frame: .zero)
+        let secondWebView = WKWebView(frame: .zero)
+        let firstAttachStarted = WebInspectorTestGate()
+        let firstAttachGate = WebInspectorTestGate()
+
+        let firstAttach = Task { @MainActor in
+            try await session.attach(to: firstWebView) { [self] _ in
+                await firstAttachStarted.open()
+                await firstAttachGate.wait()
+                return try await makeFakeContainer()
+            }
+        }
+        await firstAttachStarted.wait()
+
+        var secondContext: WebInspectorContext?
+        try await session.attach(to: secondWebView) { [self] _ in
+            let container = try await makeFakeContainer()
+            secondContext = container.mainContext
+            return container
+        }
+        let installedSecondContext = try #require(secondContext)
+
+        await firstAttachGate.open()
+        do {
+            try await firstAttach.value
+            Issue.record("Expected superseded attach to be cancelled.")
+        } catch is CancellationError {
+        }
+
+        #expect(session.context === installedSecondContext)
+        #expect(observerRecorder.observers.count == 1)
+        #expect(observerRecorder.observers.first?.isStarted == true)
+        #expect(observerRecorder.observers.first?.isInvalidated == false)
+        #expect(session.pageUserInterfaceStyle == .dark)
+    }
+
+    @Test
+    func detachInvalidatesInFlightAttachCompletion() async throws {
+        let observerRecorder = PageUserInterfaceStyleObserverRecorder(styleOnStart: .dark)
+        let session = makeSessionWithNoOpAttachment(
+            makePageUserInterfaceStyleObserver: observerRecorder.makeObserver
+        )
+        let webView = WKWebView(frame: .zero)
+        let attachStarted = WebInspectorTestGate()
+        let attachGate = WebInspectorTestGate()
+
+        let attachTask = Task { @MainActor in
+            try await session.attach(to: webView) { [self] _ in
+                await attachStarted.open()
+                await attachGate.wait()
+                return try await makeFakeContainer()
+            }
+        }
+        await attachStarted.wait()
+
+        await session.detach()
+        let detachedContext = session.context
+
+        await attachGate.open()
+        do {
+            try await attachTask.value
+            Issue.record("Expected attach completion after detach to be cancelled.")
+        } catch is CancellationError {
+        }
+
+        #expect(session.context === detachedContext)
+        #expect(session.context.state == .detached)
+        #expect(observerRecorder.observers.isEmpty)
+        #expect(session.hasPageUserInterfaceStyleObserverForTesting == false)
+        #expect(session.pageUserInterfaceStyle == .unspecified)
+    }
+
+    @Test
     func viewControllerDoesNotApplyPageUserInterfaceStyle() async throws {
         let observerRecorder = PageUserInterfaceStyleObserverRecorder(styleOnStart: .dark)
         let session = makeSessionWithNoOpAttachment(
