@@ -35,6 +35,9 @@ public final class WebInspectorContext {
             if let target = context.domEditHistoryTarget {
                 return target
             }
+            guard context.didInvalidateDOMEditHistoryTarget == false else {
+                throw WebInspectorProxyError.disconnected("DOM undo/redo target is no longer current.")
+            }
             return try context.currentPageOrThrow()
         }
     }
@@ -88,6 +91,7 @@ public final class WebInspectorContext {
     private var currentPageRetargetTask: Task<Void, Never>?
     private var currentPageCleanupTask: Task<Void, Never>?
     private var domEditHistoryTarget: WebInspectorTarget?
+    private var didInvalidateDOMEditHistoryTarget: Bool
     private var documentReloadTask: Task<Void, Never>?
     private var inspectResolutionTask: Task<Void, Never>?
     private var inspectedNodeHighlightTask: Task<Void, Never>?
@@ -135,6 +139,7 @@ public final class WebInspectorContext {
         rootNode = nil
         selectedNode = nil
         domEditHistoryTarget = nil
+        didInvalidateDOMEditHistoryTarget = false
         isElementPickerEnabled = false
         executionContexts = []
         selectedContext = nil
@@ -464,6 +469,7 @@ public final class WebInspectorContext {
                 let target = try domTarget(owning: node.id.proxyID)
                 try await target.dom.removeNode(node.id.proxyID)
                 domEditHistoryTarget = target
+                didInvalidateDOMEditHistoryTarget = false
                 try await target.dom.markUndoableState()
                 removedNodes.append(node)
             } catch {
@@ -1628,6 +1634,7 @@ public final class WebInspectorContext {
             return
         }
         domEditHistoryTarget = target
+        didInvalidateDOMEditHistoryTarget = false
     }
 
     private func currentDOMTreeSnapshot() -> DOMTreeSnapshot {
@@ -2120,11 +2127,15 @@ extension WebInspectorContext {
             // policy outside the single connected tree (05-two-layer-sdk-design
             // §detached roots). Logged so a stalled inspect() is observable.
             skipEvent("DOM.setChildNodes detached root deferred; subtree not indexed")
-        case .shadowRootPushed,
-             .shadowRootPopped,
-             .pseudoElementAdded,
-             .pseudoElementRemoved,
-             .willDestroyDOMNode,
+        case let .shadowRootPushed(host, root):
+            applyShadowRootPushed(host: host, root: root, isolation: isolation)
+        case let .shadowRootPopped(host, root):
+            applyShadowRootPopped(host: host, root: root, isolation: isolation)
+        case let .pseudoElementAdded(parent, element):
+            applyPseudoElementAdded(parent: parent, element: element, isolation: isolation)
+        case let .pseudoElementRemoved(parent, element):
+            applyPseudoElementRemoved(parent: parent, element: element, isolation: isolation)
+        case .willDestroyDOMNode,
              .unknown:
             break
         }
@@ -2197,6 +2208,10 @@ extension WebInspectorContext {
         cancelFrameDocumentLoadTasks()
         rootNode = nil
         selectedNode = nil
+        if domEditHistoryTarget != nil {
+            didInvalidateDOMEditHistoryTarget = true
+        }
+        domEditHistoryTarget = nil
         isElementPickerEnabled = false
         pendingInspectedNodeID = nil
         nodesByID = [:]
@@ -2341,6 +2356,92 @@ extension WebInspectorContext {
         }
         parentNode.setChildren(children.filter { $0.id != removedID })
         notifyDOMTreeChildRemoved(parent: parentNode, nodeID: removedID, isolation: isolation)
+    }
+
+    private func applyShadowRootPushed(
+        host: DOM.Node.ID,
+        root payload: DOM.Node,
+        isolation: isolated (any Actor)
+    ) {
+        guard let hostNode = nodesByID[DOMNode.ID(host)] else {
+            let hostID = DOMNode.ID(host)
+            loadFrameDocumentIfNeeded(forNodeID: hostID, reason: "DOM.shadowRootPushed", isolation: isolation)
+            skipEvent("DOM.shadowRootPushed referenced unmaterialized host id=\(logDescription(hostID))")
+            return
+        }
+
+        var materializedPayloadIDs = Set<DOMNode.ID>()
+        collectMaterializedPayloadIDs(payload, into: &materializedPayloadIDs)
+        let rootNode = model(for: payload, preserving: materializedPayloadIDs, isolation: isolation)
+        hostNode.appendShadowRoot(rootNode)
+        notifyDOMTreeChildrenReplaced(parent: hostNode, isolation: isolation)
+        resolvePendingInspectedNode(requestSubtreeIfNeeded: false, isolation: isolation)
+    }
+
+    private func applyShadowRootPopped(
+        host: DOM.Node.ID,
+        root: DOM.Node.ID,
+        isolation: isolated (any Actor)
+    ) {
+        guard let hostNode = nodesByID[DOMNode.ID(host)] else {
+            let hostID = DOMNode.ID(host)
+            loadFrameDocumentIfNeeded(forNodeID: hostID, reason: "DOM.shadowRootPopped", isolation: isolation)
+            skipEvent("DOM.shadowRootPopped referenced unmaterialized host id=\(logDescription(hostID))")
+            return
+        }
+
+        let rootID = DOMNode.ID(root)
+        guard let removedRoot = hostNode.removeShadowRoot(id: rootID) ?? nodesByID[rootID] else {
+            skipEvent("DOM.shadowRootPopped referenced unmaterialized root id=\(logDescription(rootID))")
+            return
+        }
+        removeSubtreeFromIndex(removedRoot, isolation: isolation)
+        notifyDOMTreeChildrenReplaced(parent: hostNode, isolation: isolation)
+    }
+
+    private func applyPseudoElementAdded(
+        parent: DOM.Node.ID,
+        element payload: DOM.Node,
+        isolation: isolated (any Actor)
+    ) {
+        guard let parentNode = nodesByID[DOMNode.ID(parent)] else {
+            let parentID = DOMNode.ID(parent)
+            loadFrameDocumentIfNeeded(forNodeID: parentID, reason: "DOM.pseudoElementAdded", isolation: isolation)
+            skipEvent("DOM.pseudoElementAdded referenced unmaterialized parent id=\(logDescription(parentID))")
+            return
+        }
+
+        var materializedPayloadIDs = Set<DOMNode.ID>()
+        collectMaterializedPayloadIDs(payload, into: &materializedPayloadIDs)
+        let pseudoElement = model(for: payload, preserving: materializedPayloadIDs, isolation: isolation)
+        if let replacedElement = parentNode.setPseudoElement(pseudoElement) {
+            removeSubtreeFromIndex(replacedElement, preserving: materializedPayloadIDs, isolation: isolation)
+        }
+        notifyDOMTreeChildrenReplaced(parent: parentNode, isolation: isolation)
+        resolvePendingInspectedNode(requestSubtreeIfNeeded: false, isolation: isolation)
+    }
+
+    private func applyPseudoElementRemoved(
+        parent: DOM.Node.ID,
+        element: DOM.Node.ID,
+        isolation: isolated (any Actor)
+    ) {
+        guard let parentNode = nodesByID[DOMNode.ID(parent)] else {
+            let parentID = DOMNode.ID(parent)
+            loadFrameDocumentIfNeeded(forNodeID: parentID, reason: "DOM.pseudoElementRemoved", isolation: isolation)
+            skipEvent("DOM.pseudoElementRemoved referenced unmaterialized parent id=\(logDescription(parentID))")
+            return
+        }
+
+        let elementID = DOMNode.ID(element)
+        guard let removedElement = parentNode.removePseudoElement(id: elementID) ?? nodesByID[elementID] else {
+            skipEvent(
+                "DOM.pseudoElementRemoved referenced unmaterialized pseudo element id=\(logDescription(elementID))"
+            )
+            return
+        }
+        removeSubtreeFromIndex(removedElement, isolation: isolation)
+        notifyDOMTreeChildrenReplaced(parent: parentNode, isolation: isolation)
     }
 
     @discardableResult
@@ -3327,6 +3428,9 @@ extension WebInspectorContext {
         timestamp: Double
     ) {
         let id = NetworkRequest.ID(proxyID)
+        guard clearedNetworkRequestIDs.contains(id) == false || redirectResponse == nil else {
+            return
+        }
         clearedNetworkRequestIDs.remove(id)
         let request: NetworkRequest
         var inserted = false

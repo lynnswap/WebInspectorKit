@@ -219,6 +219,55 @@ public final class DOMNode: WebInspectorPersistentModel {
         contentDocument = node
     }
 
+    func appendShadowRoot(_ node: DOMNode) {
+        shadowRoots.removeAll { $0.id == node.id }
+        shadowRoots.append(node)
+    }
+
+    func removeShadowRoot(id: ID) -> DOMNode? {
+        guard let index = shadowRoots.firstIndex(where: { $0.id == id }) else {
+            return nil
+        }
+        return shadowRoots.remove(at: index)
+    }
+
+    func setPseudoElement(_ node: DOMNode) -> DOMNode? {
+        switch node.pseudoType {
+        case .before:
+            let previous = beforePseudoElement
+            beforePseudoElement = node
+            return previous?.id == node.id ? nil : previous
+        case .after:
+            let previous = afterPseudoElement
+            afterPseudoElement = node
+            return previous?.id == node.id ? nil : previous
+        case .other(_), nil:
+            if let index = otherPseudoElements.firstIndex(where: { $0.id == node.id }) {
+                otherPseudoElements[index] = node
+            } else {
+                otherPseudoElements.append(node)
+            }
+            return nil
+        }
+    }
+
+    func removePseudoElement(id: ID) -> DOMNode? {
+        if beforePseudoElement?.id == id {
+            let removed = beforePseudoElement
+            beforePseudoElement = nil
+            return removed
+        }
+        if afterPseudoElement?.id == id {
+            let removed = afterPseudoElement
+            afterPseudoElement = nil
+            return removed
+        }
+        guard let index = otherPseudoElements.firstIndex(where: { $0.id == id }) else {
+            return nil
+        }
+        return otherPseudoElements.remove(at: index)
+    }
+
     func associatedSubtreeRoots() -> [DOMNode] {
         [contentDocument]
             .compactMap { $0 }

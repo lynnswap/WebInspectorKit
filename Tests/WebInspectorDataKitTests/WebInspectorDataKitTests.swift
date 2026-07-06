@@ -2314,6 +2314,10 @@ func restartClearsConsoleMessagesBeforeConsoleReplay() async throws {
 func documentUpdatedReloadsRootDocument() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
+    let document = try #require(context.rootNode)
+    await runtime.backend.enqueue((), for: "DOM", method: "setAttributeValue")
+    await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
+    try await context.dom.setAttribute("data-before-reset", value: "1", on: document.id)
     let undoCommands = try context.domUndoRedoCommands()
     let controller = try await context.treeController()
     let recorder = DOMTreeUpdateRecorder(stream: controller.updates)
@@ -2356,6 +2360,10 @@ func documentUpdatedReloadsRootDocument() async throws {
     #expect(resetUpdateIndex < documentUpdatedIndex)
     await #expect(throws: WebInspectorProxyError.disconnected("DOM undo/redo target is no longer current.")) {
         try await undoCommands.undo()
+    }
+    await runtime.backend.enqueue((), for: "DOM", method: "undo")
+    await #expect(throws: WebInspectorProxyError.disconnected("DOM undo/redo target is no longer current.")) {
+        try await context.editHistory.undo()
     }
 
     let commands = await runtime.backend.recordedCommands()
@@ -2486,6 +2494,118 @@ func domTreeControllerPublishesAssociatedSubtreeDeltas() async throws {
     #expect(controller.snapshot.visibleChildren(of: DOMNode.ID(iframeID)).nodeIDs == [DOMNode.ID(frameDocumentID)])
     #expect(controller.snapshot.parent(of: DOMNode.ID(frameDocumentID)) == DOMNode.ID(iframeID))
     #expect(controller.snapshot.parent(of: DOMNode.ID(frameBodyID)) == DOMNode.ID(frameDocumentID))
+}
+
+@MainActor
+@Test
+func domTreeControllerAppliesDynamicShadowAndPseudoElementDeltas() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(
+        runtime: runtime,
+        document: DOM.Node(
+            id: DOM.Node.ID("document"),
+            nodeType: 9,
+            nodeName: "#document",
+            childNodeCount: 1
+        )
+    )
+    let document = try #require(context.rootNode)
+    let controller = try await context.treeController()
+    let recorder = DOMTreeUpdateRecorder(stream: controller.updates)
+    defer { recorder.cancel() }
+    try await recorder.waitUntilStarted()
+    try await recorder.waitForUpdateCount(1)
+
+    let hostID = DOM.Node.ID("shadow-host")
+    let shadowRootID = DOM.Node.ID("dynamic-shadow-root")
+    let shadowChildID = DOM.Node.ID("dynamic-shadow-child")
+    let beforePseudoID = DOM.Node.ID("dynamic-before-pseudo")
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(id: hostID, nodeType: 1, nodeName: "DIV", localName: "div")
+        ]),
+        target: target
+    )
+    try await recorder.waitForUpdateCount(2)
+    let host = try #require(context.node(for: DOMNode.ID(hostID)))
+
+    await runtime.backend.emit(
+        .shadowRootPushed(
+            host: hostID,
+            root: DOM.Node(
+                id: shadowRootID,
+                nodeType: 11,
+                nodeName: "#shadow-root",
+                children: [
+                    DOM.Node(
+                        id: shadowChildID,
+                        nodeType: 1,
+                        nodeName: "SPAN",
+                        localName: "span"
+                    )
+                ],
+                shadowRootType: .open
+            )
+        ),
+        target: target
+    )
+
+    try await recorder.waitForUpdateCount(3)
+    #expect(host.shadowRoots.map(\.id) == [DOMNode.ID(shadowRootID)])
+    #expect(
+        controller.snapshot.visibleChildren(of: DOMNode.ID(hostID)).nodeIDs == [DOMNode.ID(shadowRootID)]
+    )
+    #expect(controller.snapshot.parent(of: DOMNode.ID(shadowRootID)) == DOMNode.ID(hostID))
+    #expect(controller.snapshot.parent(of: DOMNode.ID(shadowChildID)) == DOMNode.ID(shadowRootID))
+    #expect(recorder.updates.last == .delta(.childrenReplaced(
+        parentID: DOMNode.ID(hostID),
+        childIDs: [DOMNode.ID(shadowRootID)]
+    )))
+
+    await runtime.backend.emit(
+        .pseudoElementAdded(
+            parent: hostID,
+            element: DOM.Node(
+                id: beforePseudoID,
+                nodeType: 1,
+                nodeName: "::before",
+                pseudoType: .before
+            )
+        ),
+        target: target
+    )
+
+    try await recorder.waitForUpdateCount(4)
+    #expect(host.beforePseudoElement?.id == DOMNode.ID(beforePseudoID))
+    #expect(controller.snapshot.visibleChildren(of: DOMNode.ID(hostID)).nodeIDs == [
+        DOMNode.ID(beforePseudoID),
+        DOMNode.ID(shadowRootID),
+    ])
+    #expect(controller.snapshot.parent(of: DOMNode.ID(beforePseudoID)) == DOMNode.ID(hostID))
+
+    await runtime.backend.emit(
+        .pseudoElementRemoved(parent: hostID, element: beforePseudoID),
+        target: target
+    )
+
+    try await recorder.waitForUpdateCount(5)
+    #expect(host.beforePseudoElement == nil)
+    #expect(context.node(for: DOMNode.ID(beforePseudoID)) == nil)
+    #expect(
+        controller.snapshot.visibleChildren(of: DOMNode.ID(hostID)).nodeIDs == [DOMNode.ID(shadowRootID)]
+    )
+
+    await runtime.backend.emit(
+        .shadowRootPopped(host: hostID, root: shadowRootID),
+        target: target
+    )
+
+    try await recorder.waitForUpdateCount(6)
+    #expect(host.shadowRoots.isEmpty)
+    #expect(context.node(for: DOMNode.ID(shadowRootID)) == nil)
+    #expect(context.node(for: DOMNode.ID(shadowChildID)) == nil)
+    #expect(controller.snapshot.visibleChildren(of: DOMNode.ID(hostID)).nodeIDs == [])
 }
 
 @MainActor
@@ -3551,10 +3671,35 @@ func clearNetworkRequestsPublishesResetAndIgnoresClearedEvents() async throws {
     await runtime.backend.emit(
         .requestWillBeSent(
             id: firstRequestID,
-            request: Network.Request(id: firstRequestID, url: "https://example.com/reused", method: "GET"),
+            request: Network.Request(
+                id: firstRequestID,
+                url: "https://example.com/redirected",
+                method: "GET"
+            ),
+            resourceType: .fetch,
+            redirectResponse: Network.Response(url: "https://example.com/first", status: 302),
+            timestamp: 7
+        ),
+        target: target
+    )
+    for _ in 0..<10 {
+        await Task.yield()
+    }
+    #expect(results.items.isEmpty)
+    #expect(recorder.transactions.count == 3)
+    #expect(context.registeredRequest(for: firstModelID) == nil)
+
+    await runtime.backend.emit(
+        .requestWillBeSent(
+            id: firstRequestID,
+            request: Network.Request(
+                id: firstRequestID,
+                url: "https://example.com/reused",
+                method: "GET"
+            ),
             resourceType: .fetch,
             redirectResponse: nil,
-            timestamp: 7
+            timestamp: 8
         ),
         target: target
     )
