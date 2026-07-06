@@ -38,6 +38,18 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         )
     }
 
+    package func waitForEventSubscriptions(
+        route: RoutingTargetID,
+        targetID: WebInspectorTarget.ID,
+        domain: WebInspectorProxyEventDomain,
+        minimumCount: Int
+    ) async {
+        await eventSubscriptions.waitForActiveSubscribers(
+            LiveProxyEventSubscriptionKey(route: route, targetID: targetID, domain: domain),
+            minimumCount: minimumCount
+        )
+    }
+
     package nonisolated func events(
         route: RoutingTargetID,
         targetID: WebInspectorTarget.ID,
@@ -716,16 +728,27 @@ private struct LiveProxyEventSubscriptionID: Hashable, Sendable {
 
 private actor LiveProxyEventSubscriptions {
     private var activeSubscriberIDs: [LiveProxyEventSubscriptionKey: Set<LiveProxyEventSubscriptionID>] = [:]
-    private var waiters: [LiveProxyEventSubscriptionKey: [CheckedContinuation<Void, Never>]] = [:]
+    private var waiters: [LiveProxyEventSubscriptionKey: [(minimumCount: Int, continuation: CheckedContinuation<Void, Never>)]] = [:]
 
     func register(_ key: LiveProxyEventSubscriptionKey, id: LiveProxyEventSubscriptionID) {
         let inserted = activeSubscriberIDs[key, default: []].insert(id).inserted
         guard inserted else {
             return
         }
-        let continuations = waiters.removeValue(forKey: key) ?? []
-        for continuation in continuations {
-            continuation.resume()
+        guard let pending = waiters.removeValue(forKey: key) else {
+            return
+        }
+        let count = activeSubscriberIDs[key, default: []].count
+        var remaining: [(minimumCount: Int, continuation: CheckedContinuation<Void, Never>)] = []
+        for waiter in pending {
+            if count >= waiter.minimumCount {
+                waiter.continuation.resume()
+            } else {
+                remaining.append(waiter)
+            }
+        }
+        if remaining.isEmpty == false {
+            waiters[key] = remaining
         }
     }
 
@@ -742,11 +765,15 @@ private actor LiveProxyEventSubscriptions {
     }
 
     func waitForActiveSubscriber(_ key: LiveProxyEventSubscriptionKey) async {
-        guard activeSubscriberIDs[key, default: []].isEmpty else {
+        await waitForActiveSubscribers(key, minimumCount: 1)
+    }
+
+    func waitForActiveSubscribers(_ key: LiveProxyEventSubscriptionKey, minimumCount: Int) async {
+        guard activeSubscriberIDs[key, default: []].count < minimumCount else {
             return
         }
         await withCheckedContinuation { continuation in
-            waiters[key, default: []].append(continuation)
+            waiters[key, default: []].append((minimumCount: minimumCount, continuation: continuation))
         }
     }
 }

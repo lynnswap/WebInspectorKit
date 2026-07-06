@@ -1718,7 +1718,8 @@ func transportBackendKeepsPeerSubscriberActiveWhenOneStreamTerminates() async th
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let page = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+    let proxyBackend = LiveWebInspectorProxyBackend(transport: transport)
+    let page = pageTarget(proxy: WebInspectorProxy(backend: proxyBackend))
     let probe = EventDeliveryProbe()
 
     let firstSubscriber = Task {
@@ -1734,7 +1735,20 @@ func transportBackendKeepsPeerSubscriberActiveWhenOneStreamTerminates() async th
         }
     }
 
-    await waitForEventSubscription(page, domain: .network)
+    // Barrier on both subscribers being registered before the first event is
+    // published; a generous bound keeps subscriber-task startup contention
+    // (CI) from turning into an execution-time-allowance kill.
+    try await value(
+        of: Task {
+            await proxyBackend.waitForEventSubscriptions(
+                route: page.route,
+                targetID: page.id,
+                domain: .network,
+                minimumCount: 2
+            )
+        },
+        timeout: .seconds(10)
+    )
     await receiveTargetEvent(
         transport,
         targetID: ProtocolTarget.ID("page-main"),
