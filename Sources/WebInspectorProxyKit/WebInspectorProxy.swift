@@ -716,18 +716,25 @@ public actor WebInspectorProxy {
         from payload: Payload,
         domain: WebInspectorProxyDomain
     ) -> Runtime.RemoteObject.ID? {
-        guard domain == .runtime else {
-            return nil
-        }
-        switch payload {
-        case let payload as Runtime.GetPropertiesPayload:
-            return payload.object
-        case let payload as Runtime.GetPreviewPayload:
-            return payload.object
-        case let payload as Runtime.GetCollectionEntriesPayload:
-            return payload.object
-        case let payload as Runtime.ReleaseObjectPayload:
-            return payload.id
+        switch domain {
+        case .runtime:
+            switch payload {
+            case let payload as Runtime.GetPropertiesPayload:
+                return payload.object
+            case let payload as Runtime.GetPreviewPayload:
+                return payload.object
+            case let payload as Runtime.GetCollectionEntriesPayload:
+                return payload.object
+            case let payload as Runtime.ReleaseObjectPayload:
+                return payload.id
+            default:
+                return nil
+            }
+        case .dom:
+            guard let payload = payload as? DOM.RequestNodePayload else {
+                return nil
+            }
+            return payload.objectID
         default:
             return nil
         }

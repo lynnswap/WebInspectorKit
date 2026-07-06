@@ -520,7 +520,9 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
             repeatCount: message.repeatCount,
             parameters: message.parameters.map { scopedRemoteObject($0, targetRawValue: targetRawValue) },
             stackTrace: message.stackTrace,
-            networkRequestID: message.networkRequestID,
+            networkRequestID: message.networkRequestID.map {
+                scopedNetworkRequestID($0, targetRawValue: targetRawValue)
+            },
             timestamp: message.timestamp
         )
     }
@@ -648,7 +650,8 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
             headers: request.headers,
             postData: request.postData,
             referrerPolicy: request.referrerPolicy,
-            integrity: request.integrity
+            integrity: request.integrity,
+            backendResourceIdentifier: request.backendResourceIdentifier
         )
     }
 
@@ -1141,6 +1144,9 @@ private enum LiveProxyCommandDecoder {
         }
         if Result.self == DOM.Node.ID.self {
             let payload = try decode(RequestNodeResult.self, from: result.resultData)
+            if let targetScopeRawValue {
+                return DOM.Node.ID(payload.nodeId, scopedToTargetRawValue: targetScopeRawValue) as! Result
+            }
             return DOM.Node.ID(payload.nodeId) as! Result
         }
         if Result.self == String.self {

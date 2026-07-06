@@ -1457,14 +1457,41 @@ func transportBackedFrameRuntimeAndConsoleEventsKeepTargetScope() async throws {
         transport,
         targetID: frameTargetID,
         method: "Console.messageAdded",
-        params: #"{"message":{"source":"console-api","level":"log","text":"frame log","parameters":[{"type":"object","objectId":"frame-console-object","description":"console object"}],"repeatCount":1}}"#
+        params: #"{"message":{"source":"console-api","level":"log","text":"frame log","networkRequestId":"frame-request-77","parameters":[{"type":"object","objectId":"frame-console-object","description":"console object"}],"repeatCount":1}}"#
     )
     try await waitUntil { consoleResults.items.map(\.text) == ["frame log"] }
     let consoleMessage = try #require(consoleResults.items.first)
     #expect(consoleMessage.targetID == frameTarget)
+    #expect(consoleMessage.networkRequestID == NetworkRequest.ID(
+        Network.Request.ID("frame-request-77", scopedToTargetRawValue: frameTargetID.rawValue)
+    ))
     let consoleObject = try #require(consoleMessage.parameters.first)
     #expect(consoleObject.proxyID?.targetScopeRawValue == frameTargetID.rawValue)
     #expect(consoleObject.proxyID?.unscopedRawValue == "frame-console-object")
+}
+
+@MainActor
+@Test
+func consoleMessagesClearedForDistinctTargetsReleasesBothObjectGroups() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (_, context) = try await startContext(runtime: runtime)
+    await runtime.backend.enqueue((), for: "Runtime", method: "releaseObjectGroup")
+    await runtime.backend.enqueue((), for: "Runtime", method: "releaseObjectGroup")
+
+    context.apply(
+        Console.Event.messagesCleared(reason: Console.ClearReason(rawValue: "console-api")),
+        targetID: WebInspectorTarget.ID("console-frame-a")
+    )
+    context.apply(
+        Console.Event.messagesCleared(reason: Console.ClearReason(rawValue: "console-api")),
+        targetID: WebInspectorTarget.ID("console-frame-b")
+    )
+
+    try await waitUntil {
+        await runtime.backend.recordedCommands().filter {
+            $0 == RecordedCommand(domain: "Runtime", method: "releaseObjectGroup")
+        }.count == 2
+    }
 }
 
 @MainActor

@@ -122,7 +122,7 @@ public final class WebInspectorContext {
     private var runtimeObjectOwnersByID: [RuntimeObject.ID: Set<RuntimeObjectOwner>]
     private var nextRuntimeObjectOrdinal: Int
     private var pendingInspectedNodeID: DOMNode.ID?
-    private var consoleObjectGroupReleaseTask: Task<Void, Never>?
+    private var consoleObjectGroupReleaseTasks: [WebInspectorTarget.ID: Task<Void, Never>]
     private var pageHighlightDocumentGeneration: Int?
 
     public init(_ container: WebInspectorContainer, isolation: isolated (any Actor)) {
@@ -179,7 +179,7 @@ public final class WebInspectorContext {
         runtimeObjectOwnersByID = [:]
         nextRuntimeObjectOrdinal = 0
         pendingInspectedNodeID = nil
-        consoleObjectGroupReleaseTask = nil
+        consoleObjectGroupReleaseTasks = [:]
         pageHighlightDocumentGeneration = nil
         WebInspectorDataKitLog.debug("context state=\(state.logDescription)")
     }
@@ -211,7 +211,9 @@ public final class WebInspectorContext {
             task.cancel()
         }
         stopEventPumps()
-        consoleObjectGroupReleaseTask?.cancel()
+        for task in consoleObjectGroupReleaseTasks.values {
+            task.cancel()
+        }
     }
 
     public func start(isolation: isolated (any Actor) = #isolation) {
@@ -1099,8 +1101,7 @@ public final class WebInspectorContext {
         }
         styleToggleTasks = [:]
         stopEventPumps()
-        consoleObjectGroupReleaseTask?.cancel()
-        consoleObjectGroupReleaseTask = nil
+        cancelConsoleObjectGroupReleaseTasks()
         pendingInspectedNodeID = nil
         isElementPickerEnabled = false
         currentPage = nil
@@ -1822,8 +1823,7 @@ extension WebInspectorContext {
         let generation = advanceCurrentPageGeneration(isolation: isolation)
         advanceDOMDocumentGeneration(isolation: isolation)
         resetCurrentPageLifecycleModels(isolation: isolation)
-        consoleObjectGroupReleaseTask?.cancel()
-        consoleObjectGroupReleaseTask = nil
+        cancelConsoleObjectGroupReleaseTasks()
         for task in styleToggleTasks.values {
             task.cancel()
         }
@@ -1944,8 +1944,7 @@ extension WebInspectorContext {
             task.cancel()
         }
         styleToggleTasks = [:]
-        consoleObjectGroupReleaseTask?.cancel()
-        consoleObjectGroupReleaseTask = nil
+        cancelConsoleObjectGroupReleaseTasks()
         let generation = advanceCurrentPageGeneration(isolation: isolation)
         advanceDOMDocumentGeneration(isolation: isolation)
 
@@ -3582,7 +3581,6 @@ extension WebInspectorContext {
         targetID: WebInspectorTarget.ID? = nil,
         isolation: isolated (any Actor) = #isolation
     ) {
-        consoleObjectGroupReleaseTask?.cancel()
         let target: WebInspectorTarget
         if let targetID {
             target = proxy.frameTarget(id: targetID)
@@ -3592,7 +3590,11 @@ extension WebInspectorContext {
             skipEvent("Console.messagesCleared arrived without a current page target")
             return
         }
-        consoleObjectGroupReleaseTask = Task { [weak self, target] in
+        // Release tasks are tracked per target: a clear for one frame target
+        // must not cancel another target's still-pending release.
+        let key = targetID ?? .currentPage
+        consoleObjectGroupReleaseTasks[key]?.cancel()
+        consoleObjectGroupReleaseTasks[key] = Task { [weak self, target] in
             _ = isolation
             do {
                 try await target.runtime.releaseObjectGroup(.console)
@@ -3602,6 +3604,13 @@ extension WebInspectorContext {
                 self?.failIfTerminal(error, operation: "Runtime.releaseObjectGroup")
             }
         }
+    }
+
+    private func cancelConsoleObjectGroupReleaseTasks() {
+        for task in consoleObjectGroupReleaseTasks.values {
+            task.cancel()
+        }
+        consoleObjectGroupReleaseTasks = [:]
     }
 
     private func applyMessageAdded(_ payload: Console.Message, targetID: WebInspectorTarget.ID?) {
