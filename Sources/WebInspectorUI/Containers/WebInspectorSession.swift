@@ -96,16 +96,16 @@ public final class WebInspectorSession {
     }
 
     public func detach() async {
-        await detach(invalidateVisibleContent: true)
+        await detachAndReplaceContext()
     }
 
-    private func detach(invalidateVisibleContent: Bool) async {
+    private func detachAndReplaceContext() async {
         advanceAttachmentGeneration()
         #if DEBUG
         detachCountForTesting += 1
         #endif
         stopPageUserInterfaceStyleObservation()
-        await stopContainer(replaceContextWithDetached: true, invalidateVisibleContent: invalidateVisibleContent)
+        await stopContainer(replaceContextWithDetached: true)
     }
 
     package func retireRootPresentation(detach: Bool) async {
@@ -114,7 +114,7 @@ public final class WebInspectorSession {
             await suspendBackendInteractionForPresentationEnd()
             return
         }
-        await self.detach(invalidateVisibleContent: false)
+        await detachAndReplaceContext()
     }
 
     /// Mirrors the legacy presentation-end retirement: without tearing down the
@@ -162,19 +162,12 @@ public final class WebInspectorSession {
     }
 
     package func installDataContext(_ context: WebInspectorContext) {
-        installDataContext(context, invalidateVisibleContent: true)
-    }
-
-    private func installDataContext(_ context: WebInspectorContext, invalidateVisibleContent: Bool) {
         dataContext = context
-        removeContextBoundContent(invalidateVisibleContent: invalidateVisibleContent)
+        removeContextBoundContent()
     }
 
-    private func stopContainer(
-        replaceContextWithDetached: Bool,
-        invalidateVisibleContent: Bool = true
-    ) async {
-        removeContextBoundContent(invalidateVisibleContent: invalidateVisibleContent)
+    private func stopContainer(replaceContextWithDetached: Bool) async {
+        removeContextBoundContent()
         if let container {
             self.container = nil
             await container.close()
@@ -182,17 +175,12 @@ public final class WebInspectorSession {
             await dataContext.stop()
         }
         if replaceContextWithDetached {
-            installDataContext(Self.makeDetachedDataContext(), invalidateVisibleContent: invalidateVisibleContent)
+            installDataContext(Self.makeDetachedDataContext())
         }
     }
 
-    private func removeContextBoundContent(invalidateVisibleContent: Bool) {
-        if invalidateVisibleContent {
-            interface.removeContextBoundContent()
-        } else {
-            interface.removeNetworkPanelModel()
-            interface.removeContentCache()
-        }
+    private func removeContextBoundContent() {
+        interface.removeContextBoundContent()
     }
 
     private static func makeDetachedDataContext() -> WebInspectorContext {

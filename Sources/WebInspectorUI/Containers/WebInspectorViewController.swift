@@ -107,6 +107,7 @@ public final class WebInspectorViewController: UIViewController {
     public override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         presentationLifecycleCoordinator.beginPresentation()
+        rebuildLayout(forceHostReplacement: activeHost == nil)
         installPresentationHostWindowObserverIfNeeded()
     }
 
@@ -183,6 +184,7 @@ public final class WebInspectorViewController: UIViewController {
 
     private func finishRootPresentationLifecycle() {
         presentationLifecycleCoordinator.finishIfNeeded { [session, automaticallyDetachesOnDismiss] in
+            removeActiveHost()
             Task { @MainActor [session] in
                 await session.retireRootPresentation(detach: automaticallyDetachesOnDismiss)
             }
@@ -240,13 +242,7 @@ public final class WebInspectorViewController: UIViewController {
     }
 
     private func installHost(of kind: HostKind) {
-        if let activeHost {
-            activeHost.willMove(toParent: nil)
-            activeHost.view.removeFromSuperview()
-            activeHost.removeFromParent()
-        }
-        activeHost = nil
-        activeHostKind = nil
+        removeActiveHost()
 
         let host: UIViewController
         switch kind {
@@ -270,6 +266,18 @@ public final class WebInspectorViewController: UIViewController {
 
         activeHost = host
         activeHostKind = kind
+    }
+
+    private func removeActiveHost() {
+        guard let activeHost else {
+            activeHostKind = nil
+            return
+        }
+        activeHost.willMove(toParent: nil)
+        activeHost.view.removeFromSuperview()
+        activeHost.removeFromParent()
+        self.activeHost = nil
+        activeHostKind = nil
     }
 
     package var activeHostViewControllerForTesting: UIViewController? {

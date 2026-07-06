@@ -594,6 +594,7 @@ struct ParentContainerTests {
         let viewController = WebInspectorViewController(session: session)
         viewController.loadViewIfNeeded()
         #expect(session.interface.contentCacheCountForTesting > 0)
+        let contentRevisionBeforeRetirement = session.interface.contextBoundContentRevision
 
         viewController.finishRootPresentationLifecycleForTesting()
         #expect(await waitUntil { session.detachCountForTesting == 1 })
@@ -602,6 +603,7 @@ struct ParentContainerTests {
 
         #expect(session.detachCountForTesting == 1)
         #expect(session.interface.contentCacheCountForTesting == 0)
+        #expect(session.interface.contextBoundContentRevision > contentRevisionBeforeRetirement)
     }
 
     @Test
@@ -731,12 +733,14 @@ struct ParentContainerTests {
         viewController.automaticallyDetachesOnDismiss = false
         viewController.loadViewIfNeeded()
         #expect(session.interface.contentCacheCountForTesting > 0)
+        let contentRevisionBeforeRetirement = session.interface.contextBoundContentRevision
 
         viewController.finishRootPresentationLifecycleForTesting()
         await Task.yield()
 
         #expect(session.detachCountForTesting == 0)
         #expect(session.interface.contentCacheCountForTesting == 0)
+        #expect(session.interface.contextBoundContentRevision == contentRevisionBeforeRetirement)
     }
 
     @Test
