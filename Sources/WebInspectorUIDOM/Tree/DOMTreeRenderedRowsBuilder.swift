@@ -51,13 +51,20 @@ extension DOMTreeTextView {
 #endif
         }
 
-        func waitForCurrentBuild() async {
+        func waitForCurrentBuild(timeout: Duration = .seconds(5)) async -> Bool {
+            let start = ContinuousClock.now
             while true {
-                await Task.yield()
                 guard let task else {
-                    return
+                    return true
                 }
-                await task.value
+                if ContinuousClock.now - start >= timeout {
+                    return false
+                }
+                if task.isCancelled {
+                    await Task.yield()
+                    continue
+                }
+                await Task.yield()
             }
         }
 

@@ -2826,15 +2826,23 @@ extension DOMTreeTextView {
         await waitForRowDocumentForTesting()
     }
 
-    func waitForRowDocumentForTesting() async {
+    @discardableResult
+    func waitForRowDocumentForTesting(timeout: Duration = .seconds(5)) async -> Bool {
+        let start = ContinuousClock.now
         while true {
-            if let domTreeRenderInvalidationTask {
-                await domTreeRenderInvalidationTask.value
+            guard ContinuousClock.now - start < timeout else {
+                return false
+            }
+            if domTreeRenderInvalidationTask != nil {
+                flushPendingDOMInvalidationIfNeeded()
+                await Task.yield()
                 continue
             }
-            await rowRenderBuildCoordinator.waitForCurrentBuild()
+            guard await rowRenderBuildCoordinator.waitForCurrentBuild(timeout: timeout) else {
+                return false
+            }
             if domTreeRenderInvalidationTask == nil {
-                return
+                return true
             }
         }
     }

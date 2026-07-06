@@ -1303,7 +1303,7 @@ private func makeTreeView(fixture: DOMTreeTestFixture) async -> DOMTreeTextView 
     view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
     view.layoutIfNeeded()
     view.setRenderingActive(true)
-    await view.waitForRowDocumentForTesting()
+    #expect(await view.waitForRowDocumentForTesting())
     return view
 }
 
