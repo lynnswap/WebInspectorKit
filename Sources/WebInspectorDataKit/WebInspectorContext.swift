@@ -3490,7 +3490,7 @@ extension WebInspectorContext {
     private func resetNetworkFetchedResults() {
         networkFetchedResults.removeAll { $0.value == nil }
         for registration in networkFetchedResults {
-            registration.value?.resetItems([])
+            registration.value?.resetNetworkItems()
         }
     }
 }

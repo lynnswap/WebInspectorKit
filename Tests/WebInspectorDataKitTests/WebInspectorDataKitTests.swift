@@ -2997,6 +2997,81 @@ func networkFetchDescriptorAppliesPredicateSortAndLimit() async throws {
 
 @MainActor
 @Test
+func clearNetworkRequestsResetsDescriptorBackedQueryState() async throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let descriptor = WebInspectorFetchDescriptor<NetworkRequest>(
+        sortBy: [SortDescriptor(\.requestSentTimestamp, order: .forward)],
+        fetchLimit: 2
+    )
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: descriptor)
+
+    for (index, name) in ["stale-a", "stale-b", "stale-c"].enumerated() {
+        context.apply(.requestWillBeSent(
+            id: Network.Request.ID(name),
+            request: Network.Request(id: Network.Request.ID(name), url: "https://example.com/\(name)", method: "GET"),
+            resourceType: .fetch,
+            redirectResponse: nil,
+            timestamp: Double(index + 1)
+        ))
+    }
+    #expect(results.items.map(\.id) == [
+        NetworkRequest.ID(Network.Request.ID("stale-a")),
+        NetworkRequest.ID(Network.Request.ID("stale-b")),
+    ])
+
+    context.clearNetworkRequests()
+    #expect(results.items.isEmpty)
+
+    let freshID = Network.Request.ID("fresh-after-clear")
+    context.apply(.requestWillBeSent(
+        id: freshID,
+        request: Network.Request(id: freshID, url: "https://example.com/fresh", method: "GET"),
+        resourceType: .fetch,
+        redirectResponse: nil,
+        timestamp: 10
+    ))
+
+    #expect(results.items.map(\.id) == [NetworkRequest.ID(freshID)])
+}
+
+@MainActor
+@Test
+func startResetsDescriptorBackedNetworkQueryState() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let descriptor = WebInspectorFetchDescriptor<NetworkRequest>(
+        sortBy: [SortDescriptor(\.requestSentTimestamp, order: .forward)],
+        fetchLimit: 1
+    )
+    let networkResults: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: descriptor)
+    let staleRequestID = Network.Request.ID("stale-query-before-restart")
+
+    await emitFinishedRequest(id: staleRequestID, target: target, backend: runtime.backend)
+    try await waitUntil {
+        networkResults.items.map(\.id) == [NetworkRequest.ID(staleRequestID)]
+    }
+
+    await enqueueDomainDisableReplies(on: runtime.backend)
+    await enqueueStartupReplies(
+        on: runtime.backend,
+        document: DOM.Node(id: DOM.Node.ID("fresh-query-root"), nodeType: 9, nodeName: "#document")
+    )
+
+    context.start()
+
+    try await waitUntil {
+        networkResults.items.isEmpty && context.state == .attached
+    }
+
+    let freshRequestID = Network.Request.ID("fresh-query-after-restart")
+    await emitFinishedRequest(id: freshRequestID, target: target, backend: runtime.backend)
+    try await waitUntil {
+        networkResults.items.map(\.id) == [NetworkRequest.ID(freshRequestID)]
+    }
+}
+
+@MainActor
+@Test
 func networkFetchDescriptorOrdersEqualTimestampsByNewestInsertionFirst() async throws {
     let context = WebInspectorContext.preview(isolation: MainActor.shared)
     let descriptor = WebInspectorFetchDescriptor<NetworkRequest>(

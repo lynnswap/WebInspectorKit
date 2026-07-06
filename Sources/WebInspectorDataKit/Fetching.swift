@@ -474,6 +474,13 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
         }
     }
 
+    func resetNetworkItems() {
+        if let state = networkQueryState {
+            networkQueryState = NetworkRequestQueryState(plan: state.plan, requests: [])
+        }
+        resetItems([])
+    }
+
     func insertNetworkRequest(
         _ request: NetworkRequest,
         lookup: (NetworkRequest.ID) -> NetworkRequest?
