@@ -86,6 +86,29 @@ func clearAvailabilityUsesUnfilteredRequestsWhenFiltersHideEveryRequest() async 
     #expect(context.registeredRequest(for: requestID) == nil)
 }
 
+@Test
+@MainActor
+func selectedRequestUsesUnfilteredContextWhenFiltersHideRequest() async throws {
+    let context = makeContext()
+    let requestID = applyRequest(
+        to: context,
+        requestID: "1",
+        url: "https://cdn.example.com/app.js",
+        resourceType: .script,
+        mimeType: "text/javascript",
+        timestamp: 1
+    )
+    let request = try #require(context.registeredRequest(for: requestID))
+    let model = NetworkPanelModel(context: context)
+
+    model.selectRequest(request)
+    model.setSearchText("does-not-match")
+
+    #expect(model.displayRequestIDs.isEmpty)
+    #expect(model.selectedRequestID == requestID)
+    #expect(model.selectedRequest === request)
+}
+
 @Test(
     "Network display names use URL path segments with authority fallback",
     arguments: [

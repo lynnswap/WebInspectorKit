@@ -71,7 +71,7 @@ package final class NetworkPanelModel {
         guard let selectedRequestID else {
             return nil
         }
-        return requests.items.first { $0.id == selectedRequestID }
+        return request(for: selectedRequestID)
     }
 
     package func request(for id: NetworkRequest.ID) -> NetworkRequest? {
