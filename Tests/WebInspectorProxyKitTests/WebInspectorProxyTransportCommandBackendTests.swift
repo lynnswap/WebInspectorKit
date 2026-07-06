@@ -1443,6 +1443,129 @@ func transportBackendDeliversFrameNetworkEventsToCurrentPageRoute() async throws
 }
 
 @Test
+func transportBackendDropsNonPageDestroyAfterPageDestroyed() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-main"))
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+
+    let recorder = LifecycleEventRecorder()
+    let consumeTask = Task {
+        for await event in target.lifecycleEvents {
+            await recorder.record(event)
+        }
+    }
+    defer { consumeTask.cancel() }
+    await waitForEventSubscription(target, domain: .target)
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetDestroyed","params":{"targetId":"page-main"}}"#
+    )
+    // With no current page registered, a frame teardown must not surface as a
+    // current-page destruction; the replacement's creation event marks the
+    // point past which the frame destroy would have been delivered.
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetDestroyed","params":{"targetId":"frame-target"}}"#
+    )
+    await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-replacement"))
+
+    let clock = ContinuousClock()
+    let deadline = clock.now + .seconds(2)
+    while clock.now < deadline {
+        if await recorder.snapshot().count >= 2 {
+            break
+        }
+        await Task.yield()
+    }
+
+    let events = await recorder.snapshot()
+    guard events.count >= 2 else {
+        Issue.record("Expected the page destruction and the replacement creation to be delivered.")
+        return
+    }
+    guard case .targetDestroyed(.currentPage) = events[0] else {
+        Issue.record("Expected the page destruction on the current-page route.")
+        return
+    }
+    if case .targetDestroyed = events[1] {
+        Issue.record("Frame target destruction was misdelivered to the current-page route.")
+    }
+}
+
+private actor LifecycleEventRecorder {
+    private var events: [WebInspectorTargetLifecycleEvent] = []
+
+    func record(_ event: WebInspectorTargetLifecycleEvent) {
+        events.append(event)
+    }
+
+    func snapshot() -> [WebInspectorTargetLifecycleEvent] {
+        events
+    }
+}
+
+@Test
+func transportBackendEventSubscriptionWaitCompletesOnCancellation() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-main"))
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+
+    let waitTask = Task {
+        await target.proxy.waitForEventSubscription(
+            targetID: target.id,
+            route: target.route,
+            domain: .network
+        )
+        return Task.isCancelled
+    }
+    for _ in 0..<10 {
+        await Task.yield()
+    }
+    waitTask.cancel()
+
+    let wasCancelled = try await value(of: waitTask, timeout: .seconds(2))
+    #expect(wasCancelled)
+}
+
+@Test
+func transportBackendDecodesMemoryCacheResourceType() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+
+    let eventTask = Task {
+        var iterator = target.network.events.makeAsyncIterator()
+        return await iterator.next()
+    }
+
+    await waitForEventSubscription(target, domain: .network)
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        method: "Network.requestServedFromMemoryCache",
+        params: #"{"requestId":"cached-1","timestamp":3,"resource":{"url":"https://example.test/app.css","type":"Stylesheet","response":{"url":"https://example.test/app.css","status":200,"mimeType":"text/css","headers":{}}}}"#
+    )
+
+    let event = try #require(try await value(of: eventTask))
+    guard case let .requestServedFromMemoryCache(id, response, resourceType, timestamp) = event else {
+        Issue.record("Expected Network.requestServedFromMemoryCache event.")
+        return
+    }
+    #expect(id == Network.Request.ID("cached-1"))
+    #expect(response.url == "https://example.test/app.css")
+    #expect(resourceType == .stylesheet)
+    #expect(timestamp == 3)
+}
+
+@Test
 func transportBackendKeepsBackendResourceIdentifierOnScopedFrameRequests() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))

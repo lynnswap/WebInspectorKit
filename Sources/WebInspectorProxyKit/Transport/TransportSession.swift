@@ -364,6 +364,9 @@ package actor TransportSession {
 
         let targetID = targetIDForRootEvent(method: method, paramsData: parsed.paramsData)
         let sourceTargetID = sourceTargetIDForRootEvent(method: method, targetID: targetID)
+        let destroyedCurrentMainPageTarget = method == "Target.targetDestroyed"
+            && targetID != nil
+            && targetID == targetRegistry.currentMainPageTargetID
         let pendingStyleSheetAddedEvents = await updateRegistryFromRootEvent(
             method: method,
             targetID: targetID,
@@ -375,7 +378,8 @@ package actor TransportSession {
             method: method,
             targetID: targetID,
             sourceTargetID: sourceTargetID,
-            paramsData: parsed.paramsData
+            paramsData: parsed.paramsData,
+            destroyedCurrentMainPageTarget: destroyedCurrentMainPageTarget
         )
         await emitResolvedStyleSheetAddedEvents(pendingStyleSheetAddedEvents)
         await dispatchCommittedProvisionalTargetMessagesIfNeeded(method: method, paramsData: parsed.paramsData)
@@ -793,7 +797,8 @@ package actor TransportSession {
         method: String,
         targetID: ProtocolTarget.ID?,
         sourceTargetID: ProtocolTarget.ID? = nil,
-        paramsData: Data
+        paramsData: Data,
+        destroyedCurrentMainPageTarget: Bool = false
     ) async {
         let eventSequence = eventSequences.recordEvent(domain: domain)
         let envelope = ProtocolEvent(
@@ -803,7 +808,8 @@ package actor TransportSession {
             targetID: targetID,
             sourceTargetID: sourceTargetID,
             receivedDomainSequences: eventSequence.receivedDomainSequences,
-            paramsData: paramsData
+            paramsData: paramsData,
+            destroyedCurrentMainPageTarget: destroyedCurrentMainPageTarget
         )
         for continuation in eventSubscribers.continuations(for: domain) {
             continuation.yield(envelope)

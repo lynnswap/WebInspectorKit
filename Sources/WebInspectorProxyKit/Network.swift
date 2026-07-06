@@ -237,7 +237,7 @@ public enum Network {
         case dataReceived(id: Request.ID, dataLength: Int, encodedDataLength: Int, timestamp: Double)
         case loadingFinished(id: Request.ID, timestamp: Double, sourceMapURL: String?, metrics: Metrics?)
         case loadingFailed(id: Request.ID, errorText: String, canceled: Bool, timestamp: Double)
-        case requestServedFromMemoryCache(id: Request.ID, response: Response, timestamp: Double)
+        case requestServedFromMemoryCache(id: Request.ID, response: Response, resourceType: ResourceType?, timestamp: Double)
         case webSocket(WebSocketEvent)
         case unknown(RawEvent)
     }

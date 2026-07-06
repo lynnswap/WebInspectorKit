@@ -146,10 +146,11 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         case .currentPage:
             let snapshot = await transport.snapshot()
             if event.domain == .target,
-               event.method == "Target.targetDestroyed",
-               snapshot.currentMainPageTargetID == nil,
-               event.targetID != nil {
-                return true
+               event.method == "Target.targetDestroyed" {
+                // The registry has already dropped the destroyed record, so
+                // route by the event-time fact: only the destruction of the
+                // then-current main page belongs to the semantic page route.
+                return event.destroyedCurrentMainPageTarget
             }
             guard let currentMainPageTargetID = snapshot.currentMainPageTargetID else {
                 return false
@@ -594,10 +595,11 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
                 canceled: canceled,
                 timestamp: timestamp
             )
-        case let .requestServedFromMemoryCache(id, response, timestamp):
+        case let .requestServedFromMemoryCache(id, response, resourceType, timestamp):
             .requestServedFromMemoryCache(
                 id: scopedNetworkRequestID(id, targetRawValue: targetRawValue),
                 response: response,
+                resourceType: resourceType,
                 timestamp: timestamp
             )
         case let .webSocket(event):
@@ -730,8 +732,16 @@ private struct LiveProxyEventSubscriptionID: Hashable, Sendable {
 }
 
 private actor LiveProxyEventSubscriptions {
+    private struct Waiter {
+        let id: UInt64
+        let minimumCount: Int
+        let continuation: CheckedContinuation<Void, Never>
+    }
+
     private var activeSubscriberIDs: [LiveProxyEventSubscriptionKey: Set<LiveProxyEventSubscriptionID>] = [:]
-    private var waiters: [LiveProxyEventSubscriptionKey: [(minimumCount: Int, continuation: CheckedContinuation<Void, Never>)]] = [:]
+    private var waiters: [LiveProxyEventSubscriptionKey: [Waiter]] = [:]
+    private var nextWaiterID: UInt64 = 0
+    private var cancelledWaiterIDs: Set<UInt64> = []
 
     func register(_ key: LiveProxyEventSubscriptionKey, id: LiveProxyEventSubscriptionID) {
         let inserted = activeSubscriberIDs[key, default: []].insert(id).inserted
@@ -742,7 +752,7 @@ private actor LiveProxyEventSubscriptions {
             return
         }
         let count = activeSubscriberIDs[key, default: []].count
-        var remaining: [(minimumCount: Int, continuation: CheckedContinuation<Void, Never>)] = []
+        var remaining: [Waiter] = []
         for waiter in pending {
             if count >= waiter.minimumCount {
                 waiter.continuation.resume()
@@ -775,9 +785,46 @@ private actor LiveProxyEventSubscriptions {
         guard activeSubscriberIDs[key, default: []].count < minimumCount else {
             return
         }
-        await withCheckedContinuation { continuation in
-            waiters[key, default: []].append((minimumCount: minimumCount, continuation: continuation))
+        let waiterID = nextWaiterID
+        nextWaiterID += 1
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                addWaiter(
+                    Waiter(id: waiterID, minimumCount: minimumCount, continuation: continuation),
+                    key: key
+                )
+            }
+        } onCancel: {
+            Task {
+                await self.cancelWaiter(waiterID, key: key)
+            }
         }
+        cancelledWaiterIDs.remove(waiterID)
+    }
+
+    private func addWaiter(_ waiter: Waiter, key: LiveProxyEventSubscriptionKey) {
+        guard cancelledWaiterIDs.remove(waiter.id) == nil else {
+            waiter.continuation.resume()
+            return
+        }
+        waiters[key, default: []].append(waiter)
+    }
+
+    private func cancelWaiter(_ id: UInt64, key: LiveProxyEventSubscriptionKey) {
+        guard var pending = waiters[key],
+              let index = pending.firstIndex(where: { $0.id == id }) else {
+            cancelledWaiterIDs.insert(id)
+            return
+        }
+        let waiter = pending.remove(at: index)
+        if pending.isEmpty {
+            waiters[key] = nil
+        } else {
+            waiters[key] = pending
+        }
+        // Resuming lets the cancelled caller return and observe its own
+        // Task.isCancelled state instead of staying suspended forever.
+        waiter.continuation.resume()
     }
 }
 

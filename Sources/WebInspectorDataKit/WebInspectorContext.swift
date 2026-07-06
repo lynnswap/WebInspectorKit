@@ -1135,7 +1135,7 @@ public final class WebInspectorContext {
                 return
             }
             resetReplayBackedModelsBeforeEnable()
-            try await enableInspectorTracking(on: target, isolation: isolation)
+            try await enableInspectorTracking(on: target, generation: generation, isolation: isolation)
             guard Task.isCancelled == false else {
                 await disableEnabledDomainsAfterCancellation(isolation: isolation)
                 return
@@ -1143,7 +1143,7 @@ public final class WebInspectorContext {
             guard isCurrentPageGeneration(generation, isolation: isolation) else {
                 return
             }
-            try await enableRuntimeTracking(on: target, isolation: isolation)
+            try await enableRuntimeTracking(on: target, generation: generation, isolation: isolation)
             guard Task.isCancelled == false else {
                 await disableEnabledDomainsAfterCancellation(isolation: isolation)
                 return
@@ -1151,7 +1151,7 @@ public final class WebInspectorContext {
             guard isCurrentPageGeneration(generation, isolation: isolation) else {
                 return
             }
-            try await enableNetworkTracking(on: target, isolation: isolation)
+            try await enableNetworkTracking(on: target, generation: generation, isolation: isolation)
             guard Task.isCancelled == false else {
                 await disableEnabledDomainsAfterCancellation(isolation: isolation)
                 return
@@ -1167,7 +1167,7 @@ public final class WebInspectorContext {
             guard isCurrentPageGeneration(generation, isolation: isolation) else {
                 return
             }
-            try await enableConsoleTracking(on: target, isolation: isolation)
+            try await enableConsoleTracking(on: target, generation: generation, isolation: isolation)
             guard Task.isCancelled == false else {
                 await disableEnabledDomainsAfterCancellation(isolation: isolation)
                 return
@@ -1251,37 +1251,60 @@ public final class WebInspectorContext {
 
     private func enableInspectorTracking(
         on target: WebInspectorTarget,
+        generation: Int,
         isolation: isolated (any Actor)
     ) async throws {
         _ = isolation
         try await domainEnablement.acquire(.inspector, on: target)
+        guard isCurrentPageGeneration(generation, isolation: isolation) else {
+            // A superseding retarget already ran its lease discard; an
+            // acquisition completing late must return its lease instead of
+            // recording it where no successor will discard it.
+            await domainEnablement.discardLease(.inspector, on: target)
+            return
+        }
         inspectorTrackingTarget = target
     }
 
     private func enableRuntimeTracking(
         on target: WebInspectorTarget,
+        generation: Int,
         isolation: isolated (any Actor)
     ) async throws {
         _ = isolation
         try await domainEnablement.acquire(.runtime, on: target)
+        guard isCurrentPageGeneration(generation, isolation: isolation) else {
+            await domainEnablement.discardLease(.runtime, on: target)
+            return
+        }
         runtimeTrackingTarget = target
     }
 
     private func enableConsoleTracking(
         on target: WebInspectorTarget,
+        generation: Int,
         isolation: isolated (any Actor)
     ) async throws {
         _ = isolation
         try await domainEnablement.acquire(.console, on: target)
+        guard isCurrentPageGeneration(generation, isolation: isolation) else {
+            await domainEnablement.discardLease(.console, on: target)
+            return
+        }
         consoleTrackingTarget = target
     }
 
     private func enableNetworkTracking(
         on target: WebInspectorTarget,
+        generation: Int,
         isolation: isolated (any Actor)
     ) async throws {
         _ = isolation
         try await domainEnablement.acquire(.network, on: target)
+        guard isCurrentPageGeneration(generation, isolation: isolation) else {
+            await domainEnablement.discardLease(.network, on: target)
+            return
+        }
         networkTrackingTarget = target
     }
 
@@ -1851,15 +1874,15 @@ extension WebInspectorContext {
             guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
                 return
             }
-            try await enableInspectorTracking(on: target, isolation: isolation)
+            try await enableInspectorTracking(on: target, generation: generation, isolation: isolation)
             guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
                 return
             }
-            try await enableRuntimeTracking(on: target, isolation: isolation)
+            try await enableRuntimeTracking(on: target, generation: generation, isolation: isolation)
             guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
                 return
             }
-            try await enableNetworkTracking(on: target, isolation: isolation)
+            try await enableNetworkTracking(on: target, generation: generation, isolation: isolation)
             guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
                 return
             }
@@ -1867,7 +1890,7 @@ extension WebInspectorContext {
             guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
                 return
             }
-            try await enableConsoleTracking(on: target, isolation: isolation)
+            try await enableConsoleTracking(on: target, generation: generation, isolation: isolation)
             guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
                 return
             }
@@ -2092,8 +2115,12 @@ extension WebInspectorContext {
             inspectResolutionTask?.cancel()
             inspectResolutionTask = nil
             selectInspectedNode(node, isolation: isolation)
-        case .detachedRoot,
-             .shadowRootPushed,
+        case .detachedRoot:
+            // Deferred by design: detached roots need a registry and selection
+            // policy outside the single connected tree (05-two-layer-sdk-design
+            // §detached roots). Logged so a stalled inspect() is observable.
+            skipEvent("DOM.setChildNodes detached root deferred; subtree not indexed")
+        case .shadowRootPushed,
              .shadowRootPopped,
              .pseudoElementAdded,
              .pseudoElementRemoved,
@@ -2889,7 +2916,10 @@ extension WebInspectorContext {
             guard isCurrentStyleRefresh(node: node, generation: generation) else {
                 return nil
             }
-            try await target.css.enable()
+            // Enable the CSS agent that rejected the style reads: for a
+            // frame-owned node that is the frame target, not the semantic
+            // current page the reads were retargeted away from.
+            try await domTarget(owning: node.id.proxyID).css.enable()
             guard isCurrentStyleRefresh(node: node, generation: generation) else {
                 return nil
             }
@@ -3277,8 +3307,13 @@ extension WebInspectorContext {
             notifyNetworkRequestMutated(request)
         case let .webSocket(event):
             apply(event)
-        case let .requestServedFromMemoryCache(id, response, timestamp):
-            applyRequestServedFromMemoryCache(id: id, response: response, timestamp: timestamp)
+        case let .requestServedFromMemoryCache(id, response, resourceType, timestamp):
+            applyRequestServedFromMemoryCache(
+                id: id,
+                response: response,
+                resourceType: resourceType,
+                timestamp: timestamp
+            )
         case .unknown:
             break
         }
@@ -3326,6 +3361,7 @@ extension WebInspectorContext {
     private func applyRequestServedFromMemoryCache(
         id proxyID: Network.Request.ID,
         response: Network.Response,
+        resourceType: Network.ResourceType?,
         timestamp: Double
     ) {
         let id = NetworkRequest.ID(proxyID)
@@ -3346,14 +3382,14 @@ extension WebInspectorContext {
                 method: "GET",
                 headers: response.requestHeaders ?? [:]
             )
-            request = NetworkRequest(request: payload, resourceType: nil, timestamp: timestamp, modelContext: self)
+            request = NetworkRequest(request: payload, resourceType: resourceType, timestamp: timestamp, modelContext: self)
             requestsByID[id] = request
             orderedRequestIDs.append(id)
-            request.applyMemoryCache(response: response, timestamp: timestamp)
+            request.applyMemoryCache(response: response, resourceType: resourceType, timestamp: timestamp)
             notifyNetworkRequestInserted(request)
             return
         }
-        request.applyMemoryCache(response: response, timestamp: timestamp)
+        request.applyMemoryCache(response: response, resourceType: resourceType, timestamp: timestamp)
         notifyNetworkRequestMutated(request)
     }
 

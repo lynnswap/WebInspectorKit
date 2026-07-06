@@ -2918,6 +2918,7 @@ func fetchedResultsControllerPublishesNetworkInsertAndUpdateTransactions() async
         .requestServedFromMemoryCache(
             id: requestID,
             response: Network.Response(url: "https://example.com/first", status: 200),
+            resourceType: nil,
             timestamp: 5
         ),
         target: target
@@ -3904,6 +3905,52 @@ func selectingDOMNodeRetriesCSSStyleLoadAfterEnablingAgent() async throws {
         RecordedCommand(domain: "CSS", method: "getInlineStylesForNode"),
         RecordedCommand(domain: "CSS", method: "getComputedStyleForNode"),
     ])
+}
+
+@MainActor
+@Test
+func selectingFrameScopedDOMNodeRetriesCSSStyleLoadByEnablingFrameAgent() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let document = try #require(context.rootNode)
+    let frameTargetRawValue = "frame-css-agent"
+    let elementID = DOM.Node.ID("frame-styled-node", scopedToTargetRawValue: frameTargetRawValue)
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(
+                id: elementID,
+                nodeType: 1,
+                nodeName: "DIV",
+                localName: "div",
+                childNodeCount: 0
+            )
+        ]),
+        target: target
+    )
+    let element = try await waitForChild(in: context)
+
+    await runtime.backend.enqueueFailure(
+        WebInspectorProxyError.commandFailed(
+            domain: "CSS",
+            method: "getMatchedStylesForNode",
+            message: "CSS agent is not enabled."
+        ),
+        for: "CSS",
+        method: "getMatchedStylesForNode"
+    )
+    await runtime.backend.enqueue((), for: "CSS", method: "enable")
+    await enqueueCSSStyleReplies(on: runtime.backend)
+
+    context.select(element)
+
+    let styles = try #require(element.elementStyles)
+    try await waitUntil { styles.phase == .loaded }
+
+    let enableCommand = await runtime.backend.recordedCommands().first {
+        $0.domain == "CSS" && $0.method == "enable"
+    }
+    #expect(enableCommand?.targetID == WebInspectorTarget.ID(frameTargetRawValue))
 }
 
 @MainActor
@@ -5167,6 +5214,7 @@ func memoryCacheEventCreatesFinishedCachedRequestFromResponse() async throws {
                 source: Network.Source(rawValue: "memory-cache"),
                 requestHeaders: ["Accept": "text/css"]
             ),
+            resourceType: .stylesheet,
             timestamp: 5
         ),
         target: target
@@ -5179,7 +5227,7 @@ func memoryCacheEventCreatesFinishedCachedRequestFromResponse() async throws {
     let request = try #require(results.items.first)
     #expect(request.url == "https://example.com/cached.css")
     #expect(request.method == "GET")
-    #expect(request.resourceType == nil)
+    #expect(request.resourceType == .stylesheet)
     #expect(request.status == 200)
     #expect(request.statusText == "OK")
     #expect(request.responseURL == "https://example.com/cached.css")
@@ -5207,6 +5255,7 @@ func memoryCacheEventWithoutURLForNewRequestIsSkipped() async throws {
         .requestServedFromMemoryCache(
             id: Network.Request.ID("cached-request-without-url"),
             response: Network.Response(status: 200),
+            resourceType: nil,
             timestamp: 5
         ),
         target: target
@@ -5215,6 +5264,7 @@ func memoryCacheEventWithoutURLForNewRequestIsSkipped() async throws {
         .requestServedFromMemoryCache(
             id: Network.Request.ID("cached-request-with-url"),
             response: Network.Response(url: "https://example.com/cached.css", status: 200),
+            resourceType: nil,
             timestamp: 6
         ),
         target: target

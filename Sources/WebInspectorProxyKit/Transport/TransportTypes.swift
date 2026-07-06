@@ -129,6 +129,11 @@ package struct ProtocolEvent: Equatable, Sendable {
     package var sourceTargetID: ProtocolTarget.ID?
     package var receivedDomainSequences: [ProtocolDomain: UInt64]
     package var paramsData: Data
+    /// Event-time fact for `Target.targetDestroyed`: whether the destroyed
+    /// target was the current main page target when the event arrived. The
+    /// registry forgets the destroyed record before subscribers consume the
+    /// event, so consumers cannot reconstruct this from a snapshot.
+    package var destroyedCurrentMainPageTarget: Bool
 
     package init(
         sequence: UInt64,
@@ -137,7 +142,8 @@ package struct ProtocolEvent: Equatable, Sendable {
         targetID: ProtocolTarget.ID?,
         sourceTargetID: ProtocolTarget.ID? = nil,
         receivedDomainSequences: [ProtocolDomain: UInt64] = [:],
-        paramsData: Data
+        paramsData: Data,
+        destroyedCurrentMainPageTarget: Bool = false
     ) {
         self.sequence = sequence
         self.domain = domain
@@ -146,6 +152,7 @@ package struct ProtocolEvent: Equatable, Sendable {
         self.sourceTargetID = sourceTargetID
         self.receivedDomainSequences = receivedDomainSequences
         self.paramsData = paramsData
+        self.destroyedCurrentMainPageTarget = destroyedCurrentMainPageTarget
     }
 
     package func receivedSequence(for domain: ProtocolDomain) -> UInt64 {

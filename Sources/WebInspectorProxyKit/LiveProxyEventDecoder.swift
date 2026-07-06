@@ -214,6 +214,7 @@ enum LiveProxyEventDecoder {
             return .requestServedFromMemoryCache(
                 id: Network.Request.ID(params.requestId),
                 response: params.resource.proxyResponse,
+                resourceType: Network.ResourceType(rawValue: params.resource.type),
                 timestamp: params.timestamp
             )
         case "Network.webSocketCreated":

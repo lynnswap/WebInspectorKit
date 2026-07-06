@@ -819,11 +819,15 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         state = .failed(errorText: errorText, canceled: canceled)
     }
 
-    func applyMemoryCache(response: Network.Response, timestamp: Double) {
+    func applyMemoryCache(response: Network.Response, resourceType: Network.ResourceType?, timestamp: Double) {
         if let url = response.url {
             self.url = url
         }
-        resourceType = nil
+        // The cached-resource payload carries the protocol-authoritative type;
+        // keep any previously decoded type when the event omits it.
+        if let resourceType {
+            self.resourceType = resourceType
+        }
         webSocket = nil
         status = response.status
         statusText = response.statusText
