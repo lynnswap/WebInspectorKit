@@ -224,7 +224,9 @@ public struct WebInspectorFetchedResultsTransaction<Model: WebInspectorFetchable
 
         let updates = newPositions.values
             .compactMap { newPosition -> WebInspectorFetchedResultsItemChange<ItemID>? in
-                guard oldPositions[newPosition.itemID] != nil,
+                guard let oldPosition = oldPositions[newPosition.itemID],
+                      oldPosition.sectionID == newPosition.sectionID,
+                      oldPosition.indexPath == newPosition.indexPath,
                       updatedItemIDs.contains(newPosition.itemID) else {
                     return nil
                 }
@@ -239,6 +241,7 @@ public struct WebInspectorFetchedResultsTransaction<Model: WebInspectorFetchable
 
     private struct ItemPosition {
         var itemID: ItemID
+        var sectionID: WebInspectorFetchSectionID
         var indexPath: WebInspectorFetchedResultsIndexPath
     }
 
@@ -250,6 +253,7 @@ public struct WebInspectorFetchedResultsTransaction<Model: WebInspectorFetchable
             for (itemIndex, itemID) in section.itemIDs.enumerated() where positions[itemID] == nil {
                 positions[itemID] = ItemPosition(
                     itemID: itemID,
+                    sectionID: section.id,
                     indexPath: WebInspectorFetchedResultsIndexPath(
                         section: sectionIndex,
                         item: itemIndex

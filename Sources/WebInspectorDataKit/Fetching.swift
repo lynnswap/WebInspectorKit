@@ -298,15 +298,16 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
         yieldTransaction(oldSnapshot: oldSnapshot, updatedItemIDs: [])
     }
 
-    func refreshTopologyAfterItemMutation(_ item: Model) {
-        guard sectionBy != nil,
-              items.contains(where: { $0.id == item.id }) else {
+    func refreshAfterItemMutation(_ item: Model) {
+        guard items.contains(where: { $0.id == item.id }) else {
             return
         }
         let oldSnapshot = currentSnapshot
-        sections = Self.sections(for: items, sectionBy: sectionBy)
+        if sectionBy != nil {
+            sections = Self.sections(for: items, sectionBy: sectionBy)
+        }
         bumpTopologyRevisionIfNeeded(oldSnapshot: oldSnapshot)
-        yieldTransaction(oldSnapshot: oldSnapshot, updatedItemIDs: [])
+        yieldTransaction(oldSnapshot: oldSnapshot, updatedItemIDs: [item.id])
     }
 
     func resetItems(_ items: [Model]) {
@@ -491,11 +492,11 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
         lookup: (NetworkRequest.ID) -> NetworkRequest?
     ) {
         guard var state = networkQueryState else {
-            refreshTopologyAfterItemMutation(request)
+            refreshAfterItemMutation(request)
             return
         }
         state.upsert(request: request)
         networkQueryState = state
-        setItems(state.visibleRequests(lookup: lookup))
+        setItems(state.visibleRequests(lookup: lookup), updatedItemIDs: [request.id])
     }
 }

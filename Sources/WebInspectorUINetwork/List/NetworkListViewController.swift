@@ -474,7 +474,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private func fetchedResultsDidPublish(
         _ transaction: WebInspectorFetchedResultsTransaction<NetworkRequest>
     ) {
-        guard transaction.hasChanges else {
+        guard transaction.hasNetworkListTopologyChanges else {
             return
         }
         guard snapshotCoordinator.isRenderingActive else {
@@ -488,12 +488,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         _ transaction: WebInspectorFetchedResultsTransaction<NetworkRequest>
     ) {
         let requestIDs = transaction.newSnapshot.itemIDs
-        let topologyItemChanges = transaction.itemChanges.filter { change in
-            if case .update = change {
-                return false
-            }
-            return true
-        }
+        let topologyItemChanges = transaction.networkListTopologyItemChanges
         guard transaction.isReset
             || transaction.sectionChanges.isEmpty == false
             || topologyItemChanges.isEmpty == false else {
@@ -703,6 +698,21 @@ package final class NetworkListViewController: UICollectionViewController, UISea
             return
         }
         requestSelectionAction(request)
+    }
+}
+
+private extension WebInspectorFetchedResultsTransaction where Model == NetworkRequest {
+    var hasNetworkListTopologyChanges: Bool {
+        isReset || sectionChanges.isEmpty == false || networkListTopologyItemChanges.isEmpty == false
+    }
+
+    var networkListTopologyItemChanges: [WebInspectorFetchedResultsItemChange<NetworkRequest.ID>] {
+        itemChanges.filter { change in
+            if case .update = change {
+                return false
+            }
+            return true
+        }
     }
 }
 

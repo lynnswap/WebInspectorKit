@@ -3238,16 +3238,19 @@ extension WebInspectorContext {
                 encodedDataLength: encodedDataLength,
                 timestamp: timestamp
             )
+            notifyNetworkRequestMutated(request)
         case let .loadingFinished(id, timestamp, sourceMapURL, metrics):
             guard let request = networkRequest(for: id, method: "loadingFinished") else {
                 return
             }
             request.finish(timestamp: timestamp, sourceMapURL: sourceMapURL, metrics: metrics)
+            notifyNetworkRequestMutated(request)
         case let .loadingFailed(id, errorText, canceled, timestamp):
             guard let request = networkRequest(for: id, method: "loadingFailed") else {
                 return
             }
             request.fail(errorText: errorText, canceled: canceled, timestamp: timestamp)
+            notifyNetworkRequestMutated(request)
         case let .webSocket(event):
             apply(event)
         case let .requestServedFromMemoryCache(id, response, timestamp):
@@ -3292,7 +3295,7 @@ extension WebInspectorContext {
         if inserted {
             notifyNetworkRequestInserted(request)
         } else if topologyMayHaveChanged {
-            notifyNetworkRequestTopologyMayHaveChanged(request)
+            notifyNetworkRequestMutated(request)
         }
     }
 
@@ -3327,7 +3330,7 @@ extension WebInspectorContext {
             return
         }
         request.applyMemoryCache(response: response, timestamp: timestamp)
-        notifyNetworkRequestTopologyMayHaveChanged(request)
+        notifyNetworkRequestMutated(request)
     }
 
     private func applyResponseReceived(
@@ -3368,7 +3371,7 @@ extension WebInspectorContext {
         if inserted {
             notifyNetworkRequestInserted(request)
         } else {
-            notifyNetworkRequestTopologyMayHaveChanged(request)
+            notifyNetworkRequestMutated(request)
         }
     }
 
@@ -3381,31 +3384,37 @@ extension WebInspectorContext {
                 return
             }
             networkRequest.applyWebSocketHandshakeRequest(request, timestamp: timestamp)
+            notifyNetworkRequestMutated(networkRequest)
         case let .handshakeResponse(id, response, timestamp):
             guard let networkRequest = networkRequest(for: id, method: "webSocketHandshakeResponseReceived") else {
                 return
             }
             networkRequest.applyWebSocketHandshakeResponse(response, timestamp: timestamp)
+            notifyNetworkRequestMutated(networkRequest)
         case let .frameSent(id, frame, timestamp):
             guard let networkRequest = networkRequest(for: id, method: "webSocketFrameSent") else {
                 return
             }
             networkRequest.appendWebSocketFrame(frame, direction: .sent, timestamp: timestamp)
+            notifyNetworkRequestMutated(networkRequest)
         case let .frameReceived(id, frame, timestamp):
             guard let networkRequest = networkRequest(for: id, method: "webSocketFrameReceived") else {
                 return
             }
             networkRequest.appendWebSocketFrame(frame, direction: .received, timestamp: timestamp)
+            notifyNetworkRequestMutated(networkRequest)
         case let .error(id, message, timestamp):
             guard let networkRequest = networkRequest(for: id, method: "webSocketFrameError") else {
                 return
             }
             networkRequest.appendWebSocketError(message, timestamp: timestamp)
+            notifyNetworkRequestMutated(networkRequest)
         case let .closed(id, timestamp):
             guard let networkRequest = networkRequest(for: id, method: "webSocketClosed") else {
                 return
             }
             networkRequest.closeWebSocket(timestamp: timestamp)
+            notifyNetworkRequestMutated(networkRequest)
         case .other:
             break
         }
@@ -3429,7 +3438,7 @@ extension WebInspectorContext {
         if inserted {
             notifyNetworkRequestInserted(request)
         } else {
-            notifyNetworkRequestTopologyMayHaveChanged(request)
+            notifyNetworkRequestMutated(request)
         }
     }
 
@@ -3468,7 +3477,7 @@ extension WebInspectorContext {
         }
     }
 
-    private func notifyNetworkRequestTopologyMayHaveChanged(_ request: NetworkRequest) {
+    private func notifyNetworkRequestMutated(_ request: NetworkRequest) {
         networkFetchedResults.removeAll { $0.value == nil }
         for registration in networkFetchedResults {
             registration.value?.refreshNetworkRequestAfterMutation(
