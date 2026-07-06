@@ -1953,6 +1953,66 @@ func sharedContainerContextsReenableDomainsOnCommittedPageTarget() async throws 
 
 @MainActor
 @Test
+func currentPageDestroyWithoutReplacementRegressesToAttachingAndRecovers() async throws {
+    let doomedTargetID = ProtocolTarget.ID("page-doomed")
+    let rebornTargetID = ProtocolTarget.ID("page-reborn")
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installTransportPageTarget(in: transport, targetID: doomedTargetID)
+    let proxy = try await WebInspectorProxy(
+        transport: transport,
+        configuration: .init(responseTimeout: .milliseconds(750), bootstrapTimeout: .milliseconds(100))
+    )
+    let container = WebInspectorContainer(proxy: proxy)
+
+    let autoReplier = Task {
+        var repliedMessageIDs = Set<UInt64>()
+        while Task.isCancelled == false {
+            for message in await backend.sentTargetMessages() {
+                guard let messageID = try? transportMessageID(message.message),
+                      repliedMessageIDs.insert(messageID).inserted else {
+                    continue
+                }
+                let method = (try? transportTargetMessageMethod(message.message)) ?? ""
+                let result = method == "DOM.getDocument"
+                    ? transportDocumentResult(
+                        nodeID: message.targetIdentifier == rebornTargetID ? "reborn-root" : "doomed-root"
+                    )
+                    : "{}"
+                await receiveTransportTargetReply(
+                    transport,
+                    targetID: message.targetIdentifier,
+                    messageID: messageID,
+                    result: result
+                )
+            }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+    }
+    defer { autoReplier.cancel() }
+
+    let context = container.mainContext
+    try await waitUntil(timeout: .seconds(5)) { context.state == .attached }
+    #expect(context.rootNode != nil)
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetDestroyed","params":{"targetId":"page-doomed"}}"#
+    )
+
+    try await waitUntil(timeout: .seconds(5)) {
+        context.state == .attaching && context.rootNode == nil
+    }
+
+    await installTransportPageTarget(in: transport, targetID: rebornTargetID, frameID: "reborn-frame")
+
+    let rebornRootID = DOMNode.ID(DOM.Node.ID("reborn-root"))
+    try await waitUntil(timeout: .seconds(5)) {
+        context.state == .attached && context.rootNode?.id == rebornRootID
+    }
+}
+
+@MainActor
+@Test
 func startCancelsInFlightCurrentPageRetargetBeforeRestarting() async throws {
     let targetID = ProtocolTarget.ID("page-restart")
     let (_, _, context) = try await startTransportBackedContext(

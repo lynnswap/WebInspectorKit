@@ -1962,8 +1962,28 @@ extension WebInspectorContext {
             }
         }
         do {
-            let replacement = try await proxy.waitForCurrentPage()
+            let gracePeriod = await proxy.bootstrapGracePeriod
+            var replacement = try await proxy.waitForCurrentPageReplacement(gracePeriod: gracePeriod)
             guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
+                return
+            }
+            if replacement == nil {
+                // The destroyed page has no successor yet (process kill without
+                // an immediate reload). `.attached` promises a usable current
+                // page, so stop presenting the destroyed page's state and wait
+                // for the next page target to appear.
+                currentPage = nil
+                resetCurrentPageLifecycleModels(isolation: isolation)
+                if state == .attached {
+                    transition(to: .attaching)
+                }
+                replacement = try await proxy.waitForCurrentPageReplacement(gracePeriod: nil)
+                guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
+                    return
+                }
+            }
+            guard let replacement else {
+                fail(.disconnected("Current page target was destroyed without a replacement."))
                 return
             }
             currentPage = replacement

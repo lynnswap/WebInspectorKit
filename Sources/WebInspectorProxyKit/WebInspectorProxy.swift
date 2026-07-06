@@ -142,7 +142,7 @@ public actor WebInspectorProxy {
         try ensureOpenForCurrentPageAccess()
         if let transport {
             do {
-                try await refreshCurrentPage(from: transport)
+                try await refreshCurrentPage(from: transport, timeout: configuration.bootstrapTimeout)
             } catch {
                 throw Self.mapBootstrapTargetError(error)
             }
@@ -154,6 +154,32 @@ public actor WebInspectorProxy {
             return pageTarget
         }
         throw WebInspectorProxyError.disconnected("WebInspectorProxyKit shell has no current page target.")
+    }
+
+    /// Waits for a usable current page target after the previous one was
+    /// destroyed. Returns nil when no successor target exists once
+    /// `gracePeriod` elapses — page absence is a target-lifecycle fact owned
+    /// by the transport registry, distinct from command timeouts. A nil
+    /// `gracePeriod` waits indefinitely for the next page target. Throws only
+    /// connection-terminal errors.
+    package func waitForCurrentPageReplacement(gracePeriod: Duration?) async throws -> WebInspectorTarget? {
+        try ensureOpenForCurrentPageAccess()
+        guard let transport else {
+            return pageTarget
+        }
+        do {
+            try await refreshCurrentPage(from: transport, timeout: gracePeriod)
+        } catch TransportSession.Error.missingMainPageTarget {
+            return nil
+        } catch {
+            throw Self.mapBootstrapTargetError(error)
+        }
+        try ensureOpenForCurrentPageAccess()
+        return pageTarget
+    }
+
+    package var bootstrapGracePeriod: Duration {
+        configuration.bootstrapTimeout
     }
 
     public func reload() async throws {
@@ -708,14 +734,18 @@ public actor WebInspectorProxy {
     }
 
     private func bootstrapCurrentPage(from transport: TransportSession) async throws {
-        try await refreshCurrentPage(from: transport)
+        try await refreshCurrentPage(from: transport, timeout: configuration.bootstrapTimeout)
     }
 
-    private func refreshCurrentPage(from transport: TransportSession) async throws {
+    /// `timeout: nil` waits indefinitely for the next main page target.
+    private func refreshCurrentPage(
+        from transport: TransportSession,
+        timeout: Duration?
+    ) async throws {
         let transportTarget: TransportSession.MainPageTarget
         do {
             transportTarget = try await transport.waitForCurrentMainPageTarget(
-                timeout: configuration.bootstrapTimeout
+                timeout: timeout
             )
         } catch {
             pageTarget = nil
