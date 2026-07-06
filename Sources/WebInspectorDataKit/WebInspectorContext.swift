@@ -1113,6 +1113,7 @@ public final class WebInspectorContext {
         currentPage = nil
         advanceCurrentPageGeneration(isolation: isolation)
         advanceDOMDocumentGeneration(isolation: isolation)
+        resetAttachmentBackedModels(isolation: isolation)
         teardownError = nil
         teardownError = await disableEnabledDomains(isolation: isolation)
         transition(to: .detached)
@@ -1363,6 +1364,11 @@ public final class WebInspectorContext {
         resetDOM(isolation: isolation)
         clearExecutionContexts()
         clearConsoleMessages()
+    }
+
+    private func resetAttachmentBackedModels(isolation: isolated (any Actor)) {
+        resetCurrentPageLifecycleModels(isolation: isolation)
+        resetNetworkModelsForNewAttachment()
     }
 
     private func disableEnabledDomains(

@@ -770,6 +770,79 @@ func closeAfterAttachedDisablesEnabledDomains() async throws {
 
 @MainActor
 @Test
+func closeAfterAttachedClearsAttachmentBackedModels() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+    let documentID = DOM.Node.ID("document")
+    let requestID = Network.Request.ID("request-1")
+    let runtimeContextID = Runtime.ExecutionContext.ID("main")
+    let networkResults: WebInspectorFetchedResults<NetworkRequest>
+    let consoleResults: WebInspectorFetchedResults<ConsoleMessage>
+
+    await enqueueStartupReplies(
+        on: runtime.backend,
+        document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document")
+    )
+
+    let container = WebInspectorContainer(proxy: runtime.proxy)
+    let context = container.mainContext
+    networkResults = context.fetchedResults()
+    consoleResults = context.fetchedResults()
+    try await waitForStartupSubscribers(runtime: runtime, target: target)
+    try await waitUntil { context.state == .attached }
+
+    await runtime.backend.emit(
+        .requestWillBeSent(
+            id: requestID,
+            request: Network.Request(id: requestID, url: "https://example.com/app.js", method: "GET"),
+            resourceType: .script,
+            redirectResponse: nil,
+            timestamp: 1
+        ),
+        target: target
+    )
+    await runtime.backend.emit(
+        .messageAdded(Console.Message(
+            source: Console.Source(rawValue: "console-api"),
+            level: Console.Level(rawValue: "warning"),
+            text: "hello",
+            timestamp: 2
+        )),
+        target: target
+    )
+    await runtime.backend.emit(
+        .executionContextCreated(Runtime.ExecutionContext(id: runtimeContextID, name: "Main", kind: .normal)),
+        target: target
+    )
+    try await waitUntil {
+        networkResults.items.count == 1
+            && consoleResults.items.count == 1
+            && context.executionContexts.count == 1
+    }
+
+    let request = try #require(networkResults.items.first)
+    let message = try #require(consoleResults.items.first)
+    #expect(context.rootNode?.id == DOMNode.ID(documentID))
+    #expect(context.node(for: DOMNode.ID(documentID)) != nil)
+    #expect(context.registeredRequest(for: request.id) === request)
+    #expect(context.registeredMessage(for: message.id) === message)
+
+    await enqueueDomainDisableReplies(on: runtime.backend)
+    await container.close()
+
+    #expect(context.state == .detached)
+    #expect(context.rootNode == nil)
+    #expect(context.node(for: DOMNode.ID(documentID)) == nil)
+    #expect(context.registeredRequest(for: request.id) == nil)
+    #expect(networkResults.items.isEmpty)
+    #expect(context.registeredMessage(for: message.id) == nil)
+    #expect(consoleResults.items.isEmpty)
+    #expect(context.executionContexts.isEmpty)
+    #expect(context.selectedContext == nil)
+}
+
+@MainActor
+@Test
 func closeRecordsNetworkDisableFailureAndDetachesContext() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
