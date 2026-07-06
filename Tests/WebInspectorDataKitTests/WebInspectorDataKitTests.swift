@@ -1882,6 +1882,77 @@ func startBeginsFreshNetworkAttachmentEpoch() async throws {
 
 @MainActor
 @Test
+func sharedContainerContextsReenableDomainsOnCommittedPageTarget() async throws {
+    let oldTargetID = ProtocolTarget.ID("page-old")
+    let newTargetID = ProtocolTarget.ID("page-new")
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installTransportPageTarget(in: transport, targetID: oldTargetID)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let container = WebInspectorContainer(proxy: proxy)
+
+    let autoReplier = Task {
+        var repliedMessageIDs = Set<UInt64>()
+        while Task.isCancelled == false {
+            for message in await backend.sentTargetMessages() {
+                guard let messageID = try? transportMessageID(message.message),
+                      repliedMessageIDs.insert(messageID).inserted else {
+                    continue
+                }
+                let method = (try? transportTargetMessageMethod(message.message)) ?? ""
+                let result = method == "DOM.getDocument"
+                    ? transportDocumentResult(
+                        nodeID: message.targetIdentifier == newTargetID ? "new-shared-root" : "old-shared-root"
+                    )
+                    : "{}"
+                await receiveTransportTargetReply(
+                    transport,
+                    targetID: message.targetIdentifier,
+                    messageID: messageID,
+                    result: result
+                )
+            }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+    }
+    defer { autoReplier.cancel() }
+
+    let contextA = container.mainContext
+    let contextB = WebInspectorContext(container, isolation: MainActor.shared)
+    contextB.start()
+    try await waitUntil(timeout: .seconds(5)) {
+        contextA.state == .attached && contextB.state == .attached
+    }
+    let preSwapMessageCount = await backend.sentTargetMessages().count
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-new","type":"page","frameId":"new-main-frame","isProvisional":true}}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-old","newTargetId":"page-new"}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetDestroyed","params":{"targetId":"page-old"}}"#
+    )
+
+    let newRootID = DOMNode.ID(DOM.Node.ID("new-shared-root"))
+    try await waitUntil(timeout: .seconds(5)) {
+        contextA.state == .attached && contextB.state == .attached
+            && contextA.rootNode?.id == newRootID
+            && contextB.rootNode?.id == newRootID
+    }
+
+    let postSwapMessages = Array((await backend.sentTargetMessages()).dropFirst(preSwapMessageCount))
+    for method in ["Inspector.enable", "Runtime.enable", "Network.enable", "Console.enable"] {
+        let sends = try postSwapMessages.filter {
+            try $0.targetIdentifier == newTargetID && transportTargetMessageMethod($0.message) == method
+        }
+        #expect(sends.count == 1, "expected exactly one \(method) on the committed page target")
+    }
+}
+
+@MainActor
+@Test
 func startCancelsInFlightCurrentPageRetargetBeforeRestarting() async throws {
     let targetID = ProtocolTarget.ID("page-restart")
     let (_, _, context) = try await startTransportBackedContext(
@@ -4561,6 +4632,48 @@ func domainEnablementDiscardLeasePreservesSharedEnabledLease() async throws {
     #expect(commands == [
         RecordedCommand(domain: "Runtime", method: "enable"),
         RecordedCommand(domain: "Runtime", method: "disable"),
+    ])
+}
+
+@MainActor
+@Test
+func domainLeaseRetargetInterleavingReenablesCommittedPageBinding() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let registry = WebInspectorDomainEnablementRegistry()
+    let oldPage = WebInspectorTarget(
+        id: .currentPage,
+        kind: .page,
+        frameID: nil,
+        isProvisional: false,
+        proxy: runtime.proxy,
+        route: .currentPage,
+        pageBindingID: "page-old"
+    )
+    let newPage = WebInspectorTarget(
+        id: .currentPage,
+        kind: .page,
+        frameID: nil,
+        isProvisional: false,
+        proxy: runtime.proxy,
+        route: .currentPage,
+        pageBindingID: "page-new"
+    )
+
+    await runtime.backend.enqueue((), for: "Runtime", method: "enable")
+    try await registry.acquire(.runtime, on: oldPage)
+    try await registry.acquire(.runtime, on: oldPage)
+
+    await registry.discardLease(.runtime, on: oldPage)
+    await runtime.backend.enqueue((), for: "Runtime", method: "enable")
+    try await registry.acquire(.runtime, on: newPage)
+
+    await registry.discardLease(.runtime, on: oldPage)
+    try await registry.acquire(.runtime, on: newPage)
+
+    let commands = await runtime.backend.recordedCommands()
+    #expect(commands == [
+        RecordedCommand(domain: "Runtime", method: "enable"),
+        RecordedCommand(domain: "Runtime", method: "enable"),
     ])
 }
 

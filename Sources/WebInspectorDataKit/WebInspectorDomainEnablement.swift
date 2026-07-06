@@ -58,7 +58,14 @@ enum WebInspectorEnabledDomain: Hashable, Sendable {
 
 private struct WebInspectorDomainEnablementKey: Hashable, Sendable {
     var targetID: WebInspectorTarget.ID
+    var pageBinding: String?
     var domain: WebInspectorEnabledDomain
+
+    init(target: WebInspectorTarget, domain: WebInspectorEnabledDomain) {
+        targetID = target.id
+        pageBinding = target.pageBindingID
+        self.domain = domain
+    }
 }
 
 actor WebInspectorDomainEnablementRegistry {
@@ -76,7 +83,7 @@ actor WebInspectorDomainEnablementRegistry {
     }
 
     func acquire(_ domain: WebInspectorEnabledDomain, on target: WebInspectorTarget) async throws {
-        let key = WebInspectorDomainEnablementKey(targetID: target.id, domain: domain)
+        let key = WebInspectorDomainEnablementKey(target: target, domain: domain)
 
         switch entries[key] {
         case let .enabled(count):
@@ -104,7 +111,7 @@ actor WebInspectorDomainEnablementRegistry {
     }
 
     func release(_ domain: WebInspectorEnabledDomain, on target: WebInspectorTarget) async -> WebInspectorProxyError? {
-        let key = WebInspectorDomainEnablementKey(targetID: target.id, domain: domain)
+        let key = WebInspectorDomainEnablementKey(target: target, domain: domain)
 
         switch entries[key] {
         case let .enabled(count):
@@ -138,7 +145,7 @@ actor WebInspectorDomainEnablementRegistry {
     }
 
     func discardLease(_ domain: WebInspectorEnabledDomain, on target: WebInspectorTarget) {
-        let key = WebInspectorDomainEnablementKey(targetID: target.id, domain: domain)
+        let key = WebInspectorDomainEnablementKey(target: target, domain: domain)
 
         switch entries[key] {
         case let .enabled(count):
@@ -203,6 +210,15 @@ actor WebInspectorDomainEnablementRegistry {
     }
 
     private func disable(_ domain: WebInspectorEnabledDomain, on target: WebInspectorTarget) async -> WebInspectorProxyError? {
+        if let binding = target.pageBindingID {
+            let currentBinding = await target.proxy.currentPageBindingID
+            guard currentBinding == binding else {
+                WebInspectorDataKitLog.debug(
+                    "domain disable skipped stale page binding domain=\(domain.rawValue) target=\(target.id.rawValue)"
+                )
+                return nil
+            }
+        }
         do {
             try await domain.disable(on: target)
             WebInspectorDataKitLog.debug("domain disable finished domain=\(domain.rawValue) target=\(target.id.rawValue)")

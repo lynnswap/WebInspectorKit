@@ -61,6 +61,7 @@ public struct WebInspectorTarget: Identifiable, Sendable {
 
     package let proxy: WebInspectorProxy
     package let route: RoutingTargetID
+    package let pageBindingID: String?
 
     package init(
         id: ID,
@@ -68,7 +69,8 @@ public struct WebInspectorTarget: Identifiable, Sendable {
         frameID: FrameID?,
         isProvisional: Bool,
         proxy: WebInspectorProxy,
-        route: RoutingTargetID
+        route: RoutingTargetID,
+        pageBindingID: String? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -76,6 +78,19 @@ public struct WebInspectorTarget: Identifiable, Sendable {
         self.isProvisional = isProvisional
         self.proxy = proxy
         self.route = route
+        self.pageBindingID = pageBindingID
+    }
+
+    package func withPageBinding(from lifecycleTarget: WebInspectorLifecycleTarget) -> WebInspectorTarget {
+        WebInspectorTarget(
+            id: id,
+            kind: lifecycleTarget.kind,
+            frameID: lifecycleTarget.frameID,
+            isProvisional: lifecycleTarget.isProvisional,
+            proxy: proxy,
+            route: route,
+            pageBindingID: lifecycleTarget.pageBindingID
+        )
     }
 
     public var dom: DOM.Client {

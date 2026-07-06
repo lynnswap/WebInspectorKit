@@ -130,6 +130,10 @@ public actor WebInspectorProxy {
         pageTarget
     }
 
+    package var currentPageBindingID: String? {
+        pageTarget?.pageBindingID
+    }
+
     public var canReload: Bool {
         pageTarget != nil && closeState == .open
     }
@@ -797,7 +801,8 @@ public actor WebInspectorProxy {
             frameID: record.frameID.map { FrameID($0.rawValue) },
             isProvisional: record.isProvisional,
             proxy: self,
-            route: .currentPage
+            route: .currentPage,
+            pageBindingID: record.id.rawValue
         )
     }
 
@@ -808,7 +813,8 @@ public actor WebInspectorProxy {
             frameID: target.frameID,
             isProvisional: target.isProvisional,
             proxy: self,
-            route: .currentPage
+            route: .currentPage,
+            pageBindingID: target.pageBindingID
         )
     }
 

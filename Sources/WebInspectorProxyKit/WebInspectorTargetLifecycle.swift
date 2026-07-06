@@ -5,17 +5,20 @@ package struct WebInspectorLifecycleTarget: Sendable {
     package let kind: WebInspectorTarget.Kind
     package let frameID: FrameID?
     package let isProvisional: Bool
+    package let pageBindingID: String?
 
     package init(
         id: WebInspectorTarget.ID,
         kind: WebInspectorTarget.Kind,
         frameID: FrameID?,
-        isProvisional: Bool
+        isProvisional: Bool,
+        pageBindingID: String? = nil
     ) {
         self.id = id
         self.kind = kind
         self.frameID = frameID
         self.isProvisional = isProvisional
+        self.pageBindingID = pageBindingID
     }
 
     init?(semanticID: WebInspectorTarget.ID, record: ProtocolTarget.Record) {
@@ -26,7 +29,8 @@ package struct WebInspectorLifecycleTarget: Sendable {
             id: semanticID,
             kind: kind,
             frameID: record.frameID.map { FrameID($0.rawValue) },
-            isProvisional: record.isProvisional
+            isProvisional: record.isProvisional,
+            pageBindingID: record.id.rawValue
         )
     }
 }

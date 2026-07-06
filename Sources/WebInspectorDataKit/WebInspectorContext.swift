@@ -1810,6 +1810,8 @@ extension WebInspectorContext {
             fail(.disconnected("Current page target committed while WebInspectorDataKit had no current page."))
             return
         }
+        let refreshedTarget = target.withPageBinding(from: commit.newTarget)
+        currentPage = refreshedTarget
 
         currentPageRetargetTask?.cancel()
         documentReloadTask?.cancel()
@@ -1824,9 +1826,9 @@ extension WebInspectorContext {
         }
         styleToggleTasks = [:]
 
-        currentPageRetargetTask = Task { [weak self, target, generation] in
+        currentPageRetargetTask = Task { [weak self, refreshedTarget, generation] in
             _ = isolation
-            await self?.retargetCurrentPage(target, generation: generation, isolation: isolation)
+            await self?.retargetCurrentPage(refreshedTarget, generation: generation, isolation: isolation)
         }
     }
 
