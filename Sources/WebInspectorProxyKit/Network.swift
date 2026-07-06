@@ -233,7 +233,7 @@ public enum Network {
             redirectResponse: Response?,
             timestamp: Double
         )
-        case responseReceived(id: Request.ID, response: Response, resourceType: ResourceType, timestamp: Double)
+        case responseReceived(id: Request.ID, response: Response, resourceType: ResourceType?, timestamp: Double)
         case dataReceived(id: Request.ID, dataLength: Int, encodedDataLength: Int, timestamp: Double)
         case loadingFinished(id: Request.ID, timestamp: Double, sourceMapURL: String?, metrics: Metrics?)
         case loadingFailed(id: Request.ID, errorText: String, canceled: Bool, timestamp: Double)

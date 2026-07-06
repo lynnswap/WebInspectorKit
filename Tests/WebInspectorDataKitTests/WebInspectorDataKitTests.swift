@@ -5085,6 +5085,37 @@ func responseReceivedWithoutRequestWillBeSentCreatesRequest() async throws {
 
 @MainActor
 @Test
+func responseReceivedWithoutResourceTypePreservesRequestResourceType() async throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let requestID = Network.Request.ID("response-type-preserved-request")
+    let modelID = NetworkRequest.ID(requestID)
+
+    context.apply(.requestWillBeSent(
+        id: requestID,
+        request: Network.Request(id: requestID, url: "https://example.com/image.png", method: "GET"),
+        resourceType: .image,
+        redirectResponse: nil,
+        timestamp: 1
+    ))
+    context.apply(.responseReceived(
+        id: requestID,
+        response: Network.Response(
+            url: "https://example.com/image.png",
+            status: 200,
+            statusText: "OK",
+            mimeType: "image/png"
+        ),
+        resourceType: nil,
+        timestamp: 2
+    ))
+
+    let request = try #require(context.registeredRequest(for: modelID))
+    #expect(request.resourceType == .image)
+    #expect(request.responseReceivedTimestamp == 2)
+}
+
+@MainActor
+@Test
 func loadingFinishedStoresTerminalMetadataAndOverridesDataTotals() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)

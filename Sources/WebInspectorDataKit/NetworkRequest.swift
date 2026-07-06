@@ -765,11 +765,12 @@ public final class NetworkRequest: WebInspectorFetchableModel {
 
     func applyResponse(
         _ response: Network.Response,
-        resourceType: Network.ResourceType,
+        resourceType: Network.ResourceType?,
         timestamp: Double?
     ) {
-        self.resourceType = resourceType
-        if resourceType == .webSocket {
+        let resolvedResourceType = resourceType ?? self.resourceType
+        self.resourceType = resolvedResourceType
+        if resolvedResourceType == .webSocket {
             _ = ensureWebSocketState()
         } else {
             webSocket = nil

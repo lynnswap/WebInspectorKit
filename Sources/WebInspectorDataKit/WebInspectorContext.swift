@@ -3500,7 +3500,7 @@ extension WebInspectorContext {
     private func applyResponseReceived(
         id proxyID: Network.Request.ID,
         response: Network.Response,
-        resourceType: Network.ResourceType,
+        resourceType: Network.ResourceType?,
         timestamp: Double
     ) {
         let id = NetworkRequest.ID(proxyID)

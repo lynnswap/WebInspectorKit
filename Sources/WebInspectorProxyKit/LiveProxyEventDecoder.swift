@@ -182,7 +182,7 @@ enum LiveProxyEventDecoder {
             return .responseReceived(
                 id: Network.Request.ID(params.requestId),
                 response: params.response.proxyResponse(fallbackURL: nil),
-                resourceType: Network.ResourceType(rawValue: params.type),
+                resourceType: params.type.map(Network.ResourceType.init(rawValue:)),
                 timestamp: params.timestamp
             )
         case "Network.dataReceived":
@@ -657,7 +657,7 @@ private struct BackendResourceIdentifierPayload: Decodable {
 
 private struct ResponseReceivedParams: Decodable {
     var requestId: String
-    var type: String
+    var type: String?
     var response: ResponsePayload
     var timestamp: Double
 }

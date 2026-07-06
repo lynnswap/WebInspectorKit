@@ -1389,6 +1389,37 @@ func transportBackendDecodesNetworkResponseEventForTargetRoute() async throws {
 }
 
 @Test
+func transportBackendDecodesNetworkResponseEventWithoutType() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+
+    let eventTask = Task {
+        var iterator = target.network.events.makeAsyncIterator()
+        return await iterator.next()
+    }
+
+    await waitForEventSubscription(target, domain: .network)
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        method: "Network.responseReceived",
+        params: #"{"requestId":"request-1","response":{"url":"https://example.test/","status":200,"statusText":"OK","mimeType":"text/html","headers":{"content-type":"text/html"},"source":"network"},"timestamp":12.5}"#
+    )
+
+    let event = try #require(try await value(of: eventTask))
+    guard case let .responseReceived(id, response, resourceType, timestamp) = event else {
+        Issue.record("Expected Network.responseReceived.")
+        return
+    }
+    #expect(id == Network.Request.ID("request-1"))
+    #expect(response.url == "https://example.test/")
+    #expect(resourceType == nil)
+    #expect(timestamp == 12.5)
+}
+
+@Test
 func transportBackendDeliversFrameNetworkEventsToCurrentPageRoute() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
