@@ -334,6 +334,18 @@ public actor WebInspectorProxy {
             guard case let .console(value) = event else {
                 return nil
             }
+            return value.event
+        }
+    }
+
+    package nonisolated func targetedConsoleEvents(
+        targetID: WebInspectorTarget.ID,
+        route: RoutingTargetID
+    ) -> AsyncStream<Console.TargetedEvent> {
+        eventStream(targetID: targetID, route: route, domain: .console) { event in
+            guard case let .console(value) = event else {
+                return nil
+            }
             return value
         }
     }
@@ -501,9 +513,6 @@ public actor WebInspectorProxy {
         domain: WebInspectorProxyDomain,
         payload: Payload
     ) -> ProtocolCommandTarget {
-        guard route == .currentPage else {
-            return ProtocolCommandTarget(targetID: targetID, route: route)
-        }
         if let nodeID = Self.nodeID(from: payload, domain: domain) {
             if let scopedTargetRawValue = nodeID.targetScopeRawValue {
                 return ProtocolCommandTarget(
@@ -526,8 +535,29 @@ public actor WebInspectorProxy {
                 route: RoutingTargetID(scopedTargetRawValue)
             )
         }
+        if let styleSheetID = Self.styleSheetID(from: payload, domain: domain),
+           let scopedTargetRawValue = styleSheetID.targetScopeRawValue {
+            return ProtocolCommandTarget(
+                targetID: WebInspectorTarget.ID(scopedTargetRawValue),
+                route: RoutingTargetID(scopedTargetRawValue)
+            )
+        }
         if let requestID = Self.networkRequestID(from: payload, domain: domain),
            let scopedTargetRawValue = requestID.targetScopeRawValue {
+            return ProtocolCommandTarget(
+                targetID: WebInspectorTarget.ID(scopedTargetRawValue),
+                route: RoutingTargetID(scopedTargetRawValue)
+            )
+        }
+        if let executionContextID = Self.executionContextID(from: payload, domain: domain),
+           let scopedTargetRawValue = executionContextID.targetScopeRawValue {
+            return ProtocolCommandTarget(
+                targetID: WebInspectorTarget.ID(scopedTargetRawValue),
+                route: RoutingTargetID(scopedTargetRawValue)
+            )
+        }
+        if let remoteObjectID = Self.remoteObjectID(from: payload, domain: domain),
+           let scopedTargetRawValue = remoteObjectID.targetScopeRawValue {
             return ProtocolCommandTarget(
                 targetID: WebInspectorTarget.ID(scopedTargetRawValue),
                 route: RoutingTargetID(scopedTargetRawValue)
@@ -619,6 +649,17 @@ public actor WebInspectorProxy {
         }
     }
 
+    private nonisolated static func styleSheetID<Payload: Sendable>(
+        from payload: Payload,
+        domain: WebInspectorProxyDomain
+    ) -> CSS.StyleSheet.ID? {
+        guard domain == .css,
+              let payload = payload as? CSS.SetStyleSheetTextPayload else {
+            return nil
+        }
+        return payload.id
+    }
+
     private nonisolated static func networkRequestID<Payload: Sendable>(
         from payload: Payload,
         domain: WebInspectorProxyDomain
@@ -628,6 +669,38 @@ public actor WebInspectorProxy {
             return nil
         }
         return payload.id
+    }
+
+    private nonisolated static func executionContextID<Payload: Sendable>(
+        from payload: Payload,
+        domain: WebInspectorProxyDomain
+    ) -> Runtime.ExecutionContext.ID? {
+        guard domain == .runtime,
+              let payload = payload as? Runtime.EvaluatePayload else {
+            return nil
+        }
+        return payload.context
+    }
+
+    private nonisolated static func remoteObjectID<Payload: Sendable>(
+        from payload: Payload,
+        domain: WebInspectorProxyDomain
+    ) -> Runtime.RemoteObject.ID? {
+        guard domain == .runtime else {
+            return nil
+        }
+        switch payload {
+        case let payload as Runtime.GetPropertiesPayload:
+            return payload.object
+        case let payload as Runtime.GetPreviewPayload:
+            return payload.object
+        case let payload as Runtime.GetCollectionEntriesPayload:
+            return payload.object
+        case let payload as Runtime.ReleaseObjectPayload:
+            return payload.id
+        default:
+            return nil
+        }
     }
 
     private func bootstrapCurrentPage(from transport: TransportSession) async throws {

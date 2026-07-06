@@ -18,7 +18,10 @@ enum LiveProxyEventDecoder {
         case .network:
             return try .network(networkEvent(from: event))
         case .console:
-            return try .console(consoleEvent(from: event))
+            return try .console(Console.TargetedEvent(
+                event: consoleEvent(from: event),
+                targetID: event.targetID.map { WebInspectorTarget.ID($0.rawValue) }
+            ))
         case .runtime:
             return try .runtime(runtimeEvent(from: event, targetID: targetID))
         case .page:
@@ -935,8 +938,16 @@ struct RuntimeRemoteObjectPayload: Decodable {
     var preview: ObjectPreviewPayload?
 
     var proxyObject: Runtime.RemoteObject {
+        proxyObject(targetScopeRawValue: nil)
+    }
+
+    func proxyObject(targetScopeRawValue: String?) -> Runtime.RemoteObject {
         Runtime.RemoteObject(
-            id: objectId.map(Runtime.RemoteObject.ID.init),
+            id: objectId.map { rawValue in
+                targetScopeRawValue.map {
+                    Runtime.RemoteObject.ID(rawValue, scopedToTargetRawValue: $0)
+                } ?? Runtime.RemoteObject.ID(rawValue)
+            },
             kind: Runtime.Kind(rawProtocolValue: type, subtype: subtype),
             subtype: subtype.map(Runtime.Subtype.init(rawValue:)),
             className: className,

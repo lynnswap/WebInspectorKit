@@ -19,7 +19,13 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         } catch {
             throw mapTransportError(error, domain: command.domain.rawValue, method: command.method)
         }
-        return try LiveProxyCommandDecoder.decode(Result.self, for: command, from: result)
+        let targetScopeRawValue = await targetScopeRawValue(for: command)
+        return try LiveProxyCommandDecoder.decode(
+            Result.self,
+            for: command,
+            targetScopeRawValue: targetScopeRawValue,
+            from: result
+        )
     }
 
     package func waitForEventSubscription(
@@ -98,6 +104,25 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         }
     }
 
+    private nonisolated func targetScopeRawValue<Payload: Sendable, Result: Sendable>(
+        for command: WebInspectorProxyCommand<Payload, Result>
+    ) async -> String? {
+        guard case let .target(rawValue) = command.route.storage else {
+            return nil
+        }
+        let targetID = ProtocolTarget.ID(rawValue)
+        let snapshot = await transport.snapshot()
+        if targetID == snapshot.currentMainPageTargetID {
+            return nil
+        }
+        if let record = snapshot.targetsByID[targetID],
+           record.kind == .page,
+           record.parentFrameID == nil {
+            return nil
+        }
+        return rawValue
+    }
+
     private nonisolated func shouldDeliver(_ event: ProtocolEvent, to route: RoutingTargetID) async -> Bool {
         switch route.storage {
         case let .target(rawValue):
@@ -142,6 +167,10 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
                 // frame Network events if WebKit emits them.
                 return isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
             case .css:
+                return isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
+            case .console:
+                return isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
+            case .runtime:
                 return isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
             default:
                 return false
@@ -191,29 +220,72 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         from event: ProtocolEvent,
         route: RoutingTargetID
     ) async -> WebInspectorProxyEvent {
+        let snapshot = await transport.snapshot()
+        let scopedProxyEvent = scopedAgentOwnedEvent(proxyEvent, from: event, route: route, snapshot: snapshot)
         guard case .currentPage = route.storage,
               let targetID = event.targetID else {
-            return proxyEvent
+            return scopedProxyEvent
         }
-        let snapshot = await transport.snapshot()
         if event.domain == .inspector,
            targetID == snapshot.currentMainPageTargetID {
-            return mainPageInspectorEvent(proxyEvent)
+            return mainPageInspectorEvent(scopedProxyEvent)
         }
         guard let currentMainPageTargetID = snapshot.currentMainPageTargetID,
               targetID != currentMainPageTargetID,
               let record = snapshot.targetsByID[targetID],
               isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID) else {
-            return proxyEvent
+            return scopedProxyEvent
         }
-        switch proxyEvent {
+        switch scopedProxyEvent {
         case let .dom(domEvent):
             return .dom(scopedDOMEvent(domEvent, targetRawValue: targetID.rawValue))
+        case let .css(cssEvent):
+            return .css(scopedCSSEvent(cssEvent, targetRawValue: targetID.rawValue))
         case let .network(networkEvent):
             return .network(scopedNetworkEvent(networkEvent, targetRawValue: targetID.rawValue))
         default:
+            return scopedProxyEvent
+        }
+    }
+
+    private nonisolated func scopedAgentOwnedEvent(
+        _ proxyEvent: WebInspectorProxyEvent,
+        from event: ProtocolEvent,
+        route: RoutingTargetID,
+        snapshot: TransportSession.Snapshot
+    ) -> WebInspectorProxyEvent {
+        let targetScopeRawValue = runtimeAgentScopeRawValue(for: event, route: route, snapshot: snapshot)
+        switch proxyEvent {
+        case let .runtime(runtimeEvent):
+            return .runtime(scopedRuntimeEvent(runtimeEvent, targetScopeRawValue: targetScopeRawValue))
+        case let .console(targetedEvent):
+            return .console(Console.TargetedEvent(
+                event: scopedConsoleEvent(targetedEvent.event, targetScopeRawValue: targetScopeRawValue),
+                targetID: targetedEvent.targetID
+            ))
+        case .targetLifecycle, .dom, .inspector, .css, .network:
             return proxyEvent
         }
+    }
+
+    private nonisolated func runtimeAgentScopeRawValue(
+        for event: ProtocolEvent,
+        route: RoutingTargetID,
+        snapshot: TransportSession.Snapshot
+    ) -> String? {
+        let agentTargetID = event.sourceTargetID ?? event.targetID
+        guard let agentTargetID else {
+            return nil
+        }
+        if agentTargetID == snapshot.currentMainPageTargetID {
+            return nil
+        }
+        if let record = snapshot.targetsByID[agentTargetID],
+           record.kind == .page,
+           record.parentFrameID == nil {
+            return nil
+        }
+        return agentTargetID.rawValue
     }
 
     private nonisolated func mainPageInspectorEvent(
@@ -326,6 +398,145 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
             return id
         }
         return DOM.Node.ID(id.rawValue, scopedToTargetRawValue: targetRawValue)
+    }
+
+    private nonisolated func scopedCSSEvent(
+        _ event: CSS.Event,
+        targetRawValue: String
+    ) -> CSS.Event {
+        switch event {
+        case let .styleSheetChanged(id):
+            .styleSheetChanged(scopedStyleSheetID(id, targetRawValue: targetRawValue))
+        case let .styleSheetAdded(header):
+            .styleSheetAdded(CSS.StyleSheetHeader(
+                styleSheetID: scopedStyleSheetID(header.styleSheetID, targetRawValue: targetRawValue),
+                frameID: header.frameID,
+                sourceURL: header.sourceURL,
+                origin: header.origin,
+                title: header.title,
+                disabled: header.disabled,
+                isInline: header.isInline,
+                startLine: header.startLine,
+                startColumn: header.startColumn
+            ))
+        case let .styleSheetRemoved(id):
+            .styleSheetRemoved(scopedStyleSheetID(id, targetRawValue: targetRawValue))
+        case .mediaQueryResultChanged:
+            .mediaQueryResultChanged
+        case let .nodeLayoutFlagsChanged(id):
+            .nodeLayoutFlagsChanged(scopedDOMNodeID(id, targetRawValue: targetRawValue))
+        case let .unknown(rawEvent):
+            .unknown(rawEvent)
+        }
+    }
+
+    private nonisolated func scopedStyleSheetID(
+        _ id: CSS.StyleSheet.ID,
+        targetRawValue: String
+    ) -> CSS.StyleSheet.ID {
+        guard id.targetScopeRawValue == nil else {
+            return id
+        }
+        return CSS.StyleSheet.ID(id.rawValue, scopedToTargetRawValue: targetRawValue)
+    }
+
+    private nonisolated func scopedRuntimeEvent(
+        _ event: Runtime.Event,
+        targetScopeRawValue: String?
+    ) -> Runtime.Event {
+        guard let targetScopeRawValue else {
+            return event
+        }
+        switch event {
+        case let .executionContextCreated(context):
+            return .executionContextCreated(Runtime.ExecutionContext(
+                id: scopedExecutionContextID(context.id, targetRawValue: targetScopeRawValue),
+                name: context.name,
+                frameID: context.frameID,
+                kind: context.kind
+            ))
+        case let .executionContextDestroyed(id):
+            return .executionContextDestroyed(scopedExecutionContextID(id, targetRawValue: targetScopeRawValue))
+        case .executionContextsCleared:
+            return .executionContextsCleared(target: WebInspectorTarget.ID(targetScopeRawValue))
+        case let .unknown(rawEvent):
+            return .unknown(rawEvent)
+        }
+    }
+
+    private nonisolated func scopedExecutionContextID(
+        _ id: Runtime.ExecutionContext.ID,
+        targetRawValue: String
+    ) -> Runtime.ExecutionContext.ID {
+        guard id.targetScopeRawValue == nil else {
+            return id
+        }
+        return Runtime.ExecutionContext.ID(id.rawValue, scopedToTargetRawValue: targetRawValue)
+    }
+
+    private nonisolated func scopedConsoleEvent(
+        _ event: Console.Event,
+        targetScopeRawValue: String?
+    ) -> Console.Event {
+        guard let targetScopeRawValue else {
+            return event
+        }
+        switch event {
+        case let .messageAdded(message):
+            return .messageAdded(scopedConsoleMessage(message, targetRawValue: targetScopeRawValue))
+        case let .messageRepeatCountUpdated(count, timestamp):
+            return .messageRepeatCountUpdated(count: count, timestamp: timestamp)
+        case let .messagesCleared(reason):
+            return .messagesCleared(reason: reason)
+        case let .unknown(rawEvent):
+            return .unknown(rawEvent)
+        }
+    }
+
+    private nonisolated func scopedConsoleMessage(
+        _ message: Console.Message,
+        targetRawValue: String
+    ) -> Console.Message {
+        Console.Message(
+            source: message.source,
+            level: message.level,
+            type: message.type,
+            text: message.text,
+            url: message.url,
+            line: message.line,
+            column: message.column,
+            repeatCount: message.repeatCount,
+            parameters: message.parameters.map { scopedRemoteObject($0, targetRawValue: targetRawValue) },
+            stackTrace: message.stackTrace,
+            networkRequestID: message.networkRequestID,
+            timestamp: message.timestamp
+        )
+    }
+
+    private nonisolated func scopedRemoteObject(
+        _ object: Runtime.RemoteObject,
+        targetRawValue: String
+    ) -> Runtime.RemoteObject {
+        Runtime.RemoteObject(
+            id: object.id.map { scopedRemoteObjectID($0, targetRawValue: targetRawValue) },
+            kind: object.kind,
+            subtype: object.subtype,
+            className: object.className,
+            description: object.description,
+            value: object.value,
+            size: object.size,
+            preview: object.preview
+        )
+    }
+
+    private nonisolated func scopedRemoteObjectID(
+        _ id: Runtime.RemoteObject.ID,
+        targetRawValue: String
+    ) -> Runtime.RemoteObject.ID {
+        guard id.targetScopeRawValue == nil else {
+            return id
+        }
+        return Runtime.RemoteObject.ID(id.rawValue, scopedToTargetRawValue: targetRawValue)
     }
 
     private nonisolated func scopedNetworkEvent(
@@ -617,7 +828,7 @@ private enum LiveProxyCommandEncoder {
 
         case (.dom, "requestNode"):
             let payload = try payload(command.payload, as: DOM.RequestNodePayload.self, command: command)
-            return try data(["objectId": payload.objectID.rawValue])
+            return try data(["objectId": payload.objectID.unscopedRawValue])
 
         case (.dom, "getOuterHTML"):
             let payload = try payload(command.payload, as: DOM.GetOuterHTMLPayload.self, command: command)
@@ -694,28 +905,29 @@ private enum LiveProxyCommandEncoder {
             let payload = try payload(command.payload, as: Runtime.EvaluatePayload.self, command: command)
             var object: [String: Any] = ["expression": payload.expression]
             if let context = payload.context {
-                object["contextId"] = Int(context.rawValue) ?? context.rawValue
+                let rawValue = context.unscopedRawValue
+                object["contextId"] = Int(rawValue) ?? rawValue
             }
             return try data(object)
 
         case (.runtime, "getProperties"):
             let payload = try payload(command.payload, as: Runtime.GetPropertiesPayload.self, command: command)
             return try data([
-                "objectId": payload.object.rawValue,
+                "objectId": payload.object.unscopedRawValue,
                 "ownProperties": payload.ownProperties,
             ])
 
         case (.runtime, "getPreview"):
             let payload = try payload(command.payload, as: Runtime.GetPreviewPayload.self, command: command)
-            return try data(["objectId": payload.object.rawValue])
+            return try data(["objectId": payload.object.unscopedRawValue])
 
         case (.runtime, "getCollectionEntries"):
             let payload = try payload(command.payload, as: Runtime.GetCollectionEntriesPayload.self, command: command)
-            return try data(["objectId": payload.object.rawValue])
+            return try data(["objectId": payload.object.unscopedRawValue])
 
         case (.runtime, "releaseObject"):
             let payload = try payload(command.payload, as: Runtime.ReleaseObjectPayload.self, command: command)
-            return try data(["objectId": payload.id.rawValue])
+            return try data(["objectId": payload.id.unscopedRawValue])
 
         case (.runtime, "releaseObjectGroup"):
             let payload = try payload(command.payload, as: Runtime.ReleaseObjectGroupPayload.self, command: command)
@@ -883,6 +1095,7 @@ private enum LiveProxyCommandDecoder {
     static func decode<Payload: Sendable, Result: Sendable>(
         _ type: Result.Type,
         for command: WebInspectorProxyCommand<Payload, Result>,
+        targetScopeRawValue: String?,
         from result: ProtocolCommand.Result
     ) throws -> Result {
         if Result.self == Void.self {
@@ -910,11 +1123,11 @@ private enum LiveProxyCommandDecoder {
         }
         if Result.self == CSS.MatchedStyles.self {
             let payload = try decode(CSSMatchedStylesResult.self, from: result.resultData)
-            return payload.proxyMatchedStyles(targetScopeRawValue: targetScopeRawValue(for: command)) as! Result
+            return payload.proxyMatchedStyles(targetScopeRawValue: targetScopeRawValue) as! Result
         }
         if Result.self == CSS.InlineStyles.self {
             let payload = try decode(CSSInlineStylesResult.self, from: result.resultData)
-            return payload.proxyInlineStyles(targetScopeRawValue: targetScopeRawValue(for: command)) as! Result
+            return payload.proxyInlineStyles(targetScopeRawValue: targetScopeRawValue) as! Result
         }
         if Result.self == [CSS.ComputedProperty].self {
             let payload = try decode(CSSComputedStyleResult.self, from: result.resultData)
@@ -922,11 +1135,11 @@ private enum LiveProxyCommandDecoder {
         }
         if Result.self == CSS.Style.self {
             let payload = try decode(CSSSetStyleTextResult.self, from: result.resultData)
-            return payload.style.proxyStyle(targetScopeRawValue: targetScopeRawValue(for: command)) as! Result
+            return payload.style.proxyStyle(targetScopeRawValue: targetScopeRawValue) as! Result
         }
         if Result.self == CSS.Rule.self {
             let payload = try decode(CSSSetRuleSelectorResult.self, from: result.resultData)
-            return payload.rule.proxyRule(targetScopeRawValue: targetScopeRawValue(for: command)) as! Result
+            return payload.rule.proxyRule(targetScopeRawValue: targetScopeRawValue) as! Result
         }
         if Result.self == CSS.Rule.Grouping.self {
             let payload = try decode(CSSSetGroupingHeaderTextResult.self, from: result.resultData)
@@ -934,11 +1147,11 @@ private enum LiveProxyCommandDecoder {
         }
         if Result.self == Runtime.EvaluationResult.self {
             let payload = try decode(RuntimeEvaluationResultPayload.self, from: result.resultData)
-            return payload.proxyResult as! Result
+            return payload.proxyResult(targetScopeRawValue: targetScopeRawValue) as! Result
         }
         if Result.self == [Runtime.PropertyDescriptor].self {
             let payload = try decode(RuntimePropertiesResultPayload.self, from: result.resultData)
-            return payload.proxyProperties as! Result
+            return payload.proxyProperties(targetScopeRawValue: targetScopeRawValue) as! Result
         }
         if Result.self == Runtime.ObjectPreview.self {
             let payload = try decode(RuntimePreviewResultPayload.self, from: result.resultData)
@@ -946,7 +1159,7 @@ private enum LiveProxyCommandDecoder {
         }
         if Result.self == [Runtime.CollectionEntry].self {
             let payload = try decode(RuntimeCollectionEntriesResultPayload.self, from: result.resultData)
-            return payload.proxyEntries as! Result
+            return payload.proxyEntries(targetScopeRawValue: targetScopeRawValue) as! Result
         }
 
         throw WebInspectorProxyError.commandFailed(
@@ -958,15 +1171,6 @@ private enum LiveProxyCommandDecoder {
 
     private static func decode<Payload: Decodable>(_ type: Payload.Type, from data: Data) throws -> Payload {
         try JSONDecoder().decode(type, from: data)
-    }
-
-    private static func targetScopeRawValue<Payload: Sendable, Result: Sendable>(
-        for command: WebInspectorProxyCommand<Payload, Result>
-    ) -> String? {
-        guard case let .target(rawValue) = command.route.storage else {
-            return nil
-        }
-        return rawValue
     }
 
     private struct DocumentResult: Decodable {
@@ -1067,9 +1271,9 @@ private struct RuntimeEvaluationResultPayload: Decodable {
     var wasThrown: Bool?
     var savedResultIndex: Int?
 
-    var proxyResult: Runtime.EvaluationResult {
+    func proxyResult(targetScopeRawValue: String?) -> Runtime.EvaluationResult {
         Runtime.EvaluationResult(
-            object: result.proxyObject,
+            object: result.proxyObject(targetScopeRawValue: targetScopeRawValue),
             wasThrown: wasThrown ?? false,
             savedResultIndex: savedResultIndex
         )
@@ -1079,8 +1283,8 @@ private struct RuntimeEvaluationResultPayload: Decodable {
 private struct RuntimePropertiesResultPayload: Decodable {
     var properties: [RuntimePropertyDescriptorPayload]
 
-    var proxyProperties: [Runtime.PropertyDescriptor] {
-        properties.map(\.proxyProperty)
+    func proxyProperties(targetScopeRawValue: String?) -> [Runtime.PropertyDescriptor] {
+        properties.map { $0.proxyProperty(targetScopeRawValue: targetScopeRawValue) }
     }
 }
 
@@ -1098,18 +1302,18 @@ private struct RuntimePropertyDescriptorPayload: Decodable {
     var isPrivate: Bool?
     var nativeGetter: Bool?
 
-    var proxyProperty: Runtime.PropertyDescriptor {
+    func proxyProperty(targetScopeRawValue: String?) -> Runtime.PropertyDescriptor {
         Runtime.PropertyDescriptor(
             name: name,
-            value: value?.proxyObject,
+            value: value?.proxyObject(targetScopeRawValue: targetScopeRawValue),
             writable: writable,
-            get: get?.proxyObject,
-            set: set?.proxyObject,
+            get: get?.proxyObject(targetScopeRawValue: targetScopeRawValue),
+            set: set?.proxyObject(targetScopeRawValue: targetScopeRawValue),
             wasThrown: wasThrown,
             configurable: configurable,
             enumerable: enumerable,
             isOwn: isOwn,
-            symbol: symbol?.proxyObject,
+            symbol: symbol?.proxyObject(targetScopeRawValue: targetScopeRawValue),
             isPrivate: isPrivate,
             nativeGetter: nativeGetter
         )
@@ -1123,8 +1327,8 @@ private struct RuntimePreviewResultPayload: Decodable {
 private struct RuntimeCollectionEntriesResultPayload: Decodable {
     var entries: [RuntimeCollectionEntryPayload]
 
-    var proxyEntries: [Runtime.CollectionEntry] {
-        entries.map(\.proxyEntry)
+    func proxyEntries(targetScopeRawValue: String?) -> [Runtime.CollectionEntry] {
+        entries.map { $0.proxyEntry(targetScopeRawValue: targetScopeRawValue) }
     }
 }
 
@@ -1132,10 +1336,10 @@ private struct RuntimeCollectionEntryPayload: Decodable {
     var key: RuntimeRemoteObjectPayload?
     var value: RuntimeRemoteObjectPayload
 
-    var proxyEntry: Runtime.CollectionEntry {
+    func proxyEntry(targetScopeRawValue: String?) -> Runtime.CollectionEntry {
         Runtime.CollectionEntry(
-            key: key?.proxyObject,
-            value: value.proxyObject
+            key: key?.proxyObject(targetScopeRawValue: targetScopeRawValue),
+            value: value.proxyObject(targetScopeRawValue: targetScopeRawValue)
         )
     }
 }

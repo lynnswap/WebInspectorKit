@@ -158,9 +158,10 @@ public final class CSSModelController {
     public func requestSetProperty(
         _ propertyID: CSS.Property.ID,
         enabled: Bool,
+        options: WebInspectorMutationOptions = .automatic,
         isolation: isolated (any Actor) = #isolation
     ) -> Bool {
-        context.requestSetCSSProperty(propertyID, enabled: enabled, isolation: isolation)
+        context.requestSetCSSProperty(propertyID, enabled: enabled, options: options, isolation: isolation)
     }
 
     public func setDeclarationText(

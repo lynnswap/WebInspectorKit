@@ -45,7 +45,7 @@ func frameTargetFactoryDispatchesDOMCommandsToFrameRoute() async throws {
     let commands = await runtime.backend.recordedCommands()
     let command = try #require(commands.first)
     #expect(command.targetID == frameTarget.id)
-    #expect(command.route == frameTarget.route)
+    #expect(command.route == RoutingTargetID(frameTarget.id.rawValue))
     #expect(command.domain == "DOM")
     #expect(command.method == "getDocument")
     #expect(command.payload.cast(as: DOM.GetDocumentPayload.self) != nil)
@@ -454,6 +454,98 @@ func cssEnableAndDisableDispatchToTargetRoute() async throws {
     #expect(disable.domain == "CSS")
     #expect(disable.method == "disable")
     #expect(disable.payload.cast(as: CSS.DisablePayload.self) != nil)
+}
+
+@Test
+func scopedCSSStyleSheetIDDispatchesToOwningTarget() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let page = try await runtime.proxy.waitForCurrentPage()
+    let frameTarget = await runtime.proxy.installTargetForTesting(kind: .frame)
+    let styleSheetID = CSS.StyleSheet.ID(
+        "frame-sheet",
+        scopedToTargetRawValue: frameTarget.id.rawValue
+    )
+
+    await runtime.backend.enqueue((), for: "CSS", method: "setStyleSheetText")
+
+    try await page.css.setStyleSheetText(styleSheetID, text: "body { color: red; }")
+
+    let commands = await runtime.backend.recordedCommands()
+    let command = try #require(commands.first)
+    #expect(command.targetID == frameTarget.id)
+    #expect(command.route == RoutingTargetID(frameTarget.id.rawValue))
+    #expect(command.domain == "CSS")
+    #expect(command.method == "setStyleSheetText")
+    let payload = try #require(command.payload.cast(as: CSS.SetStyleSheetTextPayload.self))
+    #expect(payload.id == styleSheetID)
+    #expect(payload.id.unscopedRawValue == "frame-sheet")
+}
+
+@Test
+func scopedRuntimeIDsDispatchToOwningTarget() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let page = try await runtime.proxy.waitForCurrentPage()
+    let frameTarget = await runtime.proxy.installTargetForTesting(kind: .frame)
+    let contextID = Runtime.ExecutionContext.ID(
+        "frame-context",
+        scopedToTargetRawValue: frameTarget.id.rawValue
+    )
+    let objectID = Runtime.RemoteObject.ID(
+        "frame-object",
+        scopedToTargetRawValue: frameTarget.id.rawValue
+    )
+
+    await runtime.backend.enqueue(
+        Runtime.EvaluationResult(object: Runtime.RemoteObject(id: objectID, kind: .object)),
+        for: "Runtime",
+        method: "evaluate"
+    )
+    _ = try await page.runtime.evaluate("window", in: contextID)
+
+    await runtime.backend.enqueue(
+        [Runtime.PropertyDescriptor(name: "answer")],
+        for: "Runtime",
+        method: "getProperties"
+    )
+    _ = try await page.runtime.properties(of: objectID)
+
+    await runtime.backend.enqueue(
+        Runtime.ObjectPreview(kind: .object, description: "preview"),
+        for: "Runtime",
+        method: "getPreview"
+    )
+    _ = try await page.runtime.preview(of: objectID)
+
+    await runtime.backend.enqueue(
+        [Runtime.CollectionEntry(value: Runtime.RemoteObject(id: nil, kind: .string, value: .string("value")))],
+        for: "Runtime",
+        method: "getCollectionEntries"
+    )
+    _ = try await page.runtime.collectionEntries(of: objectID)
+
+    await runtime.backend.enqueue((), for: "Runtime", method: "releaseObject")
+    try await page.runtime.releaseObject(objectID)
+
+    let runtimeCommands = await runtime.backend.recordedCommands()
+        .filter { $0.domain == "Runtime" }
+    #expect(runtimeCommands.count == 5)
+    #expect(runtimeCommands.allSatisfy { $0.targetID == frameTarget.id })
+    #expect(runtimeCommands.allSatisfy { $0.route == RoutingTargetID(frameTarget.id.rawValue) })
+
+    let evaluate = try #require(runtimeCommands.first { $0.method == "evaluate" })
+    #expect(evaluate.payload.cast(as: Runtime.EvaluatePayload.self)?.context == contextID)
+
+    let properties = try #require(runtimeCommands.first { $0.method == "getProperties" })
+    #expect(properties.payload.cast(as: Runtime.GetPropertiesPayload.self)?.object == objectID)
+
+    let preview = try #require(runtimeCommands.first { $0.method == "getPreview" })
+    #expect(preview.payload.cast(as: Runtime.GetPreviewPayload.self)?.object == objectID)
+
+    let entries = try #require(runtimeCommands.first { $0.method == "getCollectionEntries" })
+    #expect(entries.payload.cast(as: Runtime.GetCollectionEntriesPayload.self)?.object == objectID)
+
+    let release = try #require(runtimeCommands.first { $0.method == "releaseObject" })
+    #expect(release.payload.cast(as: Runtime.ReleaseObjectPayload.self)?.id == objectID)
 }
 
 private struct TimedOut: Error {}

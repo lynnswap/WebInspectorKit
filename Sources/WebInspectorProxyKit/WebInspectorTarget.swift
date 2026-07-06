@@ -110,6 +110,10 @@ public struct WebInspectorTarget: Identifiable, Sendable {
         proxy.targetLifecycleEvents(targetID: id, route: route)
     }
 
+    package var targetedConsoleEvents: AsyncStream<Console.TargetedEvent> {
+        proxy.targetedConsoleEvents(targetID: id, route: route)
+    }
+
     package func waitForModelEventSubscriptions() async {
         for domain in [WebInspectorProxyEventDomain.dom, .inspector, .css, .network, .console, .runtime] {
             await proxy.waitForEventSubscription(targetID: id, route: route, domain: domain)

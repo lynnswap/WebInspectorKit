@@ -501,7 +501,7 @@ func transportCommandBackendEncodesAndDecodesCSSStyleCommands() async throws {
     )
     let updatedRule = try await setRuleSelectorTask.value
     #expect(updatedRule.selectorList.text == ".card")
-    #expect(updatedRule.id?.targetScopeRawValue == "page-main")
+    #expect(updatedRule.id?.targetScopeRawValue == nil)
     #expect(updatedRule.id?.unscopedRawValue == "sheet\u{1F}1")
 
     let setGroupingHeaderTextTask = Task {
@@ -1307,7 +1307,8 @@ func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async 
         Issue.record("Expected frame CSS.styleSheetChanged to be projected into the current page CSS stream.")
         return
     }
-    #expect(styleSheetID == CSS.StyleSheet.ID("frame-sheet"))
+    #expect(styleSheetID.targetScopeRawValue == "frame-target")
+    #expect(styleSheetID.unscopedRawValue == "frame-sheet")
 }
 
 @Test

@@ -4,26 +4,24 @@ import WebInspectorProxyKit
 public final class WebInspectorContext {
     package struct DOMUndoRedoCommands {
         private weak var context: WebInspectorContext?
-        private let target: WebInspectorTarget
+        private let target: WebInspectorTarget?
         private let documentGeneration: Int
 
-        fileprivate init(context: WebInspectorContext, target: WebInspectorTarget, documentGeneration: Int) {
+        fileprivate init(context: WebInspectorContext, target: WebInspectorTarget?, documentGeneration: Int) {
             self.context = context
             self.target = target
             self.documentGeneration = documentGeneration
         }
 
         package func undo(isolation: isolated (any Actor) = #isolation) async throws {
-            try validateCurrentPage(isolation: isolation)
-            try await target.dom.undo()
+            try await undoRedoTarget(isolation: isolation).dom.undo()
         }
 
         package func redo(isolation: isolated (any Actor) = #isolation) async throws {
-            try validateCurrentPage(isolation: isolation)
-            try await target.dom.redo()
+            try await undoRedoTarget(isolation: isolation).dom.redo()
         }
 
-        private func validateCurrentPage(isolation: isolated (any Actor)) throws {
+        private func undoRedoTarget(isolation: isolated (any Actor)) throws -> WebInspectorTarget {
             guard let context else {
                 throw WebInspectorProxyError.disconnected("WebInspectorDataKit context was released before DOM undo/redo.")
             }
@@ -31,6 +29,13 @@ public final class WebInspectorContext {
             guard context.domDocumentGeneration == documentGeneration else {
                 throw WebInspectorProxyError.disconnected("DOM undo/redo target is no longer current.")
             }
+            if let target {
+                return target
+            }
+            if let target = context.domEditHistoryTarget {
+                return target
+            }
+            return try context.currentPageOrThrow()
         }
     }
 
@@ -82,6 +87,7 @@ public final class WebInspectorContext {
     private var startupTask: Task<Void, Never>?
     private var currentPageRetargetTask: Task<Void, Never>?
     private var currentPageCleanupTask: Task<Void, Never>?
+    private var domEditHistoryTarget: WebInspectorTarget?
     private var documentReloadTask: Task<Void, Never>?
     private var inspectResolutionTask: Task<Void, Never>?
     private var inspectedNodeHighlightTask: Task<Void, Never>?
@@ -106,6 +112,7 @@ public final class WebInspectorContext {
     private var consoleMessagesByID: [ConsoleMessage.ID: ConsoleMessage]
     private var orderedConsoleMessageIDs: [ConsoleMessage.ID]
     private var lastConsoleMessageID: ConsoleMessage.ID?
+    private var lastConsoleMessageIDByTargetID: [WebInspectorTarget.ID: ConsoleMessage.ID]
     private var nextConsoleMessageOrdinal: Int
     private var consoleFetchedResults: [WeakWebInspectorFetchedResults<ConsoleMessage>]
     private var runtimeContextsByID: [RuntimeContext.ID: RuntimeContext]
@@ -127,6 +134,7 @@ public final class WebInspectorContext {
         teardownError = nil
         rootNode = nil
         selectedNode = nil
+        domEditHistoryTarget = nil
         isElementPickerEnabled = false
         executionContexts = []
         selectedContext = nil
@@ -136,6 +144,7 @@ public final class WebInspectorContext {
         startupTask = nil
         currentPageRetargetTask = nil
         currentPageCleanupTask = nil
+        domEditHistoryTarget = nil
         documentReloadTask = nil
         inspectResolutionTask = nil
         inspectedNodeHighlightTask = nil
@@ -160,6 +169,7 @@ public final class WebInspectorContext {
         consoleMessagesByID = [:]
         orderedConsoleMessageIDs = []
         lastConsoleMessageID = nil
+        lastConsoleMessageIDByTargetID = [:]
         nextConsoleMessageOrdinal = 0
         consoleFetchedResults = []
         runtimeContextsByID = [:]
@@ -214,6 +224,7 @@ public final class WebInspectorContext {
         state = .attaching
         notifyStatusChanged()
         teardownError = nil
+        resetNetworkModelsForNewAttachment()
         startupTask = Task { [weak self, previousStartupTask, previousCurrentPageCleanupTask] in
             _ = isolation
             await previousStartupTask?.value
@@ -339,9 +350,10 @@ public final class WebInspectorContext {
     ) async throws {
         requireOwner(isolation)
         let node = try requiredNode(for: id, isolation: isolation)
-        let page = try currentPageOrThrow()
-        try await page.dom.setAttributeValue(node.id.proxyID, name: name, value: value)
-        try await Self.markDOMUndoableStateIfNeeded(on: page, options: options)
+        let target = try domTarget(owning: node.id.proxyID)
+        try await target.dom.setAttributeValue(node.id.proxyID, name: name, value: value)
+        recordDOMEditHistoryTarget(target, options: options)
+        try await Self.markDOMUndoableStateIfNeeded(on: target, options: options)
     }
 
     package func setDOMOuterHTML(
@@ -352,9 +364,10 @@ public final class WebInspectorContext {
     ) async throws {
         requireOwner(isolation)
         let node = try requiredNode(for: id, isolation: isolation)
-        let page = try currentPageOrThrow()
-        try await page.dom.setOuterHTML(node.id.proxyID, html: html)
-        try await Self.markDOMUndoableStateIfNeeded(on: page, options: options)
+        let target = try domTarget(owning: node.id.proxyID)
+        try await target.dom.setOuterHTML(node.id.proxyID, html: html)
+        recordDOMEditHistoryTarget(target, options: options)
+        try await Self.markDOMUndoableStateIfNeeded(on: target, options: options)
     }
 
     package func removeDOMNodes(
@@ -363,7 +376,6 @@ public final class WebInspectorContext {
         isolation: isolated (any Actor) = #isolation
     ) async throws -> DOMMutationResult {
         requireOwner(isolation)
-        let page = try currentPageOrThrow()
         var seenNodeIDs: Set<DOMNode.ID> = []
         let uniqueNodes = try nodeIDs
             .map { try requiredNode(for: $0, isolation: isolation) }
@@ -375,8 +387,10 @@ public final class WebInspectorContext {
         var acceptedNodeIDs: [DOMNode.ID] = []
         for node in sortedNodes {
             do {
-                try await page.dom.removeNode(node.id.proxyID)
-                try await Self.markDOMUndoableStateIfNeeded(on: page, options: options)
+                let target = try domTarget(owning: node.id.proxyID)
+                try await target.dom.removeNode(node.id.proxyID)
+                recordDOMEditHistoryTarget(target, options: options)
+                try await Self.markDOMUndoableStateIfNeeded(on: target, options: options)
                 acceptedNodeIDs.append(node.id)
             } catch {
                 if acceptedNodeIDs.isEmpty == false {
@@ -433,7 +447,6 @@ public final class WebInspectorContext {
         isolation: isolated (any Actor) = #isolation
     ) async throws -> Int {
         requireOwner(isolation)
-        let page = try currentPageOrThrow()
         var seenNodeIDs: Set<DOMNode.ID> = []
         let uniqueNodes = try nodes
             .map { try registeredNode($0) }
@@ -446,8 +459,10 @@ public final class WebInspectorContext {
         var removedNodes: [DOMNode] = []
         for node in sortedNodes {
             do {
-                try await page.dom.removeNode(node.id.proxyID)
-                try await page.dom.markUndoableState()
+                let target = try domTarget(owning: node.id.proxyID)
+                try await target.dom.removeNode(node.id.proxyID)
+                domEditHistoryTarget = target
+                try await target.dom.markUndoableState()
                 removedNodes.append(node)
             } catch {
                 if removedNodes.isEmpty == false {
@@ -511,7 +526,7 @@ public final class WebInspectorContext {
         requireOwner(isolation)
         return DOMUndoRedoCommands(
             context: self,
-            target: try currentPageOrThrow(),
+            target: domEditHistoryTarget,
             documentGeneration: domDocumentGeneration
         )
     }
@@ -983,6 +998,20 @@ public final class WebInspectorContext {
         nextRuntimeObjectOrdinal = 0
     }
 
+    private func clearRuntimeObjects(targetID: WebInspectorTarget.ID) {
+        for (id, object) in runtimeObjectsByID.map({ ($0.key, $0.value) }) {
+            guard object.proxyID?.targetScopeRawValue == targetID.rawValue else {
+                continue
+            }
+            runtimeObjectsByID[id] = nil
+            runtimeObjectOwnersByID[id] = nil
+            if let proxyID = object.proxyID,
+               runtimeObjectIDsByProxyID[proxyID] == id {
+                runtimeObjectIDsByProxyID.removeValue(forKey: proxyID)
+            }
+        }
+    }
+
     private func unregisterRuntimeObjects(owner: RuntimeObjectOwner) {
         for (id, owners) in runtimeObjectOwnersByID.map({ ($0.key, $0.value) }) {
             var remainingOwners = owners
@@ -997,6 +1026,23 @@ public final class WebInspectorContext {
                runtimeObjectIDsByProxyID[proxyID] == id {
                 runtimeObjectIDsByProxyID.removeValue(forKey: proxyID)
             }
+        }
+    }
+
+    private func unregisterRuntimeObject(_ object: RuntimeObject, owner: RuntimeObjectOwner) {
+        guard var owners = runtimeObjectOwnersByID[object.id] else {
+            return
+        }
+        owners.remove(owner)
+        guard owners.isEmpty else {
+            runtimeObjectOwnersByID[object.id] = owners
+            return
+        }
+        runtimeObjectOwnersByID.removeValue(forKey: object.id)
+        runtimeObjectsByID[object.id] = nil
+        if let proxyID = object.proxyID,
+           runtimeObjectIDsByProxyID[proxyID] == object.id {
+            runtimeObjectIDsByProxyID.removeValue(forKey: proxyID)
         }
     }
 
@@ -1269,7 +1315,15 @@ public final class WebInspectorContext {
         consoleMessagesByID = [:]
         orderedConsoleMessageIDs = []
         lastConsoleMessageID = nil
+        lastConsoleMessageIDByTargetID = [:]
         refreshAllConsoleMessages()
+    }
+
+    private func resetNetworkModelsForNewAttachment() {
+        clearedNetworkRequestIDs = []
+        requestsByID = [:]
+        orderedRequestIDs = []
+        resetNetworkFetchedResults()
     }
 
     private func resetCurrentPageLifecycleModels(isolation: isolated (any Actor)) {
@@ -1369,8 +1423,8 @@ public final class WebInspectorContext {
             self?.apply(event, isolation: isolation)
         }
 
-        let consolePump = WebInspectorEventPump(stream: target.console.events, isolation: isolation) { [weak self] event in
-            self?.apply(event, isolation: isolation)
+        let consolePump = WebInspectorEventPump(stream: target.targetedConsoleEvents, isolation: isolation) { [weak self] event in
+            self?.apply(event.event, targetID: event.targetID, isolation: isolation)
         }
 
         let runtimePump = WebInspectorEventPump(stream: target.runtime.events, isolation: isolation) { [weak self, targetID = target.id] event in
@@ -1502,16 +1556,51 @@ public final class WebInspectorContext {
         return currentPage
     }
 
+    private func domTarget(owning id: DOM.Node.ID) throws -> WebInspectorTarget {
+        if let scopedTargetRawValue = id.targetScopeRawValue {
+            return proxy.frameTarget(id: WebInspectorTarget.ID(scopedTargetRawValue))
+        }
+        return try currentPageOrThrow()
+    }
+
+    private func cssTarget(owning id: CSS.Style.ID) throws -> WebInspectorTarget {
+        if let scopedTargetRawValue = id.targetScopeRawValue {
+            return proxy.frameTarget(id: WebInspectorTarget.ID(scopedTargetRawValue))
+        }
+        return try currentPageOrThrow()
+    }
+
+    private func cssTarget(owning id: CSS.Rule.ID) throws -> WebInspectorTarget {
+        if let scopedTargetRawValue = id.targetScopeRawValue {
+            return proxy.frameTarget(id: WebInspectorTarget.ID(scopedTargetRawValue))
+        }
+        return try currentPageOrThrow()
+    }
+
+    private func cssTarget(owning id: CSS.StyleSheet.ID) throws -> WebInspectorTarget {
+        if let scopedTargetRawValue = id.targetScopeRawValue {
+            return proxy.frameTarget(id: WebInspectorTarget.ID(scopedTargetRawValue))
+        }
+        return try currentPageOrThrow()
+    }
+
     private static func markDOMUndoableStateIfNeeded(
-        on page: WebInspectorTarget,
+        on target: WebInspectorTarget,
         options: WebInspectorMutationOptions
     ) async throws {
         switch options.undo {
         case .automatic:
-            try await page.dom.markUndoableState()
+            try await target.dom.markUndoableState()
         case .disabled:
             break
         }
+    }
+
+    private func recordDOMEditHistoryTarget(_ target: WebInspectorTarget, options: WebInspectorMutationOptions) {
+        guard options.undo == .automatic else {
+            return
+        }
+        domEditHistoryTarget = target
     }
 
     private func currentDOMTreeSnapshot() -> DOMTreeSnapshot {
@@ -1998,7 +2087,7 @@ extension WebInspectorContext {
         requireOwner(isolation)
         var materializedPayloadIDs = Set<DOMNode.ID>()
         collectMaterializedPayloadIDs(node, into: &materializedPayloadIDs)
-        rootNode = model(for: node, preserving: materializedPayloadIDs)
+        rootNode = model(for: node, preserving: materializedPayloadIDs, isolation: isolation)
         notifyDOMTreeSnapshot(reason: reason, isolation: isolation)
         resolvePendingInspectedNode(requestSubtreeIfNeeded: true, isolation: isolation)
     }
@@ -2128,10 +2217,10 @@ extension WebInspectorContext {
         for node in nodes {
             collectMaterializedPayloadIDs(node, into: &newSubtreeIDs)
         }
-        let newChildren = nodes.map { model(for: $0, preserving: newSubtreeIDs) }
+        let newChildren = nodes.map { model(for: $0, preserving: newSubtreeIDs, isolation: isolation) }
         let newChildIDs = Set(newChildren.map(\.id))
         for previousChild in previousChildren where newChildIDs.contains(previousChild.id) == false {
-            removeSubtreeFromIndex(previousChild, preserving: newSubtreeIDs)
+            removeSubtreeFromIndex(previousChild, preserving: newSubtreeIDs, isolation: isolation)
         }
         parentNode.setChildren(newChildren)
         notifyDOMTreeChildrenReplaced(parent: parentNode, isolation: isolation)
@@ -2158,7 +2247,7 @@ extension WebInspectorContext {
         }
         var materializedPayloadIDs = Set<DOMNode.ID>()
         collectMaterializedPayloadIDs(node, into: &materializedPayloadIDs)
-        let inserted = model(for: node, preserving: materializedPayloadIDs)
+        let inserted = model(for: node, preserving: materializedPayloadIDs, isolation: isolation)
         if let previous, let index = children.firstIndex(where: { $0.id == DOMNode.ID(previous) }) {
             children.insert(inserted, at: children.index(after: index))
         } else {
@@ -2192,27 +2281,23 @@ extension WebInspectorContext {
             skipEvent("DOM.childNodeRemoved referenced unmaterialized child id=\(logDescription(removedID))")
             return
         }
-        let selectedNodeWasRemoved = removeSubtreeFromIndex(removedNode)
+        removeSubtreeFromIndex(removedNode, isolation: isolation)
 
         guard case let .loaded(children) = parentNode.children else {
             parentNode.updateChildNodeCount(max(0, parentNode.childNodeCount - 1))
             notifyDOMTreeChildCountChanged(node: parentNode, isolation: isolation)
-            if selectedNodeWasRemoved {
-                notifyDOMTreeSelectionChanged(nil, isolation: isolation)
-                notifyStatusChanged()
-            }
             return
         }
         parentNode.setChildren(children.filter { $0.id != removedID })
         notifyDOMTreeChildRemoved(parent: parentNode, nodeID: removedID, isolation: isolation)
-        if selectedNodeWasRemoved {
-            notifyDOMTreeSelectionChanged(nil, isolation: isolation)
-            notifyStatusChanged()
-        }
     }
 
     @discardableResult
-    private func removeSubtreeFromIndex(_ root: DOMNode, preserving preservedIDs: Set<DOMNode.ID> = []) -> Bool {
+    private func removeSubtreeFromIndex(
+        _ root: DOMNode,
+        preserving preservedIDs: Set<DOMNode.ID> = [],
+        isolation: isolated (any Actor)
+    ) -> Bool {
         var removedIDs = Set<DOMNode.ID>()
         collectSubtreeIDs(root, into: &removedIDs)
         removedIDs.subtract(preservedIDs)
@@ -2225,6 +2310,8 @@ extension WebInspectorContext {
             styleRefreshTask = nil
             styleRefreshGeneration += 1
             self.selectedNode = nil
+            notifyDOMTreeSelectionChanged(nil, isolation: isolation)
+            notifyStatusChanged()
             return true
         }
         return false
@@ -2253,7 +2340,11 @@ extension WebInspectorContext {
         }
     }
 
-    private func model(for payload: DOM.Node, preserving materializedPayloadIDs: Set<DOMNode.ID>) -> DOMNode {
+    private func model(
+        for payload: DOM.Node,
+        preserving materializedPayloadIDs: Set<DOMNode.ID>,
+        isolation: isolated (any Actor)
+    ) -> DOMNode {
         let id = DOMNode.ID(payload.id)
         let node: DOMNode
         let previousChildren: [DOMNode]
@@ -2275,12 +2366,24 @@ extension WebInspectorContext {
             nodesByID[id] = node
         }
 
-        let payloadContentDocument = payload.contentDocument.map { model(for: $0, preserving: materializedPayloadIDs) }
-        let shadowRoots = payload.shadowRoots.map { model(for: $0, preserving: materializedPayloadIDs) }
-        let templateContent = payload.templateContent.map { model(for: $0, preserving: materializedPayloadIDs) }
-        let beforePseudoElement = payload.beforePseudoElement.map { model(for: $0, preserving: materializedPayloadIDs) }
-        let otherPseudoElements = payload.otherPseudoElements.map { model(for: $0, preserving: materializedPayloadIDs) }
-        let afterPseudoElement = payload.afterPseudoElement.map { model(for: $0, preserving: materializedPayloadIDs) }
+        let payloadContentDocument = payload.contentDocument.map {
+            model(for: $0, preserving: materializedPayloadIDs, isolation: isolation)
+        }
+        let shadowRoots = payload.shadowRoots.map {
+            model(for: $0, preserving: materializedPayloadIDs, isolation: isolation)
+        }
+        let templateContent = payload.templateContent.map {
+            model(for: $0, preserving: materializedPayloadIDs, isolation: isolation)
+        }
+        let beforePseudoElement = payload.beforePseudoElement.map {
+            model(for: $0, preserving: materializedPayloadIDs, isolation: isolation)
+        }
+        let otherPseudoElements = payload.otherPseudoElements.map {
+            model(for: $0, preserving: materializedPayloadIDs, isolation: isolation)
+        }
+        let afterPseudoElement = payload.afterPseudoElement.map {
+            model(for: $0, preserving: materializedPayloadIDs, isolation: isolation)
+        }
         let contentDocument = projectedFrameDocument(for: node, payloadContentDocument: payloadContentDocument)
         node.setAssociatedNodes(
             contentDocument: contentDocument,
@@ -2292,19 +2395,19 @@ extension WebInspectorContext {
         )
         let associatedIDs = Set(node.associatedSubtreeRoots().map(\.id))
         for previousRoot in previousAssociatedRoots where associatedIDs.contains(previousRoot.id) == false {
-            removeSubtreeFromIndex(previousRoot, preserving: materializedPayloadIDs)
+            removeSubtreeFromIndex(previousRoot, preserving: materializedPayloadIDs, isolation: isolation)
         }
 
         if let children = payload.children {
-            let newChildren = children.map { model(for: $0, preserving: materializedPayloadIDs) }
+            let newChildren = children.map { model(for: $0, preserving: materializedPayloadIDs, isolation: isolation) }
             let newChildIDs = Set(newChildren.map(\.id))
             for previousChild in previousChildren where newChildIDs.contains(previousChild.id) == false {
-                removeSubtreeFromIndex(previousChild, preserving: materializedPayloadIDs)
+                removeSubtreeFromIndex(previousChild, preserving: materializedPayloadIDs, isolation: isolation)
             }
             node.setChildren(newChildren)
         } else if payload.childNodeCount == 0 && previousChildren.isEmpty == false {
             for previousChild in previousChildren {
-                removeSubtreeFromIndex(previousChild, preserving: materializedPayloadIDs)
+                removeSubtreeFromIndex(previousChild, preserving: materializedPayloadIDs, isolation: isolation)
             }
             node.setChildrenUnrequested(count: payload.childNodeCount)
         } else {
@@ -2443,11 +2546,11 @@ extension WebInspectorContext {
             DOMNode.ID(scopedDocument.id),
             for: frameTargetID
         )
-        let frameRoot = model(for: scopedDocument, preserving: materializedPayloadIDs)
+        let frameRoot = model(for: scopedDocument, preserving: materializedPayloadIDs, isolation: isolation)
         if let previousRootID,
            previousRootID != frameRoot.id,
            let previousRoot = nodesByID[previousRootID] {
-            removeSubtreeFromIndex(previousRoot, preserving: materializedPayloadIDs)
+            removeSubtreeFromIndex(previousRoot, preserving: materializedPayloadIDs, isolation: isolation)
         }
 
         if let owner = attachProjectedFrameDocumentRoot(frameRoot, frameTargetID: frameTargetID) {
@@ -2508,11 +2611,10 @@ extension WebInspectorContext {
             let root = nodesByID[rootID]
             frameDocumentProjectionIndex.detachProjection(attachedTo: owner.id)
             owner.setContentDocument(nil)
-            let selectedNodeWasRemoved = root.map { removeSubtreeFromIndex($0) } ?? false
-            notifyDOMTreeChildrenReplaced(parent: owner, isolation: isolation)
-            if selectedNodeWasRemoved {
-                notifyStatusChanged()
+            if let root {
+                removeSubtreeFromIndex(root, isolation: isolation)
             }
+            notifyDOMTreeChildrenReplaced(parent: owner, isolation: isolation)
         }
     }
 
@@ -2872,8 +2974,7 @@ extension WebInspectorContext {
         isolation: isolated (any Actor) = #isolation
     ) async throws {
         requireOwner(isolation)
-        guard let currentPage,
-              styleToggleTasks[id] == nil,
+        guard styleToggleTasks[id] == nil,
               let styles = selectedNode?.elementStyles,
               let intent = styles.setStyleTextIntent(for: id, enabled: enabled) else {
             throw WebInspectorProxyError.commandFailed(
@@ -2890,10 +2991,12 @@ extension WebInspectorContext {
             styleToggleTasks[id] = nil
         }
 
-        let result = try await currentPage.css.setStyleText(intent.styleID, text: intent.text)
+        let target = try cssTarget(owning: intent.styleID)
+        let result = try await target.css.setStyleText(intent.styleID, text: intent.text)
+        recordDOMEditHistoryTarget(target, options: options)
+        try await Self.markDOMUndoableStateIfNeeded(on: target, options: options)
         styles.applySetStyleText(result: result, for: id)
         refreshSelectedStylesIfHydrationActive(isolation: isolation)
-        _ = options
     }
 
     package func setCSSRuleSelector(
@@ -2903,10 +3006,11 @@ extension WebInspectorContext {
         isolation: isolated (any Actor) = #isolation
     ) async throws {
         requireOwner(isolation)
-        let page = try currentPageOrThrow()
-        _ = try await page.css.setRuleSelector(id, selector: selector)
+        let target = try cssTarget(owning: id)
+        _ = try await target.css.setRuleSelector(id, selector: selector)
+        recordDOMEditHistoryTarget(target, options: options)
+        try await Self.markDOMUndoableStateIfNeeded(on: target, options: options)
         refreshSelectedStylesIfHydrationActive(isolation: isolation)
-        _ = options
     }
 
     package func setCSSStyleSheetText(
@@ -2916,10 +3020,11 @@ extension WebInspectorContext {
         isolation: isolated (any Actor) = #isolation
     ) async throws {
         requireOwner(isolation)
-        let page = try currentPageOrThrow()
-        try await page.css.setStyleSheetText(id, text: text)
+        let target = try cssTarget(owning: id)
+        try await target.css.setStyleSheetText(id, text: text)
+        recordDOMEditHistoryTarget(target, options: options)
+        try await Self.markDOMUndoableStateIfNeeded(on: target, options: options)
         refreshSelectedStylesIfHydrationActive(isolation: isolation)
-        _ = options
     }
 
     /// Toggles a CSS declaration on or off by rewriting its owning style
@@ -2931,20 +3036,27 @@ extension WebInspectorContext {
     public func requestSetCSSProperty(
         _ id: CSS.Property.ID,
         enabled: Bool,
+        options: WebInspectorMutationOptions,
         isolation: isolated (any Actor) = #isolation
     ) -> Bool {
         requireOwner(isolation)
-        guard let currentPage,
-              styleToggleTasks[id] == nil,
+        guard styleToggleTasks[id] == nil,
               let styles = selectedNode?.elementStyles,
               let intent = styles.setStyleTextIntent(for: id, enabled: enabled) else {
             return false
         }
+        let target: WebInspectorTarget
+        do {
+            target = try cssTarget(owning: intent.styleID)
+        } catch {
+            failIfTerminal(error, operation: "CSS.setStyleText")
+            return false
+        }
 
-        styleToggleTasks[id] = Task { [weak self, currentPage, styles] in
+        styleToggleTasks[id] = Task { [weak self, target, styles] in
             _ = isolation
             do {
-                let result = try await currentPage.css.setStyleText(intent.styleID, text: intent.text)
+                let result = try await target.css.setStyleText(intent.styleID, text: intent.text)
                 guard let self else {
                     return
                 }
@@ -2952,6 +3064,8 @@ extension WebInspectorContext {
                 guard Task.isCancelled == false else {
                     return
                 }
+                self.recordDOMEditHistoryTarget(target, options: options)
+                try await Self.markDOMUndoableStateIfNeeded(on: target, options: options)
                 styles.applySetStyleText(result: result, for: id)
                 self.refreshSelectedStylesIfHydrationActive(isolation: isolation)
             } catch is CancellationError {
@@ -3373,13 +3487,18 @@ extension WebInspectorContext {
 }
 
 extension WebInspectorContext {
-    func apply(_ event: Console.Event, isolation: isolated (any Actor) = #isolation) {
+    func apply(
+        _ event: Console.Event,
+        targetID: WebInspectorTarget.ID? = nil,
+        isolation: isolated (any Actor) = #isolation
+    ) {
         requireOwner(isolation)
         switch event {
         case let .messageAdded(message):
-            applyMessageAdded(message)
+            applyMessageAdded(message, targetID: targetID)
         case let .messageRepeatCountUpdated(count, timestamp):
-            guard let lastConsoleMessageID,
+            let lastMessageID = targetID.flatMap { lastConsoleMessageIDByTargetID[$0] } ?? lastConsoleMessageID
+            guard let lastConsoleMessageID = lastMessageID,
                   let message = consoleMessagesByID[lastConsoleMessageID] else {
                 skipEvent("Console.messageRepeatCountUpdated arrived before any tracked message")
                 return
@@ -3387,31 +3506,62 @@ extension WebInspectorContext {
             message.updateRepeatCount(count, timestamp: timestamp)
             refreshAllConsoleMessages(updatedItemIDs: [message.id])
         case .messagesCleared:
-            clearConsoleMessages()
-            releaseConsoleRuntimeObjectGroup(isolation: isolation)
+            clearConsoleMessages(targetID: targetID)
+            releaseConsoleRuntimeObjectGroup(targetID: targetID, isolation: isolation)
         case .unknown:
             break
         }
     }
 
-    private func clearConsoleMessages() {
-        consoleMessagesByID = [:]
-        orderedConsoleMessageIDs = []
-        lastConsoleMessageID = nil
-        unregisterRuntimeObjects(owner: .console)
+    private func clearConsoleMessages(targetID: WebInspectorTarget.ID? = nil) {
+        guard let targetID else {
+            consoleMessagesByID = [:]
+            orderedConsoleMessageIDs = []
+            lastConsoleMessageID = nil
+            lastConsoleMessageIDByTargetID = [:]
+            unregisterRuntimeObjects(owner: .console)
+            refreshAllConsoleMessages()
+            return
+        }
+        let removedMessages = consoleMessagesByID.values.filter { $0.targetID == targetID }
+        guard removedMessages.isEmpty == false else {
+            lastConsoleMessageIDByTargetID[targetID] = nil
+            refreshAllConsoleMessages()
+            return
+        }
+        let removedIDs = Set(removedMessages.map(\.id))
+        for id in removedIDs {
+            consoleMessagesByID[id] = nil
+        }
+        orderedConsoleMessageIDs.removeAll { removedIDs.contains($0) }
+        if let lastConsoleMessageID, removedIDs.contains(lastConsoleMessageID) {
+            self.lastConsoleMessageID = orderedConsoleMessageIDs.last
+        }
+        lastConsoleMessageIDByTargetID[targetID] = orderedConsoleMessageIDs.last { id in
+            consoleMessagesByID[id]?.targetID == targetID
+        }
+        unregisterConsoleRuntimeObjectsIfUnreferenced(from: removedMessages)
         refreshAllConsoleMessages()
     }
 
-    private func releaseConsoleRuntimeObjectGroup(isolation: isolated (any Actor) = #isolation) {
+    private func releaseConsoleRuntimeObjectGroup(
+        targetID: WebInspectorTarget.ID? = nil,
+        isolation: isolated (any Actor) = #isolation
+    ) {
         consoleObjectGroupReleaseTask?.cancel()
-        guard let currentPage else {
+        let target: WebInspectorTarget
+        if let targetID {
+            target = proxy.frameTarget(id: targetID)
+        } else if let currentPage {
+            target = currentPage
+        } else {
             skipEvent("Console.messagesCleared arrived without a current page target")
             return
         }
-        consoleObjectGroupReleaseTask = Task { [weak self, currentPage] in
+        consoleObjectGroupReleaseTask = Task { [weak self, target] in
             _ = isolation
             do {
-                try await currentPage.runtime.releaseObjectGroup(.console)
+                try await target.runtime.releaseObjectGroup(.console)
             } catch is CancellationError {
                 return
             } catch {
@@ -3420,15 +3570,38 @@ extension WebInspectorContext {
         }
     }
 
-    private func applyMessageAdded(_ payload: Console.Message) {
+    private func applyMessageAdded(_ payload: Console.Message, targetID: WebInspectorTarget.ID?) {
         let id = ConsoleMessage.ID(nextConsoleMessageOrdinal)
         nextConsoleMessageOrdinal += 1
         let parameters = payload.parameters.map { registerRuntimeObject($0, owner: .console) }
-        let message = ConsoleMessage(id: id, message: payload, parameters: parameters, modelContext: self)
+        let message = ConsoleMessage(
+            id: id,
+            message: payload,
+            parameters: parameters,
+            targetID: targetID,
+            modelContext: self
+        )
         consoleMessagesByID[id] = message
         orderedConsoleMessageIDs.append(id)
         lastConsoleMessageID = id
+        if let targetID {
+            lastConsoleMessageIDByTargetID[targetID] = id
+        }
         refreshAllConsoleMessages()
+    }
+
+    private func unregisterConsoleRuntimeObjectsIfUnreferenced(from removedMessages: [ConsoleMessage]) {
+        let removedObjects = Set(removedMessages.flatMap(\.parameters).map(\.id))
+        guard removedObjects.isEmpty == false else {
+            return
+        }
+        let remainingConsoleObjects = Set(consoleMessagesByID.values.flatMap(\.parameters).map(\.id))
+        for objectID in removedObjects.subtracting(remainingConsoleObjects) {
+            guard let object = runtimeObjectsByID[objectID] else {
+                continue
+            }
+            unregisterRuntimeObject(object, owner: .console)
+        }
     }
 
     private func currentConsoleMessages() -> [ConsoleMessage] {
@@ -3495,11 +3668,11 @@ extension WebInspectorContext {
         case let .executionContextDestroyed(id):
             applyExecutionContextDestroyed(id)
         case let .executionContextsCleared(eventTargetID):
-            if let targetID, eventTargetID != targetID {
-                skipEvent("Runtime.executionContextsCleared referenced a mismatched target")
-                return
+            if eventTargetID == .currentPage || eventTargetID == targetID {
+                clearExecutionContexts()
+            } else {
+                clearExecutionContexts(targetID: eventTargetID)
             }
-            clearExecutionContexts()
         case .unknown:
             break
         }
@@ -3539,6 +3712,22 @@ extension WebInspectorContext {
         executionContexts = []
         selectedContext = nil
         clearRuntimeObjects()
+    }
+
+    private func clearExecutionContexts(targetID: WebInspectorTarget.ID) {
+        let removedIDs = Set(runtimeContextsByID.keys.filter { id in
+            id.proxyID.targetScopeRawValue == targetID.rawValue
+        })
+        guard removedIDs.isEmpty == false else {
+            return
+        }
+        runtimeContextsByID = runtimeContextsByID.filter { removedIDs.contains($0.key) == false }
+        orderedRuntimeContextIDs.removeAll { removedIDs.contains($0) }
+        if let selectedContext, removedIDs.contains(selectedContext.id) {
+            self.selectedContext = firstRuntimeContext()
+        }
+        refreshExecutionContexts()
+        clearRuntimeObjects(targetID: targetID)
     }
 
     private func refreshExecutionContexts() {

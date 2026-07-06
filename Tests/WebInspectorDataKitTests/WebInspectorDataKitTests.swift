@@ -332,6 +332,45 @@ func domCommandsDispatchThroughDataKitContext() async throws {
 
 @MainActor
 @Test
+func domMutationsAndUndoRedoUseOwningFrameTarget() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let frameTarget = await runtime.proxy.installTargetForTesting(kind: .frame)
+    let document = try #require(context.rootNode)
+    let scopedNodeID = DOM.Node.ID(
+        "frame-owned-node",
+        scopedToTargetRawValue: frameTarget.id.rawValue
+    )
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(id: scopedNodeID, nodeType: 3, nodeName: "#text", nodeValue: "frame")
+        ]),
+        target: target
+    )
+    try await waitUntil { context.node(for: DOMNode.ID(scopedNodeID)) != nil }
+
+    await runtime.backend.enqueue((), for: "DOM", method: "removeNode")
+    await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
+    _ = try await context.dom.remove([DOMNode.ID(scopedNodeID)])
+
+    await runtime.backend.enqueue((), for: "DOM", method: "undo")
+    try await context.editHistory.undo()
+
+    await runtime.backend.enqueue((), for: "DOM", method: "redo")
+    try await context.editHistory.redo()
+
+    let mutationCommands = await runtime.backend.recordedCommands()
+        .filter { $0.domain == "DOM" && ["removeNode", "markUndoableState", "undo", "redo"].contains($0.method) }
+    #expect(mutationCommands.map(\.method) == ["removeNode", "markUndoableState", "undo", "redo"])
+    #expect(mutationCommands.allSatisfy { $0.targetID == frameTarget.id })
+    #expect(mutationCommands.allSatisfy { $0.route == RoutingTargetID(frameTarget.id.rawValue) })
+    let removal = try #require(mutationCommands.first { $0.method == "removeNode" })
+    #expect(removal.payload.cast(as: DOM.RemoveNodePayload.self)?.id == scopedNodeID)
+}
+
+@MainActor
+@Test
 func domInspectSelectsKnownNodeAndLoadsStyles() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
@@ -1352,6 +1391,121 @@ func transportBackedFrameInspectProjectsFrameDocumentUnderIframeOwner() async th
 
 @MainActor
 @Test
+func transportBackedFrameRuntimeAndConsoleEventsKeepTargetScope() async throws {
+    let pageTargetID = ProtocolTarget.ID("page-main")
+    let frameTargetID = ProtocolTarget.ID("frame-runtime")
+    let frameTarget = WebInspectorTarget.ID(frameTargetID.rawValue)
+    let scopedContextID = Runtime.ExecutionContext.ID("7", scopedToTargetRawValue: frameTargetID.rawValue)
+    let (backend, transport, context) = try await startTransportBackedContext(
+        targetID: pageTargetID,
+        documentID: "1"
+    )
+    let consoleResults: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
+    let startupMessageCount = await backend.sentTargetMessages().count
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-runtime","type":"page","frameId":"frame-runtime","parentFrameId":"main-frame","isProvisional":false}}}"#
+    )
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: frameTargetID,
+        method: "Runtime.executionContextCreated",
+        params: #"{"context":{"id":7,"name":"Frame","frameId":"frame-runtime","type":"normal"}}"#
+    )
+    try await waitUntil {
+        context.executionContexts.contains { $0.id == RuntimeContext.ID(scopedContextID) }
+    }
+    let frameContext = try #require(context.executionContexts.first { $0.id == RuntimeContext.ID(scopedContextID) })
+
+    var capturedEvaluation: RuntimeEvaluation?
+    let evaluationTask = Task { @MainActor in
+        capturedEvaluation = try await context.runtime.evaluate("window", in: frameContext)
+    }
+    let evaluate = try await waitForTransportTargetMessage(
+        backend,
+        method: "Runtime.evaluate",
+        after: startupMessageCount
+    )
+    #expect(evaluate.targetIdentifier == frameTargetID)
+    let evaluateParameters = try transportTargetMessageParameters(evaluate.message)
+    #expect(evaluateParameters["contextId"] as? Int == 7)
+    await receiveTransportTargetReply(
+        transport,
+        targetID: evaluate.targetIdentifier,
+        messageID: try transportMessageID(evaluate.message),
+        result: #"{"result":{"type":"object","objectId":"frame-evaluation-object","description":"frame object"}}"#
+    )
+    try await evaluationTask.value
+    let evaluation = try #require(capturedEvaluation)
+    #expect(evaluation.object.proxyID?.targetScopeRawValue == frameTargetID.rawValue)
+    #expect(evaluation.object.proxyID?.unscopedRawValue == "frame-evaluation-object")
+
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: frameTargetID,
+        method: "Console.messageAdded",
+        params: #"{"message":{"source":"console-api","level":"log","text":"frame log","parameters":[{"type":"object","objectId":"frame-console-object","description":"console object"}],"repeatCount":1}}"#
+    )
+    try await waitUntil { consoleResults.items.map(\.text) == ["frame log"] }
+    let consoleMessage = try #require(consoleResults.items.first)
+    #expect(consoleMessage.targetID == frameTarget)
+    let consoleObject = try #require(consoleMessage.parameters.first)
+    #expect(consoleObject.proxyID?.targetScopeRawValue == frameTargetID.rawValue)
+    #expect(consoleObject.proxyID?.unscopedRawValue == "frame-console-object")
+}
+
+@MainActor
+@Test
+func transportBackedStyleSheetTextEditRoutesToFrameTargetAndMarksUndo() async throws {
+    let pageTargetID = ProtocolTarget.ID("page-main")
+    let frameTargetID = ProtocolTarget.ID("frame-css")
+    let styleSheetID = CSS.StyleSheet.ID("frame-sheet", scopedToTargetRawValue: frameTargetID.rawValue)
+    let (backend, transport, context) = try await startTransportBackedContext(
+        targetID: pageTargetID,
+        documentID: "1"
+    )
+    let startupMessageCount = await backend.sentTargetMessages().count
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-css","type":"page","frameId":"frame-css","parentFrameId":"main-frame","isProvisional":false}}}"#
+    )
+
+    let editTask = Task { @MainActor in
+        try await context.css.setStyleSheetText("body { color: red; }", for: styleSheetID)
+    }
+    let setStyleSheetText = try await waitForTransportTargetMessage(
+        backend,
+        method: "CSS.setStyleSheetText",
+        after: startupMessageCount
+    )
+    #expect(setStyleSheetText.targetIdentifier == frameTargetID)
+    let parameters = try transportTargetMessageParameters(setStyleSheetText.message)
+    #expect(parameters["styleSheetId"] as? String == "frame-sheet")
+    #expect(parameters["text"] as? String == "body { color: red; }")
+    await receiveTransportTargetReply(
+        transport,
+        targetID: setStyleSheetText.targetIdentifier,
+        messageID: try transportMessageID(setStyleSheetText.message),
+        result: "{}"
+    )
+
+    let markUndoableState = try await waitForTransportTargetMessage(
+        backend,
+        method: "DOM.markUndoableState",
+        after: startupMessageCount
+    )
+    #expect(markUndoableState.targetIdentifier == frameTargetID)
+    await receiveTransportTargetReply(
+        transport,
+        targetID: markUndoableState.targetIdentifier,
+        messageID: try transportMessageID(markUndoableState.message),
+        result: "{}"
+    )
+    try await editTask.value
+}
+
+@MainActor
+@Test
 func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
     let oldTargetID = ProtocolTarget.ID("page-old")
     let newTargetID = ProtocolTarget.ID("page-new")
@@ -1682,6 +1836,35 @@ func currentPageTargetDestroyedDuringRetargetDoesNotDetachOrClearNetwork() async
     )
     try await pickerTask.value
     #expect(context.isElementPickerEnabled)
+}
+
+@MainActor
+@Test
+func startBeginsFreshNetworkAttachmentEpoch() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let networkResults: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let staleRequestID = Network.Request.ID("stale-before-restart")
+
+    await emitFinishedRequest(id: staleRequestID, target: target, backend: runtime.backend)
+    try await waitUntil {
+        networkResults.items.map(\.id) == [NetworkRequest.ID(staleRequestID)]
+    }
+
+    await enqueueDomainDisableReplies(on: runtime.backend)
+    await enqueueStartupReplies(
+        on: runtime.backend,
+        document: DOM.Node(id: DOM.Node.ID("fresh-after-restart"), nodeType: 9, nodeName: "#document")
+    )
+
+    context.start()
+
+    try await waitUntil { networkResults.items.isEmpty }
+    try await waitUntil {
+        context.rootNode?.id == DOMNode.ID(DOM.Node.ID("fresh-after-restart"))
+            && context.state == .attached
+    }
+    #expect(networkResults.items.isEmpty)
 }
 
 @MainActor
@@ -2431,6 +2614,64 @@ func domTreeControllerPublishesSelectionDeltasWithoutOwningExpansion() async thr
         await Task.yield()
     }
     #expect(revealRecorder.requests.count == 1)
+}
+
+@MainActor
+@Test
+func setChildNodesReplacementPublishesSelectionClearingForRemovedDescendant() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(
+        runtime: runtime,
+        document: DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document")
+    )
+    let document = try #require(context.rootNode)
+    let parentID = DOM.Node.ID("parent")
+    let selectedID = DOM.Node.ID("selected-text")
+    let replacementID = DOM.Node.ID("replacement-text")
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(
+                id: parentID,
+                nodeType: 1,
+                nodeName: "DIV",
+                localName: "div",
+                children: [
+                    DOM.Node(id: selectedID, nodeType: 3, nodeName: "#text", nodeValue: "selected")
+                ]
+            )
+        ]),
+        target: target
+    )
+    try await waitUntil { context.node(for: DOMNode.ID(selectedID)) != nil }
+
+    let selected = try #require(context.node(for: DOMNode.ID(selectedID)))
+    let controller = try await context.treeController()
+    let recorder = DOMTreeUpdateRecorder(stream: controller.updates)
+    defer { recorder.cancel() }
+    try await recorder.waitUntilStarted()
+    try await recorder.waitForUpdateCount(1)
+
+    context.select(selected)
+    try await recorder.waitForUpdateCount(2)
+    #expect(controller.snapshot.selectedNodeID == selected.id)
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: parentID, nodes: [
+            DOM.Node(id: replacementID, nodeType: 3, nodeName: "#text", nodeValue: "replacement")
+        ]),
+        target: target
+    )
+
+    try await waitUntil {
+        context.selectedNode == nil
+            && context.node(for: DOMNode.ID(selectedID)) == nil
+            && context.node(for: DOMNode.ID(replacementID)) != nil
+    }
+    try await waitUntil {
+        recorder.updates.contains(.delta(.selectionChanged(nodeID: nil)))
+    }
+    #expect(controller.snapshot.selectedNodeID == nil)
 }
 
 
@@ -3756,6 +3997,7 @@ func requestSetCSSPropertyTogglesDeclarationAndRefreshesStyles() async throws {
     )
 
     let propertyID = try #require(styles.sections.first?.style.properties.first?.id)
+    await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
     #expect(context.css.requestSetProperty(propertyID, enabled: false))
 
     try await waitUntil {
@@ -3768,10 +4010,46 @@ func requestSetCSSPropertyTogglesDeclarationAndRefreshesStyles() async throws {
     let payload = try #require(setStyleText.payload.cast(as: CSS.SetStyleTextPayload.self))
     #expect(payload.id == CSS.Style.ID("style-1"))
     #expect(payload.text == "/* display: grid; */")
+    let undoMarks = commands.filter { $0.domain == "DOM" && $0.method == "markUndoableState" }
+    #expect(undoMarks.count == 1)
+    #expect(undoMarks.first?.targetID == target.id)
 
     let property = try #require(styles.sections.first?.style.properties.first)
     #expect(property.status == .disabled)
     #expect(property.isModifiedByInspector)
+}
+
+@MainActor
+@Test
+func cssRuleSelectorEditsMarkUndoableStateOnOwningTarget() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (_, context) = try await startContext(runtime: runtime)
+    let frameTarget = await runtime.proxy.installTargetForTesting(kind: .frame)
+    let ruleID = CSS.Rule.ID("frame-rule", scopedToTargetRawValue: frameTarget.id.rawValue)
+
+    await runtime.backend.enqueue(
+        CSS.Rule(
+            id: ruleID,
+            selectorList: CSS.Rule.SelectorList(selectors: [".updated"], text: ".updated"),
+            origin: CSS.Origin(rawValue: "regular"),
+            style: CSS.Style(id: CSS.Style.ID("frame-style", scopedToTargetRawValue: frameTarget.id.rawValue))
+        ),
+        for: "CSS",
+        method: "setRuleSelector"
+    )
+    await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
+
+    try await context.css.setRuleSelector(".updated", for: ruleID)
+
+    let commands = await runtime.backend.recordedCommands()
+    let setRuleSelector = try #require(commands.first { $0.domain == "CSS" && $0.method == "setRuleSelector" })
+    #expect(setRuleSelector.targetID == frameTarget.id)
+    #expect(setRuleSelector.route == RoutingTargetID(frameTarget.id.rawValue))
+    #expect(setRuleSelector.payload.cast(as: CSS.SetRuleSelectorPayload.self)?.id == ruleID)
+
+    let markUndoableState = try #require(commands.first { $0.domain == "DOM" && $0.method == "markUndoableState" })
+    #expect(markUndoableState.targetID == frameTarget.id)
+    #expect(markUndoableState.route == RoutingTargetID(frameTarget.id.rawValue))
 }
 
 @MainActor

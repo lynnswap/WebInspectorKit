@@ -29,6 +29,7 @@ public final class ConsoleMessage: WebInspectorFetchableModel {
     public private(set) var stackTrace: Console.StackTrace?
     public private(set) var networkRequestID: NetworkRequest.ID?
     public private(set) var timestamp: Double?
+    let targetID: WebInspectorTarget.ID?
 
     @ObservationIgnored weak var modelContext: WebInspectorContext?
 
@@ -36,6 +37,7 @@ public final class ConsoleMessage: WebInspectorFetchableModel {
         id: ID,
         message: Console.Message,
         parameters: [RuntimeObject],
+        targetID: WebInspectorTarget.ID?,
         modelContext: WebInspectorContext
     ) {
         self.id = id
@@ -51,6 +53,7 @@ public final class ConsoleMessage: WebInspectorFetchableModel {
         stackTrace = message.stackTrace
         networkRequestID = message.networkRequestID.map(NetworkRequest.ID.init)
         timestamp = message.timestamp
+        self.targetID = targetID
         self.modelContext = modelContext
     }
 

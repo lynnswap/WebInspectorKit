@@ -155,11 +155,16 @@ public actor WebInspectorTestBackend {
     }
 
     public func emit(_ event: Console.Event, target: WebInspectorTarget.ID) async {
-        emit(.console(event), target: target, route: nil, domain: .console)
+        emit(.console(Console.TargetedEvent(event: event, targetID: target)), target: target, route: nil, domain: .console)
     }
 
     public func emit(_ event: Console.Event, target: WebInspectorTarget) async {
-        emit(.console(event), target: target.id, route: target.route, domain: .console)
+        emit(
+            .console(Console.TargetedEvent(event: event, targetID: target.id)),
+            target: target.id,
+            route: target.route,
+            domain: .console
+        )
     }
 
     public func emit(_ event: Runtime.Event, target: WebInspectorTarget.ID) async {

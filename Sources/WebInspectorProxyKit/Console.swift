@@ -189,6 +189,16 @@ public enum Console {
         case unknown(RawEvent)
     }
 
+    package struct TargetedEvent: Sendable {
+        package let event: Event
+        package let targetID: WebInspectorTarget.ID?
+
+        package init(event: Event, targetID: WebInspectorTarget.ID?) {
+            self.event = event
+            self.targetID = targetID
+        }
+    }
+
     public struct EventStream: AsyncSequence, Sendable {
         public typealias Element = Event
         public typealias AsyncIterator = AsyncStream<Event>.Iterator

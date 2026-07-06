@@ -49,7 +49,7 @@ package enum WebInspectorProxyEvent: Sendable {
     case inspector(Inspector.Event)
     case css(CSS.Event)
     case network(Network.Event)
-    case console(Console.Event)
+    case console(Console.TargetedEvent)
     case runtime(Runtime.Event)
 }
 
