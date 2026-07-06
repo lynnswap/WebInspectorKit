@@ -3276,6 +3276,57 @@ func networkFetchDescriptorAppliesPredicateSortAndLimit() async throws {
 
 @MainActor
 @Test
+func networkFetchDescriptorFallsBackForUnsupportedPublicPredicates() async throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    context.apply(.requestWillBeSent(
+        id: Network.Request.ID("api"),
+        request: Network.Request(id: Network.Request.ID("api"), url: "https://api.example.com/data.json", method: "GET"),
+        resourceType: .fetch,
+        redirectResponse: nil,
+        timestamp: 1
+    ))
+    context.apply(.requestWillBeSent(
+        id: Network.Request.ID("image"),
+        request: Network.Request(id: Network.Request.ID("image"), url: "https://static.example.com/photo", method: "GET"),
+        resourceType: .image,
+        redirectResponse: nil,
+        timestamp: 2
+    ))
+    context.apply(.responseReceived(
+        id: Network.Request.ID("image"),
+        response: Network.Response(
+            url: "https://static.example.com/photo",
+            status: 200,
+            mimeType: "image/png"
+        ),
+        resourceType: .image,
+        timestamp: 3
+    ))
+    context.apply(.requestWillBeSent(
+        id: Network.Request.ID("script"),
+        request: Network.Request(id: Network.Request.ID("script"), url: "https://cdn.example.com/app.js", method: "GET"),
+        resourceType: .script,
+        redirectResponse: nil,
+        timestamp: 4
+    ))
+
+    let descriptor = WebInspectorFetchDescriptor<NetworkRequest>(
+        predicate: #Predicate { request in
+            request.url.localizedStandardContains("api")
+                || request.mimeType == "image/png"
+        },
+        sortBy: [SortDescriptor(\.requestSentTimestamp, order: .forward)]
+    )
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: descriptor)
+
+    #expect(results.items.map(\.id) == [
+        NetworkRequest.ID(Network.Request.ID("api")),
+        NetworkRequest.ID(Network.Request.ID("image")),
+    ])
+}
+
+@MainActor
+@Test
 func clearNetworkRequestsResetsDescriptorBackedQueryState() async throws {
     let context = WebInspectorContext.preview(isolation: MainActor.shared)
     let descriptor = WebInspectorFetchDescriptor<NetworkRequest>(
