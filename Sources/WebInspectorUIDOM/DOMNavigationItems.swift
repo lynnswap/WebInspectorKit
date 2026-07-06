@@ -240,8 +240,8 @@ package final class DOMNavigationItems: NSObject {
             return
         }
         do {
-            let undoCommands = try context.domUndoRedoCommands()
             let result = try await context.dom.remove([selectedNode.id])
+            let undoCommands = try context.domUndoRedoCommands()
             DOMDeletionUndoRegistration.registerDeleteUndo(
                 on: undoManager,
                 commands: undoCommands,

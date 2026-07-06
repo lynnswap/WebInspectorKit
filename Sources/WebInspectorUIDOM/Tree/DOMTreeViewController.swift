@@ -97,28 +97,24 @@ package final class DOMTreeViewController: UIViewController {
         context: WebInspectorContext,
         undoManager: UndoManager?
     ) async -> Bool {
-        var undoCommands: WebInspectorContext.DOMUndoRedoCommands?
         let deletedNodeCount: Int
+        let undoCommands: WebInspectorContext.DOMUndoRedoCommands
         do {
-            let commands = try context.domUndoRedoCommands()
-            undoCommands = commands
             let result = try await context.dom.remove(nodeIDs)
             deletedNodeCount = result.acceptedNodeIDs.count
+            undoCommands = try context.domUndoRedoCommands()
         } catch let error as WebInspectorContext.DOMDeletionPartialFailure {
-            guard let undoCommands else {
+            guard let partialUndoCommands = try? context.domUndoRedoCommands() else {
                 return false
             }
             DOMDeletionUndoRegistration.registerDeleteUndo(
                 on: undoManager,
-                commands: undoCommands,
+                commands: partialUndoCommands,
                 deletedNodeCount: error.deletedNodeCount
             )
             return error.deletedNodeCount > 0
         } catch {
             WebInspectorUIDOMLog.debug("DOM tree delete failed nodeIDs=\(nodeIDs.map { String(describing: $0) }): \(String(describing: error))")
-            return false
-        }
-        guard let undoCommands else {
             return false
         }
         DOMDeletionUndoRegistration.registerDeleteUndo(

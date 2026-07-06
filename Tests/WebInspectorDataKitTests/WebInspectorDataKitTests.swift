@@ -350,6 +350,10 @@ func domMutationsAndUndoRedoUseOwningFrameTarget() async throws {
     )
     try await waitUntil { context.node(for: DOMNode.ID(scopedNodeID)) != nil }
 
+    await runtime.backend.enqueue((), for: "DOM", method: "setAttributeValue")
+    await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
+    try await context.dom.setAttribute("data-edited", value: "page", on: document.id)
+
     await runtime.backend.enqueue((), for: "DOM", method: "removeNode")
     await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
     _ = try await context.dom.remove([DOMNode.ID(scopedNodeID)])
@@ -360,12 +364,21 @@ func domMutationsAndUndoRedoUseOwningFrameTarget() async throws {
     await runtime.backend.enqueue((), for: "DOM", method: "redo")
     try await context.editHistory.redo()
 
-    let mutationCommands = await runtime.backend.recordedCommands()
-        .filter { $0.domain == "DOM" && ["removeNode", "markUndoableState", "undo", "redo"].contains($0.method) }
-    #expect(mutationCommands.map(\.method) == ["removeNode", "markUndoableState", "undo", "redo"])
-    #expect(mutationCommands.allSatisfy { $0.targetID == frameTarget.id })
-    #expect(mutationCommands.allSatisfy { $0.route == RoutingTargetID(frameTarget.id.rawValue) })
-    let removal = try #require(mutationCommands.first { $0.method == "removeNode" })
+    let domCommands = await runtime.backend.recordedCommands()
+        .filter { $0.domain == "DOM" && ["setAttributeValue", "removeNode", "markUndoableState", "undo", "redo"].contains($0.method) }
+    #expect(domCommands.map(\.method) == [
+        "setAttributeValue",
+        "markUndoableState",
+        "removeNode",
+        "markUndoableState",
+        "undo",
+        "redo",
+    ])
+    #expect(domCommands.prefix(2).allSatisfy { $0.targetID == target.id })
+    let frameCommands = domCommands.dropFirst(2)
+    #expect(frameCommands.allSatisfy { $0.targetID == frameTarget.id })
+    #expect(frameCommands.allSatisfy { $0.route == RoutingTargetID(frameTarget.id.rawValue) })
+    let removal = try #require(frameCommands.first { $0.method == "removeNode" })
     #expect(removal.payload.cast(as: DOM.RemoveNodePayload.self)?.id == scopedNodeID)
 }
 
