@@ -70,12 +70,21 @@ extension WebInspectorTab {
 extension WebInspectorTab {
     @MainActor
     package final class ContentCache {
+        private var epoch = 0
         private var viewControllerByKey: [WebInspectorTab.ContentKey: UIViewController] = [:]
 
         package func viewController<Content: UIViewController>(
             for key: WebInspectorTab.ContentKey,
+            epoch: Int,
             make: () -> Content
         ) -> Content {
+            if self.epoch != epoch {
+                // Content built for a previous context epoch must never
+                // satisfy a lookup from the current one, even when an explicit
+                // clear was missed or is still pending.
+                removeAll()
+                self.epoch = epoch
+            }
             if let cachedViewController = viewControllerByKey[key] {
                 if let contentViewController = cachedViewController as? Content {
                     return contentViewController

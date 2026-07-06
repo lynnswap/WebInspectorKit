@@ -262,6 +262,45 @@ struct ParentContainerTests {
     }
 
     @Test
+    func contentCacheEvictsEntriesFromPreviousEpoch() {
+        let cache = WebInspectorTab.ContentCache()
+        let key = WebInspectorTab.ContentKey(tabID: "epoch-tab", contentID: "root")
+
+        let first = cache.viewController(for: key, epoch: 0) { UIViewController() }
+        #expect(cache.viewController(for: key, epoch: 0) { UIViewController() } === first)
+
+        let second = cache.viewController(for: key, epoch: 1) { UIViewController() }
+        #expect(second !== first)
+        #expect(cache.viewController(for: key, epoch: 1) { UIViewController() } === second)
+        #expect(cache.countForTesting == 1)
+    }
+
+    @Test
+    func representationBeforeDeferredRetirementKeepsContentAndSkipsDetach() async throws {
+        let session = makeSessionWithNoOpAttachment()
+        _ = WebInspectorTab.ContentFactory.makeViewController(
+            for: .dom,
+            session: session,
+            hostLayout: .compact
+        )
+        let viewController = WebInspectorViewController(session: session)
+        viewController.loadViewIfNeeded()
+        #expect(session.interface.contentCacheCountForTesting > 0)
+
+        viewController.finishRootPresentationLifecycleForTesting()
+        // Begin the next presentation before the deferred retirement task runs.
+        viewController.beginAppearanceTransition(true, animated: false)
+        viewController.endAppearanceTransition()
+
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+
+        #expect(session.detachCountForTesting == 0)
+        #expect(session.interface.contentCacheCountForTesting > 0)
+    }
+
+    @Test
     func compactHostRebuildsActiveTabsWhenDataContextChanges() async throws {
         let session = makeSessionWithNoOpAttachment()
         let viewController = WebInspectorViewController(session: session)

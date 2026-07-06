@@ -6,17 +6,23 @@ import WebInspectorUIBase
 @MainActor
 private final class WebInspectorRootPresentationLifecycleCoordinator {
     private var didFinishCurrentPresentation = false
+    private var presentationGeneration: UInt64 = 0
 
     func beginPresentation() {
         didFinishCurrentPresentation = false
+        presentationGeneration &+= 1
     }
 
-    func finishIfNeeded(_ finish: () -> Void) {
+    func finishIfNeeded(_ finish: (_ generation: UInt64) -> Void) {
         guard didFinishCurrentPresentation == false else {
             return
         }
         didFinishCurrentPresentation = true
-        finish()
+        finish(presentationGeneration)
+    }
+
+    func isCurrentPresentation(_ generation: UInt64) -> Bool {
+        presentationGeneration == generation
     }
 
     #if DEBUG
@@ -183,9 +189,15 @@ public final class WebInspectorViewController: UIViewController {
     }
 
     private func finishRootPresentationLifecycle() {
-        presentationLifecycleCoordinator.finishIfNeeded { [session, automaticallyDetachesOnDismiss] in
+        presentationLifecycleCoordinator.finishIfNeeded { [session, automaticallyDetachesOnDismiss, presentationLifecycleCoordinator] generation in
             removeActiveHost()
-            Task { @MainActor [session] in
+            Task { @MainActor in
+                // A re-presentation can begin before this deferred retirement
+                // runs; retiring then would tear down content the new
+                // presentation has already built.
+                guard presentationLifecycleCoordinator.isCurrentPresentation(generation) else {
+                    return
+                }
                 await session.retireRootPresentation(detach: automaticallyDetachesOnDismiss)
             }
         }

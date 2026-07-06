@@ -132,18 +132,20 @@ package final class CompactTabBarController: UITabBarController, UITabBarControl
         }
 
         let descriptor = session.interface.descriptor(for: displayItem)
-        let tabs = session.interface.tabs
         let session = session
         let nativeTab = UITab(
             title: descriptor?.title ?? "",
             image: descriptor?.image,
             identifier: itemID
         ) { _ in
+            // Resolve tabs at invocation time: the regular host already reads
+            // the live tab set, and a captured snapshot would rebuild content
+            // from a replaced tab's stale definition.
             WebInspectorTab.ContentFactory.makeViewController(
                 for: displayItem,
                 session: session,
                 hostLayout: .compact,
-                tabs: tabs
+                tabs: session.interface.tabs
             )
         }
         nativeTabByItemID[itemID] = nativeTab

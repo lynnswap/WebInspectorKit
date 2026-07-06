@@ -121,13 +121,17 @@ public final class WebInspectorSession {
     /// connection, disable the element picker and hide any visible highlight so
     /// a re-presentation starts from a clean interaction state.
     private func suspendBackendInteractionForPresentationEnd() async {
-        guard dataContext.status.state == .attached else {
+        // Bind the context once: a concurrent attach can swap dataContext
+        // across the awaits below, and this retirement must not touch the
+        // replacement context.
+        let context = dataContext
+        guard context.status.state == .attached else {
             return
         }
-        if dataContext.isElementPickerEnabled {
-            try? await dataContext.setElementPickerEnabled(false)
+        if context.isElementPickerEnabled {
+            try? await context.setElementPickerEnabled(false)
         }
-        try? await dataContext.hideHighlight()
+        try? await context.hideHighlight()
     }
 
     private func startPageUserInterfaceStyleObservation(for webView: WKWebView) {
@@ -273,7 +277,7 @@ package final class InterfaceModel {
         for key: WebInspectorTab.ContentKey,
         make: () -> Content
     ) -> Content {
-        contentCache.viewController(for: key, make: make)
+        contentCache.viewController(for: key, epoch: contextBoundContentRevision, make: make)
     }
 
     package func networkPanelModel(for context: WebInspectorContext) -> NetworkPanelModel {
