@@ -584,6 +584,10 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         id.proxyID
     }
 
+    var backendResourceIdentifier: Network.BackendResourceID? {
+        currentRequest.backendResourceIdentifier
+    }
+
     var isActive: Bool {
         switch state {
         case .pending,
@@ -919,7 +923,8 @@ public final class NetworkRequest: WebInspectorFetchableModel {
             headers: request.headers,
             postData: request.postData,
             referrerPolicy: request.referrerPolicy,
-            integrity: request.integrity
+            integrity: request.integrity,
+            backendResourceIdentifier: request.backendResourceIdentifier
         )
     }
 
@@ -931,7 +936,8 @@ public final class NetworkRequest: WebInspectorFetchableModel {
             headers: currentRequest.headers,
             postData: currentRequest.postData,
             referrerPolicy: currentRequest.referrerPolicy,
-            integrity: currentRequest.integrity
+            integrity: currentRequest.integrity,
+            backendResourceIdentifier: currentRequest.backendResourceIdentifier
         )
     }
 
@@ -952,7 +958,8 @@ public final class NetworkRequest: WebInspectorFetchableModel {
             headers: headers,
             postData: currentRequest.postData,
             referrerPolicy: currentRequest.referrerPolicy,
-            integrity: currentRequest.integrity
+            integrity: currentRequest.integrity,
+            backendResourceIdentifier: currentRequest.backendResourceIdentifier
         )
     }
 

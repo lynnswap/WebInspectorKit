@@ -892,7 +892,14 @@ private enum LiveProxyCommandEncoder {
 
         case (.network, "getResponseBody"):
             let payload = try payload(command.payload, as: Network.GetResponseBodyPayload.self, command: command)
-            return try data(["requestId": payload.id.unscopedRawValue])
+            var object: [String: Any] = ["requestId": payload.id.unscopedRawValue]
+            if let backendResourceIdentifier = payload.backendResourceIdentifier {
+                object["backendResourceIdentifier"] = [
+                    "sourceProcessID": backendResourceIdentifier.sourceProcessID,
+                    "resourceID": backendResourceIdentifier.resourceID,
+                ]
+            }
+            return try data(object)
 
         case (.console, "setLoggingChannelLevel"):
             let payload = try payload(command.payload, as: Console.SetLoggingChannelLevelPayload.self, command: command)

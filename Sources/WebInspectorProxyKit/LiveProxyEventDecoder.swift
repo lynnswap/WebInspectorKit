@@ -169,7 +169,10 @@ enum LiveProxyEventDecoder {
             let params = try decode(RequestWillBeSentParams.self, from: event)
             return .requestWillBeSent(
                 id: Network.Request.ID(params.requestId),
-                request: params.request.proxyRequest(id: params.requestId),
+                request: params.request.proxyRequest(
+                    id: params.requestId,
+                    backendResourceIdentifier: params.backendResourceIdentifier?.proxyIdentifier
+                ),
                 resourceType: params.type.map(Network.ResourceType.init(rawValue:)),
                 redirectResponse: params.redirectResponse?.proxyResponse(fallbackURL: params.request.url),
                 timestamp: params.timestamp
@@ -639,6 +642,16 @@ private struct RequestWillBeSentParams: Decodable {
     var type: String?
     var redirectResponse: ResponsePayload?
     var timestamp: Double
+    var backendResourceIdentifier: BackendResourceIdentifierPayload?
+}
+
+private struct BackendResourceIdentifierPayload: Decodable {
+    var sourceProcessID: String
+    var resourceID: String
+
+    var proxyIdentifier: Network.BackendResourceID {
+        Network.BackendResourceID(sourceProcessID: sourceProcessID, resourceID: resourceID)
+    }
 }
 
 private struct ResponseReceivedParams: Decodable {
@@ -683,7 +696,10 @@ private struct RequestPayload: Decodable {
     var referrerPolicy: String?
     var integrity: String?
 
-    func proxyRequest(id: String) -> Network.Request {
+    func proxyRequest(
+        id: String,
+        backendResourceIdentifier: Network.BackendResourceID? = nil
+    ) -> Network.Request {
         Network.Request(
             id: Network.Request.ID(id),
             url: url,
@@ -691,7 +707,8 @@ private struct RequestPayload: Decodable {
             headers: headers ?? [:],
             postData: postData,
             referrerPolicy: referrerPolicy.map(Network.ReferrerPolicy.init(rawValue:)),
-            integrity: integrity
+            integrity: integrity,
+            backendResourceIdentifier: backendResourceIdentifier
         )
     }
 }

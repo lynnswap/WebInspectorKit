@@ -1443,6 +1443,59 @@ func transportBackendDeliversFrameNetworkEventsToCurrentPageRoute() async throws
 }
 
 @Test
+func transportBackendForwardsBackendResourceIdentifierToResponseBodyCommand() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+
+    let eventTask = Task {
+        var iterator = target.network.events.makeAsyncIterator()
+        return await iterator.next()
+    }
+
+    await waitForEventSubscription(target, domain: .network)
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        method: "Network.requestWillBeSent",
+        params: #"{"requestId":"cached-request","request":{"url":"https://example.test/cached","method":"GET"},"timestamp":1,"type":"Image","backendResourceIdentifier":{"sourceProcessID":"77","resourceID":"1234"}}"#
+    )
+
+    let event = try #require(try await value(of: eventTask))
+    guard case let .requestWillBeSent(id, request, _, _, _) = event else {
+        Issue.record("Expected Network.requestWillBeSent for the current page.")
+        return
+    }
+    #expect(request.backendResourceIdentifier == Network.BackendResourceID(
+        sourceProcessID: "77",
+        resourceID: "1234"
+    ))
+
+    let bodyTask = Task {
+        try await target.network.responseBody(
+            for: id,
+            backendResourceIdentifier: request.backendResourceIdentifier
+        )
+    }
+    let bodyCommand = try await waitForTargetMessage(backend, method: "Network.getResponseBody")
+    let parameters = try messageParameters(bodyCommand.message)
+    #expect(parameters["requestId"] as? String == "cached-request")
+    let identifier = try #require(parameters["backendResourceIdentifier"] as? [String: Any])
+    #expect(identifier["sourceProcessID"] as? String == "77")
+    #expect(identifier["resourceID"] as? String == "1234")
+    await receiveTargetReply(
+        transport,
+        targetID: bodyCommand.targetIdentifier,
+        messageID: try messageID(bodyCommand.message),
+        result: #"{"body":"cached body","base64Encoded":false}"#
+    )
+    let body = try await bodyTask.value
+    #expect(body.data == "cached body")
+}
+
+@Test
 func transportBackendDeliversParentlessFrameNetworkEventsToCurrentPageRoute() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))

@@ -24,11 +24,14 @@ public enum Network {
             )
         }
 
-        public func responseBody(for id: Request.ID) async throws -> Body {
+        public func responseBody(
+            for id: Request.ID,
+            backendResourceIdentifier: BackendResourceID? = nil
+        ) async throws -> Body {
             try await context.dispatch(
                 domain: .network,
                 method: "getResponseBody",
-                payload: GetResponseBodyPayload(id: id),
+                payload: GetResponseBodyPayload(id: id, backendResourceIdentifier: backendResourceIdentifier),
                 returning: Body.self
             )
         }
@@ -50,9 +53,11 @@ public enum Network {
 
     package struct GetResponseBodyPayload: Sendable {
         package let id: Request.ID
+        package let backendResourceIdentifier: BackendResourceID?
 
-        package init(id: Request.ID) {
+        package init(id: Request.ID, backendResourceIdentifier: BackendResourceID? = nil) {
             self.id = id
+            self.backendResourceIdentifier = backendResourceIdentifier
         }
     }
 
@@ -72,6 +77,7 @@ public enum Network {
         public let postData: String?
         public let referrerPolicy: ReferrerPolicy?
         public let integrity: String?
+        public let backendResourceIdentifier: BackendResourceID?
 
         public init(
             id: ID,
@@ -80,7 +86,8 @@ public enum Network {
             headers: [String: String] = [:],
             postData: String? = nil,
             referrerPolicy: ReferrerPolicy? = nil,
-            integrity: String? = nil
+            integrity: String? = nil,
+            backendResourceIdentifier: BackendResourceID? = nil
         ) {
             self.id = id
             self.url = url
@@ -89,6 +96,20 @@ public enum Network {
             self.postData = postData
             self.referrerPolicy = referrerPolicy
             self.integrity = integrity
+            self.backendResourceIdentifier = backendResourceIdentifier
+        }
+    }
+
+    /// WebKit's backend-process resource identity for a request. Some
+    /// resources (network-process or cached loads) key their bodies by this
+    /// identifier, so body commands must forward it when present.
+    public struct BackendResourceID: Hashable, Sendable {
+        public let sourceProcessID: String
+        public let resourceID: String
+
+        public init(sourceProcessID: String, resourceID: String) {
+            self.sourceProcessID = sourceProcessID
+            self.resourceID = resourceID
         }
     }
 

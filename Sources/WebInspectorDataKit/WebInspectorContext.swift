@@ -869,7 +869,10 @@ public final class WebInspectorContext {
         }
 
         do {
-            let body = try await currentPage.network.responseBody(for: request.proxyID)
+            let body = try await currentPage.network.responseBody(
+                for: request.proxyID,
+                backendResourceIdentifier: request.backendResourceIdentifier
+            )
             request.finishResponseBodyFetch(result: .success(body))
         } catch let error as WebInspectorProxyError {
             request.finishResponseBodyFetch(result: .failure(error))
