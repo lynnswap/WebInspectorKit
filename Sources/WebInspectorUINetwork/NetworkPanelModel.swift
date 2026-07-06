@@ -71,6 +71,9 @@ package final class NetworkPanelModel {
         guard let selectedRequestID else {
             return nil
         }
+        // Observe the unfiltered request topology so registry removals invalidate
+        // the selection without tying selection lifetime to display filters.
+        _ = clearableRequests.topologyRevision
         return request(for: selectedRequestID)
     }
 
