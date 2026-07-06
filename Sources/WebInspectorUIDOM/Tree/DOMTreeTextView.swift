@@ -2830,7 +2830,8 @@ extension DOMTreeTextView {
     func waitForRowDocumentForTesting(timeout: Duration = .seconds(5)) async -> Bool {
         let start = ContinuousClock.now
         while true {
-            guard ContinuousClock.now - start < timeout else {
+            let elapsed = ContinuousClock.now - start
+            guard elapsed < timeout else {
                 return false
             }
             if domTreeRenderInvalidationTask != nil {
@@ -2838,10 +2839,11 @@ extension DOMTreeTextView {
                 await Task.yield()
                 continue
             }
-            guard await rowRenderBuildCoordinator.waitForCurrentBuild(timeout: timeout) else {
+            guard await rowRenderBuildCoordinator.waitForCurrentBuild(timeout: timeout - elapsed) else {
                 return false
             }
-            if domTreeRenderInvalidationTask == nil {
+            if domTreeRenderInvalidationTask == nil,
+               !rowRenderBuildCoordinator.hasCurrentBuild {
                 return true
             }
         }

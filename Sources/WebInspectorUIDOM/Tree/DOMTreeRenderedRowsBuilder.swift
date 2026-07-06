@@ -20,9 +20,16 @@ extension DOMTreeTextView {
         private var currentRequest: DOMTreeTextView.RowRenderBuildRequest?
         private var generation: UInt64 = 0
 #if DEBUG
+        private struct BuildCompletionWaiter {
+            let continuation: CheckedContinuation<Bool, Never>
+            let timeoutTask: Task<Void, Never>
+        }
+
         private var shouldSuspendNextBuildForTesting = false
         private var suspendedBuildContinuationForTesting: CheckedContinuation<Void, Never>?
         private var buildSuspensionWaitersForTesting: [CheckedContinuation<Void, Never>] = []
+        private var nextBuildCompletionWaiterID: UInt64 = 0
+        private var buildCompletionWaiters: [UInt64: BuildCompletionWaiter] = [:]
 #endif
 
         init(builder: DOMTreeTextView.RowRenderBuilder) {
@@ -48,25 +55,30 @@ extension DOMTreeTextView {
             currentRequest = nil
 #if DEBUG
             resumeSuspendedBuildForTesting()
+            resolveBuildCompletionWaiters(result: true)
 #endif
         }
 
+#if DEBUG
         func waitForCurrentBuild(timeout: Duration = .seconds(5)) async -> Bool {
-            let start = ContinuousClock.now
-            while true {
-                guard let task else {
-                    return true
+            guard task != nil else {
+                return true
+            }
+
+            return await withCheckedContinuation { continuation in
+                let waiterID = nextBuildCompletionWaiterID
+                nextBuildCompletionWaiterID &+= 1
+                let timeoutTask = Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: timeout)
+                    self?.resolveBuildCompletionWaiter(id: waiterID, result: false)
                 }
-                if ContinuousClock.now - start >= timeout {
-                    return false
-                }
-                if task.isCancelled {
-                    await Task.yield()
-                    continue
-                }
-                await Task.yield()
+                buildCompletionWaiters[waiterID] = BuildCompletionWaiter(
+                    continuation: continuation,
+                    timeoutTask: timeoutTask
+                )
             }
         }
+#endif
 
         func currentBuildMayRender(_ invalidation: DOMTreeRenderInvalidation) -> Bool {
             currentRequest?.mayRender(invalidation) == true
@@ -100,6 +112,9 @@ extension DOMTreeTextView {
                     if generation == buildGeneration {
                         task = nil
                         currentRequest = nil
+#if DEBUG
+                        resolveBuildCompletionWaiters(result: true)
+#endif
                         if shouldNotifyFinish {
                             didFinish?()
                         }
@@ -152,6 +167,21 @@ extension DOMTreeTextView {
 
         func cachedMarkupKeysForTesting() -> Set<DOMTreeTextView.MarkupCacheKey> {
             builder.cachedMarkupKeysForTesting
+        }
+
+        private func resolveBuildCompletionWaiters(result: Bool) {
+            let waiterIDs = Array(buildCompletionWaiters.keys)
+            for waiterID in waiterIDs {
+                resolveBuildCompletionWaiter(id: waiterID, result: result)
+            }
+        }
+
+        private func resolveBuildCompletionWaiter(id: UInt64, result: Bool) {
+            guard let waiter = buildCompletionWaiters.removeValue(forKey: id) else {
+                return
+            }
+            waiter.timeoutTask.cancel()
+            waiter.continuation.resume(returning: result)
         }
 
         func resumeSuspendedBuildForTesting() {

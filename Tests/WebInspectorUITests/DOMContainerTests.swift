@@ -1069,7 +1069,7 @@ struct DOMContainerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         let treeView = viewController.displayedDOMTreeTextViewForTesting
-        await treeView.waitForRowDocumentForTesting()
+        #expect(await treeView.waitForRowDocumentForTesting())
 
         await enqueueDOMRemoveNodeWithUndoMark(on: fixture.runtime.backend)
         await treeView.deleteRowFromMenuForTesting(containing: "<input", undoManager: undoManager)
@@ -1102,7 +1102,7 @@ struct DOMContainerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         let treeView = viewController.displayedDOMTreeTextViewForTesting
-        await treeView.waitForRowDocumentForTesting()
+        #expect(await treeView.waitForRowDocumentForTesting())
 
         treeView.primaryClickRowForTesting(containing: "<input")
         treeView.primaryClickRowForTesting(containing: "<button", modifiers: .command)
@@ -1148,7 +1148,7 @@ struct DOMContainerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         let treeView = viewController.displayedDOMTreeTextViewForTesting
-        await treeView.waitForRowDocumentForTesting()
+        #expect(await treeView.waitForRowDocumentForTesting())
 
         treeView.primaryClickRowForTesting(containing: "<input")
         treeView.primaryClickRowForTesting(containing: "<button", modifiers: .command)
@@ -1181,7 +1181,7 @@ struct DOMContainerTests {
         let selectionWindow = showInWindow(selectionViewController)
         defer { selectionWindow.isHidden = true }
         let selectionTreeView = selectionViewController.displayedDOMTreeTextViewForTesting
-        await selectionTreeView.waitForRowDocumentForTesting()
+        #expect(await selectionTreeView.waitForRowDocumentForTesting())
 
         await selectionFixture.runtime.backend.enqueue((), for: "DOM", method: "highlightNode")
         selectionTreeView.primaryClickRowForTesting(containing: "<input")
@@ -1199,7 +1199,7 @@ struct DOMContainerTests {
         let hoverWindow = showInWindow(hoverViewController)
         defer { hoverWindow.isHidden = true }
         let hoverTreeView = hoverViewController.displayedDOMTreeTextViewForTesting
-        await hoverTreeView.waitForRowDocumentForTesting()
+        #expect(await hoverTreeView.waitForRowDocumentForTesting())
         let hoverBaselineCount = await hoverFixture.runtime.backend.recordedCommands()
             .filter { $0.domain == "DOM" && $0.method == "highlightNode" }
             .count
@@ -1232,7 +1232,7 @@ struct DOMContainerTests {
         let hideWindow = showInWindow(hideViewController)
         defer { hideWindow.isHidden = true }
         let hideTreeView = hideViewController.displayedDOMTreeTextViewForTesting
-        await hideTreeView.waitForRowDocumentForTesting()
+        #expect(await hideTreeView.waitForRowDocumentForTesting())
 
         await hideFixture.runtime.backend.enqueue((), for: "DOM", method: "highlightNode")
         hideTreeView.hoverRowForTesting(containing: "<body")
@@ -1250,7 +1250,7 @@ struct DOMContainerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         let treeView = viewController.displayedDOMTreeTextViewForTesting
-        await treeView.waitForRowDocumentForTesting()
+        #expect(await treeView.waitForRowDocumentForTesting())
 
         treeView.primaryClickRowForTesting(containing: "<input")
         _ = await recordedDOMCommands(on: fixture.runtime.backend, method: "highlightNode", count: 1)
