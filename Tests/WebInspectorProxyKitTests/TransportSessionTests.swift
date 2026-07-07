@@ -400,6 +400,20 @@ func detachFailsPendingRepliesAndClosesStreams() async throws {
 }
 
 @Test
+func eventStreamsRequestedAfterDetachFinishImmediately() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend, responseTimeout: testResponseTimeout)
+
+    await session.detach()
+
+    let domainStream = await session.events(for: .dom)
+    let orderedStream = await session.orderedEvents()
+
+    #expect(try await nextEvent(from: domainStream) == nil)
+    #expect(try await nextEvent(from: orderedStream) == nil)
+}
+
+@Test
 func waitForCurrentMainPageTargetFailsAfterDetach() async throws {
     let backend = FakeTransportBackend()
     let session = TransportSession(backend: backend, responseTimeout: testResponseTimeout)
@@ -1298,6 +1312,16 @@ private func waitForRootMessage(_ backend: FakeTransportBackend, timeout: Durati
 private func waitForTargetMessage(_ backend: FakeTransportBackend, timeout: Duration = testWaitTimeout) async throws -> SentTargetMessage {
     try await waitForBackendValue(timeout: timeout) {
         try await backend.waitForTargetMessage()
+    }
+}
+
+private func nextEvent(
+    from stream: AsyncStream<ProtocolEvent>,
+    timeout: Duration = testWaitTimeout
+) async throws -> ProtocolEvent? {
+    try await waitForBackendValue(timeout: timeout) {
+        var iterator = stream.makeAsyncIterator()
+        return await iterator.next()
     }
 }
 
