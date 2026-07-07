@@ -335,7 +335,7 @@ package final class DOMElementViewController: UICollectionViewController {
     private func property(
         for item: DOMElementStylePresentationItemIdentifier,
         in section: CSSStyleSection
-    ) -> CSS.Property? {
+    ) -> CSSStyleProperty? {
         styleSnapshotCoordinator.property(for: item, in: section)
     }
 

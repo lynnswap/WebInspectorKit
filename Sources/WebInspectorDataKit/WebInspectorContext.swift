@@ -99,7 +99,7 @@ public final class WebInspectorContext {
     private var styleRefreshTask: Task<Void, Never>?
     private var styleRefreshGeneration: Int
     private var isStyleHydrationActive: Bool
-    private var styleToggleTasks: [CSS.Property.ID: Task<Void, Never>]
+    private var styleToggleTasks: [CSSStyleProperty.ID: Task<Void, Never>]
     private var eventPumps: [WebInspectorEventPump]
     private var inspectorTrackingTarget: WebInspectorTarget?
     private var networkTrackingTarget: WebInspectorTarget?
@@ -3174,7 +3174,7 @@ extension WebInspectorContext {
     }
 
     package func setCSSProperty(
-        _ id: CSS.Property.ID,
+        _ id: CSSStyleProperty.ID,
         enabled: Bool,
         options: WebInspectorMutationOptions,
         isolation: isolated (any Actor) = #isolation
@@ -3207,7 +3207,7 @@ extension WebInspectorContext {
 
     package func setCSSDeclarationText(
         _ text: String,
-        for id: CSS.Property.ID,
+        for id: CSSStyleProperty.ID,
         options: WebInspectorMutationOptions,
         isolation: isolated (any Actor) = #isolation
     ) async throws {
@@ -3239,13 +3239,14 @@ extension WebInspectorContext {
 
     package func setCSSRuleSelector(
         _ selector: String,
-        for id: CSS.Rule.ID,
+        for id: CSSStyleRule.ID,
         options: WebInspectorMutationOptions,
         isolation: isolated (any Actor) = #isolation
     ) async throws {
         requireOwner(isolation)
-        let target = try cssTarget(owning: id)
-        _ = try await target.css.setRuleSelector(id, selector: selector)
+        let proxyID = id.proxyID
+        let target = try cssTarget(owning: proxyID)
+        _ = try await target.css.setRuleSelector(proxyID, selector: selector)
         recordDOMEditHistoryTarget(target, options: options)
         try await Self.markDOMUndoableStateIfNeeded(on: target, options: options)
         refreshSelectedStylesIfHydrationActive(isolation: isolation)
@@ -3272,7 +3273,7 @@ extension WebInspectorContext {
     /// property is already in flight.
     @discardableResult
     public func requestSetCSSProperty(
-        _ id: CSS.Property.ID,
+        _ id: CSSStyleProperty.ID,
         enabled: Bool,
         options: WebInspectorMutationOptions,
         isolation: isolated (any Actor) = #isolation

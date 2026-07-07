@@ -144,7 +144,7 @@ func sectionBuilderMakesNoSectionsWithoutInlineStyles() throws {
     let sections = CSSStyleSectionBuilder.makeSections(matched: matched, inline: nil)
 
     #expect(sections.map(\.kind) == [.rule])
-    #expect(sections.first?.rule?.selectorList.text == ".only")
+    #expect(sections.first?.rule?.selectorText == ".only")
 }
 
 private func builderRule(

@@ -1,7 +1,6 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
 import WebInspectorDataKit
-import WebInspectorProxyKit
 
 @MainActor
 package enum DOMElementStyleVariableVisibility {
@@ -64,7 +63,7 @@ package enum DOMElementStyleVariableVisibility {
         name.hasPrefix("--")
     }
 
-    private static func contributesCSSVariableUsage(_ property: CSS.Property) -> Bool {
+    private static func contributesCSSVariableUsage(_ property: CSSStyleProperty) -> Bool {
         property.isEnabled && !property.isOverridden
     }
 

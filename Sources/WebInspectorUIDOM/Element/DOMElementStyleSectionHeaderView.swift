@@ -1,7 +1,6 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
 import WebInspectorDataKit
-import WebInspectorProxyKit
 import UIKit
 
 package enum DOMElementStyleSectionHeaderText {
@@ -21,28 +20,28 @@ package enum DOMElementStyleSectionHeaderText {
         }
     }
 
-    package static func displayOriginText(for rule: CSS.Rule) -> String? {
+    package static func displayOriginText(for rule: CSSStyleRule) -> String? {
         if let sourceLocation = sourceLocation(for: rule) {
             return displayText(for: sourceLocation)
         }
         return displayText(for: rule.origin)
     }
 
-    package static func accessibilityOriginText(for rule: CSS.Rule) -> String? {
+    package static func accessibilityOriginText(for rule: CSSStyleRule) -> String? {
         if let sourceLocation = sourceLocation(for: rule) {
             return fullDisplayText(for: sourceLocation)
         }
         return displayText(for: rule.origin)
     }
 
-    /// Source location from what `CSS.Rule` carries directly: the selector
+    /// Source location from what `CSSStyleRule` carries directly: the selector
     /// range when present, otherwise the rule's reported source line.
     /// Stylesheet-header offsets are not applied (no header registry yet).
-    package static func sourceLocation(for rule: CSS.Rule) -> SourceLocation? {
+    package static func sourceLocation(for rule: CSSStyleRule) -> SourceLocation? {
         guard let sourceURL = rule.sourceURL, !sourceURL.isEmpty else {
             return nil
         }
-        if let selectorRange = rule.selectorList.range {
+        if let selectorRange = rule.selectorRange {
             return SourceLocation(
                 sourceURL: sourceURL,
                 line: selectorRange.startLine,
@@ -95,7 +94,7 @@ package enum DOMElementStyleSectionHeaderText {
         return sourceURL
     }
 
-    package static func displayText(for origin: CSS.Origin) -> String? {
+    package static func displayText(for origin: CSSStyleRule.Origin) -> String? {
         switch origin.rawValue {
         case "user":
             String(localized: "dom.element.styles.origin.user", bundle: WebInspectorUILocalization.bundle)

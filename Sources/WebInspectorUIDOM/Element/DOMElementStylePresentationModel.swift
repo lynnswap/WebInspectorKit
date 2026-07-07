@@ -1,25 +1,12 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
 import WebInspectorDataKit
-import WebInspectorProxyKit
 import UIKit
-
-extension CSS.Property {
-    /// Whether the declaration currently applies (not commented out).
-    var isEnabled: Bool {
-        status != .disabled
-    }
-
-    /// Whether another declaration overrides this one in the cascade.
-    var isOverridden: Bool {
-        status == .inactive
-    }
-}
 
 @MainActor
 package struct DOMElementStylePresentationItemIdentifier: Hashable {
     package enum Kind: Hashable {
-        case property(propertyID: CSS.Property.ID, propertyIndex: Int)
+        case property(propertyID: CSSStyleProperty.ID, propertyIndex: Int)
         case hiddenUnusedVariables(count: Int)
     }
 
@@ -154,11 +141,11 @@ package final class DOMElementStyleSnapshotCoordinator {
         var value: String
         var priority: String?
         var text: String?
-        var status: CSS.Status
+        var status: CSSStyleProperty.Status
         var isEditable: Bool
         var isModifiedByInspector: Bool
 
-        init(_ property: CSS.Property) {
+        init(_ property: CSSStyleProperty) {
             name = property.name
             value = property.value
             priority = property.priority
@@ -267,7 +254,7 @@ package final class DOMElementStyleSnapshotCoordinator {
     package func property(
         for item: DOMElementStylePresentationItemIdentifier,
         in section: CSSStyleSection
-    ) -> CSS.Property? {
+    ) -> CSSStyleProperty? {
         guard case let .property(propertyID, _) = item.kind else {
             return nil
         }

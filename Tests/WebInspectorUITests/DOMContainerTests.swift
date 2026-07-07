@@ -116,7 +116,7 @@ struct DOMContainerTests {
         #expect(DOMElementStyleSectionHeaderText.displayText(
             for: DOMElementStyleSectionHeaderText.SourceLocation(sourceURL: "styles.css", line: 0, column: 81)
         ) == "styles.css:1:82")
-        #expect(DOMElementStyleSectionHeaderText.displayText(for: CSS.Origin(rawValue: "user-agent"))?.isEmpty == false)
+        #expect(DOMElementStyleSectionHeaderText.displayText(for: CSSStyleRule.Origin(rawValue: "user-agent"))?.isEmpty == false)
     }
 
     @Test
@@ -766,8 +766,8 @@ struct DOMContainerTests {
 
     @Test
     func elementStylePropertyViewSendsToggleActionWithImmediateControlFeedback() {
-        let propertyID = CSS.Property.ID("test-style:0")
-        let property = CSS.Property(
+        let propertyID = CSSStyleProperty.ID("test-style:0")
+        let property = CSSStyleProperty(
             id: propertyID,
             name: "margin",
             value: "0",
@@ -776,7 +776,7 @@ struct DOMContainerTests {
             isEditable: true
         )
         let propertyView = DOMElementStylePropertyView()
-        var requestedPropertyID: CSS.Property.ID?
+        var requestedPropertyID: CSSStyleProperty.ID?
         var requestedEnabled: Bool?
         propertyView.bind(property: property) { propertyID, enabled in
             requestedPropertyID = propertyID
@@ -801,16 +801,16 @@ struct DOMContainerTests {
 
     @Test
     func elementStylePropertyViewIgnoresNonEditableProperties() {
-        let nonEditable = CSS.Property(
-            id: CSS.Property.ID("test-style:0"),
+        let nonEditable = CSSStyleProperty(
+            id: CSSStyleProperty.ID("test-style:0"),
             name: "margin",
             value: "0",
             text: "margin: 0;",
             status: .active,
             isEditable: false
         )
-        let implicit = CSS.Property(
-            id: CSS.Property.ID("test-style:1"),
+        let implicit = CSSStyleProperty(
+            id: CSSStyleProperty.ID("test-style:1"),
             name: "padding",
             value: "0",
             text: "padding: 0;",
@@ -843,8 +843,8 @@ struct DOMContainerTests {
 
     @Test
     func elementStylePropertyViewNormalizesMultilinePropertyText() {
-        let property = CSS.Property(
-            id: CSS.Property.ID("test-style:0"),
+        let property = CSSStyleProperty(
+            id: CSSStyleProperty.ID("test-style:0"),
             name: "background",
             value: "red",
             text: "background:\n    red;",
@@ -1345,9 +1345,9 @@ struct DOMContainerTests {
     }
 
     private struct BodyStyleIDs {
-        var margin: CSS.Property.ID
-        var boxSizing: CSS.Property.ID
-        var fontSize: CSS.Property.ID
+        var margin: CSSStyleProperty.ID
+        var boxSizing: CSSStyleProperty.ID
+        var fontSize: CSSStyleProperty.ID
     }
 
     private struct DOMNavigationKeyCommandSpec: Hashable {
@@ -1530,9 +1530,9 @@ struct DOMContainerTests {
             ])
         )
         return BodyStyleIDs(
-            margin: CSS.Property.ID("\(styleID):0"),
-            boxSizing: CSS.Property.ID("\(styleID):1"),
-            fontSize: CSS.Property.ID("\(styleID):2")
+            margin: CSSStyleProperty.ID("\(styleID):0"),
+            boxSizing: CSSStyleProperty.ID("\(styleID):1"),
+            fontSize: CSSStyleProperty.ID("\(styleID):2")
         )
     }
 

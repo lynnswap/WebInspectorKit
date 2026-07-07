@@ -4758,11 +4758,12 @@ func cssRuleSelectorEditsMarkUndoableStateOnOwningTarget() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (_, context) = try await startContext(runtime: runtime)
     let frameTarget = await runtime.proxy.installTargetForTesting(kind: .frame)
-    let ruleID = CSS.Rule.ID("frame-rule", scopedToTargetRawValue: frameTarget.id.rawValue)
+    let proxyRuleID = CSS.Rule.ID("frame-rule", scopedToTargetRawValue: frameTarget.id.rawValue)
+    let ruleID = CSSStyleRule.ID(proxyRuleID)
 
     await runtime.backend.enqueue(
         CSS.Rule(
-            id: ruleID,
+            id: proxyRuleID,
             selectorList: CSS.Rule.SelectorList(selectors: [".updated"], text: ".updated"),
             origin: CSS.Origin(rawValue: "regular"),
             style: CSS.Style(id: CSS.Style.ID("frame-style", scopedToTargetRawValue: frameTarget.id.rawValue))
@@ -4778,7 +4779,7 @@ func cssRuleSelectorEditsMarkUndoableStateOnOwningTarget() async throws {
     let setRuleSelector = try #require(commands.first { $0.domain == "CSS" && $0.method == "setRuleSelector" })
     #expect(setRuleSelector.targetID == frameTarget.id)
     #expect(setRuleSelector.route == RoutingTargetID(frameTarget.id.rawValue))
-    #expect(setRuleSelector.payload.cast(as: CSS.SetRuleSelectorPayload.self)?.id == ruleID)
+    #expect(setRuleSelector.payload.cast(as: CSS.SetRuleSelectorPayload.self)?.id == proxyRuleID)
 
     let markUndoableState = try #require(commands.first { $0.domain == "DOM" && $0.method == "markUndoableState" })
     #expect(markUndoableState.targetID == frameTarget.id)

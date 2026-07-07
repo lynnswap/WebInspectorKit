@@ -1,6 +1,6 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
-import WebInspectorProxyKit
+import WebInspectorDataKit
 import UIKit
 
 @MainActor
@@ -8,7 +8,7 @@ package final class DOMElementStylePropertyCollectionCell: UICollectionViewListC
     private static let modifiedBackgroundColor = UIColor.systemGreen.withProminence(.quaternary).withAlphaComponent(0.99)
 
     private let propertyView = DOMElementStylePropertyView()
-    private var property: CSS.Property?
+    private var property: CSSStyleProperty?
     private var toggleAction: DOMElementStylePropertyView.ToggleAction?
 
     override package init(frame: CGRect) {
@@ -38,7 +38,7 @@ package final class DOMElementStylePropertyCollectionCell: UICollectionViewListC
     /// once and is re-rendered through the coordinator's reconfigure path
     /// when the row's content changes.
     package func bind(
-        property: CSS.Property,
+        property: CSSStyleProperty,
         onToggle: DOMElementStylePropertyView.ToggleAction?
     ) {
         self.property = property
@@ -70,7 +70,7 @@ package final class DOMElementStylePropertyCollectionCell: UICollectionViewListC
         ])
     }
 
-    private func render(_ property: CSS.Property) {
+    private func render(_ property: CSSStyleProperty) {
         propertyView.render(property: property, onToggle: toggleAction)
         renderBackground(
             isModifiedByInspector: property.isModifiedByInspector,

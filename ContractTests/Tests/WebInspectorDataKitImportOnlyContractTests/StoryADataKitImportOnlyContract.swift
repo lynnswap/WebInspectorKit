@@ -23,6 +23,9 @@ private actor DataKitImportOnlyActor {
         _ = context.rootNode?.children
         _ = context.selectedNode?.attributes
         _ = context.selectedNode?.attributeList.first?.name
+        _ = context.selectedNode?.elementStyles?.sections.first?.rule?.selectorText
+        _ = context.selectedNode?.elementStyles?.sections.first?.style.properties.first?.name
+        _ = context.selectedNode?.elementStyles?.computedProperties.first?.value
         _ = context.isElementPickerEnabled
         context.clearNetworkRequests()
         let treeController = try await context.treeController()

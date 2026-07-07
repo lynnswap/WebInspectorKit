@@ -146,7 +146,7 @@ public final class CSSModelController {
     }
 
     public func setProperty(
-        _ propertyID: CSS.Property.ID,
+        _ propertyID: CSSStyleProperty.ID,
         enabled: Bool,
         options: WebInspectorMutationOptions = .automatic,
         isolation: isolated (any Actor) = #isolation
@@ -156,7 +156,7 @@ public final class CSSModelController {
 
     @discardableResult
     public func requestSetProperty(
-        _ propertyID: CSS.Property.ID,
+        _ propertyID: CSSStyleProperty.ID,
         enabled: Bool,
         options: WebInspectorMutationOptions = .automatic,
         isolation: isolated (any Actor) = #isolation
@@ -166,7 +166,7 @@ public final class CSSModelController {
 
     public func setDeclarationText(
         _ text: String,
-        for propertyID: CSS.Property.ID,
+        for propertyID: CSSStyleProperty.ID,
         options: WebInspectorMutationOptions = .automatic,
         isolation: isolated (any Actor) = #isolation
     ) async throws {
@@ -175,7 +175,7 @@ public final class CSSModelController {
 
     public func setRuleSelector(
         _ selector: String,
-        for ruleID: CSS.Rule.ID,
+        for ruleID: CSSStyleRule.ID,
         options: WebInspectorMutationOptions = .automatic,
         isolation: isolated (any Actor) = #isolation
     ) async throws {

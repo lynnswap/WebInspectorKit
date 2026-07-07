@@ -1,15 +1,15 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
-import WebInspectorProxyKit
+import WebInspectorDataKit
 import UIKit
 
 @MainActor
 package final class DOMElementStylePropertyView: UIView {
-    package typealias ToggleAction = @MainActor (CSS.Property.ID, Bool) -> Bool
+    package typealias ToggleAction = @MainActor (CSSStyleProperty.ID, Bool) -> Bool
 
     private let declarationTextView = UITextView()
     private let toggleSwitch = UISwitch()
-    private var property: CSS.Property?
+    private var property: CSSStyleProperty?
     private var toggleAction: ToggleAction?
 
     override package init(frame: CGRect) {
@@ -23,14 +23,14 @@ package final class DOMElementStylePropertyView: UIView {
     }
 
     package func bind(
-        property: CSS.Property,
+        property: CSSStyleProperty,
         onToggle: ToggleAction? = nil
     ) {
         render(property: property, onToggle: onToggle)
     }
 
     package func render(
-        property: CSS.Property,
+        property: CSSStyleProperty,
         onToggle: ToggleAction? = nil
     ) {
         self.property = property
@@ -86,23 +86,23 @@ package final class DOMElementStylePropertyView: UIView {
         ])
     }
 
-    private func renderAll(from property: CSS.Property) {
+    private func renderAll(from property: CSSStyleProperty) {
         renderDeclaration(from: property)
         renderToggleState(from: property)
         renderToggleAccessibility(from: property)
         renderRowAccessibility(from: property)
     }
 
-    private func renderDeclaration(from property: CSS.Property) {
+    private func renderDeclaration(from property: CSSStyleProperty) {
         declarationTextView.attributedText = declarationText(for: property)
     }
 
-    private func renderToggleState(from property: CSS.Property, animated: Bool = false) {
+    private func renderToggleState(from property: CSSStyleProperty, animated: Bool = false) {
         toggleSwitch.setOn(property.isEnabled, animated: animated)
         toggleSwitch.isEnabled = canToggle(property)
     }
 
-    private func renderToggleAccessibility(from property: CSS.Property) {
+    private func renderToggleAccessibility(from property: CSSStyleProperty) {
         toggleSwitch.accessibilityLabel = String(
             localized: LocalizedStringResource(
                 "dom.element.styles.toggle_property.accessibility_label",
@@ -112,7 +112,7 @@ package final class DOMElementStylePropertyView: UIView {
         )
     }
 
-    private func renderRowAccessibility(from property: CSS.Property) {
+    private func renderRowAccessibility(from property: CSSStyleProperty) {
         accessibilityIdentifier = "WebInspector.DOM.Element.StyleProperty.\(property.name)"
         accessibilityLabel = accessibilityLabel(for: property)
         accessibilityValue = accessibilityValue(for: property)
@@ -136,11 +136,11 @@ package final class DOMElementStylePropertyView: UIView {
         }
     }
 
-    private func canToggle(_ property: CSS.Property) -> Bool {
+    private func canToggle(_ property: CSSStyleProperty) -> Bool {
         property.isEditable && toggleAction != nil
     }
 
-    private func declarationText(for property: CSS.Property) -> NSAttributedString {
+    private func declarationText(for property: CSSStyleProperty) -> NSAttributedString {
         var attributes: [NSAttributedString.Key: Any] = [
             .font: declarationTextView.font ?? .preferredFont(forTextStyle: .body),
             .foregroundColor: property.status == .disabled ? UIColor.secondaryLabel : UIColor.label,
@@ -151,7 +151,7 @@ package final class DOMElementStylePropertyView: UIView {
         return NSAttributedString(string: declarationDisplayText(for: property), attributes: attributes)
     }
 
-    private func declarationDisplayText(for property: CSS.Property) -> String {
+    private func declarationDisplayText(for property: CSSStyleProperty) -> String {
         let declaration: String
         if property.status == .disabled {
             declaration = property.text ?? "/* \(declarationSourceText(for: property)) */"
@@ -161,7 +161,7 @@ package final class DOMElementStylePropertyView: UIView {
         return normalizedSingleLineDeclaration(declaration)
     }
 
-    private func declarationSourceText(for property: CSS.Property) -> String {
+    private func declarationSourceText(for property: CSSStyleProperty) -> String {
         var declaration = "\(property.name): \(property.value)"
         if let priority = property.priority, !priority.isEmpty {
             declaration += " !\(priority)"
@@ -177,11 +177,11 @@ package final class DOMElementStylePropertyView: UIView {
             .joined(separator: " ")
     }
 
-    private func accessibilityLabel(for property: CSS.Property) -> String {
+    private func accessibilityLabel(for property: CSSStyleProperty) -> String {
         declarationDisplayText(for: property)
     }
 
-    private func accessibilityValue(for property: CSS.Property) -> String {
+    private func accessibilityValue(for property: CSSStyleProperty) -> String {
         var states = [
             property.isEnabled
                 ? String(localized: "dom.element.styles.property_enabled.accessibility_value", bundle: WebInspectorUILocalization.bundle)
@@ -209,7 +209,7 @@ package final class DOMElementStylePropertyView: UIView {
         // Static preview: values do not observe, so re-render the row
         // locally with the toggled value.
         let row = DOMElementStylePropertyView()
-        @MainActor func renderRow(_ property: CSS.Property) {
+        @MainActor func renderRow(_ property: CSSStyleProperty) {
             row.render(property: property) { _, enabled in
                 renderRow(DOMElementStylePropertyViewPreviewData.toggled(property, enabled: enabled))
                 return true
@@ -224,7 +224,7 @@ package final class DOMElementStylePropertyView: UIView {
 
 @MainActor
 private enum DOMElementStylePropertyViewPreviewData {
-    static func sourceText(for property: CSS.Property) -> String {
+    static func sourceText(for property: CSSStyleProperty) -> String {
         var text = "\(property.name): \(property.value)"
         if let priority = property.priority, !priority.isEmpty {
             text += " !\(priority)"
@@ -232,8 +232,8 @@ private enum DOMElementStylePropertyViewPreviewData {
         return text + ";"
     }
 
-    static func toggled(_ property: CSS.Property, enabled: Bool) -> CSS.Property {
-        CSS.Property(
+    static func toggled(_ property: CSSStyleProperty, enabled: Bool) -> CSSStyleProperty {
+        CSSStyleProperty(
             id: property.id,
             name: property.name,
             value: property.value,
@@ -244,34 +244,34 @@ private enum DOMElementStylePropertyViewPreviewData {
         )
     }
 
-    static func makeProperties() -> [CSS.Property] {
+    static func makeProperties() -> [CSSStyleProperty] {
         [
-            CSS.Property(
-                id: CSS.Property.ID("preview-margin"),
+            CSSStyleProperty(
+                id: CSSStyleProperty.ID("preview-margin"),
                 name: "margin",
                 value: "0",
                 text: "margin: 0;",
                 status: .active,
                 isEditable: true
             ),
-            CSS.Property(
-                id: CSS.Property.ID("preview-box-sizing"),
+            CSSStyleProperty(
+                id: CSSStyleProperty.ID("preview-box-sizing"),
                 name: "box-sizing",
                 value: "border-box",
                 text: "/* box-sizing: border-box; */",
                 status: .disabled,
                 isEditable: true
             ),
-            CSS.Property(
-                id: CSS.Property.ID("preview-font-size"),
+            CSSStyleProperty(
+                id: CSSStyleProperty.ID("preview-font-size"),
                 name: "font-size",
                 value: "12px",
                 text: "font-size: 12px;",
                 status: .inactive,
                 isEditable: true
             ),
-            CSS.Property(
-                id: CSS.Property.ID("preview-margin-top"),
+            CSSStyleProperty(
+                id: CSSStyleProperty.ID("preview-margin-top"),
                 name: "margin-top",
                 value: "0",
                 implicit: true

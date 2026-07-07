@@ -47,10 +47,10 @@ public final class CSSStyles: WebInspectorPersistentModel {
     public let id: ID
     public private(set) var phase: Phase
     public private(set) var sections: [CSSStyleSection]
-    public private(set) var computedProperties: [CSS.ComputedProperty]
+    public private(set) var computedProperties: [CSSComputedProperty]
 
     @ObservationIgnored weak var modelContext: WebInspectorContext?
-    @ObservationIgnored private var inspectorBaselines: [CSS.Property.ID: CSSPropertyInspectorBaseline]
+    @ObservationIgnored private var inspectorBaselines: [CSSStyleProperty.ID: CSSPropertyInspectorBaseline]
 
     init(nodeID: DOMNode.ID, modelContext: WebInspectorContext) {
         id = ID(nodeID: nodeID)
@@ -71,8 +71,8 @@ public final class CSSStyles: WebInspectorPersistentModel {
         computedProperties: [CSS.ComputedProperty]
     ) {
         sections = CSSStyleSectionBuilder.makeSections(matched: matchedStyles, inline: inlineStyles)
-            .map { section($0, replacingStyleWith: applyingInspectorBaselines(to: $0.style)) }
-        self.computedProperties = computedProperties
+            .map { section($0, replacingStyleWith: applyingInspectorBaselines(to: $0.proxyStyle)) }
+        self.computedProperties = computedProperties.map(CSSComputedProperty.init)
         phase = .loaded
     }
 
@@ -98,7 +98,7 @@ public final class CSSStyles: WebInspectorPersistentModel {
     /// command inputs when the property is currently editable, or nil to
     /// refuse the toggle (stale phase, non-editable section/style/property,
     /// no-op toggle, or unrewritable style text).
-    func setStyleTextIntent(for propertyID: CSS.Property.ID, enabled: Bool) -> SetStyleTextIntent? {
+    func setStyleTextIntent(for propertyID: CSSStyleProperty.ID, enabled: Bool) -> SetStyleTextIntent? {
         guard phase == .loaded,
               let (sectionIndex, propertyIndex) = locateProperty(propertyID) else {
             return nil
@@ -107,7 +107,7 @@ public final class CSSStyles: WebInspectorPersistentModel {
         guard section.isEditable else {
             return nil
         }
-        let style = section.style
+        let style = section.proxyStyle
         guard style.isEditable else {
             return nil
         }
@@ -124,7 +124,7 @@ public final class CSSStyles: WebInspectorPersistentModel {
         return SetStyleTextIntent(styleID: style.id, text: text)
     }
 
-    func setDeclarationTextIntent(for propertyID: CSS.Property.ID, text replacementText: String) -> SetStyleTextIntent? {
+    func setDeclarationTextIntent(for propertyID: CSSStyleProperty.ID, text replacementText: String) -> SetStyleTextIntent? {
         guard phase == .loaded,
               let (sectionIndex, propertyIndex) = locateProperty(propertyID) else {
             return nil
@@ -133,7 +133,7 @@ public final class CSSStyles: WebInspectorPersistentModel {
         guard section.isEditable else {
             return nil
         }
-        let style = section.style
+        let style = section.proxyStyle
         guard style.isEditable else {
             return nil
         }
@@ -154,18 +154,18 @@ public final class CSSStyles: WebInspectorPersistentModel {
     /// style's ID (keeping section identity), recomputes
     /// `isModifiedByInspector` against recorded baselines, and marks the
     /// styles stale for the follow-up refresh.
-    func applySetStyleText(result: CSS.Style, for propertyID: CSS.Property.ID) {
+    func applySetStyleText(result: CSS.Style, for propertyID: CSSStyleProperty.ID) {
         var didRewriteSection = false
-        for index in sections.indices where sections[index].style.id == result.id {
+        for index in sections.indices where sections[index].proxyStyle.id == result.id {
             let section = sections[index]
             if inspectorBaselines[propertyID] == nil,
-               let property = section.style.properties.first(where: { $0.id == propertyID }) {
+               let property = section.proxyStyle.properties.first(where: { $0.id == propertyID.proxyID }) {
                 inspectorBaselines[propertyID] = CSSPropertyInspectorBaseline(property)
             }
             let normalized = CSSStyleSectionBuilder.normalizedStyle(
                 result,
                 isEditable: section.isEditable,
-                ruleOrigin: section.rule?.origin
+                ruleOrigin: section.proxyRule?.origin
             )
             sections[index] = self.section(section, replacingStyleWith: applyingInspectorBaselines(to: normalized))
             didRewriteSection = true
@@ -175,10 +175,10 @@ public final class CSSStyles: WebInspectorPersistentModel {
         }
     }
 
-    private func locateProperty(_ propertyID: CSS.Property.ID) -> (sectionIndex: Int, propertyIndex: Int)? {
+    private func locateProperty(_ propertyID: CSSStyleProperty.ID) -> (sectionIndex: Int, propertyIndex: Int)? {
         for sectionIndex in sections.indices {
-            guard let propertyIndex = sections[sectionIndex].style.properties.firstIndex(
-                where: { $0.id == propertyID }
+            guard let propertyIndex = sections[sectionIndex].proxyStyle.properties.firstIndex(
+                where: { $0.id == propertyID.proxyID }
             ) else {
                 continue
             }
@@ -188,7 +188,7 @@ public final class CSSStyles: WebInspectorPersistentModel {
     }
 
     private func section(_ section: CSSStyleSection, replacingStyleWith style: CSS.Style) -> CSSStyleSection {
-        var rule = section.rule
+        var rule = section.proxyRule
         rule?.style = style
         return CSSStyleSection(
             id: section.id,
@@ -206,12 +206,13 @@ public final class CSSStyles: WebInspectorPersistentModel {
         }
         var style = style
         style.properties = style.properties.map { property in
-            guard let baseline = inspectorBaselines[property.id] else {
+            let propertyID = CSSStyleProperty.ID(property.id)
+            guard let baseline = inspectorBaselines[propertyID] else {
                 return property
             }
             let isModified = CSSPropertyInspectorBaseline(property) != baseline
             if isModified == false {
-                inspectorBaselines[property.id] = nil
+                inspectorBaselines[propertyID] = nil
             }
             return CSS.Property(
                 id: property.id,

@@ -1,28 +1,5 @@
 import WebInspectorProxyKit
 
-public struct CSSStyleSection: Sendable, Identifiable {
-    public enum Kind: Hashable, Sendable {
-        case inlineStyle
-        case rule
-        case attributesStyle
-        case pseudoElement(String)
-        case inheritedInlineStyle(ancestorIndex: Int)
-        case inheritedRule(ancestorIndex: Int)
-    }
-
-    public struct ID: Hashable, Sendable {
-        public let kind: Kind
-        public let ordinal: Int
-    }
-
-    public let id: ID
-    public let kind: Kind
-    public let title: String?
-    public let rule: CSS.Rule?
-    public let style: CSS.Style
-    public let isEditable: Bool
-}
-
 enum CSSStyleSectionBuilder {
     static func makeSections(matched: CSS.MatchedStyles, inline: CSS.InlineStyles?) -> [CSSStyleSection] {
         var sections: [CSSStyleSection] = []

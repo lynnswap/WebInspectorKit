@@ -33,3 +33,22 @@ if rg -n "${denylist}" "${graph}"; then
   echo "error: WebInspectorDataKit public symbol graph exposes forbidden boundary symbols." >&2
   exit 1
 fi
+
+css_payload_pattern='s:20WebInspectorProxyKit3CSSO(4RuleV|5StyleV|8PropertyV|16ComputedPropertyV|6StatusO|6OriginV)'
+css_payload_hits="$(
+  jq -r --arg pattern "${css_payload_pattern}" '
+    .symbols[]
+    | select(.accessLevel == "public")
+    | select(
+        ((.declarationFragments // []) + (.names.subHeading // []))
+        | any((.preciseIdentifier? // "") | test($pattern))
+      )
+    | "  - " + (.pathComponents | join("."))
+  ' "${graph}"
+)"
+
+if [[ -n "${css_payload_hits}" ]]; then
+  echo "error: WebInspectorDataKit public CSS style surface exposes WebInspectorProxyKit payload types." >&2
+  echo "${css_payload_hits}" >&2
+  exit 1
+fi
