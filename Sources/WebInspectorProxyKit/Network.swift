@@ -121,6 +121,7 @@ public enum Network {
         public let headers: [String: String]
         public let source: Source?
         public let requestHeaders: [String: String]?
+        public let bodySize: Int?
 
         public init(
             url: String? = nil,
@@ -129,7 +130,8 @@ public enum Network {
             mimeType: String? = nil,
             headers: [String: String] = [:],
             source: Source? = nil,
-            requestHeaders: [String: String]? = nil
+            requestHeaders: [String: String]? = nil,
+            bodySize: Int? = nil
         ) {
             self.url = url
             self.status = status
@@ -138,6 +140,7 @@ public enum Network {
             self.headers = headers
             self.source = source
             self.requestHeaders = requestHeaders
+            self.bodySize = bodySize
         }
     }
 

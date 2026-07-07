@@ -7,6 +7,17 @@ private let logger = Logger(subsystem: "WebInspectorKit", category: "WebInspecto
 private struct ProtocolCommandTarget: Sendable {
     var targetID: WebInspectorTarget.ID
     var route: RoutingTargetID
+    var resultTargetScopeRawValue: String?
+
+    init(
+        targetID: WebInspectorTarget.ID,
+        route: RoutingTargetID,
+        resultTargetScopeRawValue: String? = nil
+    ) {
+        self.targetID = targetID
+        self.route = route
+        self.resultTargetScopeRawValue = resultTargetScopeRawValue
+    }
 }
 
 public actor WebInspectorProxy {
@@ -284,6 +295,7 @@ public actor WebInspectorProxy {
         let command = WebInspectorProxyCommand<Payload, Result>(
             targetID: commandTarget.targetID,
             route: commandTarget.route,
+            resultTargetScopeRawValue: commandTarget.resultTargetScopeRawValue,
             domain: domain,
             method: method,
             payload: payload
@@ -586,6 +598,13 @@ public actor WebInspectorProxy {
                 route: RoutingTargetID(scopedTargetRawValue)
             )
         }
+        if let requestNodeObjectID = Self.requestNodeObjectID(from: payload, domain: domain) {
+            return ProtocolCommandTarget(
+                targetID: targetID,
+                route: route,
+                resultTargetScopeRawValue: requestNodeObjectID.targetScopeRawValue
+            )
+        }
         if let remoteObjectID = Self.remoteObjectID(from: payload, domain: domain),
            let scopedTargetRawValue = remoteObjectID.targetScopeRawValue {
             return ProtocolCommandTarget(
@@ -731,13 +750,21 @@ public actor WebInspectorProxy {
                 return nil
             }
         case .dom:
-            guard let payload = payload as? DOM.RequestNodePayload else {
-                return nil
-            }
-            return payload.objectID
+            return nil
         default:
             return nil
         }
+    }
+
+    private nonisolated static func requestNodeObjectID<Payload: Sendable>(
+        from payload: Payload,
+        domain: WebInspectorProxyDomain
+    ) -> Runtime.RemoteObject.ID? {
+        guard domain == .dom,
+              let payload = payload as? DOM.RequestNodePayload else {
+            return nil
+        }
+        return payload.objectID
     }
 
     private func bootstrapCurrentPage(from transport: TransportSession) async throws {

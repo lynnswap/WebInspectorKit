@@ -119,6 +119,9 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
     private nonisolated func targetScopeRawValue<Payload: Sendable, Result: Sendable>(
         for command: WebInspectorProxyCommand<Payload, Result>
     ) async -> String? {
+        if let resultTargetScopeRawValue = command.resultTargetScopeRawValue {
+            return resultTargetScopeRawValue
+        }
         guard case let .target(rawValue) = command.route.storage else {
             return nil
         }

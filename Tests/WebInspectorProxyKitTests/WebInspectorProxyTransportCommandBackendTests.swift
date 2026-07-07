@@ -1582,7 +1582,7 @@ func transportBackendDecodesMemoryCacheResourceType() async throws {
         transport,
         targetID: ProtocolTarget.ID("page-main"),
         method: "Network.requestServedFromMemoryCache",
-        params: #"{"requestId":"cached-1","timestamp":3,"resource":{"url":"https://example.test/app.css","type":"Stylesheet","response":{"url":"https://example.test/app.css","status":200,"mimeType":"text/css","headers":{}}}}"#
+        params: #"{"requestId":"cached-1","timestamp":3,"resource":{"url":"https://example.test/app.css","type":"Stylesheet","bodySize":1234,"response":{"url":"https://example.test/app.css","status":200,"mimeType":"text/css","headers":{}}}}"#
     )
 
     let event = try #require(try await value(of: eventTask))
@@ -1592,6 +1592,7 @@ func transportBackendDecodesMemoryCacheResourceType() async throws {
     }
     #expect(id == Network.Request.ID("cached-1"))
     #expect(response.url == "https://example.test/app.css")
+    #expect(response.bodySize == 1234)
     #expect(resourceType == .stylesheet)
     #expect(timestamp == 3)
 }
@@ -1633,7 +1634,7 @@ func transportBackendKeepsBackendResourceIdentifierOnScopedFrameRequests() async
 }
 
 @Test
-func transportBackendScopesRequestNodeResultFromFrameTarget() async throws {
+func transportBackendRoutesRequestNodeThroughPageDOMAgentAndScopesResult() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
@@ -1649,7 +1650,7 @@ func transportBackendScopesRequestNodeResultFromFrameTarget() async throws {
         )
     }
     let requestNode = try await waitForTargetMessage(backend, method: "DOM.requestNode")
-    #expect(requestNode.targetIdentifier == ProtocolTarget.ID("frame-target"))
+    #expect(requestNode.targetIdentifier == ProtocolTarget.ID("page-main"))
     #expect(try messageParameters(requestNode.message)["objectId"] as? String == "frame-object")
     await receiveTargetReply(
         transport,

@@ -499,6 +499,35 @@ func pageTargetWithKnownNonMainFrameIsClassifiedAsFrame() async throws {
 }
 
 @Test
+func provisionalPageTargetWithKnownNonMainFrameIsClassifiedAsFrame() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend)
+
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-existing","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#)
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"iframe-page-provisional","type":"page","frameId":"child-frame","isProvisional":true}}}"#)
+    let snapshot = await session.snapshot()
+
+    #expect(snapshot.currentMainPageTargetID == ProtocolTarget.ID("page-main"))
+    #expect(snapshot.targetsByID[ProtocolTarget.ID("iframe-page-provisional")]?.kind == .frame)
+}
+
+@Test
+func oldlessProvisionalPageCommitWithNonMainFrameDoesNotRetargetCurrentPage() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend)
+
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"iframe-page-provisional","type":"page","frameId":"child-frame","isProvisional":true}}}"#)
+    await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"newTargetId":"iframe-page-provisional"}}"#)
+    let snapshot = await session.snapshot()
+
+    #expect(snapshot.currentMainPageTargetID == ProtocolTarget.ID("page-main"))
+    #expect(snapshot.targetsByID[ProtocolTarget.ID("page-main")] != nil)
+    #expect(snapshot.targetsByID[ProtocolTarget.ID("iframe-page-provisional")]?.isProvisional == false)
+}
+
+@Test
 func pageTargetWithoutFrameIDCanCommitAsCurrentPage() async throws {
     let backend = FakeTransportBackend()
     let session = TransportSession(backend: backend)

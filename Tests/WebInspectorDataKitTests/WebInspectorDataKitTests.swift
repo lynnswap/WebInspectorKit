@@ -384,6 +384,47 @@ func domMutationsAndUndoRedoUseOwningFrameTarget() async throws {
 
 @MainActor
 @Test
+func domDeleteRejectsCrossTargetSelectionBeforeRemovingNodes() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let frameTarget = await runtime.proxy.installTargetForTesting(kind: .frame)
+    let document = try #require(context.rootNode)
+    let pageNodeID = DOM.Node.ID("page-node")
+    let scopedFrameNodeID = DOM.Node.ID(
+        "frame-node",
+        scopedToTargetRawValue: frameTarget.id.rawValue
+    )
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(id: pageNodeID, nodeType: 1, nodeName: "DIV", localName: "div"),
+            DOM.Node(id: scopedFrameNodeID, nodeType: 1, nodeName: "SPAN", localName: "span"),
+        ]),
+        target: target
+    )
+    try await waitUntil {
+        context.node(for: DOMNode.ID(pageNodeID)) != nil
+            && context.node(for: DOMNode.ID(scopedFrameNodeID)) != nil
+    }
+
+    await #expect(throws: WebInspectorProxyError.commandFailed(
+        domain: "DOM",
+        method: "removeNode",
+        message: "Deleting nodes from multiple DOM targets in one mutation is not supported."
+    )) {
+        _ = try await context.dom.remove([
+            DOMNode.ID(pageNodeID),
+            DOMNode.ID(scopedFrameNodeID),
+        ])
+    }
+
+    let removeCommands = await runtime.backend.recordedCommands()
+        .filter { $0.domain == "DOM" && $0.method == "removeNode" }
+    #expect(removeCommands.isEmpty)
+}
+
+@MainActor
+@Test
 func domInspectSelectsKnownNodeAndLoadsStyles() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
@@ -5773,7 +5814,8 @@ func memoryCacheEventCreatesFinishedCachedRequestFromResponse() async throws {
                 mimeType: "text/css",
                 headers: ["Content-Type": "text/css"],
                 source: Network.Source(rawValue: "memory-cache"),
-                requestHeaders: ["Accept": "text/css"]
+                requestHeaders: ["Accept": "text/css"],
+                bodySize: 2048
             ),
             resourceType: .stylesheet,
             timestamp: 5
@@ -5800,8 +5842,8 @@ func memoryCacheEventCreatesFinishedCachedRequestFromResponse() async throws {
     #expect(request.responseReceivedTimestamp == 5)
     #expect(request.lastDataReceivedTimestamp == nil)
     #expect(request.finishedOrFailedTimestamp == 5)
-    #expect(request.decodedDataLength == 0)
-    #expect(request.encodedDataLength == 0)
+    #expect(request.decodedDataLength == 2048)
+    #expect(request.encodedDataLength == 2048)
     #expect(request.responseBody.phase == .available)
     #expect(context.registeredRequest(for: request.id) === request)
 }

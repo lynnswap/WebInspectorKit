@@ -846,8 +846,9 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         responseReceivedTimestamp = timestamp
         lastDataReceivedTimestamp = nil
         finishedOrFailedTimestamp = timestamp
-        decodedDataLength = 0
-        encodedDataLength = 0
+        let bodySize = response.bodySize.map { max(0, $0) } ?? 0
+        decodedDataLength = bodySize
+        encodedDataLength = bodySize
         metrics = nil
         redirects = []
         requestBody = NetworkBody.makeRequestBody(for: currentRequest)

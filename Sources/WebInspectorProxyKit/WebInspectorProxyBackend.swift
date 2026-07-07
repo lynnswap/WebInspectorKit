@@ -24,6 +24,7 @@ package enum WebInspectorProxyEventDomain: String, Hashable, Sendable {
 package struct WebInspectorProxyCommand<Payload: Sendable, Result: Sendable>: Sendable {
     package let targetID: WebInspectorTarget.ID
     package let route: RoutingTargetID
+    package let resultTargetScopeRawValue: String?
     package let domain: WebInspectorProxyDomain
     package let method: String
     package let payload: Payload
@@ -31,12 +32,14 @@ package struct WebInspectorProxyCommand<Payload: Sendable, Result: Sendable>: Se
     package init(
         targetID: WebInspectorTarget.ID,
         route: RoutingTargetID,
+        resultTargetScopeRawValue: String? = nil,
         domain: WebInspectorProxyDomain,
         method: String,
         payload: Payload
     ) {
         self.targetID = targetID
         self.route = route
+        self.resultTargetScopeRawValue = resultTargetScopeRawValue
         self.domain = domain
         self.method = method
         self.payload = payload

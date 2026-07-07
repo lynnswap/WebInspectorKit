@@ -723,7 +723,7 @@ private struct ResponsePayload: Decodable {
     var source: String?
     var requestHeaders: [String: String]?
 
-    func proxyResponse(fallbackURL: String?) -> Network.Response {
+    func proxyResponse(fallbackURL: String?, bodySize: Int? = nil) -> Network.Response {
         Network.Response(
             url: url ?? fallbackURL,
             status: status,
@@ -731,7 +731,8 @@ private struct ResponsePayload: Decodable {
             mimeType: mimeType,
             headers: headers ?? [:],
             source: source.map(Network.Source.init(rawValue:)),
-            requestHeaders: requestHeaders
+            requestHeaders: requestHeaders,
+            bodySize: bodySize
         )
     }
 }
@@ -763,10 +764,12 @@ private struct MetricsPayload: Decodable {
 private struct CachedResourcePayload: Decodable {
     var url: String
     var type: String
+    var bodySize: Int?
     var response: ResponsePayload?
 
     var proxyResponse: Network.Response {
-        response?.proxyResponse(fallbackURL: url) ?? Network.Response(url: url)
+        response?.proxyResponse(fallbackURL: url, bodySize: bodySize)
+            ?? Network.Response(url: url, bodySize: bodySize)
     }
 }
 

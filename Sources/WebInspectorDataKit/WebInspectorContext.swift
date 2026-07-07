@@ -391,10 +391,10 @@ public final class WebInspectorContext {
         let sortedNodes = uniqueNodes.sorted {
             snapshot.ancestorNodeIDs(of: $0.id).count > snapshot.ancestorNodeIDs(of: $1.id).count
         }
+        let deletionTargets = try validatedDeletionTargets(for: sortedNodes)
         var acceptedNodeIDs: [DOMNode.ID] = []
-        for node in sortedNodes {
+        for (node, target) in zip(sortedNodes, deletionTargets) {
             do {
-                let target = try domTarget(owning: node.id.proxyID)
                 try await target.dom.removeNode(node.id.proxyID)
                 recordDOMEditHistoryTarget(target, options: options)
                 try await Self.markDOMUndoableStateIfNeeded(on: target, options: options)
@@ -463,13 +463,12 @@ public final class WebInspectorContext {
             .sorted {
                 snapshot.ancestorNodeIDs(of: $0.id).count > snapshot.ancestorNodeIDs(of: $1.id).count
             }
+        let deletionTargets = try validatedDeletionTargets(for: sortedNodes)
         var removedNodes: [DOMNode] = []
-        for node in sortedNodes {
+        for (node, target) in zip(sortedNodes, deletionTargets) {
             do {
-                let target = try domTarget(owning: node.id.proxyID)
                 try await target.dom.removeNode(node.id.proxyID)
-                domEditHistoryTarget = target
-                didInvalidateDOMEditHistoryTarget = false
+                recordDOMEditHistoryTarget(target, options: .init())
                 try await target.dom.markUndoableState()
                 removedNodes.append(node)
             } catch {
@@ -1669,6 +1668,24 @@ public final class WebInspectorContext {
         }
         domEditHistoryTarget = target
         didInvalidateDOMEditHistoryTarget = false
+    }
+
+    private func validatedDeletionTargets(for nodes: [DOMNode]) throws -> [WebInspectorTarget] {
+        var deletionTargets: [WebInspectorTarget] = []
+        var firstTargetID: WebInspectorTarget.ID?
+        for node in nodes {
+            let target = try domTarget(owning: node.id.proxyID)
+            if let firstTargetID, firstTargetID != target.id {
+                throw WebInspectorProxyError.commandFailed(
+                    domain: "DOM",
+                    method: "removeNode",
+                    message: "Deleting nodes from multiple DOM targets in one mutation is not supported."
+                )
+            }
+            firstTargetID = target.id
+            deletionTargets.append(target)
+        }
+        return deletionTargets
     }
 
     private func currentDOMTreeSnapshot() -> DOMTreeSnapshot {

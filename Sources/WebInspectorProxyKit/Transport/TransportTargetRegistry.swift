@@ -34,6 +34,11 @@ struct TransportTargetRegistry: Sendable {
         if parentFrameID != nil {
             return .frame
         }
+        if let frameID,
+           let existingTargetID = frameTargetIDsByFrameID[frameID],
+           existingTargetID != currentMainPageTargetID {
+            return .frame
+        }
         if isProvisional == true {
             return .page
         }
@@ -167,6 +172,11 @@ struct TransportTargetRegistry: Sendable {
            newRecord.isTopLevelPage,
            let currentMainPageTargetID,
            currentMainPageTargetID != newTargetID {
+            if let frameID = newRecord.frameID,
+               let currentMainFrameID,
+               frameID != currentMainFrameID {
+                return nil
+            }
             return currentMainPageTargetID
         }
 
