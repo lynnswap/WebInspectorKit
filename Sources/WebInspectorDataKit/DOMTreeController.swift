@@ -253,8 +253,7 @@ final class DOMTreeState {
 
         let previousChildIDs = nodesByID[parent.id]
             .map(indexedSubtreeChildIDs(of:)) ?? []
-        let nextChildIDs = Set(indexedSubtreeChildIDs(of: parent))
-        for previousChildID in previousChildIDs where nextChildIDs.contains(previousChildID) == false {
+        for previousChildID in previousChildIDs {
             removeSubtree(previousChildID, nodesByID: &nodesByID, parentByNodeID: &parentByNodeID)
         }
         upsertNode(parent, parentID: parentByNodeID[parent.id], nodesByID: &nodesByID, parentByNodeID: &parentByNodeID)

@@ -687,12 +687,13 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         guard canFetchResponseBody else {
             return
         }
-        responseBody.markFetching()
+        let expectedBody = responseBody
+        expectedBody.markFetching()
         guard let modelContext else {
-            responseBody.fail(.disconnected("NetworkRequest is not registered in a WebInspectorContext."))
+            expectedBody.fail(.disconnected("NetworkRequest is not registered in a WebInspectorContext."))
             return
         }
-        await modelContext.fetchResponseBody(for: self, isolation: isolation)
+        await modelContext.fetchResponseBody(for: self, expectedBody: expectedBody, isolation: isolation)
     }
 
     func applyRequestWillBeSent(
@@ -854,12 +855,15 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         state = .finished
     }
 
-    func finishResponseBodyFetch(result: Result<Network.Body, WebInspectorProxyError>) {
+    func finishResponseBodyFetch(result: Result<Network.Body, WebInspectorProxyError>, expectedBody: NetworkBody) {
+        guard responseBody === expectedBody else {
+            return
+        }
         switch result {
         case let .success(body):
-            responseBody.load(body)
+            expectedBody.load(body)
         case let .failure(error):
-            responseBody.fail(error)
+            expectedBody.fail(error)
         }
     }
 

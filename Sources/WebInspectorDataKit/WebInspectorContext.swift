@@ -866,12 +866,15 @@ public final class WebInspectorContext {
 
     func fetchResponseBody(
         for request: NetworkRequest,
+        expectedBody: NetworkBody,
         isolation: isolated (any Actor) = #isolation
     ) async {
         requireOwner(isolation)
         guard let currentPage else {
-            request.finishResponseBodyFetch(
-                result: .failure(.disconnected("WebInspectorDataKit has no current page target."))
+            finishResponseBodyFetch(
+                .failure(.disconnected("WebInspectorDataKit has no current page target.")),
+                for: request,
+                expectedBody: expectedBody
             )
             return
         }
@@ -881,16 +884,31 @@ public final class WebInspectorContext {
                 for: request.proxyID,
                 backendResourceIdentifier: request.backendResourceIdentifier
             )
-            request.finishResponseBodyFetch(result: .success(body))
+            finishResponseBodyFetch(.success(body), for: request, expectedBody: expectedBody)
         } catch let error as WebInspectorProxyError {
-            request.finishResponseBodyFetch(result: .failure(error))
+            finishResponseBodyFetch(.failure(error), for: request, expectedBody: expectedBody)
         } catch {
-            request.finishResponseBodyFetch(result: .failure(.commandFailed(
-                domain: "Network",
-                method: "getResponseBody",
-                message: String(describing: error)
-            )))
+            finishResponseBodyFetch(
+                .failure(.commandFailed(
+                    domain: "Network",
+                    method: "getResponseBody",
+                    message: String(describing: error)
+                )),
+                for: request,
+                expectedBody: expectedBody
+            )
         }
+    }
+
+    private func finishResponseBodyFetch(
+        _ result: Result<Network.Body, WebInspectorProxyError>,
+        for request: NetworkRequest,
+        expectedBody: NetworkBody
+    ) {
+        guard requestsByID[request.id] === request else {
+            return
+        }
+        request.finishResponseBodyFetch(result: result, expectedBody: expectedBody)
     }
 
     func requestChildren(
@@ -3142,6 +3160,38 @@ extension WebInspectorContext {
                 domain: "CSS",
                 method: "setStyleText",
                 message: "CSS property is stale, already mutating, or not editable."
+            )
+        }
+
+        let marker = Task<Void, Never> {}
+        styleToggleTasks[id] = marker
+        defer {
+            marker.cancel()
+            styleToggleTasks[id] = nil
+        }
+
+        let target = try cssTarget(owning: intent.styleID)
+        let result = try await target.css.setStyleText(intent.styleID, text: intent.text)
+        recordDOMEditHistoryTarget(target, options: options)
+        try await Self.markDOMUndoableStateIfNeeded(on: target, options: options)
+        styles.applySetStyleText(result: result, for: id)
+        refreshSelectedStylesIfHydrationActive(isolation: isolation)
+    }
+
+    package func setCSSDeclarationText(
+        _ text: String,
+        for id: CSS.Property.ID,
+        options: WebInspectorMutationOptions,
+        isolation: isolated (any Actor) = #isolation
+    ) async throws {
+        requireOwner(isolation)
+        guard styleToggleTasks[id] == nil,
+              let styles = selectedNode?.elementStyles,
+              let intent = styles.setDeclarationTextIntent(for: id, text: text) else {
+            throw WebInspectorProxyError.commandFailed(
+                domain: "CSS",
+                method: "setStyleText",
+                message: "CSS declaration is stale, already mutating, or not editable."
             )
         }
 

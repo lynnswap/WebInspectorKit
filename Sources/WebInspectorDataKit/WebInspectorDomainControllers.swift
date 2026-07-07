@@ -167,16 +167,10 @@ public final class CSSModelController {
     public func setDeclarationText(
         _ text: String,
         for propertyID: CSS.Property.ID,
-        options: WebInspectorMutationOptions = .automatic
+        options: WebInspectorMutationOptions = .automatic,
+        isolation: isolated (any Actor) = #isolation
     ) async throws {
-        _ = text
-        _ = propertyID
-        _ = options
-        throw WebInspectorProxyError.commandFailed(
-            domain: "CSS",
-            method: "setStyleText",
-            message: "CSS declaration text editing is not implemented by WebInspectorDataKit yet."
-        )
+        try await context.setCSSDeclarationText(text, for: propertyID, options: options, isolation: isolation)
     }
 
     public func setRuleSelector(

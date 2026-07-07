@@ -2520,6 +2520,64 @@ func domTreeControllerPublishesInitialSnapshotAndChildDeltas() async throws {
 
 @MainActor
 @Test
+func domTreeControllerPrunesRetainedChildDescendantsOnReplacement() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(
+        runtime: runtime,
+        document: DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document", childNodeCount: 1)
+    )
+    let document = try #require(context.rootNode)
+    let controller = try await context.treeController()
+    let recorder = DOMTreeUpdateRecorder(stream: controller.updates)
+    defer { recorder.cancel() }
+    try await recorder.waitUntilStarted()
+    try await recorder.waitForUpdateCount(1)
+
+    let childID = DOM.Node.ID("child")
+    let removedSpanID = DOM.Node.ID("removed-span")
+    let removedEmID = DOM.Node.ID("removed-em")
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(
+                id: childID,
+                nodeType: 1,
+                nodeName: "DIV",
+                localName: "div",
+                children: [
+                    DOM.Node(id: removedSpanID, nodeType: 1, nodeName: "SPAN", localName: "span"),
+                    DOM.Node(id: removedEmID, nodeType: 1, nodeName: "EM", localName: "em"),
+                ]
+            )
+        ]),
+        target: target
+    )
+
+    try await recorder.waitForUpdateCount(2)
+    #expect(controller.snapshot.node(for: DOMNode.ID(removedSpanID)) != nil)
+    #expect(controller.snapshot.node(for: DOMNode.ID(removedEmID)) != nil)
+    let child = try #require(context.node(for: DOMNode.ID(childID)))
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(id: childID, nodeType: 1, nodeName: "DIV", localName: "div", childNodeCount: 0)
+        ]),
+        target: target
+    )
+
+    try await recorder.waitForUpdateCount(3)
+    try await waitUntil {
+        context.node(for: DOMNode.ID(removedSpanID)) == nil
+            && context.node(for: DOMNode.ID(removedEmID)) == nil
+    }
+    #expect(context.node(for: DOMNode.ID(childID)) === child)
+    #expect(controller.snapshot.node(for: DOMNode.ID(childID)) != nil)
+    #expect(controller.snapshot.node(for: DOMNode.ID(removedSpanID)) == nil)
+    #expect(controller.snapshot.node(for: DOMNode.ID(removedEmID)) == nil)
+    #expect(controller.snapshot.parent(of: DOMNode.ID(removedEmID)) == nil)
+}
+
+@MainActor
+@Test
 func domTreeControllerPublishesAssociatedSubtreeDeltas() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(
@@ -4597,6 +4655,64 @@ func requestSetCSSPropertyTogglesDeclarationAndRefreshesStyles() async throws {
 
 @MainActor
 @Test
+func setCSSDeclarationTextRewritesStyleTextAndMarksUndoableState() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let document = try #require(context.rootNode)
+    let elementID = DOM.Node.ID("styled-node")
+
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
+        ]),
+        target: target
+    )
+    let element = try await waitForChild(in: context)
+
+    await enqueueCSSStyleReplies(on: runtime.backend)
+    context.select(element)
+    let styles = try #require(element.elementStyles)
+    try await waitUntil { styles.phase == .loaded }
+
+    let updatedStyle = CSS.Style(
+        id: CSS.Style.ID("style-1"),
+        properties: [
+            CSS.Property(
+                id: CSS.Property.ID("property-1"),
+                name: "display",
+                value: "flex",
+                text: "display: flex;",
+                isEditable: true,
+                isModifiedByInspector: true
+            )
+        ],
+        cssText: "display: flex;",
+        isEditable: true
+    )
+    await runtime.backend.enqueue(updatedStyle, for: "CSS", method: "setStyleText")
+    await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
+
+    let propertyID = try #require(styles.sections.first?.style.properties.first?.id)
+    try await context.css.setDeclarationText("display: flex;", for: propertyID)
+
+    let commands = await runtime.backend.recordedCommands()
+    let setStyleText = try #require(commands.last { $0 == RecordedCommand(domain: "CSS", method: "setStyleText") })
+    let payload = try #require(setStyleText.payload.cast(as: CSS.SetStyleTextPayload.self))
+    #expect(payload.id == CSS.Style.ID("style-1"))
+    #expect(payload.text == "display: flex;")
+    let undoMarks = commands.filter { $0.domain == "DOM" && $0.method == "markUndoableState" }
+    #expect(undoMarks.count == 1)
+    #expect(undoMarks.first?.targetID == target.id)
+
+    let property = try #require(styles.sections.first?.style.properties.first)
+    #expect(property.value == "flex")
+    #expect(property.text == "display: flex;")
+    #expect(property.isModifiedByInspector)
+    #expect(styles.phase == .needsRefresh)
+}
+
+@MainActor
+@Test
 func cssRuleSelectorEditsMarkUndoableStateOnOwningTarget() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (_, context) = try await startContext(runtime: runtime)
@@ -5012,6 +5128,110 @@ func domainEnablementReleaseDuringPendingEnableDisablesAfterEnableCompletes() as
     #expect(commands == [
         RecordedCommand(domain: "Runtime", method: "enable"),
         RecordedCommand(domain: "Runtime", method: "disable"),
+    ])
+}
+
+@MainActor
+@Test
+func domainEnablementAcquireWaitsForFinalReleaseDisable() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+    let registry = WebInspectorDomainEnablementRegistry()
+    let disableGate = WebInspectorTestGate()
+
+    await runtime.backend.enqueue((), for: "Runtime", method: "enable")
+    try await registry.acquire(.runtime, on: target)
+    await runtime.backend.hold(domain: "Runtime", method: "disable", gate: disableGate)
+    await runtime.backend.enqueue((), for: "Runtime", method: "disable")
+
+    let releaseTask = Task {
+        await registry.release(.runtime, on: target)
+    }
+    try await waitUntil {
+        await runtime.backend.recordedCommands() == [
+            RecordedCommand(domain: "Runtime", method: "enable"),
+            RecordedCommand(domain: "Runtime", method: "disable"),
+        ]
+    }
+
+    let acquireTask = Task {
+        try await registry.acquire(.runtime, on: target)
+    }
+    for _ in 0..<10 {
+        await Task.yield()
+    }
+    #expect(await runtime.backend.recordedCommands() == [
+        RecordedCommand(domain: "Runtime", method: "enable"),
+        RecordedCommand(domain: "Runtime", method: "disable"),
+    ])
+
+    await runtime.backend.enqueue((), for: "Runtime", method: "enable")
+    await disableGate.open()
+
+    #expect(await releaseTask.value == nil)
+    try await acquireTask.value
+    #expect(await runtime.backend.recordedCommands() == [
+        RecordedCommand(domain: "Runtime", method: "enable"),
+        RecordedCommand(domain: "Runtime", method: "disable"),
+        RecordedCommand(domain: "Runtime", method: "enable"),
+    ])
+}
+
+@MainActor
+@Test
+func domainEnablementAcquireWaitsForPendingReleaseDisable() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+    let registry = WebInspectorDomainEnablementRegistry()
+    let enableGate = WebInspectorTestGate()
+    let disableGate = WebInspectorTestGate()
+
+    await runtime.backend.hold(domain: "Runtime", method: "enable", gate: enableGate)
+    await runtime.backend.hold(domain: "Runtime", method: "disable", gate: disableGate)
+
+    let firstAcquireTask = Task {
+        try await registry.acquire(.runtime, on: target)
+    }
+    try await waitUntil {
+        await runtime.backend.recordedCommands() == [
+            RecordedCommand(domain: "Runtime", method: "enable")
+        ]
+    }
+
+    let releaseTask = Task {
+        await registry.release(.runtime, on: target)
+    }
+    let secondAcquireTask = Task {
+        try await registry.acquire(.runtime, on: target)
+    }
+
+    await runtime.backend.enqueue((), for: "Runtime", method: "enable")
+    await runtime.backend.enqueue((), for: "Runtime", method: "disable")
+    await enableGate.open()
+    try await waitUntil {
+        await runtime.backend.recordedCommands() == [
+            RecordedCommand(domain: "Runtime", method: "enable"),
+            RecordedCommand(domain: "Runtime", method: "disable"),
+        ]
+    }
+    for _ in 0..<10 {
+        await Task.yield()
+    }
+    #expect(await runtime.backend.recordedCommands() == [
+        RecordedCommand(domain: "Runtime", method: "enable"),
+        RecordedCommand(domain: "Runtime", method: "disable"),
+    ])
+
+    await runtime.backend.enqueue((), for: "Runtime", method: "enable")
+    await disableGate.open()
+
+    try await firstAcquireTask.value
+    #expect(await releaseTask.value == nil)
+    try await secondAcquireTask.value
+    #expect(await runtime.backend.recordedCommands() == [
+        RecordedCommand(domain: "Runtime", method: "enable"),
+        RecordedCommand(domain: "Runtime", method: "disable"),
+        RecordedCommand(domain: "Runtime", method: "enable"),
     ])
 }
 
@@ -6053,6 +6273,44 @@ func fetchResponseBodyStoresLoadedAndFailedPhases() async throws {
 
     let commands = await runtime.backend.recordedCommands()
     #expect(commands.contains(RecordedCommand(domain: "Network", method: "getResponseBody")))
+}
+
+@MainActor
+@Test
+func fetchResponseBodyDropsCompletionAfterNetworkClear() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let requestID = Network.Request.ID("cleared-body-request")
+    let gate = WebInspectorTestGate()
+
+    await emitFinishedRequest(id: requestID, target: target, backend: runtime.backend)
+    try await waitUntil {
+        context.registeredRequest(for: NetworkRequest.ID(requestID))?.state == .finished
+    }
+    let request = try #require(context.registeredRequest(for: NetworkRequest.ID(requestID)))
+    let body = request.responseBody
+    await runtime.backend.hold(domain: "Network", method: "getResponseBody", gate: gate)
+
+    let fetchTask = Task {
+        await request.fetchResponseBody()
+    }
+    try await waitUntil {
+        await runtime.backend.recordedCommands().contains(RecordedCommand(domain: "Network", method: "getResponseBody"))
+    }
+
+    context.clearNetworkRequests()
+    #expect(context.registeredRequest(for: NetworkRequest.ID(requestID)) == nil)
+    await runtime.backend.enqueue(
+        Network.Body(data: "stale-body", base64Encoded: false),
+        for: "Network",
+        method: "getResponseBody"
+    )
+    await gate.open()
+    await fetchTask.value
+
+    #expect(body.phase == NetworkBody.Phase.fetching)
+    #expect(body.text == nil)
+    #expect(request.responseBody === body)
 }
 
 @MainActor

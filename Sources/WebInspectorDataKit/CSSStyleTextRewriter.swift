@@ -112,6 +112,19 @@ enum CSSStyleTextRewriter {
         return context.serializedStyleText(replacingPropertyAt: propertyIndex, with: toggledText)
     }
 
+    static func rewrittenStyleText(style: CSS.Style, propertyIndex: Int, replacementText: String) -> String? {
+        guard style.properties.indices.contains(propertyIndex),
+              style.properties[propertyIndex].isEditable else {
+            return nil
+        }
+        var context = RewriteContext(style: style)
+        if context.hasAuthoredStyleText {
+            return context.rewriteAuthoredStyleText(propertyIndex: propertyIndex, with: replacementText)
+        }
+
+        return context.serializedStyleText(replacingPropertyAt: propertyIndex, with: replacementText)
+    }
+
     static func canTogglePropertyText(_ property: CSS.Property) -> Bool {
         guard property.status != .inactive else {
             return false

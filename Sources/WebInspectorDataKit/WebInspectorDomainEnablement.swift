@@ -72,6 +72,7 @@ actor WebInspectorDomainEnablementRegistry {
     private enum Entry: Sendable {
         case enabling(count: Int, generation: Int, task: Task<Void, any Error>)
         case enabled(count: Int)
+        case disabling(generation: Int, task: Task<WebInspectorProxyError?, Never>)
     }
 
     private var entries: [WebInspectorDomainEnablementKey: Entry]
@@ -98,6 +99,14 @@ actor WebInspectorDomainEnablementRegistry {
                 "domain acquire pending domain=\(domain.rawValue) target=\(target.id.rawValue) count=\(count + 1)"
             )
             try await finishEnabling(key: key, domain: domain, generation: generation, task: task)
+        case let .disabling(generation, task):
+            WebInspectorDataKitLog.debug(
+                "domain acquire waits for disable domain=\(domain.rawValue) target=\(target.id.rawValue)"
+            )
+            if let error = await finishDisabling(key: key, domain: domain, generation: generation, task: task) {
+                throw error
+            }
+            try await acquire(domain, on: target)
         case nil:
             let generation = nextGeneration
             nextGeneration += 1
@@ -123,9 +132,14 @@ actor WebInspectorDomainEnablementRegistry {
                 )
                 return nil
             }
-            entries[key] = nil
+            let generation = nextGeneration
+            nextGeneration += 1
+            let task = Task<WebInspectorProxyError?, Never> {
+                await Self.disable(domain, on: target)
+            }
+            entries[key] = .disabling(generation: generation, task: task)
             WebInspectorDataKitLog.debug("domain disable start domain=\(domain.rawValue) target=\(target.id.rawValue)")
-            return await disable(domain, on: target)
+            return await finishDisabling(key: key, domain: domain, generation: generation, task: task)
         case let .enabling(count, generation, task):
             precondition(count > 0, "WebInspector domain enablement count must be positive.")
             if count > 1 {
@@ -134,11 +148,23 @@ actor WebInspectorDomainEnablementRegistry {
                     "domain release pending domain=\(domain.rawValue) target=\(target.id.rawValue) count=\(count - 1)"
                 )
             } else {
-                entries[key] = nil
+                let disableGeneration = nextGeneration
+                nextGeneration += 1
+                let disableTask = Task<WebInspectorProxyError?, Never> {
+                    await Self.disableAfterPendingEnable(domain, on: target, task: task)
+                }
+                entries[key] = .disabling(generation: disableGeneration, task: disableTask)
                 WebInspectorDataKitLog.debug("domain release pending cancelled domain=\(domain.rawValue) target=\(target.id.rawValue)")
-                return await disableAfterPendingEnable(domain, on: target, task: task)
+                return await finishDisabling(
+                    key: key,
+                    domain: domain,
+                    generation: disableGeneration,
+                    task: disableTask
+                )
             }
             return nil
+        case .disabling:
+            preconditionFailure("Releasing WebInspector domain enablement while disable is already in flight.")
         case nil:
             preconditionFailure("Releasing WebInspector domain enablement without a matching acquire.")
         }
@@ -174,6 +200,8 @@ actor WebInspectorDomainEnablementRegistry {
                     "domain lease discarded pending domain=\(domain.rawValue) target=\(target.id.rawValue)"
                 )
             }
+        case .disabling:
+            preconditionFailure("Discarding WebInspector domain enablement while disable is already in flight.")
         case nil:
             preconditionFailure("Discarding WebInspector domain enablement without a matching acquire.")
         }
@@ -209,7 +237,27 @@ actor WebInspectorDomainEnablementRegistry {
         }
     }
 
-    private func disable(_ domain: WebInspectorEnabledDomain, on target: WebInspectorTarget) async -> WebInspectorProxyError? {
+    private func finishDisabling(
+        key: WebInspectorDomainEnablementKey,
+        domain: WebInspectorEnabledDomain,
+        generation: Int,
+        task: Task<WebInspectorProxyError?, Never>
+    ) async -> WebInspectorProxyError? {
+        let error = await task.value
+        if case let .disabling(currentGeneration, _) = entries[key],
+           currentGeneration == generation {
+            entries[key] = nil
+            WebInspectorDataKitLog.debug(
+                "domain disable registry cleared domain=\(domain.rawValue) target=\(key.targetID.rawValue)"
+            )
+        }
+        return error
+    }
+
+    private nonisolated static func disable(
+        _ domain: WebInspectorEnabledDomain,
+        on target: WebInspectorTarget
+    ) async -> WebInspectorProxyError? {
         if let binding = target.pageBindingID {
             let currentBinding = await target.proxy.currentPageBindingID
             guard currentBinding == binding else {
@@ -242,7 +290,7 @@ actor WebInspectorDomainEnablementRegistry {
         }
     }
 
-    private func disableAfterPendingEnable(
+    private nonisolated static func disableAfterPendingEnable(
         _ domain: WebInspectorEnabledDomain,
         on target: WebInspectorTarget,
         task: Task<Void, any Error>

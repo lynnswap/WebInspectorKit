@@ -124,6 +124,31 @@ public final class CSSStyles: WebInspectorPersistentModel {
         return SetStyleTextIntent(styleID: style.id, text: text)
     }
 
+    func setDeclarationTextIntent(for propertyID: CSS.Property.ID, text replacementText: String) -> SetStyleTextIntent? {
+        guard phase == .loaded,
+              let (sectionIndex, propertyIndex) = locateProperty(propertyID) else {
+            return nil
+        }
+        let section = sections[sectionIndex]
+        guard section.isEditable else {
+            return nil
+        }
+        let style = section.style
+        guard style.isEditable else {
+            return nil
+        }
+        let property = style.properties[propertyIndex]
+        guard property.isEditable,
+              let text = CSSStyleTextRewriter.rewrittenStyleText(
+                  style: style,
+                  propertyIndex: propertyIndex,
+                  replacementText: replacementText
+              ) else {
+            return nil
+        }
+        return SetStyleTextIntent(styleID: style.id, text: text)
+    }
+
     /// Applies a `CSS.setStyleText` result: records the toggled property's
     /// pre-edit baseline, rewrites every section sharing the returned
     /// style's ID (keeping section identity), recomputes
