@@ -44,6 +44,9 @@ package actor TransportSession {
     }
 
     package func events(for domain: ProtocolDomain) -> AsyncStream<ProtocolEvent> {
+        guard !closed else {
+            return finishedStream(of: ProtocolEvent.self)
+        }
         let pair = AsyncStream<ProtocolEvent>.makeStream(bufferingPolicy: .unbounded)
         let subscriberID = eventSubscribers.insert(pair.continuation, domain: domain)
         pair.continuation.onTermination = { [weak self] _ in
@@ -55,6 +58,9 @@ package actor TransportSession {
     }
 
     package func orderedEvents() -> AsyncStream<ProtocolEvent> {
+        guard !closed else {
+            return finishedStream(of: ProtocolEvent.self)
+        }
         let pair = AsyncStream<ProtocolEvent>.makeStream(bufferingPolicy: .unbounded)
         let subscriberID = eventSubscribers.insertOrdered(pair.continuation)
         pair.continuation.onTermination = { [weak self] _ in
