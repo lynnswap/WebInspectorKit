@@ -1282,10 +1282,7 @@ public final class WebInspectorContext {
         _ = isolation
         try await domainEnablement.acquire(.inspector, on: target)
         guard isCurrentPageGeneration(generation, isolation: isolation) else {
-            // A superseding retarget already ran its lease discard; an
-            // acquisition completing late must return its lease instead of
-            // recording it where no successor will discard it.
-            await domainEnablement.discardLease(.inspector, on: target)
+            await releaseLateAcquiredDomain(.inspector, on: target, isolation: isolation)
             return
         }
         inspectorTrackingTarget = target
@@ -1299,7 +1296,7 @@ public final class WebInspectorContext {
         _ = isolation
         try await domainEnablement.acquire(.runtime, on: target)
         guard isCurrentPageGeneration(generation, isolation: isolation) else {
-            await domainEnablement.discardLease(.runtime, on: target)
+            await releaseLateAcquiredDomain(.runtime, on: target, isolation: isolation)
             return
         }
         runtimeTrackingTarget = target
@@ -1313,7 +1310,7 @@ public final class WebInspectorContext {
         _ = isolation
         try await domainEnablement.acquire(.console, on: target)
         guard isCurrentPageGeneration(generation, isolation: isolation) else {
-            await domainEnablement.discardLease(.console, on: target)
+            await releaseLateAcquiredDomain(.console, on: target, isolation: isolation)
             return
         }
         consoleTrackingTarget = target
@@ -1327,10 +1324,23 @@ public final class WebInspectorContext {
         _ = isolation
         try await domainEnablement.acquire(.network, on: target)
         guard isCurrentPageGeneration(generation, isolation: isolation) else {
-            await domainEnablement.discardLease(.network, on: target)
+            await releaseLateAcquiredDomain(.network, on: target, isolation: isolation)
             return
         }
         networkTrackingTarget = target
+    }
+
+    private func releaseLateAcquiredDomain(
+        _ domain: WebInspectorEnabledDomain,
+        on target: WebInspectorTarget,
+        isolation: isolated (any Actor)
+    ) async {
+        _ = isolation
+        if let error = await domainEnablement.release(domain, on: target) {
+            WebInspectorDataKitLog.debug(
+                "domain late-acquire release failed domain=\(domain.rawValue) target=\(target.id.rawValue) error=\(String(describing: error))"
+            )
+        }
     }
 
     private func loadCurrentDOMDocument(

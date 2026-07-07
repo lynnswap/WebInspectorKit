@@ -5095,6 +5095,47 @@ func closeDuringStartupKeepsContextDetached() async throws {
 
 @MainActor
 @Test
+func stopDuringStartupReleasesLateRuntimeAcquire() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+    let gate = WebInspectorTestGate()
+
+    await runtime.backend.hold(domain: "Runtime", method: "enable", gate: gate)
+    await runtime.backend.enqueue((), for: "Inspector", method: "enable")
+    await runtime.backend.enqueue((), for: "Inspector", method: "initialized")
+    await runtime.backend.enqueue((), for: "Runtime", method: "enable")
+
+    let container = WebInspectorContainer(proxy: runtime.proxy)
+    let context = container.mainContext
+    try await waitForStartupSubscribers(runtime: runtime, target: target)
+    try await waitUntil {
+        await runtime.backend.recordedCommands() == [
+            RecordedCommand(domain: "Inspector", method: "enable"),
+            RecordedCommand(domain: "Inspector", method: "initialized"),
+            RecordedCommand(domain: "Runtime", method: "enable"),
+        ]
+    }
+
+    await runtime.backend.enqueue((), for: "Inspector", method: "disable")
+    await context.stop()
+    #expect(context.state == .detached)
+
+    await runtime.backend.enqueue((), for: "Runtime", method: "disable")
+    await gate.open()
+    try await waitUntil {
+        await runtime.backend.recordedCommands() == [
+            RecordedCommand(domain: "Inspector", method: "enable"),
+            RecordedCommand(domain: "Inspector", method: "initialized"),
+            RecordedCommand(domain: "Runtime", method: "enable"),
+            RecordedCommand(domain: "Inspector", method: "disable"),
+            RecordedCommand(domain: "Runtime", method: "disable"),
+        ]
+    }
+    #expect(context.state == .detached)
+}
+
+@MainActor
+@Test
 func domainEnablementReleaseDuringPendingEnableDisablesAfterEnableCompletes() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
