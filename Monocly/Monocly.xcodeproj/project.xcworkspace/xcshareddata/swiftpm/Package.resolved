@@ -87,8 +87,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/SyntaxEditorUI.git",
       "state" : {
-        "revision" : "281719c5a02f6be5e46d5e36f3e7c2d352e21b04",
-        "version" : "0.16.4"
+        "revision" : "67961c13883faad2b55fb73ee3eff05b444a9f35",
+        "version" : "0.16.5"
       }
     },
     {
