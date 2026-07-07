@@ -1,6 +1,5 @@
+import WebInspectorDataKit
 import WebInspectorUIBase
-import WebInspectorCore
-import WebInspectorTransport
 
 @MainActor
 package enum NetworkPreviewFixtures {
@@ -15,8 +14,8 @@ package enum NetworkPreviewFixtures {
     }
 
     package static func makePanelModel(mode: Mode) -> NetworkPanelModel {
-        let network = makeNetworkSession(mode: mode)
-        let model = NetworkPanelModel(network: network)
+        let context = makeContext(mode: mode)
+        let model = NetworkPanelModel(context: context)
         switch mode {
         case .detail,
              .detailResponseOnlyShort,
@@ -30,21 +29,21 @@ package enum NetworkPreviewFixtures {
         return model
     }
 
-    package static func makeNetworkSession(mode: Mode) -> NetworkSession {
-        let network = NetworkSession()
-        applySampleData(to: network, mode: mode)
-        return network
+    package static func makeContext(mode: Mode) -> WebInspectorContext {
+        let context = WebInspectorContext.preview(isolation: MainActor.shared)
+        applySampleData(to: context, mode: mode)
+        return context
     }
 
-    package static func applySampleData(to network: NetworkSession, mode: Mode) {
+    package static func applySampleData(to context: WebInspectorContext, mode: Mode) {
         switch mode {
         case .detailResponseOnlyShort:
             applyRequest(
-                to: network,
+                to: context,
                 requestID: "1001",
                 url: "https://api.example.com/v1/status.json",
                 method: "GET",
-                resourceType: .xhr,
+                resourceTypeRawValue: "XHR",
                 responseMimeType: "application/json",
                 status: 200,
                 statusText: "OK",
@@ -55,11 +54,11 @@ package enum NetworkPreviewFixtures {
             return
         case .detailRequestAndResponseShort:
             applyRequest(
-                to: network,
+                to: context,
                 requestID: "1001",
                 url: "https://telemetry.example/log.json",
                 method: "POST",
-                resourceType: .xhr,
+                resourceTypeRawValue: "XHR",
                 responseMimeType: "application/json",
                 status: 200,
                 statusText: "OK",
@@ -72,11 +71,11 @@ package enum NetworkPreviewFixtures {
             return
         case .detailResponseOnlyLong:
             applyRequest(
-                to: network,
+                to: context,
                 requestID: "1001",
                 url: "https://api.example.com/v1/status.json",
                 method: "GET",
-                resourceType: .xhr,
+                resourceTypeRawValue: "XHR",
                 responseMimeType: "application/json",
                 status: 200,
                 statusText: "OK",
@@ -87,11 +86,11 @@ package enum NetworkPreviewFixtures {
             return
         case .detailRequestAndResponseLong:
             applyRequest(
-                to: network,
+                to: context,
                 requestID: "1001",
                 url: "https://telemetry.example/log.json",
                 method: "POST",
-                resourceType: .xhr,
+                resourceTypeRawValue: "XHR",
                 responseMimeType: "application/json",
                 status: 200,
                 statusText: "OK",
@@ -107,11 +106,11 @@ package enum NetworkPreviewFixtures {
         }
 
         applyRequest(
-            to: network,
+            to: context,
             requestID: "1001",
             url: "https://telemetry.example/log",
             method: "POST",
-            resourceType: .xhr,
+            resourceTypeRawValue: "XHR",
             responseMimeType: "application/json",
             status: 200,
             statusText: "OK",
@@ -119,10 +118,10 @@ package enum NetworkPreviewFixtures {
             encodedBodyLength: 64
         )
         applyRequest(
-            to: network,
+            to: context,
             requestID: "1002",
             url: "https://static.example/images/icons/trending-up.png",
-            resourceType: .image,
+            resourceTypeRawValue: "Image",
             responseMimeType: "image/png",
             status: 200,
             statusText: "OK",
@@ -132,10 +131,10 @@ package enum NetworkPreviewFixtures {
 
         if mode == .rootLongTitle {
             applyRequest(
-                to: network,
+                to: context,
                 requestID: "1999",
                 url: "https://cdn.example.com/assets/network/preview/super-long-file-name-for-line-wrap-validation-with-json-tag-rendering-and-truncation-check.json",
-                resourceType: .xhr,
+                resourceTypeRawValue: "XHR",
                 responseMimeType: "application/json",
                 status: 200,
                 statusText: "OK",
@@ -147,11 +146,11 @@ package enum NetworkPreviewFixtures {
 
     @discardableResult
     private static func applyRequest(
-        to network: NetworkSession,
+        to context: WebInspectorContext,
         requestID: String,
         url: String,
         method: String = "GET",
-        resourceType: NetworkRequest.ResourceType,
+        resourceTypeRawValue: String,
         responseMimeType: String,
         status: Int,
         statusText: String,
@@ -161,64 +160,29 @@ package enum NetworkPreviewFixtures {
         postData: String? = nil,
         responseBody: String? = nil
     ) -> NetworkRequest.ID {
-        let targetID = ProtocolTarget.ID("preview-page")
-        let requestID = NetworkRequest.ProtocolID(requestID)
         let resolvedPostData = postData ?? (method == "POST" ? "sample=true&source=wi-preview" : nil)
         let resolvedRequestHeaders = requestHeaders
             ?? (resolvedPostData == nil ? [:] : ["content-type": "application/x-www-form-urlencoded"])
-        let key = network.applyRequestWillBeSent(
-            targetID: targetID,
+        return context.seedNetworkRequest(
             requestID: requestID,
-            frameID: DOMFrame.ID("preview-frame"),
-            loaderID: "preview-loader",
-            documentURL: "https://example.com",
-            request: NetworkRequest.Payload(
-                url: url,
-                method: method,
-                headers: resolvedRequestHeaders,
-                postData: resolvedPostData
-            ),
-            resourceType: resourceType,
+            url: url,
+            method: method,
+            resourceTypeRawValue: resourceTypeRawValue,
+            requestHeaders: resolvedRequestHeaders,
+            postData: resolvedPostData,
+            responseMIMEType: responseMimeType,
+            responseStatus: status,
+            responseStatusText: statusText,
+            responseHeaders: [
+                "content-length": String(encodedBodyLength),
+                "content-type": responseMimeType,
+            ],
+            responseBody: responseMimeType == "application/json"
+                ? (responseBody ?? #"{"result":"ok","items":[1,2,3],"source":"preview"}"#)
+                : nil,
             timestamp: timestamp,
-            walltime: 1_700_000_000 + timestamp
+            encodedBodyLength: encodedBodyLength
         )
-        network.applyResponseReceived(
-            targetID: targetID,
-            requestID: requestID,
-            resourceType: resourceType,
-            response: NetworkRequest.Response.Payload(
-                url: url,
-                status: status,
-                statusText: statusText,
-                headers: [
-                    "content-length": String(encodedBodyLength),
-                    "content-type": responseMimeType,
-                ],
-                mimeType: responseMimeType
-            ),
-            timestamp: timestamp + 0.1
-        )
-        network.applyDataReceived(
-            targetID: targetID,
-            requestID: requestID,
-            dataLength: encodedBodyLength,
-            encodedDataLength: encodedBodyLength,
-            timestamp: timestamp + 0.11
-        )
-        network.applyLoadingFinished(
-            targetID: targetID,
-            requestID: requestID,
-            timestamp: timestamp + 0.2
-        )
-        if responseMimeType == "application/json" {
-            network.request(for: key)?.applyResponseBody(
-                NetworkBody.Payload(
-                    body: responseBody ?? #"{"result":"ok","items":[1,2,3],"source":"preview"}"#,
-                    base64Encoded: false
-                )
-            )
-        }
-        return key
     }
 
     private static func shortPreviewJSONBody(kind: String) -> String {

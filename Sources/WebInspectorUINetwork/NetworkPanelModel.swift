@@ -1,21 +1,17 @@
 import WebInspectorUIBase
-import WebInspectorCore
+import WebInspectorDataKit
 import Foundation
 import Observation
 
 @MainActor
 private final class NetworkResponseBodyFetchCoordinator {
-    private let action: NetworkPanelModel.ResponseBodyFetchAction?
     private var fetchesInFlight: Set<NetworkRequest.ID> = []
 
-    init(action: NetworkPanelModel.ResponseBodyFetchAction?) {
-        self.action = action
-    }
+    init() {}
 
     func fetchIfNeeded(for request: NetworkRequest) {
         guard request.canFetchResponseBody,
-              fetchesInFlight.contains(request.id) == false,
-              let action else {
+              fetchesInFlight.contains(request.id) == false else {
             return
         }
         fetchesInFlight.insert(request.id)
@@ -23,7 +19,7 @@ private final class NetworkResponseBodyFetchCoordinator {
             defer {
                 fetchesInFlight.remove(request.id)
             }
-            await action(request.id)
+            await request.fetchResponseBody()
         }
     }
 }
@@ -31,81 +27,58 @@ private final class NetworkResponseBodyFetchCoordinator {
 @MainActor
 @Observable
 package final class NetworkPanelModel {
-    package typealias ResponseBodyFetchAction = @MainActor (NetworkRequest.ID) async -> Void
-
-    package let network: NetworkSession
+    package let context: WebInspectorContext
+    package let requests: WebInspectorFetchedResults<NetworkRequest>
+    private let clearableRequests: WebInspectorFetchedResults<NetworkRequest>
     package var selectedRequestID: NetworkRequest.ID?
     package var searchText: String = ""
-    package var activeResourceFilters: Set<NetworkRequest.Display.ResourceFilter> = [] {
+    package var activeResourceFilters: Set<NetworkDisplay.ResourceFilter> = [] {
         didSet {
-            let normalized = NetworkRequest.Display.ResourceFilter.normalizedSelection(activeResourceFilters)
+            let normalized = NetworkDisplay.ResourceFilter.normalizedSelection(activeResourceFilters)
             if effectiveResourceFilters != normalized {
                 effectiveResourceFilters = normalized
+                updateNetworkFetchDescriptor()
             }
         }
     }
-    package private(set) var effectiveResourceFilters: Set<NetworkRequest.Display.ResourceFilter> = []
+    package private(set) var effectiveResourceFilters: Set<NetworkDisplay.ResourceFilter> = []
     @ObservationIgnored private let responseBodyFetchCoordinator: NetworkResponseBodyFetchCoordinator
-    @ObservationIgnored private let mediaPreviewClassifier: NetworkRequest.Display.MediaPreviewClassifier
-    @ObservationIgnored private var displayIndex: NetworkPanelDisplayIndex
 
-    package init(
-        network: NetworkSession,
-        responseBodyFetchAction: ResponseBodyFetchAction? = nil,
-        mediaPreviewClassifier: @escaping NetworkRequest.Display.MediaPreviewClassifier = { mimeType, url in
-            NetworkRequest.Display.MediaPreviewSupport.classification(mimeType: mimeType, url: url)
-        }
-    ) {
-        self.network = network
-        self.responseBodyFetchCoordinator = NetworkResponseBodyFetchCoordinator(action: responseBodyFetchAction)
-        self.mediaPreviewClassifier = mediaPreviewClassifier
-        self.displayIndex = NetworkPanelDisplayIndex()
+    package init(context: WebInspectorContext) {
+        self.context = context
+        self.requests = context.network.fetchedResults(for: Self.makeNetworkFetchDescriptor(searchText: "", filters: []))
+        self.clearableRequests = context.network.fetchedResults()
+        self.responseBodyFetchCoordinator = NetworkResponseBodyFetchCoordinator()
     }
 
     package var displayRequestIDs: [NetworkRequest.ID] {
-        let requestIDs = network.orderedRequestIDs
-        let criteria = NetworkPanelDisplayCriteria(
-            searchText: normalizedSearchText,
-            resourceFilters: effectiveResourceFilters
-        )
-        return displayIndex.reconcile(
-            network: network,
-            orderedRequestIDs: requestIDs,
-            criteria: criteria,
-            topologyRevision: network.requestTopologyRevision,
-            displayRevision: criteria.requiresEntries ? network.requestDisplayRevision : nil,
-            mediaPreviewClassifier: mediaPreviewClassifier
-        )
+        requests.items.map(\.id)
     }
 
     package var displayRequests: [NetworkRequest] {
-        displayRequestIDs.compactMap { network.request(for: $0) }
+        displayRequestIDs.compactMap { request(for: $0) }
     }
 
     package var isEmpty: Bool {
-        network.orderedRequestIDs.isEmpty
+        requests.items.isEmpty
     }
 
-    package var displayRowsInvalidationRevision: DisplayRowsInvalidationRevision {
-        let query = normalizedSearchText
-        let resourceFilters = effectiveResourceFilters
-        return DisplayRowsInvalidationRevision(
-            searchText: query,
-            resourceFilters: resourceFilters,
-            topologyRevision: network.requestTopologyRevision,
-            displayRevision: query.isEmpty && resourceFilters.isEmpty ? nil : network.requestDisplayRevision
-        )
+    package var hasClearableRequests: Bool {
+        clearableRequests.items.isEmpty == false
     }
 
     package var selectedRequest: NetworkRequest? {
         guard let selectedRequestID else {
             return nil
         }
-        return network.request(for: selectedRequestID)
+        // Observe the unfiltered request topology so registry removals invalidate
+        // the selection without tying selection lifetime to display filters.
+        _ = clearableRequests.topologyRevision
+        return request(for: selectedRequestID)
     }
 
     package func request(for id: NetworkRequest.ID) -> NetworkRequest? {
-        network.request(for: id)
+        context.registeredRequest(for: id)
     }
 
     package func selectRequest(_ request: NetworkRequest?) {
@@ -117,16 +90,17 @@ package final class NetworkPanelModel {
             return
         }
         searchText = text
+        updateNetworkFetchDescriptor()
     }
 
-    package func setResourceFilter(_ filter: NetworkRequest.Display.ResourceFilter, enabled: Bool) {
+    package func setResourceFilter(_ filter: NetworkDisplay.ResourceFilter, enabled: Bool) {
         var nextFilters = activeResourceFilters
         if enabled {
             nextFilters.insert(filter)
         } else {
             nextFilters.remove(filter)
         }
-        nextFilters = NetworkRequest.Display.ResourceFilter.normalizedSelection(nextFilters)
+        nextFilters = NetworkDisplay.ResourceFilter.normalizedSelection(nextFilters)
         guard nextFilters != activeResourceFilters else {
             return
         }
@@ -142,7 +116,7 @@ package final class NetworkPanelModel {
 
     package func clearRequests() {
         selectedRequestID = nil
-        network.reset()
+        context.network.clearRequests()
     }
 
     package func fetchResponseBodyIfNeeded(for request: NetworkRequest) {
@@ -152,37 +126,77 @@ package final class NetworkPanelModel {
     private var normalizedSearchText: String {
         searchText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
+    private func updateNetworkFetchDescriptor() {
+        requests.updateFetchDescriptor(
+            Self.makeNetworkFetchDescriptor(
+                searchText: normalizedSearchText,
+                filters: effectiveResourceFilters
+            )
+        )
+    }
+
+    private static func makeNetworkFetchDescriptor(
+        searchText: String,
+        filters: Set<NetworkDisplay.ResourceFilter>
+    ) -> WebInspectorFetchDescriptor<NetworkRequest> {
+        let categories = NetworkRequest.ResourceCategory.networkCategories(for: filters)
+        let normalizedSearchText = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let predicate: Predicate<NetworkRequest>?
+        if normalizedSearchText.isEmpty, categories.isEmpty {
+            predicate = nil
+        } else if categories.isEmpty {
+            predicate = #Predicate { request in
+                request.searchableText.localizedStandardContains(normalizedSearchText)
+            }
+        } else if normalizedSearchText.isEmpty {
+            predicate = #Predicate { request in
+                categories.contains(request.resourceCategory)
+            }
+        } else {
+            predicate = #Predicate { request in
+                categories.contains(request.resourceCategory)
+                    && request.searchableText.localizedStandardContains(normalizedSearchText)
+            }
+        }
+        return WebInspectorFetchDescriptor(
+            predicate: predicate,
+            sortBy: [SortDescriptor(\.requestSentTimestamp, order: .reverse)]
+        )
+    }
 }
 
-#if DEBUG
-extension NetworkPanelModel {
-    package var displayEntryBuildCountForTesting: Int {
-        displayIndex.displayEntryBuildCount
-    }
-
-    package var rebuiltDisplayRequestIDsForTesting: [NetworkRequest.ID] {
-        displayIndex.rebuiltDisplayRequestIDs
-    }
-
-    package var displayEntryCacheCountForTesting: Int {
-        displayIndex.displayEntryCacheCount
-    }
-
-    package var fullMembershipEvaluationCountForTesting: Int {
-        displayIndex.fullMembershipEvaluationCount
-    }
-
-    package func resetDisplayIndexTestingCounters() {
-        displayIndex.resetTestingCounters()
+private extension NetworkRequest.ResourceCategory {
+    static func networkCategories(
+        for filters: Set<NetworkDisplay.ResourceFilter>
+    ) -> [NetworkRequest.ResourceCategory] {
+        var categories: [NetworkRequest.ResourceCategory] = []
+        for filter in NetworkDisplay.ResourceFilter.pickerCases where filters.contains(filter) {
+            categories.append(contentsOf: filter.networkResourceCategories)
+        }
+        return categories
     }
 }
-#endif
 
-extension NetworkPanelModel {
-    package struct DisplayRowsInvalidationRevision: Equatable {
-        package var searchText: String
-        package var resourceFilters: Set<NetworkRequest.Display.ResourceFilter>
-        package var topologyRevision: Int
-        package var displayRevision: Int?
+private extension NetworkDisplay.ResourceFilter {
+    var networkResourceCategories: [NetworkRequest.ResourceCategory] {
+        switch self {
+        case .all:
+            []
+        case .document:
+            [.document]
+        case .stylesheet:
+            [.stylesheet]
+        case .media:
+            [.image, .media]
+        case .font:
+            [.font]
+        case .script:
+            [.script]
+        case .xhrFetch:
+            [.xhrFetch]
+        case .other:
+            [.webSocket, .other]
+        }
     }
 }

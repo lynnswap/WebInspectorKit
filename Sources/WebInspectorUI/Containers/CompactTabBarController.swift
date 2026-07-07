@@ -8,6 +8,7 @@ package final class CompactTabBarController: UITabBarController, UITabBarControl
     private let session: WebInspectorSession
     private let tabTransitionAnimator = NoAnimationTabTransitionAnimator()
     private var nativeTabByItemID: [WebInspectorTab.DisplayItem.ID: UITab] = [:]
+    private var renderedContentRevision: Int?
     private var interfaceObservation: PortableObservationTracking.Token?
     private var isRenderingSelection = false
 
@@ -77,15 +78,25 @@ package final class CompactTabBarController: UITabBarController, UITabBarControl
     private func renderInterface(_ interface: InterfaceModel, animated: Bool) {
         let displayItems = interface.displayItems(for: .compact)
         let selectedDisplayItem = interface.resolvedSelection(for: .compact)
+        let contentRevision = interface.contextBoundContentRevision
+        let shouldRebuildContent = renderedContentRevision.map { $0 != contentRevision } ?? false
         renderSelectionFromInterface {
-            setTabsIfNeeded(for: displayItems, animated: animated)
+            if shouldRebuildContent {
+                nativeTabByItemID.removeAll()
+            }
+            setTabsIfNeeded(for: displayItems, animated: animated, force: shouldRebuildContent)
             renderSelection(selectedDisplayItem)
+            renderedContentRevision = contentRevision
         }
     }
 
-    private func setTabsIfNeeded(for displayItems: [WebInspectorTab.DisplayItem], animated: Bool) {
+    private func setTabsIfNeeded(
+        for displayItems: [WebInspectorTab.DisplayItem],
+        animated: Bool,
+        force: Bool = false
+    ) {
         let nextItemIDs = displayItems.map(\.id)
-        guard tabs.map(\.identifier) != nextItemIDs else {
+        guard force || tabs.map(\.identifier) != nextItemIDs else {
             return
         }
         setTabs(nativeTabs(for: displayItems), animated: animated)
@@ -121,18 +132,20 @@ package final class CompactTabBarController: UITabBarController, UITabBarControl
         }
 
         let descriptor = session.interface.descriptor(for: displayItem)
-        let tabs = session.interface.tabs
         let session = session
         let nativeTab = UITab(
             title: descriptor?.title ?? "",
             image: descriptor?.image,
             identifier: itemID
         ) { _ in
+            // Resolve tabs at invocation time: the regular host already reads
+            // the live tab set, and a captured snapshot would rebuild content
+            // from a replaced tab's stale definition.
             WebInspectorTab.ContentFactory.makeViewController(
                 for: displayItem,
                 session: session,
                 hostLayout: .compact,
-                tabs: tabs
+                tabs: session.interface.tabs
             )
         }
         nativeTabByItemID[itemID] = nativeTab

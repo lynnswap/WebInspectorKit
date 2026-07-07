@@ -17,24 +17,16 @@ let package = Package(
     ],
     products: [
         .library(
-            name: "WebInspectorCore",
-            targets: ["WebInspectorCore"]
+            name: "WebInspectorProxyKit",
+            targets: ["WebInspectorProxyKit"]
         ),
         .library(
-            name: "WebInspectorNativeBridge",
-            targets: ["WebInspectorNativeBridge"]
+            name: "WebInspectorProxyKitTesting",
+            targets: ["WebInspectorProxyKitTesting"]
         ),
         .library(
-            name: "WebInspectorNativeSymbols",
-            targets: ["WebInspectorNativeSymbols"]
-        ),
-        .library(
-            name: "WebInspectorTransport",
-            targets: ["WebInspectorTransport"]
-        ),
-        .library(
-            name: "WebInspectorUI",
-            targets: ["WebInspectorUI"]
+            name: "WebInspectorDataKit",
+            targets: ["WebInspectorDataKit"]
         ),
         .library(
             name: "WebInspectorKit",
@@ -52,7 +44,7 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/lynnswap/SyntaxEditorUI.git",
-            exact: "0.16.3"
+            exact: "0.16.4"
         ),
         .package(
             url: "https://github.com/p-x9/MachOKit.git",
@@ -61,53 +53,27 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "WebInspectorCore",
+            name: "WebInspectorProxyKit",
             dependencies: [
-                "WebInspectorCoreSupport",
-                "WebInspectorCoreRuntime",
-                "WebInspectorCoreDOMCSS",
-                "WebInspectorCoreConsoleNetwork",
-                "WebInspectorTransport",
-                .product(name: "ObservationBridge", package: "ObservationBridge")
+                "WebInspectorNativeBridge",
+                "WebInspectorNativeSymbols"
             ],
-            exclude: ["README.md", "Docs"],
+            exclude: ["README.md"],
             swiftSettings: strictSwiftSettings
         ),
         .target(
-            name: "WebInspectorCoreSupport",
+            name: "WebInspectorProxyKitTesting",
             dependencies: [
-                "WebInspectorTransport"
+                "WebInspectorProxyKit"
             ],
             swiftSettings: strictSwiftSettings
         ),
         .target(
-            name: "WebInspectorCoreRuntime",
+            name: "WebInspectorDataKit",
             dependencies: [
-                "WebInspectorCoreSupport",
-                "WebInspectorTransport",
-                .product(name: "ObservationBridge", package: "ObservationBridge")
+                "WebInspectorProxyKit"
             ],
-            swiftSettings: strictSwiftSettings
-        ),
-        .target(
-            name: "WebInspectorCoreDOMCSS",
-            dependencies: [
-                "WebInspectorCoreSupport",
-                "WebInspectorCoreRuntime",
-                "WebInspectorTransport",
-                .product(name: "ObservationBridge", package: "ObservationBridge")
-            ],
-            swiftSettings: strictSwiftSettings
-        ),
-        .target(
-            name: "WebInspectorCoreConsoleNetwork",
-            dependencies: [
-                "WebInspectorCoreSupport",
-                "WebInspectorCoreRuntime",
-                "WebInspectorCoreDOMCSS",
-                "WebInspectorTransport",
-                .product(name: "ObservationBridge", package: "ObservationBridge")
-            ],
+            exclude: ["README.md"],
             swiftSettings: strictSwiftSettings
         ),
         .target(
@@ -128,21 +94,6 @@ let package = Package(
             swiftSettings: strictSwiftSettings
         ),
         .target(
-            name: "WebInspectorTransport",
-            dependencies: [],
-            swiftSettings: strictSwiftSettings
-        ),
-        .target(
-            name: "WebInspectorNativeTransport",
-            dependencies: [
-                "WebInspectorCore",
-                "WebInspectorTransport",
-                "WebInspectorNativeBridge",
-                "WebInspectorNativeSymbols"
-            ],
-            swiftSettings: strictSwiftSettings
-        ),
-        .target(
             name: "WebInspectorUIBase",
             dependencies: [],
             resources: [
@@ -153,8 +104,8 @@ let package = Package(
         .target(
             name: "WebInspectorUIDOM",
             dependencies: [
-                "WebInspectorCore",
-                "WebInspectorTransport",
+                "WebInspectorDataKit",
+                "WebInspectorProxyKit",
                 "WebInspectorUIBase",
                 .product(name: "ObservationBridge", package: "ObservationBridge"),
                 .product(name: "UIHostingMenu", package: "UIHostingMenu", condition: .when(platforms: [.iOS]))
@@ -164,8 +115,7 @@ let package = Package(
         .target(
             name: "WebInspectorUINetwork",
             dependencies: [
-                "WebInspectorCore",
-                "WebInspectorTransport",
+                "WebInspectorDataKit",
                 "WebInspectorUIBase",
                 .product(name: "ObservationBridge", package: "ObservationBridge"),
                 .product(name: "UIHostingMenu", package: "UIHostingMenu", condition: .when(platforms: [.iOS]))
@@ -175,7 +125,8 @@ let package = Package(
         .target(
             name: "WebInspectorUISyntaxBody",
             dependencies: [
-                "WebInspectorCore",
+                "WebInspectorDataKit",
+                "WebInspectorProxyKit",
                 "WebInspectorUIBase",
                 "WebInspectorUINetwork",
                 .product(name: "ObservationBridge", package: "ObservationBridge"),
@@ -186,8 +137,7 @@ let package = Package(
         .target(
             name: "WebInspectorUI",
             dependencies: [
-                "WebInspectorCore",
-                "WebInspectorTransport",
+                "WebInspectorDataKit",
                 "WebInspectorUIBase",
                 "WebInspectorUIDOM",
                 "WebInspectorUINetwork",
@@ -202,43 +152,14 @@ let package = Package(
         .target(
             name: "WebInspectorKit",
             dependencies: [
-                "WebInspectorNativeTransport",
                 "WebInspectorUI"
             ],
-            swiftSettings: strictSwiftSettings
-        ),
-        .testTarget(
-            name: "WebInspectorCoreTests",
-            dependencies: [
-                "WebInspectorCore",
-                "WebInspectorCoreSupport",
-                "WebInspectorCoreRuntime",
-                "WebInspectorCoreDOMCSS",
-                "WebInspectorCoreConsoleNetwork",
-                "WebInspectorTransport",
-                "WebInspectorTestSupport"
-            ],
-            path: "Tests/WebInspectorCoreTests",
-            swiftSettings: strictSwiftSettings
-        ),
-        .testTarget(
-            name: "WebInspectorTransportTests",
-            dependencies: [
-                "WebInspectorCore",
-                "WebInspectorCoreSupport",
-                "WebInspectorCoreRuntime",
-                "WebInspectorCoreDOMCSS",
-                "WebInspectorCoreConsoleNetwork",
-                "WebInspectorTransport",
-                "WebInspectorTestSupport"
-            ],
-            path: "Tests/WebInspectorTransportTests",
             swiftSettings: strictSwiftSettings
         ),
         .target(
             name: "WebInspectorTestSupport",
             dependencies: [
-                "WebInspectorTransport"
+                "WebInspectorProxyKit"
             ],
             path: "Tests/WebInspectorTestSupport",
             swiftSettings: strictSwiftSettings
@@ -266,18 +187,32 @@ let package = Package(
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(
-            name: "WebInspectorNativeTransportTests",
+            name: "WebInspectorProxyKitTests",
             dependencies: [
-                "WebInspectorNativeTransport"
+                "WebInspectorProxyKit",
+                "WebInspectorProxyKitTesting",
+                "WebInspectorTestSupport"
             ],
-            path: "Tests/WebInspectorNativeTransportTests",
+            path: "Tests/WebInspectorProxyKitTests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "WebInspectorDataKitTests",
+            dependencies: [
+                "WebInspectorDataKit",
+                "WebInspectorProxyKitTesting",
+                "WebInspectorProxyKit",
+                "WebInspectorTestSupport"
+            ],
+            path: "Tests/WebInspectorDataKitTests",
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(
             name: "WebInspectorUITests",
             dependencies: [
-                "WebInspectorCore",
-                "WebInspectorTransport",
+                "WebInspectorDataKit",
+                "WebInspectorProxyKit",
+                "WebInspectorProxyKitTesting",
                 "WebInspectorUIBase",
                 "WebInspectorUIDOM",
                 "WebInspectorUINetwork",

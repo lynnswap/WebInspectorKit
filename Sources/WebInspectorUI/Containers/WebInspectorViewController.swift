@@ -1,23 +1,28 @@
 #if canImport(UIKit)
 import UIKit
 import WebKit
-import WebInspectorCore
 import WebInspectorUIBase
 
 @MainActor
 private final class WebInspectorRootPresentationLifecycleCoordinator {
     private var didFinishCurrentPresentation = false
+    private var presentationGeneration: UInt64 = 0
 
     func beginPresentation() {
         didFinishCurrentPresentation = false
+        presentationGeneration &+= 1
     }
 
-    func finishIfNeeded(_ finish: () -> Void) {
+    func finishIfNeeded(_ finish: (_ generation: UInt64) -> Void) {
         guard didFinishCurrentPresentation == false else {
             return
         }
         didFinishCurrentPresentation = true
-        finish()
+        finish(presentationGeneration)
+    }
+
+    func isCurrentPresentation(_ generation: UInt64) -> Bool {
+        presentationGeneration == generation
     }
 
     #if DEBUG
@@ -108,6 +113,7 @@ public final class WebInspectorViewController: UIViewController {
     public override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         presentationLifecycleCoordinator.beginPresentation()
+        rebuildLayout(forceHostReplacement: activeHost == nil)
         installPresentationHostWindowObserverIfNeeded()
     }
 
@@ -154,14 +160,6 @@ public final class WebInspectorViewController: UIViewController {
         finishRootPresentationLifecycle()
     }
 
-    package func attachPresentation(
-        to webView: WKWebView,
-        perform attach: @MainActor (InspectorSession, WKWebView) async throws -> Void
-    ) async throws {
-        try await session.attachPresentation(to: webView, perform: attach)
-    }
-
-    @_disfavoredOverload
     public func attach(to webView: WKWebView) async throws {
         try await session.attach(to: webView)
     }
@@ -191,8 +189,15 @@ public final class WebInspectorViewController: UIViewController {
     }
 
     private func finishRootPresentationLifecycle() {
-        presentationLifecycleCoordinator.finishIfNeeded { [session, automaticallyDetachesOnDismiss] in
-            Task { @MainActor [session] in
+        presentationLifecycleCoordinator.finishIfNeeded { [session, automaticallyDetachesOnDismiss, presentationLifecycleCoordinator] generation in
+            removeActiveHost()
+            Task { @MainActor in
+                // A re-presentation can begin before this deferred retirement
+                // runs; retiring then would tear down content the new
+                // presentation has already built.
+                guard presentationLifecycleCoordinator.isCurrentPresentation(generation) else {
+                    return
+                }
                 await session.retireRootPresentation(detach: automaticallyDetachesOnDismiss)
             }
         }
@@ -249,13 +254,7 @@ public final class WebInspectorViewController: UIViewController {
     }
 
     private func installHost(of kind: HostKind) {
-        if let activeHost {
-            activeHost.willMove(toParent: nil)
-            activeHost.view.removeFromSuperview()
-            activeHost.removeFromParent()
-        }
-        activeHost = nil
-        activeHostKind = nil
+        removeActiveHost()
 
         let host: UIViewController
         switch kind {
@@ -279,6 +278,18 @@ public final class WebInspectorViewController: UIViewController {
 
         activeHost = host
         activeHostKind = kind
+    }
+
+    private func removeActiveHost() {
+        guard let activeHost else {
+            activeHostKind = nil
+            return
+        }
+        activeHost.willMove(toParent: nil)
+        activeHost.view.removeFromSuperview()
+        activeHost.removeFromParent()
+        self.activeHost = nil
+        activeHostKind = nil
     }
 
     package var activeHostViewControllerForTesting: UIViewController? {

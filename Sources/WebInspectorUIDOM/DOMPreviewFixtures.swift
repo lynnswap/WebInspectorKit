@@ -1,105 +1,130 @@
 import WebInspectorUIBase
-import WebInspectorCore
-import WebInspectorTransport
+import WebInspectorDataKit
+import WebInspectorProxyKit
 
 @MainActor
 package enum DOMPreviewFixtures {
-    package static func makeDOMSession() -> DOMSession {
-        let session = DOMSession()
-        let targetID = ProtocolTarget.ID("preview-page")
-        session.applyTargetCreated(
-            ProtocolTarget.Record(
-                id: targetID,
-                kind: .page,
-                frameID: DOMFrame.ID("preview-frame")
-            ),
-            makeCurrentMainPage: true
-        )
-        _ = session.replaceDocumentRoot(previewDocument(), targetID: targetID)
-        return session
+    package static func makeWebInspectorContext(
+        document: DOM.Node = previewProxyDocument()
+    ) -> WebInspectorContext {
+        let context = WebInspectorContext.preview(isolation: MainActor.shared)
+        context.seedDOMDocument(document)
+        return context
     }
 
-    private static func previewDocument() -> DOMNode.Payload {
-        DOMNode.Payload(
-            nodeID: .init(1),
-            nodeType: .document,
+    package static func firstElement(named localName: String, in context: WebInspectorContext) -> DOMNode? {
+        guard let rootNode = context.rootNode else {
+            return nil
+        }
+        var stack = [rootNode]
+        while let node = stack.popLast() {
+            if node.localName == localName {
+                return node
+            }
+            if case let .loaded(children) = node.children {
+                stack.append(contentsOf: children.reversed())
+            }
+        }
+        return nil
+    }
+
+    private static func previewProxyDocument() -> DOM.Node {
+        DOM.Node(
+            id: .init("document"),
+            nodeType: 9,
             nodeName: "#document",
-            regularChildren: .loaded([
-                DOMNode.Payload(
-                    nodeID: .init(2),
-                    nodeType: .documentType,
+            childNodeCount: 2,
+            children: [
+                DOM.Node(
+                    id: .init("doctype"),
+                    nodeType: 10,
                     nodeName: "html"
                 ),
-                DOMNode.Payload(
-                    nodeID: .init(3),
-                    nodeType: .element,
+                DOM.Node(
+                    id: .init("html"),
+                    nodeType: 1,
                     nodeName: "HTML",
                     localName: "html",
-                    attributes: [DOMNode.Attribute(name: "lang", value: "en")],
-                    regularChildren: .loaded([
-                        DOMNode.Payload(
-                            nodeID: .init(4),
-                            nodeType: .element,
+                    attributes: ["lang": "en"],
+                    attributeList: [DOM.Attribute(name: "lang", value: "en")],
+                    childNodeCount: 2,
+                    children: [
+                        DOM.Node(
+                            id: .init("head"),
+                            nodeType: 1,
                             nodeName: "HEAD",
                             localName: "head",
-                            regularChildren: .loaded([
-                                DOMNode.Payload(
-                                    nodeID: .init(5),
-                                    nodeType: .element,
+                            childNodeCount: 1,
+                            children: [
+                                DOM.Node(
+                                    id: .init("title"),
+                                    nodeType: 1,
                                     nodeName: "TITLE",
                                     localName: "title"
                                 ),
-                            ])
+                            ]
                         ),
-                        DOMNode.Payload(
-                            nodeID: .init(6),
-                            nodeType: .element,
+                        DOM.Node(
+                            id: .init("body"),
+                            nodeType: 1,
                             nodeName: "BODY",
                             localName: "body",
-                            attributes: [DOMNode.Attribute(name: "class", value: "logged-in env-production")],
-                            regularChildren: .loaded([
-                                DOMNode.Payload(
-                                    nodeID: .init(7),
-                                    nodeType: .element,
+                            attributes: ["class": "logged-in env-production"],
+                            attributeList: [
+                                DOM.Attribute(name: "class", value: "logged-in env-production"),
+                            ],
+                            childNodeCount: 4,
+                            children: [
+                                DOM.Node(
+                                    id: .init("start-of-content"),
+                                    nodeType: 1,
                                     nodeName: "DIV",
                                     localName: "div",
                                     attributes: [
-                                        DOMNode.Attribute(name: "id", value: "start-of-content"),
-                                        DOMNode.Attribute(name: "data-testid", value: "cellInnerDiv"),
+                                        "id": "start-of-content",
+                                        "data-testid": "cellInnerDiv",
+                                    ],
+                                    attributeList: [
+                                        DOM.Attribute(name: "id", value: "start-of-content"),
+                                        DOM.Attribute(name: "data-testid", value: "cellInnerDiv"),
                                     ]
                                 ),
-                                DOMNode.Payload(
-                                    nodeID: .init(8),
-                                    nodeType: .element,
+                                DOM.Node(
+                                    id: .init("article"),
+                                    nodeType: 1,
                                     nodeName: "ARTICLE",
                                     localName: "article",
-                                    regularChildren: .loaded([
-                                        DOMNode.Payload(
-                                            nodeID: .init(9),
-                                            nodeType: .element,
+                                    childNodeCount: 1,
+                                    children: [
+                                        DOM.Node(
+                                            id: .init("nested-child"),
+                                            nodeType: 1,
                                             nodeName: "SPAN",
                                             localName: "span",
-                                            attributes: [DOMNode.Attribute(name: "id", value: "nested-child")]
+                                            attributes: ["id": "nested-child"],
+                                            attributeList: [
+                                                DOM.Attribute(name: "id", value: "nested-child"),
+                                            ]
                                         ),
-                                    ])
+                                    ]
                                 ),
-                                DOMNode.Payload(
-                                    nodeID: .init(10),
-                                    nodeType: .text,
+                                DOM.Node(
+                                    id: .init("intro-text"),
+                                    nodeType: 3,
                                     nodeName: "#text",
                                     nodeValue: "Introducing luma for iOS 26"
                                 ),
-                                DOMNode.Payload(
-                                    nodeID: .init(11),
-                                    nodeType: .comment,
+                                DOM.Node(
+                                    id: .init("comment"),
+                                    nodeType: 8,
                                     nodeName: "#comment",
                                     nodeValue: "comment text"
                                 ),
-                            ])
+                            ]
                         ),
-                    ])
+                    ]
                 ),
-            ])
+            ]
         )
     }
 }

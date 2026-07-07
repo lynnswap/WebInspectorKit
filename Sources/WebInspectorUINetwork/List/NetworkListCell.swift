@@ -1,6 +1,6 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
-import WebInspectorCore
+import WebInspectorDataKit
 import ObservationBridge
 import UIKit
 
@@ -119,7 +119,7 @@ package final class NetworkListCell: UICollectionViewListCell {
 
     private func render(
         displayName: String,
-        statusSeverity: NetworkRequest.Display.StatusSeverity,
+        statusSeverity: NetworkDisplay.StatusSeverity,
         fileTypeLabel: String
     ) {
         render(displayName: displayName)
@@ -144,7 +144,7 @@ package final class NetworkListCell: UICollectionViewListCell {
     }
 
     private func renderAccessories(
-        statusSeverity: NetworkRequest.Display.StatusSeverity,
+        statusSeverity: NetworkDisplay.StatusSeverity,
         fileTypeLabel: String
     ) {
         let color = statusSeverity.color

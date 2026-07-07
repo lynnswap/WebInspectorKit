@@ -1,6 +1,6 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
-import WebInspectorCore
+import WebInspectorDataKit
 import UIKit
 
 @MainActor
@@ -17,7 +17,7 @@ package final class DOMCompactNavigationController: UINavigationController {
 
     package init(
         rootViewController: UIViewController,
-        inspector: InspectorSession
+        context: WebInspectorContext
     ) {
         rootViewController.webInspectorDetachFromContainerForReuse()
         super.init(rootViewController: rootViewController)
@@ -25,7 +25,7 @@ package final class DOMCompactNavigationController: UINavigationController {
         webInspectorApplyNavigationControllerBackground(to: self)
         rootViewController.navigationItem.style = .browser
         let treeViewController = rootViewController as? DOMTreeViewController
-        let navigationItems = DOMNavigationItems(inspector: inspector)
+        let navigationItems = DOMNavigationItems(context: context)
         navigationItems.install(on: rootViewController.navigationItem) { [weak self, weak treeViewController] in
             treeViewController?.domTreeUndoManager ?? self?.undoManager
         }
@@ -35,6 +35,20 @@ package final class DOMCompactNavigationController: UINavigationController {
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         nil
+    }
+
+    override package var canBecomeFirstResponder: Bool {
+        domNavigationItems != nil
+    }
+
+    override package var keyCommands: [UIKeyCommand]? {
+        domNavigationItems?.makeKeyCommands(actions: DOMNavigationItems.KeyCommandActions(
+            undo: #selector(performDOMUndoCommand),
+            redo: #selector(performDOMRedoCommand),
+            reload: #selector(performDOMReloadCommand),
+            delete: #selector(performDOMDeleteCommand),
+            pickElement: #selector(performDOMPickElementCommand)
+        ))
     }
 
     override package func viewDidLoad() {
@@ -50,6 +64,31 @@ package final class DOMCompactNavigationController: UINavigationController {
     private func applyBackgroundFromTraits() {
         webInspectorApplyNavigationControllerBackground(to: self)
     }
+
+    @objc
+    private func performDOMUndoCommand(_ sender: UIKeyCommand) {
+        domNavigationItems?.performUndoCommand()
+    }
+
+    @objc
+    private func performDOMRedoCommand(_ sender: UIKeyCommand) {
+        domNavigationItems?.performRedoCommand()
+    }
+
+    @objc
+    private func performDOMReloadCommand(_ sender: UIKeyCommand) {
+        domNavigationItems?.performReloadCommand()
+    }
+
+    @objc
+    private func performDOMDeleteCommand(_ sender: UIKeyCommand) {
+        domNavigationItems?.performDeleteCommand()
+    }
+
+    @objc
+    private func performDOMPickElementCommand(_ sender: UIKeyCommand) {
+        domNavigationItems?.performToggleElementPickerCommand()
+    }
 }
 
 #if DEBUG
@@ -62,14 +101,13 @@ extension DOMCompactNavigationController {
 
 #Preview("DOM Compact Tree") {
     DOMCompactNavigationController(
-        rootViewController: DOMTreeViewController(dom: DOMPreviewFixtures.makeDOMSession())
+        rootViewController: DOMTreeViewController(context: DOMPreviewFixtures.makeWebInspectorContext())
     )
 }
 
 #Preview("DOM Compact Element") {
-    let inspection = AttachedInspection(dom: DOMPreviewFixtures.makeDOMSession())
     DOMCompactNavigationController(
-        rootViewController: DOMElementViewController(inspection: inspection)
+        rootViewController: DOMElementViewController(context: DOMPreviewFixtures.makeWebInspectorContext())
     )
 }
 #endif

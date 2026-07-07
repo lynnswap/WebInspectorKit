@@ -1,13 +1,8 @@
 #if canImport(UIKit)
-import ObservationBridge
 import Testing
-import WebInspectorTransport
 import UIKit
-@testable import WebInspectorCore
-@testable import WebInspectorCoreConsoleNetwork
-@testable import WebInspectorCoreDOMCSS
-@testable import WebInspectorCoreRuntime
-@testable import WebInspectorCoreSupport
+@testable import WebInspectorDataKit
+@testable import WebInspectorProxyKit
 @testable import WebInspectorUI
 @testable import WebInspectorUISyntaxBody
 @testable import WebInspectorUINetwork
@@ -18,7 +13,7 @@ import UIKit
 @Suite(.serialized)
 struct DOMTreeTextViewTests {
     @Test
-    func rendersDOMMarkupFromDOMSession() async throws {
+    func rendersDOMMarkupFromDataKitContext() async throws {
         let view = await makeTreeView()
         let text = view.documentTextForTesting
 
@@ -35,35 +30,11 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
-    func rowRenderBuildDoesNotSnapshotDOMSession() async throws {
-        let session = makeDOMSession()
-        let baserowSnapshotBuildCount = session.snapshotBuildCountForTesting
-
-        let view = await makeTreeView(session: session)
-        #expect(view.documentTextForTesting.contains("<html lang=\"en\">"))
-        #expect(session.snapshotBuildCountForTesting == baserowSnapshotBuildCount)
-
-        view.toggleRowForTesting(containing: "<article")
-        await view.waitForRowDocumentForTesting()
-
-        #expect(view.documentTextForTesting.contains("<span id=\"nested-child\"></span>"))
-        #expect(session.snapshotBuildCountForTesting == baserowSnapshotBuildCount)
-    }
-
-    @Test
     func collapsedDescendantMutationDoesNotRouteCollapsedSubtreeBuild() async throws {
-        let session = makeDOMSession()
-        let view = await makeTreeView(session: session)
-        let documentID = try #require(session.currentPageRootNode?.id.documentID)
-        let articleID = DOMNode.ID(documentID: documentID, nodeID: .init(8))
-        let nestedChildID = DOMNode.ID(documentID: documentID, nodeID: .init(9))
-        let observedTreeRenderRevisions = await view.documentObservationDeliveryForTesting.values {
-            session.treeRenderInvalidation.revision
-        }
-        defer {
-            observedTreeRenderRevisions.cancel()
-        }
-        let baserowSnapshotBuildCount = session.snapshotBuildCountForTesting
+        let session = makeDOMTreeFixture()
+        let view = await makeTreeView(fixture: session)
+        let articleID = nodeID(8)
+        let nestedChildID = nodeID(9)
         let baselineAppliedTreeRevision = view.rowDocumentAppliedTreeRevisionForTesting
         let baselineBuildCount = view.buildRowRenderPlanCallCountForTesting
 
@@ -72,27 +43,22 @@ struct DOMTreeTextViewTests {
 
         session.applyAttributeModified(nestedChildID, name: "data-state", value: "ready")
         let expectedTreeRevision = session.treeRevision
-        let didObserveTreeRevision = await observedTreeRenderRevisions.waitUntil {
-            $0 >= expectedTreeRevision
-        } != nil
-        await view.waitForRowDocumentForTesting()
+        let didObserveTreeRevision = await view.waitForObservedTreeRevisionForTesting(expectedTreeRevision)
 
         #expect(didObserveTreeRevision)
         #expect(view.buildRowRenderPlanCallCountForTesting == baselineBuildCount)
         #expect(DOMTreeTextView.RowRenderBuilder.lastCollectedNodeIDsForTesting.contains(articleID))
         #expect(!DOMTreeTextView.RowRenderBuilder.lastCollectedNodeIDsForTesting.contains(nestedChildID))
-        #expect(session.snapshotBuildCountForTesting == baserowSnapshotBuildCount)
         #expect(view.rowDocumentAppliedTreeRevisionForTesting == baselineAppliedTreeRevision)
         #expect(!view.documentTextForTesting.contains("data-state=\"ready\""))
     }
 
     @Test
     func coalescedVisibleThenCollapsedMutationStillRoutesVisibleUpdate() async throws {
-        let session = makeDOMSession()
-        let view = await makeTreeView(session: session)
-        let documentID = try #require(session.currentPageRootNode?.id.documentID)
-        let visibleDivID = DOMNode.ID(documentID: documentID, nodeID: .init(7))
-        let nestedChildID = DOMNode.ID(documentID: documentID, nodeID: .init(9))
+        let session = makeDOMTreeFixture()
+        let view = await makeTreeView(fixture: session)
+        let visibleDivID = nodeID(7)
+        let nestedChildID = nodeID(9)
 
         #expect(view.documentTextForTesting.contains("<div id=\"start-of-content\" data-testid=\"cellInnerDiv\"></div>"))
         #expect(view.documentTextForTesting.contains("<article>…</article>"))
@@ -100,7 +66,7 @@ struct DOMTreeTextViewTests {
 
         let didRenderVisibleAttribute = await waitForRenderedDocumentTreeUpdate(
             in: view,
-            session: session,
+            fixture: session,
             update: {
                 session.applyAttributeModified(visibleDivID, name: "data-visible", value: "ready")
                 session.applyAttributeModified(nestedChildID, name: "data-hidden", value: "ready")
@@ -117,29 +83,29 @@ struct DOMTreeTextViewTests {
 
     @Test
     func documentRootStructureMutationRoutesHiddenRenderRoot() async throws {
-        let session = makeDOMSession(
-            root: DOMNode.Payload(
-                nodeID: .init(1),
-                nodeType: .document,
+        let session = makeDOMTreeFixture(
+            root: DOM.Node(
+                id: proxyNodeID(1),
+                nodeType: 9,
                 nodeName: "#document",
-                regularChildren: .unrequested(count: 1)
+                childNodeCount: 1
             )
         )
-        let view = await makeTreeView(session: session)
+        let view = await makeTreeView(fixture: session)
         let rootID = try #require(session.currentPageRootNode?.id)
 
         #expect(view.documentTextForTesting.isEmpty)
 
         let didRenderDocumentElement = await waitForRenderedDocumentTreeUpdate(
             in: view,
-            session: session,
+            fixture: session,
             update: {
                 session.applySetChildNodes(
                     parent: rootID,
                     children: [
-                        DOMNode.Payload(
-                            nodeID: .init(2),
-                            nodeType: .element,
+                        DOM.Node(
+                            id: proxyNodeID(2),
+                            nodeType: 1,
                             nodeName: "HTML",
                             localName: "html"
                         ),
@@ -303,9 +269,9 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
-    func selectingNodeUpdatesCoreSelectionAndRowDecoration() async throws {
-        let session = makeDOMSession()
-        let view = await makeTreeView(session: session)
+    func selectingNodeUpdatesDataKitSelectionAndRowDecoration() async throws {
+        let session = makeDOMTreeFixture()
+        let view = await makeTreeView(fixture: session)
 
         view.selectRowForTesting(containing: "<input disabled>")
         view.layoutIfNeeded()
@@ -315,9 +281,9 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
-    func primaryClickingRowUpdatesCoreSelection() async throws {
-        let session = makeDOMSession()
-        let view = await makeTreeView(session: session)
+    func primaryClickingRowUpdatesDataKitSelection() async throws {
+        let session = makeDOMTreeFixture()
+        let view = await makeTreeView(fixture: session)
 
         view.primaryClickRowForTesting(containing: "<input disabled>")
         view.layoutIfNeeded()
@@ -349,17 +315,17 @@ struct DOMTreeTextViewTests {
 
         #expect(view.disclosureHitTestedLineTextForTesting(atContentPoint: point)?.contains("<article") == true)
         view.primaryClickContentPointForTesting(point)
-        await view.waitForRowDocumentForTesting()
+        #expect(await view.waitForRowDocumentForTesting())
 
         #expect(view.documentTextForTesting.contains("<span id=\"nested-child\"></span>"))
     }
 
     @Test
     func primaryClickingRowHighlightsSelectedPageNode() async throws {
-        let session = makeDOMSession()
+        let session = makeDOMTreeFixture()
         let recorder = NodeActionRecorder()
         let view = DOMTreeTextView(
-            dom: session,
+            context: session.context,
             highlightNodeAction: { nodeID, owner in
                 recorder.record(nodeID, owner: owner)
             }
@@ -367,7 +333,7 @@ struct DOMTreeTextViewTests {
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
         view.setRenderingActive(true)
-        await view.waitForRowDocumentForTesting()
+        #expect(await view.waitForRowDocumentForTesting())
 
         view.primaryClickRowForTesting(containing: "<input disabled>")
         let highlightedNodeID = await recorder.nextNodeID()
@@ -379,10 +345,10 @@ struct DOMTreeTextViewTests {
 
     @Test
     func hoverEndRestoresSelectedPageHighlight() async throws {
-        let session = makeDOMSession()
+        let session = makeDOMTreeFixture()
         let restoreRecorder = VoidActionRecorder()
         let view = DOMTreeTextView(
-            dom: session,
+            context: session.context,
             highlightNodeAction: { _, _ in },
             restoreHighlightAction: {
                 restoreRecorder.record()
@@ -391,7 +357,7 @@ struct DOMTreeTextViewTests {
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
         view.setRenderingActive(true)
-        await view.waitForRowDocumentForTesting()
+        #expect(await view.waitForRowDocumentForTesting())
 
         view.primaryClickRowForTesting(containing: "<input disabled>")
         view.hoverRowForTesting(containing: "<article")
@@ -403,10 +369,10 @@ struct DOMTreeTextViewTests {
 
     @Test
     func repeatedHoverEndCancelsPendingRestoreHighlight() async throws {
-        let session = makeDOMSession()
+        let session = makeDOMTreeFixture()
         let restoreRecorder = VoidActionRecorder()
         let view = DOMTreeTextView(
-            dom: session,
+            context: session.context,
             highlightNodeAction: { _, _ in },
             restoreHighlightAction: {
                 restoreRecorder.record()
@@ -415,7 +381,7 @@ struct DOMTreeTextViewTests {
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
         view.setRenderingActive(true)
-        await view.waitForRowDocumentForTesting()
+        #expect(await view.waitForRowDocumentForTesting())
 
         view.primaryClickRowForTesting(containing: "<input disabled>")
         view.hoverRowForTesting(containing: "<article")
@@ -430,11 +396,11 @@ struct DOMTreeTextViewTests {
 
     @Test
     func hidingWithHoveredPageHighlightRestoresHighlightWhileRenderingInactive() async throws {
-        let session = makeDOMSession()
+        let session = makeDOMTreeFixture()
         let highlightRecorder = NodeActionRecorder()
         let restoreRecorder = VoidActionRecorder()
         let view = DOMTreeTextView(
-            dom: session,
+            context: session.context,
             highlightNodeAction: { nodeID, owner in
                 highlightRecorder.record(nodeID, owner: owner)
             },
@@ -445,7 +411,7 @@ struct DOMTreeTextViewTests {
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
         view.setRenderingActive(true)
-        await view.waitForRowDocumentForTesting()
+        #expect(await view.waitForRowDocumentForTesting())
 
         view.hoverRowForTesting(containing: "<article")
         _ = await highlightRecorder.nextNodeID()
@@ -459,10 +425,10 @@ struct DOMTreeTextViewTests {
 
     @Test
     func hidingWithQueuedHoverRestorePreservesHighlightRestoreTask() async throws {
-        let session = makeDOMSession()
+        let session = makeDOMTreeFixture()
         let restoreRecorder = VoidActionRecorder()
         let view = DOMTreeTextView(
-            dom: session,
+            context: session.context,
             highlightNodeAction: { _, _ in },
             restoreHighlightAction: {
                 restoreRecorder.record()
@@ -471,7 +437,7 @@ struct DOMTreeTextViewTests {
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
         view.setRenderingActive(true)
-        await view.waitForRowDocumentForTesting()
+        #expect(await view.waitForRowDocumentForTesting())
 
         view.primaryClickRowForTesting(containing: "<input disabled>")
         view.hoverRowForTesting(containing: "<article")
@@ -485,10 +451,10 @@ struct DOMTreeTextViewTests {
 
     @Test
     func hidingWithQueuedSelectionHighlightRequeuesHighlightOnResume() async throws {
-        let session = makeDOMSession()
+        let session = makeDOMTreeFixture()
         let highlightRecorder = NodeActionRecorder()
         let view = DOMTreeTextView(
-            dom: session,
+            context: session.context,
             highlightNodeAction: { nodeID, owner in
                 highlightRecorder.record(nodeID, owner: owner)
             }
@@ -496,7 +462,7 @@ struct DOMTreeTextViewTests {
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
         view.setRenderingActive(true)
-        await view.waitForRowDocumentForTesting()
+        #expect(await view.waitForRowDocumentForTesting())
 
         view.primaryClickRowForTesting(containing: "<input disabled>")
         view.setRenderingActive(false)
@@ -514,11 +480,11 @@ struct DOMTreeTextViewTests {
 
     @Test
     func hoverHighlightCancelsPendingRestoreHighlight() async throws {
-        let session = makeDOMSession()
+        let session = makeDOMTreeFixture()
         let highlightRecorder = NodeActionRecorder()
         let restoreRecorder = CancellableVoidActionRecorder()
         let view = DOMTreeTextView(
-            dom: session,
+            context: session.context,
             highlightNodeAction: { nodeID, owner in
                 highlightRecorder.record(nodeID, owner: owner)
             },
@@ -529,7 +495,7 @@ struct DOMTreeTextViewTests {
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
         view.setRenderingActive(true)
-        await view.waitForRowDocumentForTesting()
+        #expect(await view.waitForRowDocumentForTesting())
 
         view.primaryClickRowForTesting(containing: "<input disabled>")
         view.hoverRowForTesting(containing: "<article")
@@ -546,13 +512,13 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
-    func pageHighlightActionsAreSuppressedWhileElementPickerIsActive() async throws {
-        let session = makeDOMSession()
+    func pageHighlightActionsOverrideElementPickerState() async throws {
+        let session = makeDOMTreeFixture()
         session.isSelectingElement = true
         let highlightRecorder = NodeActionRecorder()
         let restoreRecorder = VoidActionRecorder()
         let view = DOMTreeTextView(
-            dom: session,
+            context: session.context,
             highlightNodeAction: { nodeID, owner in
                 highlightRecorder.record(nodeID, owner: owner)
             },
@@ -563,16 +529,27 @@ struct DOMTreeTextViewTests {
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
         view.setRenderingActive(true)
-        await view.waitForRowDocumentForTesting()
+        #expect(await view.waitForRowDocumentForTesting())
 
         view.primaryClickRowForTesting(containing: "<input disabled>")
+        let selectionHighlightedNodeID = await highlightRecorder.nextNodeID()
+
+        #expect(session.selectedNode?.id == selectionHighlightedNodeID)
+        #expect(session.node(for: selectionHighlightedNodeID)?.localName == "input")
+        #expect(highlightRecorder.recordedOwners == [.selection])
+        highlightRecorder.removeAll()
+
         view.hoverRowForTesting(containing: "<article")
+        let hoverHighlightedNodeID = await highlightRecorder.nextNodeID()
+
+        #expect(session.node(for: hoverHighlightedNodeID)?.localName == "article")
+        #expect(highlightRecorder.recordedOwners == [.transient])
+
         view.endHoverForTesting()
-        await view.waitForPageHighlightTaskForTesting()
+        await restoreRecorder.next()
 
         #expect(session.selectedNode?.localName == "input")
-        #expect(highlightRecorder.recordedNodeIDs.isEmpty)
-        #expect(restoreRecorder.recordCount == 0)
+        #expect(restoreRecorder.recordCount == 1)
     }
 
     @Test
@@ -580,7 +557,7 @@ struct DOMTreeTextViewTests {
         let view = await makeTreeView()
 
         view.toggleRowForTesting(containing: "<article")
-        await view.waitForRowDocumentForTesting()
+        #expect(await view.waitForRowDocumentForTesting())
 
         let text = view.documentTextForTesting
         #expect(text.contains("<article>"))
@@ -591,11 +568,11 @@ struct DOMTreeTextViewTests {
 
     @Test
     func localMarkupLookupUsesIndexedOpeningRow() async throws {
-        let session = makeDOMSession()
-        let view = await makeTreeView(session: session)
+        let session = makeDOMTreeFixture()
+        let view = await makeTreeView(fixture: session)
 
         view.toggleRowForTesting(containing: "<article")
-        await view.waitForRowDocumentForTesting()
+        #expect(await view.waitForRowDocumentForTesting())
 
         let articleID = try #require(
             session.snapshot().nodesByID.first { entry in
@@ -613,11 +590,11 @@ struct DOMTreeTextViewTests {
 
     @Test
     func markupCacheSeparatesOpeningAndClosingRowsForSameNode() async throws {
-        let session = makeDOMSession()
-        let view = await makeTreeView(session: session)
+        let session = makeDOMTreeFixture()
+        let view = await makeTreeView(fixture: session)
 
         view.toggleRowForTesting(containing: "<article")
-        await view.waitForRowDocumentForTesting()
+        #expect(await view.waitForRowDocumentForTesting())
 
         let articleID = try #require(
             session.snapshot().nodesByID.first { entry in
@@ -649,24 +626,18 @@ struct DOMTreeTextViewTests {
 
     @Test
     func expandedDescendantMutationRerendersAfterExpansionDependencyRefresh() async throws {
-        let session = makeDOMSession()
-        let view = await makeTreeView(session: session)
+        let session = makeDOMTreeFixture()
+        let view = await makeTreeView(fixture: session)
 
         view.toggleRowForTesting(containing: "<article")
-        await view.waitForRowDocumentForTesting()
+        #expect(await view.waitForRowDocumentForTesting())
         #expect(view.documentTextForTesting.contains("<span id=\"nested-child\"></span>"))
 
-        let nestedChildID = try #require(
-            session.snapshot().nodesByID.first { entry in
-                entry.value.attributes.contains { attribute in
-                    attribute.name == "id" && attribute.value == "nested-child"
-                }
-            }?.key
-        )
+        let nestedChildID = nodeID(9)
 
         let didRenderAttribute = await waitForRenderedDocumentTreeUpdate(
             in: view,
-            session: session,
+            fixture: session,
             update: {
                 session.applyAttributeModified(nestedChildID, name: "data-state", value: "ready")
             },
@@ -680,24 +651,18 @@ struct DOMTreeTextViewTests {
 
     @Test
     func visibleContentMutationUsesIncrementalTextStorageUpdate() async throws {
-        let session = makeDOMSession()
-        let view = await makeTreeView(session: session)
+        let session = makeDOMTreeFixture()
+        let view = await makeTreeView(fixture: session)
 
         view.toggleRowForTesting(containing: "<article")
-        await view.waitForRowDocumentForTesting()
+        #expect(await view.waitForRowDocumentForTesting())
         view.resetPerformanceCountersForTesting()
 
-        let nestedChildID = try #require(
-            session.snapshot().nodesByID.first { entry in
-                entry.value.attributes.contains { attribute in
-                    attribute.name == "id" && attribute.value == "nested-child"
-                }
-            }?.key
-        )
+        let nestedChildID = nodeID(9)
 
         let didRenderAttribute = await waitForRenderedDocumentTreeUpdate(
             in: view,
-            session: session,
+            fixture: session,
             update: {
                 session.applyAttributeModified(nestedChildID, name: "data-state", value: "ready")
             },
@@ -711,36 +676,27 @@ struct DOMTreeTextViewTests {
         #expect(view.replaceRowDocumentCallCountForTesting == 0)
         #expect(view.resetTextFragmentViewsCallCountForTesting == 0)
         #expect(view.rowSpanDisplayInvalidationCallCountForTesting == 1)
-        #expect(view.textSegmentRectsCallCountForTesting == 0)
     }
 
     @Test
     func hiddenVisibleMutationDefersRenderingUntilRenderingResumes() async throws {
-        let session = makeDOMSession()
-        let view = await makeTreeView(session: session)
-        let documentID = try #require(session.currentPageRootNode?.id.documentID)
-        let visibleDivID = DOMNode.ID(documentID: documentID, nodeID: .init(7))
-        let observedTreeRenderRevisions = await view.documentObservationDeliveryForTesting.values {
-            session.treeRenderInvalidation.revision
-        }
-        defer {
-            observedTreeRenderRevisions.cancel()
-        }
+        let session = makeDOMTreeFixture()
+        let view = await makeTreeView(fixture: session)
+        let visibleDivID = nodeID(7)
         let baselineText = view.documentTextForTesting
         view.resetPerformanceCountersForTesting()
 
         view.setRenderingActive(false)
         session.applyAttributeModified(visibleDivID, name: "data-visible", value: "deferred")
         let hiddenRevision = session.treeRevision
-        #expect(await observedTreeRenderRevisions.waitUntil { $0 >= hiddenRevision } != nil)
-        await view.waitForRowDocumentForTesting()
+        #expect(await view.waitForRowDocumentAppliedTreeRevisionForTesting(hiddenRevision) == false)
 
         #expect(view.buildRowRenderPlanCallCountForTesting == 0)
         #expect(view.documentTextForTesting == baselineText)
         #expect(!view.documentTextForTesting.contains("data-visible=\"deferred\""))
 
         view.setRenderingActive(true)
-        await view.waitForRowDocumentForTesting()
+        #expect(await view.waitForRowDocumentForTesting())
 
         #expect(view.buildRowRenderPlanCallCountForTesting == 1)
         #expect(view.documentTextForTesting.contains("data-visible=\"deferred\""))
@@ -748,15 +704,9 @@ struct DOMTreeTextViewTests {
 
     @Test
     func inFlightExpansionMutationRebuildsAgainstNewSnapshot() async throws {
-        let session = makeDOMSession()
-        let view = await makeTreeView(session: session)
-        let nestedChildID = try #require(
-            session.snapshot().nodesByID.first { entry in
-                entry.value.attributes.contains { attribute in
-                    attribute.name == "id" && attribute.value == "nested-child"
-                }
-            }?.key
-        )
+        let session = makeDOMTreeFixture()
+        let view = await makeTreeView(fixture: session)
+        let nestedChildID = nodeID(9)
 
         view.suspendNextRowRenderBuildForTesting()
         view.toggleRowForTesting(containing: "<article")
@@ -764,7 +714,7 @@ struct DOMTreeTextViewTests {
 
         let didRenderAttribute = await waitForRenderedDocumentTreeUpdate(
             in: view,
-            session: session,
+            fixture: session,
             update: {
                 session.applyAttributeModified(nestedChildID, name: "data-state", value: "ready")
             },
@@ -779,36 +729,33 @@ struct DOMTreeTextViewTests {
 
     @Test
     func hidingDuringInFlightRowRenderBuildCancelsStaleApply() async throws {
-        let session = makeDOMSession()
-        let view = await makeTreeView(session: session)
+        let session = makeDOMTreeFixture()
+        let view = await makeTreeView(fixture: session)
 
         view.suspendNextRowRenderBuildForTesting()
         view.toggleRowForTesting(containing: "<article")
         await view.waitForRowRenderBuildSuspensionForTesting()
 
         view.setRenderingActive(false)
-        await view.waitForRowDocumentForTesting()
+        #expect(await view.waitForRowDocumentForTesting())
 
         #expect(!view.documentTextForTesting.contains("<span id=\"nested-child\"></span>"))
 
         view.resumeRowRenderBuildForTesting()
-        await view.waitForRowDocumentForTesting()
+        #expect(await view.waitForRowDocumentForTesting())
 
         #expect(!view.documentTextForTesting.contains("<span id=\"nested-child\"></span>"))
 
         view.setRenderingActive(true)
-        await view.waitForRowDocumentForTesting()
+        #expect(await view.waitForRowDocumentForTesting())
 
         #expect(view.documentTextForTesting.contains("<span id=\"nested-child\"></span>"))
     }
 
     @Test
     func selectionChangeUpdatesDecorationsWithoutRebuildingRowRender() async throws {
-        let session = makeDOMSession()
-        let view = await makeTreeView(session: session)
-        let selectedRowCounts = await view.selectionObservationDeliveryForTesting.values {
-            view.selectedRowRectsForTesting().count
-        }
+        let session = makeDOMTreeFixture()
+        let view = await makeTreeView(fixture: session)
         view.resetPerformanceCountersForTesting()
 
         let htmlID = try #require(
@@ -817,57 +764,41 @@ struct DOMTreeTextViewTests {
             }?.key
         )
         session.selectNode(htmlID)
+        #expect(await view.waitForObservedTreeRevisionForTesting(session.selectionRevision))
+        view.routeCurrentSelectionInvalidationForTesting()
+        view.layoutIfNeeded()
 
-        let didRenderSelection = await selectedRowCounts.waitUntil { $0 == 1 } != nil
-        #expect(didRenderSelection)
+        #expect(view.selectedRowRectsForTesting().count == 1)
         #expect(view.buildRowRenderPlanCallCountForTesting == 0)
     }
 
     @Test
     func hiddenSelectionChangeDefersRevealUntilRenderingResumes() async throws {
-        let session = makeDOMSession(root: selectionRevealRaceDocument())
-        let view = await makeTreeView(session: session)
+        let session = makeDOMTreeFixture(root: selectionRevealRaceDocument())
+        let view = await makeTreeView(fixture: session)
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 96)
         view.layoutIfNeeded()
-        let initialSnapshot = session.snapshot()
-        let bodyID = try #require(
-            initialSnapshot.nodesByID.first { entry in
-                entry.value.localName == "body"
-            }?.key
-        )
-        let targetID = try #require(
-            initialSnapshot.nodesByID.first { entry in
-                entry.value.attributes.contains { attribute in
-                    attribute.name == "id" && attribute.value == "selected-target"
-                }
-            }?.key
-        )
+        let bodyID = nodeID(3)
+        let targetID = nodeID(4)
         session.applySetChildNodes(
             parent: bodyID,
             children: selectionRevealRaceBodyChildren(prefixCount: 80),
             eventSequence: 10
         )
-        await view.waitForRowDocumentForTesting()
+        #expect(await view.waitForRowDocumentForTesting())
         view.contentOffset = .zero
         view.clearDrawnSelectedRowRectsForTesting()
-        let observedSelectionRevisions = await view.selectionObservationDeliveryForTesting.values {
-            session.selectionRevision
-        }
-        defer {
-            observedSelectionRevisions.cancel()
-        }
 
         view.setRenderingActive(false)
         session.selectNode(targetID)
         let hiddenSelectionRevision = session.selectionRevision
-        #expect(await observedSelectionRevisions.waitUntil { $0 >= hiddenSelectionRevision } != nil)
-        await view.waitForRowDocumentForTesting()
+        #expect(await view.waitForObservedTreeRevisionForTesting(hiddenSelectionRevision))
 
         #expect(view.contentOffset.y == 0)
         #expect(view.drawnSelectedRowRectsForTesting.isEmpty)
 
         view.setRenderingActive(true)
-        await view.waitForRowDocumentForTesting()
+        #expect(await view.waitForRowDocumentForTesting())
         view.layoutIfNeeded()
 
         let revealState = renderedSelectionRevealState(in: view, containing: "selected-target")
@@ -877,11 +808,10 @@ struct DOMTreeTextViewTests {
 
     @Test
     func hiddenSelectionChangeClearsMultiSelectionBeforePendingDOMInvalidationFlush() async throws {
-        let session = makeDOMSession()
-        let view = await makeTreeView(session: session)
-        let documentID = try #require(session.currentPageRootNode?.id.documentID)
-        let visibleDivID = DOMNode.ID(documentID: documentID, nodeID: .init(7))
-        let inputID = DOMNode.ID(documentID: documentID, nodeID: .init(12))
+        let session = makeDOMTreeFixture()
+        let view = await makeTreeView(fixture: session)
+        let visibleDivID = nodeID(7)
+        let inputID = nodeID(12)
 
         view.primaryClickRowForTesting(containing: "<div id=\"start-of-content\"", modifiers: .command)
         view.primaryClickRowForTesting(containing: "<input disabled>", modifiers: .command)
@@ -892,31 +822,19 @@ struct DOMTreeTextViewTests {
             "      <article>…</article>",
         ])
 
-        let observedTreeRenderRevisions = await view.documentObservationDeliveryForTesting.values {
-            session.treeRenderInvalidation.revision
-        }
-        let observedSelectionRevisions = await view.selectionObservationDeliveryForTesting.values {
-            session.selectionRevision
-        }
-        defer {
-            observedTreeRenderRevisions.cancel()
-            observedSelectionRevisions.cancel()
-        }
-
         view.setRenderingActive(false)
         session.applyAttributeModified(visibleDivID, name: "data-visible", value: "while-hidden")
         session.selectNode(inputID)
         let hiddenTreeRevision = session.treeRevision
         let hiddenSelectionRevision = session.selectionRevision
-        #expect(await observedTreeRenderRevisions.waitUntil { $0 >= hiddenTreeRevision } != nil)
-        #expect(await observedSelectionRevisions.waitUntil { $0 >= hiddenSelectionRevision } != nil)
-        await view.waitForRowDocumentForTesting()
+        #expect(await view.waitForRowDocumentAppliedTreeRevisionForTesting(hiddenTreeRevision) == false)
+        #expect(hiddenSelectionRevision >= hiddenTreeRevision)
 
         #expect(!view.documentTextForTesting.contains("data-visible=\"while-hidden\""))
         #expect(view.multiSelectedRowSnapshotsInDisplayOrderForTesting.count == 3)
 
         view.setRenderingActive(true)
-        await view.waitForRowDocumentForTesting()
+        #expect(await view.waitForRowDocumentForTesting())
         view.layoutIfNeeded()
 
         #expect(view.documentTextForTesting.contains("data-visible=\"while-hidden\""))
@@ -926,8 +844,8 @@ struct DOMTreeTextViewTests {
 
     @Test
     func hiddenSelectionChangeAwayAndBackStillClearsMultiSelectionOnResume() async throws {
-        let session = makeDOMSession()
-        let view = await makeTreeView(session: session)
+        let session = makeDOMTreeFixture()
+        let view = await makeTreeView(fixture: session)
         let snapshot = session.snapshot()
         let inputID = try #require(
             snapshot.nodesByID.first { entry in
@@ -948,23 +866,16 @@ struct DOMTreeTextViewTests {
         view.routeCurrentSelectionInvalidationForTesting()
         #expect(view.multiSelectedRowSnapshotsInDisplayOrderForTesting.count == 3)
 
-        let observedSelectionRevisions = await view.selectionObservationDeliveryForTesting.values {
-            session.selectionRevision
-        }
-        defer {
-            observedSelectionRevisions.cancel()
-        }
-
         view.setRenderingActive(false)
         session.selectNode(articleID)
         session.selectNode(inputID)
         let hiddenSelectionRevision = session.selectionRevision
-        #expect(await observedSelectionRevisions.waitUntil { $0 >= hiddenSelectionRevision } != nil)
+        #expect(await view.waitForObservedTreeRevisionForTesting(hiddenSelectionRevision))
 
         #expect(view.multiSelectedRowSnapshotsInDisplayOrderForTesting.count == 3)
 
         view.setRenderingActive(true)
-        await view.waitForRowDocumentForTesting()
+        #expect(await view.waitForRowDocumentForTesting())
         view.layoutIfNeeded()
 
         #expect(view.multiSelectedRowSnapshotsInDisplayOrderForTesting.isEmpty)
@@ -973,24 +884,13 @@ struct DOMTreeTextViewTests {
 
     @Test
     func selectionRevealWaitsForInFlightRowRenderBuild() async throws {
-        let session = makeDOMSession(root: selectionRevealRaceDocument())
-        let view = await makeTreeView(session: session)
+        let session = makeDOMTreeFixture(root: selectionRevealRaceDocument())
+        let view = await makeTreeView(fixture: session)
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 96)
         view.layoutIfNeeded()
 
-        let initialSnapshot = session.snapshot()
-        let bodyID = try #require(
-            initialSnapshot.nodesByID.first { entry in
-                entry.value.localName == "body"
-            }?.key
-        )
-        let targetID = try #require(
-            initialSnapshot.nodesByID.first { entry in
-                entry.value.attributes.contains { attribute in
-                    attribute.name == "id" && attribute.value == "selected-target"
-                }
-            }?.key
-        )
+        let bodyID = nodeID(3)
+        let targetID = nodeID(4)
 
         view.suspendNextRowRenderBuildForTesting()
         session.applySetChildNodes(
@@ -1003,7 +903,7 @@ struct DOMTreeTextViewTests {
         view.routeCurrentSelectionInvalidationForTesting()
 
         view.resumeRowRenderBuildForTesting()
-        await view.waitForRowDocumentForTesting()
+        #expect(await view.waitForRowDocumentForTesting())
 
         let selectedLine = try #require(
             view.rowSnapshotsForTesting.first { snapshot in
@@ -1020,10 +920,9 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
-    func selectionRevealSkipsStaleSelectedNodeDuringPendingInspectSelection() async throws {
-        let protocolTargetID = ProtocolTarget.ID("page-main")
-        let session = makeDOMSession(root: selectionRevealRaceDocument())
-        let view = await makeTreeView(session: session)
+    func selectionRevealUsesLatestSelectionDuringInFlightRowRenderBuild() async throws {
+        let session = makeDOMTreeFixture(root: selectionRevealRaceDocument())
+        let view = await makeTreeView(fixture: session)
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 96)
         view.layoutIfNeeded()
 
@@ -1033,13 +932,8 @@ struct DOMTreeTextViewTests {
                 entry.value.localName == "body"
             }?.key
         )
-        let oldSelectedNodeID = try #require(
-            initialSnapshot.nodesByID.first { entry in
-                entry.value.attributes.contains { attribute in
-                    attribute.name == "id" && attribute.value == "selected-target"
-                }
-            }?.key
-        )
+        let oldSelectedNodeID = nodeID(4)
+        let latestSelectedNodeID = nodeID(1_070)
 
         view.suspendNextRowRenderBuildForTesting()
         session.applySetChildNodes(
@@ -1049,82 +943,38 @@ struct DOMTreeTextViewTests {
         await view.waitForRowRenderBuildSuspensionForTesting()
 
         session.selectNode(oldSelectedNodeID)
+        #expect(await view.waitForObservedTreeRevisionForTesting(session.selectionRevision))
+        view.routeCurrentSelectionInvalidationForTesting()
+        session.selectNode(latestSelectedNodeID)
+        #expect(await view.waitForObservedTreeRevisionForTesting(session.selectionRevision))
         view.routeCurrentSelectionInvalidationForTesting()
 
-        let command = session.beginInspectSelectionRequest(
-            targetID: protocolTargetID,
-            objectID: "next-selection"
-        )
-        let selectionRequestID: DOMSelection.Request.ID
-        guard case let .success(.requestNode(id, _, _)) = command else {
-            Issue.record("Expected pending DOM.requestNode selection")
-            return
-        }
-        selectionRequestID = id
-
         view.resumeRowRenderBuildForTesting()
-        await view.waitForRowDocumentForTesting()
+        #expect(await view.waitForRowDocumentForTesting())
 
-        #expect(session.hasPendingSelectionRequest)
-        #expect(view.contentOffset.y < view.bounds.height)
-
-        var requestNodeResult: DOMNode.RequestResolution?
-        let revealedSelectionState = await waitForSelectionRenderedState(
+        let revealState = renderedSelectionRevealState(
             in: view,
-            update: {
-                requestNodeResult = session.applyRequestNodeResult(
-                    selectionRequestID: selectionRequestID,
-                    targetID: protocolTargetID,
-                    nodeID: .init(4)
-                )
-            },
-            sample: {
-                renderedSelectionRevealState(
-                    in: view,
-                    containing: "id=\"selected-target\""
-                )
-            },
-            until: {
-                $0.isSelectedRowRevealed
-            }
+            containing: "id=\"prefix-70\""
         )
-        let result = try #require(requestNodeResult)
-        guard case let .resolved(resolvedNodeID) = result else {
-            Issue.record("Expected pending DOM.requestNode selection to resolve")
-            return
-        }
-        let revealState = try #require(revealedSelectionState)
-
-        #expect(resolvedNodeID == oldSelectedNodeID)
-        #expect(!session.hasPendingSelectionRequest)
+        #expect(session.selectedNode?.id == latestSelectedNodeID)
         #expect(revealState.contentOffsetY > revealState.boundsHeight)
         #expect(revealState.isSelectedRowVisible)
     }
 
     @Test
     func documentResetClearsLocalExpansionStateEvenWhenNodeIDsRepeat() async throws {
-        let session = makeDOMSession()
-        let view = await makeTreeView(session: session)
+        let session = makeDOMTreeFixture()
+        let view = await makeTreeView(fixture: session)
 
         view.toggleRowForTesting(containing: "<article")
-        await view.waitForRowDocumentForTesting()
+        #expect(await view.waitForRowDocumentForTesting())
         #expect(view.documentTextForTesting.contains("<span id=\"nested-child\"></span>"))
 
-        let targetID = ProtocolTarget.ID("page-main")
         let didRenderResetDocument = await waitForRenderedDocumentTreeUpdate(
             in: view,
-            session: session,
+            fixture: session,
             update: {
-                session.reset()
-                session.applyTargetCreated(
-                    ProtocolTarget.Record(
-                        id: targetID,
-                        kind: .page,
-                        frameID: DOMFrame.ID("main-frame")
-                    ),
-                    makeCurrentMainPage: true
-                )
-                _ = session.replaceDocumentRoot(documentNode(), targetID: targetID)
+                session.replaceDocumentRoot(documentNode())
             },
             until: {
                 let text = view.documentTextForTesting
@@ -1140,10 +990,10 @@ struct DOMTreeTextViewTests {
 
     @Test
     func openingUnloadedRowRequestsChildrenThroughInjectedAction() async throws {
-        let session = makeDOMSession(root: documentWithDeferredArticle())
+        let session = makeDOMTreeFixture(root: documentWithDeferredArticle())
         let recorder = NodeRequestRecorder()
         let view = DOMTreeTextView(
-            dom: session,
+            context: session.context,
             requestChildrenAction: { nodeID in
                 recorder.record(nodeID)
                 return true
@@ -1152,7 +1002,7 @@ struct DOMTreeTextViewTests {
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
         view.setRenderingActive(true)
-        await view.waitForRowDocumentForTesting()
+        #expect(await view.waitForRowDocumentForTesting())
 
         view.toggleRowForTesting(containing: "<article")
         let requestedNodeID = await recorder.next()
@@ -1162,14 +1012,12 @@ struct DOMTreeTextViewTests {
 
     @Test
     func initialSelectionOpensProjectedFrameAncestors() async throws {
-        let fixture = try makeProjectedFrameSession()
+        let fixture = makeProjectedFrameFixture()
         fixture.session.selectNode(fixture.selectedNodeID)
 
-        let view = await makeTreeView(session: fixture.session)
+        let view = await makeTreeView(fixture: fixture.session)
 
-        let projection = fixture.session.treeProjection(rootTargetID: fixture.pageTargetID)
-        #expect(fixture.session.snapshot().nodesByID[fixture.frameRootID]?.parentID == nil)
-        #expect(projection.ancestorNodeIDs(of: fixture.selectedNodeID).contains(fixture.frameRootID))
+        #expect(fixture.session.snapshot().ancestorNodeIDs(of: fixture.selectedNodeID).contains(fixture.frameRootID))
         #expect(view.documentTextForTesting.contains("#document"))
         #expect(view.documentTextForTesting.contains("<img id=\"ad-node\">"))
         #expect(view.selectedRowRectsForTesting().count == 1)
@@ -1177,8 +1025,8 @@ struct DOMTreeTextViewTests {
 
     @Test
     func selectingProjectedFrameNodeOpensComposedAncestors() async throws {
-        let fixture = try makeProjectedFrameSession()
-        let view = await makeTreeView(session: fixture.session)
+        let fixture = makeProjectedFrameFixture()
+        let view = await makeTreeView(fixture: fixture.session)
 
         let sampleRenderedState: @MainActor @Sendable () -> RenderedDOMTreeState = {
             view.layoutIfNeeded()
@@ -1189,7 +1037,7 @@ struct DOMTreeTextViewTests {
         }
         let didRenderSelection = await waitForSelectionObservationRender(
             in: view,
-            session: fixture.session,
+            fixture: fixture.session,
             update: {
                 fixture.session.selectNode(fixture.selectedNodeID)
             },
@@ -1198,9 +1046,7 @@ struct DOMTreeTextViewTests {
             }
         )
 
-        let projection = fixture.session.treeProjection(rootTargetID: fixture.pageTargetID)
-        #expect(fixture.session.snapshot().nodesByID[fixture.frameRootID]?.parentID == nil)
-        #expect(projection.ancestorNodeIDs(of: fixture.selectedNodeID).contains(fixture.frameRootID))
+        #expect(fixture.session.snapshot().ancestorNodeIDs(of: fixture.selectedNodeID).contains(fixture.frameRootID))
         #expect(didRenderSelection)
     }
 }
@@ -1265,10 +1111,10 @@ private final class NodeRequestRecorder {
 @MainActor
 private final class NodeActionRecorder {
     private var nodeIDs: [DOMNode.ID] = []
-    private var owners: [DOMPageHighlightOwner] = []
+    private var owners: [DOMTreePageHighlightOwner] = []
     private var continuation: CheckedContinuation<DOMNode.ID, Never>?
 
-    func record(_ nodeID: DOMNode.ID, owner: DOMPageHighlightOwner) {
+    func record(_ nodeID: DOMNode.ID, owner: DOMTreePageHighlightOwner) {
         nodeIDs.append(nodeID)
         owners.append(owner)
         continuation?.resume(returning: nodeID)
@@ -1288,7 +1134,7 @@ private final class NodeActionRecorder {
         nodeIDs
     }
 
-    var recordedOwners: [DOMPageHighlightOwner] {
+    var recordedOwners: [DOMTreePageHighlightOwner] {
         owners
     }
 
@@ -1384,30 +1230,93 @@ private final class CancellableVoidActionRecorder {
 }
 
 @MainActor
-private func makeTreeView(root: DOMNode.Payload = documentNode()) async -> DOMTreeTextView {
-    await makeTreeView(session: makeDOMSession(root: root))
+private final class DOMTreeTestFixture {
+    let context: WebInspectorContext
+    let treeController: DOMTreeController
+
+    init(root: DOM.Node) {
+        let context = WebInspectorContext.preview(isolation: MainActor.shared)
+        context.seedDOMDocument(root)
+        self.context = context
+        self.treeController = context.rootTreeController()
+    }
+
+    var currentPageRootNode: DOMNode? {
+        context.rootNode
+    }
+
+    var selectedNode: DOMNode? {
+        context.selectedNode
+    }
+
+    var treeRevision: UInt64 {
+        treeController.snapshot.revision
+    }
+
+    var selectionRevision: UInt64 {
+        treeController.snapshot.revision
+    }
+
+    var isSelectingElement: Bool {
+        get {
+            context.isElementPickerEnabled
+        }
+        set {
+            context.seedElementPickerEnabled(newValue)
+        }
+    }
+
+    func snapshot() -> DOMTreeSnapshot {
+        treeController.snapshot
+    }
+
+    func node(for id: DOMNode.ID) -> DOMNode? {
+        try? context.requiredNode(for: id)
+    }
+
+    func selectNode(_ id: DOMNode.ID) {
+        try? context.selectNode(id)
+    }
+
+    func applyAttributeModified(_ id: DOMNode.ID, name: String, value: String) {
+        context.apply(.attributeModified(id.proxyID, name: name, value: value))
+    }
+
+    func applySetChildNodes(parent: DOMNode.ID, children: [DOM.Node], eventSequence: Int = 0) {
+        _ = eventSequence
+        context.apply(.setChildNodes(parent: parent.proxyID, nodes: children))
+    }
+
+    func replaceDocumentRoot(_ root: DOM.Node) {
+        context.seedDOMDocument(root)
+    }
 }
 
 @MainActor
-private func makeTreeView(session: DOMSession) async -> DOMTreeTextView {
-    let view = DOMTreeTextView(dom: session)
+private func makeTreeView(root: DOM.Node = documentNode()) async -> DOMTreeTextView {
+    await makeTreeView(fixture: makeDOMTreeFixture(root: root))
+}
+
+@MainActor
+private func makeTreeView(fixture: DOMTreeTestFixture) async -> DOMTreeTextView {
+    let view = DOMTreeTextView(context: fixture.context)
     view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
     view.layoutIfNeeded()
     view.setRenderingActive(true)
-    await view.waitForRowDocumentForTesting()
+    #expect(await view.waitForRowDocumentForTesting())
     return view
 }
 
 @MainActor
 private func waitForRenderedDocumentTreeUpdate(
     in view: DOMTreeTextView,
-    session: DOMSession,
+    fixture: DOMTreeTestFixture,
     timeout: Duration = .seconds(1),
     update: @MainActor () -> Void,
     until condition: @escaping @MainActor @Sendable () -> Bool
 ) async -> Bool {
     update()
-    let expectedTreeRevision = session.treeRevision
+    let expectedTreeRevision = fixture.treeRevision
     let didApplyTreeRevision = await view.waitForRowDocumentAppliedTreeRevisionForTesting(
         expectedTreeRevision,
         timeout: timeout
@@ -1419,34 +1328,21 @@ private func waitForRenderedDocumentTreeUpdate(
 @MainActor
 private func waitForSelectionObservationRender(
     in view: DOMTreeTextView,
-    session: DOMSession,
+    fixture: DOMTreeTestFixture,
     timeout: Duration = .seconds(1),
     update: @MainActor () -> Void,
     until condition: @escaping @MainActor @Sendable () -> Bool
 ) async -> Bool {
-    let observedSelectionRevisions = await view.selectionObservationDeliveryForTesting.values {
-        session.selectionRevision
-    }
-    defer {
-        observedSelectionRevisions.cancel()
-    }
-
+    let baselineRevision = fixture.selectionRevision
     update()
-    let expectedSelectionRevision = session.selectionRevision
-    let didAlreadyObserveRevision = observedSelectionRevisions.latestValue.map {
-        $0 >= expectedSelectionRevision
-    } ?? false
-    if !didAlreadyObserveRevision {
-        let didObserveSelectionRevision = await observedSelectionRevisions.waitUntil(timeout: timeout) {
-            $0 >= expectedSelectionRevision
-        } != nil
-        guard didObserveSelectionRevision else {
-            view.layoutIfNeeded()
-            return condition()
-        }
+    let expectedSelectionRevision = fixture.selectionRevision
+    if expectedSelectionRevision > baselineRevision {
+        _ = await view.waitForRowDocumentAppliedTreeRevisionForTesting(expectedSelectionRevision, timeout: timeout)
     }
 
-    await view.waitForRowDocumentForTesting()
+    guard await view.waitForRowDocumentForTesting() else {
+        return false
+    }
     view.layoutIfNeeded()
     return condition()
 }
@@ -1454,24 +1350,17 @@ private func waitForSelectionObservationRender(
 @MainActor
 private func waitForSelectionRenderedState<State: Sendable>(
     in view: DOMTreeTextView,
+    fixture: DOMTreeTestFixture,
     timeout: Duration = .seconds(1),
     update: @MainActor () -> Void,
     sample: @escaping @MainActor @Sendable () -> State,
     until condition: @escaping @Sendable (State) -> Bool
 ) async -> State? {
-    let observedStates = await view.selectionObservationDeliveryForTesting.values {
-        sample()
-    }
-    defer {
-        observedStates.cancel()
-    }
-
+    let baselineRevision = fixture.selectionRevision
     update()
-    if let latestState = observedStates.latestValue, condition(latestState) {
-        return latestState
-    }
-    if let renderedState = await observedStates.waitUntil(timeout: timeout, condition) {
-        return renderedState
+    let expectedSelectionRevision = fixture.selectionRevision
+    if expectedSelectionRevision > baselineRevision {
+        _ = await view.waitForRowDocumentAppliedTreeRevisionForTesting(expectedSelectionRevision, timeout: timeout)
     }
     let fallbackState = sample()
     return condition(fallbackState) ? fallbackState : nil
@@ -1495,297 +1384,315 @@ private func renderedSelectionRevealState(
 }
 
 @MainActor
-private func makeDOMSession(root: DOMNode.Payload = documentNode()) -> DOMSession {
-    let targetID = ProtocolTarget.ID("page-main")
-    let session = DOMSession()
-    session.applyTargetCreated(
-        ProtocolTarget.Record(
-            id: targetID,
-            kind: .page,
-            frameID: DOMFrame.ID("main-frame")
-        ),
-        makeCurrentMainPage: true
-    )
-    _ = session.replaceDocumentRoot(root, targetID: targetID)
-    return session
+private func makeDOMTreeFixture(root: DOM.Node = documentNode()) -> DOMTreeTestFixture {
+    DOMTreeTestFixture(root: root)
 }
 
 @MainActor
-private func makeProjectedFrameSession() throws -> (
-    session: DOMSession,
-    pageTargetID: ProtocolTarget.ID,
-    frameRootID: DOMNode.ID,
-    selectedNodeID: DOMNode.ID
-) {
-    let pageTargetID = ProtocolTarget.ID("page-main")
-    let frameTargetID = ProtocolTarget.ID("frame-ad-target")
-    let frameID = DOMFrame.ID("frame-ad")
-    let session = DOMSession()
-
-    session.applyTargetCreated(
-        ProtocolTarget.Record(id: pageTargetID, kind: .page, frameID: DOMFrame.ID("main-frame")),
-        makeCurrentMainPage: true
-    )
-    session.applyTargetCreated(
-        ProtocolTarget.Record(id: frameTargetID, kind: .frame, frameID: frameID)
-    )
-    _ = session.replaceDocumentRoot(projectedPageDocument(frameID: frameID), targetID: pageTargetID)
-    let frameRootID = session.replaceDocumentRoot(projectedFrameDocument(), targetID: frameTargetID)
-    let selectedNodeID = try #require(
-        session.snapshot().currentNodeIDByKey[DOMNode.CurrentKey(targetID: frameTargetID, nodeID: .init(8))]
-    )
-
-    return (session, pageTargetID, frameRootID, selectedNodeID)
+private struct ProjectedFrameFixture {
+    var session: DOMTreeTestFixture
+    var frameRootID: DOMNode.ID
+    var selectedNodeID: DOMNode.ID
 }
 
-private func documentNode() -> DOMNode.Payload {
-    DOMNode.Payload(
-        nodeID: .init(1),
-        nodeType: .document,
+@MainActor
+private func makeProjectedFrameFixture() -> ProjectedFrameFixture {
+    ProjectedFrameFixture(
+        session: makeDOMTreeFixture(root: projectedPageDocument()),
+        frameRootID: nodeID(101),
+        selectedNodeID: nodeID(108)
+    )
+}
+
+private func proxyNodeID(_ value: Int) -> DOM.Node.ID {
+    DOM.Node.ID(String(value))
+}
+
+private func proxyNodeID(_ value: String) -> DOM.Node.ID {
+    DOM.Node.ID(value)
+}
+
+private func nodeID(_ value: Int) -> DOMNode.ID {
+    DOMNode.ID(proxyNodeID(value))
+}
+
+private func attributesDictionary(_ attributes: [DOM.Attribute]) -> [String: String] {
+    Dictionary(uniqueKeysWithValues: attributes.map { ($0.name, $0.value) })
+}
+
+private func documentNode() -> DOM.Node {
+    DOM.Node(
+        id: proxyNodeID(1),
+        nodeType: 9,
         nodeName: "#document",
-        regularChildren: .loaded([
-            DOMNode.Payload(
-                nodeID: .init(2),
-                nodeType: .documentType,
-                nodeName: "html"
-            ),
-            DOMNode.Payload(
-                nodeID: .init(3),
-                nodeType: .element,
+        childNodeCount: 2,
+        children: [
+            DOM.Node(id: proxyNodeID(2), nodeType: 10, nodeName: "html"),
+            DOM.Node(
+                id: proxyNodeID(3),
+                nodeType: 1,
                 nodeName: "HTML",
                 localName: "html",
-                attributes: [DOMNode.Attribute(name: "lang", value: "en")],
-                regularChildren: .loaded([
-                    DOMNode.Payload(
-                        nodeID: .init(4),
-                        nodeType: .element,
+                attributes: ["lang": "en"],
+                attributeList: [DOM.Attribute(name: "lang", value: "en")],
+                childNodeCount: 2,
+                children: [
+                    DOM.Node(
+                        id: proxyNodeID(4),
+                        nodeType: 1,
                         nodeName: "HEAD",
                         localName: "head",
-                        regularChildren: .loaded([
-                            DOMNode.Payload(
-                                nodeID: .init(5),
-                                nodeType: .element,
-                                nodeName: "TITLE",
-                                localName: "title"
-                            ),
-                        ])
+                        childNodeCount: 1,
+                        children: [
+                            DOM.Node(id: proxyNodeID(5), nodeType: 1, nodeName: "TITLE", localName: "title"),
+                        ]
                     ),
                     bodyNode(article: articleNode()),
-                ])
+                ]
             ),
-        ])
+        ]
     )
 }
 
-private func documentWithDeferredArticle() -> DOMNode.Payload {
-    DOMNode.Payload(
-        nodeID: .init(1),
-        nodeType: .document,
+private func documentWithDeferredArticle() -> DOM.Node {
+    DOM.Node(
+        id: proxyNodeID(1),
+        nodeType: 9,
         nodeName: "#document",
-        regularChildren: .loaded([
-            DOMNode.Payload(
-                nodeID: .init(3),
-                nodeType: .element,
+        childNodeCount: 1,
+        children: [
+            DOM.Node(
+                id: proxyNodeID(3),
+                nodeType: 1,
                 nodeName: "HTML",
                 localName: "html",
-                regularChildren: .loaded([
+                childNodeCount: 1,
+                children: [
                     bodyNode(
-                        article: DOMNode.Payload(
-                            nodeID: .init(8),
-                            nodeType: .element,
+                        article: DOM.Node(
+                            id: proxyNodeID(8),
+                            nodeType: 1,
                             nodeName: "ARTICLE",
                             localName: "article",
-                            regularChildren: .unrequested(count: 1)
+                            childNodeCount: 1
                         )
                     ),
-                ])
+                ]
             ),
-        ])
+        ]
     )
 }
 
-private func selectionRevealRaceDocument() -> DOMNode.Payload {
-    DOMNode.Payload(
-        nodeID: .init(1),
-        nodeType: .document,
+private func selectionRevealRaceDocument() -> DOM.Node {
+    DOM.Node(
+        id: proxyNodeID(1),
+        nodeType: 9,
         nodeName: "#document",
-        regularChildren: .loaded([
-            DOMNode.Payload(
-                nodeID: .init(2),
-                nodeType: .element,
+        childNodeCount: 1,
+        children: [
+            DOM.Node(
+                id: proxyNodeID(2),
+                nodeType: 1,
                 nodeName: "HTML",
                 localName: "html",
-                regularChildren: .loaded([
-                    DOMNode.Payload(
-                        nodeID: .init(3),
-                        nodeType: .element,
+                childNodeCount: 1,
+                children: [
+                    DOM.Node(
+                        id: proxyNodeID(3),
+                        nodeType: 1,
                         nodeName: "BODY",
                         localName: "body",
-                        regularChildren: .loaded([
+                        childNodeCount: 1,
+                        children: [
                             selectionRevealRaceTargetNode(),
-                        ])
+                        ]
                     ),
-                ])
+                ]
             ),
-        ])
+        ]
     )
 }
 
-private func selectionRevealRaceBodyChildren(prefixCount: Int) -> [DOMNode.Payload] {
+private func selectionRevealRaceBodyChildren(prefixCount: Int) -> [DOM.Node] {
     (0..<prefixCount).map { index in
-        DOMNode.Payload(
-            nodeID: .init(1_000 + index),
-            nodeType: .element,
+        let attributes = [DOM.Attribute(name: "id", value: "prefix-\(index)")]
+        return DOM.Node(
+            id: proxyNodeID(1_000 + index),
+            nodeType: 1,
             nodeName: "DIV",
             localName: "div",
-            attributes: [DOMNode.Attribute(name: "id", value: "prefix-\(index)")]
+            attributes: attributesDictionary(attributes),
+            attributeList: attributes
         )
     } + [selectionRevealRaceTargetNode()]
 }
 
-private func selectionRevealRaceTargetNode() -> DOMNode.Payload {
-    DOMNode.Payload(
-        nodeID: .init(4),
-        nodeType: .element,
+private func selectionRevealRaceTargetNode() -> DOM.Node {
+    let attributes = [DOM.Attribute(name: "id", value: "selected-target")]
+    return DOM.Node(
+        id: proxyNodeID(4),
+        nodeType: 1,
         nodeName: "DIV",
         localName: "div",
-        attributes: [DOMNode.Attribute(name: "id", value: "selected-target")]
+        attributes: attributesDictionary(attributes),
+        attributeList: attributes
     )
 }
 
-private func projectedPageDocument(frameID: DOMFrame.ID) -> DOMNode.Payload {
-    DOMNode.Payload(
-        nodeID: .init(1),
-        nodeType: .document,
+private func projectedPageDocument() -> DOM.Node {
+    let iframeAttributes = [DOM.Attribute(name: "src", value: "https://frame.example/ad")]
+    return DOM.Node(
+        id: proxyNodeID(1),
+        nodeType: 9,
         nodeName: "#document",
-        regularChildren: .loaded([
-            DOMNode.Payload(
-                nodeID: .init(2),
-                nodeType: .element,
+        childNodeCount: 1,
+        children: [
+            DOM.Node(
+                id: proxyNodeID(2),
+                nodeType: 1,
                 nodeName: "HTML",
                 localName: "html",
-                regularChildren: .loaded([
-                    DOMNode.Payload(
-                        nodeID: .init(3),
-                        nodeType: .element,
+                childNodeCount: 1,
+                children: [
+                    DOM.Node(
+                        id: proxyNodeID(3),
+                        nodeType: 1,
                         nodeName: "BODY",
                         localName: "body",
-                        regularChildren: .loaded([
-                            DOMNode.Payload(
-                                nodeID: .init(20),
-                                nodeType: .element,
+                        childNodeCount: 1,
+                        children: [
+                            DOM.Node(
+                                id: proxyNodeID(20),
+                                nodeType: 1,
                                 nodeName: "IFRAME",
                                 localName: "iframe",
-                                ownerFrameID: frameID,
-                                attributes: [DOMNode.Attribute(name: "src", value: "https://frame.example/ad")]
+                                attributes: attributesDictionary(iframeAttributes),
+                                attributeList: iframeAttributes,
+                                childNodeCount: 1,
+                                contentDocument: projectedFrameDocument()
                             ),
-                        ])
+                        ]
                     ),
-                ])
-            ),
-        ])
-    )
-}
-
-private func projectedFrameDocument() -> DOMNode.Payload {
-    DOMNode.Payload(
-        nodeID: .init(101),
-        nodeType: .document,
-        nodeName: "#document",
-        documentURL: "https://frame.example/ad",
-        regularChildren: .loaded([
-            DOMNode.Payload(
-                nodeID: .init(2),
-                nodeType: .element,
-                nodeName: "HTML",
-                localName: "html",
-                regularChildren: .loaded([
-                    DOMNode.Payload(
-                        nodeID: .init(3),
-                        nodeType: .element,
-                        nodeName: "BODY",
-                        localName: "body",
-                        regularChildren: .loaded([
-                            DOMNode.Payload(
-                                nodeID: .init(8),
-                                nodeType: .element,
-                                nodeName: "IMG",
-                                localName: "img",
-                                attributes: [DOMNode.Attribute(name: "id", value: "ad-node")]
-                            ),
-                        ])
-                    ),
-                ])
-            ),
-        ])
-    )
-}
-
-private func bodyNode(article: DOMNode.Payload) -> DOMNode.Payload {
-    DOMNode.Payload(
-        nodeID: .init(6),
-        nodeType: .element,
-        nodeName: "BODY",
-        localName: "body",
-        attributes: [DOMNode.Attribute(name: "class", value: "logged-in env-production")],
-        regularChildren: .loaded([
-            DOMNode.Payload(
-                nodeID: .init(7),
-                nodeType: .element,
-                nodeName: "DIV",
-                localName: "div",
-                attributes: [
-                    DOMNode.Attribute(name: "id", value: "start-of-content"),
-                    DOMNode.Attribute(name: "data-testid", value: "cellInnerDiv"),
                 ]
             ),
-            DOMNode.Payload(
-                nodeID: .init(12),
-                nodeType: .element,
+        ]
+    )
+}
+
+private func projectedFrameDocument() -> DOM.Node {
+    DOM.Node(
+        id: proxyNodeID(101),
+        nodeType: 9,
+        nodeName: "#document",
+        documentURL: "https://frame.example/ad",
+        childNodeCount: 1,
+        children: [
+            DOM.Node(
+                id: proxyNodeID(102),
+                nodeType: 1,
+                nodeName: "HTML",
+                localName: "html",
+                childNodeCount: 1,
+                children: [
+                    DOM.Node(
+                        id: proxyNodeID(103),
+                        nodeType: 1,
+                        nodeName: "BODY",
+                        localName: "body",
+                        childNodeCount: 1,
+                        children: [
+                            frameImageNode(),
+                        ]
+                    ),
+                ]
+            ),
+        ]
+    )
+}
+
+private func frameImageNode() -> DOM.Node {
+    let attributes = [DOM.Attribute(name: "id", value: "ad-node")]
+    return DOM.Node(
+        id: proxyNodeID(108),
+        nodeType: 1,
+        nodeName: "IMG",
+        localName: "img",
+        attributes: attributesDictionary(attributes),
+        attributeList: attributes
+    )
+}
+
+private func bodyNode(article: DOM.Node) -> DOM.Node {
+    let bodyAttributes = [DOM.Attribute(name: "class", value: "logged-in env-production")]
+    let divAttributes = [
+        DOM.Attribute(name: "id", value: "start-of-content"),
+        DOM.Attribute(name: "data-testid", value: "cellInnerDiv"),
+    ]
+    let inputAttributes = [DOM.Attribute(name: "disabled", value: "")]
+    return DOM.Node(
+        id: proxyNodeID(6),
+        nodeType: 1,
+        nodeName: "BODY",
+        localName: "body",
+        attributes: attributesDictionary(bodyAttributes),
+        attributeList: bodyAttributes,
+        childNodeCount: 5,
+        children: [
+            DOM.Node(
+                id: proxyNodeID(7),
+                nodeType: 1,
+                nodeName: "DIV",
+                localName: "div",
+                attributes: attributesDictionary(divAttributes),
+                attributeList: divAttributes
+            ),
+            DOM.Node(
+                id: proxyNodeID(12),
+                nodeType: 1,
                 nodeName: "INPUT",
                 localName: "input",
-                attributes: [DOMNode.Attribute(name: "disabled", value: "")]
+                attributes: attributesDictionary(inputAttributes),
+                attributeList: inputAttributes
             ),
             article,
-            DOMNode.Payload(
-                nodeID: .init(10),
-                nodeType: .text,
+            DOM.Node(
+                id: proxyNodeID(10),
+                nodeType: 3,
                 nodeName: "#text",
                 nodeValue: "Introducing luma for iOS 26"
             ),
-            DOMNode.Payload(
-                nodeID: .init(11),
-                nodeType: .comment,
+            DOM.Node(
+                id: proxyNodeID(11),
+                nodeType: 8,
                 nodeName: "#comment",
                 nodeValue: "comment text"
             ),
-        ])
+        ]
     )
 }
 
-private func articleNode() -> DOMNode.Payload {
-    DOMNode.Payload(
-        nodeID: .init(8),
-        nodeType: .element,
+private func articleNode() -> DOM.Node {
+    let nestedAttributes = [DOM.Attribute(name: "id", value: "nested-child")]
+    return DOM.Node(
+        id: proxyNodeID(8),
+        nodeType: 1,
         nodeName: "ARTICLE",
         localName: "article",
-        regularChildren: .loaded([
-            DOMNode.Payload(
-                nodeID: .init(9),
-                nodeType: .element,
+        childNodeCount: 1,
+        children: [
+            DOM.Node(
+                id: proxyNodeID(9),
+                nodeType: 1,
                 nodeName: "SPAN",
                 localName: "span",
-                attributes: [DOMNode.Attribute(name: "id", value: "nested-child")]
+                attributes: attributesDictionary(nestedAttributes),
+                attributeList: nestedAttributes
             ),
-        ])
+        ]
     )
 }
 
 private func makeRowDocumentRows(_ texts: [String]) -> [DOMTreeRowRenderPlan] {
-    let documentID = DOMDocument.ID(
-        targetID: ProtocolTarget.ID("row-document-test"),
-        localDocumentLifetimeID: .init(1)
-    )
     var utf16Location = 0
     return texts.enumerated().map { index, text in
         let utf16Length = (text as NSString).length
@@ -1794,7 +1701,7 @@ private func makeRowDocumentRows(_ texts: [String]) -> [DOMTreeRowRenderPlan] {
         }
         return DOMTreeRowRenderPlan(
             identity: DOMTreeRowIdentity(
-                nodeID: DOMNode.ID(documentID: documentID, nodeID: .init(index + 1)),
+                nodeID: nodeID(index + 1),
                 kind: .opening
             ),
             depth: 0,

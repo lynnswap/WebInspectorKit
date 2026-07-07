@@ -1,8 +1,7 @@
 import WebInspectorUIBase
-import WebInspectorCore
 import Foundation
 
-extension NetworkRequest.Display {
+extension NetworkDisplay {
     package enum ResourceFilter: String, CaseIterable, Hashable, Sendable, Identifiable {
         case all
         case document
@@ -15,7 +14,7 @@ extension NetworkRequest.Display {
 
         package var id: String { rawValue }
 
-        package static var pickerCases: [NetworkRequest.Display.ResourceFilter] {
+        package static var pickerCases: [NetworkDisplay.ResourceFilter] {
             [
                 .document,
                 .stylesheet,
@@ -28,8 +27,8 @@ extension NetworkRequest.Display {
         }
 
         package static func normalizedSelection(
-            _ selection: Set<NetworkRequest.Display.ResourceFilter>
-        ) -> Set<NetworkRequest.Display.ResourceFilter> {
+            _ selection: Set<NetworkDisplay.ResourceFilter>
+        ) -> Set<NetworkDisplay.ResourceFilter> {
             if selection.contains(.all) {
                 if selection.count == 1 {
                     return []
@@ -42,8 +41,8 @@ extension NetworkRequest.Display {
         }
 
         package static func displaySelection(
-            from activeFilters: Set<NetworkRequest.Display.ResourceFilter>
-        ) -> Set<NetworkRequest.Display.ResourceFilter> {
+            from activeFilters: Set<NetworkDisplay.ResourceFilter>
+        ) -> Set<NetworkDisplay.ResourceFilter> {
             activeFilters.isEmpty ? [.all] : activeFilters
         }
 
@@ -68,19 +67,19 @@ extension NetworkRequest.Display {
             }
         }
 
-        init(resourceType: NetworkRequest.ResourceType) {
-            switch resourceType {
-            case .document:
+        init(resourceTypeRawValue: String) {
+            switch resourceTypeRawValue.lowercased() {
+            case "document":
                 self = .document
-            case .styleSheet:
+            case "stylesheet":
                 self = .stylesheet
-            case .image, .media:
+            case "image", "media":
                 self = .media
-            case .font:
+            case "font":
                 self = .font
-            case .script:
+            case "script":
                 self = .script
-            case .xhr, .fetch, .ping, .beacon:
+            case "xhr", "fetch", "ping", "beacon":
                 self = .xhrFetch
             default:
                 self = .other
@@ -88,11 +87,11 @@ extension NetworkRequest.Display {
         }
 
         init(mimeType: String?, url: String) {
-            let urlSummary = NetworkRequest.Display.URLSummary(url: url)
+            let urlSummary = NetworkDisplay.URLSummary(url: url)
             self = Self.inferred(
                 mimeType: mimeType,
                 pathExtension: urlSummary.pathExtension,
-                mediaPreviewClassification: NetworkRequest.Display.MediaPreviewSupport.classification(
+                mediaPreviewClassification: NetworkDisplay.MediaPreviewSupport.classification(
                     mimeType: mimeType,
                     url: url
                 )
@@ -102,8 +101,8 @@ extension NetworkRequest.Display {
         package static func inferred(
             mimeType: String?,
             pathExtension: String?,
-            mediaPreviewClassification: NetworkRequest.Display.MediaPreviewClassification
-        ) -> NetworkRequest.Display.ResourceFilter {
+            mediaPreviewClassification: NetworkDisplay.MediaPreviewClassification
+        ) -> NetworkDisplay.ResourceFilter {
             let normalizedMimeType = mimeType?
                 .split(separator: ";", maxSplits: 1, omittingEmptySubsequences: true)
                 .first?

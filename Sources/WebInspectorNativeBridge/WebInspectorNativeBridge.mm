@@ -895,7 +895,7 @@ WebInspectorNativeControllerDiscoveryTestResult WebInspectorNativeRunControllerD
     if (error) {
         *error = [NSError errorWithDomain:@"WebInspectorNativeBridge.Transport"
                                      code:1
-                                 userInfo:@{ NSLocalizedDescriptionKey: @"WebInspectorTransport is only available on iOS and macOS." }];
+                                 userInfo:@{ NSLocalizedDescriptionKey: @"Native inspector transport is only available on iOS and macOS." }];
     }
     return NO;
 }
@@ -905,7 +905,7 @@ WebInspectorNativeControllerDiscoveryTestResult WebInspectorNativeRunControllerD
     if (error) {
         *error = [NSError errorWithDomain:@"WebInspectorNativeBridge.Transport"
                                      code:1
-                                 userInfo:@{ NSLocalizedDescriptionKey: @"WebInspectorTransport is only available on iOS and macOS." }];
+                                 userInfo:@{ NSLocalizedDescriptionKey: @"Native inspector transport is only available on iOS and macOS." }];
     }
     return NO;
 }

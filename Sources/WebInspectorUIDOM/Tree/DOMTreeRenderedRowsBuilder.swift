@@ -1,7 +1,8 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
 import Foundation
-import WebInspectorCore
+import WebInspectorDataKit
+import WebInspectorProxyKit
 
 extension DOMTreeTextView {
     @MainActor
@@ -19,9 +20,16 @@ extension DOMTreeTextView {
         private var currentRequest: DOMTreeTextView.RowRenderBuildRequest?
         private var generation: UInt64 = 0
 #if DEBUG
+        private struct BuildCompletionWaiter {
+            let continuation: CheckedContinuation<Bool, Never>
+            let timeoutTask: Task<Void, Never>
+        }
+
         private var shouldSuspendNextBuildForTesting = false
         private var suspendedBuildContinuationForTesting: CheckedContinuation<Void, Never>?
         private var buildSuspensionWaitersForTesting: [CheckedContinuation<Void, Never>] = []
+        private var nextBuildCompletionWaiterID: UInt64 = 0
+        private var buildCompletionWaiters: [UInt64: BuildCompletionWaiter] = [:]
 #endif
 
         init(builder: DOMTreeTextView.RowRenderBuilder) {
@@ -41,23 +49,36 @@ extension DOMTreeTextView {
         }
 
         func cancel() {
+            generation &+= 1
             task?.cancel()
             task = nil
             currentRequest = nil
 #if DEBUG
             resumeSuspendedBuildForTesting()
+            resolveBuildCompletionWaiters(result: true)
 #endif
         }
 
-        func waitForCurrentBuild() async {
-            while true {
-                await Task.yield()
-                guard let task else {
-                    return
+#if DEBUG
+        func waitForCurrentBuild(timeout: Duration = .seconds(5)) async -> Bool {
+            guard task != nil else {
+                return true
+            }
+
+            return await withCheckedContinuation { continuation in
+                let waiterID = nextBuildCompletionWaiterID
+                nextBuildCompletionWaiterID &+= 1
+                let timeoutTask = Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: timeout)
+                    self?.resolveBuildCompletionWaiter(id: waiterID, result: false)
                 }
-                await task.value
+                buildCompletionWaiters[waiterID] = BuildCompletionWaiter(
+                    continuation: continuation,
+                    timeoutTask: timeoutTask
+                )
             }
         }
+#endif
 
         func currentBuildMayRender(_ invalidation: DOMTreeRenderInvalidation) -> Bool {
             currentRequest?.mayRender(invalidation) == true
@@ -91,6 +112,9 @@ extension DOMTreeTextView {
                     if generation == buildGeneration {
                         task = nil
                         currentRequest = nil
+#if DEBUG
+                        resolveBuildCompletionWaiters(result: true)
+#endif
                         if shouldNotifyFinish {
                             didFinish?()
                         }
@@ -145,6 +169,21 @@ extension DOMTreeTextView {
             builder.cachedMarkupKeysForTesting
         }
 
+        private func resolveBuildCompletionWaiters(result: Bool) {
+            let waiterIDs = Array(buildCompletionWaiters.keys)
+            for waiterID in waiterIDs {
+                resolveBuildCompletionWaiter(id: waiterID, result: result)
+            }
+        }
+
+        private func resolveBuildCompletionWaiter(id: UInt64, result: Bool) {
+            guard let waiter = buildCompletionWaiters.removeValue(forKey: id) else {
+                return
+            }
+            waiter.timeoutTask.cancel()
+            waiter.continuation.resume(returning: result)
+        }
+
         func resumeSuspendedBuildForTesting() {
             guard let continuation = suspendedBuildContinuationForTesting else {
                 return
@@ -174,12 +213,12 @@ extension DOMTreeTextView {
 extension DOMTreeTextView {
     @MainActor
     final class RowRenderBuilder {
-        private let dom: DOMSession
+        private let treeController: DOMTreeController
         private let expansionState: DOMTreeTextView.ExpansionState
         private var markupCache: [DOMTreeTextView.MarkupCacheKey: DOMTreeTextView.CachedMarkup] = [:]
 
-        init(dom: DOMSession, expansionState: DOMTreeTextView.ExpansionState) {
-            self.dom = dom
+        init(treeController: DOMTreeController, expansionState: DOMTreeTextView.ExpansionState) {
+            self.treeController = treeController
             self.expansionState = expansionState
         }
 
@@ -197,7 +236,7 @@ extension DOMTreeTextView {
         ) -> DOMTreeTextView.RowRenderBuildRequest {
             let expansionSnapshot = expansionState.snapshot
             return DOMTreeTextView.RowRenderBuildRequest(
-                snapshot: dom.domTreeRenderSnapshot(),
+                snapshot: treeController.snapshot,
                 expansionState: expansionSnapshot,
                 previousRowCapacity: previousRowCapacity,
                 previousTextCapacity: previousTextCapacity,
@@ -249,16 +288,16 @@ extension DOMTreeTextView {
         let regularChildKnownCount: Int
         let isTemplateContent: Bool
 
-        init(node: DOMTreeRenderNodeSnapshot, isTemplateContent: Bool) {
+        init(node: DOMTreeSnapshot.Node, isTemplateContent: Bool) {
             id = node.id
-            nodeType = node.nodeType
+            nodeType = node.kind
             nodeName = node.nodeName
             localName = node.localName
             nodeValue = node.nodeValue
-            attributes = node.attributes
-            pseudoType = node.pseudoType
-            shadowRootType = node.shadowRootType
-            regularChildKnownCount = node.regularChildKnownCount
+            attributes = node.attributeList
+            pseudoType = node.pseudoType?.domTreeDisplayName
+            shadowRootType = node.shadowRootType?.domTreeDisplayName
+            regularChildKnownCount = node.childNodeCount
             self.isTemplateContent = isTemplateContent
         }
 
@@ -282,14 +321,14 @@ extension DOMTreeTextView {
     }
 
     struct RowRenderBuildRequest: Sendable {
-        let snapshot: DOMTreeRenderSnapshot
+        let snapshot: DOMTreeSnapshot
         let expansionState: [DOMNode.ID: Bool]
         let previousRowCapacity: Int
         let previousTextCapacity: Int
         let markupCache: [DOMTreeTextView.MarkupCacheKey: DOMTreeTextView.CachedMarkup]
 
         init(
-            snapshot: DOMTreeRenderSnapshot,
+            snapshot: DOMTreeSnapshot,
             expansionState: [DOMNode.ID: Bool],
             previousRowCapacity: Int,
             previousTextCapacity: Int,
@@ -303,7 +342,7 @@ extension DOMTreeTextView {
         }
 
         var treeRevision: UInt64 {
-            snapshot.treeRevision
+            snapshot.revision
         }
 
         func isNodeOpen(nodeID: DOMNode.ID, displayName: String) -> Bool {
@@ -344,7 +383,7 @@ extension DOMTreeTextView {
         }
 
         private func mayRenderNode(_ nodeID: DOMNode.ID, displayRootIDs: Set<DOMNode.ID>) -> Bool {
-            guard let node = snapshot.node(for: nodeID) else {
+            guard snapshot.node(for: nodeID) != nil else {
                 return false
             }
             if displayRootIDs.contains(nodeID) {
@@ -352,7 +391,7 @@ extension DOMTreeTextView {
             }
 
             var visitedNodeIDs: Set<DOMNode.ID> = [nodeID]
-            var parentID = node.parentID
+            var parentID = snapshot.parent(of: nodeID)
             while let currentParentID = parentID {
                 guard visitedNodeIDs.insert(currentParentID).inserted,
                       let parent = snapshot.node(for: currentParentID),
@@ -362,7 +401,7 @@ extension DOMTreeTextView {
                 if displayRootIDs.contains(currentParentID) {
                     return true
                 }
-                parentID = parent.parentID
+                parentID = snapshot.parent(of: currentParentID)
             }
             return false
         }
@@ -479,7 +518,7 @@ extension DOMTreeTextView {
                       let node = request.snapshot.node(for: nodeID) else {
                     return
                 }
-                let visibleChildren = request.snapshot.visibleChildrenProjection(of: nodeID)
+                let visibleChildren = request.snapshot.visibleChildren(of: nodeID)
                 let renderNode = DOMTreeTextView.RowRenderNode(
                     node: node,
                     isTemplateContent: request.snapshot.isTemplateContent(nodeID)
@@ -500,7 +539,7 @@ extension DOMTreeTextView {
                 guard hasDisclosure, isOpen else {
                     return
                 }
-                for childID in visibleChildren.children {
+                for childID in visibleChildren.nodeIDs {
                     try collect(childID, depth: depth + 1)
                 }
                 guard DOMTreeTextView.MarkupBuilder.rendersClosingTagRow(for: renderNode) else {
@@ -618,6 +657,34 @@ extension DOMTreeTextView {
             )
             renderedLinePrefixCache[depth] = prefix
             return prefix
+        }
+    }
+}
+
+private extension DOM.PseudoType {
+    var domTreeDisplayName: String {
+        switch self {
+        case .before:
+            return "before"
+        case .after:
+            return "after"
+        case let .other(value):
+            return value
+        }
+    }
+}
+
+private extension DOM.ShadowRootType {
+    var domTreeDisplayName: String {
+        switch self {
+        case .open:
+            return "open"
+        case .closed:
+            return "closed"
+        case .userAgent:
+            return "user-agent"
+        case let .other(value):
+            return value
         }
     }
 }

@@ -81,11 +81,18 @@ Start with [`MIGRATION.md`](Docs/MIGRATION.md) when updating from an older
 release.
 
 For implementation work, [`ArchitectureOverview.md`](Docs/ArchitectureOverview.md)
-is the top-level map for module boundaries, runtime ownership, and transport
-flow. Core-specific model notes are rooted at the
-[`WebInspectorCore README`](Sources/WebInspectorCore/README.md), which links to
-the detailed DOM, CSS, Network, and transport research docs kept next to the
-Core target.
+is the top-level map for module boundaries, runtime ownership, and WebKit
+communication flow. The current SDK split is:
+
+- `WebInspectorProxyKit` for custom UIs that want typed domain commands and
+  events directly over an inspected `WKWebView`.
+- `WebInspectorDataKit` for custom UIs that want observable DOM, Network,
+  Console, Runtime, and CSS models built on top of `WebInspectorProxyKit`.
+- `WebInspectorKit` for the built-in UIKit inspector UI.
+
+`WebInspectorNativeBridge`, `WebInspectorNativeSymbols`, and the internal
+protocol-routing code are implementation details of `WebInspectorProxyKit`;
+SDK consumers should not import or depend on them.
 
 ## License
 

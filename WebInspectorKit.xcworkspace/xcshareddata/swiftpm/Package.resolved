@@ -1,5 +1,5 @@
 {
-  "originHash" : "80cfeb395916ffa319209697faaee1567284291e8f276e381216fbe2fc64c8a8",
+  "originHash" : "94a9deea3e15a1d51cbedcb631d5a7c9b8bd4fe73e62390fd67c184fc2d98613",
   "pins" : [
     {
       "identity" : "machokit",
@@ -33,8 +33,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-asn1.git",
       "state" : {
-        "revision" : "eb50cbd14606a9161cbc5d452f18797c90ef0bab",
-        "version" : "1.7.0"
+        "revision" : "a9a5efd40eaf558a2bcd48d64b1d1646be686008",
+        "version" : "1.7.1"
       }
     },
     {
@@ -60,8 +60,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/p-x9/swift-fileio.git",
       "state" : {
-        "revision" : "d589ff3966f9f064574780f527449a946736b989",
-        "version" : "0.13.0"
+        "revision" : "e581ae04d4079c675042fa62aeabc5ba7480d3df",
+        "version" : "0.14.0"
       }
     },
     {
@@ -87,8 +87,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/SyntaxEditorUI.git",
       "state" : {
-        "revision" : "a83d11a3394d1dc8b319277e04e3fc623cb7b4ed",
-        "version" : "0.16.3"
+        "revision" : "281719c5a02f6be5e46d5e36f3e7c2d352e21b04",
+        "version" : "0.16.4"
       }
     },
     {

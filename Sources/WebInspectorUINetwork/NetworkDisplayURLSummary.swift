@@ -1,8 +1,7 @@
 import WebInspectorUIBase
 import Foundation
-import WebInspectorCore
 
-extension NetworkRequest.Display {
+extension NetworkDisplay {
     package struct URLSummary: Equatable, Sendable {
         package var rawURL: String
         package var displayName: String

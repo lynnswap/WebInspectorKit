@@ -1,17 +1,17 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
-import WebInspectorCore
+import WebInspectorDataKit
 
 @MainActor
 package enum DOMElementStyleVariableVisibility {
     package static func hiddenUnusedVariableIndices(
-        in section: CSSStyle.Section,
+        in section: CSSStyleSection,
         usedCSSVariables: Set<String>
     ) -> Set<Int> {
         guard isInheritedStyleSection(section) else {
             return []
         }
-        return Set(section.style.cssProperties.enumerated().compactMap { index, property in
+        return Set(section.style.properties.enumerated().compactMap { index, property in
             guard property.isEnabled,
                   isCSSVariable(property.name),
                   !usedCSSVariables.contains(property.name) else {
@@ -21,14 +21,10 @@ package enum DOMElementStyleVariableVisibility {
         })
     }
 
-    package static func usedCSSVariableNames(in nodeStyles: CSSNodeStyles) -> Set<String> {
-        usedCSSVariableNames(in: nodeStyles.sections)
-    }
-
-    package static func usedCSSVariableNames(in sections: [CSSStyle.Section]) -> Set<String> {
+    package static func usedCSSVariableNames(in sections: [CSSStyleSection]) -> Set<String> {
         var usedVariables = Set<String>()
         for section in sections {
-            for property in section.style.cssProperties where contributesCSSVariableUsage(property) {
+            for property in section.style.properties where contributesCSSVariableUsage(property) {
                 if isCSSVariable(property.name) {
                     continue
                 }
@@ -40,7 +36,7 @@ package enum DOMElementStyleVariableVisibility {
         while addedReferences {
             addedReferences = false
             for section in sections {
-                for property in section.style.cssProperties
+                for property in section.style.properties
                 where contributesCSSVariableUsage(property)
                     && isCSSVariable(property.name)
                     && usedVariables.contains(property.name) {
@@ -54,7 +50,7 @@ package enum DOMElementStyleVariableVisibility {
         return usedVariables
     }
 
-    private static func isInheritedStyleSection(_ section: CSSStyle.Section) -> Bool {
+    private static func isInheritedStyleSection(_ section: CSSStyleSection) -> Bool {
         switch section.kind {
         case .inheritedInlineStyle, .inheritedRule:
             true
@@ -67,7 +63,7 @@ package enum DOMElementStyleVariableVisibility {
         name.hasPrefix("--")
     }
 
-    private static func contributesCSSVariableUsage(_ property: CSSProperty) -> Bool {
+    private static func contributesCSSVariableUsage(_ property: CSSStyleProperty) -> Bool {
         property.isEnabled && !property.isOverridden
     }
 

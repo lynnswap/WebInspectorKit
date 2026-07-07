@@ -1,23 +1,20 @@
 import WebInspectorUIBase
-import WebInspectorCore
 import Foundation
 
-extension NetworkRequest {
-    package enum Display {}
-}
+package enum NetworkDisplay {}
 
-extension NetworkRequest.Display {
-    package typealias MediaPreviewClassifier = @Sendable (String?, String?) -> NetworkRequest.Display.MediaPreviewClassification
+extension NetworkDisplay {
+    package typealias MediaPreviewClassifier = @Sendable (String?, String?) -> NetworkDisplay.MediaPreviewClassification
 
-    package struct Projection {
-        package var requestURLSummary: NetworkRequest.Display.URLSummary
-        package var responseURLSummary: NetworkRequest.Display.URLSummary?
+    package struct Projection: Equatable {
+        package var requestURLSummary: NetworkDisplay.URLSummary
+        package var responseURLSummary: NetworkDisplay.URLSummary?
         package var fileTypeLabel: String
         package var searchTokens: [String]
 
         package init(
-            requestURLSummary: NetworkRequest.Display.URLSummary,
-            responseURLSummary: NetworkRequest.Display.URLSummary?,
+            requestURLSummary: NetworkDisplay.URLSummary,
+            responseURLSummary: NetworkDisplay.URLSummary?,
             fileTypeLabel: String,
             searchTokens: [String]
         ) {
@@ -29,170 +26,48 @@ extension NetworkRequest.Display {
     }
 }
 
-extension NetworkRequest {
-    package var displayName: String {
-        NetworkRequest.Display.URLSummary(url: request.url).displayName
-    }
-
-    package var statusLabel: String {
-        if let status = response?.status, status > 0 {
-            return String(status)
-        }
-        switch state {
-        case .failed:
-            return "Failed"
-        case .pending:
-            return "Pending"
-        case .responded:
-            return "Pending"
-        case .finished:
-            return "Finished"
-        }
-    }
-
-    package var fileTypeLabel: String {
-        NetworkRequest.Display.fileTypeLabel(
-            mimeType: response?.mimeType,
-            resourceType: resourceType,
-            urlSummary: NetworkRequest.Display.URLSummary(url: request.url)
-        )
-    }
-
-    package var statusSeverity: NetworkRequest.Display.StatusSeverity {
-        if case .failed = state {
-            return .error
-        }
-        if let status = response?.status {
-            if status >= 500 {
-                return .error
-            }
-            if status >= 400 {
-                return .warning
-            }
-            if status >= 300 {
-                return .notice
-            }
-            return .success
-        }
-        if state == .finished {
-            return .success
-        }
-        return .neutral
-    }
-
-    package func matchesDisplaySearchText(_ query: String) -> Bool {
-        guard query.isEmpty == false else {
-            return true
-        }
-        return displayProjection().searchTokens.contains { $0.localizedStandardContains(query) }
-    }
-
-    package func displayResourceFilter(
-        mediaPreviewClassifier: NetworkRequest.Display.MediaPreviewClassifier
-    ) -> NetworkRequest.Display.ResourceFilter {
-        let requestURLSummary = NetworkRequest.Display.URLSummary(url: request.url)
-        let responseURLSummary = response.map { NetworkRequest.Display.URLSummary(url: $0.url) }
-        return NetworkRequest.Display.resourceFilter(
-            resourceType: resourceType,
-            response: response,
-            requestURLSummary: requestURLSummary,
-            responseURLSummary: responseURLSummary,
-            mediaPreviewClassifier: mediaPreviewClassifier
-        )
-    }
-
-    package func displayProjection() -> NetworkRequest.Display.Projection {
-        let requestURLSummary = NetworkRequest.Display.URLSummary(url: request.url)
-        let responseURLSummary = response.map { NetworkRequest.Display.URLSummary(url: $0.url) }
-        let fileTypeLabel = NetworkRequest.Display.fileTypeLabel(
-            mimeType: response?.mimeType,
-            resourceType: resourceType,
-            urlSummary: requestURLSummary
-        )
-        let statusCodeLabel = response.map { String($0.status) } ?? ""
-        return NetworkRequest.Display.Projection(
-            requestURLSummary: requestURLSummary,
-            responseURLSummary: responseURLSummary,
-            fileTypeLabel: fileTypeLabel,
-            searchTokens: NetworkRequest.Display.searchTokens(
-                requestURLSummary: requestURLSummary,
-                responseURLSummary: responseURLSummary,
-                requestMethod: request.method,
-                statusCodeLabel: statusCodeLabel,
-                statusText: response?.statusText ?? "",
-                fileTypeLabel: fileTypeLabel
-            )
-        )
-    }
-
-    package var duration: TimeInterval? {
-        guard let end = finishedOrFailedTimestamp ?? lastDataReceivedTimestamp ?? responseReceivedTimestamp else {
-            return nil
-        }
-        return max(0, end - requestSentTimestamp)
-    }
-
-    package func durationText(for value: TimeInterval) -> String {
-        if value < 1 {
-            let milliseconds = Int((value * 1000).rounded())
-            return "\(milliseconds) ms"
-        }
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        formatter.minimumFractionDigits = 2
-        formatter.maximumFractionDigits = 2
-        formatter.usesGroupingSeparator = false
-        let seconds = formatter.string(from: NSNumber(value: value)) ?? String(value)
-        return "\(seconds) s"
-    }
-
-    package func sizeText(for length: Int) -> String {
-        let formatter = ByteCountFormatter()
-        formatter.countStyle = .binary
-        return formatter.string(fromByteCount: Int64(length))
-    }
-}
-
-extension NetworkRequest.Display {
+extension NetworkDisplay {
     package static func resourceFilter(
-        resourceType: NetworkRequest.ResourceType?,
-        response: NetworkRequest.Response.Payload?,
-        requestURLSummary: NetworkRequest.Display.URLSummary,
-        responseURLSummary: NetworkRequest.Display.URLSummary?,
-        mediaPreviewClassifier: NetworkRequest.Display.MediaPreviewClassifier
-    ) -> NetworkRequest.Display.ResourceFilter {
-        guard let response else {
-            if let resourceType {
-                return NetworkRequest.Display.ResourceFilter(resourceType: resourceType)
+        resourceTypeRawValue: String?,
+        hasResponse: Bool,
+        responseMIMEType: String?,
+        responseHeaders: [String: String],
+        responseURLSummary: NetworkDisplay.URLSummary?,
+        requestURLSummary: NetworkDisplay.URLSummary,
+        mediaPreviewClassifier: NetworkDisplay.MediaPreviewClassifier
+    ) -> NetworkDisplay.ResourceFilter {
+        guard hasResponse else {
+            if let resourceTypeRawValue {
+                return NetworkDisplay.ResourceFilter(resourceTypeRawValue: resourceTypeRawValue)
             }
-            return NetworkRequest.Display.ResourceFilter.inferred(
+            return NetworkDisplay.ResourceFilter.inferred(
                 mimeType: nil,
                 pathExtension: requestURLSummary.pathExtension,
                 mediaPreviewClassification: mediaPreviewClassifier(nil, requestURLSummary.rawURL)
             )
         }
 
-        let responseMIMEType = NetworkRequest.Display.displayMIMEType(
-            mimeType: response.mimeType,
-            headers: response.headers
+        let responseMIMEType = NetworkDisplay.displayMIMEType(
+            mimeType: responseMIMEType,
+            headers: responseHeaders
         )
-        if let resourceType,
-           NetworkRequest.Display.shouldKeepResourceTypeForURLInferredMedia(resourceType) {
+        if let resourceTypeRawValue,
+           NetworkDisplay.shouldKeepResourceTypeForURLInferredMedia(rawValue: resourceTypeRawValue) {
             if case .previewable = mediaPreviewClassifier(responseMIMEType, nil) {
                 return .media
             }
-            return NetworkRequest.Display.ResourceFilter(resourceType: resourceType)
+            return NetworkDisplay.ResourceFilter(resourceTypeRawValue: resourceTypeRawValue)
         }
 
-        let responseURLSummary = responseURLSummary ?? NetworkRequest.Display.URLSummary(url: response.url)
+        let responseURLSummary = responseURLSummary ?? requestURLSummary
         switch mediaPreviewClassifier(responseMIMEType, responseURLSummary.rawURL) {
         case .previewable:
             return .media
         case .notPreviewable:
-            if resourceType == .image || resourceType == .media {
+            if NetworkDisplay.isMediaResourceType(rawValue: resourceTypeRawValue) {
                 return .media
             }
-            return NetworkRequest.Display.ResourceFilter.inferred(
+            return NetworkDisplay.ResourceFilter.inferred(
                 mimeType: responseMIMEType,
                 pathExtension: responseURLSummary.pathExtension,
                 mediaPreviewClassification: mediaPreviewClassifier(responseMIMEType, responseURLSummary.rawURL)
@@ -200,10 +75,10 @@ extension NetworkRequest.Display {
         case .unknown:
             break
         }
-        if let resourceType {
-            return NetworkRequest.Display.ResourceFilter(resourceType: resourceType)
+        if let resourceTypeRawValue {
+            return NetworkDisplay.ResourceFilter(resourceTypeRawValue: resourceTypeRawValue)
         }
-        return NetworkRequest.Display.ResourceFilter.inferred(
+        return NetworkDisplay.ResourceFilter.inferred(
             mimeType: responseMIMEType,
             pathExtension: responseURLSummary.pathExtension,
             mediaPreviewClassification: mediaPreviewClassifier(responseMIMEType, responseURLSummary.rawURL)
@@ -212,8 +87,8 @@ extension NetworkRequest.Display {
 
     package static func fileTypeLabel(
         mimeType: String?,
-        resourceType: NetworkRequest.ResourceType?,
-        urlSummary: NetworkRequest.Display.URLSummary
+        resourceTypeRawValue: String?,
+        urlSummary: NetworkDisplay.URLSummary
     ) -> String {
         if let mimeType,
            let subtype = mimeType
@@ -228,8 +103,8 @@ extension NetworkRequest.Display {
            pathExtension.isEmpty == false {
             return pathExtension
         }
-        if let resourceType {
-            return resourceType.displayLabel
+        if let resourceTypeRawValue {
+            return resourceTypeDisplayLabel(rawValue: resourceTypeRawValue)
         }
         return "-"
     }
@@ -248,8 +123,8 @@ extension NetworkRequest.Display {
     }
 
     package static func searchTokens(
-        requestURLSummary: NetworkRequest.Display.URLSummary,
-        responseURLSummary: NetworkRequest.Display.URLSummary?,
+        requestURLSummary: NetworkDisplay.URLSummary,
+        responseURLSummary: NetworkDisplay.URLSummary?,
         requestMethod: String,
         statusCodeLabel: String,
         statusText: String,
@@ -267,12 +142,21 @@ extension NetworkRequest.Display {
         )
     }
 
-    fileprivate static func shouldKeepResourceTypeForURLInferredMedia(_ resourceType: NetworkRequest.ResourceType) -> Bool {
-        switch resourceType {
-        case .image, .media, .xhr, .fetch, .other:
-            return false
+    fileprivate static func shouldKeepResourceTypeForURLInferredMedia(rawValue: String) -> Bool {
+        switch rawValue.lowercased() {
+        case "image", "media", "xhr", "fetch", "other":
+            false
         default:
-            return true
+            true
+        }
+    }
+
+    private static func isMediaResourceType(rawValue: String?) -> Bool {
+        switch rawValue?.lowercased() {
+        case "image", "media":
+            true
+        default:
+            false
         }
     }
 
@@ -291,36 +175,34 @@ extension NetworkRequest.Display {
         }
         return headers.first { $0.key.caseInsensitiveCompare(name) == .orderedSame }?.value
     }
-}
 
-extension NetworkRequest.ResourceType {
-    fileprivate var displayLabel: String {
-        switch self {
-        case .document:
+    private static func resourceTypeDisplayLabel(rawValue: String) -> String {
+        switch rawValue.lowercased() {
+        case "document":
             "document"
-        case .styleSheet:
+        case "stylesheet":
             "stylesheet"
-        case .image:
+        case "image":
             "image"
-        case .media:
+        case "media":
             "media"
-        case .font:
+        case "font":
             "font"
-        case .script:
+        case "script":
             "script"
-        case .xhr:
+        case "xhr":
             "xhr"
-        case .fetch:
+        case "fetch":
             "fetch"
-        case .ping:
+        case "ping":
             "ping"
-        case .beacon:
+        case "beacon":
             "beacon"
-        case .webSocket:
+        case "websocket":
             "websocket"
-        case .eventSource:
+        case "eventsource":
             "eventsource"
-        case .other:
+        case "other":
             "other"
         default:
             rawValue.lowercased()

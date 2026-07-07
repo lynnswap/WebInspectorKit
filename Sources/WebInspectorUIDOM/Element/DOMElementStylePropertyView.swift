@@ -1,15 +1,15 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
-import WebInspectorCore
+import WebInspectorDataKit
 import UIKit
 
 @MainActor
 package final class DOMElementStylePropertyView: UIView {
-    package typealias ToggleAction = @MainActor (CSSProperty.ID, Bool) -> Bool
+    package typealias ToggleAction = @MainActor (CSSStyleProperty.ID, Bool) -> Bool
 
     private let declarationTextView = UITextView()
     private let toggleSwitch = UISwitch()
-    private var property: CSSProperty?
+    private var property: CSSStyleProperty?
     private var toggleAction: ToggleAction?
 
     override package init(frame: CGRect) {
@@ -23,14 +23,14 @@ package final class DOMElementStylePropertyView: UIView {
     }
 
     package func bind(
-        property: CSSProperty,
+        property: CSSStyleProperty,
         onToggle: ToggleAction? = nil
     ) {
         render(property: property, onToggle: onToggle)
     }
 
     package func render(
-        property: CSSProperty,
+        property: CSSStyleProperty,
         onToggle: ToggleAction? = nil
     ) {
         self.property = property
@@ -86,23 +86,23 @@ package final class DOMElementStylePropertyView: UIView {
         ])
     }
 
-    private func renderAll(from property: CSSProperty) {
+    private func renderAll(from property: CSSStyleProperty) {
         renderDeclaration(from: property)
         renderToggleState(from: property)
         renderToggleAccessibility(from: property)
         renderRowAccessibility(from: property)
     }
 
-    private func renderDeclaration(from property: CSSProperty) {
+    private func renderDeclaration(from property: CSSStyleProperty) {
         declarationTextView.attributedText = declarationText(for: property)
     }
 
-    private func renderToggleState(from property: CSSProperty, animated: Bool = false) {
+    private func renderToggleState(from property: CSSStyleProperty, animated: Bool = false) {
         toggleSwitch.setOn(property.isEnabled, animated: animated)
         toggleSwitch.isEnabled = canToggle(property)
     }
 
-    private func renderToggleAccessibility(from property: CSSProperty) {
+    private func renderToggleAccessibility(from property: CSSStyleProperty) {
         toggleSwitch.accessibilityLabel = String(
             localized: LocalizedStringResource(
                 "dom.element.styles.toggle_property.accessibility_label",
@@ -112,7 +112,7 @@ package final class DOMElementStylePropertyView: UIView {
         )
     }
 
-    private func renderRowAccessibility(from property: CSSProperty) {
+    private func renderRowAccessibility(from property: CSSStyleProperty) {
         accessibilityIdentifier = "WebInspector.DOM.Element.StyleProperty.\(property.name)"
         accessibilityLabel = accessibilityLabel(for: property)
         accessibilityValue = accessibilityValue(for: property)
@@ -126,22 +126,21 @@ package final class DOMElementStylePropertyView: UIView {
 
         let requestedEnabledState = toggleSwitch.isOn
         guard canToggle(property),
-              requestedEnabledState != property.isEnabled,
-              let propertyID = property.id else {
+              requestedEnabledState != property.isEnabled else {
             toggleSwitch.setOn(property.isEnabled, animated: false)
             return
         }
 
-        if toggleAction?(propertyID, requestedEnabledState) != true {
+        if toggleAction?(property.id, requestedEnabledState) != true {
             toggleSwitch.setOn(property.isEnabled, animated: false)
         }
     }
 
-    private func canToggle(_ property: CSSProperty) -> Bool {
-        property.isEditable && property.id != nil && toggleAction != nil
+    private func canToggle(_ property: CSSStyleProperty) -> Bool {
+        property.isEditable && toggleAction != nil
     }
 
-    private func declarationText(for property: CSSProperty) -> NSAttributedString {
+    private func declarationText(for property: CSSStyleProperty) -> NSAttributedString {
         var attributes: [NSAttributedString.Key: Any] = [
             .font: declarationTextView.font ?? .preferredFont(forTextStyle: .body),
             .foregroundColor: property.status == .disabled ? UIColor.secondaryLabel : UIColor.label,
@@ -152,7 +151,7 @@ package final class DOMElementStylePropertyView: UIView {
         return NSAttributedString(string: declarationDisplayText(for: property), attributes: attributes)
     }
 
-    private func declarationDisplayText(for property: CSSProperty) -> String {
+    private func declarationDisplayText(for property: CSSStyleProperty) -> String {
         let declaration: String
         if property.status == .disabled {
             declaration = property.text ?? "/* \(declarationSourceText(for: property)) */"
@@ -162,10 +161,10 @@ package final class DOMElementStylePropertyView: UIView {
         return normalizedSingleLineDeclaration(declaration)
     }
 
-    private func declarationSourceText(for property: CSSProperty) -> String {
+    private func declarationSourceText(for property: CSSStyleProperty) -> String {
         var declaration = "\(property.name): \(property.value)"
-        if !property.priority.isEmpty {
-            declaration += " !\(property.priority)"
+        if let priority = property.priority, !priority.isEmpty {
+            declaration += " !\(priority)"
         }
         return declaration + ";"
     }
@@ -178,11 +177,11 @@ package final class DOMElementStylePropertyView: UIView {
             .joined(separator: " ")
     }
 
-    private func accessibilityLabel(for property: CSSProperty) -> String {
+    private func accessibilityLabel(for property: CSSStyleProperty) -> String {
         declarationDisplayText(for: property)
     }
 
-    private func accessibilityValue(for property: CSSProperty) -> String {
+    private func accessibilityValue(for property: CSSStyleProperty) -> String {
         var states = [
             property.isEnabled
                 ? String(localized: "dom.element.styles.property_enabled.accessibility_value", bundle: WebInspectorUILocalization.bundle)
@@ -207,14 +206,16 @@ package final class DOMElementStylePropertyView: UIView {
     stackView.isLayoutMarginsRelativeArrangement = true
 
     for property in DOMElementStylePropertyViewPreviewData.makeProperties() {
+        // Static preview: values do not observe, so re-render the row
+        // locally with the toggled value.
         let row = DOMElementStylePropertyView()
-        row.bind(property: property) { _, enabled in
-            property.status = enabled ? .active : .disabled
-            property.text = enabled
-                ? DOMElementStylePropertyViewPreviewData.sourceText(for: property)
-                : "/* \(DOMElementStylePropertyViewPreviewData.sourceText(for: property)) */"
-            return true
+        @MainActor func renderRow(_ property: CSSStyleProperty) {
+            row.render(property: property) { _, enabled in
+                renderRow(DOMElementStylePropertyViewPreviewData.toggled(property, enabled: enabled))
+                return true
+            }
         }
+        renderRow(property)
         stackView.addArrangedSubview(row)
     }
 
@@ -223,43 +224,54 @@ package final class DOMElementStylePropertyView: UIView {
 
 @MainActor
 private enum DOMElementStylePropertyViewPreviewData {
-    private static let styleID = CSSStyle.ID(styleSheetID: .init("preview"), ordinal: 0)
-
-    static func sourceText(for property: CSSProperty) -> String {
+    static func sourceText(for property: CSSStyleProperty) -> String {
         var text = "\(property.name): \(property.value)"
-        if !property.priority.isEmpty {
-            text += " !\(property.priority)"
+        if let priority = property.priority, !priority.isEmpty {
+            text += " !\(priority)"
         }
         return text + ";"
     }
 
-    static func makeProperties() -> [CSSProperty] {
+    static func toggled(_ property: CSSStyleProperty, enabled: Bool) -> CSSStyleProperty {
+        CSSStyleProperty(
+            id: property.id,
+            name: property.name,
+            value: property.value,
+            priority: property.priority,
+            text: enabled ? sourceText(for: property) : "/* \(sourceText(for: property)) */",
+            status: enabled ? .active : .disabled,
+            isEditable: property.isEditable
+        )
+    }
+
+    static func makeProperties() -> [CSSStyleProperty] {
         [
-            CSSProperty(
-                id: CSSProperty.ID(styleID: styleID, propertyIndex: 0),
+            CSSStyleProperty(
+                id: CSSStyleProperty.ID("preview-margin"),
                 name: "margin",
                 value: "0",
                 text: "margin: 0;",
                 status: .active,
                 isEditable: true
             ),
-            CSSProperty(
-                id: CSSProperty.ID(styleID: styleID, propertyIndex: 1),
+            CSSStyleProperty(
+                id: CSSStyleProperty.ID("preview-box-sizing"),
                 name: "box-sizing",
                 value: "border-box",
                 text: "/* box-sizing: border-box; */",
                 status: .disabled,
                 isEditable: true
             ),
-            CSSProperty(
-                id: CSSProperty.ID(styleID: styleID, propertyIndex: 2),
+            CSSStyleProperty(
+                id: CSSStyleProperty.ID("preview-font-size"),
                 name: "font-size",
                 value: "12px",
                 text: "font-size: 12px;",
                 status: .inactive,
                 isEditable: true
             ),
-            CSSProperty(
+            CSSStyleProperty(
+                id: CSSStyleProperty.ID("preview-margin-top"),
                 name: "margin-top",
                 value: "0",
                 implicit: true

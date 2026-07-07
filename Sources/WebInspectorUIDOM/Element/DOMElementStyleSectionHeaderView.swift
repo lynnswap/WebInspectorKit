@@ -1,27 +1,60 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
-import WebInspectorCore
-import ObservationBridge
+import WebInspectorDataKit
 import UIKit
 
 package enum DOMElementStyleSectionHeaderText {
     private static let largeColumnNumber = 80
 
-    package static func displayOriginText(for rule: CSSRule) -> String? {
-        if let sourceLocation = rule.sourceLocation {
+    package struct SourceLocation: Equatable, Sendable {
+        /// Zero-based source line, matching WebKit source location values.
+        package var sourceURL: String
+        package var line: Int
+        /// Zero-based source column when the rule provides one.
+        package var column: Int?
+
+        package init(sourceURL: String, line: Int, column: Int? = nil) {
+            self.sourceURL = sourceURL
+            self.line = line
+            self.column = column
+        }
+    }
+
+    package static func displayOriginText(for rule: CSSStyleRule) -> String? {
+        if let sourceLocation = sourceLocation(for: rule) {
             return displayText(for: sourceLocation)
         }
         return displayText(for: rule.origin)
     }
 
-    package static func accessibilityOriginText(for rule: CSSRule) -> String? {
-        if let sourceLocation = rule.sourceLocation {
+    package static func accessibilityOriginText(for rule: CSSStyleRule) -> String? {
+        if let sourceLocation = sourceLocation(for: rule) {
             return fullDisplayText(for: sourceLocation)
         }
         return displayText(for: rule.origin)
     }
 
-    package static func displayText(for sourceLocation: CSSRule.SourceLocation) -> String {
+    /// Source location from what `CSSStyleRule` carries directly: the selector
+    /// range when present, otherwise the rule's reported source line.
+    /// Stylesheet-header offsets are not applied (no header registry yet).
+    package static func sourceLocation(for rule: CSSStyleRule) -> SourceLocation? {
+        guard let sourceURL = rule.sourceURL, !sourceURL.isEmpty else {
+            return nil
+        }
+        if let selectorRange = rule.selectorRange {
+            return SourceLocation(
+                sourceURL: sourceURL,
+                line: selectorRange.startLine,
+                column: selectorRange.startColumn
+            )
+        }
+        guard let sourceLine = rule.sourceLine else {
+            return nil
+        }
+        return SourceLocation(sourceURL: sourceURL, line: sourceLine, column: nil)
+    }
+
+    package static func displayText(for sourceLocation: SourceLocation) -> String {
         var text = displayName(forSourceURL: sourceLocation.sourceURL)
         text += ":\(sourceLocation.line + 1)"
         if let column = sourceLocation.column, column > largeColumnNumber {
@@ -30,7 +63,7 @@ package enum DOMElementStyleSectionHeaderText {
         return text
     }
 
-    package static func fullDisplayText(for sourceLocation: CSSRule.SourceLocation) -> String {
+    package static func fullDisplayText(for sourceLocation: SourceLocation) -> String {
         var text = sourceLocation.sourceURL
         text += ":\(sourceLocation.line + 1)"
         if let column = sourceLocation.column {
@@ -61,26 +94,24 @@ package enum DOMElementStyleSectionHeaderText {
         return sourceURL
     }
 
-    package static func displayText(for origin: CSSStyle.Origin) -> String? {
-        switch origin {
-        case .user:
+    package static func displayText(for origin: CSSStyleRule.Origin) -> String? {
+        switch origin.rawValue {
+        case "user":
             String(localized: "dom.element.styles.origin.user", bundle: WebInspectorUILocalization.bundle)
-        case .userAgent:
+        case "user-agent":
             String(localized: "dom.element.styles.origin.user_agent", bundle: WebInspectorUILocalization.bundle)
-        case .author:
+        case "author":
             String(localized: "dom.element.styles.origin.author", bundle: WebInspectorUILocalization.bundle)
-        case .inspector:
+        case "inspector":
             String(localized: "dom.element.styles.origin.inspector", bundle: WebInspectorUILocalization.bundle)
-        case let .other(value):
-            value.isEmpty ? nil : value
+        default:
+            origin.rawValue.isEmpty ? nil : origin.rawValue
         }
     }
 }
 
 @MainActor
 final class DOMElementStyleSectionHeaderView: UICollectionViewListCell {
-    private var sectionObservation: PortableObservationTracking.Token?
-    private weak var section: CSSStyle.Section?
     private var renderedTitle = ""
     private var renderedOriginText: String?
     private var renderedAccessibilityOriginText: String?
@@ -99,33 +130,14 @@ final class DOMElementStyleSectionHeaderView: UICollectionViewListCell {
         bind(nil)
     }
 
-    isolated deinit {
-        sectionObservation?.cancel()
+    /// Sections are value types: the header renders the configured value
+    /// once and is re-bound by the view controller when the section's
+    /// rendered content changes.
+    func bind(_ section: CSSStyleSection?) {
+        render(section)
     }
 
-    func bind(_ section: CSSStyle.Section?) {
-        guard let section else {
-            sectionObservation?.cancel()
-            sectionObservation = nil
-            self.section = nil
-            render(nil)
-            return
-        }
-
-        if self.section === section {
-            return
-        }
-        self.section = section
-        sectionObservation?.cancel()
-        sectionObservation = withPortableContinuousObservation { [weak self, weak section] _ in
-            guard let self else {
-                return
-            }
-            self.render(section)
-        }
-    }
-
-    private func render(_ section: CSSStyle.Section?) {
+    private func render(_ section: CSSStyleSection?) {
         renderedTitle = section?.title ?? ""
         renderedOriginText = section?.rule.flatMap(DOMElementStyleSectionHeaderText.displayOriginText(for:))
         renderedAccessibilityOriginText = section?.rule.flatMap(DOMElementStyleSectionHeaderText.accessibilityOriginText(for:))

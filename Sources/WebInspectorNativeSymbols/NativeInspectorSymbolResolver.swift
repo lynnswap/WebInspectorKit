@@ -110,7 +110,7 @@ package enum NativeInspectorSymbolResolver {
     package static func resolveCurrent() -> NativeInspectorSymbolResolution {
         NativeInspectorSymbolResolution(
             addresses: .zero,
-            failureReason: "WebInspectorTransport is only available on iOS and macOS.",
+            failureReason: "Native inspector transport is only available on iOS and macOS.",
             failureKind: "unsupported",
             phase: nil,
             missingFunctions: [],

@@ -1,6 +1,6 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
-import WebInspectorCore
+import WebInspectorDataKit
 import ObservationBridge
 import UIHostingMenu
 import UIKit
@@ -15,6 +15,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
     private struct PendingSnapshotUpdate {
         var rows: NetworkListViewController.SnapshotRows
+        var snapshot: NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkRequest.ID>
     }
 
     private struct SnapshotCoordinator {
@@ -27,9 +28,9 @@ package final class NetworkListViewController: UICollectionViewController, UISea
             isRenderingActive = true
         }
 
-        mutating func suspendRendering(hasPendingThrottledReload: Bool) {
+        mutating func suspendRendering() {
             isRenderingActive = false
-            if hasPendingThrottledReload || pendingUpdate != nil {
+            if pendingUpdate != nil {
                 needsReloadOnNextAppearance = true
             }
             pendingUpdate = nil
@@ -44,16 +45,13 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         }
     }
 
-    private static let snapshotThrottleInterval: Duration = .milliseconds(80)
-
     private let model: NetworkPanelModel
+    private let fetchedResultsController: WebInspectorFetchedResultsController<NetworkRequest>
     private var requestSelectionAction: RequestSelectionAction
-    private var displayRowsObservation: PortableObservationTracking.Token?
+    private var fetchedResultsTransactionTask: Task<Void, Never>?
     private var searchTextObservation: PortableObservationTracking.Token?
     private var resourceFilterObservation: PortableObservationTracking.Token?
     private var selectedRequestObservation: PortableObservationTracking.Token?
-    private let displayRowsReloadScheduler = MainActorDelayScheduler()
-    private var hasPendingThrottledDisplayRowsReload = false
 
     private var snapshotCoordinator = SnapshotCoordinator()
     private var isApplyingSearchPresentation = false
@@ -84,6 +82,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
     package init(model: NetworkPanelModel) {
         self.model = model
+        self.fetchedResultsController = WebInspectorFetchedResultsController(fetchedResults: model.requests)
         requestSelectionAction = { [model] request in
             model.selectRequest(request)
         }
@@ -97,11 +96,10 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     isolated deinit {
-        displayRowsObservation?.cancel()
+        fetchedResultsTransactionTask?.cancel()
         searchTextObservation?.cancel()
         resourceFilterObservation?.cancel()
         selectedRequestObservation?.cancel()
-        displayRowsReloadScheduler.cancel()
         detachSearchPresentation()
 #if DEBUG
         deinitHandlerForTesting?()
@@ -135,10 +133,6 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         super.viewWillAppear(animated)
         configureNavigationItem()
         navigationController?.setNavigationBarHidden(false, animated: animated)
-    }
-
-    override package func viewIsAppearing(_ animated: Bool) {
-        super.viewIsAppearing(animated)
         resumeRendering()
     }
 
@@ -171,20 +165,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func startObservingModel() {
-        displayRowsObservation?.cancel()
-        displayRowsObservation = withPortableContinuousObservation { [weak self] event in
-            guard let self else { return }
-            _ = model.displayRowsInvalidationRevision
-            guard snapshotCoordinator.isRenderingActive else {
-                snapshotCoordinator.markNeedsReloadOnNextAppearance()
-                return
-            }
-            if event.kind == .initial {
-                reloadDataFromModel()
-            } else {
-                scheduleThrottledDisplayRowsReload()
-            }
-        }
+        startObservingFetchedResultsTransactions()
 
         searchTextObservation?.cancel()
         searchTextObservation = withPortableContinuousObservation { [weak self] _ in
@@ -211,6 +192,16 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         }
     }
 
+    private func startObservingFetchedResultsTransactions() {
+        fetchedResultsTransactionTask?.cancel()
+        let transactions = fetchedResultsController.transactions
+        fetchedResultsTransactionTask = Task { @MainActor [weak self] in
+            for await transaction in transactions {
+                self?.fetchedResultsDidPublish(transaction)
+            }
+        }
+    }
+
     private func resumeRendering() {
         snapshotCoordinator.resumeRendering()
         setVisibleCellRenderingActive(true)
@@ -219,7 +210,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         renderSelectedRequestID(model.selectedRequestID)
         renderInitialEmptyStateIfNeeded()
         if snapshotCoordinator.needsReloadForActiveRendering {
-            scheduleThrottledDisplayRowsReload()
+            reloadDataFromModel()
         }
     }
 
@@ -227,38 +218,8 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         guard snapshotCoordinator.isRenderingActive else {
             return
         }
-        snapshotCoordinator.suspendRendering(hasPendingThrottledReload: hasPendingThrottledDisplayRowsReload)
-        hasPendingThrottledDisplayRowsReload = false
-        displayRowsReloadScheduler.cancel()
+        snapshotCoordinator.suspendRendering()
         setVisibleCellRenderingActive(false)
-    }
-
-    private func scheduleThrottledDisplayRowsReload() {
-        guard snapshotCoordinator.isRenderingActive else {
-            snapshotCoordinator.markNeedsReloadOnNextAppearance()
-            return
-        }
-        hasPendingThrottledDisplayRowsReload = true
-        guard displayRowsReloadScheduler.hasScheduledDelay == false else {
-            return
-        }
-
-        displayRowsReloadScheduler.schedule(after: Self.snapshotThrottleInterval) { [weak self] in
-            self?.flushThrottledDisplayRowsReload()
-        }
-    }
-
-    private func flushThrottledDisplayRowsReload() {
-        guard hasPendingThrottledDisplayRowsReload else {
-            return
-        }
-        guard snapshotCoordinator.isRenderingActive else {
-            hasPendingThrottledDisplayRowsReload = false
-            snapshotCoordinator.markNeedsReloadOnNextAppearance()
-            return
-        }
-        hasPendingThrottledDisplayRowsReload = false
-        reloadDataFromModel()
     }
 
     private func configureNavigationItem() {
@@ -353,14 +314,14 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         activeSearchController.searchBar.text = text
     }
 
-    private func renderFilterItem(effectiveResourceFilters: Set<NetworkRequest.Display.ResourceFilter>) {
+    private func renderFilterItem(effectiveResourceFilters: Set<NetworkDisplay.ResourceFilter>) {
         guard isViewLoaded else {
             return
         }
         filterItem.isSelected = effectiveResourceFilters.isEmpty == false
     }
 
-    private func resourceFilterSelectionDidChange(effectiveResourceFilters: Set<NetworkRequest.Display.ResourceFilter>) {
+    private func resourceFilterSelectionDidChange(effectiveResourceFilters: Set<NetworkDisplay.ResourceFilter>) {
         renderFilterItem(effectiveResourceFilters: effectiveResourceFilters)
     }
 
@@ -425,10 +386,12 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func requestSnapshotUpdate(requestIDs: [NetworkRequest.ID]) {
-        requestSnapshotUpdate(rows: NetworkListViewController.SnapshotRows(requestIDs: requestIDs))
+        let rows = NetworkListViewController.SnapshotRows(requestIDs: requestIDs)
+        requestSnapshotUpdate(snapshot: makeSnapshot(requestIDs: requestIDs), rows: rows)
     }
 
     private func requestSnapshotUpdate(
+        snapshot: NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkRequest.ID>,
         rows: NetworkListViewController.SnapshotRows
     ) {
         guard isCollectionViewVisible else {
@@ -445,10 +408,11 @@ package final class NetworkListViewController: UICollectionViewController, UISea
             snapshotCoordinator.pendingUpdate = nil
             return
         }
-        enqueueSnapshotUpdate(rows: rows)
+        enqueueSnapshotUpdate(snapshot: snapshot, rows: rows)
     }
 
     private func enqueueSnapshotUpdate(
+        snapshot: NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkRequest.ID>,
         rows: NetworkListViewController.SnapshotRows
     ) {
         if let pendingSnapshotUpdate = snapshotCoordinator.pendingUpdate,
@@ -459,7 +423,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
             || dataSource.snapshot().itemIdentifiers != rows.requestIDs else {
             return
         }
-        snapshotCoordinator.pendingUpdate = PendingSnapshotUpdate(rows: rows)
+        snapshotCoordinator.pendingUpdate = PendingSnapshotUpdate(rows: rows, snapshot: snapshot)
         applyPendingSnapshotUpdateIfNeeded()
     }
 
@@ -478,16 +442,13 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         snapshotCoordinator.pendingUpdate = nil
         snapshotCoordinator.state.beginApplying(update.rows)
 
-        let snapshot = makeSnapshot(
-            requestIDs: update.rows.requestIDs
-        )
         let completion: () -> Void = { [weak self] in
             self?.snapshotUpdateDidFinish(appliedRows: update.rows)
         }
 #if DEBUG
         snapshotApplyCountStorageForTesting += 1
 #endif
-        dataSource.apply(snapshot, animatingDifferences: false, completion: completion)
+        dataSource.apply(update.snapshot, animatingDifferences: false, completion: completion)
     }
 
     private func snapshotUpdateDidFinish(
@@ -508,6 +469,152 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         }
         renderSelectedRequestID(model.selectedRequestID)
         applyPendingSnapshotUpdateIfNeeded()
+    }
+
+    private func fetchedResultsDidPublish(
+        _ transaction: WebInspectorFetchedResultsTransaction<NetworkRequest>
+    ) {
+        guard transaction.hasNetworkListTopologyChanges else {
+            return
+        }
+        guard snapshotCoordinator.isRenderingActive else {
+            snapshotCoordinator.markNeedsReloadOnNextAppearance()
+            return
+        }
+        applyTopologyTransaction(transaction)
+    }
+
+    private func applyTopologyTransaction(
+        _ transaction: WebInspectorFetchedResultsTransaction<NetworkRequest>
+    ) {
+        let requestIDs = transaction.newSnapshot.itemIDs
+        let topologyItemChanges = transaction.networkListTopologyItemChanges
+        guard transaction.isReset
+            || transaction.sectionChanges.isEmpty == false
+            || topologyItemChanges.isEmpty == false else {
+            return
+        }
+        guard transaction.isReset == false,
+              transaction.sectionChanges.isEmpty,
+              snapshotCoordinator.state.isApplying == false else {
+            requestSnapshotUpdate(requestIDs: requestIDs)
+            renderEmptyState(isEmpty: requestIDs.isEmpty)
+            return
+        }
+
+        var snapshot = dataSource.snapshot()
+        guard snapshot.itemIdentifiers == transaction.oldSnapshot.itemIDs else {
+            requestSnapshotUpdate(requestIDs: requestIDs)
+            renderEmptyState(isEmpty: requestIDs.isEmpty)
+            return
+        }
+        guard applyIncrementalItemChanges(
+            topologyItemChanges,
+            to: &snapshot,
+            targetItemIDs: requestIDs
+        ) else {
+            requestSnapshotUpdate(requestIDs: requestIDs)
+            renderEmptyState(isEmpty: requestIDs.isEmpty)
+            return
+        }
+        requestSnapshotUpdate(
+            snapshot: snapshot,
+            rows: NetworkListViewController.SnapshotRows(requestIDs: requestIDs)
+        )
+        renderEmptyState(isEmpty: requestIDs.isEmpty)
+    }
+
+    private func applyIncrementalItemChanges(
+        _ changes: [WebInspectorFetchedResultsItemChange<NetworkRequest.ID>],
+        to snapshot: inout NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkRequest.ID>,
+        targetItemIDs: [NetworkRequest.ID]
+    ) -> Bool {
+        if snapshot.sectionIdentifiers.contains(.main) == false {
+            snapshot.appendSections([.main])
+        }
+        for change in changes {
+            if case let .delete(itemID, _) = change,
+               snapshot.indexOfItem(itemID) != nil {
+                snapshot.deleteItems([itemID])
+            }
+        }
+        for change in changes {
+            guard case let .insert(itemID, indexPath) = change else {
+                continue
+            }
+            guard snapshot.indexOfItem(itemID) == nil else {
+                continue
+            }
+            insertItem(
+                itemID,
+                atTargetIndex: indexPath.item,
+                targetItemIDs: targetItemIDs,
+                into: &snapshot
+            )
+        }
+        for change in changes {
+            guard case let .move(itemID, _, indexPath) = change else {
+                continue
+            }
+            guard snapshot.indexOfItem(itemID) != nil else {
+                return false
+            }
+            moveItem(
+                itemID,
+                toTargetIndex: indexPath.item,
+                targetItemIDs: targetItemIDs,
+                in: &snapshot
+            )
+        }
+        return snapshot.itemIdentifiers == targetItemIDs
+    }
+
+    private func insertItem(
+        _ itemID: NetworkRequest.ID,
+        atTargetIndex targetIndex: Int,
+        targetItemIDs: [NetworkRequest.ID],
+        into snapshot: inout NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkRequest.ID>
+    ) {
+        if targetIndex > 0 {
+            let previousItemID = targetItemIDs[targetIndex - 1]
+            if snapshot.indexOfItem(previousItemID) != nil {
+                snapshot.insertItems([itemID], afterItem: previousItemID)
+                return
+            }
+        }
+        let nextIndex = targetIndex + 1
+        if nextIndex < targetItemIDs.count {
+            let nextItemID = targetItemIDs[nextIndex]
+            if snapshot.indexOfItem(nextItemID) != nil {
+                snapshot.insertItems([itemID], beforeItem: nextItemID)
+                return
+            }
+        }
+        snapshot.appendItems([itemID], toSection: .main)
+    }
+
+    private func moveItem(
+        _ itemID: NetworkRequest.ID,
+        toTargetIndex targetIndex: Int,
+        targetItemIDs: [NetworkRequest.ID],
+        in snapshot: inout NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkRequest.ID>
+    ) {
+        let nextIndex = targetIndex + 1
+        if nextIndex < targetItemIDs.count {
+            let nextItemID = targetItemIDs[nextIndex]
+            if nextItemID != itemID,
+               snapshot.indexOfItem(nextItemID) != nil {
+                snapshot.moveItem(itemID, beforeItem: nextItemID)
+                return
+            }
+        }
+        if targetIndex > 0 {
+            let previousItemID = targetItemIDs[targetIndex - 1]
+            if previousItemID != itemID,
+               snapshot.indexOfItem(previousItemID) != nil {
+                snapshot.moveItem(itemID, afterItem: previousItemID)
+            }
+        }
     }
 
     private func reloadDataFromModel() {
@@ -594,6 +701,21 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 }
 
+private extension WebInspectorFetchedResultsTransaction where Model == NetworkRequest {
+    var hasNetworkListTopologyChanges: Bool {
+        isReset || sectionChanges.isEmpty == false || networkListTopologyItemChanges.isEmpty == false
+    }
+
+    var networkListTopologyItemChanges: [WebInspectorFetchedResultsItemChange<NetworkRequest.ID>] {
+        itemChanges.filter { change in
+            if case .update = change {
+                return false
+            }
+            return true
+        }
+    }
+}
+
 #if DEBUG
 extension NetworkListViewController {
     package var collectionViewForTesting: UICollectionView {
@@ -613,10 +735,6 @@ extension NetworkListViewController {
         filterItem
     }
 
-    package var displayRowsObservationDeliveryForTesting: PortableObservationTracking.Token? {
-        displayRowsObservation
-    }
-
     package var selectedRequestObservationDeliveryForTesting: PortableObservationTracking.Token? {
         selectedRequestObservation
     }
@@ -627,10 +745,6 @@ extension NetworkListViewController {
 
     package var snapshotApplyCountForTesting: Int {
         snapshotApplyCountStorageForTesting
-    }
-
-    package var hasScheduledDisplayRowsReloadForTesting: Bool {
-        hasPendingThrottledDisplayRowsReload || displayRowsReloadScheduler.hasScheduledDelay
     }
 
     package var filterMenuBuildCountForTesting: Int {
@@ -665,22 +779,19 @@ extension NetworkListViewController {
         )
     }
 
-    package func flushPendingSnapshotUpdateForTesting() async {
-        if snapshotCoordinator.needsReloadForActiveRendering {
-            scheduleThrottledDisplayRowsReload()
-        }
-        displayRowsReloadScheduler.cancel()
-        flushThrottledDisplayRowsReload()
-        applyPendingSnapshotUpdateIfNeeded()
-        await waitForSnapshotUpdateCompletionForTesting()
+    package func suspendRenderingForTesting() {
+        suspendRendering()
     }
 
-    package func flushThrottledDisplayRowsReloadForTesting() async {
+    package func resumeRenderingForTesting() {
+        resumeRendering()
+    }
+
+    package func flushPendingSnapshotUpdateForTesting() async {
         if snapshotCoordinator.needsReloadForActiveRendering {
-            scheduleThrottledDisplayRowsReload()
+            reloadDataFromModel()
         }
-        displayRowsReloadScheduler.cancel()
-        flushThrottledDisplayRowsReload()
+        applyPendingSnapshotUpdateIfNeeded()
         await waitForSnapshotUpdateCompletionForTesting()
     }
 

@@ -1,7 +1,7 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
 import Foundation
-import WebInspectorCore
+import WebInspectorDataKit
 
 package enum NetworkTextPreviewPreparationAction {
     case unavailable

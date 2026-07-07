@@ -1,14 +1,13 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
-import WebInspectorCore
+import WebInspectorDataKit
 import UIKit
 
 @MainActor
 package final class DOMSplitViewController: UISplitViewController {
     private let treeViewController: DOMTreeViewController
     private let elementViewController: DOMElementViewController
-    private let inspection: AttachedInspection?
-    private let inspector: InspectorSession?
+    private let context: WebInspectorContext?
     private var domNavigationItems: DOMNavigationItems?
     private lazy var treeNavigationController = RegularSplitColumnNavigationController(
         rootViewController: treeViewController
@@ -17,32 +16,42 @@ package final class DOMSplitViewController: UISplitViewController {
         rootViewController: elementViewController
     )
 
-    package convenience init(inspection: AttachedInspection) {
-        let inspector = InspectorSession(attachment: inspection)
+    package convenience init(context: WebInspectorContext) {
         self.init(
-            treeViewController: DOMTreeViewController(inspection: inspection),
-            elementViewController: DOMElementViewController(inspection: inspection),
-            inspection: inspection,
-            inspector: inspector
+            treeViewController: DOMTreeViewController(context: context),
+            elementViewController: DOMElementViewController(context: context),
+            context: context
         )
     }
 
     package init(
         treeViewController: DOMTreeViewController,
         elementViewController: DOMElementViewController,
-        inspection: AttachedInspection? = nil,
-        inspector: InspectorSession? = nil
+        context: WebInspectorContext? = nil
     ) {
         self.treeViewController = treeViewController
         self.elementViewController = elementViewController
-        self.inspection = inspection
-        self.inspector = inspector
+        self.context = context
         super.init(style: .doubleColumn)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         nil
+    }
+
+    override package var canBecomeFirstResponder: Bool {
+        domNavigationItems != nil
+    }
+
+    override package var keyCommands: [UIKeyCommand]? {
+        domNavigationItems?.makeKeyCommands(actions: DOMNavigationItems.KeyCommandActions(
+            undo: #selector(performDOMUndoCommand),
+            redo: #selector(performDOMRedoCommand),
+            reload: #selector(performDOMReloadCommand),
+            delete: #selector(performDOMDeleteCommand),
+            pickElement: #selector(performDOMPickElementCommand)
+        ))
     }
 
     override package func viewDidLoad() {
@@ -85,14 +94,39 @@ package final class DOMSplitViewController: UISplitViewController {
     }
 
     private func configureNavigationItem() {
-        guard let inspector else {
+        guard let context else {
             return
         }
-        let navigationItems = DOMNavigationItems(inspector: inspector)
+        let navigationItems = DOMNavigationItems(context: context)
         navigationItems.install(on: navigationItem) { [weak self] in
             self?.treeViewController.domTreeUndoManager ?? self?.undoManager
         }
         domNavigationItems = navigationItems
+    }
+
+    @objc
+    private func performDOMUndoCommand(_ sender: UIKeyCommand) {
+        domNavigationItems?.performUndoCommand()
+    }
+
+    @objc
+    private func performDOMRedoCommand(_ sender: UIKeyCommand) {
+        domNavigationItems?.performRedoCommand()
+    }
+
+    @objc
+    private func performDOMReloadCommand(_ sender: UIKeyCommand) {
+        domNavigationItems?.performReloadCommand()
+    }
+
+    @objc
+    private func performDOMDeleteCommand(_ sender: UIKeyCommand) {
+        domNavigationItems?.performDeleteCommand()
+    }
+
+    @objc
+    private func performDOMPickElementCommand(_ sender: UIKeyCommand) {
+        domNavigationItems?.performToggleElementPickerCommand()
     }
 }
 
@@ -111,12 +145,7 @@ extension DOMSplitViewController {
 @MainActor
 private enum DOMSplitViewControllerPreview {
     static func makeViewController() -> DOMSplitViewController {
-        let dom = DOMPreviewFixtures.makeDOMSession()
-        let inspection = AttachedInspection(dom: dom)
-        return DOMSplitViewController(
-            treeViewController: DOMTreeViewController(inspection: inspection),
-            elementViewController: DOMElementViewController(inspection: inspection)
-        )
+        DOMSplitViewController(context: DOMPreviewFixtures.makeWebInspectorContext())
     }
 }
 #endif
