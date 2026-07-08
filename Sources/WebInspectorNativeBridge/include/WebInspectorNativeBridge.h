@@ -54,4 +54,12 @@ FOUNDATION_EXPORT WebInspectorNativeControllerDiscoveryTestResult WebInspectorNa
     NSInteger secondaryControllerOffset
 );
 
+FOUNDATION_EXPORT WebInspectorNativeControllerDiscoveryTestResult WebInspectorNativeRunControllerDiscoveryScenarioWithInvalidCandidatesForTesting(
+    NSUInteger pageAllocationSize,
+    NSInteger cachedOffset,
+    NSInteger primaryControllerOffset,
+    NSInteger invalidControllerOffset,
+    NSInteger secondaryInvalidControllerOffset
+);
+
 NS_ASSUME_NONNULL_END

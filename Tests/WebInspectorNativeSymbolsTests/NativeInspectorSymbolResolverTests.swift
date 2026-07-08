@@ -113,6 +113,14 @@ struct NativeInspectorSymbolResolverTests {
     }
 
     @Test
+    func loadedImageSymbolOffsetRejectsMachHeaderAddress() {
+        #expect(!NativeInspectorSymbolResolverCore.loadedImageSymbolOffsetIsUsable(-1, textVirtualMemorySize: 0x1000))
+        #expect(!NativeInspectorSymbolResolverCore.loadedImageSymbolOffsetIsUsable(0, textVirtualMemorySize: 0x1000))
+        #expect(NativeInspectorSymbolResolverCore.loadedImageSymbolOffsetIsUsable(8, textVirtualMemorySize: 0x1000))
+        #expect(!NativeInspectorSymbolResolverCore.loadedImageSymbolOffsetIsUsable(0x1000, textVirtualMemorySize: 0x1000))
+    }
+
+    @Test
     func cStringSwiftMangledNameDetectionRejectsShortNames() {
         for symbolName in ["", "_", "_$", "$"] {
             let isLikelySwiftMangled = unsafe symbolName.withCString { symbolNameC in

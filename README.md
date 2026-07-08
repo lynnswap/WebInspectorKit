@@ -84,6 +84,9 @@ For implementation work, [`ArchitectureOverview.md`](Docs/ArchitectureOverview.m
 is the top-level map for module boundaries, runtime ownership, and WebKit
 communication flow. The current SDK split is:
 
+Runtime WebKit version mapping notes live in
+[`WebKitVersionMapping.md`](Docs/WebKitVersionMapping.md).
+
 - `WebInspectorProxyKit` for custom UIs that want typed domain commands and
   events directly over an inspected `WKWebView`.
 - `WebInspectorDataKit` for custom UIs that want observable DOM, Network,
