@@ -729,7 +729,7 @@ struct NetworkDetailViewControllerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        let didRenderVisibleBody = await waitUntilRendered(in: viewController) {
+        let didRenderVisibleBody = await waitUntilPreparedTextPreviewRendered(in: viewController) {
             viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text.contains(#""visible" : true"#)
         }
         #expect(didRenderVisibleBody)
@@ -744,7 +744,7 @@ struct NetworkDetailViewControllerTests {
         viewController.beginAppearanceTransition(true, animated: false)
         viewController.endAppearanceTransition()
 
-        let didRenderHiddenBody = await waitUntilRendered(in: viewController) {
+        let didRenderHiddenBody = await waitUntilPreparedTextPreviewRendered(in: viewController) {
             viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text.contains(#""hidden" : true"#)
         }
         #expect(didRenderHiddenBody)
@@ -800,7 +800,7 @@ struct NetworkDetailViewControllerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        let didRenderPrettyBody = await waitUntilRendered(in: viewController) {
+        let didRenderPrettyBody = await waitUntilPreparedTextPreviewRendered(in: viewController) {
             viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == """
             {
               "a" : 1,
@@ -2457,6 +2457,17 @@ struct NetworkDetailViewControllerTests {
                 sampleRenderedCondition(in: viewController, condition: condition)
             }
         )
+    }
+
+    private func waitUntilPreparedTextPreviewRendered(
+        in viewController: NetworkDetailViewController,
+        _ condition: @escaping @MainActor @Sendable () -> Bool
+    ) async -> Bool {
+        if await waitUntilRendered(in: viewController, condition) {
+            return true
+        }
+        await viewController.syntaxBodyViewControllerForTesting.waitUntilTextPreviewPreparationFinishedForTesting()
+        return await waitUntilRendered(in: viewController, condition)
     }
 
     private func waitUntilNetworkBodyPhase(
