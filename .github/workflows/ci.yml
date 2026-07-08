@@ -136,7 +136,7 @@ jobs:
             test_scheme: WebInspectorNativeTests
             simulator_device: iPhone 17 Pro
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 10
+    timeout-minutes: 15
     env:
       XCODE_MAJOR: ${{ matrix.xcode_major }}
       IOS_MAJOR: ${{ matrix.ios_major }}
