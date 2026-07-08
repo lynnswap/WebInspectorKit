@@ -2669,6 +2669,20 @@ extension DOMTreeTextView {
         return true
     }
 
+    func waitForPendingDOMInvalidationForTesting(
+        _ minimumRevision: UInt64,
+        timeout: Duration = .seconds(1)
+    ) async -> Bool {
+        let start = ContinuousClock.now
+        while pendingDOMTreeRenderInvalidation?.revision ?? 0 < minimumRevision {
+            if ContinuousClock.now - start >= timeout {
+                return false
+            }
+            await Task.yield()
+        }
+        return true
+    }
+
     func resetPerformanceCountersForTesting() {
         performanceCounters.reset()
     }

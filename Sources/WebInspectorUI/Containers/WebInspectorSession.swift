@@ -59,14 +59,47 @@ public final class WebInspectorSession {
     }
 
     public func attach(to webView: WKWebView) async throws {
-        try await attach(to: webView) { webView in
-            try await WebInspectorContainer(attachingTo: webView)
-        }
+        try await attach(
+            makeContainer: {
+                try await WebInspectorContainer(attachingTo: webView)
+            },
+            makePageUserInterfaceStyleObserver: { [makePageUserInterfaceStyleObserver] apply in
+                makePageUserInterfaceStyleObserver(webView, apply)
+            }
+        )
     }
 
     package func attach(
         to webView: WKWebView,
         makeContainer: @MainActor (WKWebView) async throws -> WebInspectorContainer
+    ) async throws {
+        try await attach(
+            makeContainer: {
+                try await makeContainer(webView)
+            },
+            makePageUserInterfaceStyleObserver: { [makePageUserInterfaceStyleObserver] apply in
+                makePageUserInterfaceStyleObserver(webView, apply)
+            }
+        )
+    }
+
+    package func attachForTesting(
+        makeContainer: @escaping @MainActor () async throws -> WebInspectorContainer,
+        makePageUserInterfaceStyleObserver: @escaping @MainActor (
+            @escaping @MainActor (UIUserInterfaceStyle) -> Void
+        ) -> (any WebInspectorPageUserInterfaceStyleObserving)? = { _ in nil }
+    ) async throws {
+        try await attach(
+            makeContainer: makeContainer,
+            makePageUserInterfaceStyleObserver: makePageUserInterfaceStyleObserver
+        )
+    }
+
+    private func attach(
+        makeContainer: @MainActor () async throws -> WebInspectorContainer,
+        makePageUserInterfaceStyleObserver: @MainActor (
+            @escaping @MainActor (UIUserInterfaceStyle) -> Void
+        ) -> (any WebInspectorPageUserInterfaceStyleObserving)?
     ) async throws {
         let generation = advanceAttachmentGeneration()
         stopPageUserInterfaceStyleObservation()
@@ -76,7 +109,7 @@ public final class WebInspectorSession {
             throw CancellationError()
         }
         do {
-            let container = try await makeContainer(webView)
+            let container = try await makeContainer()
             try Task.checkCancellation()
             guard isCurrentAttachmentGeneration(generation) else {
                 await container.close()
@@ -84,7 +117,7 @@ public final class WebInspectorSession {
             }
             self.container = container
             installDataContext(container.mainContext)
-            startPageUserInterfaceStyleObservation(for: webView)
+            startPageUserInterfaceStyleObservation(makePageUserInterfaceStyleObserver)
         } catch {
             guard isCurrentAttachmentGeneration(generation) else {
                 throw error
@@ -134,9 +167,15 @@ public final class WebInspectorSession {
         try? await context.hideHighlight()
     }
 
-    private func startPageUserInterfaceStyleObservation(for webView: WKWebView) {
-        let observer = makePageUserInterfaceStyleObserver(webView) { [weak self] style in
+    private func startPageUserInterfaceStyleObservation(
+        _ makeObserver: @MainActor (
+            @escaping @MainActor (UIUserInterfaceStyle) -> Void
+        ) -> (any WebInspectorPageUserInterfaceStyleObserving)?
+    ) {
+        guard let observer = makeObserver({ [weak self] style in
             self?.setPageUserInterfaceStyle(style)
+        }) else {
+            return
         }
         pageUserInterfaceStyleObserver = observer
         observer.start()

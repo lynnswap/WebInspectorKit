@@ -689,8 +689,9 @@ struct DOMTreeTextViewTests {
         view.setRenderingActive(false)
         session.applyAttributeModified(visibleDivID, name: "data-visible", value: "deferred")
         let hiddenRevision = session.treeRevision
-        #expect(await view.waitForRowDocumentAppliedTreeRevisionForTesting(hiddenRevision) == false)
+        #expect(await view.waitForPendingDOMInvalidationForTesting(hiddenRevision))
 
+        #expect(view.rowDocumentAppliedTreeRevisionForTesting < hiddenRevision)
         #expect(view.buildRowRenderPlanCallCountForTesting == 0)
         #expect(view.documentTextForTesting == baselineText)
         #expect(!view.documentTextForTesting.contains("data-visible=\"deferred\""))
@@ -827,9 +828,10 @@ struct DOMTreeTextViewTests {
         session.selectNode(inputID)
         let hiddenTreeRevision = session.treeRevision
         let hiddenSelectionRevision = session.selectionRevision
-        #expect(await view.waitForRowDocumentAppliedTreeRevisionForTesting(hiddenTreeRevision) == false)
+        #expect(await view.waitForObservedTreeRevisionForTesting(hiddenSelectionRevision))
         #expect(hiddenSelectionRevision >= hiddenTreeRevision)
 
+        #expect(view.rowDocumentAppliedTreeRevisionForTesting < hiddenTreeRevision)
         #expect(!view.documentTextForTesting.contains("data-visible=\"while-hidden\""))
         #expect(view.multiSelectedRowSnapshotsInDisplayOrderForTesting.count == 3)
 
