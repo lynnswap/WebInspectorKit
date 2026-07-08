@@ -51,6 +51,36 @@ struct WebInspectorNativeBridgeTests {
     }
 
     @Test
+    func invalidControllerShapeCandidatesDoNotBlockResolution() {
+        let result = WebInspectorNativeRunControllerDiscoveryScenarioWithInvalidCandidatesForTesting(
+            0x1000,
+            -1,
+            0x540,
+            0x580,
+            0x5A0
+        )
+
+        #expect(result.found.boolValue)
+        #expect(result.resolvedOffset == 0x540)
+        #expect(result.validCandidateCount == 1)
+    }
+
+    @Test
+    func invalidCachedOffsetFallsBackToValidController() {
+        let result = WebInspectorNativeRunControllerDiscoveryScenarioWithInvalidCandidatesForTesting(
+            0x1000,
+            0x580,
+            0x540,
+            0x580,
+            -1
+        )
+
+        #expect(result.found.boolValue)
+        #expect(result.resolvedOffset == 0x540)
+        #expect(result.validCandidateCount == 1)
+    }
+
+    @Test
     func zeroAllocationSizeUsesFallbackRange() {
         let result = WebInspectorNativeRunControllerDiscoveryScenarioForTesting(
             0,

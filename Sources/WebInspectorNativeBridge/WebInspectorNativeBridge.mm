@@ -25,6 +25,9 @@ static constexpr ptrdiff_t invalidControllerOffset = -1;
 static constexpr ptrdiff_t webPageInspectorControllerOffset = 0x4C0;
 static constexpr size_t frontendRouterStorageIndex = 0;
 static constexpr size_t backendDispatcherStorageIndex = 1;
+static constexpr size_t agentRegistryStorageIndex = 2;
+static constexpr uint32_t maximumExpectedInspectorAgentCount = 64;
+static constexpr size_t backendDispatcherFrontendRouterScanBytes = 0x100;
 static constexpr ptrdiff_t preferredControllerSearchRadius = 0x100;
 static constexpr size_t fallbackControllerScanBytes = 0x1000;
 static std::atomic<ptrdiff_t> cachedControllerOffset { invalidControllerOffset };
@@ -160,6 +163,29 @@ static BOOL safeReadWord(const void *address, uintptr_t *valueOut)
     return YES;
 }
 
+static BOOL safeReadUInt32(const void *address, uint32_t *valueOut)
+{
+    if (!address || !valueOut)
+        return NO;
+
+    uint32_t rawValue = 0;
+    vm_size_t bytesRead = 0;
+    kern_return_t result = vm_read_overwrite(
+        mach_task_self(),
+        reinterpret_cast<vm_address_t>(address),
+        sizeof(rawValue),
+        reinterpret_cast<vm_address_t>(&rawValue),
+        &bytesRead
+    );
+    if (result != KERN_SUCCESS || bytesRead != sizeof(rawValue)) {
+        *valueOut = 0;
+        return NO;
+    }
+
+    *valueOut = rawValue;
+    return YES;
+}
+
 struct ControllerResolutionStats {
     size_t attemptedOffsetCount { 0 };
     size_t validCandidateCount { 0 };
@@ -256,6 +282,52 @@ static BOOL backendDispatcherPointer(void *controller, void **backendDispatcherO
     return safeReadPointer(slot, backendDispatcherOut) && *backendDispatcherOut;
 }
 
+static BOOL controllerHasValidAgentRegistry(void *controller)
+{
+    if (!controller)
+        return NO;
+
+    auto *agentRegistry = reinterpret_cast<uint8_t *>(controller) + (agentRegistryStorageIndex * sizeof(void *));
+
+    void *agentsBuffer = nullptr;
+    if (!safeReadPointer(agentRegistry, &agentsBuffer) || !agentsBuffer || !pointerIsWritableMapped(agentsBuffer))
+        return NO;
+
+    uint32_t agentCapacity = 0;
+    if (!safeReadUInt32(agentRegistry + sizeof(void *), &agentCapacity))
+        return NO;
+
+    uint32_t agentCount = 0;
+    if (!safeReadUInt32(agentRegistry + sizeof(void *) + sizeof(uint32_t), &agentCount))
+        return NO;
+
+    if (!agentCount || agentCapacity < agentCount || agentCapacity > maximumExpectedInspectorAgentCount)
+        return NO;
+
+    void *firstAgent = nullptr;
+    if (!safeReadPointer(agentsBuffer, &firstAgent) || !firstAgent || !pointerIsWritableMapped(firstAgent))
+        return NO;
+
+    return YES;
+}
+
+static BOOL backendDispatcherReferencesFrontendRouter(void *backendDispatcher, void *frontendRouter)
+{
+    if (!backendDispatcher || !frontendRouter)
+        return NO;
+
+    auto *storage = reinterpret_cast<uint8_t *>(backendDispatcher);
+    for (size_t offset = 0; offset + sizeof(void *) <= backendDispatcherFrontendRouterScanBytes; offset += sizeof(void *)) {
+        void *candidate = nullptr;
+        if (!safeReadPointer(storage + offset, &candidate))
+            continue;
+        if (candidate == frontendRouter)
+            return YES;
+    }
+
+    return NO;
+}
+
 static BOOL controllerCandidateAtOffset(void *pageProxy, ptrdiff_t offset, void **controllerOut, void **backendDispatcherOut)
 {
     if (!pageProxy)
@@ -274,6 +346,12 @@ static BOOL controllerCandidateAtOffset(void *pageProxy, ptrdiff_t offset, void 
 
     void *backendDispatcher = nullptr;
     if (!backendDispatcherPointer(controller, &backendDispatcher) || !backendDispatcher || !pointerIsWritableMapped(backendDispatcher))
+        return NO;
+
+    if (!backendDispatcherReferencesFrontendRouter(backendDispatcher, frontendRouter))
+        return NO;
+
+    if (!controllerHasValidAgentRegistry(controller))
         return NO;
 
     if (controllerOut)
@@ -443,7 +521,9 @@ static BOOL installSyntheticControllerAtOffset(
     void *pageBuffer,
     size_t pageByteCount,
     NSInteger offset,
-    std::vector<void *>& allocations
+    std::vector<void *>& allocations,
+    bool hasValidAgentRegistry,
+    bool backendReferencesFrontendRouter
 )
 {
     if (!pageBuffer || offset < 0)
@@ -455,17 +535,33 @@ static BOOL installSyntheticControllerAtOffset(
 
     void *controller = allocateZeroedBlock(sizeof(uintptr_t) * 5, allocations);
     void *frontendRouter = allocateZeroedBlock(sizeof(uint64_t), allocations);
-    void *backendDispatcher = allocateZeroedBlock(sizeof(uint64_t), allocations);
-    void *agentsBuffer = allocateZeroedBlock(sizeof(uint64_t), allocations);
-    if (!controller || !frontendRouter || !backendDispatcher || !agentsBuffer)
+    void *backendDispatcher = allocateZeroedBlock(backendDispatcherFrontendRouterScanBytes, allocations);
+    if (!controller || !frontendRouter || !backendDispatcher)
         return NO;
 
     auto *controllerWords = reinterpret_cast<uintptr_t *>(controller);
     controllerWords[0] = reinterpret_cast<uintptr_t>(frontendRouter);
     controllerWords[1] = reinterpret_cast<uintptr_t>(backendDispatcher);
-    controllerWords[2] = reinterpret_cast<uintptr_t>(agentsBuffer);
-    controllerWords[3] = 1;
-    controllerWords[4] = 1;
+
+    if (backendReferencesFrontendRouter) {
+        auto *backendDispatcherWords = reinterpret_cast<uintptr_t *>(backendDispatcher);
+        backendDispatcherWords[2] = reinterpret_cast<uintptr_t>(frontendRouter);
+    }
+
+    if (hasValidAgentRegistry) {
+        void *firstAgent = allocateZeroedBlock(sizeof(uint64_t), allocations);
+        void *agentsBuffer = allocateZeroedBlock(sizeof(uintptr_t), allocations);
+        if (!firstAgent || !agentsBuffer)
+            return NO;
+
+        auto *agentPointers = reinterpret_cast<uintptr_t *>(agentsBuffer);
+        agentPointers[0] = reinterpret_cast<uintptr_t>(firstAgent);
+        controllerWords[2] = reinterpret_cast<uintptr_t>(agentsBuffer);
+
+        auto *agentVectorMetadata = reinterpret_cast<uint32_t *>(controllerWords + 3);
+        agentVectorMetadata[0] = 1;
+        agentVectorMetadata[1] = 1;
+    }
 
     auto *slot = reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(pageBuffer) + normalizedOffset);
     *slot = controller;
@@ -850,8 +946,54 @@ WebInspectorNativeControllerDiscoveryTestResult WebInspectorNativeRunControllerD
         };
     }
 
-    WebInspectorNativeBridgePrivate::installSyntheticControllerAtOffset(pageBuffer, scanByteCount, primaryControllerOffset, allocations);
-    WebInspectorNativeBridgePrivate::installSyntheticControllerAtOffset(pageBuffer, scanByteCount, secondaryControllerOffset, allocations);
+    WebInspectorNativeBridgePrivate::installSyntheticControllerAtOffset(pageBuffer, scanByteCount, primaryControllerOffset, allocations, true, true);
+    WebInspectorNativeBridgePrivate::installSyntheticControllerAtOffset(pageBuffer, scanByteCount, secondaryControllerOffset, allocations, true, true);
+
+    auto resolution = WebInspectorNativeBridgePrivate::resolveControllerInPageProxy(
+        pageBuffer,
+        scanByteCount,
+        pageAllocationSize == 0,
+        cachedOffset >= 0 ? cachedOffset : WebInspectorNativeBridgePrivate::invalidControllerOffset
+    );
+
+    WebInspectorNativeBridgePrivate::freeAllocatedBlocks(allocations);
+
+    return {
+        .found = resolution.stats.resolvedOffset != WebInspectorNativeBridgePrivate::invalidControllerOffset,
+        .usedFallbackRange = resolution.stats.usedFallbackRange,
+        .resolvedOffset = resolution.stats.resolvedOffset,
+        .attemptedOffsetCount = resolution.stats.attemptedOffsetCount,
+        .validCandidateCount = resolution.stats.validCandidateCount,
+        .scannedByteCount = resolution.stats.scannedByteCount,
+    };
+}
+
+WebInspectorNativeControllerDiscoveryTestResult WebInspectorNativeRunControllerDiscoveryScenarioWithInvalidCandidatesForTesting(
+    NSUInteger pageAllocationSize,
+    NSInteger cachedOffset,
+    NSInteger primaryControllerOffset,
+    NSInteger invalidControllerOffset,
+    NSInteger secondaryInvalidControllerOffset
+)
+{
+    size_t scanByteCount = pageAllocationSize ? pageAllocationSize : WebInspectorNativeBridgePrivate::fallbackControllerScanBytes;
+    std::vector<void *> allocations;
+
+    void *pageBuffer = WebInspectorNativeBridgePrivate::allocateZeroedBlock(scanByteCount, allocations);
+    if (!pageBuffer) {
+        return {
+            .found = NO,
+            .usedFallbackRange = NO,
+            .resolvedOffset = WebInspectorNativeBridgePrivate::invalidControllerOffset,
+            .attemptedOffsetCount = 0,
+            .validCandidateCount = 0,
+            .scannedByteCount = 0,
+        };
+    }
+
+    WebInspectorNativeBridgePrivate::installSyntheticControllerAtOffset(pageBuffer, scanByteCount, primaryControllerOffset, allocations, true, true);
+    WebInspectorNativeBridgePrivate::installSyntheticControllerAtOffset(pageBuffer, scanByteCount, invalidControllerOffset, allocations, true, false);
+    WebInspectorNativeBridgePrivate::installSyntheticControllerAtOffset(pageBuffer, scanByteCount, secondaryInvalidControllerOffset, allocations, false, true);
 
     auto resolution = WebInspectorNativeBridgePrivate::resolveControllerInPageProxy(
         pageBuffer,
@@ -946,6 +1088,29 @@ WebInspectorNativeControllerDiscoveryTestResult WebInspectorNativeRunControllerD
     (void)cachedOffset;
     (void)primaryControllerOffset;
     (void)secondaryControllerOffset;
+    return {
+        .found = NO,
+        .usedFallbackRange = NO,
+        .resolvedOffset = -1,
+        .attemptedOffsetCount = 0,
+        .validCandidateCount = 0,
+        .scannedByteCount = 0,
+    };
+}
+
+WebInspectorNativeControllerDiscoveryTestResult WebInspectorNativeRunControllerDiscoveryScenarioWithInvalidCandidatesForTesting(
+    NSUInteger pageAllocationSize,
+    NSInteger cachedOffset,
+    NSInteger primaryControllerOffset,
+    NSInteger invalidControllerOffset,
+    NSInteger secondaryInvalidControllerOffset
+)
+{
+    (void)pageAllocationSize;
+    (void)cachedOffset;
+    (void)primaryControllerOffset;
+    (void)invalidControllerOffset;
+    (void)secondaryInvalidControllerOffset;
     return {
         .found = NO,
         .usedFallbackRange = NO,

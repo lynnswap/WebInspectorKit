@@ -133,7 +133,10 @@ extension NativeInspectorSymbolResolverCore {
         text: SegmentCommand64,
         bucket: inout NativeInspectorResolvedSymbolBucket
     ) {
-        guard offset >= 0 else {
+        guard loadedImageSymbolOffsetIsUsable(offset, textVirtualMemorySize: UInt64(text.virtualMemorySize)) else {
+            if offset > 0, bucket.outsideTextAddress == nil {
+                bucket.outsideTextAddress = imageBaseAddress + UInt64(offset)
+            }
             return
         }
 
@@ -146,6 +149,16 @@ extension NativeInspectorSymbolResolverCore {
             return
         }
         bucket.insertCandidate(address)
+    }
+
+    static func loadedImageSymbolOffsetIsUsable(
+        _ offset: Int,
+        textVirtualMemorySize: UInt64
+    ) -> Bool {
+        guard offset > 0 else {
+            return false
+        }
+        return UInt64(offset) < textVirtualMemorySize
     }
 
     static func resolvedAddress(
