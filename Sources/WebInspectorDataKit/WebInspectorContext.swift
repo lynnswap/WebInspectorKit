@@ -3861,12 +3861,20 @@ extension WebInspectorContext {
                 }
                 continue
             }
+            let oldSnapshot = results.networkSnapshotForDelta
+            let resultTopologyRevision = results.topologyRevision
+            let indexSequence = networkRequestIndexSequence
             guard let delta = await networkRequestIndex.delta(
                 plan: plan,
                 sectionBy: results.sectionBy,
-                oldSnapshot: results.networkSnapshotForDelta,
+                oldSnapshot: oldSnapshot,
                 changedID: request.id
             ) else {
+                continue
+            }
+            guard networkRequestIndexSequence == indexSequence,
+                  results.topologyRevision == resultTopologyRevision,
+                  results.networkSnapshotForDelta == oldSnapshot else {
                 continue
             }
             results.applyNetworkDelta(delta, lookup: { id in self.requestsByID[id] })
