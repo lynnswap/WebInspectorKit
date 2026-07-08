@@ -3797,6 +3797,10 @@ extension WebInspectorContext {
         return NetworkRequestRecordInput(request: request, orderIndex: orderIndex)
     }
 
+    private func isCurrentNetworkRequest(_ request: NetworkRequest) -> Bool {
+        requestsByID[request.id] === request
+    }
+
     private func nextNetworkRequestIndexSequence() -> UInt64 {
         networkRequestIndexSequence &+= 1
         return networkRequestIndexSequence
@@ -3819,8 +3823,14 @@ extension WebInspectorContext {
         _ = isolation
         networkCollectionState.didInsertRequest()
         await syncNetworkRequestIndexIfNeeded(isolation: isolation)
+        guard isCurrentNetworkRequest(request) else {
+            return
+        }
         let sequence = nextNetworkRequestIndexSequence()
         await networkRequestIndex.upsert(networkRecordInput(for: request), sequence: sequence)
+        guard isCurrentNetworkRequest(request) else {
+            return
+        }
         await applyNetworkResultDeltas(for: request, inserted: true, isolation: isolation)
     }
 
@@ -3830,8 +3840,14 @@ extension WebInspectorContext {
     ) async {
         _ = isolation
         await syncNetworkRequestIndexIfNeeded(isolation: isolation)
+        guard isCurrentNetworkRequest(request) else {
+            return
+        }
         let sequence = nextNetworkRequestIndexSequence()
         await networkRequestIndex.upsert(networkRecordInput(for: request), sequence: sequence)
+        guard isCurrentNetworkRequest(request) else {
+            return
+        }
         await applyNetworkResultDeltas(for: request, inserted: false, isolation: isolation)
     }
 
