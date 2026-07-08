@@ -256,7 +256,9 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
         WebInspectorFetchedResultsTransaction<Model>
     >()
     @ObservationIgnored weak var modelContext: WebInspectorContext?
+    @ObservationIgnored private var networkQueryPlan: NetworkRequestQueryPlan?
     @ObservationIgnored private var networkQueryState: NetworkRequestQueryState?
+    @ObservationIgnored private var networkResultSnapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID>?
 
     init(
         fetchDescriptor: WebInspectorFetchDescriptor<Model>,
@@ -270,7 +272,9 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
         sections = Self.sections(for: items, sectionBy: sectionBy)
         self.modelContext = modelContext
         topologyRevision = 0
+        networkQueryPlan = nil
         networkQueryState = nil
+        networkResultSnapshot = nil
     }
 
     deinit {
@@ -442,11 +446,30 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
 }
 
 extension WebInspectorFetchedResults where Model == NetworkRequest {
+    var networkSnapshotForDelta: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID> {
+        if let networkResultSnapshot {
+            return networkResultSnapshot
+        }
+        let snapshot = WebInspectorFetchedResultsSnapshot(sections: sections)
+        networkResultSnapshot = snapshot
+        return snapshot
+    }
+
+    func currentNetworkQueryPlan(context: WebInspectorContext) -> NetworkRequestQueryPlan {
+        if let networkQueryPlan {
+            return networkQueryPlan
+        }
+        let plan = NetworkRequestQueryPlan(descriptor: fetchDescriptor, context: context)
+        networkQueryPlan = plan
+        return plan
+    }
+
     func setNetworkItems(
         _ requests: [NetworkRequest],
         plan: NetworkRequestQueryPlan,
         lookup: (NetworkRequest.ID) -> NetworkRequest?
     ) {
+        networkQueryPlan = plan
         if plan.requiresQuery {
             let state = NetworkRequestQueryState(plan: plan, requests: requests)
             networkQueryState = state
@@ -455,6 +478,7 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
             networkQueryState = nil
             setItems(requests)
         }
+        networkResultSnapshot = WebInspectorFetchedResultsSnapshot(sections: sections)
     }
 
     func applyNetworkFetchDescriptor(
@@ -464,6 +488,7 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
         lookup: (NetworkRequest.ID) -> NetworkRequest?
     ) {
         fetchDescriptor = descriptor
+        networkQueryPlan = plan
         if plan.requiresQuery {
             let state = NetworkRequestQueryState(plan: plan, requests: requests)
             networkQueryState = state
@@ -472,6 +497,7 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
             networkQueryState = nil
             resetItems(requests)
         }
+        networkResultSnapshot = WebInspectorFetchedResultsSnapshot(sections: sections)
     }
 
     func resetNetworkItems() {
@@ -479,6 +505,7 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
             networkQueryState = NetworkRequestQueryState(plan: state.plan, requests: [])
         }
         resetItems([])
+        networkResultSnapshot = WebInspectorFetchedResultsSnapshot()
     }
 
     func insertNetworkRequest(
@@ -487,11 +514,13 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
     ) {
         guard var state = networkQueryState else {
             insertItem(request)
+            networkResultSnapshot = WebInspectorFetchedResultsSnapshot(sections: sections)
             return
         }
         state.upsert(request: request)
         networkQueryState = state
         setItems(state.visibleRequests(lookup: lookup))
+        networkResultSnapshot = WebInspectorFetchedResultsSnapshot(sections: sections)
     }
 
     func refreshNetworkRequestAfterMutation(
@@ -500,10 +529,37 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
     ) {
         guard var state = networkQueryState else {
             refreshAfterItemMutation(request)
+            networkResultSnapshot = WebInspectorFetchedResultsSnapshot(sections: sections)
             return
         }
         state.upsert(request: request)
         networkQueryState = state
         setItems(state.visibleRequests(lookup: lookup), updatedItemIDs: [request.id])
+        networkResultSnapshot = WebInspectorFetchedResultsSnapshot(sections: sections)
+    }
+
+    func applyNetworkDelta(
+        _ delta: NetworkResultSetDelta,
+        lookup: (NetworkRequest.ID) -> NetworkRequest?
+    ) {
+        let oldSnapshot = networkSnapshotForDelta
+        items = delta.snapshot.itemIDs.compactMap(lookup)
+        sections = delta.snapshot.sections.map { section in
+            WebInspectorFetchSection(
+                id: section.id,
+                title: section.title,
+                items: section.itemIDs.compactMap(lookup)
+            )
+        }
+        networkResultSnapshot = delta.snapshot
+        if oldSnapshot != delta.snapshot {
+            bumpTopologyRevision()
+        }
+        guard transactionRelay.hasContinuations,
+              let transaction = delta.transaction,
+              transaction.hasChanges else {
+            return
+        }
+        transactionRelay.yield(transaction)
     }
 }

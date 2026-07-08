@@ -110,7 +110,7 @@ struct NetworkDetailViewControllerTests {
     @Test
     func listLoadDoesNotEvaluateDisplayRequestsUntilAppearing() async throws {
         let context = makeContext()
-        _ = try #require(applyRequest(
+        _ = try #require(await applyRequest(
             to: context,
             requestID: "1",
             url: "https://example.com/api/data.json",
@@ -194,7 +194,7 @@ struct NetworkDetailViewControllerTests {
     func detailModeControlSwitchesPreviewAndHeaders() async throws {
         let context = makeContext()
         let request = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "1",
                 url: "https://example.com/api/data.json",
@@ -265,7 +265,7 @@ struct NetworkDetailViewControllerTests {
     func previewTextBodyUsesAutomaticInsetsAsRegisteredContentScrollView() async throws {
         let context = makeContext()
         let request = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "1",
                 url: "https://example.com/api/data.txt",
@@ -304,7 +304,7 @@ struct NetworkDetailViewControllerTests {
     func previewRequestWithoutBodyReplacesPreviousBodyWithUnavailablePlaceholder() async throws {
         let context = makeContext()
         let bodyRequest = try #require(
-            applyRequestWithoutResponse(
+            await applyRequestWithoutResponse(
                 to: context,
                 requestID: "body",
                 url: "https://example.com/form",
@@ -313,7 +313,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         let emptyRequest = try #require(
-            applyRequestWithoutResponse(
+            await applyRequestWithoutResponse(
                 to: context,
                 requestID: "empty",
                 url: "https://example.com/no-body"
@@ -349,7 +349,7 @@ struct NetworkDetailViewControllerTests {
     func responseOnlyPreviewRoleExpandsToBothWithoutChangingLogicalSelection() async throws {
         let context = makeContext()
         let responseOnlyRequest = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "response-only",
                 url: "https://example.com/response.json",
@@ -358,7 +358,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         let requestAndResponse = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "both",
                 url: "https://example.com/both.json",
@@ -395,7 +395,7 @@ struct NetworkDetailViewControllerTests {
     func requestPreviewRoleSurvivesResponseOnlySelection() async throws {
         let context = makeContext()
         let requestAndResponse = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "both",
                 url: "https://example.com/both.json",
@@ -406,7 +406,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         let responseOnlyRequest = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "response-only",
                 url: "https://example.com/response.txt",
@@ -461,7 +461,7 @@ struct NetworkDetailViewControllerTests {
     func previewRequestWithoutBodyRendersPlaceholderWhenBodySurfaceResumes() async throws {
         let context = makeContext()
         let request = try #require(
-            applyRequestWithoutResponse(
+            await applyRequestWithoutResponse(
                 to: context,
                 requestID: "1",
                 url: "https://example.com/no-body"
@@ -496,7 +496,7 @@ struct NetworkDetailViewControllerTests {
     func detailUpdatesResponseHeadersAfterSelection() async throws {
         let context = makeContext()
         let request = try #require(
-            applyRequestWithoutResponse(
+            await applyRequestWithoutResponse(
                 to: context,
                 requestID: "1",
                 url: "https://example.com/api/data.json"
@@ -514,7 +514,7 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(didRenderRequestHeaders)
 
-        applyResponseReceived(
+        await applyResponseReceived(
             to: context,
             requestID: "1",
             url: "https://example.com/api/data.json",
@@ -533,7 +533,7 @@ struct NetworkDetailViewControllerTests {
     func detailModeControlUsesCoreBodyAvailabilityAndRendersRequestBody() async throws {
         let context = makeContext()
         let request = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "1",
                 url: "https://example.com/form",
@@ -571,7 +571,7 @@ struct NetworkDetailViewControllerTests {
     func detailModeControlDisablesWhenSelectedRequestDisappears() async throws {
         let context = makeContext()
         let request = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "1",
                 url: "https://example.com/form",
@@ -602,7 +602,7 @@ struct NetworkDetailViewControllerTests {
     func responsePreviewRequestsRuntimeFetchWhenBodyIsAvailable() async throws {
         let context = makeContext()
         let request = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "1",
                 url: "https://example.com/api/data.json",
@@ -631,7 +631,7 @@ struct NetworkDetailViewControllerTests {
     func responsePreviewPrewarmsSyntaxWhileFetching() async throws {
         let context = makeContext()
         let request = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "1",
                 url: "https://example.com/api/data.json",
@@ -668,7 +668,7 @@ struct NetworkDetailViewControllerTests {
     func hiddenDetailDoesNotFetchResponseBodyUntilAppearingAgain() async throws {
         let context = makeContext()
         let request = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "1",
                 url: "https://example.com/api/data.json",
@@ -714,7 +714,7 @@ struct NetworkDetailViewControllerTests {
     func hiddenDetailKeepsDisplayedBodyAndReconcilesBodyOnReturn() async throws {
         let context = makeContext()
         let request = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "1",
                 url: "https://example.com/api/data.json",
@@ -754,7 +754,7 @@ struct NetworkDetailViewControllerTests {
     func deeplyNestedJSONPreviewFallsBackToRawText() async throws {
         let context = makeContext()
         let request = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "1",
                 url: "https://example.com/api/deep.json",
@@ -784,7 +784,7 @@ struct NetworkDetailViewControllerTests {
     func jsonPreviewFormatsCRLFWhitespace() async throws {
         let context = makeContext()
         let request = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "1",
                 url: "https://example.com/api/data.json",
@@ -909,7 +909,7 @@ struct NetworkDetailViewControllerTests {
     func mediaResponsePreviewReleasesPlayerAndTemporaryFileWhenShowingHeaders() async throws {
         let context = makeContext()
         let request = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "1",
                 url: "https://media.example.com/download.php",
@@ -964,7 +964,7 @@ struct NetworkDetailViewControllerTests {
     func mediaResponsePreviewReusesPlayerAndTemporaryFileWhenRequestUpdateDoesNotChangeBody() async throws {
         let context = makeContext()
         let request = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "1",
                 url: "https://media.example.com/download.php",
@@ -995,7 +995,7 @@ struct NetworkDetailViewControllerTests {
         let playerIdentity = try #require(viewController.syntaxBodyViewControllerForTesting.mediaPlayerIdentityForTesting)
         #expect(playerFactory.requestedURLs == [temporaryFileURL])
 
-        applyDataReceived(
+        await applyDataReceived(
             to: context,
             requestID: "1",
             dataLength: 128,
@@ -1014,7 +1014,7 @@ struct NetworkDetailViewControllerTests {
     func mediaResponsePreviewPausesPlayerButKeepsSurfaceWhenHidden() async throws {
         let context = makeContext()
         let request = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "1",
                 url: "https://media.example.com/download.php",
@@ -1065,7 +1065,7 @@ struct NetworkDetailViewControllerTests {
     func mediaResponsePreviewReleasesPlayerAndTemporaryFileWhenSelectionClears() async throws {
         let context = makeContext()
         let request = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "1",
                 url: "https://media.example.com/download.php",
@@ -1110,7 +1110,7 @@ struct NetworkDetailViewControllerTests {
     func hiddenMediaResponsePreviewReleasesPlayerAndTemporaryFileWhenSelectionClearsBeforeReappearing() async throws {
         let context = makeContext()
         let request = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "1",
                 url: "https://media.example.com/download.php",
@@ -1164,7 +1164,7 @@ struct NetworkDetailViewControllerTests {
         let imageSize = CGSize(width: 600, height: 1400)
         let context = makeContext()
         let request = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "1",
                 url: "https://media.example.com/large.png",
@@ -1232,7 +1232,7 @@ struct NetworkDetailViewControllerTests {
         let imageSize = CGSize(width: 600, height: 1400)
         let context = makeContext()
         let request = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "1",
                 url: "https://media.example.com/large.png",
@@ -1276,7 +1276,7 @@ struct NetworkDetailViewControllerTests {
         let imageSize = CGSize(width: 24, height: 12)
         let context = makeContext()
         let request = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "1",
                 url: "https://media.example.com/icon.png",
@@ -1309,7 +1309,7 @@ struct NetworkDetailViewControllerTests {
     func responsePreviewWaitsForLoadingFinishedBeforeFetching() async throws {
         let context = makeContext()
         let request = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "1",
                 url: "https://example.com/api/data.json",
@@ -1327,7 +1327,7 @@ struct NetworkDetailViewControllerTests {
 
         #expect(request.responseBody.phase == .available)
 
-        applyLoadingFinished(to: context, requestID: "1", timestamp: 3)
+        await applyLoadingFinished(to: context, requestID: "1", timestamp: 3)
 
         let didFetch = await waitUntilRendered(in: viewController) {
             guard case .failed = request.responseBody.phase else {
@@ -1342,7 +1342,7 @@ struct NetworkDetailViewControllerTests {
     func failedResponseBodyDoesNotRefetchFromRendering() async throws {
         let context = makeContext()
         let request = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "1",
                 url: "https://example.com/api/data.json",
@@ -1386,7 +1386,7 @@ struct NetworkDetailViewControllerTests {
     func headersModeDoesNotFetchResponseBody() async throws {
         let context = makeContext()
         let request = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "1",
                 url: "https://example.com/api/data.json",
@@ -1413,7 +1413,7 @@ struct NetworkDetailViewControllerTests {
     func headersModePreservesSelectionWhenRequestUpdateDoesNotChangeDocument() async throws {
         let context = makeContext()
         let request = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "1",
                 url: "https://example.com/api/data.json",
@@ -1438,7 +1438,7 @@ struct NetworkDetailViewControllerTests {
         viewController.headersTextViewForTesting.selectedRangeForTesting = selectedRange
         let assignmentCount = viewController.headersTextViewForTesting.attributedTextAssignmentCountForTesting
 
-        applyDataReceived(
+        await applyDataReceived(
             to: context,
             requestID: "1",
             dataLength: 128,
@@ -1455,7 +1455,7 @@ struct NetworkDetailViewControllerTests {
     func hiddenDetailKeepsHeadersAndRebindsSameSelectedRequestOnReturn() async throws {
         let context = makeContext()
         let request = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "1",
                 url: "https://example.com/api/data.json",
@@ -1478,7 +1478,7 @@ struct NetworkDetailViewControllerTests {
 
         viewController.beginAppearanceTransition(false, animated: false)
         viewController.endAppearanceTransition()
-        applyResponseReceived(
+        await applyResponseReceived(
             to: context,
             requestID: "1",
             url: "https://example.com/api/data.json",
@@ -1502,7 +1502,7 @@ struct NetworkDetailViewControllerTests {
     func requestPreviewRoleDoesNotFetchResponseBodyAfterLoadingFinishes() async throws {
         let context = makeContext()
         let request = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "1",
                 url: "https://example.com/api/data.json",
@@ -1534,7 +1534,7 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(didRenderRequestBody)
 
-        applyLoadingFinished(to: context, requestID: "1", timestamp: 3)
+        await applyLoadingFinished(to: context, requestID: "1", timestamp: 3)
 
         let didStayOnRequestBody = await waitUntilRendered(in: viewController) {
             viewController.currentPreviewRoleForTesting == .request
@@ -1548,7 +1548,7 @@ struct NetworkDetailViewControllerTests {
     func selectedRequestRebindingIgnoresOldRequestMutations() async throws {
         let context = makeContext()
         let firstRequest = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "1",
                 url: "https://example.com/first.json",
@@ -1557,7 +1557,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         let secondRequest = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "2",
                 url: "https://example.com/second.json",
@@ -1583,7 +1583,7 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(didRenderSecond)
 
-        applyResponseReceived(
+        await applyResponseReceived(
             to: context,
             requestID: "1",
             url: "https://example.com/first.json",
@@ -1594,7 +1594,7 @@ struct NetworkDetailViewControllerTests {
 
         #expect(viewController.headersTextViewForTesting.renderedTextForTesting.contains("x-old-request: stale") == false)
 
-        applyResponseReceived(
+        await applyResponseReceived(
             to: context,
             requestID: "2",
             url: "https://example.com/second.json",
@@ -1615,7 +1615,7 @@ struct NetworkDetailViewControllerTests {
     func previewRoleSwitchPreservesInstalledBodyViews() async throws {
         let context = makeContext()
         let request = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "1",
                 url: "https://example.com/api/data.json",
@@ -1661,7 +1661,7 @@ struct NetworkDetailViewControllerTests {
     func rebindingPreviewBodyCancelsOutgoingTextPreparation() async throws {
         let context = makeContext()
         let firstRequest = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "1",
                 url: "https://example.com/api/large.json",
@@ -1670,7 +1670,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         let secondRequest = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "2",
                 url: "https://example.com/api/current.json",
@@ -1709,7 +1709,7 @@ struct NetworkDetailViewControllerTests {
     @Test
     func compactContainerPushesAndPopsDetailFromSelection() async throws {
         let context = makeContext()
-        let request = try #require(applyRequest(to: context, requestID: "1", url: "https://example.com/app.js"))
+        let request = try #require(await applyRequest(to: context, requestID: "1", url: "https://example.com/app.js"))
         let model = NetworkPanelModel(context: context)
         let listViewController = NetworkListViewController(model: model)
         let detailViewController = makeNetworkDetailViewController(model: model)
@@ -1741,7 +1741,7 @@ struct NetworkDetailViewControllerTests {
     func compactProgrammaticPopKeepsDetailSurfaceUntilTransitionCompletes() async throws {
         let context = makeContext()
         let request = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "1",
                 url: "https://example.com/api/data.txt",
@@ -1793,7 +1793,7 @@ struct NetworkDetailViewControllerTests {
     func compactUserPopDiscardsDetailSurfaceWhenSelectionClearsBeforeTransitionCompletes() async throws {
         let context = makeContext()
         let request = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "1",
                 url: "https://example.com/api/data.txt",
@@ -1844,7 +1844,7 @@ struct NetworkDetailViewControllerTests {
     @Test
     func compactContainerCanPushSameRequestAfterBackNavigation() async throws {
         let context = makeContext()
-        _ = try #require(applyRequest(to: context, requestID: "1", url: "https://example.com/app.js"))
+        _ = try #require(await applyRequest(to: context, requestID: "1", url: "https://example.com/app.js"))
         let model = NetworkPanelModel(context: context)
         let listViewController = NetworkListViewController(model: model)
         let detailViewController = makeNetworkDetailViewController(model: model)
@@ -1887,7 +1887,7 @@ struct NetworkDetailViewControllerTests {
     func compactContainerBackNavigationReleasesDetailMediaPreviewResources() async throws {
         let context = makeContext()
         let request = try #require(
-            applyRequest(
+            await applyRequest(
                 to: context,
                 requestID: "1",
                 url: "https://media.example.com/download.php",
@@ -1945,7 +1945,7 @@ struct NetworkDetailViewControllerTests {
     @Test
     func compactContainerPopsDetailWhenSelectedRequestDisappears() async throws {
         let context = makeContext()
-        let request = try #require(applyRequest(to: context, requestID: "1", url: "https://example.com/app.js"))
+        let request = try #require(await applyRequest(to: context, requestID: "1", url: "https://example.com/app.js"))
         let model = NetworkPanelModel(context: context)
         let listViewController = NetworkListViewController(model: model)
         let detailViewController = makeNetworkDetailViewController(model: model)
@@ -1979,7 +1979,7 @@ struct NetworkDetailViewControllerTests {
     @Test
     func visibleListAppliesLiveInsertThroughFetchedResultsTransactions() async throws {
         let context = makeContext()
-        let firstRequest = try #require(applyRequest(
+        let firstRequest = try #require(await applyRequest(
             to: context,
             requestID: "1",
             url: "https://example.com/first.js"
@@ -1994,7 +1994,7 @@ struct NetworkDetailViewControllerTests {
 
         let evaluationCountBeforeInsert = listViewController.displayRequestIDsEvaluationCountForTesting
         let snapshotApplyCountBeforeInsert = listViewController.snapshotApplyCountForTesting
-        let secondRequest = try #require(applyRequest(
+        let secondRequest = try #require(await applyRequest(
             to: context,
             requestID: "2",
             url: "https://example.com/second.js"
@@ -2012,7 +2012,7 @@ struct NetworkDetailViewControllerTests {
     @Test
     func visibleListAppliesDescriptorResetThroughFetchedResultsTransactions() async throws {
         let context = makeContext()
-        _ = try #require(applyRequest(
+        _ = try #require(await applyRequest(
             to: context,
             requestID: "1",
             url: "https://media.example.com/clip.mp4",
@@ -2044,7 +2044,7 @@ struct NetworkDetailViewControllerTests {
     @Test
     func hiddenListDefersSnapshotEvaluationUntilAppearingAgain() async throws {
         let context = makeContext()
-        _ = try #require(applyRequest(
+        _ = try #require(await applyRequest(
             to: context,
             requestID: "1",
             url: "https://media.example.com/clip.mp4",
@@ -2076,7 +2076,7 @@ struct NetworkDetailViewControllerTests {
     @Test
     func hiddenListDefersQueuedSnapshotApplyUntilAppearingAgain() async throws {
         let context = makeContext()
-        let request = try #require(applyRequest(
+        let request = try #require(await applyRequest(
             to: context,
             requestID: "1",
             url: "https://media.example.com/clip.mp4",
@@ -2114,7 +2114,7 @@ struct NetworkDetailViewControllerTests {
     @Test
     func hiddenFilteredListSkipsSnapshotReloadWhenRowsRemainVisible() async throws {
         let context = makeContext()
-        let request = try #require(applyRequest(
+        let request = try #require(await applyRequest(
             to: context,
             requestID: "1",
             url: "https://media.example.com/clip.mp4",
@@ -2139,7 +2139,7 @@ struct NetworkDetailViewControllerTests {
 
         listViewController.beginAppearanceTransition(false, animated: false)
         listViewController.endAppearanceTransition()
-        applyResponseReceived(
+        await applyResponseReceived(
             to: context,
             requestID: "1",
             url: request.url,
@@ -2172,7 +2172,7 @@ struct NetworkDetailViewControllerTests {
     @Test
     func hiddenListSuspendsBoundCellRenderingUntilAppearingAgain() async throws {
         let context = makeContext()
-        let request = try #require(applyRequest(
+        let request = try #require(await applyRequest(
             to: context,
             requestID: "1",
             url: "https://media.example.com/clip.mp4",
@@ -2196,7 +2196,7 @@ struct NetworkDetailViewControllerTests {
         listViewController.endAppearanceTransition()
         #expect(cell.hasActiveRequestObservationForTesting == false)
 
-        applyResponseReceived(
+        await applyResponseReceived(
             to: context,
             requestID: "1",
             url: request.url,
@@ -2248,9 +2248,9 @@ struct NetworkDetailViewControllerTests {
         responseHeaders: [String: String] = ["content-type": "text/javascript"],
         responseMimeType: String = "text/javascript",
         finishes: Bool = true
-    ) -> NetworkRequest? {
+    ) async -> NetworkRequest? {
         let requestID = Network.Request.ID(rawRequestID)
-        context.apply(
+        await context.apply(
             .requestWillBeSent(
                 id: requestID,
                 request: Network.Request(
@@ -2265,7 +2265,7 @@ struct NetworkDetailViewControllerTests {
                 timestamp: 1
             )
         )
-        context.apply(
+        await context.apply(
             .responseReceived(
                 id: requestID,
                 response: Network.Response(
@@ -2282,7 +2282,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         if finishes {
-            context.apply(
+            await context.apply(
                 .loadingFinished(
                     id: requestID,
                     timestamp: 3,
@@ -2300,9 +2300,9 @@ struct NetworkDetailViewControllerTests {
         url: String,
         requestHeaders: [String: String] = [:],
         postData: String? = nil
-    ) -> NetworkRequest? {
+    ) async -> NetworkRequest? {
         let requestID = Network.Request.ID(rawRequestID)
-        context.apply(
+        await context.apply(
             .requestWillBeSent(
                 id: requestID,
                 request: Network.Request(
@@ -2327,9 +2327,9 @@ struct NetworkDetailViewControllerTests {
         responseHeaders: [String: String],
         responseMimeType: String,
         timestamp: Double
-    ) {
+    ) async {
         let requestID = Network.Request.ID(rawRequestID)
-        context.apply(
+        await context.apply(
             .responseReceived(
                 id: requestID,
                 response: Network.Response(
@@ -2352,8 +2352,8 @@ struct NetworkDetailViewControllerTests {
         dataLength: Int,
         encodedDataLength: Int,
         timestamp: Double
-    ) {
-        context.apply(
+    ) async {
+        await context.apply(
             .dataReceived(
                 id: Network.Request.ID(rawRequestID),
                 dataLength: dataLength,
@@ -2367,8 +2367,8 @@ struct NetworkDetailViewControllerTests {
         to context: WebInspectorContext,
         requestID rawRequestID: String,
         timestamp: Double
-    ) {
-        context.apply(
+    ) async {
+        await context.apply(
             .loadingFinished(
                 id: Network.Request.ID(rawRequestID),
                 timestamp: timestamp,

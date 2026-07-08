@@ -14,7 +14,7 @@ struct NetworkPanelModelTests {
 @MainActor
 func displayRequestsApplySearchFilterAndNewestFirstOrder() async throws {
     let context = makeContext()
-    applyRequest(
+    await applyRequest(
         to: context,
         requestID: "1",
         url: "https://example.com/index.html",
@@ -22,7 +22,7 @@ func displayRequestsApplySearchFilterAndNewestFirstOrder() async throws {
         mimeType: "text/html",
         timestamp: 1
     )
-    let scriptID = applyRequest(
+    let scriptID = await applyRequest(
         to: context,
         requestID: "2",
         url: "https://cdn.example.com/app.js",
@@ -30,7 +30,7 @@ func displayRequestsApplySearchFilterAndNewestFirstOrder() async throws {
         mimeType: "text/javascript",
         timestamp: 2
     )
-    applyRequest(
+    await applyRequest(
         to: context,
         requestID: "3",
         url: "https://cdn.example.com/photo.png",
@@ -50,7 +50,7 @@ func displayRequestsApplySearchFilterAndNewestFirstOrder() async throws {
 @MainActor
 func clearAvailabilityUsesUnfilteredRequestsWhenFiltersHideEveryRequest() async throws {
     let context = makeContext()
-    let requestID = applyRequest(
+    let requestID = await applyRequest(
         to: context,
         requestID: "1",
         url: "https://cdn.example.com/app.js",
@@ -90,7 +90,7 @@ func clearAvailabilityUsesUnfilteredRequestsWhenFiltersHideEveryRequest() async 
 @MainActor
 func selectedRequestUsesUnfilteredContextWhenFiltersHideRequest() async throws {
     let context = makeContext()
-    let requestID = applyRequest(
+    let requestID = await applyRequest(
         to: context,
         requestID: "1",
         url: "https://cdn.example.com/app.js",
@@ -113,7 +113,7 @@ func selectedRequestUsesUnfilteredContextWhenFiltersHideRequest() async throws {
 @MainActor
 func selectedRequestInvalidatesWhenUnfilteredRequestDisappears() async throws {
     let context = makeContext()
-    let requestID = applyRequest(
+    let requestID = await applyRequest(
         to: context,
         requestID: "1",
         url: "https://cdn.example.com/app.js",
@@ -165,7 +165,7 @@ func selectedRequestInvalidatesWhenUnfilteredRequestDisappears() async throws {
 @MainActor
 func requestDisplayUsesReadableURLDisplayName(url: String, expectedDisplayName: String) async throws {
     let context = makeContext()
-    let requestID = applyRequest(
+    let requestID = await applyRequest(
         to: context,
         requestID: "1",
         url: url,
@@ -182,7 +182,7 @@ func requestDisplayUsesReadableURLDisplayName(url: String, expectedDisplayName: 
 @MainActor
 func requestDisplayUsesEncodingFallbackForURLDerivedLabelsAndFilters() async throws {
     let context = makeContext()
-    let spacedURLRequestID = applyRequest(
+    let spacedURLRequestID = await applyRequest(
         to: context,
         requestID: "1",
         url: "https://cdn.example.com/photo 1.png",
@@ -190,7 +190,7 @@ func requestDisplayUsesEncodingFallbackForURLDerivedLabelsAndFilters() async thr
         mimeType: nil,
         timestamp: 1
     )
-    let invalidEscapeRequestID = applyRequest(
+    let invalidEscapeRequestID = await applyRequest(
         to: context,
         requestID: "2",
         url: "https://cdn.example.com/photo%ZZ.png",
@@ -215,7 +215,7 @@ func requestDisplayUsesEncodingFallbackForURLDerivedLabelsAndFilters() async thr
 @MainActor
 func mediaFilterIncludesPreviewableMediaResponses() async throws {
     let context = makeContext()
-    let imageID = applyRequest(
+    let imageID = await applyRequest(
         to: context,
         requestID: "1",
         url: "https://cdn.example.com/photo.png",
@@ -223,7 +223,7 @@ func mediaFilterIncludesPreviewableMediaResponses() async throws {
         mimeType: "image/png",
         timestamp: 1
     )
-    let movieID = applyRequest(
+    let movieID = await applyRequest(
         to: context,
         requestID: "2",
         url: "https://cdn.example.com/movie.mp4",
@@ -231,7 +231,7 @@ func mediaFilterIncludesPreviewableMediaResponses() async throws {
         mimeType: "video/mp4",
         timestamp: 2
     )
-    let avifResponseID = applyRequest(
+    let avifResponseID = await applyRequest(
         to: context,
         requestID: "3",
         url: "https://api.example.com/avatar",
@@ -239,7 +239,7 @@ func mediaFilterIncludesPreviewableMediaResponses() async throws {
         mimeType: "image/avif",
         timestamp: 3
     )
-    let avifURLID = applyRequest(
+    let avifURLID = await applyRequest(
         to: context,
         requestID: "4",
         url: "https://api.example.com/avatar.avif",
@@ -247,7 +247,7 @@ func mediaFilterIncludesPreviewableMediaResponses() async throws {
         mimeType: "application/octet-stream",
         timestamp: 4
     )
-    let hlsID = applyRequest(
+    let hlsID = await applyRequest(
         to: context,
         requestID: "5",
         url: "https://media.example.com/live/master.m3u8",
@@ -255,7 +255,7 @@ func mediaFilterIncludesPreviewableMediaResponses() async throws {
         mimeType: "application/vnd.apple.mpegurl",
         timestamp: 5
     )
-    let mp4URLID = applyRequest(
+    let mp4URLID = await applyRequest(
         to: context,
         requestID: "6",
         url: "https://media.example.com/clip.mp4",
@@ -263,7 +263,7 @@ func mediaFilterIncludesPreviewableMediaResponses() async throws {
         mimeType: "application/octet-stream",
         timestamp: 6
     )
-    let mp3URLID = applyRequest(
+    let mp3URLID = await applyRequest(
         to: context,
         requestID: "7",
         url: "https://media.example.com/song.mp3",
@@ -271,7 +271,7 @@ func mediaFilterIncludesPreviewableMediaResponses() async throws {
         mimeType: "application/octet-stream",
         timestamp: 7
     )
-    let apngResponseID = applyRequest(
+    let apngResponseID = await applyRequest(
         to: context,
         requestID: "8",
         url: "https://cdn.example.com/animated.apng",
@@ -279,7 +279,7 @@ func mediaFilterIncludesPreviewableMediaResponses() async throws {
         mimeType: "image/apng",
         timestamp: 8
     )
-    let svgID = applyRequest(
+    let svgID = await applyRequest(
         to: context,
         requestID: "9",
         url: "https://cdn.example.com/icon.svg",
@@ -287,7 +287,7 @@ func mediaFilterIncludesPreviewableMediaResponses() async throws {
         mimeType: "image/svg+xml",
         timestamp: 9
     )
-    applyRequest(
+    await applyRequest(
         to: context,
         requestID: "10",
         url: "https://cdn.example.com/font.woff2",
@@ -295,7 +295,7 @@ func mediaFilterIncludesPreviewableMediaResponses() async throws {
         mimeType: "font/woff2",
         timestamp: 10
     )
-    applyRequest(
+    await applyRequest(
         to: context,
         requestID: "11",
         url: "https://api.example.com/data.json",
@@ -303,7 +303,7 @@ func mediaFilterIncludesPreviewableMediaResponses() async throws {
         mimeType: "application/json",
         timestamp: 11
     )
-    applyRequest(
+    await applyRequest(
         to: context,
         requestID: "12",
         url: "https://cdn.example.com/app.js",
@@ -311,7 +311,7 @@ func mediaFilterIncludesPreviewableMediaResponses() async throws {
         mimeType: "text/javascript",
         timestamp: 12
     )
-    applyRequest(
+    await applyRequest(
         to: context,
         requestID: "13",
         url: "https://cdn.example.com/player.mp4",
@@ -319,7 +319,7 @@ func mediaFilterIncludesPreviewableMediaResponses() async throws {
         mimeType: "text/javascript",
         timestamp: 13
     )
-    applyRequest(
+    await applyRequest(
         to: context,
         requestID: "14",
         url: "https://cdn.example.com/theme.png",
@@ -327,7 +327,7 @@ func mediaFilterIncludesPreviewableMediaResponses() async throws {
         mimeType: "text/css",
         timestamp: 14
     )
-    applyRequest(
+    await applyRequest(
         to: context,
         requestID: "15",
         url: "https://api.example.com/download",
@@ -335,7 +335,7 @@ func mediaFilterIncludesPreviewableMediaResponses() async throws {
         mimeType: "application/octet-stream",
         timestamp: 15
     )
-    let apngURLID = applyRequest(
+    let apngURLID = await applyRequest(
         to: context,
         requestID: "16",
         url: "https://cdn.example.com/animated.apng",
@@ -343,7 +343,7 @@ func mediaFilterIncludesPreviewableMediaResponses() async throws {
         mimeType: "application/octet-stream",
         timestamp: 16
     )
-    applyRequest(
+    await applyRequest(
         to: context,
         requestID: "17",
         url: "https://cdn.example.com/player.mp4",
@@ -351,14 +351,14 @@ func mediaFilterIncludesPreviewableMediaResponses() async throws {
         mimeType: "application/octet-stream",
         timestamp: 17
     )
-    applyPendingRequest(
+    await applyPendingRequest(
         to: context,
         requestID: "18",
         url: "https://api.example.com/pending-avatar.png",
         resourceType: .xhr,
         timestamp: 18
     )
-    let headerMediaID = applyRequest(
+    let headerMediaID = await applyRequest(
         to: context,
         requestID: "19",
         url: "https://api.example.com/thumbnail",
@@ -444,7 +444,7 @@ func mediaPreviewSupportClassifiesHLSPlaylists() {
 @MainActor
 func displayResourceFilterUpdatesWhenResponseMIMEBecomesPreviewable() async throws {
     let context = makeContext()
-    let requestID = applyPendingRequest(
+    let requestID = await applyPendingRequest(
         to: context,
         requestID: "1",
         url: "https://api.example.com/avatar",
@@ -456,7 +456,7 @@ func displayResourceFilterUpdatesWhenResponseMIMEBecomesPreviewable() async thro
 
     #expect(model.displayRequestIDs.isEmpty)
 
-    applyResponseReceived(
+    await applyResponseReceived(
         to: context,
         requestID: "1",
         url: "https://api.example.com/avatar",
@@ -475,7 +475,7 @@ func displayResourceFilterUpdatesWhenResponseMIMEBecomesPreviewable() async thro
 @MainActor
 func requestStatusSeverityUpdatesWhenResponseChanges() async throws {
     let context = makeContext()
-    let requestID = applyRequest(
+    let requestID = await applyRequest(
         to: context,
         requestID: "1",
         url: "https://api.example.com/data.json",
@@ -489,7 +489,7 @@ func requestStatusSeverityUpdatesWhenResponseChanges() async throws {
 
     #expect(request.statusSeverity == .error)
 
-    applyResponseReceived(
+    await applyResponseReceived(
         to: context,
         requestID: "1",
         url: "https://api.example.com/data.json",
@@ -506,7 +506,7 @@ func requestStatusSeverityUpdatesWhenResponseChanges() async throws {
 @MainActor
 func displaySearchFieldsUpdateWhenRequestChanges() async throws {
     let context = makeContext()
-    let requestID = applyPendingRequest(
+    let requestID = await applyPendingRequest(
         to: context,
         requestID: "1",
         url: "https://api.example.com/old",
@@ -519,7 +519,7 @@ func displaySearchFieldsUpdateWhenRequestChanges() async throws {
     model.setSearchText("new-endpoint")
     #expect(model.displayRequestIDs.isEmpty)
 
-    applyRedirectRequest(
+    await applyRedirectRequest(
         to: context,
         requestID: "1",
         url: "https://api.example.com/new-endpoint",
@@ -535,7 +535,7 @@ func displaySearchFieldsUpdateWhenRequestChanges() async throws {
     model.setSearchText("json")
     #expect(model.displayRequestIDs.isEmpty)
 
-    applyResponseReceived(
+    await applyResponseReceived(
         to: context,
         requestID: "1",
         url: "https://api.example.com/new-endpoint",
@@ -554,14 +554,14 @@ func displaySearchFieldsUpdateWhenRequestChanges() async throws {
 @MainActor
 func requestFileTypeAndSearchUpdateWhenRawMIMETypeAppears() async throws {
     let context = makeContext()
-    let requestID = applyPendingRequest(
+    let requestID = await applyPendingRequest(
         to: context,
         requestID: "1",
         url: "https://api.example.com/resource",
         resourceType: .xhr,
         timestamp: 1
     )
-    applyResponseReceived(
+    await applyResponseReceived(
         to: context,
         requestID: "1",
         url: "https://api.example.com/resource",
@@ -577,7 +577,7 @@ func requestFileTypeAndSearchUpdateWhenRawMIMETypeAppears() async throws {
     model.setSearchText("json")
     #expect(model.displayRequestIDs.isEmpty)
 
-    applyResponseReceived(
+    await applyResponseReceived(
         to: context,
         requestID: "1",
         url: "https://api.example.com/resource",
@@ -594,7 +594,7 @@ func requestFileTypeAndSearchUpdateWhenRawMIMETypeAppears() async throws {
 @MainActor
 func displayRequestsIgnoreContentOnlyUpdatesDuringActiveFiltering() async throws {
     let context = makeContext()
-    let requestID = applyRequest(
+    let requestID = await applyRequest(
         to: context,
         requestID: "1",
         url: "https://media.example.com/clip.mp4",
@@ -608,8 +608,8 @@ func displayRequestsIgnoreContentOnlyUpdatesDuringActiveFiltering() async throws
 
     #expect(model.displayRequestIDs == [requestID])
 
-    applyDataReceived(to: context, requestID: "1", dataLength: 1024, encodedDataLength: 512, timestamp: 2)
-    applyLoadingFinished(to: context, requestID: "1", timestamp: 3)
+    await applyDataReceived(to: context, requestID: "1", dataLength: 1024, encodedDataLength: 512, timestamp: 2)
+    await applyLoadingFinished(to: context, requestID: "1", timestamp: 3)
 
     #expect(model.displayRequestIDs == [requestID])
 }
@@ -618,7 +618,7 @@ func displayRequestsIgnoreContentOnlyUpdatesDuringActiveFiltering() async throws
 @MainActor
 func displayRequestsUpdateWhenCriteriaChanges() async throws {
     let context = makeContext()
-    let scriptID = applyRequest(
+    let scriptID = await applyRequest(
         to: context,
         requestID: "1",
         url: "https://cdn.example.com/app.js",
@@ -626,7 +626,7 @@ func displayRequestsUpdateWhenCriteriaChanges() async throws {
         mimeType: "text/javascript",
         timestamp: 1
     )
-    applyRequest(
+    await applyRequest(
         to: context,
         requestID: "2",
         url: "https://cdn.example.com/photo.png",
@@ -647,7 +647,7 @@ func displayRequestsUpdateWhenCriteriaChanges() async throws {
 @MainActor
 func displayRequestsClearAfterReset() async throws {
     let context = makeContext()
-    applyRequest(
+    await applyRequest(
         to: context,
         requestID: "1",
         url: "https://cdn.example.com/app.js",
@@ -669,7 +669,7 @@ func displayRequestsClearAfterReset() async throws {
 @MainActor
 func displayRequestsUpdateWhenResourceCategoryChanges() async throws {
     let context = makeContext()
-    let jsonID = applyRequest(
+    let jsonID = await applyRequest(
         to: context,
         requestID: "1",
         url: "https://api.example.com/data.json",
@@ -677,7 +677,7 @@ func displayRequestsUpdateWhenResourceCategoryChanges() async throws {
         mimeType: "application/json",
         timestamp: 1
     )
-    let mediaID = applyRequest(
+    let mediaID = await applyRequest(
         to: context,
         requestID: "2",
         url: "https://media.example.com/clip.mp4",
@@ -690,10 +690,10 @@ func displayRequestsUpdateWhenResourceCategoryChanges() async throws {
 
     #expect(model.displayRequestIDs == [mediaID])
 
-    applyDataReceived(to: context, requestID: "1", dataLength: 1024, encodedDataLength: 512, timestamp: 3)
+    await applyDataReceived(to: context, requestID: "1", dataLength: 1024, encodedDataLength: 512, timestamp: 3)
     #expect(model.displayRequestIDs == [mediaID])
 
-    applyResponseReceived(
+    await applyResponseReceived(
         to: context,
         requestID: "1",
         url: "https://api.example.com/data.mp4",
@@ -708,7 +708,7 @@ func displayRequestsUpdateWhenResourceCategoryChanges() async throws {
 @MainActor
 func displayRequestIDsUseDataKitClassificationForMediaFiltering() async throws {
     let context = makeContext()
-    let requestID = applyRequest(
+    let requestID = await applyRequest(
         to: context,
         requestID: "1",
         url: "https://media.example.com/clip.mp4",
@@ -733,7 +733,7 @@ func displayRequestIDsUseDataKitClassificationForMediaFiltering() async throws {
 @MainActor
 func clearRequestsClearsSelectionButPreservesDisplayCriteria() async throws {
     let context = makeContext()
-    let requestID = applyRequest(
+    let requestID = await applyRequest(
         to: context,
         requestID: "1",
         url: "https://cdn.example.com/app.js",
@@ -759,7 +759,7 @@ func clearRequestsClearsSelectionButPreservesDisplayCriteria() async throws {
 @MainActor
 func responseBodyFetchMovesUnavailablePreviewContextToFailedPhase() async throws {
     let context = makeContext()
-    let requestID = applyRequest(
+    let requestID = await applyRequest(
         to: context,
         requestID: "1",
         url: "https://api.example.com/data.json",
@@ -800,8 +800,8 @@ private func applyRequest(
     status: Int = 200,
     statusText: String = "OK",
     timestamp: Double
-) -> NetworkRequest.ID {
-    let requestID = applyPendingRequest(
+) async -> NetworkRequest.ID {
+    let requestID = await applyPendingRequest(
         to: context,
         requestID: rawRequestID,
         url: url,
@@ -809,7 +809,7 @@ private func applyRequest(
         resourceType: resourceType,
         timestamp: timestamp
     )
-    applyResponseReceived(
+    await applyResponseReceived(
         to: context,
         requestID: rawRequestID,
         url: url,
@@ -820,7 +820,7 @@ private func applyRequest(
         statusText: statusText,
         timestamp: timestamp + 0.1
     )
-    applyLoadingFinished(to: context, requestID: rawRequestID, timestamp: timestamp + 0.2)
+    await applyLoadingFinished(to: context, requestID: rawRequestID, timestamp: timestamp + 0.2)
     return requestID
 }
 
@@ -833,9 +833,9 @@ private func applyPendingRequest(
     method: String = "GET",
     resourceType: Network.ResourceType,
     timestamp: Double
-) -> NetworkRequest.ID {
+) async -> NetworkRequest.ID {
     let requestID = Network.Request.ID(rawRequestID)
-    context.apply(
+    await context.apply(
         .requestWillBeSent(
             id: requestID,
             request: Network.Request(id: requestID, url: url, method: method),
@@ -856,9 +856,9 @@ private func applyRedirectRequest(
     resourceType: Network.ResourceType,
     redirectURL: String,
     timestamp: Double
-) {
+) async {
     let requestID = Network.Request.ID(rawRequestID)
-    context.apply(
+    await context.apply(
         .requestWillBeSent(
             id: requestID,
             request: Network.Request(id: requestID, url: url, method: method),
@@ -880,9 +880,9 @@ private func applyResponseReceived(
     status: Int = 200,
     statusText: String = "OK",
     timestamp: Double
-) {
+) async {
     let requestID = Network.Request.ID(rawRequestID)
-    context.apply(
+    await context.apply(
         .responseReceived(
             id: requestID,
             response: Network.Response(
@@ -906,8 +906,8 @@ private func applyDataReceived(
     dataLength: Int,
     encodedDataLength: Int,
     timestamp: Double
-) {
-    context.apply(
+) async {
+    await context.apply(
         .dataReceived(
             id: Network.Request.ID(rawRequestID),
             dataLength: dataLength,
@@ -922,8 +922,8 @@ private func applyLoadingFinished(
     to context: WebInspectorContext,
     requestID rawRequestID: String,
     timestamp: Double
-) {
-    context.apply(
+) async {
+    await context.apply(
         .loadingFinished(
             id: Network.Request.ID(rawRequestID),
             timestamp: timestamp,

@@ -3140,7 +3140,7 @@ func setChildNodesReplacementPublishesSelectionClearingForRemovedDescendant() as
 
 @MainActor
 @Test
-func fetchedResultsControllerPublishesNetworkInsertAndUpdateTransactions() async throws {
+func fetchedResultsControllerPublishesNetworkTopologyTransactionsOnly() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
@@ -3183,8 +3183,7 @@ func fetchedResultsControllerPublishesNetworkInsertAndUpdateTransactions() async
 
     try await waitUntil { request.status == 200 }
     #expect(results.items.first === request)
-    try await recorder.waitForTransactionCount(2)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: modelID, indexPath: firstIndexPath)])
+    #expect(recorder.transactions.count == 1)
 
     await runtime.backend.emit(
         .dataReceived(id: requestID, dataLength: 7, encodedDataLength: 3, timestamp: 3),
@@ -3193,8 +3192,7 @@ func fetchedResultsControllerPublishesNetworkInsertAndUpdateTransactions() async
 
     try await waitUntil { request.decodedDataLength == 7 && request.encodedDataLength == 3 }
     #expect(results.items.first === request)
-    try await recorder.waitForTransactionCount(3)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: modelID, indexPath: firstIndexPath)])
+    #expect(recorder.transactions.count == 1)
 
     await runtime.backend.emit(
         .loadingFinished(id: requestID, timestamp: 4, sourceMapURL: nil, metrics: nil),
@@ -3203,8 +3201,7 @@ func fetchedResultsControllerPublishesNetworkInsertAndUpdateTransactions() async
 
     try await waitUntil { request.state == .finished }
     #expect(results.items.first === request)
-    try await recorder.waitForTransactionCount(4)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: modelID, indexPath: firstIndexPath)])
+    #expect(recorder.transactions.count == 1)
 
     await runtime.backend.emit(
         .requestServedFromMemoryCache(
@@ -3218,8 +3215,7 @@ func fetchedResultsControllerPublishesNetworkInsertAndUpdateTransactions() async
 
     try await waitUntil { request.finishedOrFailedTimestamp == 5 }
     #expect(results.items.first === request)
-    try await recorder.waitForTransactionCount(5)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: modelID, indexPath: firstIndexPath)])
+    #expect(recorder.transactions.count == 1)
 
     let failedRequestID = Network.Request.ID("controller-failed-request")
     let failedModelID = NetworkRequest.ID(failedRequestID)
@@ -3235,7 +3231,7 @@ func fetchedResultsControllerPublishesNetworkInsertAndUpdateTransactions() async
         target: target
     )
 
-    try await recorder.waitForTransactionCount(6)
+    try await recorder.waitForTransactionCount(2)
     #expect(recorder.transactions.last?.itemChanges == [.insert(itemID: failedModelID, indexPath: failedIndexPath)])
     let failedRequest = try #require(results.items.last)
 
@@ -3251,8 +3247,7 @@ func fetchedResultsControllerPublishesNetworkInsertAndUpdateTransactions() async
         return false
     }
     #expect(results.items.last === failedRequest)
-    try await recorder.waitForTransactionCount(7)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: failedModelID, indexPath: failedIndexPath)])
+    #expect(recorder.transactions.count == 2)
 
     let socketRequestID = Network.Request.ID("controller-socket-request")
     let socketModelID = NetworkRequest.ID(socketRequestID)
@@ -3262,7 +3257,7 @@ func fetchedResultsControllerPublishesNetworkInsertAndUpdateTransactions() async
         target: target
     )
 
-    try await recorder.waitForTransactionCount(8)
+    try await recorder.waitForTransactionCount(3)
     #expect(recorder.transactions.last?.itemChanges == [.insert(itemID: socketModelID, indexPath: socketIndexPath)])
     let socketRequest = try #require(results.items.last)
 
@@ -3282,8 +3277,7 @@ func fetchedResultsControllerPublishesNetworkInsertAndUpdateTransactions() async
 
     try await waitUntil { socketRequest.webSocket?.handshakeRequest?.headers["Upgrade"] == "websocket" }
     #expect(results.items.last === socketRequest)
-    try await recorder.waitForTransactionCount(9)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: socketModelID, indexPath: socketIndexPath)])
+    #expect(recorder.transactions.count == 3)
 
     await runtime.backend.emit(
         .webSocket(.handshakeResponse(
@@ -3296,8 +3290,7 @@ func fetchedResultsControllerPublishesNetworkInsertAndUpdateTransactions() async
 
     try await waitUntil { socketRequest.status == 101 }
     #expect(results.items.last === socketRequest)
-    try await recorder.waitForTransactionCount(10)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: socketModelID, indexPath: socketIndexPath)])
+    #expect(recorder.transactions.count == 3)
 
     await runtime.backend.emit(
         .webSocket(.frameSent(
@@ -3310,8 +3303,7 @@ func fetchedResultsControllerPublishesNetworkInsertAndUpdateTransactions() async
 
     try await waitUntil { socketRequest.webSocket?.frames.count == 1 }
     #expect(results.items.last === socketRequest)
-    try await recorder.waitForTransactionCount(11)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: socketModelID, indexPath: socketIndexPath)])
+    #expect(recorder.transactions.count == 3)
 
     await runtime.backend.emit(
         .webSocket(.frameReceived(
@@ -3324,8 +3316,7 @@ func fetchedResultsControllerPublishesNetworkInsertAndUpdateTransactions() async
 
     try await waitUntil { socketRequest.webSocket?.frames.count == 2 }
     #expect(results.items.last === socketRequest)
-    try await recorder.waitForTransactionCount(12)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: socketModelID, indexPath: socketIndexPath)])
+    #expect(recorder.transactions.count == 3)
 
     await runtime.backend.emit(
         .webSocket(.error(id: socketRequestID, message: "decode failed", timestamp: 12)),
@@ -3334,8 +3325,7 @@ func fetchedResultsControllerPublishesNetworkInsertAndUpdateTransactions() async
 
     try await waitUntil { socketRequest.webSocket?.frames.count == 3 }
     #expect(results.items.last === socketRequest)
-    try await recorder.waitForTransactionCount(13)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: socketModelID, indexPath: socketIndexPath)])
+    #expect(recorder.transactions.count == 3)
 
     await runtime.backend.emit(
         .webSocket(.closed(id: socketRequestID, timestamp: 13)),
@@ -3344,8 +3334,7 @@ func fetchedResultsControllerPublishesNetworkInsertAndUpdateTransactions() async
 
     try await waitUntil { socketRequest.state == .finished && socketRequest.webSocket?.readyState == .closed }
     #expect(results.items.last === socketRequest)
-    try await recorder.waitForTransactionCount(14)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: socketModelID, indexPath: socketIndexPath)])
+    #expect(recorder.transactions.count == 3)
 }
 
 @MainActor
@@ -3406,23 +3395,89 @@ func sectionedNetworkResultsPublishTopologyWhenSectionKeyChanges() async throws 
 
 @MainActor
 @Test
+func sectionedNetworkResultsPublishItemMoveWhenSectionKeyChangesBetweenExistingSections() async throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(sectionBy: \.resourceCategory)
+    let controller = WebInspectorFetchedResultsController(fetchedResults: results)
+    let recorder = FetchedResultsTransactionRecorder(stream: controller.transactions)
+    defer { recorder.cancel() }
+    try await recorder.waitUntilStarted()
+
+    let imageID = Network.Request.ID("existing-image-section")
+    let movingID = Network.Request.ID("moving-xhr-to-image")
+    let remainingXHRID = Network.Request.ID("remaining-xhr-section")
+    await context.apply(.requestWillBeSent(
+        id: imageID,
+        request: Network.Request(id: imageID, url: "https://cdn.example.com/photo.png", method: "GET"),
+        resourceType: .image,
+        redirectResponse: nil,
+        timestamp: 1
+    ))
+    await context.apply(.requestWillBeSent(
+        id: movingID,
+        request: Network.Request(id: movingID, url: "https://api.example.com/avatar", method: "GET"),
+        resourceType: .xhr,
+        redirectResponse: nil,
+        timestamp: 2
+    ))
+    await context.apply(.requestWillBeSent(
+        id: remainingXHRID,
+        request: Network.Request(id: remainingXHRID, url: "https://api.example.com/data", method: "GET"),
+        resourceType: .xhr,
+        redirectResponse: nil,
+        timestamp: 3
+    ))
+    try await recorder.waitForTransactionCount(3)
+
+    let movingModelID = NetworkRequest.ID(movingID)
+    await context.apply(.responseReceived(
+        id: movingID,
+        response: Network.Response(
+            url: "https://api.example.com/avatar",
+            status: 200,
+            mimeType: "image/png"
+        ),
+        resourceType: .xhr,
+        timestamp: 4
+    ))
+
+    try await recorder.waitForTransactionCount(4)
+    #expect(controller.snapshot.sections.map(\.id) == [
+        WebInspectorFetchSectionID(rawValue: "image"),
+        WebInspectorFetchSectionID(rawValue: "xhrFetch"),
+    ])
+    #expect(controller.snapshot.sections.map(\.itemIDs) == [
+        [NetworkRequest.ID(imageID), movingModelID],
+        [NetworkRequest.ID(remainingXHRID)],
+    ])
+    #expect(recorder.transactions.last?.itemChanges == [
+        .move(
+            itemID: movingModelID,
+            from: WebInspectorFetchedResultsIndexPath(section: 1, item: 0),
+            to: WebInspectorFetchedResultsIndexPath(section: 0, item: 1)
+        ),
+    ])
+}
+
+@MainActor
+@Test
 func networkFetchDescriptorAppliesPredicateSortAndLimit() async throws {
     let context = WebInspectorContext.preview(isolation: MainActor.shared)
-    context.apply(.requestWillBeSent(
+    await context.apply(.requestWillBeSent(
         id: Network.Request.ID("graphql-old"),
         request: Network.Request(id: Network.Request.ID("graphql-old"), url: "https://api.example.com/graphql?older", method: "POST"),
         resourceType: .fetch,
         redirectResponse: nil,
         timestamp: 1
     ))
-    context.apply(.requestWillBeSent(
+    await context.apply(.requestWillBeSent(
         id: Network.Request.ID("image"),
         request: Network.Request(id: Network.Request.ID("image"), url: "https://static.example.com/photo.png", method: "GET"),
         resourceType: .image,
         redirectResponse: nil,
         timestamp: 2
     ))
-    context.apply(.requestWillBeSent(
+    await context.apply(.requestWillBeSent(
         id: Network.Request.ID("graphql-new"),
         request: Network.Request(id: Network.Request.ID("graphql-new"), url: "https://api.example.com/graphql?newer", method: "POST"),
         resourceType: .fetch,
@@ -3448,23 +3503,23 @@ func networkFetchDescriptorAppliesPredicateSortAndLimit() async throws {
 
 @MainActor
 @Test
-func networkFetchDescriptorFallsBackForUnsupportedPublicPredicates() async throws {
+func networkFetchDescriptorPlansURLAndMIMETypePredicates() async throws {
     let context = WebInspectorContext.preview(isolation: MainActor.shared)
-    context.apply(.requestWillBeSent(
+    await context.apply(.requestWillBeSent(
         id: Network.Request.ID("api"),
         request: Network.Request(id: Network.Request.ID("api"), url: "https://api.example.com/data.json", method: "GET"),
         resourceType: .fetch,
         redirectResponse: nil,
         timestamp: 1
     ))
-    context.apply(.requestWillBeSent(
+    await context.apply(.requestWillBeSent(
         id: Network.Request.ID("image"),
         request: Network.Request(id: Network.Request.ID("image"), url: "https://static.example.com/photo", method: "GET"),
         resourceType: .image,
         redirectResponse: nil,
         timestamp: 2
     ))
-    context.apply(.responseReceived(
+    await context.apply(.responseReceived(
         id: Network.Request.ID("image"),
         response: Network.Response(
             url: "https://static.example.com/photo",
@@ -3474,7 +3529,7 @@ func networkFetchDescriptorFallsBackForUnsupportedPublicPredicates() async throw
         resourceType: .image,
         timestamp: 3
     ))
-    context.apply(.requestWillBeSent(
+    await context.apply(.requestWillBeSent(
         id: Network.Request.ID("script"),
         request: Network.Request(id: Network.Request.ID("script"), url: "https://cdn.example.com/app.js", method: "GET"),
         resourceType: .script,
@@ -3508,7 +3563,7 @@ func clearNetworkRequestsResetsDescriptorBackedQueryState() async throws {
     let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: descriptor)
 
     for (index, name) in ["stale-a", "stale-b", "stale-c"].enumerated() {
-        context.apply(.requestWillBeSent(
+        await context.apply(.requestWillBeSent(
             id: Network.Request.ID(name),
             request: Network.Request(id: Network.Request.ID(name), url: "https://example.com/\(name)", method: "GET"),
             resourceType: .fetch,
@@ -3525,7 +3580,7 @@ func clearNetworkRequestsResetsDescriptorBackedQueryState() async throws {
     #expect(results.items.isEmpty)
 
     let freshID = Network.Request.ID("fresh-after-clear")
-    context.apply(.requestWillBeSent(
+    await context.apply(.requestWillBeSent(
         id: freshID,
         request: Network.Request(id: freshID, url: "https://example.com/fresh", method: "GET"),
         resourceType: .fetch,
@@ -3590,7 +3645,7 @@ func networkFetchDescriptorOrdersEqualTimestampsByNewestInsertionFirst() async t
     let firstModelID = NetworkRequest.ID(firstID)
     let secondModelID = NetworkRequest.ID(secondID)
 
-    context.apply(.requestWillBeSent(
+    await context.apply(.requestWillBeSent(
         id: firstID,
         request: Network.Request(id: firstID, url: "https://example.com/first", method: "GET"),
         resourceType: .fetch,
@@ -3600,7 +3655,7 @@ func networkFetchDescriptorOrdersEqualTimestampsByNewestInsertionFirst() async t
     try await recorder.waitForTransactionCount(1)
     #expect(results.items.map(\.id) == [firstModelID])
 
-    context.apply(.requestWillBeSent(
+    await context.apply(.requestWillBeSent(
         id: secondID,
         request: Network.Request(id: secondID, url: "https://example.com/second", method: "GET"),
         resourceType: .fetch,
@@ -3612,11 +3667,6 @@ func networkFetchDescriptorOrdersEqualTimestampsByNewestInsertionFirst() async t
     #expect(results.items.map(\.id) == [secondModelID, firstModelID])
     #expect(recorder.transactions.last?.itemChanges == [
         .insert(itemID: secondModelID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)),
-        .move(
-            itemID: firstModelID,
-            from: WebInspectorFetchedResultsIndexPath(section: 0, item: 0),
-            to: WebInspectorFetchedResultsIndexPath(section: 0, item: 1)
-        ),
     ])
 }
 
@@ -3637,7 +3687,7 @@ func networkFetchDescriptorPublishesPredicateEnterAndLeave() async throws {
 
     let requestID = Network.Request.ID("status-request")
     let modelID = NetworkRequest.ID(requestID)
-    context.apply(.requestWillBeSent(
+    await context.apply(.requestWillBeSent(
         id: requestID,
         request: Network.Request(id: requestID, url: "https://api.example.com/status", method: "GET"),
         resourceType: .fetch,
@@ -3650,7 +3700,7 @@ func networkFetchDescriptorPublishesPredicateEnterAndLeave() async throws {
     #expect(results.items.isEmpty)
     #expect(recorder.transactions.isEmpty)
 
-    context.apply(.responseReceived(
+    await context.apply(.responseReceived(
         id: requestID,
         response: Network.Response(url: "https://api.example.com/status", status: 500),
         resourceType: .fetch,
@@ -3663,7 +3713,7 @@ func networkFetchDescriptorPublishesPredicateEnterAndLeave() async throws {
         .insert(itemID: modelID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)),
     ])
 
-    context.apply(.responseReceived(
+    await context.apply(.responseReceived(
         id: requestID,
         response: Network.Response(url: "https://api.example.com/status", status: 200),
         resourceType: .fetch,
@@ -3683,28 +3733,28 @@ func networkFetchDescriptorPublishesPredicateEnterAndLeave() async throws {
 func networkFetchDescriptorSupportsResourceCategorySets() async throws {
     let context = WebInspectorContext.preview(isolation: MainActor.shared)
 
-    context.apply(.requestWillBeSent(
+    await context.apply(.requestWillBeSent(
         id: Network.Request.ID("pending-avatar"),
         request: Network.Request(id: Network.Request.ID("pending-avatar"), url: "https://api.example.com/avatar.png", method: "GET"),
         resourceType: .xhr,
         redirectResponse: nil,
         timestamp: 1
     ))
-    context.apply(.requestWillBeSent(
+    await context.apply(.requestWillBeSent(
         id: Network.Request.ID("script"),
         request: Network.Request(id: Network.Request.ID("script"), url: "https://cdn.example.com/app.js", method: "GET"),
         resourceType: .script,
         redirectResponse: nil,
         timestamp: 2
     ))
-    context.apply(.requestWillBeSent(
+    await context.apply(.requestWillBeSent(
         id: Network.Request.ID("image"),
         request: Network.Request(id: Network.Request.ID("image"), url: "https://cdn.example.com/photo.png", method: "GET"),
         resourceType: .image,
         redirectResponse: nil,
         timestamp: 3
     ))
-    context.apply(.requestWillBeSent(
+    await context.apply(.requestWillBeSent(
         id: Network.Request.ID("movie"),
         request: Network.Request(id: Network.Request.ID("movie"), url: "https://media.example.com/clip.mp4", method: "GET"),
         resourceType: .fetch,
@@ -3725,7 +3775,7 @@ func networkFetchDescriptorSupportsResourceCategorySets() async throws {
         NetworkRequest.ID(Network.Request.ID("image")),
     ])
 
-    context.apply(.responseReceived(
+    await context.apply(.responseReceived(
         id: Network.Request.ID("pending-avatar"),
         response: Network.Response(
             url: "https://api.example.com/avatar.png",
@@ -3735,7 +3785,7 @@ func networkFetchDescriptorSupportsResourceCategorySets() async throws {
         resourceType: .xhr,
         timestamp: 5
     ))
-    context.apply(.responseReceived(
+    await context.apply(.responseReceived(
         id: Network.Request.ID("movie"),
         response: Network.Response(
             url: "https://media.example.com/clip.mp4",
@@ -3758,7 +3808,7 @@ func networkFetchDescriptorSupportsResourceCategorySets() async throws {
 func networkRequestResourceCategoryUsesResponseHeadersWithoutPendingURLInference() async throws {
     let context = WebInspectorContext.preview(isolation: MainActor.shared)
     let requestID = Network.Request.ID("header-avatar")
-    context.apply(.requestWillBeSent(
+    await context.apply(.requestWillBeSent(
         id: requestID,
         request: Network.Request(id: requestID, url: "https://api.example.com/avatar.png", method: "GET"),
         resourceType: .xhr,
@@ -3769,7 +3819,7 @@ func networkRequestResourceCategoryUsesResponseHeadersWithoutPendingURLInference
 
     #expect(request.resourceCategory == .xhrFetch)
 
-    context.apply(.responseReceived(
+    await context.apply(.responseReceived(
         id: requestID,
         response: Network.Response(
             url: "https://api.example.com/avatar",
@@ -3785,7 +3835,7 @@ func networkRequestResourceCategoryUsesResponseHeadersWithoutPendingURLInference
     #expect(request.searchableText.localizedStandardContains("image/png") == false)
 
     let scriptVideoID = Network.Request.ID("script-video")
-    context.apply(.requestWillBeSent(
+    await context.apply(.requestWillBeSent(
         id: scriptVideoID,
         request: Network.Request(id: scriptVideoID, url: "https://cdn.example.com/player.js", method: "GET"),
         resourceType: .script,
@@ -3795,7 +3845,7 @@ func networkRequestResourceCategoryUsesResponseHeadersWithoutPendingURLInference
     let scriptVideoRequest = try #require(context.registeredRequest(forProxyID: scriptVideoID))
     #expect(scriptVideoRequest.resourceCategory == .script)
 
-    context.apply(.responseReceived(
+    await context.apply(.responseReceived(
         id: scriptVideoID,
         response: Network.Response(
             url: "https://cdn.example.com/player.js",
@@ -5517,14 +5567,14 @@ func responseReceivedWithoutResourceTypePreservesRequestResourceType() async thr
     let requestID = Network.Request.ID("response-type-preserved-request")
     let modelID = NetworkRequest.ID(requestID)
 
-    context.apply(.requestWillBeSent(
+    await context.apply(.requestWillBeSent(
         id: requestID,
         request: Network.Request(id: requestID, url: "https://example.com/image.png", method: "GET"),
         resourceType: .image,
         redirectResponse: nil,
         timestamp: 1
     ))
-    context.apply(.responseReceived(
+    await context.apply(.responseReceived(
         id: requestID,
         response: Network.Response(
             url: "https://example.com/image.png",

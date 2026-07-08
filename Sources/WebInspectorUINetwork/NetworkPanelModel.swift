@@ -29,7 +29,7 @@ private final class NetworkResponseBodyFetchCoordinator {
 package final class NetworkPanelModel {
     package let context: WebInspectorContext
     package let requests: WebInspectorFetchedResults<NetworkRequest>
-    private let clearableRequests: WebInspectorFetchedResults<NetworkRequest>
+    private let collectionState: NetworkRequestCollectionState
     package var selectedRequestID: NetworkRequest.ID?
     package var searchText: String = ""
     package var activeResourceFilters: Set<NetworkDisplay.ResourceFilter> = [] {
@@ -47,7 +47,7 @@ package final class NetworkPanelModel {
     package init(context: WebInspectorContext) {
         self.context = context
         self.requests = context.network.fetchedResults(for: Self.makeNetworkFetchDescriptor(searchText: "", filters: []))
-        self.clearableRequests = context.network.fetchedResults()
+        self.collectionState = context.networkRequestsCollectionState
         self.responseBodyFetchCoordinator = NetworkResponseBodyFetchCoordinator()
     }
 
@@ -64,7 +64,7 @@ package final class NetworkPanelModel {
     }
 
     package var hasClearableRequests: Bool {
-        clearableRequests.items.isEmpty == false
+        collectionState.hasRequests
     }
 
     package var selectedRequest: NetworkRequest? {
@@ -73,7 +73,7 @@ package final class NetworkPanelModel {
         }
         // Observe the unfiltered request topology so registry removals invalidate
         // the selection without tying selection lifetime to display filters.
-        _ = clearableRequests.topologyRevision
+        _ = collectionState.topologyRevision
         return request(for: selectedRequestID)
     }
 

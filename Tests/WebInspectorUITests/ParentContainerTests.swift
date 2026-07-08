@@ -902,7 +902,7 @@ struct ParentContainerTests {
     func networkPanelModelSelectionIsSharedAcrossParentHosts() async throws {
         let context = makeContext()
         let session = WebInspectorSession(context: context)
-        let requestID = applyRequest(
+        let requestID = await applyRequest(
             to: context,
             requestID: "1",
             url: "https://example.com/app.js"
@@ -988,9 +988,9 @@ struct ParentContainerTests {
         to context: WebInspectorContext,
         requestID rawRequestID: String,
         url: String
-    ) -> WebInspectorDataKit.NetworkRequest.ID {
+    ) async -> WebInspectorDataKit.NetworkRequest.ID {
         let requestID = WebInspectorProxyKit.Network.Request.ID(rawRequestID)
-        context.apply(
+        await context.apply(
             .requestWillBeSent(
                 id: requestID,
                 request: WebInspectorProxyKit.Network.Request(
@@ -1003,7 +1003,7 @@ struct ParentContainerTests {
                 timestamp: 1
             )
         )
-        context.apply(
+        await context.apply(
             .responseReceived(
                 id: requestID,
                 response: WebInspectorProxyKit.Network.Response(
@@ -1017,7 +1017,7 @@ struct ParentContainerTests {
                 timestamp: 2
             )
         )
-        context.apply(
+        await context.apply(
             .loadingFinished(
                 id: requestID,
                 timestamp: 3,
