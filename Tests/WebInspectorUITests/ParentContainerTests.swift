@@ -5,7 +5,6 @@ import WebInspectorDataKit
 import WebInspectorProxyKit
 import WebInspectorProxyKitTesting
 import UIKit
-import WebKit
 @testable import WebInspectorUI
 @testable import WebInspectorUISyntaxBody
 @testable import WebInspectorUINetwork
@@ -62,31 +61,33 @@ struct ParentContainerTests {
     }
 
     @Test
-    func sessionUpdatesPageUserInterfaceStyleFromUnderPageBackgroundColor() async throws {
+    func sessionUpdatesPageUserInterfaceStyleFromPageObserver() async throws {
+        let observerRecorder = PageUserInterfaceStyleObserverRecorder(styleOnStart: .dark)
         let session = makeSessionWithNoOpAttachment()
-        let webView = WKWebView(frame: .zero)
 
-        try await attach(session, to: webView)
+        try await attach(
+            session,
+            makePageUserInterfaceStyleObserver: observerRecorder.makeObserver
+        )
         let styleObservation = await observePageUserInterfaceStyle(in: session)
         defer { styleObservation.cancel() }
 
-        webView.underPageBackgroundColor = .black
-
         #expect(await styleObservation.values.waitUntilValue(UIUserInterfaceStyle.dark.rawValue))
 
-        webView.underPageBackgroundColor = .white
+        let observer = try #require(observerRecorder.observers.first)
+        observer.publish(.light)
         #expect(await styleObservation.values.waitUntilValue(UIUserInterfaceStyle.light.rawValue))
     }
 
     @Test
     func sessionClearsPageUserInterfaceStyleAndStopsObservingOnDetach() async throws {
         let observerRecorder = PageUserInterfaceStyleObserverRecorder(styleOnStart: .dark)
-        let session = makeSessionWithNoOpAttachment(
+        let session = makeSessionWithNoOpAttachment()
+
+        try await attach(
+            session,
             makePageUserInterfaceStyleObserver: observerRecorder.makeObserver
         )
-        let webView = WKWebView(frame: .zero)
-
-        try await attach(session, to: webView)
         let observer = try #require(observerRecorder.observers.first)
         #expect(observer.isStarted)
         #expect(session.pageUserInterfaceStyle == .dark)
@@ -102,25 +103,25 @@ struct ParentContainerTests {
 
     @Test
     func sessionClearsPageUserInterfaceStyleAndStopsObservingWhenAttachFails() async throws {
-        let observedWebView = WKWebView(frame: .zero)
-        let observedWebViewID = ObjectIdentifier(observedWebView)
         let observerRecorder = PageUserInterfaceStyleObserverRecorder(styleOnStart: .dark)
-        let attachAction: @MainActor (WKWebView) async throws -> Void = { webView in
-            if ObjectIdentifier(webView) != observedWebViewID {
-                throw AttachmentFailure()
-            }
-        }
-        let session = makeSessionWithNoOpAttachment(
+        let session = makeSessionWithNoOpAttachment()
+
+        try await attach(
+            session,
             makePageUserInterfaceStyleObserver: observerRecorder.makeObserver
         )
-
-        try await attach(session, to: observedWebView, perform: attachAction)
         let observer = try #require(observerRecorder.observers.first)
         #expect(observer.isStarted)
         #expect(session.pageUserInterfaceStyle == .dark)
 
         do {
-            try await attach(session, to: WKWebView(frame: .zero), perform: attachAction)
+            try await attach(
+                session,
+                perform: {
+                    throw AttachmentFailure()
+                },
+                makePageUserInterfaceStyleObserver: observerRecorder.makeObserver
+            )
             Issue.record("Expected attach to fail")
         } catch {
             #expect(error is AttachmentFailure)
@@ -137,29 +138,31 @@ struct ParentContainerTests {
     @Test
     func staleAttachCompletionDoesNotReplaceNewerAttach() async throws {
         let observerRecorder = PageUserInterfaceStyleObserverRecorder(styleOnStart: .dark)
-        let session = makeSessionWithNoOpAttachment(
-            makePageUserInterfaceStyleObserver: observerRecorder.makeObserver
-        )
-        let firstWebView = WKWebView(frame: .zero)
-        let secondWebView = WKWebView(frame: .zero)
+        let session = makeSessionWithNoOpAttachment()
         let firstAttachStarted = WebInspectorTestGate()
         let firstAttachGate = WebInspectorTestGate()
 
         let firstAttach = Task { @MainActor in
-            try await session.attach(to: firstWebView) { [self] _ in
-                await firstAttachStarted.open()
-                await firstAttachGate.wait()
-                return try await makeFakeContainer()
-            }
+            try await session.attachForTesting(
+                makeContainer: { [self] in
+                    await firstAttachStarted.open()
+                    await firstAttachGate.wait()
+                    return try await makeFakeContainer()
+                },
+                makePageUserInterfaceStyleObserver: observerRecorder.makeObserver
+            )
         }
         await firstAttachStarted.wait()
 
         var secondContext: WebInspectorContext?
-        try await session.attach(to: secondWebView) { [self] _ in
-            let container = try await makeFakeContainer()
-            secondContext = container.mainContext
-            return container
-        }
+        try await session.attachForTesting(
+            makeContainer: { [self] in
+                let container = try await makeFakeContainer()
+                secondContext = container.mainContext
+                return container
+            },
+            makePageUserInterfaceStyleObserver: observerRecorder.makeObserver
+        )
         let installedSecondContext = try #require(secondContext)
 
         await firstAttachGate.open()
@@ -179,19 +182,19 @@ struct ParentContainerTests {
     @Test
     func detachInvalidatesInFlightAttachCompletion() async throws {
         let observerRecorder = PageUserInterfaceStyleObserverRecorder(styleOnStart: .dark)
-        let session = makeSessionWithNoOpAttachment(
-            makePageUserInterfaceStyleObserver: observerRecorder.makeObserver
-        )
-        let webView = WKWebView(frame: .zero)
+        let session = makeSessionWithNoOpAttachment()
         let attachStarted = WebInspectorTestGate()
         let attachGate = WebInspectorTestGate()
 
         let attachTask = Task { @MainActor in
-            try await session.attach(to: webView) { [self] _ in
-                await attachStarted.open()
-                await attachGate.wait()
-                return try await makeFakeContainer()
-            }
+            try await session.attachForTesting(
+                makeContainer: { [self] in
+                    await attachStarted.open()
+                    await attachGate.wait()
+                    return try await makeFakeContainer()
+                },
+                makePageUserInterfaceStyleObserver: observerRecorder.makeObserver
+            )
         }
         await attachStarted.wait()
 
@@ -228,7 +231,7 @@ struct ParentContainerTests {
         #expect(session.interface.contentCacheCountForTesting > 0)
 
         var installedContext: WebInspectorContext?
-        try await session.attach(to: WKWebView(frame: .zero)) { [self] _ in
+        try await session.attachForTesting {
             let container = try await makeFakeContainer()
             installedContext = container.mainContext
             return container
@@ -346,15 +349,15 @@ struct ParentContainerTests {
     @Test
     func viewControllerDoesNotApplyPageUserInterfaceStyle() async throws {
         let observerRecorder = PageUserInterfaceStyleObserverRecorder(styleOnStart: .dark)
-        let session = makeSessionWithNoOpAttachment(
-            makePageUserInterfaceStyleObserver: observerRecorder.makeObserver
-        )
+        let session = makeSessionWithNoOpAttachment()
         let viewController = WebInspectorViewController(session: session)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
-        let webView = WKWebView(frame: .zero)
 
-        try await attach(session, to: webView)
+        try await attach(
+            session,
+            makePageUserInterfaceStyleObserver: observerRecorder.makeObserver
+        )
 
         #expect(session.pageUserInterfaceStyle == .dark)
         #expect(viewController.overrideUserInterfaceStyle == .unspecified)
@@ -1044,27 +1047,22 @@ struct ParentContainerTests {
 
     private func attach(
         _ session: WebInspectorSession,
-        to webView: WKWebView,
-        perform attachAction: @escaping @MainActor (WKWebView) async throws -> Void = { _ in }
-    ) async throws {
-        try await session.attach(to: webView) { [self] webView in
-            try await attachAction(webView)
-            return try await makeFakeContainer()
-        }
-    }
-
-    private func makeSessionWithNoOpAttachment(
+        perform attachAction: @escaping @MainActor () async throws -> Void = {},
         makePageUserInterfaceStyleObserver: @escaping @MainActor (
-            WKWebView,
             @escaping @MainActor (UIUserInterfaceStyle) -> Void
-        ) -> any WebInspectorPageUserInterfaceStyleObserving = { webView, apply in
-            WebInspectorPageUserInterfaceStyleObserver(webView: webView, apply: apply)
-        }
-    ) -> WebInspectorSession {
-        WebInspectorSession(
-            context: makeContext(),
+        ) -> (any WebInspectorPageUserInterfaceStyleObserving)? = { _ in nil }
+    ) async throws {
+        try await session.attachForTesting(
+            makeContainer: { [self] in
+                try await attachAction()
+                return try await makeFakeContainer()
+            },
             makePageUserInterfaceStyleObserver: makePageUserInterfaceStyleObserver
         )
+    }
+
+    private func makeSessionWithNoOpAttachment() -> WebInspectorSession {
+        WebInspectorSession(context: makeContext())
     }
 
     @MainActor
@@ -1077,9 +1075,8 @@ struct ParentContainerTests {
         }
 
         func makeObserver(
-            webView: WKWebView,
             apply: @escaping @MainActor (UIUserInterfaceStyle) -> Void
-        ) -> any WebInspectorPageUserInterfaceStyleObserving {
+        ) -> (any WebInspectorPageUserInterfaceStyleObserving)? {
             let observer = PageUserInterfaceStyleObserverDouble(
                 styleOnStart: styleOnStart,
                 apply: apply
