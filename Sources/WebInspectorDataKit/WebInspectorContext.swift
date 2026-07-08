@@ -111,7 +111,12 @@ public final class WebInspectorContext {
     private let statusRelay: WebInspectorAsyncStreamRelay<Status>
     private var requestsByID: [NetworkRequest.ID: NetworkRequest]
     private var orderedRequestIDs: [NetworkRequest.ID]
+    private var networkRequestOrderIndicesByID: [NetworkRequest.ID: Int]
     private var clearedNetworkRequestIDs: Set<NetworkRequest.ID>
+    private let networkRequestIndex: NetworkRequestIndex
+    private var networkRequestIndexSequence: UInt64
+    private var networkRequestIndexNeedsRebuild: Bool
+    private let networkCollectionState: NetworkRequestCollectionState
     private var networkFetchedResults: [WeakWebInspectorFetchedResults<NetworkRequest>]
     private var consoleMessagesByID: [ConsoleMessage.ID: ConsoleMessage]
     private var orderedConsoleMessageIDs: [ConsoleMessage.ID]
@@ -169,7 +174,12 @@ public final class WebInspectorContext {
         statusRelay = WebInspectorAsyncStreamRelay()
         requestsByID = [:]
         orderedRequestIDs = []
+        networkRequestOrderIndicesByID = [:]
         clearedNetworkRequestIDs = []
+        networkRequestIndex = NetworkRequestIndex()
+        networkRequestIndexSequence = 0
+        networkRequestIndexNeedsRebuild = false
+        networkCollectionState = NetworkRequestCollectionState()
         networkFetchedResults = []
         consoleMessagesByID = [:]
         orderedConsoleMessageIDs = []
@@ -277,6 +287,10 @@ public final class WebInspectorContext {
     ) -> NetworkRequest? {
         requireOwner(isolation)
         return requestsByID[id]
+    }
+
+    package var networkRequestsCollectionState: NetworkRequestCollectionState {
+        networkCollectionState
     }
 
     package func registeredRequest(
@@ -1384,6 +1398,10 @@ public final class WebInspectorContext {
         clearedNetworkRequestIDs = []
         requestsByID = [:]
         orderedRequestIDs = []
+        networkRequestOrderIndicesByID = [:]
+        networkRequestIndexNeedsRebuild = true
+        clearNetworkRequestIndex()
+        networkCollectionState.replaceCount(0)
         resetNetworkFetchedResults()
     }
 
@@ -1482,7 +1500,7 @@ public final class WebInspectorContext {
         }
 
         let networkPump = WebInspectorEventPump(stream: target.network.events, isolation: isolation) { [weak self] event in
-            self?.apply(event, isolation: isolation)
+            await self?.apply(event, isolation: isolation)
         }
 
         let cssPump = WebInspectorEventPump(stream: target.css.events, isolation: isolation) { [weak self] event in
@@ -3372,65 +3390,81 @@ extension WebInspectorContext {
         requireOwner(isolation)
         let requestID = Network.Request.ID(rawRequestID)
         let resourceType = resourceTypeRawValue.map(Network.ResourceType.init(rawValue:))
-        apply(
-            .requestWillBeSent(
-                id: requestID,
-                request: Network.Request(
-                    id: requestID,
-                    url: url,
-                    method: method,
-                    headers: requestHeaders,
-                    postData: postData
-                ),
+        let payload = Network.Request(
+            id: requestID,
+            url: url,
+            method: method,
+            headers: requestHeaders,
+            postData: postData
+        )
+        let id = NetworkRequest.ID(requestID)
+        let request: NetworkRequest
+        let inserted: Bool
+        if let existing = requestsByID[id] {
+            request = existing
+            request.applyRequestWillBeSent(
+                request: payload,
                 resourceType: resourceType,
-                redirectResponse: nil,
                 timestamp: timestamp
-            ),
-            isolation: isolation
-        )
-        apply(
-            .responseReceived(
-                id: requestID,
-                response: Network.Response(
-                    url: url,
-                    status: responseStatus,
-                    statusText: responseStatusText,
-                    mimeType: responseMIMEType,
-                    headers: responseHeaders,
-                    source: Network.Source(rawValue: "network"),
-                    requestHeaders: requestHeaders
-                ),
-                resourceType: resourceType ?? .other,
-                timestamp: timestamp + 0.1
-            ),
-            isolation: isolation
-        )
-        apply(
-            .dataReceived(
-                id: requestID,
-                dataLength: encodedBodyLength,
-                encodedDataLength: encodedBodyLength,
-                timestamp: timestamp + 0.11
-            ),
-            isolation: isolation
-        )
-        apply(
-            .loadingFinished(
-                id: requestID,
-                timestamp: timestamp + 0.2,
-                sourceMapURL: nil,
-                metrics: Network.Metrics(
-                    encodedDataLength: encodedBodyLength,
-                    decodedBodyLength: encodedBodyLength
-                )
-            ),
-            isolation: isolation
-        )
-        guard let request = networkRequest(for: requestID, method: "seedNetworkRequest") else {
-            preconditionFailure("Seeded NetworkRequest disappeared during preview seeding.")
+            )
+            inserted = false
+        } else {
+            request = NetworkRequest(
+                request: payload,
+                resourceType: resourceType,
+                timestamp: timestamp,
+                modelContext: self
+            )
+            requestsByID[id] = request
+            appendNetworkRequestID(id)
+            inserted = true
         }
+        request.applyResponse(
+            Network.Response(
+                url: url,
+                status: responseStatus,
+                statusText: responseStatusText,
+                mimeType: responseMIMEType,
+                headers: responseHeaders,
+                source: Network.Source(rawValue: "network"),
+                requestHeaders: requestHeaders
+            ),
+            resourceType: resourceType ?? .other,
+            timestamp: timestamp + 0.1
+        )
+        request.applyDataReceived(
+            dataLength: encodedBodyLength,
+            encodedDataLength: encodedBodyLength,
+            timestamp: timestamp + 0.11
+        )
+        request.finish(
+            timestamp: timestamp + 0.2,
+            sourceMapURL: nil,
+            metrics: Network.Metrics(
+                encodedDataLength: encodedBodyLength,
+                decodedBodyLength: encodedBodyLength
+            )
+        )
         if let responseBody {
             request.responseBody.load(Network.Body(data: responseBody, base64Encoded: false))
+        }
+        networkRequestIndexNeedsRebuild = true
+        networkFetchedResults.removeAll { $0.value == nil }
+        if inserted {
+            networkCollectionState.didInsertRequest()
+            for registration in networkFetchedResults {
+                registration.value?.insertNetworkRequest(
+                    request,
+                    lookup: { id in self.requestsByID[id] }
+                )
+            }
+        } else {
+            for registration in networkFetchedResults {
+                registration.value?.refreshNetworkRequestAfterMutation(
+                    request,
+                    lookup: { id in self.requestsByID[id] }
+                )
+            }
         }
         return request.id
     }
@@ -3455,19 +3489,26 @@ extension WebInspectorContext {
         ))
     }
 
-    package func apply(_ event: Network.Event, isolation: isolated (any Actor) = #isolation) {
+    package func apply(_ event: Network.Event, isolation: isolated (any Actor) = #isolation) async {
         requireOwner(isolation)
         switch event {
         case let .requestWillBeSent(id, request, resourceType, redirectResponse, timestamp):
-            applyRequestWillBeSent(
+            await applyRequestWillBeSent(
                 id: id,
                 request: request,
                 resourceType: resourceType,
                 redirectResponse: redirectResponse,
-                timestamp: timestamp
+                timestamp: timestamp,
+                isolation: isolation
             )
         case let .responseReceived(id, response, resourceType, timestamp):
-            applyResponseReceived(id: id, response: response, resourceType: resourceType, timestamp: timestamp)
+            await applyResponseReceived(
+                id: id,
+                response: response,
+                resourceType: resourceType,
+                timestamp: timestamp,
+                isolation: isolation
+            )
         case let .dataReceived(id, dataLength, encodedDataLength, timestamp):
             guard let request = networkRequest(for: id, method: "dataReceived") else {
                 return
@@ -3477,27 +3518,28 @@ extension WebInspectorContext {
                 encodedDataLength: encodedDataLength,
                 timestamp: timestamp
             )
-            notifyNetworkRequestMutated(request)
+            await notifyNetworkRequestMutated(request, isolation: isolation)
         case let .loadingFinished(id, timestamp, sourceMapURL, metrics):
             guard let request = networkRequest(for: id, method: "loadingFinished") else {
                 return
             }
             request.finish(timestamp: timestamp, sourceMapURL: sourceMapURL, metrics: metrics)
-            notifyNetworkRequestMutated(request)
+            await notifyNetworkRequestMutated(request, isolation: isolation)
         case let .loadingFailed(id, errorText, canceled, timestamp):
             guard let request = networkRequest(for: id, method: "loadingFailed") else {
                 return
             }
             request.fail(errorText: errorText, canceled: canceled, timestamp: timestamp)
-            notifyNetworkRequestMutated(request)
+            await notifyNetworkRequestMutated(request, isolation: isolation)
         case let .webSocket(event):
-            apply(event)
+            await apply(event, isolation: isolation)
         case let .requestServedFromMemoryCache(id, response, resourceType, timestamp):
-            applyRequestServedFromMemoryCache(
+            await applyRequestServedFromMemoryCache(
                 id: id,
                 response: response,
                 resourceType: resourceType,
-                timestamp: timestamp
+                timestamp: timestamp,
+                isolation: isolation
             )
         case .unknown:
             break
@@ -3509,8 +3551,10 @@ extension WebInspectorContext {
         request payload: Network.Request,
         resourceType: Network.ResourceType?,
         redirectResponse: Network.Response?,
-        timestamp: Double
-    ) {
+        timestamp: Double,
+        isolation: isolated (any Actor)
+    ) async {
+        _ = isolation
         let id = NetworkRequest.ID(proxyID)
         guard clearedNetworkRequestIDs.contains(id) == false || redirectResponse == nil else {
             return
@@ -3536,13 +3580,13 @@ extension WebInspectorContext {
         } else {
             request = NetworkRequest(request: payload, resourceType: resourceType, timestamp: timestamp, modelContext: self)
             requestsByID[id] = request
-            orderedRequestIDs.append(id)
+            appendNetworkRequestID(id)
             inserted = true
         }
         if inserted {
-            notifyNetworkRequestInserted(request)
+            await notifyNetworkRequestInserted(request, isolation: isolation)
         } else if topologyMayHaveChanged {
-            notifyNetworkRequestMutated(request)
+            await notifyNetworkRequestMutated(request, isolation: isolation)
         }
     }
 
@@ -3550,8 +3594,10 @@ extension WebInspectorContext {
         id proxyID: Network.Request.ID,
         response: Network.Response,
         resourceType: Network.ResourceType?,
-        timestamp: Double
-    ) {
+        timestamp: Double,
+        isolation: isolated (any Actor)
+    ) async {
+        _ = isolation
         let id = NetworkRequest.ID(proxyID)
         guard clearedNetworkRequestIDs.contains(id) == false else {
             return
@@ -3572,21 +3618,23 @@ extension WebInspectorContext {
             )
             request = NetworkRequest(request: payload, resourceType: resourceType, timestamp: timestamp, modelContext: self)
             requestsByID[id] = request
-            orderedRequestIDs.append(id)
+            appendNetworkRequestID(id)
             request.applyMemoryCache(response: response, resourceType: resourceType, timestamp: timestamp)
-            notifyNetworkRequestInserted(request)
+            await notifyNetworkRequestInserted(request, isolation: isolation)
             return
         }
         request.applyMemoryCache(response: response, resourceType: resourceType, timestamp: timestamp)
-        notifyNetworkRequestMutated(request)
+        await notifyNetworkRequestMutated(request, isolation: isolation)
     }
 
     private func applyResponseReceived(
         id proxyID: Network.Request.ID,
         response: Network.Response,
         resourceType: Network.ResourceType?,
-        timestamp: Double
-    ) {
+        timestamp: Double,
+        isolation: isolated (any Actor)
+    ) async {
+        _ = isolation
         let id = NetworkRequest.ID(proxyID)
         guard clearedNetworkRequestIDs.contains(id) == false else {
             return
@@ -3612,63 +3660,69 @@ extension WebInspectorContext {
             )
             request = NetworkRequest(request: payload, resourceType: resourceType, timestamp: timestamp, modelContext: self)
             requestsByID[id] = request
-            orderedRequestIDs.append(id)
+            appendNetworkRequestID(id)
             inserted = true
         }
         request.applyResponse(response, resourceType: resourceType, timestamp: timestamp)
         if inserted {
-            notifyNetworkRequestInserted(request)
+            await notifyNetworkRequestInserted(request, isolation: isolation)
         } else {
-            notifyNetworkRequestMutated(request)
+            await notifyNetworkRequestMutated(request, isolation: isolation)
         }
     }
 
-    private func apply(_ event: Network.WebSocketEvent) {
+    private func apply(_ event: Network.WebSocketEvent, isolation: isolated (any Actor)) async {
+        _ = isolation
         switch event {
         case let .created(id, url):
-            applyWebSocketCreated(id: id, url: url)
+            await applyWebSocketCreated(id: id, url: url, isolation: isolation)
         case let .handshakeRequest(id, request, timestamp):
             guard let networkRequest = networkRequest(for: id, method: "webSocketWillSendHandshakeRequest") else {
                 return
             }
             networkRequest.applyWebSocketHandshakeRequest(request, timestamp: timestamp)
-            notifyNetworkRequestMutated(networkRequest)
+            await notifyNetworkRequestMutated(networkRequest, isolation: isolation)
         case let .handshakeResponse(id, response, timestamp):
             guard let networkRequest = networkRequest(for: id, method: "webSocketHandshakeResponseReceived") else {
                 return
             }
             networkRequest.applyWebSocketHandshakeResponse(response, timestamp: timestamp)
-            notifyNetworkRequestMutated(networkRequest)
+            await notifyNetworkRequestMutated(networkRequest, isolation: isolation)
         case let .frameSent(id, frame, timestamp):
             guard let networkRequest = networkRequest(for: id, method: "webSocketFrameSent") else {
                 return
             }
             networkRequest.appendWebSocketFrame(frame, direction: .sent, timestamp: timestamp)
-            notifyNetworkRequestMutated(networkRequest)
+            await notifyNetworkRequestMutated(networkRequest, isolation: isolation)
         case let .frameReceived(id, frame, timestamp):
             guard let networkRequest = networkRequest(for: id, method: "webSocketFrameReceived") else {
                 return
             }
             networkRequest.appendWebSocketFrame(frame, direction: .received, timestamp: timestamp)
-            notifyNetworkRequestMutated(networkRequest)
+            await notifyNetworkRequestMutated(networkRequest, isolation: isolation)
         case let .error(id, message, timestamp):
             guard let networkRequest = networkRequest(for: id, method: "webSocketFrameError") else {
                 return
             }
             networkRequest.appendWebSocketError(message, timestamp: timestamp)
-            notifyNetworkRequestMutated(networkRequest)
+            await notifyNetworkRequestMutated(networkRequest, isolation: isolation)
         case let .closed(id, timestamp):
             guard let networkRequest = networkRequest(for: id, method: "webSocketClosed") else {
                 return
             }
             networkRequest.closeWebSocket(timestamp: timestamp)
-            notifyNetworkRequestMutated(networkRequest)
+            await notifyNetworkRequestMutated(networkRequest, isolation: isolation)
         case .other:
             break
         }
     }
 
-    private func applyWebSocketCreated(id proxyID: Network.Request.ID, url: String) {
+    private func applyWebSocketCreated(
+        id proxyID: Network.Request.ID,
+        url: String,
+        isolation: isolated (any Actor)
+    ) async {
+        _ = isolation
         let id = NetworkRequest.ID(proxyID)
         clearedNetworkRequestIDs.remove(id)
         let request: NetworkRequest
@@ -3679,14 +3733,14 @@ extension WebInspectorContext {
             let payload = Network.Request(id: proxyID, url: url, method: "GET")
             request = NetworkRequest(request: payload, resourceType: .webSocket, timestamp: nil, modelContext: self)
             requestsByID[id] = request
-            orderedRequestIDs.append(id)
+            appendNetworkRequestID(id)
             inserted = true
         }
         request.applyWebSocketCreated(url: url)
         if inserted {
-            notifyNetworkRequestInserted(request)
+            await notifyNetworkRequestInserted(request, isolation: isolation)
         } else {
-            notifyNetworkRequestMutated(request)
+            await notifyNetworkRequestMutated(request, isolation: isolation)
         }
     }
 
@@ -3708,6 +3762,10 @@ extension WebInspectorContext {
         clearedNetworkRequestIDs.formUnion(requestsByID.keys)
         requestsByID = [:]
         orderedRequestIDs = []
+        networkRequestOrderIndicesByID = [:]
+        networkRequestIndexNeedsRebuild = true
+        clearNetworkRequestIndex()
+        networkCollectionState.replaceCount(0)
         resetNetworkFetchedResults()
     }
 
@@ -3715,23 +3773,103 @@ extension WebInspectorContext {
         orderedRequestIDs.compactMap { requestsByID[$0] }
     }
 
-    private func notifyNetworkRequestInserted(_ request: NetworkRequest) {
-        networkFetchedResults.removeAll { $0.value == nil }
-        for registration in networkFetchedResults {
-            registration.value?.insertNetworkRequest(
-                request,
-                lookup: { id in self.requestsByID[id] }
-            )
+    private func appendNetworkRequestID(_ id: NetworkRequest.ID) {
+        networkRequestOrderIndicesByID[id] = orderedRequestIDs.count
+        orderedRequestIDs.append(id)
+    }
+
+    private func clearNetworkRequestIndex() {
+        let index = networkRequestIndex
+        let sequence = nextNetworkRequestIndexSequence()
+        Task {
+            await index.replace(with: [], sequence: sequence)
         }
     }
 
-    private func notifyNetworkRequestMutated(_ request: NetworkRequest) {
+    private func currentNetworkRecordInputs() -> [NetworkRequestRecordInput] {
+        orderedRequestIDs.enumerated().compactMap { index, id in
+            requestsByID[id].map { NetworkRequestRecordInput(request: $0, orderIndex: index) }
+        }
+    }
+
+    private func networkRecordInput(for request: NetworkRequest) -> NetworkRequestRecordInput {
+        let orderIndex = networkRequestOrderIndicesByID[request.id] ?? orderedRequestIDs.count
+        return NetworkRequestRecordInput(request: request, orderIndex: orderIndex)
+    }
+
+    private func nextNetworkRequestIndexSequence() -> UInt64 {
+        networkRequestIndexSequence &+= 1
+        return networkRequestIndexSequence
+    }
+
+    private func syncNetworkRequestIndexIfNeeded(isolation: isolated (any Actor)) async {
+        _ = isolation
+        guard networkRequestIndexNeedsRebuild else {
+            return
+        }
+        networkRequestIndexNeedsRebuild = false
+        let sequence = nextNetworkRequestIndexSequence()
+        await networkRequestIndex.replace(with: currentNetworkRecordInputs(), sequence: sequence)
+    }
+
+    private func notifyNetworkRequestInserted(
+        _ request: NetworkRequest,
+        isolation: isolated (any Actor)
+    ) async {
+        _ = isolation
+        networkCollectionState.didInsertRequest()
+        await syncNetworkRequestIndexIfNeeded(isolation: isolation)
+        let sequence = nextNetworkRequestIndexSequence()
+        await networkRequestIndex.upsert(networkRecordInput(for: request), sequence: sequence)
+        await applyNetworkResultDeltas(for: request, inserted: true, isolation: isolation)
+    }
+
+    private func notifyNetworkRequestMutated(
+        _ request: NetworkRequest,
+        isolation: isolated (any Actor)
+    ) async {
+        _ = isolation
+        await syncNetworkRequestIndexIfNeeded(isolation: isolation)
+        let sequence = nextNetworkRequestIndexSequence()
+        await networkRequestIndex.upsert(networkRecordInput(for: request), sequence: sequence)
+        await applyNetworkResultDeltas(for: request, inserted: false, isolation: isolation)
+    }
+
+    private func applyNetworkResultDeltas(
+        for request: NetworkRequest,
+        inserted: Bool,
+        isolation: isolated (any Actor)
+    ) async {
+        _ = isolation
         networkFetchedResults.removeAll { $0.value == nil }
         for registration in networkFetchedResults {
-            registration.value?.refreshNetworkRequestAfterMutation(
-                request,
-                lookup: { id in self.requestsByID[id] }
-            )
+            guard let results = registration.value else {
+                continue
+            }
+            let plan = results.currentNetworkQueryPlan(context: self)
+            if plan.requiresModelPredicate {
+                if inserted {
+                    results.insertNetworkRequest(
+                        request,
+                        lookup: { id in self.requestsByID[id] }
+                    )
+                } else {
+                    results.refreshNetworkRequestAfterMutation(
+                        request,
+                        lookup: { id in self.requestsByID[id] }
+                    )
+                }
+                continue
+            }
+            guard let delta = await networkRequestIndex.delta(
+                plan: plan,
+                sectionBy: results.sectionBy,
+                oldSnapshot: results.networkSnapshotForDelta,
+                changedID: request.id
+            ) else {
+                continue
+            }
+            results.applyNetworkDelta(delta, lookup: { id in self.requestsByID[id] })
         }
     }
 

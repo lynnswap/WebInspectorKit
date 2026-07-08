@@ -6,7 +6,7 @@ struct WebInspectorEventPump: Sendable {
     init<Event: Sendable, Events: AsyncSequence & Sendable>(
         stream: Events,
         isolation: isolated (any Actor),
-        apply: @escaping (Event) -> Void
+        apply: @escaping (Event) async -> Void
     ) where Events.Element == Event, Events.Failure == Never {
         let target = WebInspectorEventPumpTarget(apply: apply)
         task = Task.detached(priority: .userInitiated) {
@@ -28,14 +28,14 @@ struct WebInspectorEventPump: Sendable {
 // the non-Sendable apply closure directly; apply(_:isolation:) runs on the
 // WebInspectorContext owner actor passed to the pump initializer.
 private final class WebInspectorEventPumpTarget<Event: Sendable>: @unchecked Sendable {
-    private let applyEvent: (Event) -> Void
+    private let applyEvent: (Event) async -> Void
 
-    init(apply: @escaping (Event) -> Void) {
+    init(apply: @escaping (Event) async -> Void) {
         applyEvent = apply
     }
 
-    func apply(_ event: Event, isolation: isolated (any Actor)) {
+    func apply(_ event: Event, isolation: isolated (any Actor)) async {
         _ = isolation
-        applyEvent(event)
+        await applyEvent(event)
     }
 }

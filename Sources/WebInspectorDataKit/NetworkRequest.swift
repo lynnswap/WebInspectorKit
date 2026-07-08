@@ -987,7 +987,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         requestBody.updateHints(kind: hints.kind, sourceSyntaxKind: hints.syntaxKind)
     }
 
-    private static func resourceCategory(
+    package static func resourceCategory(
         resourceType: Network.ResourceType?,
         mimeType: String?,
         url: String,
@@ -1063,7 +1063,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         return .other
     }
 
-    private static func effectiveMIMEType(mimeType: String?, headers: [String: String]) -> String? {
+    package static func effectiveMIMEType(mimeType: String?, headers: [String: String]) -> String? {
         if let mimeType, mimeType.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
             return mimeType
         }
@@ -1105,7 +1105,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         }
     }
 
-    private static func urlSearchText(_ rawURL: String) -> String {
+    package static func urlSearchText(_ rawURL: String) -> String {
         guard rawURL.range(of: "data:", options: [.anchored, .caseInsensitive]) == nil,
               let components = URLComponents(string: rawURL, encodingInvalidCharacters: false)
                 ?? URLComponents(string: rawURL, encodingInvalidCharacters: true) else {
@@ -1119,7 +1119,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         .joined(separator: "\n")
     }
 
-    private static func pathExtension(in rawURL: String) -> String {
+    package static func pathExtension(in rawURL: String) -> String {
         guard rawURL.range(of: "data:", options: [.anchored, .caseInsensitive]) == nil else {
             return ""
         }
@@ -1190,7 +1190,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         "wav",
     ]
 
-    private static func uniqueNonEmpty(_ values: [String?]) -> [String] {
+    package static func uniqueNonEmpty(_ values: [String?]) -> [String] {
         var seen = Set<String>()
         var results: [String] = []
         for value in values {

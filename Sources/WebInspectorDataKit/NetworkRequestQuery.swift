@@ -1,25 +1,86 @@
 import Foundation
 import WebInspectorProxyKit
 
-package struct NetworkRequestRecord: Hashable, Sendable {
+package struct NetworkRequestRecordInput: Hashable, Sendable {
     package var id: NetworkRequest.ID
     package var orderIndex: Int
     package var url: String
     package var method: String
-    package var resourceCategory: NetworkRequest.ResourceCategory
-    package var searchableText: String
+    package var resourceTypeRawValue: String?
+    package var mimeType: String?
+    package var responseURL: String?
+    package var responseHeaders: [String: String]
     package var statusCode: Int?
+    package var statusText: String?
     package var requestSentTimestamp: Double?
+    package var hasResponse: Bool
 
     package init(request: NetworkRequest, orderIndex: Int) {
         id = request.id
         self.orderIndex = orderIndex
         url = request.url
         method = request.method
-        resourceCategory = request.resourceCategory
-        searchableText = request.searchableText
+        resourceTypeRawValue = request.resourceType?.rawValue
+        mimeType = request.mimeType
+        responseURL = request.responseURL
+        responseHeaders = request.responseHeaders
         statusCode = request.statusCode
+        statusText = request.statusText
         requestSentTimestamp = request.requestSentTimestamp
+        hasResponse = request.hasResponse
+    }
+}
+
+package struct NetworkRequestRecord: Hashable, Sendable {
+    package var id: NetworkRequest.ID
+    package var orderIndex: Int
+    package var url: String
+    package var method: String
+    package var resourceTypeRawValue: String?
+    package var mimeType: String?
+    package var resourceCategory: NetworkRequest.ResourceCategory
+    package var searchableText: String
+    package var statusCode: Int?
+    package var requestSentTimestamp: Double?
+
+    package init(input: NetworkRequestRecordInput) {
+        id = input.id
+        orderIndex = input.orderIndex
+        url = input.url
+        method = input.method
+        resourceTypeRawValue = input.resourceTypeRawValue
+        mimeType = input.mimeType
+        let resourceType = input.resourceTypeRawValue.map(Network.ResourceType.init(rawValue:))
+        let effectiveMIMEType = NetworkRequest.effectiveMIMEType(
+            mimeType: input.mimeType,
+            headers: input.responseHeaders
+        )
+        let category = NetworkRequest.resourceCategory(
+            resourceType: resourceType,
+            mimeType: effectiveMIMEType,
+            url: input.responseURL ?? input.url,
+            hasResponse: input.hasResponse
+        )
+        resourceCategory = category
+        searchableText = NetworkRequest.uniqueNonEmpty([
+            input.url,
+            input.responseURL,
+            NetworkRequest.urlSearchText(input.url),
+            input.responseURL.map(NetworkRequest.urlSearchText),
+            input.method,
+            input.statusCode.map(String.init),
+            input.statusText,
+            input.mimeType,
+            input.resourceTypeRawValue,
+            category.rawValue,
+        ])
+        .joined(separator: "\n")
+        statusCode = input.statusCode
+        requestSentTimestamp = input.requestSentTimestamp
+    }
+
+    package init(request: NetworkRequest, orderIndex: Int) {
+        self.init(input: NetworkRequestRecordInput(request: request, orderIndex: orderIndex))
     }
 }
 
@@ -29,6 +90,15 @@ package struct NetworkRequestQueryPlan: Sendable {
     package enum Filter: Sendable {
         case record(RecordPredicate)
         case model(Predicate<NetworkRequest>)
+
+        package func matches(record: NetworkRequestRecord) -> Bool? {
+            switch self {
+            case let .record(predicate):
+                return predicate(record)
+            case .model:
+                return nil
+            }
+        }
 
         package func matches(record: NetworkRequestRecord, request: NetworkRequest) -> Bool {
             switch self {
@@ -63,6 +133,17 @@ package struct NetworkRequestQueryPlan: Sendable {
 
     package var requiresQuery: Bool {
         filter != nil || sortComparators.isEmpty == false || fetchLimit != nil || fetchOffset > 0
+    }
+
+    package var requiresModelPredicate: Bool {
+        guard case .model = filter else {
+            return false
+        }
+        return true
+    }
+
+    package func matches(record: NetworkRequestRecord) -> Bool? {
+        filter?.matches(record: record) ?? true
     }
 
     package func matches(record: NetworkRequestRecord, request: NetworkRequest) -> Bool {
@@ -303,6 +384,7 @@ private protocol NetworkRequestRecordResourceCategorySequenceExpression {
 
 private enum NetworkRequestRecordPredicateValue: Equatable, Sendable {
     case string(String)
+    case optionalString(String?)
     case resourceCategory(NetworkRequest.ResourceCategory)
 }
 
@@ -358,8 +440,30 @@ extension PredicateExpressions.Equal: NetworkRequestRecordPredicateExpression
         let lhsExpression = try lhs.networkRequestEquatableExpression()
         let rhsExpression = try rhs.networkRequestEquatableExpression()
         return { record in
-            lhsExpression(record) == rhsExpression(record)
+            networkRequestRecordPredicateValuesEqual(lhsExpression(record), rhsExpression(record))
         }
+    }
+}
+
+private func networkRequestRecordPredicateValuesEqual(
+    _ lhs: NetworkRequestRecordPredicateValue,
+    _ rhs: NetworkRequestRecordPredicateValue
+) -> Bool {
+    switch (lhs, rhs) {
+    case let (.string(lhs), .string(rhs)):
+        return lhs == rhs
+    case let (.optionalString(lhs), .optionalString(rhs)):
+        return lhs == rhs
+    case let (.optionalString(lhs), .string(rhs)):
+        return lhs == rhs
+    case let (.string(lhs), .optionalString(rhs)):
+        return lhs == rhs
+    case let (.resourceCategory(lhs), .resourceCategory(rhs)):
+        return lhs == rhs
+    case (.string, _),
+         (.optionalString, _),
+         (.resourceCategory, _):
+        return false
     }
 }
 
@@ -430,6 +534,9 @@ extension PredicateExpressions.KeyPath: NetworkRequestRecordStringExpression
     where Root == PredicateExpressions.Variable<NetworkRequest>, Output == String
 {
     fileprivate func networkRequestStringExpression() throws -> @Sendable (NetworkRequestRecord) -> String {
+        if keyPath == \NetworkRequest.url {
+            return { $0.url }
+        }
         if keyPath == \NetworkRequest.method {
             return { $0.method }
         }
@@ -444,15 +551,22 @@ extension PredicateExpressions.KeyPath: NetworkRequestRecordEquatableExpression
     where Root == PredicateExpressions.Variable<NetworkRequest>
 {
     fileprivate func networkRequestEquatableExpression() throws -> @Sendable (NetworkRequestRecord) -> NetworkRequestRecordPredicateValue {
-        if keyPath == \NetworkRequest.method || keyPath == \NetworkRequest.searchableText {
+        if keyPath == \NetworkRequest.url || keyPath == \NetworkRequest.method || keyPath == \NetworkRequest.searchableText {
             let stringExpression: @Sendable (NetworkRequestRecord) -> String
-            if keyPath == \NetworkRequest.method {
+            if keyPath == \NetworkRequest.url {
+                stringExpression = { $0.url }
+            } else if keyPath == \NetworkRequest.method {
                 stringExpression = { $0.method }
             } else {
                 stringExpression = { $0.searchableText }
             }
             return { record in
                 .string(stringExpression(record))
+            }
+        }
+        if keyPath == \NetworkRequest.mimeType {
+            return { record in
+                .optionalString(record.mimeType)
             }
         }
         if keyPath == \NetworkRequest.resourceCategory {
@@ -497,6 +611,10 @@ extension PredicateExpressions.Value: NetworkRequestRecordEquatableExpression {
     fileprivate func networkRequestEquatableExpression() throws -> @Sendable (NetworkRequestRecord) -> NetworkRequestRecordPredicateValue {
         if let value = value as? String {
             return { _ in .string(value) }
+        }
+        if Output.self == Optional<String>.self {
+            let value = value as! String?
+            return { _ in .optionalString(value) }
         }
         if let value = value as? NetworkRequest.ResourceCategory {
             return { _ in .resourceCategory(value) }
