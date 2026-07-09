@@ -90,7 +90,7 @@ let inspector = WebInspectorViewController(
 
 The DocC workflow publishes symbol-level documentation to GitHub Pages:
 
-- [WebInspectorKit](https://lynnswap.github.io/WebInspectorKit/documentation/webinspectorkit/)
+- [Package Documentation](https://lynnswap.github.io/WebInspectorKit/documentation/)
 - [WebInspectorUI](https://lynnswap.github.io/WebInspectorKit/documentation/webinspectorui/)
 - [WebInspectorDataKit](https://lynnswap.github.io/WebInspectorKit/documentation/webinspectordatakit/)
 - [WebInspectorProxyKit](https://lynnswap.github.io/WebInspectorKit/documentation/webinspectorproxykit/)
