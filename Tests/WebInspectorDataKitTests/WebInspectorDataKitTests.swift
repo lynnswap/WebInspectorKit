@@ -2023,29 +2023,11 @@ func sharedContainerContextsReenableDomainsOnCommittedPageTarget() async throws 
     let proxy = try await WebInspectorProxy(transport: transport)
     let container = WebInspectorContainer(proxy: proxy)
 
-    let autoReplier = Task {
-        var repliedMessageIDs = Set<UInt64>()
-        while Task.isCancelled == false {
-            for message in await backend.sentTargetMessages() {
-                guard let messageID = try? transportMessageID(message.message),
-                      repliedMessageIDs.insert(messageID).inserted else {
-                    continue
-                }
-                let method = (try? transportTargetMessageMethod(message.message)) ?? ""
-                let result = method == "DOM.getDocument"
-                    ? transportDocumentResult(
-                        nodeID: message.targetIdentifier == newTargetID ? "new-shared-root" : "old-shared-root"
-                    )
-                    : "{}"
-                await receiveTransportTargetReply(
-                    transport,
-                    targetID: message.targetIdentifier,
-                    messageID: messageID,
-                    result: result
-                )
-            }
-            try? await Task.sleep(for: .milliseconds(5))
-        }
+    let autoReplier = startAutoReplyingTransportTargetMessages(
+        backend: backend,
+        transport: transport
+    ) { targetID in
+        targetID == newTargetID ? "new-shared-root" : "old-shared-root"
     }
     defer { autoReplier.cancel() }
 
@@ -2097,29 +2079,11 @@ func currentPageDestroyWithoutReplacementRegressesToAttachingAndRecovers() async
     )
     let container = WebInspectorContainer(proxy: proxy)
 
-    let autoReplier = Task {
-        var repliedMessageIDs = Set<UInt64>()
-        while Task.isCancelled == false {
-            for message in await backend.sentTargetMessages() {
-                guard let messageID = try? transportMessageID(message.message),
-                      repliedMessageIDs.insert(messageID).inserted else {
-                    continue
-                }
-                let method = (try? transportTargetMessageMethod(message.message)) ?? ""
-                let result = method == "DOM.getDocument"
-                    ? transportDocumentResult(
-                        nodeID: message.targetIdentifier == rebornTargetID ? "reborn-root" : "doomed-root"
-                    )
-                    : "{}"
-                await receiveTransportTargetReply(
-                    transport,
-                    targetID: message.targetIdentifier,
-                    messageID: messageID,
-                    result: result
-                )
-            }
-            try? await Task.sleep(for: .milliseconds(5))
-        }
+    let autoReplier = startAutoReplyingTransportTargetMessages(
+        backend: backend,
+        transport: transport
+    ) { targetID in
+        targetID == rebornTargetID ? "reborn-root" : "doomed-root"
     }
     defer { autoReplier.cancel() }
 
@@ -7113,6 +7077,41 @@ private func installTransportPageTarget(
     await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"\#(targetID)","type":"page","frameId":"\#(frameID)","isProvisional":false}}}"#
     )
+}
+
+@MainActor
+private func startAutoReplyingTransportTargetMessages(
+    backend: FakeTransportBackend,
+    transport: TransportSession,
+    documentNodeID: @escaping @MainActor @Sendable (ProtocolTarget.ID) -> String
+) -> Task<Void, Never> {
+    Task { @MainActor in
+        var repliedTargetMessageCount = 0
+        while Task.isCancelled == false {
+            do {
+                let sentMessage = try await backend.waitForTargetMessage(after: repliedTargetMessageCount)
+                repliedTargetMessageCount += 1
+
+                let messageID = try transportMessageID(sentMessage.message)
+                let method = try transportTargetMessageMethod(sentMessage.message)
+                let result = method == "DOM.getDocument"
+                    ? transportDocumentResult(nodeID: documentNodeID(sentMessage.targetIdentifier))
+                    : "{}"
+
+                await receiveTransportTargetReply(
+                    transport,
+                    targetID: sentMessage.targetIdentifier,
+                    messageID: messageID,
+                    result: result
+                )
+            } catch is CancellationError {
+                return
+            } catch {
+                Issue.record("Failed to auto-reply to transport target message: \(error)")
+                return
+            }
+        }
+    }
 }
 
 private func waitForTransportTargetMessage(
