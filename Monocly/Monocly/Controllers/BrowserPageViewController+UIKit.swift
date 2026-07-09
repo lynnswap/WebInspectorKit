@@ -27,6 +27,11 @@ final class BrowserPageViewController: UIViewController {
         ]
     }
 
+    private enum NavigationSymbolName {
+        static let back = "chevron.backward"
+        static let forward = "chevron.forward"
+    }
+
     private let browserWindow: BrowserWindow
     private let inspectorSession: WebInspectorSession
     private let launchConfiguration: BrowserLaunchConfiguration
@@ -46,21 +51,27 @@ final class BrowserPageViewController: UIViewController {
         action: nil
     )
     private let backButtonItem = UIBarButtonItem(
-        image: UIImage(systemName: "chevron.left"),
+        image: UIImage(systemName: NavigationSymbolName.back),
         style: .plain,
         target: nil,
         action: nil
     )
     private let forwardButtonItem = UIBarButtonItem(
-        image: UIImage(systemName: "chevron.right"),
+        image: UIImage(systemName: NavigationSymbolName.forward),
         style: .plain,
         target: nil,
         action: nil
     )
-    private lazy var backNavigationAction = UIAction { [weak self] _ in
+    private lazy var backNavigationAction = UIAction(
+        title: "",
+        image: UIImage(systemName: NavigationSymbolName.back)
+    ) { [weak self] _ in
         self?.browserWindow.goBack()
     }
-    private lazy var forwardNavigationAction = UIAction { [weak self] _ in
+    private lazy var forwardNavigationAction = UIAction(
+        title: "",
+        image: UIImage(systemName: NavigationSymbolName.forward)
+    ) { [weak self] _ in
         self?.browserWindow.goForward()
     }
     private var hostedWebView: WKWebView?
