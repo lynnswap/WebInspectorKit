@@ -1687,7 +1687,7 @@ struct NetworkDetailViewControllerTests {
             listViewController: listViewController,
             detailViewController: detailViewController
         )
-        let window = showInWindow(navigationController, makeVisible: true, useUIKitVisibility: true)
+        let window = showInWindow(navigationController, makeVisible: true)
         defer { window.isHidden = true }
 
         await listViewController.flushPendingSnapshotUpdateForTesting()
@@ -1700,9 +1700,10 @@ struct NetworkDetailViewControllerTests {
         #expect(didPush)
         await waitForNavigationTransitionToFinish(in: navigationController)
 
-        _ = withUIKitAnimationsDisabled {
-            navigationController.popViewController(animated: false)
+        let poppedViewController = withUIKitAnimationsDisabled {
+            navigationController.popDetailFromUserNavigationForTesting()
         }
+        #expect(poppedViewController === detailViewController)
         let didReturnToList = await waitUntilNavigationStackSynced(in: navigationController) {
             navigationController.viewControllers == [listViewController]
                 && model.selectedRequest == nil

@@ -318,6 +318,23 @@ extension NetworkCompactNavigationController {
     package func syncStackForTesting() {
         syncStack(to: desiredStackTarget(), animated: false)
     }
+
+    @discardableResult
+    package func popDetailFromUserNavigationForTesting() -> UIViewController? {
+        guard viewControllers.last === detailViewController else {
+            return nil
+        }
+
+        activeTransition = StackTransition(
+            target: .list,
+            removesDetail: true,
+            selectionCommit: userPopSelectionCommit()
+        )
+        let poppedViewController = popViewController(animated: false)
+        _ = finishActiveTransitionIfNeeded(shownTarget: .list)
+        performDeferredStackSyncIfNeeded()
+        return poppedViewController
+    }
 }
 #endif
 #endif
