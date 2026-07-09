@@ -2,8 +2,15 @@ import Foundation
 import WebKit
 import WebInspectorNativeBridge
 
+/// The native attachment's actual variation boundary: asynchronous explicit
+/// detach versus synchronous deinitialization backstop. Both production and
+/// tests use the same `NativeAttachment` lifecycle implementation.
+package protocol NativeAttachmentBackend: TransportBackend {
+    @MainActor func detachSynchronously()
+}
+
 @MainActor
-package final class NativeInspectorBackend: TransportBackend {
+package final class NativeInspectorBackend: NativeAttachmentBackend {
     private weak var webView: WKWebView?
     private let resolvedSymbols: NativeInspectorResolvedSymbols
     private nonisolated let messageHandler: @Sendable (String) -> Void

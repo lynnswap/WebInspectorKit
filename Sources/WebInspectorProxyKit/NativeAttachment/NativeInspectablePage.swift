@@ -75,15 +75,15 @@ package enum NativeConnectionCoreFactory {
 }
 
 @MainActor
-private final class NativeAttachment {
+package final class NativeAttachment {
     private let receiver: TransportReceiver
-    private let backend: NativeInspectorBackend
+    private let backend: any NativeAttachmentBackend
     private let page: NativeInspectablePage
     private var isClosed = false
 
-    init(
+    package init(
         receiver: TransportReceiver,
-        backend: NativeInspectorBackend,
+        backend: any NativeAttachmentBackend,
         page: NativeInspectablePage
     ) {
         self.receiver = receiver
@@ -91,7 +91,7 @@ private final class NativeAttachment {
         self.page = page
     }
 
-    func close() async {
+    package func close() async {
         guard !isClosed else {
             return
         }
