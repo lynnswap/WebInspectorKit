@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   datakit-symbol-boundary:
-    name: DataKit Symbol Boundary
+    name: WebInspectorDataKit Public API Boundary
     runs-on: macos-26
     timeout-minutes: 10
     env:
@@ -67,7 +67,7 @@ jobs:
         run: Scripts/check-datakit-symbol-boundary.sh
 
   contract-tests:
-    name: Consumer Contract Tests
+    name: Consumer API Contract Tests
     runs-on: macos-26
     timeout-minutes: 15
     env:
