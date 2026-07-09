@@ -1,8 +1,16 @@
 import Synchronization
 
 package final class TransportReceiver: Sendable {
+    // Swift cannot store a weak actor reference directly in this Sendable value
+    // state. Every read and write of this box is protected by `state`'s Mutex;
+    // the box never escapes the receiver. The unchecked conformance represents
+    // only that synchronization fact, not ownership of connection state.
+    private final class WeakCore: @unchecked Sendable {
+        weak var value: ConnectionCore?
+    }
+
     private struct State: Sendable {
-        var transport: TransportSession?
+        var core = WeakCore()
         var messages: [String] = []
         var messageStartIndex = 0
         var isDraining = false
@@ -14,12 +22,12 @@ package final class TransportReceiver: Sendable {
 
     package init() {}
 
-    package func setTransport(_ transport: TransportSession) {
+    package func setCore(_ core: ConnectionCore) {
         let drainGeneration = state.withLock {
             guard !$0.isClosed else {
                 return nil as UInt64?
             }
-            $0.transport = transport
+            $0.core.value = core
             guard $0.messages.isEmpty == false, !$0.isDraining else {
                 return nil
             }
@@ -41,7 +49,7 @@ package final class TransportReceiver: Sendable {
                 return nil as UInt64?
             }
             $0.messages.append(message)
-            guard $0.transport != nil else {
+            guard $0.core.value != nil else {
                 return nil
             }
             guard !$0.isDraining else {
@@ -63,20 +71,32 @@ package final class TransportReceiver: Sendable {
         state.withLock {
             $0.isClosed = true
             $0.generation &+= 1
-            $0.transport = nil
+            $0.core.value = nil
             $0.messages.removeAll(keepingCapacity: false)
             $0.messageStartIndex = 0
             $0.isDraining = false
         }
     }
 
-    private func drain(generation: UInt64) async {
-        while let next = nextMessage(generation: generation) {
-            await next.transport.receiveRootMessage(next.message)
+    package func fail(_ message: String) {
+        let core = state.withLock { state in
+            guard !state.isClosed else {
+                return nil as ConnectionCore?
+            }
+            return state.core.value
+        }
+        Task { [weak core] in
+            await core?.failFromNativeCallback(message)
         }
     }
 
-    private func nextMessage(generation: UInt64) -> (transport: TransportSession, message: String)? {
+    private func drain(generation: UInt64) async {
+        while let next = nextMessage(generation: generation) {
+            await next.core.receiveRootMessage(next.message)
+        }
+    }
+
+    private func nextMessage(generation: UInt64) -> (core: ConnectionCore, message: String)? {
         state.withLock {
             guard !$0.isClosed, $0.generation == generation else {
                 return nil
@@ -87,7 +107,7 @@ package final class TransportReceiver: Sendable {
                 $0.isDraining = false
                 return nil
             }
-            guard let transport = $0.transport else {
+            guard let core = $0.core.value else {
                 $0.isDraining = false
                 return nil
             }
@@ -95,7 +115,7 @@ package final class TransportReceiver: Sendable {
             let message = $0.messages[$0.messageStartIndex]
             $0.messageStartIndex += 1
             compactMessagesIfNeeded(in: &$0)
-            return (transport, message)
+            return (core, message)
         }
     }
 

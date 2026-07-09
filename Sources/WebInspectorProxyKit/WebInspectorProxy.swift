@@ -23,8 +23,9 @@ private struct ProtocolCommandTarget: Sendable {
 
 /// An attached Web Inspector protocol connection for a `WKWebView`.
 ///
-/// `WebInspectorProxy` owns the private WebKit inspector attachment, tracks the
-/// current page target, and routes typed domain commands through
+/// `WebInspectorProxy` is a handle to the private WebKit inspector connection.
+/// Its connection core owns the current physical page binding and routes typed
+/// domain commands through
 /// ``WebInspectorTarget`` values.
 ///
 /// Example:
@@ -61,21 +62,7 @@ public actor WebInspectorProxy {
 
     private let configuration: Configuration
     private let backend: (any WebInspectorProxyBackend)?
-    private let transport: TransportSession?
-    private let closeConnection: (@Sendable () async -> Void)?
-    private var pageTarget: WebInspectorTarget?
-    private var nextTargetOrdinal: UInt64
-    private var nextCloseWaiterID: UInt64
-    private var closeWaiters: [UInt64: CheckedContinuation<Void, any Error>]
-    private var closeWaiterRegistrationWaiters: [CheckedContinuation<Void, Never>]
-    private var cancelledCloseWaiterIDs: Set<UInt64>
-    private var closeState: CloseState
-
-    private enum CloseState {
-        case open
-        case closing
-        case closed
-    }
+    private let core: ConnectionCore
 
     /// Attaches a Web Inspector protocol connection to a web view.
     ///
@@ -86,9 +73,9 @@ public actor WebInspectorProxy {
         attachingTo webView: WKWebView,
         configuration: Configuration = .init()
     ) async throws {
-        let nativeConnection: NativeInspectorConnection
+        let nativeCore: ConnectionCore
         do {
-            nativeConnection = try await NativeInspectorConnectionFactory.attach(
+            nativeCore = try await NativeConnectionCoreFactory.attach(
                 to: webView,
                 responseTimeout: configuration.responseTimeout,
                 fatalFailureHandler: { message in
@@ -100,21 +87,11 @@ public actor WebInspectorProxy {
         }
 
         self.configuration = configuration
-        backend = LiveWebInspectorProxyBackend(transport: nativeConnection.transport)
-        transport = nativeConnection.transport
-        closeConnection = {
-            await nativeConnection.close()
-        }
-        pageTarget = nil
-        nextTargetOrdinal = 0
-        nextCloseWaiterID = 0
-        closeWaiters = [:]
-        closeWaiterRegistrationWaiters = []
-        cancelledCloseWaiterIDs = []
-        closeState = .open
+        backend = LiveWebInspectorProxyBackend(transport: nativeCore)
+        core = nativeCore
 
         do {
-            try await bootstrapCurrentPage(from: nativeConnection.transport)
+            try await bootstrapCurrentPage(from: nativeCore)
         } catch {
             await close()
             throw Self.mapNativeAttachError(error)
@@ -128,15 +105,11 @@ public actor WebInspectorProxy {
     ) {
         self.configuration = configuration
         self.backend = backend
-        transport = nil
-        self.closeConnection = closeConnection
-        pageTarget = nil
-        nextTargetOrdinal = 0
-        nextCloseWaiterID = 0
-        closeWaiters = [:]
-        closeWaiterRegistrationWaiters = []
-        cancelledCloseWaiterIDs = []
-        closeState = .open
+        core = ConnectionCore(
+            backend: UnavailableTransportBackend(),
+            responseTimeout: configuration.responseTimeout,
+            closeAction: closeConnection
+        )
     }
 
     package init(
@@ -145,18 +118,12 @@ public actor WebInspectorProxy {
         closeConnection: (@Sendable () async -> Void)? = nil
     ) async throws {
         self.configuration = configuration
-        self.transport = transport
+        core = transport
         backend = LiveWebInspectorProxyBackend(transport: transport)
-        self.closeConnection = closeConnection ?? {
-            await transport.detach()
+
+        if let closeConnection {
+            await transport.replaceCloseActionForTesting(closeConnection)
         }
-        pageTarget = nil
-        nextTargetOrdinal = 0
-        nextCloseWaiterID = 0
-        closeWaiters = [:]
-        closeWaiterRegistrationWaiters = []
-        cancelledCloseWaiterIDs = []
-        closeState = .open
 
         do {
             try await bootstrapCurrentPage(from: transport)
@@ -168,17 +135,26 @@ public actor WebInspectorProxy {
 
     /// The currently known page target, if bootstrap has completed.
     public var currentPage: WebInspectorTarget? {
-        pageTarget
+        get async {
+            guard let record = await core.currentMainPageRecord() else {
+                return nil
+            }
+            return try? currentPageTarget(from: record)
+        }
     }
 
     package var currentPageBindingID: String? {
-        pageTarget?.pageBindingID
+        get async {
+            await core.currentMainPageRecord()?.id.rawValue
+        }
     }
 
     /// A Boolean value indicating whether the proxy has an open page target
     /// that can receive reload commands.
     public var canReload: Bool {
-        pageTarget != nil && closeState == .open
+        get async {
+            await core.currentMainPageRecord() != nil
+        }
     }
 
     /// Waits for and returns the current page target.
@@ -187,21 +163,15 @@ public actor WebInspectorProxy {
     /// possible. The method throws if the proxy is closed, detached, or no page
     /// target can be discovered before the bootstrap timeout.
     public func waitForCurrentPage() async throws -> WebInspectorTarget {
-        try ensureOpenForCurrentPageAccess()
-        if let transport {
-            do {
-                try await refreshCurrentPage(from: transport, timeout: configuration.bootstrapTimeout)
-            } catch {
-                throw Self.mapBootstrapTargetError(error)
-            }
-            if let pageTarget {
-                return pageTarget
-            }
+        try await ensureOpenForCurrentPageAccess()
+        do {
+            return try await currentPageTarget(
+                from: core,
+                timeout: configuration.bootstrapTimeout
+            )
+        } catch {
+            throw Self.mapBootstrapTargetError(error)
         }
-        if let pageTarget {
-            return pageTarget
-        }
-        throw WebInspectorProxyError.disconnected("WebInspectorProxyKit shell has no current page target.")
     }
 
     /// Waits for a usable current page target after the previous one was
@@ -211,19 +181,14 @@ public actor WebInspectorProxy {
     /// `gracePeriod` waits indefinitely for the next page target. Throws only
     /// connection-terminal errors.
     package func waitForCurrentPageReplacement(gracePeriod: Duration?) async throws -> WebInspectorTarget? {
-        try ensureOpenForCurrentPageAccess()
-        guard let transport else {
-            return pageTarget
-        }
+        try await ensureOpenForCurrentPageAccess()
         do {
-            try await refreshCurrentPage(from: transport, timeout: gracePeriod)
+            return try await currentPageTarget(from: core, timeout: gracePeriod)
         } catch TransportSession.Error.missingMainPageTarget {
             return nil
         } catch {
             throw Self.mapBootstrapTargetError(error)
         }
-        try ensureOpenForCurrentPageAccess()
-        return pageTarget
     }
 
     package var bootstrapGracePeriod: Duration {
@@ -232,9 +197,7 @@ public actor WebInspectorProxy {
 
     /// Reloads the currently inspected page without ignoring cache.
     public func reload() async throws {
-        guard let pageTarget else {
-            throw WebInspectorProxyError.disconnected("WebInspectorProxyKit shell has no current page target.")
-        }
+        let pageTarget = try await waitForCurrentPage()
         let _: Void = try await dispatchCommand(
             targetID: pageTarget.id,
             route: pageTarget.route,
@@ -249,20 +212,7 @@ public actor WebInspectorProxy {
     /// Calling `close()` more than once is allowed. Await
     /// ``waitUntilClosed()`` when another task needs to observe completion.
     public func close() async {
-        switch closeState {
-        case .open:
-            break
-        case .closing:
-            try? await waitUntilClosed()
-            return
-        case .closed:
-            return
-        }
-        closeState = .closing
-        pageTarget = nil
-        await closeConnection?()
-        closeState = .closed
-        resumeCloseWaiters()
+        await core.close()
     }
 
     /// Suspends until ``close()`` has finished.
@@ -270,53 +220,32 @@ public actor WebInspectorProxy {
     /// If the proxy is already closed, this method returns immediately. If the
     /// waiting task is cancelled, only that waiter is cancelled.
     public func waitUntilClosed() async throws {
-        guard closeState != .closed else {
-            return
-        }
-        nextCloseWaiterID &+= 1
-        let waiterID = nextCloseWaiterID
-        try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                registerCloseWaiter(id: waiterID, continuation: continuation)
-            }
-        } onCancel: {
-            Task {
-                await self.cancelCloseWaiter(waiterID)
-            }
-        }
+        try await core.waitUntilClosed()
     }
 
     package func installTargetForTesting(
         kind: WebInspectorTarget.Kind = .page,
         frameID: FrameID? = nil,
         isProvisional: Bool = false
-    ) -> WebInspectorTarget {
-        let ordinal = nextTargetOrdinal
-        nextTargetOrdinal += 1
+    ) async -> WebInspectorTarget {
+        let record = await core.installTargetForTesting(
+            kind: kind.protocolKind,
+            frameID: frameID.map { ProtocolFrame.ID($0.rawValue) },
+            isProvisional: isProvisional
+        )
         let target = WebInspectorTarget(
-            id: WebInspectorTarget.ID("test-target-\(ordinal)"),
+            id: WebInspectorTarget.ID(record.id.rawValue),
             kind: kind,
             frameID: frameID,
             isProvisional: isProvisional,
             proxy: self,
-            route: RoutingTargetID("test-route-\(ordinal)")
+            route: RoutingTargetID(record.id.rawValue)
         )
-        if kind == .page && isProvisional == false {
-            pageTarget = target
-        }
         return target
     }
 
     package func waitForCloseWaiterForTesting() async {
-        guard closeState != .closed else {
-            preconditionFailure("Cannot wait for a close waiter after WebInspectorProxy closed.")
-        }
-        guard closeWaiters.isEmpty else {
-            return
-        }
-        await withCheckedContinuation { continuation in
-            closeWaiterRegistrationWaiters.append(continuation)
-        }
+        await core.waitForCloseWaiterForTesting()
     }
 
     package func dispatchCommand<Payload: Sendable, Result: Sendable>(
@@ -326,8 +255,12 @@ public actor WebInspectorProxy {
         method: String,
         payload: Payload
     ) async throws -> Result {
-        guard closeState == .open else {
+        do {
+            try await core.requireOpen()
+        } catch TransportSession.Error.transportClosed {
             throw WebInspectorProxyError.closed
+        } catch let TransportSession.Error.transportFailure(message) {
+            throw WebInspectorProxyError.disconnected(message)
         }
         guard let backend else {
             throw unimplementedCommand(domain: domain.rawValue, method: method)
@@ -466,7 +399,6 @@ public actor WebInspectorProxy {
                                 guard case let .targetLifecycle(value) = event else {
                                     preconditionFailure("Backend emitted a mismatched event for lifecycle.")
                                 }
-                                await self.applyTargetLifecycleEventToProxyState(value)
                                 continuation.yield(value)
                             }
                         }
@@ -814,90 +746,32 @@ public actor WebInspectorProxy {
     }
 
     private func bootstrapCurrentPage(from transport: TransportSession) async throws {
-        try await refreshCurrentPage(from: transport, timeout: configuration.bootstrapTimeout)
+        _ = try await currentPageTarget(
+            from: transport,
+            timeout: configuration.bootstrapTimeout
+        )
     }
 
-    /// `timeout: nil` waits indefinitely for the next main page target.
-    private func refreshCurrentPage(
+    /// `timeout: nil` waits indefinitely for the next main page target. The
+    /// returned handle is materialized from the core's current record; no
+    /// proxy-owned current-target cache participates in routing.
+    private func currentPageTarget(
         from transport: TransportSession,
         timeout: Duration?
-    ) async throws {
-        let transportTarget: TransportSession.MainPageTarget
-        do {
-            transportTarget = try await transport.waitForCurrentMainPageTarget(
-                timeout: timeout
-            )
-        } catch {
-            pageTarget = nil
-            try ensureOpenForCurrentPageAccess()
-            throw error
-        }
-        let snapshot = await transport.snapshot()
-        try ensureOpenForCurrentPageAccess()
-        guard let record = snapshot.targetsByID[transportTarget.targetID] else {
+    ) async throws -> WebInspectorTarget {
+        _ = try await transport.waitForCurrentMainPageTarget(timeout: timeout)
+        try await ensureOpenForCurrentPageAccess()
+        guard let record = await transport.currentMainPageRecord() else {
             throw WebInspectorProxyError.disconnected("Current page target disappeared during bootstrap.")
         }
-        pageTarget = try currentPageTarget(from: record)
+        return try currentPageTarget(from: record)
     }
 
-    private func ensureOpenForCurrentPageAccess() throws {
-        guard closeState == .open else {
-            pageTarget = nil
-            throw WebInspectorProxyError.closed
-        }
-    }
-
-    private func applyTargetLifecycleEventToProxyState(_ event: WebInspectorTargetLifecycleEvent) {
-        guard closeState == .open else {
-            return
-        }
-        switch event {
-        case let .didCommitProvisionalTarget(commit) where commit.newTarget.id == .currentPage:
-            pageTarget = currentPageTarget(from: commit.newTarget)
-        case let .targetDestroyed(targetID) where targetID == .currentPage:
-            pageTarget = nil
-        default:
-            break
-        }
-    }
-
-    private func registerCloseWaiter(id: UInt64, continuation: CheckedContinuation<Void, any Error>) {
-        guard closeState != .closed else {
-            continuation.resume()
-            return
-        }
-        guard cancelledCloseWaiterIDs.remove(id) == nil else {
-            continuation.resume(throwing: CancellationError())
-            return
-        }
-        closeWaiters[id] = continuation
-        resumeCloseWaiterRegistrationWaiters()
-    }
-
-    private func cancelCloseWaiter(_ id: UInt64) {
-        guard let continuation = closeWaiters.removeValue(forKey: id) else {
-            if closeState != .closed {
-                cancelledCloseWaiterIDs.insert(id)
-            }
-            return
-        }
-        continuation.resume(throwing: CancellationError())
-    }
-
-    private func resumeCloseWaiters() {
-        let waiters = closeWaiters.values
-        closeWaiters.removeAll()
-        cancelledCloseWaiterIDs.removeAll()
-        for waiter in waiters {
-            waiter.resume()
-        }
-    }
-
-    private func resumeCloseWaiterRegistrationWaiters() {
-        let waiters = closeWaiterRegistrationWaiters
-        closeWaiterRegistrationWaiters.removeAll()
-        for waiter in waiters {
-            waiter.resume()
+    private func ensureOpenForCurrentPageAccess() async throws {
+        do {
+            try await core.requireOpen()
+        } catch {
+            throw Self.mapBootstrapTargetError(error)
         }
     }
 
@@ -916,18 +790,6 @@ public actor WebInspectorProxy {
         )
     }
 
-    private func currentPageTarget(from target: WebInspectorLifecycleTarget) -> WebInspectorTarget {
-        WebInspectorTarget(
-            id: target.id,
-            kind: target.kind,
-            frameID: target.frameID,
-            isProvisional: target.isProvisional,
-            proxy: self,
-            route: .currentPage,
-            pageBindingID: target.pageBindingID
-        )
-    }
-
     private nonisolated static func mapBootstrapTargetError(_ error: any Error) -> any Error {
         guard let transportError = error as? TransportSession.Error else {
             return error
@@ -937,6 +799,8 @@ public actor WebInspectorProxy {
             return WebInspectorProxyError.timeout(domain: "Target", method: "waitForCurrentPage")
         case .transportClosed:
             return WebInspectorProxyError.closed
+        case let .transportFailure(message):
+            return WebInspectorProxyError.disconnected(message)
         case let .replyTimeout(method, _):
             return WebInspectorProxyError.timeout(domain: "Target", method: method)
         case let .remoteError(method, _, message):
@@ -970,5 +834,29 @@ public actor WebInspectorProxy {
             }
         }
         return WebInspectorProxyError.attachFailed(String(describing: error))
+    }
+}
+
+private struct UnavailableTransportBackend: TransportBackend {
+    func sendJSONString(_ message: String) async throws {
+        _ = message
+        throw TransportSession.Error.transportClosed
+    }
+
+    func detach() async {}
+}
+
+private extension WebInspectorTarget.Kind {
+    var protocolKind: ProtocolTarget.Kind {
+        switch self {
+        case .page:
+            .page
+        case .frame:
+            .frame
+        case .worker:
+            .worker
+        case .serviceWorker:
+            .serviceWorker
+        }
     }
 }

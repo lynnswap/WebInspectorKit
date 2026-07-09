@@ -103,6 +103,8 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         switch transportError {
         case .transportClosed:
             return WebInspectorProxyError.closed
+        case let .transportFailure(message):
+            return WebInspectorProxyError.disconnected(message)
         case let .replyTimeout(method, _):
             return WebInspectorProxyError.timeout(domain: domain, method: method)
         case let .remoteError(method, _, message):

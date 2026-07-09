@@ -4,7 +4,7 @@ import WebInspectorNativeBridge
 
 @MainActor
 package final class NativeInspectorBackend: TransportBackend {
-    private let webView: WKWebView
+    private weak var webView: WKWebView?
     private let resolvedSymbols: NativeInspectorResolvedSymbols
     private nonisolated let messageHandler: @Sendable (String) -> Void
     private nonisolated let fatalFailureHandler: @Sendable (String) -> Void
@@ -23,6 +23,9 @@ package final class NativeInspectorBackend: TransportBackend {
     }
 
     package func attach() throws {
+        guard let webView else {
+            throw NativeInspectablePageError.missingWebView
+        }
         let bridge = NativeInspectorBridge(webView: webView)
         bridge.messageHandler = { [messageHandler] message in
             messageHandler(message)
@@ -45,8 +48,14 @@ package final class NativeInspectorBackend: TransportBackend {
 
     package nonisolated func detach() async {
         await MainActor.run {
-            bridge?.detach()
-            bridge = nil
+            detachSynchronously()
         }
+    }
+
+    package func detachSynchronously() {
+        bridge?.messageHandler = nil
+        bridge?.fatalFailureHandler = nil
+        bridge?.detach()
+        bridge = nil
     }
 }

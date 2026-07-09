@@ -1,8 +1,25 @@
 import Foundation
 
-package actor TransportSession {
+/// Owns one physical inspector connection.
+///
+/// Target membership, command/reply routing, inbound ordering, and terminal
+/// state deliberately live on the same actor so no public handle has to mirror
+/// transport state in order to stay current.
+package actor ConnectionCore {
     package typealias TimeoutSleep = @Sendable (Duration) async throws -> Void
     package typealias ResponseTimeoutDidFire = @Sendable () async -> Void
+    package typealias CloseAction = @Sendable () async -> Void
+
+    package enum TerminalCause: Equatable, Sendable {
+        case explicitClose
+        case fatal(String)
+    }
+
+    private enum State {
+        case open
+        case closing(TerminalCause)
+        case closed(TerminalCause)
+    }
 
     private let backend: any TransportBackend
     private let responseTimeout: Duration?
@@ -11,20 +28,27 @@ package actor TransportSession {
     private var nextCommandID: UInt64
     private var eventSequences: TransportEventSequenceTracker
     private var replyStore: TransportReplyStore
-    private var mainPageTargetWaiterStore: TransportSession.MainPageTargetWaiterStore
+    private var mainPageTargetWaiterStore: ConnectionCore.MainPageTargetWaiterStore
     private var targetRegistry: TransportTargetRegistry
     private var provisionalTargetMessageStore: TransportProvisionalTargetMessageStore
     private var styleSheetRouting: TransportStyleSheetRouting
     private var runtimeContextRegistry: RuntimeContextRegistry
     private var eventSubscribers: TransportEventSubscriberRegistry
     private var inboundMessageQueue: TransportInboundMessageQueue
-    private var closed: Bool
+    private var closeAction: CloseAction
+    private var state: State
+    private var nextCloseWaiterID: UInt64
+    private var closeWaiters: [UInt64: CheckedContinuation<Void, any Swift.Error>]
+    private var closeWaiterRegistrationWaiters: [CheckedContinuation<Void, Never>]
+    private var cancelledCloseWaiterIDs: Set<UInt64>
+    private var nextTestTargetOrdinal: UInt64
 
     package init(
         backend: any TransportBackend,
         responseTimeout: Duration? = .seconds(5),
         timeoutSleep: TimeoutSleep? = nil,
-        responseTimeoutDidFire: ResponseTimeoutDidFire? = nil
+        responseTimeoutDidFire: ResponseTimeoutDidFire? = nil,
+        closeAction: CloseAction? = nil
     ) {
         self.backend = backend
         self.responseTimeout = responseTimeout
@@ -33,18 +57,43 @@ package actor TransportSession {
         nextCommandID = 0
         eventSequences = TransportEventSequenceTracker()
         replyStore = TransportReplyStore()
-        mainPageTargetWaiterStore = TransportSession.MainPageTargetWaiterStore()
+        mainPageTargetWaiterStore = ConnectionCore.MainPageTargetWaiterStore()
         targetRegistry = TransportTargetRegistry()
         provisionalTargetMessageStore = TransportProvisionalTargetMessageStore()
         styleSheetRouting = TransportStyleSheetRouting()
         runtimeContextRegistry = RuntimeContextRegistry()
         eventSubscribers = TransportEventSubscriberRegistry()
         inboundMessageQueue = TransportInboundMessageQueue()
-        closed = false
+        self.closeAction = closeAction ?? {
+            await backend.detach()
+        }
+        state = .open
+        nextCloseWaiterID = 0
+        closeWaiters = [:]
+        closeWaiterRegistrationWaiters = []
+        cancelledCloseWaiterIDs = []
+        nextTestTargetOrdinal = 0
+    }
+
+    isolated deinit {
+        // Asynchronous detach belongs to explicit close. The isolated
+        // deinitializer is only a synchronous backstop for actor-owned local
+        // resources; native resources have their own isolated backstop.
+        eventSubscribers.finishAndRemoveAll()
+        precondition(replyStore.pendingReplies.isEmpty, "ConnectionCore deinitialized with pending replies; call close() explicitly.")
+        precondition(mainPageTargetWaiterStore.isEmpty, "ConnectionCore deinitialized with pending target waiters; call close() explicitly.")
+        precondition(closeWaiters.isEmpty, "ConnectionCore deinitialized with pending close waiters.")
+    }
+
+    private var isOpen: Bool {
+        if case .open = state {
+            return true
+        }
+        return false
     }
 
     package func events(for domain: ProtocolDomain) -> AsyncStream<ProtocolEvent> {
-        guard !closed else {
+        guard isOpen else {
             return finishedStream(of: ProtocolEvent.self)
         }
         let pair = AsyncStream<ProtocolEvent>.makeStream(bufferingPolicy: .unbounded)
@@ -58,7 +107,7 @@ package actor TransportSession {
     }
 
     package func orderedEvents() -> AsyncStream<ProtocolEvent> {
-        guard !closed else {
+        guard isOpen else {
             return finishedStream(of: ProtocolEvent.self)
         }
         let pair = AsyncStream<ProtocolEvent>.makeStream(bufferingPolicy: .unbounded)
@@ -73,8 +122,8 @@ package actor TransportSession {
 
     package func send(_ command: ProtocolCommand) async throws -> ProtocolCommand.Result {
         try Task.checkCancellation()
-        guard !closed else {
-            throw TransportSession.Error.transportClosed
+        guard isOpen else {
+            throw terminalTransportError
         }
 
         switch command.routing {
@@ -102,7 +151,7 @@ package actor TransportSession {
 
     @discardableResult
     package func receiveRootMessage(_ message: String) async -> UInt64 {
-        guard !closed else {
+        guard isOpen else {
             return eventSequences.current.sequence
         }
         inboundMessageQueue.append(message)
@@ -111,25 +160,73 @@ package actor TransportSession {
     }
 
     package func detach() async {
-        guard !closed else {
+        await close()
+    }
+
+    package func close() async {
+        await terminate(.explicitClose)
+    }
+
+    package func failFromNativeCallback(_ message: String) async {
+        await terminate(.fatal(message))
+    }
+
+    package func waitUntilClosed() async throws {
+        switch state {
+        case .open, .closing:
+            break
+        case let .closed(cause):
+            return try terminalResult(for: cause).get()
+        }
+
+        nextCloseWaiterID &+= 1
+        let waiterID = nextCloseWaiterID
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                registerCloseWaiter(id: waiterID, continuation: continuation)
+            }
+        } onCancel: {
+            Task { [weak self] in
+                await self?.cancelCloseWaiter(waiterID)
+            }
+        }
+    }
+
+    package func waitForCloseWaiterForTesting() async {
+        if case .closed = state {
+            preconditionFailure("Cannot wait for a close waiter after ConnectionCore closed.")
+        }
+        guard closeWaiters.isEmpty else {
             return
         }
-        closed = true
-        for pending in replyStore.pendingReplies {
-            await pending.promise.fulfill(.failure(TransportSession.Error.transportClosed))
+        await withCheckedContinuation { continuation in
+            closeWaiterRegistrationWaiters.append(continuation)
         }
-        for waiter in mainPageTargetWaiterStore.removeAll() {
-            await waiter.fulfill(.failure(TransportSession.Error.transportClosed))
+    }
+
+    package func replaceCloseActionForTesting(_ action: @escaping CloseAction) {
+        precondition(isOpen, "Close action must be installed before closing begins.")
+        closeAction = action
+    }
+
+    package func requireOpen() throws {
+        guard isOpen else {
+            throw terminalTransportError
         }
-        replyStore.removeAll()
-        provisionalTargetMessageStore.removeAll()
-        eventSubscribers.finishAndRemoveAll()
-        await backend.detach()
+    }
+
+    package var terminalCause: TerminalCause? {
+        switch state {
+        case .open:
+            nil
+        case let .closing(cause), let .closed(cause):
+            cause
+        }
     }
 
     package func waitForCurrentMainPageTarget(timeout: Duration? = nil) async throws -> TransportSession.MainPageTarget {
-        guard !closed else {
-            throw TransportSession.Error.transportClosed
+        guard isOpen else {
+            throw terminalTransportError
         }
         if let currentMainPageTargetID = targetRegistry.currentMainPageTargetID {
             return TransportSession.MainPageTarget(
@@ -186,6 +283,36 @@ package actor TransportSession {
 
     package func targetID(forFrameID frameID: ProtocolFrame.ID) -> ProtocolTarget.ID? {
         targetRegistry.targetID(forFrameID: frameID)
+    }
+
+    package func currentMainPageRecord() -> ProtocolTarget.Record? {
+        guard isOpen,
+              let targetID = targetRegistry.currentMainPageTargetID else {
+            return nil
+        }
+        return targetRegistry.target(for: targetID)
+    }
+
+    package func installTargetForTesting(
+        kind: ProtocolTarget.Kind,
+        frameID: ProtocolFrame.ID?,
+        isProvisional: Bool
+    ) -> ProtocolTarget.Record {
+        precondition(isOpen, "Cannot install a target after ConnectionCore starts closing.")
+        let ordinal = nextTestTargetOrdinal
+        nextTestTargetOrdinal &+= 1
+        let id = ProtocolTarget.ID("test-target-\(ordinal)")
+        let record = ProtocolTarget.Record(
+            id: id,
+            kind: kind,
+            frameID: frameID,
+            parentFrameID: nil,
+            capabilities: .resolved(for: kind, domainNames: nil),
+            isProvisional: isProvisional,
+            isPaused: false
+        )
+        _ = targetRegistry.recordTargetCreated(record)
+        return record
     }
 
     private func sendRoot(_ command: ProtocolCommand) async throws -> ProtocolCommand.Result {
@@ -890,7 +1017,109 @@ package actor TransportSession {
         }
         replyStore.markTargetReplyAsBufferedIfNeeded(commandID: commandID, targetID: targetID)
     }
+
+    private var terminalTransportError: TransportSession.Error {
+        switch state {
+        case .open, .closing(.explicitClose), .closed(.explicitClose):
+            .transportClosed
+        case let .closing(.fatal(message)), let .closed(.fatal(message)):
+            .transportFailure(message)
+        }
+    }
+
+    private func terminate(_ cause: TerminalCause) async {
+        switch state {
+        case .open:
+            state = .closing(cause)
+        case .closing:
+            try? await waitUntilClosed()
+            return
+        case .closed:
+            return
+        }
+
+        let transportError = terminalTransportError
+        for pending in replyStore.pendingReplies {
+            await pending.promise.fulfill(.failure(transportError))
+        }
+        for waiter in mainPageTargetWaiterStore.removeAll() {
+            await waiter.fulfill(.failure(transportError))
+        }
+        replyStore.removeAll()
+        provisionalTargetMessageStore.removeAll()
+        inboundMessageQueue = TransportInboundMessageQueue()
+        eventSubscribers.finishAndRemoveAll()
+
+        let closeAction = self.closeAction
+        await closeAction()
+
+        // A close action is allowed to suspend. The first terminal cause owns
+        // the transition even if another close/fatal request arrives while it
+        // is running.
+        guard case .closing = state else {
+            preconditionFailure("ConnectionCore terminal state changed outside terminate(_:).")
+        }
+        state = .closed(cause)
+        resumeCloseWaiters(with: terminalResult(for: cause))
+    }
+
+    private func terminalResult(for cause: TerminalCause) -> Result<Void, any Swift.Error> {
+        switch cause {
+        case .explicitClose:
+            .success(())
+        case let .fatal(message):
+            .failure(WebInspectorProxyError.disconnected(message))
+        }
+    }
+
+    private func registerCloseWaiter(
+        id: UInt64,
+        continuation: CheckedContinuation<Void, any Swift.Error>
+    ) {
+        if case let .closed(cause) = state {
+            continuation.resume(with: terminalResult(for: cause))
+            return
+        }
+        guard cancelledCloseWaiterIDs.remove(id) == nil else {
+            continuation.resume(throwing: CancellationError())
+            return
+        }
+        closeWaiters[id] = continuation
+        resumeCloseWaiterRegistrationWaiters()
+    }
+
+    private func cancelCloseWaiter(_ id: UInt64) {
+        guard let continuation = closeWaiters.removeValue(forKey: id) else {
+            if case .closed = state {
+                return
+            }
+            cancelledCloseWaiterIDs.insert(id)
+            return
+        }
+        continuation.resume(throwing: CancellationError())
+    }
+
+    private func resumeCloseWaiters(with result: Result<Void, any Swift.Error>) {
+        let waiters = closeWaiters.values
+        closeWaiters.removeAll()
+        cancelledCloseWaiterIDs.removeAll()
+        for waiter in waiters {
+            waiter.resume(with: result)
+        }
+    }
+
+    private func resumeCloseWaiterRegistrationWaiters() {
+        let waiters = closeWaiterRegistrationWaiters
+        closeWaiterRegistrationWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
 }
+
+/// Temporary package-only spelling retained while downstream package targets
+/// migrate in later phases. It is a typealias, not a second lifecycle owner.
+package typealias TransportSession = ConnectionCore
 
 private struct TargetDispatchParams: Decodable {
     var targetId: ProtocolTarget.ID

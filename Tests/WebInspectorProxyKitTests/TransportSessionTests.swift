@@ -1159,6 +1159,88 @@ func orderedStreamReceivesTargetEventsAcrossDomainsInTransportOrder() async thro
     #expect(recordedEvents.map(\.sequence) == [1, 2, 3, 4])
 }
 
+@Test
+func nativeFatalCallbackOwnsTerminalCauseAndFailsPendingWork() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    let receiver = TransportReceiver()
+    receiver.setCore(core)
+
+    let sendTask = Task {
+        try await core.send(
+            ProtocolCommand(domain: .target, method: "Target.setPauseOnStart", routing: .root)
+        )
+    }
+    _ = try await waitForRootMessage(backend)
+
+    let closeWaitTask = Task {
+        try await core.waitUntilClosed()
+    }
+    await core.waitForCloseWaiterForTesting()
+
+    receiver.fail("native callback failed")
+
+    await #expect(throws: TransportSession.Error.transportFailure("native callback failed")) {
+        _ = try await sendTask.value
+    }
+    await #expect(throws: WebInspectorProxyError.disconnected("native callback failed")) {
+        try await closeWaitTask.value
+    }
+    #expect(await core.terminalCause == .fatal("native callback failed"))
+    #expect(await backend.isDetached())
+    #expect(await core.snapshot().pendingRootReplyIDs.isEmpty)
+}
+
+@Test
+func connectionCoreCloseIsIdempotentAndFinishesStreamsOnce() async throws {
+    let backend = CountingTransportBackend()
+    let core = ConnectionCore(backend: backend)
+    let stream = await core.events(for: .network)
+    let nextEventTask = Task {
+        var iterator = stream.makeAsyncIterator()
+        return await iterator.next()
+    }
+
+    async let firstClose: Void = core.close()
+    async let secondClose: Void = core.close()
+    _ = await (firstClose, secondClose)
+
+    #expect(await backend.detachCount == 1)
+    #expect(await nextEventTask.value == nil)
+    try await core.waitUntilClosed()
+}
+
+@Test
+func receiverDoesNotKeepExplicitlyClosedConnectionCoreAlive() async {
+    let backend = FakeTransportBackend()
+    let receiver = TransportReceiver()
+    weak var weakCore: ConnectionCore?
+
+    do {
+        let core = ConnectionCore(backend: backend)
+        weakCore = core
+        receiver.setCore(core)
+        await core.close()
+    }
+
+    #expect(weakCore == nil)
+}
+
+@Test
+func receiverDoesNotKeepDroppedConnectionCoreAlive() {
+    let backend = FakeTransportBackend()
+    let receiver = TransportReceiver()
+    weak var weakCore: ConnectionCore?
+
+    do {
+        let core = ConnectionCore(backend: backend)
+        weakCore = core
+        receiver.setCore(core)
+    }
+
+    #expect(weakCore == nil)
+}
+
 private final class ProtocolEventRecorder: Sendable {
     private let storage = ProtocolEventRecorderStorage()
     private let task: Task<Void, Never>
@@ -1183,6 +1265,18 @@ private final class ProtocolEventRecorder: Sendable {
 
     func events(prefix count: Int, timeout: Duration = testWaitTimeout) async throws -> [ProtocolEvent] {
         try await storage.events(prefix: count, timeout: timeout)
+    }
+}
+
+private actor CountingTransportBackend: TransportBackend {
+    private(set) var detachCount = 0
+
+    func sendJSONString(_ message: String) async throws {
+        _ = message
+    }
+
+    func detach() async {
+        detachCount += 1
     }
 }
 

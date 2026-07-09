@@ -587,6 +587,27 @@ func transportBackedProxyWaitUntilClosedSuspendsUntilClose() async throws {
 }
 
 @Test
+func nativeFatalCallbackPropagatesThroughProxyTerminalAPI() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: .milliseconds(750))
+    let receiver = TransportReceiver()
+    receiver.setCore(core)
+    await installPageTarget(in: core)
+    let proxy = try await WebInspectorProxy(transport: core)
+    let page = try await proxy.waitForCurrentPage()
+
+    receiver.fail("native frontend disconnected")
+
+    await #expect(throws: WebInspectorProxyError.disconnected("native frontend disconnected")) {
+        try await proxy.waitUntilClosed()
+    }
+    await #expect(throws: WebInspectorProxyError.disconnected("native frontend disconnected")) {
+        try await page.page.reload()
+    }
+    #expect(await backend.isDetached())
+}
+
+@Test
 func proxyWaitUntilClosedReturnsImmediatelyAfterClose() async throws {
     let proxy = WebInspectorProxy()
 
@@ -596,6 +617,31 @@ func proxyWaitUntilClosedReturnsImmediatelyAfterClose() async throws {
         try await proxy.waitUntilClosed()
     }
     try await throwingValue(of: waitTask, timeout: .milliseconds(100))
+}
+
+@Test
+func proxyHandleDeallocatesAfterExplicitClose() async {
+    weak var weakProxy: WebInspectorProxy?
+
+    do {
+        let proxy = WebInspectorProxy()
+        weakProxy = proxy
+        await proxy.close()
+    }
+
+    #expect(weakProxy == nil)
+}
+
+@Test
+func droppingOpenProxyHandleReachesConnectionCoreDeinit() {
+    weak var weakProxy: WebInspectorProxy?
+
+    do {
+        let proxy = WebInspectorProxy()
+        weakProxy = proxy
+    }
+
+    #expect(weakProxy == nil)
 }
 
 @Test
