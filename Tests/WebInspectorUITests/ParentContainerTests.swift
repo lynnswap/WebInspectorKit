@@ -918,7 +918,7 @@ struct ParentContainerTests {
                 hostLayout: .compact
             ) as? NetworkCompactNavigationController
         )
-        let window = showInWindow(compactNavigationController)
+        let window = showInWindow(compactNavigationController, useUIKitVisibility: false)
         defer { window.isHidden = true }
 
         model.selectRequest(request)
@@ -1030,13 +1030,46 @@ struct ParentContainerTests {
         return context.registeredRequest(forProxyID: requestID)!.id
     }
 
-    private func showInWindow(_ viewController: UIViewController) -> UIWindow {
+    private func showInWindow(
+        _ viewController: UIViewController,
+        useUIKitVisibility: Bool = true
+    ) -> UIWindow {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = viewController
-        window.makeKeyAndVisible()
         viewController.loadViewIfNeeded()
+        viewController.view.frame = window.bounds
+        if useUIKitVisibility {
+            window.makeKeyAndVisible()
+        } else {
+            activateNetworkRenderingForTesting(in: viewController)
+        }
         window.layoutIfNeeded()
         return window
+    }
+
+    private func activateNetworkRenderingForTesting(in viewController: UIViewController) {
+        if let navigationController = viewController as? NetworkCompactNavigationController {
+            navigationController.resumeSelectionObservationForTesting()
+            for child in navigationController.viewControllers {
+                activateNetworkRenderingForTesting(in: child)
+            }
+            return
+        }
+
+        if let navigationController = viewController as? UINavigationController {
+            for child in navigationController.viewControllers {
+                activateNetworkRenderingForTesting(in: child)
+            }
+            return
+        }
+
+        if let listViewController = viewController as? NetworkListViewController {
+            listViewController.resumeRenderingForTesting()
+        }
+
+        if let detailViewController = viewController as? NetworkDetailViewController {
+            detailViewController.resumeRenderingForTesting()
+        }
     }
 
     private func makeFakeContainer() async throws -> WebInspectorContainer {
@@ -1203,7 +1236,13 @@ struct ParentContainerTests {
                 [navigationController.selectionObservationDeliveryForTesting].compactMap { $0 }
             },
             sample: {
-                condition()
+                if navigationController.view.window?.isHidden != false {
+                    navigationController.syncStackForTesting()
+                    for child in navigationController.viewControllers {
+                        activateNetworkRenderingForTesting(in: child)
+                    }
+                }
+                return condition()
             }
         )
     }
