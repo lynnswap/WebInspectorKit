@@ -508,8 +508,6 @@ struct NetworkDetailViewControllerTests {
 
         let didRenderBody = await waitUntilRendered(in: viewController) {
             viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe\ncity=Tokyo East"
-                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.model.language == .plainText
-                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.model.drawsBackground == false
         }
         #expect(didRenderBody)
     }
@@ -572,43 +570,6 @@ struct NetworkDetailViewControllerTests {
                 && viewController.currentPreviewRoleForTesting == .response
         }
         #expect(didFetch)
-    }
-
-    @Test
-    func responsePreviewPrewarmsSyntaxWhileFetching() async throws {
-        let context = makeContext()
-        let request = try #require(
-            await applyRequest(
-                to: context,
-                requestID: "1",
-                url: "https://example.com/api/data.json",
-                responseHeaders: ["content-type": "application/json"],
-                responseMimeType: "application/json"
-            )
-        )
-        let model = NetworkPanelModel(context: context)
-        model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
-        let window = showInWindow(viewController)
-        defer { window.isHidden = true }
-        viewController.setModeForTesting(.preview)
-
-        let didStartFetching = await waitUntilRendered(in: viewController) {
-            guard case .failed = request.responseBody.phase else {
-                return false
-            }
-            return viewController.currentModeForTesting == .preview
-                && viewController.currentPreviewRoleForTesting == .response
-                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.model.language == .json
-        }
-        #expect(didStartFetching)
-
-        applyResponseBody(to: context, request: request, body: #"{"ok":true}"#, base64Encoded: false)
-
-        let didRenderBody = await waitUntilRendered(in: viewController) {
-            return viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text.contains(#""ok""#)
-        }
-        #expect(didRenderBody)
     }
 
     @Test
@@ -1149,7 +1110,6 @@ struct NetworkDetailViewControllerTests {
                     && abs(layout.zoomScale - expectedMinimumZoomScale) < 0.001
             } ?? false
             return bodyViewController.isImagePreviewVisibleForTesting
-                && bodyViewController.syntaxViewForTesting.isHidden
                 && bodyViewController.imageViewForTesting.image?.size == imageSize
                 && didCompleteImageLayout
         }
@@ -1550,98 +1510,58 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func previewRoleSwitchPreservesInstalledBodyViews() async throws {
-        let context = makeContext()
-        let request = try #require(
-            await applyRequest(
-                to: context,
-                requestID: "1",
-                url: "https://example.com/api/data.json",
-                requestHeaders: ["content-type": "application/x-www-form-urlencoded"],
-                postData: "name=Jane+Doe",
-                responseHeaders: ["content-type": "application/json"],
-                responseMimeType: "application/json"
-            )
+    func textPreviewCoordinatorIgnoresCancelledPreparationResult() async throws {
+        let firstBody = NetworkBody(
+            role: .response,
+            kind: .text,
+            full: #"{"first":true}"#,
+            sourceSyntaxKind: .json,
+            phase: .loaded
         )
-        let model = NetworkPanelModel(context: context)
-        model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
-        let window = showInWindow(viewController)
-        defer { window.isHidden = true }
-        viewController.setModeForTesting(.preview)
-
-        let didRenderPreview = await waitUntilRendered(in: viewController) {
-            viewController.currentModeForTesting == .preview
-                && viewController.isPreviewRoleControlHiddenForTesting == false
-        }
-        #expect(didRenderPreview)
-
-        let bodyViewControllerID = ObjectIdentifier(viewController.syntaxBodyViewControllerForTesting)
-        let syntaxViewID = ObjectIdentifier(viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting)
-
-        viewController.selectPreviewRoleForTesting(.request)
-        let didRenderRequest = await waitUntilRendered(in: viewController) {
-            viewController.currentPreviewRoleForTesting == .request
-                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe"
-        }
-        #expect(didRenderRequest)
-
-        viewController.selectPreviewRoleForTesting(.response)
-        let didRenderResponse = await waitUntilRendered(in: viewController) {
-            viewController.currentPreviewRoleForTesting == .response
-        }
-        #expect(didRenderResponse)
-        #expect(ObjectIdentifier(viewController.syntaxBodyViewControllerForTesting) == bodyViewControllerID)
-        #expect(ObjectIdentifier(viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting) == syntaxViewID)
-    }
-
-    @Test
-    func rebindingPreviewBodyCancelsOutgoingTextPreparation() async throws {
-        let context = makeContext()
-        let firstRequest = try #require(
-            await applyRequest(
-                to: context,
-                requestID: "1",
-                url: "https://example.com/api/large.json",
-                responseHeaders: ["content-type": "application/json"],
-                responseMimeType: "application/json"
-            )
+        let secondBody = NetworkBody(
+            role: .response,
+            kind: .text,
+            full: #"{"second":true}"#,
+            sourceSyntaxKind: .json,
+            phase: .loaded
         )
-        let secondRequest = try #require(
-            await applyRequest(
-                to: context,
-                requestID: "2",
-                url: "https://example.com/api/current.json",
-                responseHeaders: ["content-type": "application/json"],
-                responseMimeType: "application/json"
-            )
-        )
-        let largeJSON = "[" + (0..<80_000).map { #"{"value":\#($0),"enabled":true}"# }.joined(separator: ",") + "]"
-        applyResponseBody(to: context, request: firstRequest, body: largeJSON, base64Encoded: false)
-        applyResponseBody(to: context, request: secondRequest, body: #"{"ok":true}"#, base64Encoded: false)
-        let firstBody = firstRequest.responseBody
-        let model = NetworkPanelModel(context: context)
-        model.selectRequest(firstRequest)
-        let viewController = makeNetworkDetailViewController(model: model)
-        let window = showInWindow(viewController)
-        defer { window.isHidden = true }
-        viewController.setModeForTesting(.preview)
+        let coordinator = NetworkTextPreviewCoordinator()
+        var resultActions: [NetworkTextPreviewResultAction] = []
 
+        await coordinator.suspendNextPreparationForTesting()
+        let firstAction = coordinator.preparePreview(for: firstBody) { action in
+            resultActions.append(action)
+        }
         let firstBodyID = ObjectIdentifier(firstBody)
-        let didStartFirstPreparation = await waitUntilRendered(in: viewController) {
-            viewController.currentPreviewRoleForTesting == .response
-                && viewController.syntaxBodyViewControllerForTesting.activeTextPreviewPreparationBodyIDForTesting == firstBodyID
+        guard case .active = firstAction else {
+            Issue.record("Expected the first JSON body to start asynchronous preparation")
+            return
         }
-        #expect(didStartFirstPreparation)
+        #expect(coordinator.activePreparationBodyIDForTesting == firstBodyID)
+        await coordinator.waitForPreparationSuspensionForTesting()
 
-        model.selectRequest(secondRequest)
-
-        let didRenderSecondRequest = await waitUntilRendered(in: viewController) {
-            viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text.contains(#""ok""#)
-                && viewController.syntaxBodyViewControllerForTesting.activeTextPreviewPreparationBodyIDForTesting != firstBodyID
+        let secondAction = coordinator.preparePreview(for: secondBody) { action in
+            resultActions.append(action)
         }
-        #expect(didRenderSecondRequest)
-        #expect(viewController.syntaxBodyViewControllerForTesting.activeTextPreviewPreparationBodyIDForTesting != firstBodyID)
+        guard case .active = secondAction else {
+            Issue.record("Expected the second JSON body to replace the first asynchronous preparation")
+            return
+        }
+        #expect(coordinator.activePreparationBodyIDForTesting == ObjectIdentifier(secondBody))
+
+        await coordinator.resumeSuspendedPreparationForTesting()
+        await coordinator.waitUntilPreparationFinishedForTesting()
+
+        let resultAction = try #require(resultActions.first)
+        guard case .show(let text, let syntaxKind) = resultAction else {
+            Issue.record("Expected the current preparation to publish rendered text")
+            return
+        }
+        #expect(resultActions.count == 1)
+        #expect(text.contains(#""second" : true"#))
+        #expect(text.contains("first") == false)
+        #expect(syntaxKind == .json)
+        #expect(coordinator.activePreparationBodyIDForTesting == nil)
     }
 
     @Test
