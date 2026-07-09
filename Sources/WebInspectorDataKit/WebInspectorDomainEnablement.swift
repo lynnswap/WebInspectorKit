@@ -68,6 +68,13 @@ private struct WebInspectorDomainEnablementKey: Hashable, Sendable {
     }
 }
 
+#if DEBUG
+private struct AcquireWaitingForDisableWaiterForTesting: Sendable {
+    var minimumSequence: UInt64
+    var continuation: CheckedContinuation<Void, Never>
+}
+#endif
+
 actor WebInspectorDomainEnablementRegistry {
     private enum Entry: Sendable {
         case enabling(count: Int, generation: Int, task: Task<Void, any Error>)
@@ -77,11 +84,46 @@ actor WebInspectorDomainEnablementRegistry {
 
     private var entries: [WebInspectorDomainEnablementKey: Entry]
     private var nextGeneration: Int
+#if DEBUG
+    private var acquireWaitingForDisableSequenceForTestingStorage: UInt64
+    private var acquireWaitingForDisableWaitersForTesting: [AcquireWaitingForDisableWaiterForTesting]
+#endif
 
     init() {
         entries = [:]
         nextGeneration = 0
+#if DEBUG
+        acquireWaitingForDisableSequenceForTestingStorage = 0
+        acquireWaitingForDisableWaitersForTesting = []
+#endif
     }
+
+#if DEBUG
+    var acquireWaitingForDisableSequenceForTesting: UInt64 {
+        acquireWaitingForDisableSequenceForTestingStorage
+    }
+
+    func waitForAcquireWaitingForDisableForTesting(
+        after baselineSequence: UInt64,
+        count: UInt64 = 1
+    ) async {
+        let minimumSequence = baselineSequence + count
+        guard acquireWaitingForDisableSequenceForTestingStorage < minimumSequence else {
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            if acquireWaitingForDisableSequenceForTestingStorage >= minimumSequence {
+                continuation.resume()
+            } else {
+                acquireWaitingForDisableWaitersForTesting.append(AcquireWaitingForDisableWaiterForTesting(
+                    minimumSequence: minimumSequence,
+                    continuation: continuation
+                ))
+            }
+        }
+    }
+#endif
 
     func acquire(_ domain: WebInspectorEnabledDomain, on target: WebInspectorTarget) async throws {
         let key = WebInspectorDomainEnablementKey(target: target, domain: domain)
@@ -103,6 +145,7 @@ actor WebInspectorDomainEnablementRegistry {
             WebInspectorDataKitLog.debug(
                 "domain acquire waits for disable domain=\(domain.rawValue) target=\(target.id.rawValue)"
             )
+            recordAcquireWaitingForDisableForTesting()
             if let error = await finishDisabling(key: key, domain: domain, generation: generation, task: task) {
                 throw error
             }
@@ -205,6 +248,21 @@ actor WebInspectorDomainEnablementRegistry {
         case nil:
             preconditionFailure("Discarding WebInspector domain enablement without a matching acquire.")
         }
+    }
+
+    private func recordAcquireWaitingForDisableForTesting() {
+#if DEBUG
+        acquireWaitingForDisableSequenceForTestingStorage += 1
+        var unresolved: [AcquireWaitingForDisableWaiterForTesting] = []
+        for waiter in acquireWaitingForDisableWaitersForTesting {
+            if acquireWaitingForDisableSequenceForTestingStorage >= waiter.minimumSequence {
+                waiter.continuation.resume()
+            } else {
+                unresolved.append(waiter)
+            }
+        }
+        acquireWaitingForDisableWaitersForTesting = unresolved
+#endif
     }
 
     private func finishEnabling(

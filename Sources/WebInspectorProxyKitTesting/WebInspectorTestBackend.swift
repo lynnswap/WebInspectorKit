@@ -101,6 +101,13 @@ private struct RecordedCommandWaiter: Sendable {
     var continuation: CheckedContinuation<[RecordedCommand], Never>
 }
 
+private struct CompletedCommandWaiter: Sendable {
+    var domain: String
+    var method: String
+    var count: Int
+    var continuation: CheckedContinuation<[RecordedCommand], Never>
+}
+
 /// Errors thrown by ``WebInspectorTestBackend`` helpers.
 public enum WebInspectorTestBackendError: Error, Equatable, Sendable {
     /// The requested event domain is not supported by the test backend.
@@ -111,10 +118,12 @@ public enum WebInspectorTestBackendError: Error, Equatable, Sendable {
 public actor WebInspectorTestBackend {
     private var enqueuedReplies: [CommandKey: [QueuedReply]]
     private var commands: [RecordedCommand]
+    private var completedCommands: [RecordedCommand]
     private var heldCommands: [HeldCommand]
     private var eventContinuations: [EventSubscriptionKey: [UUID: AsyncStream<WebInspectorProxyEvent>.Continuation]]
     private var subscriberWaiters: [SubscriberWaiter]
     private var recordedCommandWaiters: [RecordedCommandWaiter]
+    private var completedCommandWaiters: [CompletedCommandWaiter]
     private var nextSubscriberWaiterID: UInt64
     private var cancelledSubscriberWaiterIDs: Set<UInt64>
 
@@ -122,10 +131,12 @@ public actor WebInspectorTestBackend {
     public init() {
         enqueuedReplies = [:]
         commands = []
+        completedCommands = []
         heldCommands = []
         eventContinuations = [:]
         subscriberWaiters = []
         recordedCommandWaiters = []
+        completedCommandWaiters = []
         nextSubscriberWaiterID = 0
         cancelledSubscriberWaiterIDs = []
     }
@@ -222,6 +233,11 @@ public actor WebInspectorTestBackend {
         commands
     }
 
+    /// Returns commands whose backend dispatch has completed.
+    public func completedCommands() async -> [RecordedCommand] {
+        completedCommands
+    }
+
     /// Waits until at least the requested number of matching commands has been recorded.
     public func waitForRecordedCommands(
         domain: String,
@@ -238,6 +254,31 @@ public actor WebInspectorTestBackend {
                 continuation.resume(returning: matches)
             } else {
                 recordedCommandWaiters.append(RecordedCommandWaiter(
+                    domain: domain,
+                    method: method,
+                    count: count,
+                    continuation: continuation
+                ))
+            }
+        }
+    }
+
+    /// Waits until at least the requested number of matching commands has completed backend dispatch.
+    public func waitForCompletedCommands(
+        domain: String,
+        method: String,
+        count: Int
+    ) async -> [RecordedCommand] {
+        let matches = completedCommands(domain: domain, method: method)
+        guard matches.count < count else {
+            return matches
+        }
+        return await withCheckedContinuation { continuation in
+            let matches = completedCommands(domain: domain, method: method)
+            if matches.count >= count {
+                continuation.resume(returning: matches)
+            } else {
+                completedCommandWaiters.append(CompletedCommandWaiter(
                     domain: domain,
                     method: method,
                     count: count,
@@ -416,6 +457,10 @@ public actor WebInspectorTestBackend {
         commands.filter { $0.domain == domain && $0.method == method }
     }
 
+    private func completedCommands(domain: String, method: String) -> [RecordedCommand] {
+        completedCommands.filter { $0.domain == domain && $0.method == method }
+    }
+
     private func resolveRecordedCommandWaiters() {
         var unresolved: [RecordedCommandWaiter] = []
         for waiter in recordedCommandWaiters {
@@ -427,6 +472,24 @@ public actor WebInspectorTestBackend {
             }
         }
         recordedCommandWaiters = unresolved
+    }
+
+    private func recordCompletedCommand(_ command: RecordedCommand) {
+        completedCommands.append(command)
+        resolveCompletedCommandWaiters()
+    }
+
+    private func resolveCompletedCommandWaiters() {
+        var unresolved: [CompletedCommandWaiter] = []
+        for waiter in completedCommandWaiters {
+            let matches = completedCommands(domain: waiter.domain, method: waiter.method)
+            if matches.count >= waiter.count {
+                waiter.continuation.resume(returning: matches)
+            } else {
+                unresolved.append(waiter)
+            }
+        }
+        completedCommandWaiters = unresolved
     }
 }
 
@@ -445,8 +508,12 @@ extension WebInspectorTestBackend: WebInspectorProxyBackend {
     package func dispatchCommand<Payload: Sendable, Result: Sendable>(
         _ command: WebInspectorProxyCommand<Payload, Result>
     ) async throws -> Result {
-        commands.append(RecordedCommand(command: command))
+        let recordedCommand = RecordedCommand(command: command)
+        commands.append(recordedCommand)
         resolveRecordedCommandWaiters()
+        defer {
+            recordCompletedCommand(recordedCommand)
+        }
 
         if let gate = heldCommands.first(where: {
             $0.domain == command.domain.rawValue && $0.method == command.method
