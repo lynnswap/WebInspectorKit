@@ -647,11 +647,13 @@ struct ParentContainerTests {
 
     @Test
     func hiddenNavigationControllerRemovalFinishesRootPresentationLifecycle() async throws {
-        let session = makeSessionWithNoOpAttachment()
+        let tab = makeNoOpTab(id: "webinspector_test_lifecycle_hidden")
+        let session = makeSessionWithNoOpAttachment(tabs: [tab])
         _ = WebInspectorTab.ContentFactory.makeViewController(
-            for: .dom,
+            for: .customTab(tab.id),
             session: session,
-            hostLayout: .compact
+            hostLayout: .compact,
+            tabs: session.interface.tabs
         )
         let viewController = WebInspectorViewController(session: session)
         let navigationController = UINavigationController(rootViewController: viewController)
@@ -676,11 +678,13 @@ struct ParentContainerTests {
 
     @Test
     func directWindowRootRemovalFinishesRootPresentationLifecycle() async throws {
-        let session = makeSessionWithNoOpAttachment()
+        let tab = makeNoOpTab(id: "webinspector_test_lifecycle_direct")
+        let session = makeSessionWithNoOpAttachment(tabs: [tab])
         _ = WebInspectorTab.ContentFactory.makeViewController(
-            for: .dom,
+            for: .customTab(tab.id),
             session: session,
-            hostLayout: .compact
+            hostLayout: .compact,
+            tabs: session.interface.tabs
         )
         let viewController = WebInspectorViewController(session: session)
         let window = showInWindow(viewController)
@@ -739,7 +743,7 @@ struct ParentContainerTests {
     func hostReplacementAndCompactTabSwitchDoNotDetachRootSession() async throws {
         let session = makeSessionWithNoOpAttachment()
         let viewController = WebInspectorViewController(session: session)
-        let window = showInWindow(viewController)
+        let window = showInWindow(viewController, useUIKitVisibility: false)
         defer { window.isHidden = true }
 
         viewController.horizontalSizeClassOverrideForTesting = .compact
@@ -1093,8 +1097,19 @@ struct ParentContainerTests {
         )
     }
 
-    private func makeSessionWithNoOpAttachment() -> WebInspectorSession {
-        WebInspectorSession(context: makeContext())
+    private func makeSessionWithNoOpAttachment(
+        tabs: [WebInspectorTab] = [.dom, .network]
+    ) -> WebInspectorSession {
+        WebInspectorSession(context: makeContext(), tabs: tabs)
+    }
+
+    private func makeNoOpTab(
+        id: WebInspectorTab.ID = "webinspector_test_noop",
+        title: String = "Test"
+    ) -> WebInspectorTab {
+        WebInspectorTab(id: id, title: title) { _ in
+            UIViewController()
+        }
     }
 
     @MainActor

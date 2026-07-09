@@ -723,7 +723,7 @@ struct DOMContainerTests {
         applyInheritedVariableStyles(to: context)
 
         let viewController = makeElementViewController(context: context)
-        let window = showInWindow(viewController)
+        let window = showInWindow(viewController, useUIKitVisibility: false)
         defer { window.isHidden = true }
 
         let didCollapseUnusedVariables = await waitUntilRendered(in: viewController) {
@@ -1163,7 +1163,7 @@ struct DOMContainerTests {
     func treeControllerPageHighlightCommandsFollowSelectionAndHoverPolicy() async throws {
         let selectionFixture = try await makeLiveDOMContext()
         let selectionViewController = DOMTreeViewController(context: selectionFixture.context)
-        let selectionWindow = showInWindow(selectionViewController)
+        let selectionWindow = showInWindow(selectionViewController, useUIKitVisibility: false)
         defer { selectionWindow.isHidden = true }
         let selectionTreeView = selectionViewController.displayedDOMTreeTextViewForTesting
         #expect(await selectionTreeView.waitForRowDocumentForTesting())
@@ -1181,7 +1181,7 @@ struct DOMContainerTests {
         let input = try #require(hoverFixture.context.node(for: DOMNode.ID(DOM.Node.ID("input"))))
         hoverFixture.context.select(input)
         let hoverViewController = DOMTreeViewController(context: hoverFixture.context)
-        let hoverWindow = showInWindow(hoverViewController)
+        let hoverWindow = showInWindow(hoverViewController, useUIKitVisibility: false)
         defer { hoverWindow.isHidden = true }
         let hoverTreeView = hoverViewController.displayedDOMTreeTextViewForTesting
         #expect(await hoverTreeView.waitForRowDocumentForTesting())
@@ -1214,7 +1214,7 @@ struct DOMContainerTests {
 
         let hideFixture = try await makeLiveDOMContext()
         let hideViewController = DOMTreeViewController(context: hideFixture.context)
-        let hideWindow = showInWindow(hideViewController)
+        let hideWindow = showInWindow(hideViewController, useUIKitVisibility: false)
         defer { hideWindow.isHidden = true }
         let hideTreeView = hideViewController.displayedDOMTreeTextViewForTesting
         #expect(await hideTreeView.waitForRowDocumentForTesting())
@@ -1834,13 +1834,34 @@ struct DOMContainerTests {
         }
     }
 
-    private func showInWindow(_ viewController: UIViewController) -> UIWindow {
+    private func showInWindow(
+        _ viewController: UIViewController,
+        useUIKitVisibility: Bool = true
+    ) -> UIWindow {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = viewController
-        window.makeKeyAndVisible()
         viewController.loadViewIfNeeded()
+        if useUIKitVisibility {
+            window.makeKeyAndVisible()
+        } else {
+            viewController.view.frame = window.bounds
+            activateDOMRenderingForTesting(in: viewController)
+        }
         window.layoutIfNeeded()
         return window
+    }
+
+    private func activateDOMRenderingForTesting(in viewController: UIViewController) {
+        if let navigationController = viewController as? UINavigationController {
+            for child in navigationController.viewControllers {
+                activateDOMRenderingForTesting(in: child)
+            }
+            return
+        }
+
+        if let treeViewController = viewController as? DOMTreeViewController {
+            treeViewController.displayedDOMTreeTextViewForTesting.setRenderingActive(true)
+        }
     }
 
     private func showViewInWindow(_ view: UIView) -> UIWindow {
