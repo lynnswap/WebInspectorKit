@@ -47,14 +47,15 @@ let package = Package(
             exact: "0.16.5"
         ),
         .package(
-            path: "Packages/WebInspectorNativeBridge"
+            url: "https://github.com/p-x9/MachOKit.git",
+            exact: "0.51.0"
         )
     ],
     targets: [
         .target(
             name: "WebInspectorProxyKit",
             dependencies: [
-                .product(name: "WebInspectorNativeBridge", package: "WebInspectorNativeBridge")
+                "WebInspectorNativeBridge"
             ],
             exclude: ["README.md"],
             swiftSettings: strictSwiftSettings
@@ -73,6 +74,26 @@ let package = Package(
             ],
             exclude: ["README.md"],
             swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebInspectorNativeBridge",
+            dependencies: [
+                "WebInspectorNativeBridgeObjC",
+                .product(name: "MachOKit", package: "MachOKit")
+            ],
+            path: "Packages/WebInspectorNativeBridge/Sources/WebInspectorNativeBridge",
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebInspectorNativeBridgeObjC",
+            path: "Packages/WebInspectorNativeBridge/Sources/WebInspectorNativeBridgeObjC",
+            publicHeadersPath: "include",
+            linkerSettings: [
+                .linkedFramework("Foundation"),
+                .linkedFramework("JavaScriptCore"),
+                .linkedFramework("WebKit"),
+                .linkedFramework("AppKit", .when(platforms: [.macOS])),
+            ]
         ),
         .target(
             name: "WebInspectorUIBase",
