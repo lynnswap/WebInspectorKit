@@ -660,6 +660,11 @@ extension NetworkDetailViewController {
         setMode(mode)
     }
 
+    func resumeRenderingForTesting() {
+        loadViewIfNeeded()
+        resumeRendering()
+    }
+
     func selectPreviewRoleForTesting(_ role: NetworkBody.Role) {
         previewRoleControlController.selectRoleForTesting(role)
     }

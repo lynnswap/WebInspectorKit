@@ -308,6 +308,16 @@ extension NetworkCompactNavigationController {
     package var selectionObservationDeliveryForTesting: PortableObservationTracking.Token? {
         selectionObservation
     }
+
+    package func resumeSelectionObservationForTesting() {
+        loadViewIfNeeded()
+        syncStackForTesting()
+        startObservingSelection()
+    }
+
+    package func syncStackForTesting() {
+        syncStack(to: desiredStackTarget(), animated: false)
+    }
 }
 #endif
 #endif

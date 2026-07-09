@@ -1183,7 +1183,7 @@ struct NetworkDetailViewControllerTests {
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
-        let window = showInWindow(viewController, makeVisible: true)
+        let window = showInWindow(viewController, makeVisible: true, useUIKitVisibility: true)
         defer { window.isHidden = true }
         viewController.setModeForTesting(.preview)
         await waitUntilMediaPreviewPrepared(in: viewController)
@@ -1688,7 +1688,7 @@ struct NetworkDetailViewControllerTests {
             listViewController: listViewController,
             detailViewController: detailViewController
         )
-        let window = showInWindow(navigationController, makeVisible: true)
+        let window = showInWindow(navigationController, makeVisible: true, useUIKitVisibility: true)
         defer { window.isHidden = true }
 
         await listViewController.flushPendingSnapshotUpdateForTesting()
@@ -1744,7 +1744,7 @@ struct NetworkDetailViewControllerTests {
             listViewController: listViewController,
             detailViewController: detailViewController
         )
-        let window = showInWindow(navigationController, makeVisible: true)
+        let window = showInWindow(navigationController, makeVisible: true, useUIKitVisibility: true)
         defer { window.isHidden = true }
 
         model.selectRequest(request)
@@ -2251,16 +2251,45 @@ struct NetworkDetailViewControllerTests {
 
     private func showInWindow(
         _ viewController: UIViewController,
-        makeVisible: Bool = true
+        makeVisible: Bool = true,
+        useUIKitVisibility: Bool = false
     ) -> UIWindow {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = viewController
-        if makeVisible {
-            window.makeKeyAndVisible()
-        }
         viewController.loadViewIfNeeded()
+        viewController.view.frame = window.bounds
+        if makeVisible, useUIKitVisibility {
+            window.makeKeyAndVisible()
+        } else if makeVisible {
+            activateNetworkRenderingForTesting(in: viewController)
+        }
         window.layoutIfNeeded()
         return window
+    }
+
+    private func activateNetworkRenderingForTesting(in viewController: UIViewController) {
+        if let navigationController = viewController as? NetworkCompactNavigationController {
+            navigationController.resumeSelectionObservationForTesting()
+            for child in navigationController.viewControllers {
+                activateNetworkRenderingForTesting(in: child)
+            }
+            return
+        }
+
+        if let navigationController = viewController as? UINavigationController {
+            for child in navigationController.viewControllers {
+                activateNetworkRenderingForTesting(in: child)
+            }
+            return
+        }
+
+        if let listViewController = viewController as? NetworkListViewController {
+            listViewController.resumeRenderingForTesting()
+        }
+
+        if let detailViewController = viewController as? NetworkDetailViewController {
+            detailViewController.resumeRenderingForTesting()
+        }
     }
 
     private func pngBase64String(size: CGSize) -> String {
@@ -2345,7 +2374,13 @@ struct NetworkDetailViewControllerTests {
                 [navigationController.selectionObservationDeliveryForTesting].compactMap { $0 }
             },
             sample: {
-                condition()
+                if navigationController.view.window?.isHidden != false {
+                    navigationController.syncStackForTesting()
+                    for child in navigationController.viewControllers {
+                        activateNetworkRenderingForTesting(in: child)
+                    }
+                }
+                return condition()
             }
         )
     }
