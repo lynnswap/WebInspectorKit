@@ -1131,7 +1131,6 @@ struct DOMContainerTests {
         let fixture = try await makeLiveDOMContext(document: multiDeleteDocumentNode())
         let undoManager = UndoManager()
         undoManager.groupsByEvent = false
-        let navigationItems = DOMNavigationItems(context: fixture.context)
         let viewController = DOMTreeViewController(context: fixture.context)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
