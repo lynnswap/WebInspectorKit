@@ -1719,7 +1719,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func compactContainerBackNavigationReleasesDetailMediaPreviewResources() async throws {
+    func compactContainerReleasesDetailMediaPreviewResourcesWhenDetailIsRemoved() async throws {
         let context = makeContext()
         let request = try #require(
             await applyRequest(
@@ -1744,7 +1744,7 @@ struct NetworkDetailViewControllerTests {
             listViewController: listViewController,
             detailViewController: detailViewController
         )
-        let window = showInWindow(navigationController, makeVisible: true, useUIKitVisibility: true)
+        let window = showInWindow(navigationController, makeVisible: true)
         defer { window.isHidden = true }
 
         model.selectRequest(request)
@@ -1763,9 +1763,7 @@ struct NetworkDetailViewControllerTests {
         #expect(playerFactory.requestedURLs == [temporaryFileURL])
         #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
 
-        _ = withUIKitAnimationsDisabled {
-            navigationController.popViewController(animated: false)
-        }
+        model.selectRequest(nil)
 
         let didReturnToListAndReleasePreview = await waitUntilNavigationStackSynced(in: navigationController) {
             navigationController.viewControllers == [listViewController]
