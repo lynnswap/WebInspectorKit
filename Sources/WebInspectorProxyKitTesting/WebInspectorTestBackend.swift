@@ -86,6 +86,7 @@ private struct EventSubscriptionKey: Hashable, Sendable {
 }
 
 private struct SubscriberWaiter: Sendable {
+    var id: UInt64
     var route: RoutingTargetID?
     var targetID: WebInspectorTarget.ID
     var domain: WebInspectorProxyEventDomain
@@ -114,6 +115,8 @@ public actor WebInspectorTestBackend {
     private var eventContinuations: [EventSubscriptionKey: [UUID: AsyncStream<WebInspectorProxyEvent>.Continuation]]
     private var subscriberWaiters: [SubscriberWaiter]
     private var recordedCommandWaiters: [RecordedCommandWaiter]
+    private var nextSubscriberWaiterID: UInt64
+    private var cancelledSubscriberWaiterIDs: Set<UInt64>
 
     /// Creates an empty test backend.
     public init() {
@@ -123,6 +126,8 @@ public actor WebInspectorTestBackend {
         eventContinuations = [:]
         subscriberWaiters = []
         recordedCommandWaiters = []
+        nextSubscriberWaiterID = 0
+        cancelledSubscriberWaiterIDs = []
     }
 
     /// Enqueues a successful reply for the next matching command.
@@ -251,22 +256,7 @@ public actor WebInspectorTestBackend {
         guard let eventDomain = WebInspectorProxyEventDomain(rawValue: domain) else {
             throw WebInspectorTestBackendError.unsupportedEventDomain(domain)
         }
-        guard subscriberCount(for: target, domain: eventDomain) < count else {
-            return
-        }
-        await withCheckedContinuation { continuation in
-            if subscriberCount(for: target, domain: eventDomain) >= count {
-                continuation.resume()
-            } else {
-                subscriberWaiters.append(SubscriberWaiter(
-                    route: nil,
-                    targetID: target,
-                    domain: eventDomain,
-                    count: count,
-                    continuation: continuation
-                ))
-            }
-        }
+        await waitForSubscriber(route: nil, targetID: target, domain: eventDomain, count: count)
     }
 
     /// Waits until a target has at least the requested subscriber count.
@@ -278,23 +268,7 @@ public actor WebInspectorTestBackend {
         guard let eventDomain = WebInspectorProxyEventDomain(rawValue: domain) else {
             throw WebInspectorTestBackendError.unsupportedEventDomain(domain)
         }
-        let key = EventSubscriptionKey(route: target.route, targetID: target.id, domain: eventDomain)
-        guard subscriberCount(for: key) < count else {
-            return
-        }
-        await withCheckedContinuation { continuation in
-            if subscriberCount(for: key) >= count {
-                continuation.resume()
-            } else {
-                subscriberWaiters.append(SubscriberWaiter(
-                    route: target.route,
-                    targetID: target.id,
-                    domain: eventDomain,
-                    count: count,
-                    continuation: continuation
-                ))
-            }
-        }
+        await waitForSubscriber(route: target.route, targetID: target.id, domain: eventDomain, count: count)
     }
 
     /// Holds matching commands until the supplied gate opens.
@@ -369,22 +343,73 @@ public actor WebInspectorTestBackend {
     private func resolveSubscriberWaiters() {
         var unresolved: [SubscriberWaiter] = []
         for waiter in subscriberWaiters {
-            let currentCount = if let route = waiter.route {
-                subscriberCount(for: EventSubscriptionKey(
-                    route: route,
-                    targetID: waiter.targetID,
-                    domain: waiter.domain
-                ))
-            } else {
-                subscriberCount(for: waiter.targetID, domain: waiter.domain)
-            }
-            if currentCount >= waiter.count {
+            if subscriberCount(for: waiter) >= waiter.count {
                 waiter.continuation.resume()
             } else {
                 unresolved.append(waiter)
             }
         }
         subscriberWaiters = unresolved
+    }
+
+    private func waitForSubscriber(
+        route: RoutingTargetID?,
+        targetID: WebInspectorTarget.ID,
+        domain: WebInspectorProxyEventDomain,
+        count: Int
+    ) async {
+        let waiterID = nextSubscriberWaiterID
+        nextSubscriberWaiterID += 1
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                addSubscriberWaiter(SubscriberWaiter(
+                    id: waiterID,
+                    route: route,
+                    targetID: targetID,
+                    domain: domain,
+                    count: count,
+                    continuation: continuation
+                ))
+            }
+        } onCancel: {
+            Task {
+                await self.cancelSubscriberWaiter(waiterID)
+            }
+        }
+        cancelledSubscriberWaiterIDs.remove(waiterID)
+    }
+
+    private func addSubscriberWaiter(_ waiter: SubscriberWaiter) {
+        guard cancelledSubscriberWaiterIDs.remove(waiter.id) == nil else {
+            waiter.continuation.resume()
+            return
+        }
+        guard subscriberCount(for: waiter) < waiter.count else {
+            waiter.continuation.resume()
+            return
+        }
+        subscriberWaiters.append(waiter)
+    }
+
+    private func cancelSubscriberWaiter(_ id: UInt64) {
+        guard let index = subscriberWaiters.firstIndex(where: { $0.id == id }) else {
+            cancelledSubscriberWaiterIDs.insert(id)
+            return
+        }
+        let waiter = subscriberWaiters.remove(at: index)
+        waiter.continuation.resume()
+    }
+
+    private func subscriberCount(for waiter: SubscriberWaiter) -> Int {
+        if let route = waiter.route {
+            subscriberCount(for: EventSubscriptionKey(
+                route: route,
+                targetID: waiter.targetID,
+                domain: waiter.domain
+            ))
+        } else {
+            subscriberCount(for: waiter.targetID, domain: waiter.domain)
+        }
     }
 
     private func recordedCommands(domain: String, method: String) -> [RecordedCommand] {
@@ -465,13 +490,7 @@ extension WebInspectorTestBackend: WebInspectorProxyBackend {
         targetID: WebInspectorTarget.ID,
         domain: WebInspectorProxyEventDomain
     ) async {
-        let key = EventSubscriptionKey(route: route, targetID: targetID, domain: domain)
-        while subscriberCount(for: key) < 1 {
-            guard Task.isCancelled == false else {
-                return
-            }
-            await Task.yield()
-        }
+        await waitForSubscriber(route: route, targetID: targetID, domain: domain, count: 1)
     }
 
     package nonisolated func events(
