@@ -6,30 +6,30 @@ import WebInspectorNativeBridge
 struct WebInspectorNativeBridgeTests {
     @Test
     func cachedOffsetResolvesImmediately() {
-        let result = WebInspectorNativeRunControllerDiscoveryScenarioForTesting(
-            0x1000,
-            0x580,
-            0x580,
-            -1
+        let result = NativeInspectorBridgeTesting.runControllerDiscoveryScenario(
+            pageAllocationSize: 0x1000,
+            cachedOffset: 0x580,
+            primaryControllerOffset: 0x580,
+            secondaryControllerOffset: -1
         )
 
-        #expect(result.found.boolValue)
+        #expect(result.found)
         #expect(result.resolvedOffset == 0x580)
         #expect(result.attemptedOffsetCount == 1)
         #expect(result.validCandidateCount == 1)
-        #expect(result.usedFallbackRange.boolValue == false)
+        #expect(result.usedFallbackRange == false)
     }
 
     @Test
     func fullScanFindsUniqueControllerWhenKnownOffsetsMiss() {
-        let result = WebInspectorNativeRunControllerDiscoveryScenarioForTesting(
-            0x1000,
-            -1,
-            0x540,
-            -1
+        let result = NativeInspectorBridgeTesting.runControllerDiscoveryScenario(
+            pageAllocationSize: 0x1000,
+            cachedOffset: -1,
+            primaryControllerOffset: 0x540,
+            secondaryControllerOffset: -1
         )
 
-        #expect(result.found.boolValue)
+        #expect(result.found)
         #expect(result.resolvedOffset == 0x540)
         #expect(result.validCandidateCount == 1)
         #expect(result.attemptedOffsetCount > 9)
@@ -38,74 +38,74 @@ struct WebInspectorNativeBridgeTests {
 
     @Test
     func multipleCandidatesFailResolution() {
-        let result = WebInspectorNativeRunControllerDiscoveryScenarioForTesting(
-            0x1000,
-            -1,
-            0x540,
-            0x5A0
+        let result = NativeInspectorBridgeTesting.runControllerDiscoveryScenario(
+            pageAllocationSize: 0x1000,
+            cachedOffset: -1,
+            primaryControllerOffset: 0x540,
+            secondaryControllerOffset: 0x5A0
         )
 
-        #expect(result.found.boolValue == false)
+        #expect(result.found == false)
         #expect(result.resolvedOffset == -1)
         #expect(result.validCandidateCount == 2)
     }
 
     @Test
     func invalidControllerShapeCandidatesDoNotBlockResolution() {
-        let result = WebInspectorNativeRunControllerDiscoveryScenarioWithInvalidCandidatesForTesting(
-            0x1000,
-            -1,
-            0x540,
-            0x580,
-            0x5A0
+        let result = NativeInspectorBridgeTesting.runControllerDiscoveryScenarioWithInvalidCandidates(
+            pageAllocationSize: 0x1000,
+            cachedOffset: -1,
+            primaryControllerOffset: 0x540,
+            invalidControllerOffset: 0x580,
+            secondaryInvalidControllerOffset: 0x5A0
         )
 
-        #expect(result.found.boolValue)
+        #expect(result.found)
         #expect(result.resolvedOffset == 0x540)
         #expect(result.validCandidateCount == 1)
     }
 
     @Test
     func invalidCachedOffsetFallsBackToValidController() {
-        let result = WebInspectorNativeRunControllerDiscoveryScenarioWithInvalidCandidatesForTesting(
-            0x1000,
-            0x580,
-            0x540,
-            0x580,
-            -1
+        let result = NativeInspectorBridgeTesting.runControllerDiscoveryScenarioWithInvalidCandidates(
+            pageAllocationSize: 0x1000,
+            cachedOffset: 0x580,
+            primaryControllerOffset: 0x540,
+            invalidControllerOffset: 0x580,
+            secondaryInvalidControllerOffset: -1
         )
 
-        #expect(result.found.boolValue)
+        #expect(result.found)
         #expect(result.resolvedOffset == 0x540)
         #expect(result.validCandidateCount == 1)
     }
 
     @Test
     func zeroAllocationSizeUsesFallbackRange() {
-        let result = WebInspectorNativeRunControllerDiscoveryScenarioForTesting(
-            0,
-            -1,
-            0x540,
-            -1
+        let result = NativeInspectorBridgeTesting.runControllerDiscoveryScenario(
+            pageAllocationSize: 0,
+            cachedOffset: -1,
+            primaryControllerOffset: 0x540,
+            secondaryControllerOffset: -1
         )
 
-        #expect(result.found.boolValue)
+        #expect(result.found)
         #expect(result.resolvedOffset == 0x540)
-        #expect(result.usedFallbackRange.boolValue)
+        #expect(result.usedFallbackRange)
         #expect(result.scannedByteCount == 0x1000)
     }
 
     @MainActor
     @Test
     func rawFrontendMessageIsDeliveredOnceWithoutTargetDemux() {
-        let bridge = WebInspectorNativeBridge(webView: WKWebView(frame: .zero))
+        let bridge = NativeInspectorBridge(webView: WKWebView(frame: .zero))
         var deliveredMessages: [String] = []
         bridge.messageHandler = { message in
             deliveredMessages.append(message)
         }
 
         let rawMessage = #"{"method":"Target.dispatchMessageFromTarget","params":{"targetId":"frame-A","message":"{\"method\":\"DOM.documentUpdated\",\"params\":{}}"}}"#
-        _ = unsafe bridge.perform(NSSelectorFromString("handleFrontendMessageString:"), with: rawMessage)
+        bridge.handleFrontendMessageForTesting(rawMessage)
 
         #expect(deliveredMessages == [rawMessage])
     }

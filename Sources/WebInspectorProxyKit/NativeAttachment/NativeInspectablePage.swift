@@ -58,7 +58,7 @@ package enum NativeInspectorConnectionFactory {
     @MainActor
     package static func attach(
         to webView: WKWebView,
-        resolvedSymbols: WebInspectorNativeResolvedSymbols,
+        resolvedSymbols: NativeInspectorResolvedSymbols,
         makeTransportSession: @MainActor (any TransportBackend) -> TransportSession,
         fatalFailureHandler: @escaping @Sendable (String) -> Void = { _ in }
     ) async throws -> NativeInspectorConnection {
