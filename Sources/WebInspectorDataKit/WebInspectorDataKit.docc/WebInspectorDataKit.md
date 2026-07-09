@@ -53,7 +53,7 @@ provides ``WebInspectorContainer/mainContext`` as a main-actor context.
 Use the domain controllers on ``WebInspectorContext`` for high-level operations:
 
 ```swift
-try await context.dom.setElementPickerEnabled(true)
+try await context.dom.setInspectMode(enabled: true)
 try await context.page.reload()
 
 let result = try await context.runtime.evaluate("document.title")
