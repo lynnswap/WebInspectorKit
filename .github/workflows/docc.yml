@@ -55,7 +55,11 @@ jobs:
 
       - name: Generate DocC documentation
         run: |
-          swift package --allow-writing-to-directory .build/docs \
+          sdk_path="$(xcrun --sdk iphonesimulator --show-sdk-path)"
+          swift package --scratch-path .build/docc-generation \
+            --sdk "$sdk_path" \
+            --triple arm64-apple-ios18.0-simulator \
+            --allow-writing-to-directory .build/docs \
             generate-documentation \
             --target WebInspectorKit \
             --target WebInspectorUI \
@@ -69,10 +73,22 @@ jobs:
             --output-path .build/docs
           touch .build/docs/.nojekyll
 
+      - name: Archive Pages artifact
+        run: |
+          tar \
+            -C .build/docs \
+            -cf "$RUNNER_TEMP/artifact.tar" \
+            --exclude=.git \
+            --exclude=.github \
+            .
+
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          path: .build/docs
+          name: github-pages
+          path: ${{ runner.temp }}/artifact.tar
+          retention-days: 1
+          if-no-files-found: error
 
   deploy:
     name: Deploy GitHub Pages
