@@ -1137,7 +1137,6 @@ struct NetworkDetailViewControllerTests {
 
         let didRenderImage = await waitUntilRendered(in: viewController) {
             let bodyViewController = viewController.syntaxBodyViewControllerForTesting
-            let imageScrollView = bodyViewController.imageScrollViewForTesting
             let imageLayout = bodyViewController.imagePreviewRenderSnapshotForTesting
             let didCompleteImageLayout = imageLayout.map { layout in
                 let fitScale = min(
@@ -1620,7 +1619,7 @@ struct NetworkDetailViewControllerTests {
         let largeJSON = "[" + (0..<80_000).map { #"{"value":\#($0),"enabled":true}"# }.joined(separator: ",") + "]"
         applyResponseBody(to: context, request: firstRequest, body: largeJSON, base64Encoded: false)
         applyResponseBody(to: context, request: secondRequest, body: #"{"ok":true}"#, base64Encoded: false)
-        let firstBody = try #require(firstRequest.responseBody)
+        let firstBody = firstRequest.responseBody
         let model = NetworkPanelModel(context: context)
         model.selectRequest(firstRequest)
         let viewController = makeNetworkDetailViewController(model: model)
