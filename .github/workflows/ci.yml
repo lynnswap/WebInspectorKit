@@ -113,12 +113,12 @@ jobs:
         run: swift test --package-path ContractTests
 
   ios-tests:
-    name: iOS Tests (${{ matrix.name }})
+    name: ${{ matrix.name }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: iOS 18 native
+          - name: WebInspectorNativeBridgeTests (iOS 18)
             runner: macos-15
             xcode_major: '26.3'
             ios_major: '18'
@@ -126,7 +126,7 @@ jobs:
             test_scheme: WebInspectorNativeBridgeTests
             test_package_path: Packages/WebInspectorNativeBridge
             test_workspace: Packages/WebInspectorNativeBridge/WebInspectorNativeBridge.xcworkspace
-          - name: iOS 26 all
+          - name: WebInspectorKitTests (iOS 26)
             runner: macos-26
             xcode_major: '26'
             ios_major: '26'
@@ -135,7 +135,7 @@ jobs:
             test_package_path: .
             test_workspace: WebInspectorKit.xcworkspace
             simulator_device: iPhone 17 Pro
-          - name: iOS 26 native
+          - name: WebInspectorNativeBridgeTests (iOS 26)
             runner: macos-26
             xcode_major: '26'
             ios_major: '26'
