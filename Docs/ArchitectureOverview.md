@@ -20,11 +20,13 @@ the built-in UIKit UI.
 | `WebInspectorKit` | Built-in UIKit inspector UI backed by `WebInspectorDataKit`. |
 | `WebInspectorProxyKitTesting` | Public test runtime for exercising ProxyKit/DataKit consumers without the native WebKit bridge. |
 
-`WebInspectorNativeBridge` and `WebInspectorNativeSymbols` remain package
-support targets for ObjC++ and private symbol-resolution build mechanics. They
-are not SDK layers and should not be imported by consumers. Internal transport
-types such as `TransportSession`, `TransportBackend`, and protocol envelopes are
-owned by `WebInspectorProxyKit`.
+`WebInspectorNativeBridge` remains the Swift-facing package support target for
+the native bridge and private symbol-resolution mechanics.
+`WebInspectorNativeBridgeObjC` is only the ObjC++ implementation shim required
+by SwiftPM's target language boundary. Neither is an SDK layer and neither
+should be imported by consumers. Internal transport types such as
+`TransportSession`, `TransportBackend`, and protocol envelopes are owned by
+`WebInspectorProxyKit`.
 
 ## Layer Overview
 
@@ -35,7 +37,8 @@ flowchart TD
     Data["WebInspectorDataKit<br/>WebInspectorContainer + WebInspectorContext"]
     UI["WebInspectorKit / WebInspectorUI<br/>UIKit inspector"]
     Native["ProxyKit internals<br/>native attach + protocol routing"]
-    Bridge["Support targets<br/>NativeBridge + NativeSymbols"]
+    Bridge["Support target<br/>NativeBridge"]
+    ObjC["ObjC++ shim<br/>NativeBridgeObjC"]
     WebKit["WebKit private inspector backend"]
 
     Host --> Proxy
@@ -45,7 +48,8 @@ flowchart TD
     Data --> Proxy
     Proxy --> Native
     Native --> Bridge
-    Bridge --> WebKit
+    Bridge --> ObjC
+    ObjC --> WebKit
 ```
 
 Responsibilities stay narrow:
@@ -60,8 +64,8 @@ Responsibilities stay narrow:
 - `WebInspectorKit` / `WebInspectorUI`: owns native UIKit rendering, tab and
   split presentation, DOM row expansion, selection scrolling, keyboard commands,
   and view-local interaction state.
-- `WebInspectorNativeBridge` / `WebInspectorNativeSymbols`: own only the native
-  C/ObjC++ bridge and private symbol lookup needed by ProxyKit internals.
+- `WebInspectorNativeBridge`: owns only the native C/ObjC++ bridge and private
+  symbol lookup needed by ProxyKit internals.
 
 ## Event And Command Flow
 

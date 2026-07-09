@@ -17,6 +17,8 @@ UIKit Web Inspector for `WKWebView`.
 
 - Swift 6.3+
 - iOS 18+
+- ARM64/ARM64e Apple runtime; Intel Mac / x86_64 simulator environments are not
+  supported.
 
 ## Platform Notes
 
@@ -93,9 +95,9 @@ Runtime WebKit version mapping notes live in
   Console, Runtime, and CSS models built on top of `WebInspectorProxyKit`.
 - `WebInspectorKit` for the built-in UIKit inspector UI.
 
-`WebInspectorNativeBridge`, `WebInspectorNativeSymbols`, and the internal
-protocol-routing code are implementation details of `WebInspectorProxyKit`;
-SDK consumers should not import or depend on them.
+`WebInspectorNativeBridge` and the internal protocol-routing code are
+implementation details of `WebInspectorProxyKit`; SDK consumers should not
+import or depend on them.
 
 ## License
 

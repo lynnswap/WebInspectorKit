@@ -63,7 +63,7 @@ extension NativeInspectorSymbolResolverCore {
             #if DEBUG
             NativeInspectorSymbolLog.info(
                 unsafe String(
-                    format: "[WebInspectorNativeSymbols] attach entry point text-scan fallback status=skipped reason=function-starts-unavailable webCoreConnectTargets=%lu webCoreDisconnectTargets=%lu webKitBoundConnectTargets=%lu webKitBoundDisconnectTargets=%lu",
+                    format: "[WebInspectorNativeBridge] attach entry point text-scan fallback status=skipped reason=function-starts-unavailable webCoreConnectTargets=%lu webCoreDisconnectTargets=%lu webKitBoundConnectTargets=%lu webKitBoundDisconnectTargets=%lu",
                     webCoreConnectTargets.count,
                     webCoreDisconnectTargets.count,
                     webKitBoundConnectTargets.count,
@@ -121,7 +121,7 @@ extension NativeInspectorSymbolResolverCore {
             .joined(separator: ",")
         NativeInspectorSymbolLog.info(
             unsafe String(
-                format: "[WebInspectorNativeSymbols] attach entry point text-scan fallback status=%@ requested=%@ webCoreConnectTargets=%lu webCoreDisconnectTargets=%lu webKitBoundConnectTargets=%lu webKitBoundDisconnectTargets=%lu connectTargets=%lu disconnectTargets=%lu connectResult=%@ disconnectResult=%@",
+                format: "[WebInspectorNativeBridge] attach entry point text-scan fallback status=%@ requested=%@ webCoreConnectTargets=%lu webCoreDisconnectTargets=%lu webKitBoundConnectTargets=%lu webKitBoundDisconnectTargets=%lu connectTargets=%lu disconnectTargets=%lu connectResult=%@ disconnectResult=%@",
                 textScanStatus,
                 requestedFallbacks,
                 webCoreConnectTargets.count,

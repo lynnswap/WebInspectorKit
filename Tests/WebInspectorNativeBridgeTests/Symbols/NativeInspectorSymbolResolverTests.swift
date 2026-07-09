@@ -4,7 +4,7 @@ import Foundation
 import Testing
 import WebKit
 import WebInspectorNativeSymbolFixtures
-@testable import WebInspectorNativeSymbols
+@testable import WebInspectorNativeBridge
 
 private let nativeRuntimeSmokeOptInEnvironmentKey = "WEBINSPECTORKIT_RUN_NATIVE_RUNTIME_SMOKE"
 private let shouldRunNativeRuntimeSmokeTests =
@@ -261,9 +261,9 @@ struct NativeInspectorSymbolResolverTests {
         )
     }
 
+#if arch(arm64) || arch(arm64e)
     @Test
-    func fallbackCallTargetScannerReturnsUniqueFunctionStart() throws {
-        #if arch(arm64) || arch(arm64e)
+    func fallbackCallTargetScannerReturnsUniqueFunctionStart() {
         let textBaseAddress: UInt64 = 0x1000
         let functionStarts: [UInt64] = [textBaseAddress, textBaseAddress + 0x10]
         let targetAddress: UInt64 = textBaseAddress + 0x40
@@ -291,14 +291,10 @@ struct NativeInspectorSymbolResolverTests {
         }
 
         #expect(functionStart == textBaseAddress)
-        #else
-        throw Skip("This synthetic scanner test is only implemented for ARM64 layouts.")
-        #endif
     }
 
     @Test
-    func fallbackCallTargetScannerRejectsAmbiguousFunctions() throws {
-        #if arch(arm64) || arch(arm64e)
+    func fallbackCallTargetScannerRejectsAmbiguousFunctions() {
         let textBaseAddress: UInt64 = 0x2000
         let functionStarts: [UInt64] = [textBaseAddress, textBaseAddress + 0x10]
         let targetAddress: UInt64 = textBaseAddress + 0x40
@@ -326,10 +322,8 @@ struct NativeInspectorSymbolResolverTests {
         }
 
         #expect(functionStart == nil)
-        #else
-        throw Skip("This synthetic scanner test is only implemented for ARM64 layouts.")
-        #endif
     }
+#endif
 
     @Test
     func diagnosticsDoNotExposeDecodedMangledSymbols() throws {

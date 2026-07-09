@@ -64,7 +64,7 @@ extension NativeInspectorSymbolResolverCore {
         )
         if shouldLog {
             NativeInspectorSymbolLog.warning(
-                "[WebInspectorNativeSymbols] native inspector symbol lookup failed backend=native-inspector reason=\(reason)"
+                "[WebInspectorNativeBridge] native inspector symbol lookup failed backend=native-inspector reason=\(reason)"
             )
         }
         return NativeInspectorSymbolLookupResult(
@@ -86,7 +86,7 @@ extension NativeInspectorSymbolResolverCore {
             return
         }
         NativeInspectorSymbolLog.info(
-            "[WebInspectorNativeSymbols] native inspector symbol resolution attempt incomplete backend=native-inspector reason=\(reason) next=\(nextAttempt)"
+            "[WebInspectorNativeBridge] native inspector symbol resolution attempt incomplete backend=native-inspector reason=\(reason) next=\(nextAttempt)"
         )
     }
 
