@@ -2867,6 +2867,10 @@ extension DOMTreeTextView {
         rowRenderBuildCoordinator.suspendNextBuildForTesting()
     }
 
+    func setUsesInlineRowRenderBuildsForTesting(_ usesInlineBuilds: Bool) {
+        rowRenderBuildCoordinator.setUsesInlineBuildsForTesting(usesInlineBuilds)
+    }
+
     func waitForRowRenderBuildSuspensionForTesting() async {
         await rowRenderBuildCoordinator.waitForBuildSuspensionForTesting()
     }
