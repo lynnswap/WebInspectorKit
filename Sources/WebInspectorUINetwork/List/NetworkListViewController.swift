@@ -57,8 +57,18 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private var isApplyingSearchPresentation = false
     private var activeSearchController: UISearchController?
 #if DEBUG
+    private struct FetchedResultsTransactionDeliveryWaiter {
+        var id: Int
+        var baselineCount: Int
+        var continuation: CheckedContinuation<Bool, Never>
+        var timeoutTask: Task<Void, Never>
+    }
+
     private var deinitHandlerForTesting: (@MainActor () -> Void)?
     private var snapshotUpdateCompletionWaitersForTesting: [CheckedContinuation<Void, Never>] = []
+    private var fetchedResultsTransactionDeliveryWaitersForTesting: [FetchedResultsTransactionDeliveryWaiter] = []
+    private var fetchedResultsTransactionDeliveryWaiterIDStorageForTesting = 0
+    private var fetchedResultsTransactionDeliveryCountStorageForTesting = 0
     private var displayRequestIDsEvaluationCountStorageForTesting = 0
     private var snapshotApplyCountStorageForTesting = 0
     private var filterMenuBuildCountStorageForTesting = 0
@@ -102,6 +112,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         selectedRequestObservation?.cancel()
         detachSearchPresentation()
 #if DEBUG
+        resolveFetchedResultsTransactionDeliveryWaitersForTesting(result: false)
         deinitHandlerForTesting?()
 #endif
     }
@@ -477,6 +488,9 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         guard transaction.hasNetworkListTopologyChanges else {
             return
         }
+#if DEBUG
+        recordFetchedResultsTransactionDeliveryForTesting()
+#endif
         guard snapshotCoordinator.isRenderingActive else {
             snapshotCoordinator.markNeedsReloadOnNextAppearance()
             return
@@ -747,6 +761,10 @@ extension NetworkListViewController {
         snapshotApplyCountStorageForTesting
     }
 
+    package var fetchedResultsTransactionDeliveryCountForTesting: Int {
+        fetchedResultsTransactionDeliveryCountStorageForTesting
+    }
+
     package var filterMenuBuildCountForTesting: Int {
         filterMenuBuildCountStorageForTesting
     }
@@ -795,6 +813,34 @@ extension NetworkListViewController {
         await waitForSnapshotUpdateCompletionForTesting()
     }
 
+    package func waitForFetchedResultsTransactionDeliveryForTesting(
+        after baselineCount: Int,
+        timeout: Duration = .seconds(1)
+    ) async -> Bool {
+        guard fetchedResultsTransactionDeliveryCountStorageForTesting <= baselineCount else {
+            return true
+        }
+        return await withCheckedContinuation { continuation in
+            let waiterID = fetchedResultsTransactionDeliveryWaiterIDStorageForTesting
+            fetchedResultsTransactionDeliveryWaiterIDStorageForTesting &+= 1
+            let timeoutTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: timeout)
+                self?.resolveFetchedResultsTransactionDeliveryWaiterForTesting(
+                    id: waiterID,
+                    result: false
+                )
+            }
+            fetchedResultsTransactionDeliveryWaitersForTesting.append(
+                FetchedResultsTransactionDeliveryWaiter(
+                    id: waiterID,
+                    baselineCount: baselineCount,
+                    continuation: continuation,
+                    timeoutTask: timeoutTask
+                )
+            )
+        }
+    }
+
     private func waitForSnapshotUpdateCompletionForTesting() async {
         guard snapshotCoordinator.state.isApplying || snapshotCoordinator.pendingUpdate != nil else {
             return
@@ -814,6 +860,32 @@ extension NetworkListViewController {
         for waiter in waiters {
             waiter.resume()
         }
+    }
+
+    private func recordFetchedResultsTransactionDeliveryForTesting() {
+        fetchedResultsTransactionDeliveryCountStorageForTesting &+= 1
+        resolveFetchedResultsTransactionDeliveryWaitersForTesting(result: true)
+    }
+
+    private func resolveFetchedResultsTransactionDeliveryWaitersForTesting(result: Bool) {
+        let waiterIDs = fetchedResultsTransactionDeliveryWaitersForTesting.compactMap { waiter in
+            if result == false || fetchedResultsTransactionDeliveryCountStorageForTesting > waiter.baselineCount {
+                return waiter.id
+            }
+            return nil
+        }
+        for waiterID in waiterIDs {
+            resolveFetchedResultsTransactionDeliveryWaiterForTesting(id: waiterID, result: result)
+        }
+    }
+
+    private func resolveFetchedResultsTransactionDeliveryWaiterForTesting(id: Int, result: Bool) {
+        guard let index = fetchedResultsTransactionDeliveryWaitersForTesting.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        let waiter = fetchedResultsTransactionDeliveryWaitersForTesting.remove(at: index)
+        waiter.timeoutTask.cancel()
+        waiter.continuation.resume(returning: result)
     }
 
     package func setDeinitHandlerForTesting(_ handler: @escaping @MainActor () -> Void) {

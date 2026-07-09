@@ -1,5 +1,6 @@
 #if canImport(UIKit)
 import ObservationBridge
+import WebInspectorDataKit
 
 @MainActor
 func waitForObservedCondition(
@@ -50,6 +51,26 @@ func waitForObservedCondition(
     }
 
     return didObserveMatch || sample()
+}
+
+@MainActor
+func waitForNetworkBodyPhase(
+    in body: NetworkBody,
+    _ predicate: @escaping @Sendable (NetworkBody.Phase) -> Bool
+) async -> NetworkBody.Phase? {
+    let observation = withPortableContinuousObservation { _ in
+        _ = body.phase
+    }
+    defer {
+        observation.cancel()
+    }
+    let observedValues = await observation.values {
+        body.phase
+    }
+    defer {
+        observedValues.cancel()
+    }
+    return await observedValues.waitUntil(predicate)
 }
 
 @MainActor

@@ -1291,12 +1291,12 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         model.fetchResponseBodyIfNeeded(for: request)
-        let didFailInitialFetch = await waitUntilNetworkBodyPhase {
-            if case .failed = request.responseBody.phase {
+        let didFailInitialFetch = await waitForNetworkBodyPhase(in: request.responseBody) { phase in
+            if case .failed = phase {
                 return true
             }
             return false
-        }
+        } != nil
         #expect(didFailInitialFetch)
 
         model.selectRequest(request)
@@ -1829,6 +1829,7 @@ struct NetworkDetailViewControllerTests {
 
         let evaluationCountBeforeInsert = listViewController.displayRequestIDsEvaluationCountForTesting
         let snapshotApplyCountBeforeInsert = listViewController.snapshotApplyCountForTesting
+        let transactionDeliveryCountBeforeInsert = listViewController.fetchedResultsTransactionDeliveryCountForTesting
         let secondRequest = try #require(await applyRequest(
             to: context,
             requestID: "2",
@@ -1837,7 +1838,8 @@ struct NetworkDetailViewControllerTests {
 
         let didRenderInsert = await waitUntilListShows(
             [secondRequest.id, firstRequest.id],
-            in: listViewController
+            in: listViewController,
+            afterTransactionDeliveryCount: transactionDeliveryCountBeforeInsert
         )
         #expect(didRenderInsert)
         #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeInsert)
@@ -1865,9 +1867,14 @@ struct NetworkDetailViewControllerTests {
 
         let evaluationCountBeforeUpdate = listViewController.displayRequestIDsEvaluationCountForTesting
         let snapshotApplyCountBeforeUpdate = listViewController.snapshotApplyCountForTesting
+        let transactionDeliveryCountBeforeUpdate = listViewController.fetchedResultsTransactionDeliveryCountForTesting
 
         model.setSearchText("does-not-match")
-        let didRenderReset = await waitUntilListShows([], in: listViewController)
+        let didRenderReset = await waitUntilListShows(
+            [],
+            in: listViewController,
+            afterTransactionDeliveryCount: transactionDeliveryCountBeforeUpdate
+        )
 
         #expect(didRenderReset)
         #expect(model.displayRequestIDs.isEmpty)
@@ -2305,36 +2312,18 @@ struct NetworkDetailViewControllerTests {
         return await waitUntilRendered(in: viewController, condition)
     }
 
-    private func waitUntilNetworkBodyPhase(
-        timeout: Duration = .seconds(1),
-        _ condition: @escaping @MainActor @Sendable () -> Bool
-    ) async -> Bool {
-        let clock = ContinuousClock()
-        let deadline = clock.now + timeout
-        while condition() == false {
-            guard clock.now < deadline else {
-                return false
-            }
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-        return true
-    }
-
     private func waitUntilListShows(
         _ requestIDs: [NetworkRequest.ID],
         in viewController: NetworkListViewController,
-        timeout: Duration = .seconds(1)
+        afterTransactionDeliveryCount transactionDeliveryCount: Int
     ) async -> Bool {
-        let clock = ContinuousClock()
-        let deadline = clock.now + timeout
-        while viewController.displayedRequestIDsForTesting != requestIDs {
-            guard clock.now < deadline else {
-                return false
-            }
-            await viewController.flushPendingSnapshotUpdateForTesting()
-            try? await Task.sleep(for: .milliseconds(10))
+        guard await viewController.waitForFetchedResultsTransactionDeliveryForTesting(
+            after: transactionDeliveryCount
+        ) else {
+            return false
         }
-        return true
+        await viewController.flushPendingSnapshotUpdateForTesting()
+        return viewController.displayedRequestIDsForTesting == requestIDs
     }
 
     private func settleNetworkListTransactions() async {

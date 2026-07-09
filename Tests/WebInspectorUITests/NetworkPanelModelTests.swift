@@ -774,7 +774,7 @@ func responseBodyFetchMovesUnavailablePreviewContextToFailedPhase() async throws
     let expectedBody = request.responseBody
     model.fetchResponseBodyIfNeeded(for: request)
 
-    #expect(await waitForResponseBodyPhase(in: expectedBody) { phase in
+    #expect(await waitForNetworkBodyPhase(in: expectedBody) { phase in
         if case .failed = phase {
             return true
         }
@@ -932,24 +932,4 @@ private func applyLoadingFinished(
             metrics: nil
         )
     )
-}
-
-@MainActor
-private func waitForResponseBodyPhase(
-    in body: NetworkBody,
-    _ predicate: @escaping @Sendable (NetworkBody.Phase) -> Bool
-) async -> NetworkBody.Phase? {
-    let observation = withPortableContinuousObservation { _ in
-        _ = body.phase
-    }
-    defer {
-        observation.cancel()
-    }
-    let observedValues = await observation.values {
-        body.phase
-    }
-    defer {
-        observedValues.cancel()
-    }
-    return await observedValues.waitUntil(predicate)
 }
