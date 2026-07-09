@@ -13,13 +13,20 @@ package struct AnyRecordedValue: @unchecked Sendable {
     }
 }
 
+/// A command recorded by ``WebInspectorTestBackend``.
 public struct RecordedCommand: Equatable, Sendable {
+    /// The target that received the command.
     public let targetID: WebInspectorTarget.ID
+
+    /// The protocol domain for the command.
     public let domain: String
+
+    /// The protocol method for the command.
     public let method: String
     package let route: RoutingTargetID
     package let payload: AnyRecordedValue
 
+    /// Creates an unscoped recorded command used for equality assertions.
     public init(domain: String, method: String) {
         targetID = WebInspectorTarget.ID("unscoped-recorded-command")
         route = RoutingTargetID("unscoped-recorded-command")
@@ -38,6 +45,7 @@ public struct RecordedCommand: Equatable, Sendable {
         payload = AnyRecordedValue(command.payload)
     }
 
+    /// Compares recorded commands by domain and method.
     public static func == (lhs: RecordedCommand, rhs: RecordedCommand) -> Bool {
         lhs.domain == rhs.domain && lhs.method == rhs.method
     }
@@ -85,10 +93,13 @@ private struct SubscriberWaiter: Sendable {
     var continuation: CheckedContinuation<Void, Never>
 }
 
+/// Errors thrown by ``WebInspectorTestBackend`` helpers.
 public enum WebInspectorTestBackendError: Error, Equatable, Sendable {
+    /// The requested event domain is not supported by the test backend.
     case unsupportedEventDomain(String)
 }
 
+/// Controllable in-memory backend for `WebInspectorProxyKit` tests.
 public actor WebInspectorTestBackend {
     private var enqueuedReplies: [CommandKey: [QueuedReply]]
     private var commands: [RecordedCommand]
@@ -96,6 +107,7 @@ public actor WebInspectorTestBackend {
     private var eventContinuations: [EventSubscriptionKey: [UUID: AsyncStream<WebInspectorProxyEvent>.Continuation]]
     private var subscriberWaiters: [SubscriberWaiter]
 
+    /// Creates an empty test backend.
     public init() {
         enqueuedReplies = [:]
         commands = []
@@ -104,6 +116,7 @@ public actor WebInspectorTestBackend {
         subscriberWaiters = []
     }
 
+    /// Enqueues a successful reply for the next matching command.
     public func enqueue<Result: Sendable>(
         _ result: Result,
         for domain: String,
@@ -113,6 +126,7 @@ public actor WebInspectorTestBackend {
         enqueuedReplies[key, default: []].append(QueuedReply(result))
     }
 
+    /// Enqueues a failing reply for the next matching command.
     public func enqueueFailure(
         _ error: any Error & Sendable,
         for domain: String,
@@ -122,18 +136,22 @@ public actor WebInspectorTestBackend {
         enqueuedReplies[key, default: []].append(QueuedReply(failure: error))
     }
 
+    /// Emits a Network event to subscribers for a target identity.
     public func emit(_ event: Network.Event, target: WebInspectorTarget.ID) async {
         emit(.network(event), target: target, route: nil, domain: .network)
     }
 
+    /// Emits a Network event to subscribers for a target.
     public func emit(_ event: Network.Event, target: WebInspectorTarget) async {
         emit(.network(event), target: target.id, route: target.route, domain: .network)
     }
 
+    /// Emits a DOM event to subscribers for a target identity.
     public func emit(_ event: DOM.Event, target: WebInspectorTarget.ID) async {
         emit(.dom(event), target: target, route: nil, domain: .dom)
     }
 
+    /// Emits a DOM event to subscribers for a target.
     public func emit(_ event: DOM.Event, target: WebInspectorTarget) async {
         emit(.dom(event), target: target.id, route: target.route, domain: .dom)
     }
@@ -146,18 +164,22 @@ public actor WebInspectorTestBackend {
         emit(.inspector(event), target: target.id, route: target.route, domain: .inspector)
     }
 
+    /// Emits a CSS event to subscribers for a target identity.
     public func emit(_ event: CSS.Event, target: WebInspectorTarget.ID) async {
         emit(.css(event), target: target, route: nil, domain: .css)
     }
 
+    /// Emits a CSS event to subscribers for a target.
     public func emit(_ event: CSS.Event, target: WebInspectorTarget) async {
         emit(.css(event), target: target.id, route: target.route, domain: .css)
     }
 
+    /// Emits a Console event to subscribers for a target identity.
     public func emit(_ event: Console.Event, target: WebInspectorTarget.ID) async {
         emit(.console(Console.TargetedEvent(event: event, targetID: target)), target: target, route: nil, domain: .console)
     }
 
+    /// Emits a Console event to subscribers for a target.
     public func emit(_ event: Console.Event, target: WebInspectorTarget) async {
         emit(
             .console(Console.TargetedEvent(event: event, targetID: target.id)),
@@ -167,10 +189,12 @@ public actor WebInspectorTestBackend {
         )
     }
 
+    /// Emits a Runtime event to subscribers for a target identity.
     public func emit(_ event: Runtime.Event, target: WebInspectorTarget.ID) async {
         emit(.runtime(event), target: target, route: nil, domain: .runtime)
     }
 
+    /// Emits a Runtime event to subscribers for a target.
     public func emit(_ event: Runtime.Event, target: WebInspectorTarget) async {
         emit(.runtime(event), target: target.id, route: target.route, domain: .runtime)
     }
@@ -179,10 +203,12 @@ public actor WebInspectorTestBackend {
         emit(.targetLifecycle(event), target: target.id, route: target.route, domain: lifecycleDomain(for: event))
     }
 
+    /// Returns commands recorded by the backend.
     public func recordedCommands() async -> [RecordedCommand] {
         commands
     }
 
+    /// Waits until a target identity has at least the requested subscriber count.
     public func waitForSubscribers(
         domain: String,
         target: WebInspectorTarget.ID,
@@ -209,6 +235,7 @@ public actor WebInspectorTestBackend {
         }
     }
 
+    /// Waits until a target has at least the requested subscriber count.
     public func waitForSubscribers(
         domain: String,
         target: WebInspectorTarget,
@@ -236,6 +263,7 @@ public actor WebInspectorTestBackend {
         }
     }
 
+    /// Holds matching commands until the supplied gate opens.
     public func hold(domain: String, method: String, gate: WebInspectorTestGate) async {
         heldCommands.append(HeldCommand(domain: domain, method: method, gate: gate))
     }

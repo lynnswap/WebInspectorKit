@@ -1,6 +1,11 @@
 import Foundation
 import WebInspectorProxyKit
 
+/// The identity-preserving model context for an inspected page.
+///
+/// A context owns observable DOM, Network, Console, Runtime, and CSS models.
+/// It is isolated to the actor passed at initialization; callers must use the
+/// same actor when reading or mutating context-owned state.
 public final class WebInspectorContext {
     package struct DOMUndoRedoCommands {
         private weak var context: WebInspectorContext?
@@ -59,16 +64,30 @@ public final class WebInspectorContext {
 
     private typealias LoadedDOMDocument = (node: DOM.Node, generation: Int)
 
+    /// The attachment state of a context.
     public enum State: Equatable, Sendable {
+        /// The context is enabling domains and loading initial state.
         case attaching
+
+        /// The context is attached and has started observing the page.
         case attached
+
+        /// The context has been detached.
         case detached
+
+        /// The context failed with an inspector error.
         case failed(WebInspectorProxyError)
     }
 
+    /// A compact status value suitable for UI binding.
     public struct Status: Equatable, Sendable {
+        /// The current attachment state.
         public let state: State
+
+        /// The currently selected DOM node identity.
         public let selectedNodeID: DOMNode.ID?
+
+        /// A Boolean value indicating whether WebKit inspect mode is enabled.
         public let isElementPickerEnabled: Bool
     }
 
@@ -76,12 +95,26 @@ public final class WebInspectorContext {
     private let proxy: WebInspectorProxy
     private let domainEnablement: WebInspectorDomainEnablementRegistry
     private let owner: any Actor
+    /// The current attachment state.
     public private(set) var state: State
+
+    /// The terminal teardown error, if the context failed or detached because
+    /// of an inspector error.
     public private(set) var teardownError: WebInspectorProxyError?
+
+    /// The current root DOM node, if a document is loaded.
     public private(set) var rootNode: DOMNode?
+
+    /// The currently selected DOM node.
     public private(set) var selectedNode: DOMNode?
+
+    /// A Boolean value indicating whether WebKit inspect mode is enabled.
     public private(set) var isElementPickerEnabled: Bool
+
+    /// Runtime execution contexts known to the current page.
     public private(set) var executionContexts: [RuntimeContext]
+
+    /// The selected Runtime execution context.
     public private(set) var selectedContext: RuntimeContext?
 
     private var currentPage: WebInspectorTarget?
@@ -134,6 +167,7 @@ public final class WebInspectorContext {
     private var consoleObjectGroupReleaseTasks: [WebInspectorTarget.ID: Task<Void, Never>]
     private var pageHighlightDocumentGeneration: Int?
 
+    /// Creates a context owned by the supplied actor.
     public init(_ container: WebInspectorContainer, isolation: isolated (any Actor)) {
         self.container = container
         proxy = container.proxy
@@ -231,6 +265,7 @@ public final class WebInspectorContext {
         }
     }
 
+    /// Starts observing the inspected page and rebuilding DataKit models.
     public func start(isolation: isolated (any Actor) = #isolation) {
         requireOwner(isolation)
         let previousStartupTask = startupTask
@@ -268,6 +303,7 @@ public final class WebInspectorContext {
         statusRelay.makeStream(initialElement: status)
     }
 
+    /// Returns the registered DOM node for an identifier.
     public func node(for id: DOMNode.ID, isolation: isolated (any Actor) = #isolation) -> DOMNode? {
         requireOwner(isolation)
         return nodesByID[id]
@@ -281,6 +317,7 @@ public final class WebInspectorContext {
         return node
     }
 
+    /// Returns the registered Network request for an identifier.
     public func registeredRequest(
         for id: NetworkRequest.ID,
         isolation: isolated (any Actor) = #isolation
@@ -301,11 +338,13 @@ public final class WebInspectorContext {
         return requestsByID[NetworkRequest.ID(id)]
     }
 
+    /// Clears retained Network requests and emits reset transactions.
     public func clearNetworkRequests(isolation: isolated (any Actor) = #isolation) {
         requireOwner(isolation)
         clearNetworkRequests()
     }
 
+    /// Returns the registered Console message for an identifier.
     public func registeredMessage(
         for id: ConsoleMessage.ID,
         isolation: isolated (any Actor) = #isolation
@@ -314,6 +353,7 @@ public final class WebInspectorContext {
         return consoleMessagesByID[id]
     }
 
+    /// Selects a DOM node and reveals it in registered tree controllers.
     public func select(_ node: DOMNode?, isolation: isolated (any Actor) = #isolation) {
         select(node, reveal: .selectAndScroll, isolation: isolation)
     }
@@ -428,6 +468,7 @@ public final class WebInspectorContext {
         return DOMMutationResult(requestedNodeIDs: nodeIDs, acceptedNodeIDs: acceptedNodeIDs)
     }
 
+    /// Returns copied text for a DOM node in the requested format.
     public func copyText(
         _ kind: DOMNode.CopyTextKind,
         for node: DOMNode,
@@ -454,10 +495,12 @@ public final class WebInspectorContext {
         try await copyText(kind, for: try requiredNode(for: id, isolation: isolation), isolation: isolation)
     }
 
+    /// Removes one DOM node from the inspected document.
     public func delete(_ node: DOMNode, isolation: isolated (any Actor) = #isolation) async throws {
         try await delete([node], isolation: isolation)
     }
 
+    /// Removes DOM nodes from the inspected document.
     public func delete(_ nodes: [DOMNode], isolation: isolated (any Actor) = #isolation) async throws {
         _ = try await deleteCountingRemovedNodes(nodes, isolation: isolation)
     }
@@ -522,6 +565,7 @@ public final class WebInspectorContext {
     }
     #endif
 
+    /// Highlights a DOM node in the inspected page.
     public func highlight(_ node: DOMNode, isolation: isolated (any Actor) = #isolation) async throws {
         requireOwner(isolation)
         try registeredNode(node)
@@ -536,6 +580,7 @@ public final class WebInspectorContext {
         try await highlight(try requiredNode(for: id, isolation: isolation), isolation: isolation)
     }
 
+    /// Clears the current DOM highlight in the inspected page.
     public func hideHighlight(isolation: isolated (any Actor) = #isolation) async throws {
         requireOwner(isolation)
         let page = try currentPageOrThrow()
@@ -560,6 +605,7 @@ public final class WebInspectorContext {
         try await domUndoRedoCommands(isolation: isolation).redo(isolation: isolation)
     }
 
+    /// Enables or disables WebKit's element picker.
     public func setElementPickerEnabled(
         _ isEnabled: Bool,
         isolation: isolated (any Actor) = #isolation
@@ -584,6 +630,7 @@ public final class WebInspectorContext {
         )
     }
 
+    /// Reloads the inspected page.
     public func reloadPage(
         ignoringCache: Bool = false,
         isolation: isolated (any Actor) = #isolation
@@ -593,6 +640,7 @@ public final class WebInspectorContext {
         try await page.page.reload(ignoringCache: ignoringCache)
     }
 
+    /// Returns a CSS selector path for a DOM node.
     public func selectorPath(for node: DOMNode, isolation: isolated (any Actor) = #isolation) throws -> String {
         requireOwner(isolation)
         try registeredNode(node)
@@ -603,6 +651,7 @@ public final class WebInspectorContext {
         try selectorPath(for: try requiredNode(for: id, isolation: isolation), isolation: isolation)
     }
 
+    /// Returns an XPath expression for a DOM node.
     public func xPath(for node: DOMNode, isolation: isolated (any Actor) = #isolation) throws -> String {
         requireOwner(isolation)
         try registeredNode(node)
@@ -613,6 +662,7 @@ public final class WebInspectorContext {
         try xPath(for: try requiredNode(for: id, isolation: isolation), isolation: isolation)
     }
 
+    /// Creates a live DOM tree controller rooted at a node or the document root.
     public func treeController(
         root requestedRoot: DOMNode? = nil,
         isolation: isolated (any Actor) = #isolation
@@ -639,6 +689,7 @@ public final class WebInspectorContext {
         return DOMTreeController(tree: tree)
     }
 
+    /// Selects the Runtime execution context used by default evaluation calls.
     public func selectContext(_ context: RuntimeContext?, isolation: isolated (any Actor) = #isolation) {
         requireOwner(isolation)
         guard let context else {
@@ -651,6 +702,7 @@ public final class WebInspectorContext {
         selectedContext = context
     }
 
+    /// Evaluates JavaScript in the selected or supplied Runtime context.
     public func evaluate(
         _ expression: String,
         in context: RuntimeContext? = nil,
@@ -673,6 +725,7 @@ public final class WebInspectorContext {
         )
     }
 
+    /// Creates observable fetched results for a supported model type.
     public func fetchedResults<Model: WebInspectorFetchableModel>(
         for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
         sectionBy: WebInspectorSectionDescriptor<Model>? = nil,
@@ -703,6 +756,7 @@ public final class WebInspectorContext {
         return results
     }
 
+    /// Creates observable fetched results from a mutable fetch request.
     public func fetchedResults<Model: WebInspectorFetchableModel>(
         for request: WebInspectorFetchRequest<Model>,
         sectionBy: WebInspectorSectionDescriptor<Model>? = nil,
@@ -711,6 +765,7 @@ public final class WebInspectorContext {
         fetchedResults(for: request.fetchDescriptor, sectionBy: sectionBy, isolation: isolation)
     }
 
+    /// Creates observable fetched results sectioned by a string key path.
     public func fetchedResults<Model: WebInspectorFetchableModel>(
         for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
         sectionBy keyPath: KeyPath<Model, String>,
@@ -723,6 +778,7 @@ public final class WebInspectorContext {
         )
     }
 
+    /// Creates observable fetched results sectioned by an optional string key path.
     public func fetchedResults<Model: WebInspectorFetchableModel>(
         for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
         sectionBy keyPath: KeyPath<Model, String?>,
@@ -735,6 +791,7 @@ public final class WebInspectorContext {
         )
     }
 
+    /// Creates observable fetched results sectioned by a raw-representable string key path.
     public func fetchedResults<
         Model: WebInspectorFetchableModel,
         Value: RawRepresentable & Hashable & Sendable
@@ -750,6 +807,7 @@ public final class WebInspectorContext {
         )
     }
 
+    /// Creates observable fetched results sectioned by an optional raw-representable string key path.
     public func fetchedResults<
         Model: WebInspectorFetchableModel,
         Value: RawRepresentable & Hashable & Sendable
@@ -765,6 +823,7 @@ public final class WebInspectorContext {
         )
     }
 
+    /// Creates a fetched-results controller for a supported model type.
     public func fetchedResultsController<Model: WebInspectorFetchableModel>(
         for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
         sectionBy: WebInspectorSectionDescriptor<Model>? = nil,
@@ -776,6 +835,7 @@ public final class WebInspectorContext {
         )
     }
 
+    /// Creates a fetched-results controller from a mutable fetch request.
     public func fetchedResultsController<Model: WebInspectorFetchableModel>(
         for request: WebInspectorFetchRequest<Model>,
         sectionBy: WebInspectorSectionDescriptor<Model>? = nil,
@@ -786,6 +846,7 @@ public final class WebInspectorContext {
         )
     }
 
+    /// Creates a fetched-results controller sectioned by a string key path.
     public func fetchedResultsController<Model: WebInspectorFetchableModel>(
         for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
         sectionBy keyPath: KeyPath<Model, String>,
@@ -796,6 +857,7 @@ public final class WebInspectorContext {
         )
     }
 
+    /// Creates a fetched-results controller sectioned by an optional string key path.
     public func fetchedResultsController<Model: WebInspectorFetchableModel>(
         for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
         sectionBy keyPath: KeyPath<Model, String?>,
@@ -806,6 +868,7 @@ public final class WebInspectorContext {
         )
     }
 
+    /// Creates a fetched-results controller sectioned by a raw-representable string key path.
     public func fetchedResultsController<
         Model: WebInspectorFetchableModel,
         Value: RawRepresentable & Hashable & Sendable
@@ -819,6 +882,7 @@ public final class WebInspectorContext {
         )
     }
 
+    /// Creates a fetched-results controller sectioned by an optional raw-representable string key path.
     public func fetchedResultsController<
         Model: WebInspectorFetchableModel,
         Value: RawRepresentable & Hashable & Sendable
@@ -1110,6 +1174,7 @@ public final class WebInspectorContext {
         }
     }
 
+    /// Stops observing the inspected page and tears down context-owned state.
     public func stop(isolation: isolated (any Actor) = #isolation) async {
         requireOwner(isolation)
         await detach(isolation: isolation)

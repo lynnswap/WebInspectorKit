@@ -57,7 +57,6 @@ let package = Package(
             dependencies: [
                 "WebInspectorNativeBridge"
             ],
-            exclude: ["README.md"],
             swiftSettings: strictSwiftSettings
         ),
         .target(
@@ -72,7 +71,6 @@ let package = Package(
             dependencies: [
                 "WebInspectorProxyKit"
             ],
-            exclude: ["README.md"],
             swiftSettings: strictSwiftSettings
         ),
         .target(
@@ -147,7 +145,7 @@ let package = Package(
                 .product(name: "ObservationBridge", package: "ObservationBridge")
             ],
             exclude: [
-                "Docs"
+                "README.md"
             ],
             swiftSettings: strictSwiftSettings
         ),

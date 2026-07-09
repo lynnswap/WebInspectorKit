@@ -6,6 +6,10 @@ import WebInspectorDataKit
 import WebInspectorUIBase
 import WebInspectorUINetwork
 
+/// The UIKit-facing inspection session used by `WebInspectorViewController`.
+///
+/// A session owns attachment lifecycle, the current DataKit context, tab
+/// selection state, and page-derived presentation preferences.
 @MainActor
 @Observable
 public final class WebInspectorSession {
@@ -26,6 +30,7 @@ public final class WebInspectorSession {
     @ObservationIgnored package private(set) var detachCountForTesting = 0
     #endif
 
+    /// Creates a session with the provided inspector tabs.
     public init(tabs: [WebInspectorTab] = [.dom, .network]) {
         self.interface = InterfaceModel(tabs: tabs)
         self.dataContext = Self.makeDetachedDataContext()
@@ -58,6 +63,10 @@ public final class WebInspectorSession {
         dataContext
     }
 
+    /// Attaches the session to a web view.
+    ///
+    /// Attaching replaces any previous inspection context owned by this
+    /// session.
     public func attach(to webView: WKWebView) async throws {
         try await attach(
             makeContainer: {
@@ -128,6 +137,8 @@ public final class WebInspectorSession {
         }
     }
 
+    /// Detaches the session and replaces the current context with a detached
+    /// placeholder context.
     public func detach() async {
         await detachAndReplaceContext()
     }

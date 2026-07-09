@@ -1,6 +1,8 @@
 import Foundation
 
+/// Types and commands for the Web Inspector Page domain.
 public enum Page {
+    /// A target-scoped client for Page commands.
     public struct Client: Sendable {
         package let context: DomainClientContext
 
@@ -8,6 +10,7 @@ public enum Page {
             self.context = context
         }
 
+        /// Reloads the inspected page.
         public func reload(ignoringCache: Bool = false) async throws {
             try await context.dispatchVoid(
                 domain: .page,

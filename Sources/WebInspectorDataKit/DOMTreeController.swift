@@ -1,35 +1,83 @@
 import Foundation
 import WebInspectorProxyKit
 
+/// Immutable snapshot of a DOM tree projection.
 public struct DOMTreeSnapshot: Hashable, Sendable {
+    /// A snapshot node detached from observable ``DOMNode`` instances.
     public struct Node: Hashable, Identifiable, Sendable {
+        /// Loading state for a snapshot node's regular children.
         public enum Children: Hashable, Sendable {
+            /// Children have not been requested yet, but WebKit reported a count.
             case unrequested(count: Int)
+
+            /// Child node identities loaded in the snapshot.
             case loaded([DOMNode.ID])
         }
 
+        /// The stable node identity.
         public let id: DOMNode.ID
+
+        /// The protocol node name.
         public let nodeName: String
+
+        /// The local element name, if available.
         public let localName: String
+
+        /// The node value for text-like nodes.
         public let nodeValue: String
+
+        /// The raw numeric DOM node type.
         public let nodeType: Int
+
+        /// The DOM node kind.
         public let kind: DOMNode.Kind
+
+        /// The frame that owns the node, if WebKit reported one.
         public let frameID: FrameID?
+
+        /// The document URL associated with the node.
         public let documentURL: String?
+
+        /// The base URL associated with the node.
         public let baseURL: String?
+
+        /// Attributes keyed by name.
         public let attributes: [String: String]
+
+        /// Attributes in protocol order.
         public let attributeList: [DOMNode.Attribute]
+
+        /// The number of regular children reported by WebKit.
         public let childNodeCount: Int
+
+        /// Loading state for regular child nodes.
         public let children: Children
+
+        /// The content document identity for frame-like elements.
         public let contentDocumentID: DOMNode.ID?
+
+        /// Shadow root identities attached to the node.
         public let shadowRootIDs: [DOMNode.ID]
+
+        /// Template content identity associated with the node.
         public let templateContentID: DOMNode.ID?
+
+        /// The `::before` pseudo-element identity.
         public let beforePseudoElementID: DOMNode.ID?
+
+        /// Additional pseudo-element identities reported by WebKit.
         public let otherPseudoElementIDs: [DOMNode.ID]
+
+        /// The `::after` pseudo-element identity.
         public let afterPseudoElementID: DOMNode.ID?
+
+        /// The node's pseudo-element kind.
         public let pseudoType: DOM.PseudoType?
+
+        /// The node's shadow-root kind.
         public let shadowRootType: DOM.ShadowRootType?
 
+        /// A display name suitable for tree rows.
         public var displayName: String {
             if !localName.isEmpty {
                 return localName
@@ -41,22 +89,39 @@ public struct DOMTreeSnapshot: Hashable, Sendable {
         }
     }
 
+    /// Visible child identities for tree rendering.
     public struct VisibleChildren: Hashable, Sendable {
+        /// Child identities in render order.
         public let nodeIDs: [DOMNode.ID]
+
+        /// A Boolean value indicating whether regular children are still unloaded.
         public let hasUnloadedChildren: Bool
+
+        /// A Boolean value indicating whether the node can render any child disclosure.
         public let hasRenderableChildren: Bool
     }
 
+    /// Monotonic revision that changes when the snapshot topology changes.
     public let revision: UInt64
+
+    /// The root node identity for the snapshot.
     public let rootNodeID: DOMNode.ID?
+
+    /// The selected node identity at the time of the snapshot.
     public let selectedNodeID: DOMNode.ID?
+
+    /// Snapshot nodes keyed by identity.
     public let nodesByID: [DOMNode.ID: Node]
+
+    /// Parent identities keyed by child identity.
     public let parentByNodeID: [DOMNode.ID: DOMNode.ID]
 
+    /// Returns the snapshot node for an identity.
     public func node(for id: DOMNode.ID) -> Node? {
         nodesByID[id]
     }
 
+    /// Returns regular child identities for a node.
     public func children(of id: DOMNode.ID) -> [DOMNode.ID] {
         guard case let .loaded(children) = nodesByID[id]?.children else {
             return []
@@ -64,6 +129,7 @@ public struct DOMTreeSnapshot: Hashable, Sendable {
         return children
     }
 
+    /// Returns child identities in the order tree views should render them.
     public func visibleChildren(of id: DOMNode.ID) -> VisibleChildren {
         guard let node = nodesByID[id] else {
             return VisibleChildren(nodeIDs: [], hasUnloadedChildren: false, hasRenderableChildren: false)
@@ -94,6 +160,7 @@ public struct DOMTreeSnapshot: Hashable, Sendable {
         )
     }
 
+    /// Returns the visible root identities for tree rendering.
     public func displayRootIDs() -> [DOMNode.ID] {
         guard let rootNodeID,
               let rootNode = nodesByID[rootNodeID] else {
@@ -105,6 +172,7 @@ public struct DOMTreeSnapshot: Hashable, Sendable {
         return [rootNodeID]
     }
 
+    /// Returns whether the identity is a template content node.
     public func isTemplateContent(_ id: DOMNode.ID) -> Bool {
         guard let parentID = parentByNodeID[id],
               let parent = nodesByID[parentID] else {
@@ -113,10 +181,12 @@ public struct DOMTreeSnapshot: Hashable, Sendable {
         return parent.templateContentID == id
     }
 
+    /// Returns the parent identity for a node.
     public func parent(of id: DOMNode.ID) -> DOMNode.ID? {
         parentByNodeID[id]
     }
 
+    /// Returns ancestor identities from parent to root.
     public func ancestorNodeIDs(of id: DOMNode.ID) -> [DOMNode.ID] {
         var ancestors: [DOMNode.ID] = []
         var visited = Set<DOMNode.ID>()
@@ -131,33 +201,66 @@ public struct DOMTreeSnapshot: Hashable, Sendable {
     }
 }
 
+/// Updates emitted by a ``DOMTreeController``.
 public enum DOMTreeUpdate: Hashable, Sendable {
+    /// A full snapshot replacement.
     case snapshot(DOMTreeSnapshot, reason: DOMTreeSnapshotReason)
+
+    /// An incremental tree update.
     case delta(DOMTreeDelta)
 }
 
+/// Reason a DOM tree snapshot was emitted.
 public enum DOMTreeSnapshotReason: Hashable, Sendable {
+    /// The initial snapshot emitted to a subscriber.
     case initialDocument
+
+    /// The inspected page target changed.
     case pageChanged
+
+    /// WebKit reported that the document changed.
     case documentUpdated
+
+    /// The tree state was reset.
     case reset
 }
 
+/// Incremental DOM tree change.
 public enum DOMTreeDelta: Hashable, Sendable {
+    /// A node's display data changed.
     case nodeChanged(nodeID: DOMNode.ID)
+
+    /// A child was inserted under a parent.
     case childInserted(parentID: DOMNode.ID, nodeID: DOMNode.ID, previousSiblingID: DOMNode.ID?)
+
+    /// A child was removed from a parent.
     case childRemoved(parentID: DOMNode.ID, nodeID: DOMNode.ID)
+
+    /// A parent's children were replaced.
     case childrenReplaced(parentID: DOMNode.ID, childIDs: [DOMNode.ID])
+
+    /// A node's child count changed.
     case childCountChanged(nodeID: DOMNode.ID)
+
+    /// The selected node changed.
     case selectionChanged(nodeID: DOMNode.ID?)
 }
 
+/// Request emitted when a tree view should reveal a node.
 public struct DOMTreeRevealRequest: Hashable, Sendable {
+    /// The node to reveal.
     public var nodeID: DOMNode.ID
+
+    /// Ancestors that should be expanded before revealing the node.
     public var ancestorNodeIDs: [DOMNode.ID]
+
+    /// A Boolean value indicating whether the node should become selected.
     public var shouldSelect: Bool
+
+    /// A Boolean value indicating whether the node should be scrolled into view.
     public var shouldScroll: Bool
 
+    /// Creates a reveal request.
     public init(
         nodeID: DOMNode.ID,
         ancestorNodeIDs: [DOMNode.ID],
@@ -171,23 +274,29 @@ public struct DOMTreeRevealRequest: Hashable, Sendable {
     }
 }
 
+/// Live controller for a DOM tree snapshot and its updates.
 public final class DOMTreeController {
+    /// The current snapshot.
     public var snapshot: DOMTreeSnapshot {
         tree.snapshot
     }
 
+    /// The current snapshot revision.
     public var revision: UInt64 {
         tree.revision
     }
 
+    /// The currently selected node identity.
     public var selectedNodeID: DOMNode.ID? {
         tree.selectedNodeID
     }
 
+    /// Stream of snapshot and delta updates.
     public var updates: AsyncStream<DOMTreeUpdate> {
         tree.updates
     }
 
+    /// Stream of reveal requests.
     public var revealRequests: AsyncStream<DOMTreeRevealRequest> {
         tree.revealRequests
     }

@@ -21,11 +21,35 @@ private struct ProtocolCommandTarget: Sendable {
     }
 }
 
+/// An attached Web Inspector protocol connection for a `WKWebView`.
+///
+/// `WebInspectorProxy` owns the private WebKit inspector attachment, tracks the
+/// current page target, and routes typed domain commands through
+/// ``WebInspectorTarget`` values.
+///
+/// Example:
+///
+/// ```swift
+/// let proxy = try await WebInspectorProxy(attachingTo: webView)
+/// let page = try await proxy.waitForCurrentPage()
+///
+/// try await page.runtime.enable()
+/// let evaluation = try await page.runtime.evaluate("document.title")
+/// print(evaluation.object.description ?? "")
+///
+/// await proxy.close()
+/// ```
 public actor WebInspectorProxy {
+    /// Timeout configuration for command replies and current-page bootstrap.
     public struct Configuration: Equatable, Sendable {
+        /// The maximum time to wait for an individual protocol command reply.
         public var responseTimeout: Duration
+
+        /// The maximum time to wait while discovering or refreshing the current
+        /// page target.
         public var bootstrapTimeout: Duration
 
+        /// Creates proxy timeout configuration.
         public init(
             responseTimeout: Duration = .seconds(5),
             bootstrapTimeout: Duration = .seconds(5)
@@ -53,6 +77,10 @@ public actor WebInspectorProxy {
         case closed
     }
 
+    /// Attaches a Web Inspector protocol connection to a web view.
+    ///
+    /// Attach from the main actor because `WKWebView` is a UI object. Use
+    /// ``waitForCurrentPage()`` before dispatching page-scoped commands.
     @MainActor
     public init(
         attachingTo webView: WKWebView,
@@ -138,6 +166,7 @@ public actor WebInspectorProxy {
         }
     }
 
+    /// The currently known page target, if bootstrap has completed.
     public var currentPage: WebInspectorTarget? {
         pageTarget
     }
@@ -146,10 +175,17 @@ public actor WebInspectorProxy {
         pageTarget?.pageBindingID
     }
 
+    /// A Boolean value indicating whether the proxy has an open page target
+    /// that can receive reload commands.
     public var canReload: Bool {
         pageTarget != nil && closeState == .open
     }
 
+    /// Waits for and returns the current page target.
+    ///
+    /// The proxy refreshes its current-page target from the transport when
+    /// possible. The method throws if the proxy is closed, detached, or no page
+    /// target can be discovered before the bootstrap timeout.
     public func waitForCurrentPage() async throws -> WebInspectorTarget {
         try ensureOpenForCurrentPageAccess()
         if let transport {
@@ -194,6 +230,7 @@ public actor WebInspectorProxy {
         configuration.bootstrapTimeout
     }
 
+    /// Reloads the currently inspected page without ignoring cache.
     public func reload() async throws {
         guard let pageTarget else {
             throw WebInspectorProxyError.disconnected("WebInspectorProxyKit shell has no current page target.")
@@ -207,6 +244,10 @@ public actor WebInspectorProxy {
         )
     }
 
+    /// Closes the inspector connection.
+    ///
+    /// Calling `close()` more than once is allowed. Await
+    /// ``waitUntilClosed()`` when another task needs to observe completion.
     public func close() async {
         switch closeState {
         case .open:
@@ -224,6 +265,10 @@ public actor WebInspectorProxy {
         resumeCloseWaiters()
     }
 
+    /// Suspends until ``close()`` has finished.
+    ///
+    /// If the proxy is already closed, this method returns immediately. If the
+    /// waiting task is cancelled, only that waiter is cancelled.
     public func waitUntilClosed() async throws {
         guard closeState != .closed else {
             return

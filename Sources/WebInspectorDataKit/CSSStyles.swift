@@ -21,8 +21,10 @@ private struct CSSPropertyInspectorBaseline: Equatable {
     }
 }
 
+/// Observable CSS state for one DOM element.
 @Observable
 public final class CSSStyles: WebInspectorPersistentModel {
+    /// Stable identity for an element's CSS style model.
     public struct ID: Hashable, Sendable {
         let nodeID: DOMNode.ID
 
@@ -31,11 +33,21 @@ public final class CSSStyles: WebInspectorPersistentModel {
         }
     }
 
+    /// Loading phase for element style data.
     public enum Phase: Equatable, Sendable {
+        /// CSS information is currently being requested.
         case loading
+
+        /// CSS information has been loaded.
         case loaded
+
+        /// CSS information is stale and should be refreshed.
         case needsRefresh
+
+        /// CSS information is unavailable for the element.
         case unavailable
+
+        /// CSS information failed to load.
         case failed(WebInspectorProxyError)
     }
 
@@ -44,9 +56,16 @@ public final class CSSStyles: WebInspectorPersistentModel {
         let text: String
     }
 
+    /// The stable style model identity.
     public let id: ID
+
+    /// The current loading phase.
     public private(set) var phase: Phase
+
+    /// Style sections displayed for the element.
     public private(set) var sections: [CSSStyleSection]
+
+    /// Computed properties for the element.
     public private(set) var computedProperties: [CSSComputedProperty]
 
     @ObservationIgnored weak var modelContext: WebInspectorContext?

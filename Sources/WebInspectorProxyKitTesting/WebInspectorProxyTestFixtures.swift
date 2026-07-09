@@ -1,11 +1,14 @@
 import Foundation
 import WebInspectorProxyKit
 
+/// Fixture builders for tests that use `WebInspectorProxyKit`.
 public enum WebInspectorProxyTestFixtures {
+    /// Creates a DOM node identity from a raw value.
     public static func domNodeID(_ rawValue: String) -> DOM.Node.ID {
         DOM.Node.ID(rawValue)
     }
 
+    /// Creates a DOM node fixture.
     public static func domNode(
         id: String,
         nodeType: Int,
@@ -34,6 +37,7 @@ public enum WebInspectorProxyTestFixtures {
         )
     }
 
+    /// Creates a DOM document node fixture.
     public static func domDocument(
         id: String = "document",
         documentURL: String? = nil,
@@ -50,10 +54,12 @@ public enum WebInspectorProxyTestFixtures {
         )
     }
 
+    /// Creates a network request identity from a raw value.
     public static func networkRequestID(_ rawValue: String) -> Network.Request.ID {
         Network.Request.ID(rawValue)
     }
 
+    /// Creates a network request fixture.
     public static func networkRequest(
         id: String,
         url: String,
@@ -74,10 +80,12 @@ public enum WebInspectorProxyTestFixtures {
         )
     }
 
+    /// Creates a Runtime remote object identity from a raw value.
     public static func runtimeRemoteObjectID(_ rawValue: String) -> Runtime.RemoteObject.ID {
         Runtime.RemoteObject.ID(rawValue)
     }
 
+    /// Creates a Runtime remote object fixture.
     public static func runtimeRemoteObject(
         id: String? = nil,
         kind: Runtime.Kind,
