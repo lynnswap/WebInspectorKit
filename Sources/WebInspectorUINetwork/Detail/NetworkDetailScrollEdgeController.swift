@@ -68,12 +68,4 @@ final class NetworkDetailScrollEdgeController: NetworkBodyScrollEdgeSink {
     }
 }
 
-#if DEBUG
-extension NetworkDetailScrollEdgeController {
-    @available(iOS 26.0, *)
-    var interactionForTesting: UIScrollEdgeElementContainerInteraction? {
-        interaction as? UIScrollEdgeElementContainerInteraction
-    }
-}
-#endif
 #endif

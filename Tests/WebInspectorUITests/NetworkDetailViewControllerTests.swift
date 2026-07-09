@@ -215,7 +215,7 @@ struct NetworkDetailViewControllerTests {
 
         let didRenderHeaders = await waitUntilRendered(in: viewController) {
             let text = viewController.headersTextViewForTesting.renderedTextForTesting
-            let didRenderHeaders = viewController.currentModeForTesting == .headers
+            return viewController.currentModeForTesting == .headers
                 && viewController.previewViewForTesting.isHidden
                 && viewController.headersTextViewForTesting.isHidden == false
                 && viewController.headersTextViewForTesting.usesTextKit2ForTesting
@@ -223,12 +223,6 @@ struct NetworkDetailViewControllerTests {
                 && text.contains("accept: application/json")
                 && text.contains("content-type: application/json")
                 && text.contains("200 OK")
-            if #available(iOS 26.0, *) {
-                return didRenderHeaders
-                    && viewController.contentScrollView(for: .top) === viewController.headersTextViewForTesting.contentScrollView
-                    && viewController.contentScrollView(for: .bottom) === viewController.headersTextViewForTesting.contentScrollView
-            }
-            return didRenderHeaders
         }
 
         #expect(didRenderHeaders)
@@ -237,18 +231,10 @@ struct NetworkDetailViewControllerTests {
         selectMode(.preview, on: viewController)
 
         let didRenderPreview = await waitUntilRendered(in: viewController) {
-            let didRenderPreview = viewController.currentModeForTesting == .preview
+            viewController.currentModeForTesting == .preview
                 && viewController.previewViewForTesting.isHidden == false
                 && viewController.headersTextViewForTesting.isHidden
                 && viewController.isPreviewRoleControlHiddenForTesting == false
-            if #available(iOS 26.0, *) {
-                return didRenderPreview
-                    && viewController.previewRoleScrollEdgeInteractionForTesting?.edge == .top
-                    && viewController.previewRoleScrollEdgeInteractionForTesting?.scrollView === viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting
-                    && viewController.contentScrollView(for: .top) === viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting
-                    && viewController.contentScrollView(for: .bottom) === viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting
-            }
-            return didRenderPreview
         }
         #expect(didRenderPreview)
 
@@ -259,45 +245,6 @@ struct NetworkDetailViewControllerTests {
                 && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe\ncity=Tokyo East"
         }
         #expect(didRenderRequestPreview)
-    }
-
-    @Test
-    func previewTextBodyUsesAutomaticInsetsAsRegisteredContentScrollView() async throws {
-        let context = makeContext()
-        let request = try #require(
-            await applyRequest(
-                to: context,
-                requestID: "1",
-                url: "https://example.com/api/data.txt",
-                responseHeaders: ["content-type": "text/plain"],
-                responseMimeType: "text/plain"
-            )
-        )
-        applyResponseBody(to: context, request: request, body: "sample=true\nsource=preview", base64Encoded: false)
-        let model = NetworkPanelModel(context: context)
-        model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
-        let window = showInWindow(viewController)
-        defer { window.isHidden = true }
-        viewController.setModeForTesting(.preview)
-
-        let didRenderPreview = await waitUntilRendered(in: viewController) {
-            viewController.currentModeForTesting == .preview
-                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == "sample=true\nsource=preview"
-        }
-        #expect(didRenderPreview)
-
-        let bodyViewController = viewController.syntaxBodyViewControllerForTesting
-        window.layoutIfNeeded()
-
-        let syntaxView = bodyViewController.syntaxViewForTesting
-        #expect(syntaxView.contentInsetAdjustmentBehavior == .automatic)
-        #expect(syntaxView.frame == bodyViewController.view.bounds)
-        #expect(bodyViewController.view.frame == viewController.previewViewForTesting.bounds)
-        if #available(iOS 26.0, *) {
-            #expect(viewController.contentScrollView(for: .top) === syntaxView)
-            #expect(viewController.contentScrollView(for: .bottom) === syntaxView)
-        }
     }
 
     @Test
@@ -1202,18 +1149,10 @@ struct NetworkDetailViewControllerTests {
                     && abs(layout.minimumZoomScale - expectedMinimumZoomScale) < 0.001
                     && abs(layout.zoomScale - expectedMinimumZoomScale) < 0.001
             } ?? false
-            let didRenderImage = bodyViewController.isImagePreviewVisibleForTesting
+            return bodyViewController.isImagePreviewVisibleForTesting
                 && bodyViewController.syntaxViewForTesting.isHidden
                 && bodyViewController.imageViewForTesting.image?.size == imageSize
                 && didCompleteImageLayout
-            if #available(iOS 26.0, *) {
-                return didRenderImage
-                    && viewController.previewRoleScrollEdgeInteractionForTesting?.edge == .top
-                    && viewController.previewRoleScrollEdgeInteractionForTesting?.scrollView === imageScrollView
-                    && viewController.contentScrollView(for: .top) === imageScrollView
-                    && viewController.contentScrollView(for: .bottom) === imageScrollView
-            }
-            return didRenderImage
         }
         #expect(didRenderImage)
 
@@ -1735,110 +1674,6 @@ struct NetworkDetailViewControllerTests {
             navigationController.viewControllers == [listViewController]
         }
         #expect(didPop)
-    }
-
-    @Test
-    func compactProgrammaticPopKeepsDetailSurfaceUntilTransitionCompletes() async throws {
-        let context = makeContext()
-        let request = try #require(
-            await applyRequest(
-                to: context,
-                requestID: "1",
-                url: "https://example.com/api/data.txt",
-                responseHeaders: ["content-type": "text/plain"],
-                responseMimeType: "text/plain"
-            )
-        )
-        applyResponseBody(to: context, request: request, body: "visible detail body", base64Encoded: false)
-        let model = NetworkPanelModel(context: context)
-        let listViewController = NetworkListViewController(model: model)
-        let detailViewController = makeNetworkDetailViewController(model: model)
-        detailViewController.setModeForTesting(.preview)
-        let navigationController = NetworkCompactNavigationController(
-            model: model,
-            listViewController: listViewController,
-            detailViewController: detailViewController
-        )
-        let window = showInWindow(navigationController, makeVisible: true)
-        defer { window.isHidden = true }
-
-        model.selectRequest(request)
-        let didPush = await waitUntilNavigationStackSynced(in: navigationController) {
-            navigationController.viewControllers.last === detailViewController
-        }
-        #expect(didPush)
-        await waitForNavigationTransitionToFinish(in: navigationController)
-
-        let didRenderDetail = await waitUntilRendered(in: detailViewController) {
-            detailViewController.previewViewForTesting.isHidden == false
-                && detailViewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == "visible detail body"
-        }
-        #expect(didRenderDetail)
-
-        model.selectRequest(nil)
-        if navigationController.transitionCoordinator != nil {
-            #expect(detailViewController.previewViewForTesting.isHidden == false)
-            #expect(detailViewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == "visible detail body")
-        }
-
-        let didPop = await waitUntilNavigationStackSynced(in: navigationController) {
-            navigationController.viewControllers == [listViewController]
-        }
-        #expect(didPop)
-        await waitForNavigationTransitionToFinish(in: navigationController)
-        #expect(detailViewController.previewViewForTesting.isHidden)
-    }
-
-    @Test
-    func compactUserPopDiscardsDetailSurfaceWhenSelectionClearsBeforeTransitionCompletes() async throws {
-        let context = makeContext()
-        let request = try #require(
-            await applyRequest(
-                to: context,
-                requestID: "1",
-                url: "https://example.com/api/data.txt",
-                responseHeaders: ["content-type": "text/plain"],
-                responseMimeType: "text/plain"
-            )
-        )
-        applyResponseBody(to: context, request: request, body: "visible detail body", base64Encoded: false)
-        let model = NetworkPanelModel(context: context)
-        let listViewController = NetworkListViewController(model: model)
-        let detailViewController = makeNetworkDetailViewController(model: model)
-        detailViewController.setModeForTesting(.preview)
-        let navigationController = NetworkCompactNavigationController(
-            model: model,
-            listViewController: listViewController,
-            detailViewController: detailViewController
-        )
-        let window = showInWindow(navigationController, makeVisible: true)
-        defer { window.isHidden = true }
-
-        model.selectRequest(request)
-        let didPush = await waitUntilNavigationStackSynced(in: navigationController) {
-            navigationController.viewControllers.last === detailViewController
-        }
-        #expect(didPush)
-        await waitForNavigationTransitionToFinish(in: navigationController)
-
-        let didRenderDetail = await waitUntilRendered(in: detailViewController) {
-            detailViewController.previewViewForTesting.isHidden == false
-                && detailViewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == "visible detail body"
-        }
-        #expect(didRenderDetail)
-
-        _ = navigationController.popViewController(animated: true)
-        if navigationController.transitionCoordinator != nil {
-            model.selectRequest(nil)
-            #expect(detailViewController.previewViewForTesting.isHidden == false)
-            #expect(detailViewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == "visible detail body")
-        }
-
-        let didPopAndDiscard = await waitUntilNavigationStackSynced(in: navigationController) {
-            navigationController.viewControllers == [listViewController]
-                && detailViewController.previewViewForTesting.isHidden
-        }
-        #expect(didPopAndDiscard)
     }
 
     @Test

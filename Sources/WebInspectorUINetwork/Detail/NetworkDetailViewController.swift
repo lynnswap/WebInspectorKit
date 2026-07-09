@@ -636,11 +636,6 @@ extension NetworkDetailViewController {
         previewRoleControlController.isHiddenForTesting
     }
 
-    @available(iOS 26.0, *)
-    var previewRoleScrollEdgeInteractionForTesting: UIScrollEdgeElementContainerInteraction? {
-        scrollEdgeController.interactionForTesting
-    }
-
     var modelObservationDeliveryForTesting: PortableObservationTracking.Token? {
         modelObservationDelivery
     }
