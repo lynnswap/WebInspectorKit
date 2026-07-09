@@ -23,7 +23,7 @@ jobs:
   contract-tests:
     name: Consumer API Contract Tests
     runs-on: macos-26
-    timeout-minutes: 15
+    timeout-minutes: 10
     env:
       XCODE_MAJOR: '26'
     steps:
