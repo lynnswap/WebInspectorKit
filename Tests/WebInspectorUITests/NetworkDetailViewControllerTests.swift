@@ -75,6 +75,22 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func syntaxBodyPreviewAppliesBackgroundPolicyAfterLazyInstall() {
+        guard #available(iOS 26.0, *) else {
+            return
+        }
+
+        let viewController = NetworkBodyViewController()
+        viewController.traitOverrides.webInspectorDrawsBackground = false
+
+        viewController.loadViewIfNeeded()
+        viewController.setSurface(.unavailableBodyPlaceholder)
+        viewController.resumeRendering()
+
+        #expect(viewController.syntaxViewForTesting.backgroundColor == .clear)
+    }
+
+    @Test
     func listCanDisableBackgroundDrawing() {
         guard #available(iOS 26.0, *) else {
             return

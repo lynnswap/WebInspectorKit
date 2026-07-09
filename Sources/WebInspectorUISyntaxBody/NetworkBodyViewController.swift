@@ -220,6 +220,9 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
         let backgroundColor = webInspectorBackgroundPolicy.backgroundColor
         view.backgroundColor = backgroundColor
         configureScrollEdgeObservedBackground(for: imageScrollView, backgroundColor: backgroundColor)
+        if let syntaxView = syntaxViewStorage {
+            configureScrollEdgeObservedBackground(for: syntaxView, backgroundColor: backgroundColor)
+        }
     }
 
     private func configureScrollEdgeObservedBackground(
@@ -495,7 +498,9 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
     }
 
     private func installSyntaxPreviewIfNeeded() {
+        let syntaxView = syntaxView
         guard syntaxView.superview == nil else {
+            configureScrollEdgeObservedBackground(for: syntaxView)
             return
         }
         view.insertSubview(syntaxView, belowSubview: imageScrollView)
@@ -508,6 +513,7 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
             ]
         }
         NSLayoutConstraint.activate(syntaxViewConstraints)
+        configureScrollEdgeObservedBackground(for: syntaxView)
     }
 
     private func removeSyntaxPreview() {
