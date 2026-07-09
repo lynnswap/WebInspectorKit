@@ -62,4 +62,9 @@ FOUNDATION_EXPORT WebInspectorNativeControllerDiscoveryTestResult WebInspectorNa
     NSInteger secondaryInvalidControllerOffset
 );
 
+FOUNDATION_EXPORT void WebInspectorNativeDeliverFrontendMessageForTesting(
+    WebInspectorNativeBridge *bridge,
+    NSString *message
+);
+
 NS_ASSUME_NONNULL_END
