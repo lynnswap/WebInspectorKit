@@ -11,8 +11,8 @@ let strictSwiftSettings: [SwiftSetting] = [
 let package = Package(
     name: "WebInspectorKitContractTests",
     platforms: [
-        .iOS(.v18),
-        .macOS(.v15),
+        .iOS("18.4"),
+        .macOS("15.4"),
     ],
     dependencies: [
         .package(path: ".."),
