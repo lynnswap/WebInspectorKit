@@ -316,7 +316,7 @@ struct ParentContainerTests {
 
         session.installDataContext(makeContext())
 
-        let didRebuildTabs = await waitUntil {
+        let didRebuildTabs = await waitUntilCompactHostRendered(in: compactHost) {
             let rebuiltTabs = compactHost.currentUITabsForTesting
             return rebuiltTabs.count == initialTabs.count
                 && rebuiltTabs.map(ObjectIdentifier.init) != initialTabIdentities
@@ -337,7 +337,7 @@ struct ParentContainerTests {
 
         session.installDataContext(makeContext())
 
-        let didRebuildContent = await waitUntil {
+        let didRebuildContent = await waitUntilRegularHostRendered(in: regularHost) {
             guard let currentRootViewController = regularHost.viewControllers.first else {
                 return false
             }
@@ -615,13 +615,12 @@ struct ParentContainerTests {
         defer { window.isHidden = true }
 
         presenter.present(viewController, animated: false)
-        #expect(await waitUntil { presenter.presentedViewController === viewController })
+        #expect(presenter.presentedViewController === viewController)
 
         viewController.dismiss(animated: false)
-        #expect(await waitUntil { session.detachCountForTesting == 1 })
+        #expect(await waitUntilDetachCount(1, in: session))
 
         viewController.finishRootPresentationLifecycleForTesting()
-        _ = await waitUntil { session.detachCountForTesting == 1 }
         #expect(session.detachCountForTesting == 1)
     }
 
@@ -639,9 +638,8 @@ struct ParentContainerTests {
         let contentRevisionBeforeRetirement = session.interface.contextBoundContentRevision
 
         viewController.finishRootPresentationLifecycleForTesting()
-        #expect(await waitUntil { session.detachCountForTesting == 1 })
+        #expect(await waitUntilDetachCount(1, in: session))
         viewController.finishRootPresentationLifecycleForTesting()
-        _ = await waitUntil { session.detachCountForTesting == 1 }
 
         #expect(session.detachCountForTesting == 1)
         #expect(session.interface.contentCacheCountForTesting == 0)
@@ -666,14 +664,14 @@ struct ParentContainerTests {
 
         let coveringViewController = UIViewController()
         navigationController.pushViewController(coveringViewController, animated: false)
-        #expect(await waitUntil { navigationController.topViewController === coveringViewController })
+        #expect(navigationController.topViewController === coveringViewController)
         #expect(session.detachCountForTesting == 0)
         #expect(session.interface.contentCacheCountForTesting > 0)
 
         window.rootViewController = UIViewController()
         window.layoutIfNeeded()
         #expect(navigationController.view.window == nil)
-        #expect(await waitUntil { session.detachCountForTesting == 1 })
+        #expect(await waitUntilDetachCount(1, in: session))
         #expect(session.interface.contentCacheCountForTesting == 0)
     }
 
@@ -696,7 +694,7 @@ struct ParentContainerTests {
         window.layoutIfNeeded()
 
         #expect(viewController.view.window == nil)
-        #expect(await waitUntil { session.detachCountForTesting == 1 })
+        #expect(await waitUntilDetachCount(1, in: session))
         #expect(session.interface.contentCacheCountForTesting == 0)
     }
 
@@ -708,7 +706,7 @@ struct ParentContainerTests {
         defer { window.isHidden = true }
 
         presenter.present(viewController, animated: false)
-        #expect(await waitUntil { presenter.presentedViewController === viewController })
+        #expect(presenter.presentedViewController === viewController)
         let presentationController = try #require(viewController.presentationController)
         let externalDelegate = PresentationDelegateRecorder()
         presentationController.delegate = externalDelegate
@@ -1123,19 +1121,6 @@ struct ParentContainerTests {
 
     private final class PresentationDelegateRecorder: NSObject, UIAdaptivePresentationControllerDelegate {}
 
-    private func waitUntil(
-        timeoutAttempts: Int = 50,
-        predicate: @MainActor () -> Bool
-    ) async -> Bool {
-        for _ in 0..<timeoutAttempts {
-            if predicate() {
-                return true
-            }
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-        return predicate()
-    }
-
     private struct PageUserInterfaceStyleObservation {
         var token: PortableObservationTracking.Token
         var values: ObservedValues<Int>
@@ -1156,6 +1141,56 @@ struct ParentContainerTests {
             session.pageUserInterfaceStyle.rawValue
         }
         return PageUserInterfaceStyleObservation(token: token, values: values)
+    }
+
+    private func waitUntilDetachCount(_ count: Int, in session: WebInspectorSession) async -> Bool {
+        if session.detachCountForTesting >= count {
+            return true
+        }
+        let token = withPortableContinuousObservation { _ in
+            _ = session.detachCountForTesting
+        }
+        defer {
+            token.cancel()
+        }
+        let values = await token.values {
+            session.detachCountForTesting
+        }
+        defer {
+            values.cancel()
+        }
+        if values.latestValue.map({ $0 >= count }) == true {
+            return true
+        }
+        return await values.waitUntil { $0 >= count } != nil
+    }
+
+    private func waitUntilCompactHostRendered(
+        in viewController: CompactTabBarController,
+        _ condition: @escaping @MainActor @Sendable () -> Bool
+    ) async -> Bool {
+        await waitForObservedCondition(
+            deliveries: {
+                [viewController.interfaceObservationDeliveryForTesting].compactMap { $0 }
+            },
+            sample: {
+                condition()
+            }
+        )
+    }
+
+    private func waitUntilRegularHostRendered(
+        in viewController: RegularTabContentViewController,
+        _ condition: @escaping @MainActor @Sendable () -> Bool
+    ) async -> Bool {
+        await waitForObservedCondition(
+            deliveries: {
+                [viewController.interfaceObservationDeliveryForTesting].compactMap { $0 }
+            },
+            sample: {
+                condition()
+            }
+        )
     }
 
     private func waitUntilNetworkStackSynced(

@@ -163,5 +163,9 @@ package final class RegularTabContentViewController: UINavigationController {
     package var segmentedControlForTesting: UISegmentedControl {
         segmentedControl
     }
+
+    package var interfaceObservationDeliveryForTesting: PortableObservationTracking.Token? {
+        interfaceObservation
+    }
 }
 #endif
