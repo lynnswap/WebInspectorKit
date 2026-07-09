@@ -636,11 +636,6 @@ extension NetworkDetailViewController {
         previewRoleControlController.isHiddenForTesting
     }
 
-    @available(iOS 26.0, *)
-    var previewRoleScrollEdgeInteractionForTesting: UIScrollEdgeElementContainerInteraction? {
-        scrollEdgeController.interactionForTesting
-    }
-
     var modelObservationDeliveryForTesting: PortableObservationTracking.Token? {
         modelObservationDelivery
     }
@@ -663,6 +658,11 @@ extension NetworkDetailViewController {
 
     func setModeForTesting(_ mode: NetworkDetailViewController.Mode) {
         setMode(mode)
+    }
+
+    func resumeRenderingForTesting() {
+        loadViewIfNeeded()
+        resumeRendering()
     }
 
     func selectPreviewRoleForTesting(_ role: NetworkBody.Role) {

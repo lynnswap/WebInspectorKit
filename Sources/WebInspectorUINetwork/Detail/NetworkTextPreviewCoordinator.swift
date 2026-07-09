@@ -21,6 +21,9 @@ package final class NetworkTextPreviewCoordinator {
     private var pendingInput: NetworkTextPreviewInput?
     private var displayedInput: NetworkTextPreviewInput?
     private var displayedOutput: NetworkTextPreviewOutput?
+#if DEBUG
+    private let preparationGateForTesting = NetworkTextPreviewPreparationGateForTesting()
+#endif
 
     package init() {}
 
@@ -75,6 +78,18 @@ package final class NetworkTextPreviewCoordinator {
             await task.value
         }
     }
+
+    package func suspendNextPreparationForTesting() async {
+        await preparationGateForTesting.suspendNextPreparation()
+    }
+
+    package func waitForPreparationSuspensionForTesting() async {
+        await preparationGateForTesting.waitForSuspension()
+    }
+
+    package func resumeSuspendedPreparationForTesting() async {
+        await preparationGateForTesting.resumeSuspendedPreparation()
+    }
 #endif
 
     private func startPreparation(
@@ -88,8 +103,14 @@ package final class NetworkTextPreviewCoordinator {
         generation += 1
         let generation = generation
 
+#if DEBUG
+        let preparationGateForTesting = preparationGateForTesting
+#endif
         let worker = Task.detached(priority: .utility) {
-            try NetworkTextPreviewOutput.prepared(from: input)
+#if DEBUG
+            await preparationGateForTesting.suspendIfNeeded()
+#endif
+            return try NetworkTextPreviewOutput.prepared(from: input)
         }
         task = Task { @MainActor [worker, completion] in
             let output: NetworkTextPreviewOutput?
@@ -134,8 +155,68 @@ package final class NetworkTextPreviewCoordinator {
         task?.cancel()
         task = nil
         pendingInput = nil
+#if DEBUG
+        let preparationGateForTesting = preparationGateForTesting
+        Task {
+            await preparationGateForTesting.cancelSuspension()
+        }
+#endif
     }
 }
+
+#if DEBUG
+private actor NetworkTextPreviewPreparationGateForTesting {
+    private var shouldSuspendNextPreparation = false
+    private var suspendedPreparation: CheckedContinuation<Void, Never>?
+    private var suspensionWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func suspendNextPreparation() {
+        shouldSuspendNextPreparation = true
+    }
+
+    func suspendIfNeeded() async {
+        guard shouldSuspendNextPreparation else {
+            return
+        }
+        shouldSuspendNextPreparation = false
+        await withCheckedContinuation { continuation in
+            suspendedPreparation = continuation
+            let waiters = suspensionWaiters
+            suspensionWaiters.removeAll(keepingCapacity: true)
+            for waiter in waiters {
+                waiter.resume()
+            }
+        }
+    }
+
+    func waitForSuspension() async {
+        if suspendedPreparation != nil {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            suspensionWaiters.append(continuation)
+        }
+    }
+
+    func resumeSuspendedPreparation() {
+        guard let continuation = suspendedPreparation else {
+            return
+        }
+        suspendedPreparation = nil
+        continuation.resume()
+    }
+
+    func cancelSuspension() {
+        shouldSuspendNextPreparation = false
+        resumeSuspendedPreparation()
+        let waiters = suspensionWaiters
+        suspensionWaiters.removeAll(keepingCapacity: true)
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+}
+#endif
 
 private struct NetworkTextPreviewInput: Equatable, Sendable {
     var bodyID: ObjectIdentifier

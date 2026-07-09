@@ -159,6 +159,14 @@ package final class CompactTabBarController: UITabBarController, UITabBarControl
     package var displayedTabIdentifiersForTesting: [String] {
         tabs.map(\.identifier)
     }
+
+    package var selectedDisplayItemIDForTesting: WebInspectorTab.DisplayItem.ID? {
+        selectedTab?.identifier
+    }
+
+    package var interfaceObservationDeliveryForTesting: PortableObservationTracking.Token? {
+        interfaceObservation
+    }
 }
 
 @MainActor

@@ -86,11 +86,26 @@ private struct EventSubscriptionKey: Hashable, Sendable {
 }
 
 private struct SubscriberWaiter: Sendable {
+    var id: UInt64
     var route: RoutingTargetID?
     var targetID: WebInspectorTarget.ID
     var domain: WebInspectorProxyEventDomain
     var count: Int
     var continuation: CheckedContinuation<Void, Never>
+}
+
+private struct RecordedCommandWaiter: Sendable {
+    var domain: String
+    var method: String
+    var count: Int
+    var continuation: CheckedContinuation<[RecordedCommand], Never>
+}
+
+private struct CompletedCommandWaiter: Sendable {
+    var domain: String
+    var method: String
+    var count: Int
+    var continuation: CheckedContinuation<[RecordedCommand], Never>
 }
 
 /// Errors thrown by ``WebInspectorTestBackend`` helpers.
@@ -103,17 +118,27 @@ public enum WebInspectorTestBackendError: Error, Equatable, Sendable {
 public actor WebInspectorTestBackend {
     private var enqueuedReplies: [CommandKey: [QueuedReply]]
     private var commands: [RecordedCommand]
+    private var completedCommands: [RecordedCommand]
     private var heldCommands: [HeldCommand]
     private var eventContinuations: [EventSubscriptionKey: [UUID: AsyncStream<WebInspectorProxyEvent>.Continuation]]
     private var subscriberWaiters: [SubscriberWaiter]
+    private var recordedCommandWaiters: [RecordedCommandWaiter]
+    private var completedCommandWaiters: [CompletedCommandWaiter]
+    private var nextSubscriberWaiterID: UInt64
+    private var cancelledSubscriberWaiterIDs: Set<UInt64>
 
     /// Creates an empty test backend.
     public init() {
         enqueuedReplies = [:]
         commands = []
+        completedCommands = []
         heldCommands = []
         eventContinuations = [:]
         subscriberWaiters = []
+        recordedCommandWaiters = []
+        completedCommandWaiters = []
+        nextSubscriberWaiterID = 0
+        cancelledSubscriberWaiterIDs = []
     }
 
     /// Enqueues a successful reply for the next matching command.
@@ -208,6 +233,61 @@ public actor WebInspectorTestBackend {
         commands
     }
 
+    /// Returns commands whose backend dispatch has completed.
+    public func completedCommands() async -> [RecordedCommand] {
+        completedCommands
+    }
+
+    /// Waits until at least the requested number of matching commands has been recorded.
+    public func waitForRecordedCommands(
+        domain: String,
+        method: String,
+        count: Int
+    ) async -> [RecordedCommand] {
+        let matches = recordedCommands(domain: domain, method: method)
+        guard matches.count < count else {
+            return matches
+        }
+        return await withCheckedContinuation { continuation in
+            let matches = recordedCommands(domain: domain, method: method)
+            if matches.count >= count {
+                continuation.resume(returning: matches)
+            } else {
+                recordedCommandWaiters.append(RecordedCommandWaiter(
+                    domain: domain,
+                    method: method,
+                    count: count,
+                    continuation: continuation
+                ))
+            }
+        }
+    }
+
+    /// Waits until at least the requested number of matching commands has completed backend dispatch.
+    public func waitForCompletedCommands(
+        domain: String,
+        method: String,
+        count: Int
+    ) async -> [RecordedCommand] {
+        let matches = completedCommands(domain: domain, method: method)
+        guard matches.count < count else {
+            return matches
+        }
+        return await withCheckedContinuation { continuation in
+            let matches = completedCommands(domain: domain, method: method)
+            if matches.count >= count {
+                continuation.resume(returning: matches)
+            } else {
+                completedCommandWaiters.append(CompletedCommandWaiter(
+                    domain: domain,
+                    method: method,
+                    count: count,
+                    continuation: continuation
+                ))
+            }
+        }
+    }
+
     /// Waits until a target identity has at least the requested subscriber count.
     public func waitForSubscribers(
         domain: String,
@@ -217,22 +297,7 @@ public actor WebInspectorTestBackend {
         guard let eventDomain = WebInspectorProxyEventDomain(rawValue: domain) else {
             throw WebInspectorTestBackendError.unsupportedEventDomain(domain)
         }
-        guard subscriberCount(for: target, domain: eventDomain) < count else {
-            return
-        }
-        await withCheckedContinuation { continuation in
-            if subscriberCount(for: target, domain: eventDomain) >= count {
-                continuation.resume()
-            } else {
-                subscriberWaiters.append(SubscriberWaiter(
-                    route: nil,
-                    targetID: target,
-                    domain: eventDomain,
-                    count: count,
-                    continuation: continuation
-                ))
-            }
-        }
+        await waitForSubscriber(route: nil, targetID: target, domain: eventDomain, count: count)
     }
 
     /// Waits until a target has at least the requested subscriber count.
@@ -244,23 +309,7 @@ public actor WebInspectorTestBackend {
         guard let eventDomain = WebInspectorProxyEventDomain(rawValue: domain) else {
             throw WebInspectorTestBackendError.unsupportedEventDomain(domain)
         }
-        let key = EventSubscriptionKey(route: target.route, targetID: target.id, domain: eventDomain)
-        guard subscriberCount(for: key) < count else {
-            return
-        }
-        await withCheckedContinuation { continuation in
-            if subscriberCount(for: key) >= count {
-                continuation.resume()
-            } else {
-                subscriberWaiters.append(SubscriberWaiter(
-                    route: target.route,
-                    targetID: target.id,
-                    domain: eventDomain,
-                    count: count,
-                    continuation: continuation
-                ))
-            }
-        }
+        await waitForSubscriber(route: target.route, targetID: target.id, domain: eventDomain, count: count)
     }
 
     /// Holds matching commands until the supplied gate opens.
@@ -335,22 +384,112 @@ public actor WebInspectorTestBackend {
     private func resolveSubscriberWaiters() {
         var unresolved: [SubscriberWaiter] = []
         for waiter in subscriberWaiters {
-            let currentCount = if let route = waiter.route {
-                subscriberCount(for: EventSubscriptionKey(
-                    route: route,
-                    targetID: waiter.targetID,
-                    domain: waiter.domain
-                ))
-            } else {
-                subscriberCount(for: waiter.targetID, domain: waiter.domain)
-            }
-            if currentCount >= waiter.count {
+            if subscriberCount(for: waiter) >= waiter.count {
                 waiter.continuation.resume()
             } else {
                 unresolved.append(waiter)
             }
         }
         subscriberWaiters = unresolved
+    }
+
+    private func waitForSubscriber(
+        route: RoutingTargetID?,
+        targetID: WebInspectorTarget.ID,
+        domain: WebInspectorProxyEventDomain,
+        count: Int
+    ) async {
+        let waiterID = nextSubscriberWaiterID
+        nextSubscriberWaiterID += 1
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                addSubscriberWaiter(SubscriberWaiter(
+                    id: waiterID,
+                    route: route,
+                    targetID: targetID,
+                    domain: domain,
+                    count: count,
+                    continuation: continuation
+                ))
+            }
+        } onCancel: {
+            Task {
+                await self.cancelSubscriberWaiter(waiterID)
+            }
+        }
+        cancelledSubscriberWaiterIDs.remove(waiterID)
+    }
+
+    private func addSubscriberWaiter(_ waiter: SubscriberWaiter) {
+        guard cancelledSubscriberWaiterIDs.remove(waiter.id) == nil else {
+            waiter.continuation.resume()
+            return
+        }
+        guard subscriberCount(for: waiter) < waiter.count else {
+            waiter.continuation.resume()
+            return
+        }
+        subscriberWaiters.append(waiter)
+    }
+
+    private func cancelSubscriberWaiter(_ id: UInt64) {
+        guard let index = subscriberWaiters.firstIndex(where: { $0.id == id }) else {
+            cancelledSubscriberWaiterIDs.insert(id)
+            return
+        }
+        let waiter = subscriberWaiters.remove(at: index)
+        waiter.continuation.resume()
+    }
+
+    private func subscriberCount(for waiter: SubscriberWaiter) -> Int {
+        if let route = waiter.route {
+            subscriberCount(for: EventSubscriptionKey(
+                route: route,
+                targetID: waiter.targetID,
+                domain: waiter.domain
+            ))
+        } else {
+            subscriberCount(for: waiter.targetID, domain: waiter.domain)
+        }
+    }
+
+    private func recordedCommands(domain: String, method: String) -> [RecordedCommand] {
+        commands.filter { $0.domain == domain && $0.method == method }
+    }
+
+    private func completedCommands(domain: String, method: String) -> [RecordedCommand] {
+        completedCommands.filter { $0.domain == domain && $0.method == method }
+    }
+
+    private func resolveRecordedCommandWaiters() {
+        var unresolved: [RecordedCommandWaiter] = []
+        for waiter in recordedCommandWaiters {
+            let matches = recordedCommands(domain: waiter.domain, method: waiter.method)
+            if matches.count >= waiter.count {
+                waiter.continuation.resume(returning: matches)
+            } else {
+                unresolved.append(waiter)
+            }
+        }
+        recordedCommandWaiters = unresolved
+    }
+
+    private func recordCompletedCommand(_ command: RecordedCommand) {
+        completedCommands.append(command)
+        resolveCompletedCommandWaiters()
+    }
+
+    private func resolveCompletedCommandWaiters() {
+        var unresolved: [CompletedCommandWaiter] = []
+        for waiter in completedCommandWaiters {
+            let matches = completedCommands(domain: waiter.domain, method: waiter.method)
+            if matches.count >= waiter.count {
+                waiter.continuation.resume(returning: matches)
+            } else {
+                unresolved.append(waiter)
+            }
+        }
+        completedCommandWaiters = unresolved
     }
 }
 
@@ -369,7 +508,12 @@ extension WebInspectorTestBackend: WebInspectorProxyBackend {
     package func dispatchCommand<Payload: Sendable, Result: Sendable>(
         _ command: WebInspectorProxyCommand<Payload, Result>
     ) async throws -> Result {
-        commands.append(RecordedCommand(command: command))
+        let recordedCommand = RecordedCommand(command: command)
+        commands.append(recordedCommand)
+        resolveRecordedCommandWaiters()
+        defer {
+            recordCompletedCommand(recordedCommand)
+        }
 
         if let gate = heldCommands.first(where: {
             $0.domain == command.domain.rawValue && $0.method == command.method
@@ -413,13 +557,7 @@ extension WebInspectorTestBackend: WebInspectorProxyBackend {
         targetID: WebInspectorTarget.ID,
         domain: WebInspectorProxyEventDomain
     ) async {
-        let key = EventSubscriptionKey(route: route, targetID: targetID, domain: domain)
-        while subscriberCount(for: key) < 1 {
-            guard Task.isCancelled == false else {
-                return
-            }
-            await Task.yield()
-        }
+        await waitForSubscriber(route: route, targetID: targetID, domain: domain, count: 1)
     }
 
     package nonisolated func events(

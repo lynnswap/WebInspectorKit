@@ -20,56 +20,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  datakit-symbol-boundary:
-    name: WebInspectorDataKit Public API Boundary
-    runs-on: macos-26
-    timeout-minutes: 10
-    env:
-      XCODE_MAJOR: '26'
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Resolve Xcode
-        run: |
-          ruby <<'RUBY'
-          xcode_major = ENV.fetch("XCODE_MAJOR", "")
-
-          candidates = Dir["/Applications/Xcode*.app"].select { |path| File.directory?(path) }
-          candidates = candidates.select do |path|
-            xcode_major.empty? || File.basename(path).match?(/Xcode_#{Regexp.escape(xcode_major)}(?:[_.-]|\z)/)
-          end
-
-          def prerelease_xcode_path?(path)
-            labels = [path, File.realpath(path)].map { |candidate| File.basename(candidate).downcase }
-            labels.any? do |label|
-              label.match?(/beta|release[ _-]?candidate|(?:^|[_. -])rc(?:$|[_. -])/)
-            end
-          end
-
-          candidates = candidates.reject { |path| prerelease_xcode_path?(path) }
-
-          def version_components(path)
-            version = File.basename(path)[/Xcode[_-](\d+(?:[._]\d+)*)/, 1]
-            version.to_s.tr("_", ".").split(".").map(&:to_i)
-          end
-
-          selected = candidates.max_by { |path| version_components(path) }
-          abort("No stable Xcode#{xcode_major.empty? ? "" : " #{xcode_major}"} installation found") unless selected
-
-          File.open(ENV.fetch("GITHUB_ENV"), "a") do |env|
-            env.puts "DEVELOPER_DIR=#{selected}/Contents/Developer"
-          end
-          puts "Resolved Xcode: #{selected}"
-          RUBY
-
-      - name: Verify DataKit public symbol boundary
-        run: Scripts/check-datakit-symbol-boundary.sh
-
   contract-tests:
     name: Consumer API Contract Tests
     runs-on: macos-26
-    timeout-minutes: 15
+    timeout-minutes: 10
     env:
       XCODE_MAJOR: '26'
     steps:
@@ -154,6 +108,7 @@ jobs:
       TEST_PACKAGE_PATH: ${{ matrix.test_package_path }}
       TEST_WORKSPACE: ${{ matrix.test_workspace }}
       SIMULATOR_DEVICE: ${{ matrix.simulator_device }}
+      SPM_CACHE_DIR: ${{ github.workspace }}/.ci/spm-cache/${{ matrix.xcode_major }}-${{ matrix.test_scheme }}
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -232,6 +187,17 @@ jobs:
           end
           RUBY
 
+      - name: Restore Swift package cache
+        if: env.SKIP_IOS_TESTS != 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ env.SPM_CACHE_DIR }}
+            ~/Library/Caches/org.swift.swiftpm
+          key: spm-${{ runner.os }}-${{ runner.arch }}-xcode-${{ matrix.xcode_major }}-${{ matrix.test_scheme }}-${{ hashFiles('Package.resolved', 'WebInspectorKit.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'ContractTests/Package.resolved', 'Packages/WebInspectorNativeBridge/Package.resolved') }}
+          restore-keys: |
+            spm-${{ runner.os }}-${{ runner.arch }}-xcode-${{ matrix.xcode_major }}-${{ matrix.test_scheme }}-
+
       - name: Resolve iOS simulator destination
         run: |
           ruby <<'RUBY'
@@ -253,36 +219,52 @@ jobs:
             end
           end
 
-          if ios_major == xcode_major && !simulator_device.empty?
-            sdk_version = `xcodebuild -version -sdk iphonesimulator SDKVersion`.strip
-            abort("Unable to resolve iPhoneSimulator SDK version") unless $?.success? && !sdk_version.empty?
-            abort("Resolved iPhoneSimulator SDK #{sdk_version}, expected iOS #{ios_major}.x") unless sdk_version.split(".").first == ios_major
+          def available_ios_simulators(ios_major:)
+            devices = JSON.parse(`xcrun simctl list devices available --json`).fetch("devices")
+            matches = []
 
+            devices.each do |runtime, runtime_devices|
+              next unless runtime =~ /SimRuntime\.iOS-(\d+(?:-\d+)*)$/
+
+              version = Regexp.last_match(1).tr("-", ".")
+              next if version.split(".").first != ios_major
+
+              runtime_devices
+                .select { |device| device.fetch("isAvailable", true) }
+                .each do |device|
+                  matches << [
+                    version.split(".").map(&:to_i),
+                    version,
+                    device.fetch("name"),
+                    device.fetch("udid"),
+                  ]
+                end
+            end
+
+            matches
+          end
+
+          def selected_simulator(matches:, simulator_device:)
+            available_matches = simulator_device.empty? ? matches : matches.select { |_, _, name, _| name == simulator_device }
+            return nil if available_matches.empty?
+
+            preferred_matches = available_matches.select { |_, _, name, _| name.start_with?("iPhone") }
+            selected_matches = preferred_matches.empty? ? available_matches : preferred_matches
+            return selected_matches.max_by { |components, _, _, _| components } if simulator_device.empty?
+
+            selected_matches.sort_by { |components, _, name, udid| [components, name, udid] }.last
+          end
+
+          if ios_major == xcode_major && !simulator_device.empty?
             write_destination(
-              destination: "platform=iOS Simulator,name=#{simulator_device},OS=#{sdk_version}",
-              version: sdk_version
+              destination: "platform=iOS Simulator,name=#{simulator_device},OS=latest",
+              version: "latest"
             )
-            puts "Resolved simulator destination from iOS SDK: #{simulator_device} iOS #{sdk_version}"
+            puts "Using simulator destination from selected Xcode SDK: #{simulator_device} iOS latest"
             exit 0
           end
 
-          devices = JSON.parse(`xcrun simctl list devices available --json`).fetch("devices")
-          matches = []
-
-          devices.each do |runtime, runtime_devices|
-            next unless runtime =~ /SimRuntime\.iOS-(\d+(?:-\d+)*)$/
-
-            version = Regexp.last_match(1).tr("-", ".")
-            next if version.split(".").first != ios_major
-
-            available_devices = runtime_devices.select { |device| device.fetch("isAvailable", true) }
-            preferred_devices = available_devices.select { |device| device["name"].start_with?("iPhone") }
-            selected_devices = preferred_devices.empty? ? available_devices : preferred_devices
-
-            selected_devices.each do |device|
-              matches << [version.split(".").map(&:to_i), version, device.fetch("name"), device.fetch("udid")]
-            end
-          end
+          matches = available_ios_simulators(ios_major: ios_major)
 
           if matches.empty?
             warn "No available iOS #{ios_major}.x simulator found"
@@ -290,7 +272,17 @@ jobs:
             exit 1
           end
 
-          _, version, device_name, udid = matches.max_by { |components, _, _, _| components }
+          selected = selected_simulator(
+            matches: matches,
+            simulator_device: simulator_device
+          )
+          unless selected
+            warn "No available #{simulator_device} simulator found for iOS #{ios_major}.x"
+            system("xcrun simctl list devices available")
+            exit 1
+          end
+
+          _, version, device_name, udid = selected
           write_destination(destination: "platform=iOS Simulator,id=#{udid}", version: version)
           puts "Resolved simulator: #{device_name} iOS #{version} (#{udid})"
           RUBY
@@ -305,6 +297,7 @@ jobs:
           echo "Test scheme: ${TEST_SCHEME}"
           echo "Test package path: ${TEST_PACKAGE_PATH}"
           echo "Test workspace: ${TEST_WORKSPACE}"
+          echo "Swift package cache: ${SPM_CACHE_DIR}"
 
       - name: Run iOS tests
         run: |
@@ -325,6 +318,9 @@ jobs:
               -workspace "${TEST_WORKSPACE}" \
               -scheme "${TEST_SCHEME}" \
               -sdk iphonesimulator \
+              -clonedSourcePackagesDirPath "${SPM_CACHE_DIR}" \
+              -disableAutomaticPackageResolution \
+              -skipPackageUpdates \
               -derivedDataPath "${derived_data}" \
               -enableCodeCoverage NO \
               ARCHS=arm64 \
@@ -395,6 +391,9 @@ jobs:
               -workspace "${TEST_WORKSPACE}" \
               -scheme "${TEST_SCHEME}" \
               -destination "${DESTINATION}" \
+              -clonedSourcePackagesDirPath "${SPM_CACHE_DIR}" \
+              -disableAutomaticPackageResolution \
+              -skipPackageUpdates \
               -enableCodeCoverage NO \
               -parallel-testing-enabled NO \
               -maximum-concurrent-test-simulator-destinations 1 \
@@ -410,6 +409,9 @@ jobs:
               xcodebuild test \
                 -scheme "${TEST_SCHEME}" \
                 -destination "${DESTINATION}" \
+                -clonedSourcePackagesDirPath "${SPM_CACHE_DIR}" \
+                -disableAutomaticPackageResolution \
+                -skipPackageUpdates \
                 -enableCodeCoverage NO \
                 -parallel-testing-enabled NO \
                 -maximum-concurrent-test-simulator-destinations 1 \

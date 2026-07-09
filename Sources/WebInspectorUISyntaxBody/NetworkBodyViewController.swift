@@ -25,9 +25,24 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
         theme: .default,
         drawsBackground: false
     )
-    private lazy var syntaxView = SyntaxEditorView(
-        model: syntaxModel
-    )
+    private var syntaxViewStorage: SyntaxEditorView?
+    private var syntaxView: SyntaxEditorView {
+        if let syntaxViewStorage {
+            return syntaxViewStorage
+        }
+        let view = SyntaxEditorView(model: syntaxModel)
+        view.translatesAutoresizingMaskIntoConstraints = false
+        view.isHidden = true
+        view.isEditable = false
+        view.isSelectable = true
+        view.isScrollEnabled = true
+        view.alwaysBounceVertical = true
+        view.contentInsetAdjustmentBehavior = .automatic
+        view.keyboardDismissMode = .onDrag
+        view.accessibilityIdentifier = "WebInspector.Network.BodyView"
+        syntaxViewStorage = view
+        return view
+    }
     private lazy var imageView: UIImageView = {
         let imageView = UIImageView()
         imageView.translatesAutoresizingMaskIntoConstraints = false
@@ -60,6 +75,7 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
     private var textPreviewCoordinator = NetworkTextPreviewCoordinator()
     private var mediaPreviewCoordinator = NetworkMediaPreviewCoordinator()
     private let previewRenderState = NetworkBodyPreviewRenderState()
+    private var syntaxViewConstraints: [NSLayoutConstraint] = []
     private var imageWidthConstraint: NSLayoutConstraint?
     private var imageHeightConstraint: NSLayoutConstraint?
     private var shouldResetImageZoomOnNextLayout = false
@@ -93,7 +109,7 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
                 viewController.applyBackgroundFromTraits()
             }
         }
-        configureSyntaxView()
+        configurePreviewViews()
 #if DEBUG
         startObservingPreviewRenderStateForTesting()
 #endif
@@ -177,17 +193,7 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
         }
     }
 
-    private func configureSyntaxView() {
-        syntaxView.translatesAutoresizingMaskIntoConstraints = false
-        syntaxView.isEditable = false
-        syntaxView.isSelectable = true
-        syntaxView.isScrollEnabled = true
-        syntaxView.alwaysBounceVertical = true
-        syntaxView.contentInsetAdjustmentBehavior = .automatic
-        syntaxView.keyboardDismissMode = .onDrag
-        syntaxView.accessibilityIdentifier = "WebInspector.Network.BodyView"
-        applyScrollEdgeObservedBackgrounds()
-        view.addSubview(syntaxView)
+    private func configurePreviewViews() {
         view.addSubview(imageScrollView)
 
         let imageWidthConstraint = imageView.widthAnchor.constraint(equalToConstant: 0)
@@ -196,10 +202,6 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
         self.imageHeightConstraint = imageHeightConstraint
 
         NSLayoutConstraint.activate([
-            syntaxView.topAnchor.constraint(equalTo: view.topAnchor),
-            syntaxView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            syntaxView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            syntaxView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             imageScrollView.topAnchor.constraint(equalTo: view.topAnchor),
             imageScrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             imageScrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
@@ -211,25 +213,25 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
             imageWidthConstraint,
             imageHeightConstraint,
         ])
+        configureScrollEdgeObservedBackground(for: imageScrollView)
     }
 
     private func applyBackgroundFromTraits() {
         let backgroundColor = webInspectorBackgroundPolicy.backgroundColor
         view.backgroundColor = backgroundColor
-        applyScrollEdgeObservedBackgrounds(backgroundColor: backgroundColor)
+        configureScrollEdgeObservedBackground(for: imageScrollView, backgroundColor: backgroundColor)
+        if let syntaxView = syntaxViewStorage {
+            configureScrollEdgeObservedBackground(for: syntaxView, backgroundColor: backgroundColor)
+        }
     }
 
-    private func applyScrollEdgeObservedBackgrounds(
+    private func configureScrollEdgeObservedBackground(
+        for scrollView: UIScrollView,
         backgroundColor: UIColor? = nil
     ) {
         let backgroundColor = backgroundColor ?? webInspectorBackgroundPolicy.backgroundColor
         webInspectorConfigureScrollEdgeObservedScrollView(
-            syntaxView,
-            backgroundColor: backgroundColor,
-            traitCollection: traitCollection
-        )
-        webInspectorConfigureScrollEdgeObservedScrollView(
-            imageScrollView,
+            scrollView,
             backgroundColor: backgroundColor,
             traitCollection: traitCollection
         )
@@ -423,8 +425,8 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
         if syntaxModel.text.isEmpty == false || syntaxModel.language != .plainText {
             syntaxModel.replaceContents(text: "", language: .plainText)
         }
+        installSyntaxPreviewIfNeeded()
         syntaxView.isHidden = false
-        applyScrollEdgeObservedBackgrounds()
         scrollEdgeSink?.contentScrollView = syntaxView
         previewRenderState.showLoading()
     }
@@ -433,17 +435,17 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
         mediaPreviewCoordinator.prepareSyntaxPreview()
         hideImagePreview()
         removeMediaPlayerViewController()
+        installSyntaxPreviewIfNeeded()
         syntaxView.isHidden = false
-        applyScrollEdgeObservedBackgrounds()
         scrollEdgeSink?.contentScrollView = syntaxView
         previewRenderState.showSyntax()
     }
 
     private func showImagePreview(_ image: UIImage) {
         removeMediaPlayerViewController()
-        syntaxView.isHidden = true
+        removeSyntaxPreview()
         imageScrollView.isHidden = false
-        applyScrollEdgeObservedBackgrounds()
+        configureScrollEdgeObservedBackground(for: imageScrollView)
         scrollEdgeSink?.contentScrollView = imageScrollView
         shouldResetImageZoomOnNextLayout = true
         imagePreviewLayoutState = nil
@@ -458,7 +460,7 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
 
     private func showMoviePreview(_ url: URL) {
         hideImagePreview()
-        syntaxView.isHidden = true
+        removeSyntaxPreview()
         scrollEdgeSink?.contentScrollView = nil
 
         let playerViewController: AVPlayerViewController
@@ -490,8 +492,40 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
         mediaPreviewCoordinator.hideMediaPreview()
         hideImagePreview()
         removeMediaPlayerViewController()
+        installSyntaxPreviewIfNeeded()
         syntaxView.isHidden = false
         previewRenderState.showSyntax()
+    }
+
+    private func installSyntaxPreviewIfNeeded() {
+        let syntaxView = syntaxView
+        guard syntaxView.superview == nil else {
+            configureScrollEdgeObservedBackground(for: syntaxView)
+            return
+        }
+        view.insertSubview(syntaxView, belowSubview: imageScrollView)
+        if syntaxViewConstraints.isEmpty {
+            syntaxViewConstraints = [
+                syntaxView.topAnchor.constraint(equalTo: view.topAnchor),
+                syntaxView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                syntaxView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+                syntaxView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            ]
+        }
+        NSLayoutConstraint.activate(syntaxViewConstraints)
+        configureScrollEdgeObservedBackground(for: syntaxView)
+    }
+
+    private func removeSyntaxPreview() {
+        guard let syntaxView = syntaxViewStorage else {
+            return
+        }
+        syntaxView.isHidden = true
+        guard syntaxView.superview != nil else {
+            return
+        }
+        NSLayoutConstraint.deactivate(syntaxViewConstraints)
+        syntaxView.removeFromSuperview()
     }
 
     private func pauseMediaPreviewPlayback() {

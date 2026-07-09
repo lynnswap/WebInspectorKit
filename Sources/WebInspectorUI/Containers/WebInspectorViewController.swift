@@ -5,8 +5,21 @@ import WebInspectorUIBase
 
 @MainActor
 private final class WebInspectorRootPresentationLifecycleCoordinator {
+    #if DEBUG
+    private struct RetirementTaskCompletionWaiter {
+        var baselineCount: UInt64
+        var continuation: CheckedContinuation<Bool, Never>
+        var timeoutTask: Task<Void, Never>
+    }
+    #endif
+
     private var didFinishCurrentPresentation = false
     private var presentationGeneration: UInt64 = 0
+    #if DEBUG
+    private var retirementTaskCompletionCount: UInt64 = 0
+    private var retirementTaskCompletionWaiters: [UInt64: RetirementTaskCompletionWaiter] = [:]
+    private var nextRetirementTaskCompletionWaiterID: UInt64 = 0
+    #endif
 
     func beginPresentation() {
         didFinishCurrentPresentation = false
@@ -28,6 +41,57 @@ private final class WebInspectorRootPresentationLifecycleCoordinator {
     #if DEBUG
     var hasFinishedCurrentPresentationForTesting: Bool {
         didFinishCurrentPresentation
+    }
+
+    var retirementTaskCompletionCountForTesting: UInt64 {
+        retirementTaskCompletionCount
+    }
+
+    func waitForRetirementTaskCompletionForTesting(
+        after baselineCount: UInt64,
+        timeout: Duration = .seconds(1)
+    ) async -> Bool {
+        if retirementTaskCompletionCount > baselineCount {
+            return true
+        }
+
+        return await withCheckedContinuation { continuation in
+            let waiterID = nextRetirementTaskCompletionWaiterID
+            nextRetirementTaskCompletionWaiterID &+= 1
+            let timeoutTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: timeout)
+                self?.resolveRetirementTaskCompletionWaiterForTesting(id: waiterID, result: false)
+            }
+            retirementTaskCompletionWaiters[waiterID] = RetirementTaskCompletionWaiter(
+                baselineCount: baselineCount,
+                continuation: continuation,
+                timeoutTask: timeoutTask
+            )
+            if retirementTaskCompletionCount > baselineCount {
+                resolveRetirementTaskCompletionWaiterForTesting(id: waiterID, result: true)
+            }
+        }
+    }
+
+    func recordRetirementTaskCompletionForTesting() {
+        retirementTaskCompletionCount &+= 1
+        let completedWaiterIDs = retirementTaskCompletionWaiters.compactMap { id, waiter in
+            retirementTaskCompletionCount > waiter.baselineCount ? id : nil
+        }
+        for waiterID in completedWaiterIDs {
+            resolveRetirementTaskCompletionWaiterForTesting(id: waiterID, result: true)
+        }
+    }
+
+    private func resolveRetirementTaskCompletionWaiterForTesting(
+        id: UInt64,
+        result: Bool
+    ) {
+        guard let waiter = retirementTaskCompletionWaiters.removeValue(forKey: id) else {
+            return
+        }
+        waiter.timeoutTask.cancel()
+        waiter.continuation.resume(returning: result)
     }
     #endif
 }
@@ -224,6 +288,11 @@ public final class WebInspectorViewController: UIViewController {
         presentationLifecycleCoordinator.finishIfNeeded { [session, automaticallyDetachesOnDismiss, presentationLifecycleCoordinator] generation in
             removeActiveHost()
             Task { @MainActor in
+                defer {
+                    #if DEBUG
+                    presentationLifecycleCoordinator.recordRetirementTaskCompletionForTesting()
+                    #endif
+                }
                 // A re-presentation can begin before this deferred retirement
                 // runs; retiring then would tear down content the new
                 // presentation has already built.
@@ -338,6 +407,16 @@ public final class WebInspectorViewController: UIViewController {
 
     package var hasFinishedRootPresentationLifecycleForTesting: Bool {
         presentationLifecycleCoordinator.hasFinishedCurrentPresentationForTesting
+    }
+
+    package var rootPresentationRetirementTaskCompletionCountForTesting: UInt64 {
+        presentationLifecycleCoordinator.retirementTaskCompletionCountForTesting
+    }
+
+    package func waitForRootPresentationRetirementTaskCompletionForTesting(
+        after baselineCount: UInt64
+    ) async -> Bool {
+        await presentationLifecycleCoordinator.waitForRetirementTaskCompletionForTesting(after: baselineCount)
     }
     #endif
 }

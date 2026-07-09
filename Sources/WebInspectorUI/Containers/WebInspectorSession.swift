@@ -27,7 +27,7 @@ public final class WebInspectorSession {
     ) -> any WebInspectorPageUserInterfaceStyleObserving
     @ObservationIgnored private var pageUserInterfaceStyleObserver: (any WebInspectorPageUserInterfaceStyleObserving)?
     #if DEBUG
-    @ObservationIgnored package private(set) var detachCountForTesting = 0
+    package private(set) var detachCountForTesting = 0
     #endif
 
     /// Creates a session with the provided inspector tabs.

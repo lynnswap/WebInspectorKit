@@ -965,15 +965,6 @@ func restartWaitsForPreviousStartupCleanupBeforeReenable() async throws {
     )
 
     context.start()
-    for _ in 0..<10 {
-        await Task.yield()
-    }
-    #expect(await runtime.backend.recordedCommands() == [
-        RecordedCommand(domain: "Inspector", method: "enable"),
-        RecordedCommand(domain: "Inspector", method: "initialized"),
-        RecordedCommand(domain: "Runtime", method: "enable"),
-        RecordedCommand(domain: "Network", method: "enable")
-    ])
 
     await enableGate.open()
     try await waitUntil { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("restarted-document")) }
@@ -2032,29 +2023,11 @@ func sharedContainerContextsReenableDomainsOnCommittedPageTarget() async throws 
     let proxy = try await WebInspectorProxy(transport: transport)
     let container = WebInspectorContainer(proxy: proxy)
 
-    let autoReplier = Task {
-        var repliedMessageIDs = Set<UInt64>()
-        while Task.isCancelled == false {
-            for message in await backend.sentTargetMessages() {
-                guard let messageID = try? transportMessageID(message.message),
-                      repliedMessageIDs.insert(messageID).inserted else {
-                    continue
-                }
-                let method = (try? transportTargetMessageMethod(message.message)) ?? ""
-                let result = method == "DOM.getDocument"
-                    ? transportDocumentResult(
-                        nodeID: message.targetIdentifier == newTargetID ? "new-shared-root" : "old-shared-root"
-                    )
-                    : "{}"
-                await receiveTransportTargetReply(
-                    transport,
-                    targetID: message.targetIdentifier,
-                    messageID: messageID,
-                    result: result
-                )
-            }
-            try? await Task.sleep(for: .milliseconds(5))
-        }
+    let autoReplier = startAutoReplyingTransportTargetMessages(
+        backend: backend,
+        transport: transport
+    ) { targetID in
+        targetID == newTargetID ? "new-shared-root" : "old-shared-root"
     }
     defer { autoReplier.cancel() }
 
@@ -2106,29 +2079,11 @@ func currentPageDestroyWithoutReplacementRegressesToAttachingAndRecovers() async
     )
     let container = WebInspectorContainer(proxy: proxy)
 
-    let autoReplier = Task {
-        var repliedMessageIDs = Set<UInt64>()
-        while Task.isCancelled == false {
-            for message in await backend.sentTargetMessages() {
-                guard let messageID = try? transportMessageID(message.message),
-                      repliedMessageIDs.insert(messageID).inserted else {
-                    continue
-                }
-                let method = (try? transportTargetMessageMethod(message.message)) ?? ""
-                let result = method == "DOM.getDocument"
-                    ? transportDocumentResult(
-                        nodeID: message.targetIdentifier == rebornTargetID ? "reborn-root" : "doomed-root"
-                    )
-                    : "{}"
-                await receiveTransportTargetReply(
-                    transport,
-                    targetID: message.targetIdentifier,
-                    messageID: messageID,
-                    result: result
-                )
-            }
-            try? await Task.sleep(for: .milliseconds(5))
-        }
+    let autoReplier = startAutoReplyingTransportTargetMessages(
+        backend: backend,
+        transport: transport
+    ) { targetID in
+        targetID == rebornTargetID ? "reborn-root" : "doomed-root"
     }
     defer { autoReplier.cancel() }
 
@@ -3073,9 +3028,6 @@ func domTreeControllerPublishesSelectionDeltasWithoutOwningExpansion() async thr
 
     try context.dom.select(document.id, reveal: .none)
     try await recorder.waitForUpdateCount(4)
-    for _ in 0..<10 {
-        await Task.yield()
-    }
     #expect(revealRecorder.requests.count == 1)
 }
 
@@ -3694,9 +3646,6 @@ func networkFetchDescriptorPublishesPredicateEnterAndLeave() async throws {
         redirectResponse: nil,
         timestamp: 1
     ))
-    for _ in 0..<10 {
-        await Task.yield()
-    }
     #expect(results.items.isEmpty)
     #expect(recorder.transactions.isEmpty)
 
@@ -3913,6 +3862,7 @@ func clearNetworkRequestsPublishesResetAndIgnoresClearedEvents() async throws {
     #expect(context.registeredRequest(for: firstModelID) == nil)
     #expect(context.registeredRequest(for: secondModelID) == nil)
 
+    let clearedEventBaseline = context.eventPumpAppliedSequenceForTesting
     await runtime.backend.emit(
         .responseReceived(
             id: firstRequestID,
@@ -3934,13 +3884,16 @@ func clearNetworkRequestsPublishesResetAndIgnoresClearedEvents() async throws {
         .webSocket(.closed(id: secondRequestID, timestamp: 6)),
         target: target
     )
-    for _ in 0..<10 {
-        await Task.yield()
-    }
+    let didProcessClearedEvents = await context.waitForEventPumpAppliedSequenceForTesting(
+        after: clearedEventBaseline,
+        count: 4
+    )
+    #expect(didProcessClearedEvents)
     #expect(context.state == .attached)
     #expect(results.items.isEmpty)
     #expect(recorder.transactions.count == 3)
 
+    let redirectedEventBaseline = context.eventPumpAppliedSequenceForTesting
     await runtime.backend.emit(
         .requestWillBeSent(
             id: firstRequestID,
@@ -3955,9 +3908,10 @@ func clearNetworkRequestsPublishesResetAndIgnoresClearedEvents() async throws {
         ),
         target: target
     )
-    for _ in 0..<10 {
-        await Task.yield()
-    }
+    let didProcessRedirectedEvent = await context.waitForEventPumpAppliedSequenceForTesting(
+        after: redirectedEventBaseline
+    )
+    #expect(didProcessRedirectedEvent)
     #expect(results.items.isEmpty)
     #expect(recorder.transactions.count == 3)
     #expect(context.registeredRequest(for: firstModelID) == nil)
@@ -4379,9 +4333,6 @@ func selectingNonElementDOMNodeDoesNotRequestCSSStyles() async throws {
     let document = try #require(context.rootNode)
 
     context.select(document)
-    for _ in 0..<10 {
-        await Task.yield()
-    }
 
     #expect(document.elementStyles == nil)
     let commands = await runtime.backend.recordedCommands()
@@ -4454,16 +4405,20 @@ func cssEventsAndSelectedDOMMutationsMarkSelectedStylesStale() async throws {
 
     try await reloadSelectedStyles()
 
+    let otherAttributeBaseline = context.eventPumpAppliedSequenceForTesting
     await runtime.backend.emit(.attributeModified(otherID, name: "class", value: "ignored"), target: target)
-    for _ in 0..<10 {
-        await Task.yield()
-    }
+    let didProcessOtherAttribute = await context.waitForEventPumpAppliedSequenceForTesting(
+        after: otherAttributeBaseline
+    )
+    #expect(didProcessOtherAttribute)
     #expect(styles.phase == .loaded)
 
+    let otherLayoutBaseline = context.eventPumpAppliedSequenceForTesting
     await runtime.backend.emit(.nodeLayoutFlagsChanged(otherID), target: target)
-    for _ in 0..<10 {
-        await Task.yield()
-    }
+    let didProcessOtherLayout = await context.waitForEventPumpAppliedSequenceForTesting(
+        after: otherLayoutBaseline
+    )
+    #expect(didProcessOtherLayout)
     #expect(styles.phase == .loaded)
 
     await runtime.backend.emit(.nodeLayoutFlagsChanged(selectedID), target: target)
@@ -4523,9 +4478,7 @@ func cssInvalidationDuringStyleFetchIsNotOverwrittenByStaleResult() async throws
     try await waitUntil { styles.phase == .needsRefresh }
 
     await computedGate.open()
-    for _ in 0..<10 {
-        await Task.yield()
-    }
+    _ = await runtime.backend.waitForCompletedCommands(domain: "CSS", method: "getComputedStyleForNode", count: 1)
     #expect(styles.phase == .needsRefresh)
     #expect(styles.computedProperties.isEmpty)
 }
@@ -4652,9 +4605,6 @@ func styleSheetChangedWhileHydrationInactiveDefersRefetchUntilActivation() async
 
     await runtime.backend.emit(.styleSheetChanged(CSS.StyleSheet.ID("sheet-1")), target: target)
     try await waitUntil { styles.phase == .needsRefresh }
-    for _ in 0..<10 {
-        await Task.yield()
-    }
     #expect(styles.phase == .needsRefresh)
     #expect(await matchedStylesCommandCount(on: runtime.backend) == 1)
 
@@ -4916,9 +4866,6 @@ func requestSetCSSPropertyRefusesStaleAndNonEditableProperties() async throws {
     try await waitUntil { styles.phase == .needsRefresh }
     #expect(context.css.requestSetProperty(editablePropertyID, enabled: false) == false)
 
-    for _ in 0..<10 {
-        await Task.yield()
-    }
     let commands = await runtime.backend.recordedCommands()
     #expect(commands.contains(RecordedCommand(domain: "CSS", method: "setStyleText")) == false)
 }
@@ -5161,6 +5108,7 @@ func closeDuringStartupKeepsContextDetached() async throws {
 
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
+    let startupTask = try #require(context.startupTaskForTesting())
     try await waitUntil {
         await runtime.backend.recordedCommands()
             .contains(RecordedCommand(domain: "DOM", method: "getDocument"))
@@ -5170,9 +5118,7 @@ func closeDuringStartupKeepsContextDetached() async throws {
     #expect(context.state == .detached)
 
     await gate.open()
-    for _ in 0..<10 {
-        await Task.yield()
-    }
+    await startupTask.value
 
     #expect(context.state == .detached)
     #expect(context.rootNode == nil)
@@ -5287,12 +5233,11 @@ func domainEnablementAcquireWaitsForFinalReleaseDisable() async throws {
         ]
     }
 
+    let acquireWaitBaseline = await registry.acquireWaitingForDisableSequenceForTesting
     let acquireTask = Task {
         try await registry.acquire(.runtime, on: target)
     }
-    for _ in 0..<10 {
-        await Task.yield()
-    }
+    await registry.waitForAcquireWaitingForDisableForTesting(after: acquireWaitBaseline)
     #expect(await runtime.backend.recordedCommands() == [
         RecordedCommand(domain: "Runtime", method: "enable"),
         RecordedCommand(domain: "Runtime", method: "disable"),
@@ -5334,9 +5279,11 @@ func domainEnablementAcquireWaitsForPendingReleaseDisable() async throws {
     let releaseTask = Task {
         await registry.release(.runtime, on: target)
     }
+    let acquireWaitBaseline = await registry.acquireWaitingForDisableSequenceForTesting
     let secondAcquireTask = Task {
         try await registry.acquire(.runtime, on: target)
     }
+    await registry.waitForAcquireWaitingForDisableForTesting(after: acquireWaitBaseline)
 
     await runtime.backend.enqueue((), for: "Runtime", method: "enable")
     await runtime.backend.enqueue((), for: "Runtime", method: "disable")
@@ -5346,9 +5293,6 @@ func domainEnablementAcquireWaitsForPendingReleaseDisable() async throws {
             RecordedCommand(domain: "Runtime", method: "enable"),
             RecordedCommand(domain: "Runtime", method: "disable"),
         ]
-    }
-    for _ in 0..<10 {
-        await Task.yield()
     }
     #expect(await runtime.backend.recordedCommands() == [
         RecordedCommand(domain: "Runtime", method: "enable"),
@@ -6189,13 +6133,13 @@ func webSocketOtherEventDoesNotMutateRequests() async throws {
     let (target, context) = try await startContext(runtime: runtime)
     let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
 
+    let baseline = context.eventPumpAppliedSequenceForTesting
     await runtime.backend.emit(
         .webSocket(.other(RawEvent(domain: "Network", method: "webSocketFutureEvent"))),
         target: target
     )
-    for _ in 0..<10 {
-        await Task.yield()
-    }
+    let didProcessOtherEvent = await context.waitForEventPumpAppliedSequenceForTesting(after: baseline)
+    #expect(didProcessOtherEvent)
 
     #expect(results.items.isEmpty)
     #expect(context.state == .attached)
@@ -7133,6 +7077,41 @@ private func installTransportPageTarget(
     await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"\#(targetID)","type":"page","frameId":"\#(frameID)","isProvisional":false}}}"#
     )
+}
+
+@MainActor
+private func startAutoReplyingTransportTargetMessages(
+    backend: FakeTransportBackend,
+    transport: TransportSession,
+    documentNodeID: @escaping @MainActor @Sendable (ProtocolTarget.ID) -> String
+) -> Task<Void, Never> {
+    Task { @MainActor in
+        var repliedTargetMessageCount = 0
+        while Task.isCancelled == false {
+            do {
+                let sentMessage = try await backend.waitForTargetMessage(after: repliedTargetMessageCount)
+                repliedTargetMessageCount += 1
+
+                let messageID = try transportMessageID(sentMessage.message)
+                let method = try transportTargetMessageMethod(sentMessage.message)
+                let result = method == "DOM.getDocument"
+                    ? transportDocumentResult(nodeID: documentNodeID(sentMessage.targetIdentifier))
+                    : "{}"
+
+                await receiveTransportTargetReply(
+                    transport,
+                    targetID: sentMessage.targetIdentifier,
+                    messageID: messageID,
+                    result: result
+                )
+            } catch is CancellationError {
+                return
+            } catch {
+                Issue.record("Failed to auto-reply to transport target message: \(error)")
+                return
+            }
+        }
+    }
 }
 
 private func waitForTransportTargetMessage(

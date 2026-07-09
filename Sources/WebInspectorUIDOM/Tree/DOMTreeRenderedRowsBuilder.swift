@@ -30,6 +30,7 @@ extension DOMTreeTextView {
         private var buildSuspensionWaitersForTesting: [CheckedContinuation<Void, Never>] = []
         private var nextBuildCompletionWaiterID: UInt64 = 0
         private var buildCompletionWaiters: [UInt64: BuildCompletionWaiter] = [:]
+        private var usesInlineBuildsForTesting = false
 #endif
 
         init(builder: DOMTreeTextView.RowRenderBuilder) {
@@ -60,6 +61,10 @@ extension DOMTreeTextView {
         }
 
 #if DEBUG
+        func setUsesInlineBuildsForTesting(_ usesInlineBuilds: Bool) {
+            usesInlineBuildsForTesting = usesInlineBuilds
+        }
+
         func waitForCurrentBuild(timeout: Duration = .seconds(5)) async -> Bool {
             guard task != nil else {
                 return true
@@ -128,7 +133,15 @@ extension DOMTreeTextView {
                 }
                 let buildResult: DOMTreeTextView.RowRenderBuildResult
                 do {
+#if DEBUG
+                    if usesInlineBuildsForTesting {
+                        buildResult = try await builder.buildInlineForTesting(request)
+                    } else {
+                        buildResult = try await builder.build(request)
+                    }
+#else
                     buildResult = try await builder.build(request)
+#endif
                 } catch is CancellationError {
                     return
                 } catch {
@@ -257,6 +270,15 @@ extension DOMTreeTextView {
                 task.cancel()
             }
         }
+
+#if DEBUG
+        func buildInlineForTesting(
+            _ request: DOMTreeTextView.RowRenderBuildRequest
+        ) async throws -> DOMTreeTextView.RowRenderBuildResult {
+            try Task.checkCancellation()
+            return try await DOMTreeTextView.RowRenderWorker(request: request).build()
+        }
+#endif
 
         func acceptCompletedBuild(_ result: DOMTreeTextView.RowRenderBuildResult) {
             markupCache = result.markupCache

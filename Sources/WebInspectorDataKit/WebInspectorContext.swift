@@ -64,6 +64,13 @@ public final class WebInspectorContext {
 
     private typealias LoadedDOMDocument = (node: DOM.Node, generation: Int)
 
+#if DEBUG
+    private struct EventPumpAppliedWaiterForTesting {
+        var minimumSequence: UInt64
+        var continuation: CheckedContinuation<Bool, Never>
+    }
+#endif
+
     /// The attachment state of a context.
     public enum State: Equatable, Sendable {
         /// The context is enabling domains and loading initial state.
@@ -134,6 +141,11 @@ public final class WebInspectorContext {
     private var isStyleHydrationActive: Bool
     private var styleToggleTasks: [CSSStyleProperty.ID: Task<Void, Never>]
     private var eventPumps: [WebInspectorEventPump]
+#if DEBUG
+    private var eventPumpAppliedSequenceForTestingStorage: UInt64
+    private var eventPumpAppliedWaitersForTesting: [UInt64: EventPumpAppliedWaiterForTesting]
+    private var nextEventPumpAppliedWaiterIDForTesting: UInt64
+#endif
     private var inspectorTrackingTarget: WebInspectorTarget?
     private var networkTrackingTarget: WebInspectorTarget?
     private var runtimeTrackingTarget: WebInspectorTarget?
@@ -198,6 +210,11 @@ public final class WebInspectorContext {
         isStyleHydrationActive = false
         styleToggleTasks = [:]
         eventPumps = []
+#if DEBUG
+        eventPumpAppliedSequenceForTestingStorage = 0
+        eventPumpAppliedWaitersForTesting = [:]
+        nextEventPumpAppliedWaiterIDForTesting = 0
+#endif
         inspectorTrackingTarget = nil
         networkTrackingTarget = nil
         runtimeTrackingTarget = nil
@@ -263,6 +280,7 @@ public final class WebInspectorContext {
         for task in consoleObjectGroupReleaseTasks.values {
             task.cancel()
         }
+        resolveEventPumpAppliedWaitersForTesting(result: false)
     }
 
     /// Starts observing the inspected page and rebuilding DataKit models.
@@ -562,6 +580,39 @@ public final class WebInspectorContext {
     #if DEBUG
     package func installCurrentPageRetargetTaskForTesting(_ task: Task<Void, Never>) {
         currentPageRetargetTask = task
+    }
+
+    package func startupTaskForTesting(isolation: isolated (any Actor) = #isolation) -> Task<Void, Never>? {
+        requireOwner(isolation)
+        return startupTask
+    }
+
+    package var eventPumpAppliedSequenceForTesting: UInt64 {
+        eventPumpAppliedSequenceForTestingStorage
+    }
+
+    package func waitForEventPumpAppliedSequenceForTesting(
+        after baselineSequence: UInt64,
+        count: UInt64 = 1,
+        isolation: isolated (any Actor) = #isolation
+    ) async -> Bool {
+        requireOwner(isolation)
+        let minimumSequence = baselineSequence + count
+        if eventPumpAppliedSequenceForTestingStorage >= minimumSequence {
+            return true
+        }
+
+        return await withCheckedContinuation { continuation in
+            let waiterID = nextEventPumpAppliedWaiterIDForTesting
+            nextEventPumpAppliedWaiterIDForTesting &+= 1
+            eventPumpAppliedWaitersForTesting[waiterID] = EventPumpAppliedWaiterForTesting(
+                minimumSequence: minimumSequence,
+                continuation: continuation
+            )
+            if eventPumpAppliedSequenceForTestingStorage >= minimumSequence {
+                resolveEventPumpAppliedWaiterForTesting(id: waiterID, result: true)
+            }
+        }
     }
     #endif
 
@@ -1561,27 +1612,39 @@ public final class WebInspectorContext {
         stopEventPumps()
 
         let domPump = WebInspectorEventPump(stream: target.dom.events, isolation: isolation) { [weak self] event in
-            self?.apply(event, isolation: isolation)
+            guard let self else { return }
+            self.apply(event, isolation: isolation)
+            self.recordEventPumpAppliedForTesting()
         }
 
         let networkPump = WebInspectorEventPump(stream: target.network.events, isolation: isolation) { [weak self] event in
-            await self?.apply(event, isolation: isolation)
+            guard let self else { return }
+            await self.apply(event, isolation: isolation)
+            self.recordEventPumpAppliedForTesting()
         }
 
         let cssPump = WebInspectorEventPump(stream: target.css.events, isolation: isolation) { [weak self] event in
-            self?.apply(event, isolation: isolation)
+            guard let self else { return }
+            self.apply(event, isolation: isolation)
+            self.recordEventPumpAppliedForTesting()
         }
 
         let consolePump = WebInspectorEventPump(stream: target.targetedConsoleEvents, isolation: isolation) { [weak self] event in
-            self?.apply(event.event, targetID: event.targetID, isolation: isolation)
+            guard let self else { return }
+            self.apply(event.event, targetID: event.targetID, isolation: isolation)
+            self.recordEventPumpAppliedForTesting()
         }
 
         let runtimePump = WebInspectorEventPump(stream: target.runtime.events, isolation: isolation) { [weak self, targetID = target.id] event in
-            self?.apply(event, targetID: targetID, isolation: isolation)
+            guard let self else { return }
+            self.apply(event, targetID: targetID, isolation: isolation)
+            self.recordEventPumpAppliedForTesting()
         }
 
         let lifecyclePump = WebInspectorEventPump(stream: target.lifecycleEvents, isolation: isolation) { [weak self] event in
-            self?.apply(event, isolation: isolation)
+            guard let self else { return }
+            self.apply(event, isolation: isolation)
+            self.recordEventPumpAppliedForTesting()
         }
 
         eventPumps = [domPump, networkPump, cssPump, consolePump, runtimePump, lifecyclePump]
@@ -1592,6 +1655,36 @@ public final class WebInspectorContext {
             pump.stop()
         }
         eventPumps = []
+    }
+
+    private func recordEventPumpAppliedForTesting() {
+        #if DEBUG
+        eventPumpAppliedSequenceForTestingStorage &+= 1
+        let completedWaiterIDs = eventPumpAppliedWaitersForTesting.compactMap { id, waiter in
+            eventPumpAppliedSequenceForTestingStorage >= waiter.minimumSequence ? id : nil
+        }
+        for waiterID in completedWaiterIDs {
+            resolveEventPumpAppliedWaiterForTesting(id: waiterID, result: true)
+        }
+        #endif
+    }
+
+    private func resolveEventPumpAppliedWaitersForTesting(result: Bool) {
+        #if DEBUG
+        let waiterIDs = Array(eventPumpAppliedWaitersForTesting.keys)
+        for waiterID in waiterIDs {
+            resolveEventPumpAppliedWaiterForTesting(id: waiterID, result: result)
+        }
+        #endif
+    }
+
+    private func resolveEventPumpAppliedWaiterForTesting(id: UInt64, result: Bool) {
+        #if DEBUG
+        guard let waiter = eventPumpAppliedWaitersForTesting.removeValue(forKey: id) else {
+            return
+        }
+        waiter.continuation.resume(returning: result)
+        #endif
     }
 
     private func notifyDOMTreeSnapshot(

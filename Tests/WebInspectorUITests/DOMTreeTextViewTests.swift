@@ -330,6 +330,7 @@ struct DOMTreeTextViewTests {
                 recorder.record(nodeID, owner: owner)
             }
         )
+        configureTreeViewForDeterministicTesting(view)
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
         view.setRenderingActive(true)
@@ -354,6 +355,7 @@ struct DOMTreeTextViewTests {
                 restoreRecorder.record()
             }
         )
+        configureTreeViewForDeterministicTesting(view)
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
         view.setRenderingActive(true)
@@ -378,6 +380,7 @@ struct DOMTreeTextViewTests {
                 restoreRecorder.record()
             }
         )
+        configureTreeViewForDeterministicTesting(view)
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
         view.setRenderingActive(true)
@@ -408,6 +411,7 @@ struct DOMTreeTextViewTests {
                 restoreRecorder.record()
             }
         )
+        configureTreeViewForDeterministicTesting(view)
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
         view.setRenderingActive(true)
@@ -434,6 +438,7 @@ struct DOMTreeTextViewTests {
                 restoreRecorder.record()
             }
         )
+        configureTreeViewForDeterministicTesting(view)
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
         view.setRenderingActive(true)
@@ -459,6 +464,7 @@ struct DOMTreeTextViewTests {
                 highlightRecorder.record(nodeID, owner: owner)
             }
         )
+        configureTreeViewForDeterministicTesting(view)
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
         view.setRenderingActive(true)
@@ -492,6 +498,7 @@ struct DOMTreeTextViewTests {
                 await restoreRecorder.run()
             }
         )
+        configureTreeViewForDeterministicTesting(view)
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
         view.setRenderingActive(true)
@@ -526,6 +533,7 @@ struct DOMTreeTextViewTests {
                 restoreRecorder.record()
             }
         )
+        configureTreeViewForDeterministicTesting(view)
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
         view.setRenderingActive(true)
@@ -1001,6 +1009,7 @@ struct DOMTreeTextViewTests {
                 return true
             }
         )
+        configureTreeViewForDeterministicTesting(view)
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
         view.setRenderingActive(true)
@@ -1302,11 +1311,17 @@ private func makeTreeView(root: DOM.Node = documentNode()) async -> DOMTreeTextV
 @MainActor
 private func makeTreeView(fixture: DOMTreeTestFixture) async -> DOMTreeTextView {
     let view = DOMTreeTextView(context: fixture.context)
+    configureTreeViewForDeterministicTesting(view)
     view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
     view.layoutIfNeeded()
     view.setRenderingActive(true)
     #expect(await view.waitForRowDocumentForTesting())
     return view
+}
+
+@MainActor
+private func configureTreeViewForDeterministicTesting(_ view: DOMTreeTextView) {
+    view.setUsesInlineRowRenderBuildsForTesting(true)
 }
 
 @MainActor

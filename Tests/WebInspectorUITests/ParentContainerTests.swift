@@ -290,14 +290,13 @@ struct ParentContainerTests {
         viewController.loadViewIfNeeded()
         #expect(session.interface.contentCacheCountForTesting > 0)
 
+        let retirementBaseline = viewController.rootPresentationRetirementTaskCompletionCountForTesting
         viewController.finishRootPresentationLifecycleForTesting()
         // Begin the next presentation before the deferred retirement task runs.
         viewController.beginAppearanceTransition(true, animated: false)
         viewController.endAppearanceTransition()
 
-        for _ in 0..<20 {
-            await Task.yield()
-        }
+        #expect(await viewController.waitForRootPresentationRetirementTaskCompletionForTesting(after: retirementBaseline))
 
         #expect(session.detachCountForTesting == 0)
         #expect(session.interface.contentCacheCountForTesting > 0)
@@ -316,7 +315,7 @@ struct ParentContainerTests {
 
         session.installDataContext(makeContext())
 
-        let didRebuildTabs = await waitUntil {
+        let didRebuildTabs = await waitUntilCompactHostRendered(in: compactHost) {
             let rebuiltTabs = compactHost.currentUITabsForTesting
             return rebuiltTabs.count == initialTabs.count
                 && rebuiltTabs.map(ObjectIdentifier.init) != initialTabIdentities
@@ -337,7 +336,7 @@ struct ParentContainerTests {
 
         session.installDataContext(makeContext())
 
-        let didRebuildContent = await waitUntil {
+        let didRebuildContent = await waitUntilRegularHostRendered(in: regularHost) {
             guard let currentRootViewController = regularHost.viewControllers.first else {
                 return false
             }
@@ -615,13 +614,12 @@ struct ParentContainerTests {
         defer { window.isHidden = true }
 
         presenter.present(viewController, animated: false)
-        #expect(await waitUntil { presenter.presentedViewController === viewController })
+        #expect(presenter.presentedViewController === viewController)
 
         viewController.dismiss(animated: false)
-        #expect(await waitUntil { session.detachCountForTesting == 1 })
+        #expect(await waitUntilDetachCount(1, in: session))
 
         viewController.finishRootPresentationLifecycleForTesting()
-        _ = await waitUntil { session.detachCountForTesting == 1 }
         #expect(session.detachCountForTesting == 1)
     }
 
@@ -639,9 +637,8 @@ struct ParentContainerTests {
         let contentRevisionBeforeRetirement = session.interface.contextBoundContentRevision
 
         viewController.finishRootPresentationLifecycleForTesting()
-        #expect(await waitUntil { session.detachCountForTesting == 1 })
+        #expect(await waitUntilDetachCount(1, in: session))
         viewController.finishRootPresentationLifecycleForTesting()
-        _ = await waitUntil { session.detachCountForTesting == 1 }
 
         #expect(session.detachCountForTesting == 1)
         #expect(session.interface.contentCacheCountForTesting == 0)
@@ -650,11 +647,13 @@ struct ParentContainerTests {
 
     @Test
     func hiddenNavigationControllerRemovalFinishesRootPresentationLifecycle() async throws {
-        let session = makeSessionWithNoOpAttachment()
+        let tab = makeNoOpTab(id: "webinspector_test_lifecycle_hidden")
+        let session = makeSessionWithNoOpAttachment(tabs: [tab])
         _ = WebInspectorTab.ContentFactory.makeViewController(
-            for: .dom,
+            for: .customTab(tab.id),
             session: session,
-            hostLayout: .compact
+            hostLayout: .compact,
+            tabs: session.interface.tabs
         )
         let viewController = WebInspectorViewController(session: session)
         let navigationController = UINavigationController(rootViewController: viewController)
@@ -666,24 +665,26 @@ struct ParentContainerTests {
 
         let coveringViewController = UIViewController()
         navigationController.pushViewController(coveringViewController, animated: false)
-        #expect(await waitUntil { navigationController.topViewController === coveringViewController })
+        #expect(navigationController.topViewController === coveringViewController)
         #expect(session.detachCountForTesting == 0)
         #expect(session.interface.contentCacheCountForTesting > 0)
 
         window.rootViewController = UIViewController()
         window.layoutIfNeeded()
         #expect(navigationController.view.window == nil)
-        #expect(await waitUntil { session.detachCountForTesting == 1 })
+        #expect(await waitUntilDetachCount(1, in: session))
         #expect(session.interface.contentCacheCountForTesting == 0)
     }
 
     @Test
     func directWindowRootRemovalFinishesRootPresentationLifecycle() async throws {
-        let session = makeSessionWithNoOpAttachment()
+        let tab = makeNoOpTab(id: "webinspector_test_lifecycle_direct")
+        let session = makeSessionWithNoOpAttachment(tabs: [tab])
         _ = WebInspectorTab.ContentFactory.makeViewController(
-            for: .dom,
+            for: .customTab(tab.id),
             session: session,
-            hostLayout: .compact
+            hostLayout: .compact,
+            tabs: session.interface.tabs
         )
         let viewController = WebInspectorViewController(session: session)
         let window = showInWindow(viewController)
@@ -696,7 +697,7 @@ struct ParentContainerTests {
         window.layoutIfNeeded()
 
         #expect(viewController.view.window == nil)
-        #expect(await waitUntil { session.detachCountForTesting == 1 })
+        #expect(await waitUntilDetachCount(1, in: session))
         #expect(session.interface.contentCacheCountForTesting == 0)
     }
 
@@ -708,7 +709,7 @@ struct ParentContainerTests {
         defer { window.isHidden = true }
 
         presenter.present(viewController, animated: false)
-        #expect(await waitUntil { presenter.presentedViewController === viewController })
+        #expect(presenter.presentedViewController === viewController)
         let presentationController = try #require(viewController.presentationController)
         let externalDelegate = PresentationDelegateRecorder()
         presentationController.delegate = externalDelegate
@@ -732,7 +733,6 @@ struct ParentContainerTests {
         let cacheCountBeforeCancel = session.interface.contentCacheCountForTesting
 
         viewController.finishRootPresentationLifecycleForTesting(cancelled: true)
-        await Task.yield()
 
         #expect(session.detachCountForTesting == 0)
         #expect(viewController.hasFinishedRootPresentationLifecycleForTesting == false)
@@ -743,16 +743,18 @@ struct ParentContainerTests {
     func hostReplacementAndCompactTabSwitchDoNotDetachRootSession() async throws {
         let session = makeSessionWithNoOpAttachment()
         let viewController = WebInspectorViewController(session: session)
-        let window = showInWindow(viewController)
+        let window = showInWindow(viewController, useUIKitVisibility: false)
         defer { window.isHidden = true }
 
         viewController.horizontalSizeClassOverrideForTesting = .compact
         let compactHost = try #require(viewController.activeHostViewControllerForTesting as? CompactTabBarController)
         compactHost.loadViewIfNeeded()
         session.interface.selectItem(withID: WebInspectorTab.DisplayItem.domElementID)
-        await Task.yield()
+        #expect(await waitUntilCompactHostRendered(in: compactHost) {
+            compactHost.selectedDisplayItemIDForTesting == WebInspectorTab.DisplayItem.domElementID
+        })
         viewController.horizontalSizeClassOverrideForTesting = .regular
-        await Task.yield()
+        #expect(viewController.activeHostViewControllerForTesting is RegularTabContentViewController)
 
         #expect(session.detachCountForTesting == 0)
         #expect(viewController.hasFinishedRootPresentationLifecycleForTesting == false)
@@ -777,8 +779,9 @@ struct ParentContainerTests {
         #expect(session.interface.contentCacheCountForTesting > 0)
         let contentRevisionBeforeRetirement = session.interface.contextBoundContentRevision
 
+        let retirementBaseline = viewController.rootPresentationRetirementTaskCompletionCountForTesting
         viewController.finishRootPresentationLifecycleForTesting()
-        await Task.yield()
+        #expect(await viewController.waitForRootPresentationRetirementTaskCompletionForTesting(after: retirementBaseline))
 
         #expect(session.detachCountForTesting == 0)
         #expect(session.interface.contentCacheCountForTesting == 0)
@@ -919,7 +922,7 @@ struct ParentContainerTests {
                 hostLayout: .compact
             ) as? NetworkCompactNavigationController
         )
-        let window = showInWindow(compactNavigationController)
+        let window = showInWindow(compactNavigationController, useUIKitVisibility: false)
         defer { window.isHidden = true }
 
         model.selectRequest(request)
@@ -1031,13 +1034,46 @@ struct ParentContainerTests {
         return context.registeredRequest(forProxyID: requestID)!.id
     }
 
-    private func showInWindow(_ viewController: UIViewController) -> UIWindow {
+    private func showInWindow(
+        _ viewController: UIViewController,
+        useUIKitVisibility: Bool = true
+    ) -> UIWindow {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = viewController
-        window.makeKeyAndVisible()
         viewController.loadViewIfNeeded()
+        viewController.view.frame = window.bounds
+        if useUIKitVisibility {
+            window.makeKeyAndVisible()
+        } else {
+            activateNetworkRenderingForTesting(in: viewController)
+        }
         window.layoutIfNeeded()
         return window
+    }
+
+    private func activateNetworkRenderingForTesting(in viewController: UIViewController) {
+        if let navigationController = viewController as? NetworkCompactNavigationController {
+            navigationController.resumeSelectionObservationForTesting()
+            for child in navigationController.viewControllers {
+                activateNetworkRenderingForTesting(in: child)
+            }
+            return
+        }
+
+        if let navigationController = viewController as? UINavigationController {
+            for child in navigationController.viewControllers {
+                activateNetworkRenderingForTesting(in: child)
+            }
+            return
+        }
+
+        if let listViewController = viewController as? NetworkListViewController {
+            listViewController.resumeRenderingForTesting()
+        }
+
+        if let detailViewController = viewController as? NetworkDetailViewController {
+            detailViewController.resumeRenderingForTesting()
+        }
     }
 
     private func makeFakeContainer() async throws -> WebInspectorContainer {
@@ -1061,8 +1097,19 @@ struct ParentContainerTests {
         )
     }
 
-    private func makeSessionWithNoOpAttachment() -> WebInspectorSession {
-        WebInspectorSession(context: makeContext())
+    private func makeSessionWithNoOpAttachment(
+        tabs: [WebInspectorTab] = [.dom, .network]
+    ) -> WebInspectorSession {
+        WebInspectorSession(context: makeContext(), tabs: tabs)
+    }
+
+    private func makeNoOpTab(
+        id: WebInspectorTab.ID = "webinspector_test_noop",
+        title: String = "Test"
+    ) -> WebInspectorTab {
+        WebInspectorTab(id: id, title: title) { _ in
+            UIViewController()
+        }
     }
 
     @MainActor
@@ -1123,19 +1170,6 @@ struct ParentContainerTests {
 
     private final class PresentationDelegateRecorder: NSObject, UIAdaptivePresentationControllerDelegate {}
 
-    private func waitUntil(
-        timeoutAttempts: Int = 50,
-        predicate: @MainActor () -> Bool
-    ) async -> Bool {
-        for _ in 0..<timeoutAttempts {
-            if predicate() {
-                return true
-            }
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-        return predicate()
-    }
-
     private struct PageUserInterfaceStyleObservation {
         var token: PortableObservationTracking.Token
         var values: ObservedValues<Int>
@@ -1158,6 +1192,56 @@ struct ParentContainerTests {
         return PageUserInterfaceStyleObservation(token: token, values: values)
     }
 
+    private func waitUntilDetachCount(_ count: Int, in session: WebInspectorSession) async -> Bool {
+        if session.detachCountForTesting >= count {
+            return true
+        }
+        let token = withPortableContinuousObservation { _ in
+            _ = session.detachCountForTesting
+        }
+        defer {
+            token.cancel()
+        }
+        let values = await token.values {
+            session.detachCountForTesting
+        }
+        defer {
+            values.cancel()
+        }
+        if values.latestValue.map({ $0 >= count }) == true {
+            return true
+        }
+        return await values.waitUntil { $0 >= count } != nil
+    }
+
+    private func waitUntilCompactHostRendered(
+        in viewController: CompactTabBarController,
+        _ condition: @escaping @MainActor @Sendable () -> Bool
+    ) async -> Bool {
+        await waitForObservedCondition(
+            deliveries: {
+                [viewController.interfaceObservationDeliveryForTesting].compactMap { $0 }
+            },
+            sample: {
+                condition()
+            }
+        )
+    }
+
+    private func waitUntilRegularHostRendered(
+        in viewController: RegularTabContentViewController,
+        _ condition: @escaping @MainActor @Sendable () -> Bool
+    ) async -> Bool {
+        await waitForObservedCondition(
+            deliveries: {
+                [viewController.interfaceObservationDeliveryForTesting].compactMap { $0 }
+            },
+            sample: {
+                condition()
+            }
+        )
+    }
+
     private func waitUntilNetworkStackSynced(
         in navigationController: NetworkCompactNavigationController,
         _ condition: @escaping @MainActor @Sendable () -> Bool
@@ -1167,7 +1251,13 @@ struct ParentContainerTests {
                 [navigationController.selectionObservationDeliveryForTesting].compactMap { $0 }
             },
             sample: {
-                condition()
+                if navigationController.view.window?.isHidden != false {
+                    navigationController.syncStackForTesting()
+                    for child in navigationController.viewControllers {
+                        activateNetworkRenderingForTesting(in: child)
+                    }
+                }
+                return condition()
             }
         )
     }

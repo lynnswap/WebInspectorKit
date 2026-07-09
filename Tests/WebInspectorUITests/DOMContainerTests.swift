@@ -702,13 +702,12 @@ struct DOMContainerTests {
         )
 
         let viewController = makeElementViewController(context: context)
-        let window = showInWindow(viewController)
+        let window = showInWindow(viewController, useUIKitVisibility: false)
         defer { window.isHidden = true }
 
         let didCollapseOnlyUnusedVariable = await waitUntilRendered(in: viewController) {
             hiddenVariableCells(in: viewController).count == 1
         }
-        window.layoutIfNeeded()
 
         #expect(didCollapseOnlyUnusedVariable)
         let collapsedDeclarations = stylePropertyViews(in: viewController).map(\.declarationTextForTesting)
@@ -723,7 +722,7 @@ struct DOMContainerTests {
         applyInheritedVariableStyles(to: context)
 
         let viewController = makeElementViewController(context: context)
-        let window = showInWindow(viewController)
+        let window = showInWindow(viewController, useUIKitVisibility: false)
         defer { window.isHidden = true }
 
         let didCollapseUnusedVariables = await waitUntilRendered(in: viewController) {
@@ -909,9 +908,7 @@ struct DOMContainerTests {
         undoManager.undo()
         _ = await recordedDOMCommands(on: fixture.runtime.backend, method: "undo", count: 1)
 
-        let didEnableRedo = await waitUntil {
-            navigationItems.canRedoForTesting(undoManager: undoManager)
-        }
+        let didEnableRedo = await waitForDOMRedoAvailability(true, undoManager: undoManager)
         #expect(didEnableRedo)
 
         await fixture.runtime.backend.enqueue((), for: "DOM", method: "redo")
@@ -973,22 +970,17 @@ struct DOMContainerTests {
         await fixture.runtime.backend.enqueue((), for: "DOM", method: "undo")
         undoManager.undo()
         _ = await recordedDOMCommands(on: fixture.runtime.backend, method: "undo", count: 1)
-        let didEnableRedo = await waitUntil {
-            navigationItems.canRedoForTesting(undoManager: undoManager)
-        }
+        let didEnableRedo = await waitForDOMRedoAvailability(true, undoManager: undoManager)
         #expect(didEnableRedo)
 
         let marker = UndoRegistrationMarker()
         undoManager.beginUndoGrouping()
         undoManager.registerUndo(withTarget: marker) { _ in }
         undoManager.endUndoGrouping()
-        let didClearRedo = await waitUntil {
-            !navigationItems.canRedoForTesting(undoManager: undoManager)
-        }
+        let didClearRedo = await waitForDOMRedoAvailability(false, undoManager: undoManager)
         #expect(didClearRedo)
 
         navigationItems.redoForTesting(undoManager: undoManager)
-        await Task.yield()
 
         let commands = await fixture.runtime.backend.recordedCommands()
         #expect(commands.domMutationUndoMethods == ["removeNode", "undo"])
@@ -1009,9 +1001,9 @@ struct DOMContainerTests {
         let undoGate = WebInspectorTestGate()
         await fixture.runtime.backend.hold(domain: "DOM", method: "undo", gate: undoGate)
         await fixture.runtime.backend.enqueue((), for: "DOM", method: "undo")
+        let operationBaseline = DOMDeletionUndoRegistration.operationCompletionCountForTesting(on: undoManager)
         undoManager.undo()
         _ = await recordedDOMCommands(on: fixture.runtime.backend, method: "undo", count: 1)
-        await Task.yield()
 
         let marker = UndoRegistrationMarker()
         undoManager.beginUndoGrouping()
@@ -1019,13 +1011,14 @@ struct DOMContainerTests {
         undoManager.endUndoGrouping()
 
         await undoGate.open()
-        let didReenableRedo = await waitUntil(timeout: .milliseconds(100)) {
-            navigationItems.canRedoForTesting(undoManager: undoManager)
-        }
-        #expect(!didReenableRedo)
+        let didFinishUndo = await DOMDeletionUndoRegistration.waitForOperationCompletionForTesting(
+            after: operationBaseline,
+            on: undoManager
+        )
+        #expect(didFinishUndo)
+        #expect(!navigationItems.canRedoForTesting(undoManager: undoManager))
 
         navigationItems.redoForTesting(undoManager: undoManager)
-        await Task.yield()
 
         let commands = await fixture.runtime.backend.recordedCommands()
         #expect(commands.domMutationUndoMethods == ["removeNode", "undo"])
@@ -1046,9 +1039,7 @@ struct DOMContainerTests {
         await fixture.runtime.backend.enqueue((), for: "DOM", method: "undo")
         undoManager.undo()
         _ = await recordedDOMCommands(on: fixture.runtime.backend, method: "undo", count: 1)
-        let didEnableRedo = await waitUntil {
-            navigationItems.canRedoForTesting(undoManager: undoManager)
-        }
+        let didEnableRedo = await waitForDOMRedoAvailability(true, undoManager: undoManager)
         #expect(didEnableRedo)
 
         navigationItems.redoForTesting(undoManager: undoManager)
@@ -1079,9 +1070,7 @@ struct DOMContainerTests {
         await fixture.runtime.backend.enqueue((), for: "DOM", method: "undo")
         undoManager.undo()
         _ = await recordedDOMCommands(on: fixture.runtime.backend, method: "undo", count: 1)
-        let didEnableRedo = await waitUntil {
-            navigationItems.canRedoForTesting(undoManager: undoManager)
-        }
+        let didEnableRedo = await waitForDOMRedoAvailability(true, undoManager: undoManager)
         #expect(didEnableRedo)
 
         await fixture.runtime.backend.enqueue((), for: "DOM", method: "redo")
@@ -1117,9 +1106,7 @@ struct DOMContainerTests {
         await fixture.runtime.backend.enqueue((), for: "DOM", method: "undo")
         undoManager.undo()
         _ = await recordedDOMCommands(on: fixture.runtime.backend, method: "undo", count: 2)
-        let didEnableRedo = await waitUntil {
-            navigationItems.canRedoForTesting(undoManager: undoManager)
-        }
+        let didEnableRedo = await waitForDOMRedoAvailability(true, undoManager: undoManager)
         #expect(didEnableRedo)
 
         await fixture.runtime.backend.enqueue((), for: "DOM", method: "redo")
@@ -1143,7 +1130,6 @@ struct DOMContainerTests {
         let fixture = try await makeLiveDOMContext(document: multiDeleteDocumentNode())
         let undoManager = UndoManager()
         undoManager.groupsByEvent = false
-        let navigationItems = DOMNavigationItems(context: fixture.context)
         let viewController = DOMTreeViewController(context: fixture.context)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
@@ -1161,9 +1147,7 @@ struct DOMContainerTests {
         await fixture.runtime.backend.enqueue((), for: "DOM", method: "undo")
         undoManager.undo()
         _ = await recordedDOMCommands(on: fixture.runtime.backend, method: "undo", count: 1)
-        let didEnableRedo = await waitUntil {
-            navigationItems.canRedoForTesting(undoManager: undoManager)
-        }
+        let didEnableRedo = await waitForDOMRedoAvailability(true, undoManager: undoManager)
         #expect(didEnableRedo)
 
         let commands = await fixture.runtime.backend.recordedCommands()
@@ -1178,7 +1162,7 @@ struct DOMContainerTests {
     func treeControllerPageHighlightCommandsFollowSelectionAndHoverPolicy() async throws {
         let selectionFixture = try await makeLiveDOMContext()
         let selectionViewController = DOMTreeViewController(context: selectionFixture.context)
-        let selectionWindow = showInWindow(selectionViewController)
+        let selectionWindow = showInWindow(selectionViewController, useUIKitVisibility: false)
         defer { selectionWindow.isHidden = true }
         let selectionTreeView = selectionViewController.displayedDOMTreeTextViewForTesting
         #expect(await selectionTreeView.waitForRowDocumentForTesting())
@@ -1196,7 +1180,7 @@ struct DOMContainerTests {
         let input = try #require(hoverFixture.context.node(for: DOMNode.ID(DOM.Node.ID("input"))))
         hoverFixture.context.select(input)
         let hoverViewController = DOMTreeViewController(context: hoverFixture.context)
-        let hoverWindow = showInWindow(hoverViewController)
+        let hoverWindow = showInWindow(hoverViewController, useUIKitVisibility: false)
         defer { hoverWindow.isHidden = true }
         let hoverTreeView = hoverViewController.displayedDOMTreeTextViewForTesting
         #expect(await hoverTreeView.waitForRowDocumentForTesting())
@@ -1229,7 +1213,7 @@ struct DOMContainerTests {
 
         let hideFixture = try await makeLiveDOMContext()
         let hideViewController = DOMTreeViewController(context: hideFixture.context)
-        let hideWindow = showInWindow(hideViewController)
+        let hideWindow = showInWindow(hideViewController, useUIKitVisibility: false)
         defer { hideWindow.isHidden = true }
         let hideTreeView = hideViewController.displayedDOMTreeTextViewForTesting
         #expect(await hideTreeView.waitForRowDocumentForTesting())
@@ -1390,7 +1374,7 @@ struct DOMContainerTests {
         let container = WebInspectorContainer(proxy: runtime.proxy)
         let context = container.mainContext
         try await waitForLiveStartupSubscribers(runtime: runtime, target: target)
-        let didAttach = await waitUntil { context.state == .attached }
+        let didAttach = await waitForAttachedState(in: context)
         try #require(didAttach)
         return LiveDOMContextFixture(runtime: runtime, context: context)
     }
@@ -1416,40 +1400,31 @@ struct DOMContainerTests {
         try await runtime.backend.waitForSubscribers(domain: "Runtime", target: target, count: 1)
     }
 
-    private func waitUntil(
-        timeout: Duration = .seconds(1),
-        condition: @escaping @MainActor () -> Bool
-    ) async -> Bool {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: timeout)
-        while clock.now < deadline {
-            if condition() {
+    private func waitForAttachedState(in context: WebInspectorContext) async -> Bool {
+        if context.state == .attached {
+            return true
+        }
+        for await status in context.statusUpdates {
+            if status.state == .attached {
                 return true
             }
-            await Task.yield()
+            if status.state != .attaching {
+                return false
+            }
         }
-        return condition()
+        return context.state == .attached
+    }
+
+    private func waitForDOMRedoAvailability(_ isAvailable: Bool, undoManager: UndoManager?) async -> Bool {
+        await DOMDeletionUndoRegistration.waitForRedoAvailabilityForTesting(isAvailable, on: undoManager)
     }
 
     private func recordedDOMCommands(
         on backend: WebInspectorTestBackend,
         method: String,
-        count: Int,
-        timeout: Duration = .seconds(1)
+        count: Int
     ) async -> [RecordedCommand] {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: timeout)
-        var matches: [RecordedCommand] = []
-        while clock.now < deadline {
-            matches = await backend.recordedCommands()
-                .filter { $0.domain == "DOM" && $0.method == method }
-            if matches.count >= count {
-                return matches
-            }
-            await Task.yield()
-        }
-        return await backend.recordedCommands()
-            .filter { $0.domain == "DOM" && $0.method == method }
+        await backend.waitForRecordedCommands(domain: "DOM", method: method, count: count)
     }
 
     private func enqueueDOMRemoveNodeWithUndoMark(on backend: WebInspectorTestBackend) async {
@@ -1858,13 +1833,34 @@ struct DOMContainerTests {
         }
     }
 
-    private func showInWindow(_ viewController: UIViewController) -> UIWindow {
+    private func showInWindow(
+        _ viewController: UIViewController,
+        useUIKitVisibility: Bool = true
+    ) -> UIWindow {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = viewController
-        window.makeKeyAndVisible()
         viewController.loadViewIfNeeded()
+        if useUIKitVisibility {
+            window.makeKeyAndVisible()
+        } else {
+            viewController.view.frame = window.bounds
+            activateDOMRenderingForTesting(in: viewController)
+        }
         window.layoutIfNeeded()
         return window
+    }
+
+    private func activateDOMRenderingForTesting(in viewController: UIViewController) {
+        if let navigationController = viewController as? UINavigationController {
+            for child in navigationController.viewControllers {
+                activateDOMRenderingForTesting(in: child)
+            }
+            return
+        }
+
+        if let treeViewController = viewController as? DOMTreeViewController {
+            treeViewController.displayedDOMTreeTextViewForTesting.setRenderingActive(true)
+        }
     }
 
     private func showViewInWindow(_ view: UIView) -> UIWindow {

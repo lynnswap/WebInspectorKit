@@ -1014,6 +1014,14 @@ WebInspectorNativeControllerDiscoveryTestResult WebInspectorNativeRunControllerD
     };
 }
 
+void WebInspectorNativeDeliverFrontendMessageForTesting(
+    WebInspectorNativeBridge *bridge,
+    NSString *message
+)
+{
+    [bridge handleFrontendMessageString:message];
+}
+
 #else
 
 @implementation WebInspectorNativeBridge {
@@ -1119,6 +1127,16 @@ WebInspectorNativeControllerDiscoveryTestResult WebInspectorNativeRunControllerD
         .validCandidateCount = 0,
         .scannedByteCount = 0,
     };
+}
+
+void WebInspectorNativeDeliverFrontendMessageForTesting(
+    WebInspectorNativeBridge *bridge,
+    NSString *message
+)
+{
+    WebInspectorNativeMessageHandler handler = bridge.messageHandler;
+    if (message.length && handler)
+        handler(message);
 }
 
 #endif

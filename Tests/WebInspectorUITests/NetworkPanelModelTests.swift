@@ -771,14 +771,15 @@ func responseBodyFetchMovesUnavailablePreviewContextToFailedPhase() async throws
     let model = NetworkPanelModel(context: context)
 
     #expect(request.canFetchResponseBody)
+    let expectedBody = request.responseBody
     model.fetchResponseBodyIfNeeded(for: request)
 
-    try await waitUntil {
-        if case .failed = request.responseBody.phase {
+    #expect(await waitForNetworkBodyPhase(in: expectedBody) { phase in
+        if case .failed = phase {
             return true
         }
         return false
-    }
+    } != nil)
 }
 }
 
@@ -931,20 +932,4 @@ private func applyLoadingFinished(
             metrics: nil
         )
     )
-}
-
-@MainActor
-private func waitUntil(
-    timeout: Duration = .seconds(1),
-    _ condition: @escaping @MainActor () -> Bool
-) async throws {
-    let clock = ContinuousClock()
-    let deadline = clock.now + timeout
-    while condition() == false {
-        if clock.now >= deadline {
-            Issue.record("Timed out waiting for condition.")
-            return
-        }
-        try await Task.sleep(for: .milliseconds(10))
-    }
 }

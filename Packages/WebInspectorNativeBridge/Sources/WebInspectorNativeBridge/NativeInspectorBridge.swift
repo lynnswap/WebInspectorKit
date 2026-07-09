@@ -104,7 +104,7 @@ public final class NativeInspectorBridge {
     }
 
     func handleFrontendMessageForTesting(_ message: String) {
-        _ = unsafe objcBridge.perform(NSSelectorFromString("handleFrontendMessageString:"), with: message)
+        WebInspectorNativeDeliverFrontendMessageForTesting(objcBridge, message)
     }
 }
 
