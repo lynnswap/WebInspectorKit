@@ -10,6 +10,7 @@ public enum Console {
             self.context = context
         }
 
+        /// Enables Console domain events and commands for the target.
         public func enable() async throws {
             try await context.dispatchVoid(
                 domain: .console,
@@ -18,6 +19,7 @@ public enum Console {
             )
         }
 
+        /// Disables Console domain events for the target.
         public func disable() async throws {
             try await context.dispatchVoid(
                 domain: .console,
@@ -26,6 +28,7 @@ public enum Console {
             )
         }
 
+        /// Clears console messages in the inspected target.
         public func clearMessages() async throws {
             try await context.dispatchVoid(
                 domain: .console,
@@ -34,6 +37,7 @@ public enum Console {
             )
         }
 
+        /// Sets the logging level for a WebKit logging channel.
         public func setLoggingChannelLevel(_ source: ChannelSource, level: ChannelLevel) async throws {
             try await context.dispatchVoid(
                 domain: .console,
@@ -42,6 +46,7 @@ public enum Console {
             )
         }
 
+        /// Console domain events emitted by this target.
         public var events: EventStream {
             EventStream {
                 context.consoleEvents()
@@ -71,20 +76,45 @@ public enum Console {
         }
     }
 
+    /// A console message payload reported by WebKit.
     public struct Message: Sendable {
+        /// The source that produced the message.
         public let source: Source
+
+        /// The severity level of the message.
         public let level: Level
+
+        /// The message kind, if WebKit reported one.
         public let type: Kind?
+
+        /// The message text.
         public let text: String
+
+        /// The source URL associated with the message.
         public let url: String?
+
+        /// The source line associated with the message.
         public let line: Int?
+
+        /// The source column associated with the message.
         public let column: Int?
+
+        /// The number of repeated occurrences represented by the message.
         public let repeatCount: Int
+
+        /// Runtime parameters attached to the message.
         public let parameters: [Runtime.RemoteObject]
+
+        /// The JavaScript stack trace associated with the message.
         public let stackTrace: StackTrace?
+
+        /// The network request associated with the message.
         public let networkRequestID: Network.Request.ID?
+
+        /// The protocol timestamp for the message.
         public let timestamp: Double?
 
+        /// Creates a console message payload.
         public init(
             source: Source,
             level: Level,
@@ -114,20 +144,32 @@ public enum Console {
         }
     }
 
+    /// A JavaScript stack trace.
     public struct StackTrace: Sendable {
+        /// Frames in call order.
         public let callFrames: [CallFrame]
 
+        /// Creates a stack trace.
         public init(callFrames: [CallFrame] = []) {
             self.callFrames = callFrames
         }
     }
 
+    /// One JavaScript call frame.
     public struct CallFrame: Sendable {
+        /// The function name reported by WebKit.
         public let functionName: String
+
+        /// The source URL for the frame.
         public let url: String
+
+        /// The source line for the frame.
         public let line: Int
+
+        /// The source column for the frame.
         public let column: Int
 
+        /// Creates a call frame.
         public init(functionName: String, url: String, line: Int, column: Int) {
             self.functionName = functionName
             self.url = url
@@ -136,58 +178,84 @@ public enum Console {
         }
     }
 
+    /// WebKit's console message source value.
     public struct Source: RawRepresentable, Hashable, Sendable {
+        /// The raw protocol source.
         public let rawValue: String
 
+        /// Creates a message source from its raw protocol value.
         public init(rawValue: String) {
             self.rawValue = rawValue
         }
     }
 
+    /// WebKit's console severity level value.
     public struct Level: RawRepresentable, Hashable, Sendable {
+        /// The raw protocol level.
         public let rawValue: String
 
+        /// Creates a level from its raw protocol value.
         public init(rawValue: String) {
             self.rawValue = rawValue
         }
     }
 
+    /// WebKit's console message kind value.
     public struct Kind: RawRepresentable, Hashable, Sendable {
+        /// The raw protocol kind.
         public let rawValue: String
 
+        /// Creates a message kind from its raw protocol value.
         public init(rawValue: String) {
             self.rawValue = rawValue
         }
     }
 
+    /// Reason WebKit cleared console messages.
     public struct ClearReason: RawRepresentable, Hashable, Sendable {
+        /// The raw protocol clear reason.
         public let rawValue: String
 
+        /// Creates a clear reason from its raw protocol value.
         public init(rawValue: String) {
             self.rawValue = rawValue
         }
     }
 
+    /// WebKit logging channel source.
     public struct ChannelSource: RawRepresentable, Hashable, Sendable {
+        /// The raw protocol channel source.
         public let rawValue: String
 
+        /// Creates a channel source from its raw protocol value.
         public init(rawValue: String) {
             self.rawValue = rawValue
         }
     }
 
+    /// WebKit logging channel level.
     public struct ChannelLevel: RawRepresentable, Hashable, Sendable {
+        /// The raw protocol channel level.
         public let rawValue: String
 
+        /// Creates a channel level from its raw protocol value.
         public init(rawValue: String) {
             self.rawValue = rawValue
         }
     }
 
+    /// Events emitted by the Console domain.
     public enum Event: Sendable {
+        /// A message was added.
         case messageAdded(Message)
+
+        /// The repeat count for the latest message changed.
         case messageRepeatCountUpdated(count: Int, timestamp: Double?)
+
+        /// Console messages were cleared.
         case messagesCleared(reason: ClearReason)
+
+        /// An event that is not modeled by this package.
         case unknown(RawEvent)
     }
 
@@ -201,8 +269,12 @@ public enum Console {
         }
     }
 
+    /// An asynchronous stream of Console domain events.
     public struct EventStream: AsyncSequence, Sendable {
+        /// The event yielded by the stream.
         public typealias Element = Event
+
+        /// The iterator type used by the stream.
         public typealias AsyncIterator = AsyncStream<Event>.Iterator
 
         private let makeStream: @Sendable () -> AsyncStream<Event>
@@ -215,6 +287,7 @@ public enum Console {
             self.makeStream = makeStream
         }
 
+        /// Creates an iterator over Console events.
         public func makeAsyncIterator() -> AsyncIterator {
             makeStream().makeAsyncIterator()
         }

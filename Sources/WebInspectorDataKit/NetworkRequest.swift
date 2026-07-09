@@ -2,14 +2,27 @@ import Foundation
 import Observation
 import WebInspectorProxyKit
 
+/// Immutable snapshot of the request side of a network load.
 public struct NetworkRequestSnapshot: Equatable, Sendable {
+    /// The request URL.
     public let url: String
+
+    /// The HTTP method.
     public let method: String
+
+    /// Request headers keyed by header name.
     public let headers: [String: String]
+
+    /// The request body text, if WebKit included it.
     public let postData: String?
+
+    /// The referrer policy raw value, if WebKit reported one.
     public let referrerPolicy: String?
+
+    /// The request integrity metadata, if any.
     public let integrity: String?
 
+    /// Creates a request snapshot.
     public init(
         url: String,
         method: String,
@@ -38,15 +51,30 @@ public struct NetworkRequestSnapshot: Equatable, Sendable {
     }
 }
 
+/// Immutable snapshot of the response side of a network load.
 public struct NetworkResponseSnapshot: Equatable, Sendable {
+    /// The response URL.
     public let url: String?
+
+    /// The HTTP status code.
     public let status: Int?
+
+    /// The HTTP status text.
     public let statusText: String?
+
+    /// The response MIME type.
     public let mimeType: String?
+
+    /// Response headers keyed by header name.
     public let headers: [String: String]
+
+    /// WebKit's response source raw value.
     public let source: String?
+
+    /// Request headers associated with the response, if reported.
     public let requestHeaders: [String: String]?
 
+    /// Creates a response snapshot.
     public init(
         url: String? = nil,
         status: Int? = nil,
@@ -78,11 +106,18 @@ public struct NetworkResponseSnapshot: Equatable, Sendable {
     }
 }
 
+/// A redirect step recorded for a network request.
 public struct RedirectHop: Equatable, Sendable {
+    /// The request that caused the redirect.
     public let request: NetworkRequestSnapshot
+
+    /// The redirect response.
     public let response: NetworkResponseSnapshot
+
+    /// The protocol timestamp for the redirect.
     public let timestamp: Double
 
+    /// Creates a redirect hop.
     public init(
         request: NetworkRequestSnapshot,
         response: NetworkResponseSnapshot,
@@ -102,29 +137,57 @@ public struct RedirectHop: Equatable, Sendable {
     }
 }
 
+/// Observable WebSocket state attached to a network request.
 @Observable
 public final class WebSocketState {
+    /// WebSocket ready state tracked from network events.
     public enum ReadyState: Equatable, Sendable {
+        /// The WebSocket is connecting.
         case connecting
+
+        /// The WebSocket handshake completed.
         case open
+
+        /// The WebSocket is closed.
         case closed
     }
 
+    /// Direction or error state for a WebSocket frame row.
     public enum FrameDirection: Equatable, Sendable {
+        /// A frame sent by the inspected page.
         case sent
+
+        /// A frame received by the inspected page.
         case received
+
+        /// A WebSocket error row.
         case error(String)
     }
 
+    /// One WebSocket frame or error row.
     public struct Frame: Equatable, Sendable {
+        /// Direction or error state for the row.
         public let direction: FrameDirection
+
+        /// The WebSocket opcode.
         public let opcode: Int?
+
+        /// A Boolean value indicating whether the frame was masked.
         public let mask: Bool?
+
+        /// The frame payload as text or base64.
         public let payloadData: String?
+
+        /// The payload length in bytes.
         public let payloadLength: Int?
+
+        /// The error message for error rows.
         public let errorMessage: String?
+
+        /// The protocol timestamp for the frame or error.
         public let timestamp: Double
 
+        /// Creates a WebSocket frame row.
         public init(
             direction: FrameDirection,
             opcode: Int? = nil,
@@ -144,9 +207,16 @@ public final class WebSocketState {
         }
     }
 
+    /// The current WebSocket ready state.
     public private(set) var readyState: ReadyState
+
+    /// The handshake request snapshot.
     public private(set) var handshakeRequest: NetworkRequestSnapshot?
+
+    /// The handshake response snapshot.
     public private(set) var handshakeResponse: NetworkResponseSnapshot?
+
+    /// Frames and errors observed for the WebSocket.
     public private(set) var frames: [Frame]
 
     init(readyState: ReadyState = .connecting) {
@@ -202,32 +272,63 @@ public final class WebSocketState {
     }
 }
 
+/// Observable request or response body state for a network request.
 @Observable
 public final class NetworkBody {
+    /// The body side represented by the model.
     public enum Role: CaseIterable, Hashable, Sendable {
+        /// A request body.
         case request
+
+        /// A response body.
         case response
     }
 
+    /// Display classification for body content.
     public enum Kind: Hashable, Sendable {
+        /// Text-like body content.
         case text
+
+        /// URL-encoded form body content.
         case form
+
+        /// Binary body content.
         case binary
     }
 
+    /// Syntax hint for text body rendering.
     public enum SyntaxKind: Hashable, Sendable {
+        /// Plain text content.
         case plainText
+
+        /// JSON content.
         case json
+
+        /// HTML content.
         case html
+
+        /// XML content.
         case xml
+
+        /// CSS content.
         case css
+
+        /// JavaScript content.
         case javascript
     }
 
+    /// Loading phase for a body.
     public enum Phase: Equatable, Sendable {
+        /// The body is available to fetch but has not been loaded.
         case available
+
+        /// The body is currently being fetched.
         case fetching
+
+        /// The body has been loaded.
         case loaded
+
+        /// Loading the body failed.
         case failed(WebInspectorProxyError)
     }
 
@@ -250,29 +351,47 @@ public final class NetworkBody {
         }
     }
 
+    /// The body side represented by the model.
     public let role: Role
+
+    /// The display classification for the body content.
     public private(set) var kind: Kind {
         didSet {
             invalidateTextRepresentation()
         }
     }
+    /// The current body loading phase.
     public private(set) var phase: Phase
+
+    /// The full raw body payload, if loaded.
     public private(set) var full: String? {
         didSet {
             text = full
             invalidateTextRepresentation()
         }
     }
+    /// The raw body text when available.
     public private(set) var text: String?
+
+    /// The body size in bytes, if known.
     public private(set) var size: Int?
+
+    /// A Boolean value indicating whether ``full`` is base64 encoded.
     public private(set) var isBase64Encoded: Bool
+
+    /// A Boolean value indicating whether the body payload was truncated.
     public private(set) var isTruncated: Bool
+
+    /// The syntax hint inferred from headers, MIME type, or URL.
     public private(set) var sourceSyntaxKind: SyntaxKind {
         didSet {
             invalidateTextRepresentation()
         }
     }
+    /// Decoded and formatted text suitable for display.
     public private(set) var textRepresentation: String?
+
+    /// Syntax hint for ``textRepresentation``.
     public private(set) var textRepresentationSyntaxKind: SyntaxKind
     @ObservationIgnored private var isBatchingTextRepresentationInvalidation: Bool
     @ObservationIgnored private var needsTextRepresentationInvalidation: Bool
@@ -523,8 +642,10 @@ public final class NetworkBody {
     }
 }
 
+/// Observable model for one network request.
 @Observable
 public final class NetworkRequest: WebInspectorFetchableModel {
+    /// Stable identity for a network request within a context.
     public struct ID: Hashable, Sendable {
         let proxyID: Network.Request.ID
 
@@ -533,48 +654,121 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         }
     }
 
+    /// Lifecycle state for a network request.
     public enum State: Equatable, Sendable {
+        /// The request was sent and no response has been received.
         case pending
+
+        /// A response has been received and loading is still active.
         case responded
+
+        /// Loading finished successfully.
         case finished
+
+        /// Loading failed or was cancelled.
         case failed(errorText: String, canceled: Bool)
     }
 
+    /// Coarse resource category for filtering and display.
     public enum ResourceCategory: String, Codable, CaseIterable, Sendable, Hashable {
+        /// Document navigation resource.
         case document
+
+        /// Stylesheet resource.
         case stylesheet
+
+        /// Script resource.
         case script
+
+        /// Image resource.
         case image
+
+        /// Font resource.
         case font
+
+        /// XHR or Fetch resource.
         case xhrFetch
+
+        /// Media resource.
         case media
+
+        /// WebSocket resource.
         case webSocket
+
+        /// A resource that does not fit another category.
         case other
     }
 
+    /// The stable request identity.
     public let id: ID
+
+    /// The request URL.
     public private(set) var url: String
+
+    /// The HTTP method.
     public private(set) var method: String
+
+    /// The resource type reported by WebKit.
     public private(set) var resourceType: Network.ResourceType?
+
+    /// The current request lifecycle state.
     public private(set) var state: State
+
+    /// The HTTP status code.
     public private(set) var status: Int?
+
+    /// The HTTP status text.
     public private(set) var statusText: String?
+
+    /// The final response URL.
     public private(set) var responseURL: String?
+
+    /// The response MIME type.
     public private(set) var mimeType: String?
+
+    /// WebKit's response source raw value.
     public private(set) var responseSource: String?
+
+    /// The source map URL reported when loading finished.
     public private(set) var sourceMapURL: String?
+
+    /// Request headers keyed by header name.
     public private(set) var requestHeaders: [String: String]
+
+    /// Response headers keyed by header name.
     public private(set) var responseHeaders: [String: String]
+
+    /// Timestamp when the request was sent.
     public private(set) var requestSentTimestamp: Double?
+
+    /// Timestamp when the response was received.
     public private(set) var responseReceivedTimestamp: Double?
+
+    /// Timestamp for the most recent data event.
     public private(set) var lastDataReceivedTimestamp: Double?
+
+    /// Timestamp when loading finished or failed.
     public private(set) var finishedOrFailedTimestamp: Double?
+
+    /// Total decoded data length reported so far.
     public private(set) var decodedDataLength: Int
+
+    /// Total encoded data length reported so far.
     public private(set) var encodedDataLength: Int
+
+    /// Final transfer metrics, if WebKit reported them.
     public private(set) var metrics: Network.Metrics?
+
+    /// Redirect hops that led to the current request.
     public private(set) var redirects: [RedirectHop]
+
+    /// WebSocket state when the request is a WebSocket.
     public private(set) var webSocket: WebSocketState?
+
+    /// Request body state, if the request has a body.
     public private(set) var requestBody: NetworkBody?
+
+    /// Response body state.
     public private(set) var responseBody: NetworkBody
 
     @ObservationIgnored weak var modelContext: WebInspectorContext?
@@ -633,6 +827,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         currentRequest = request
     }
 
+    /// A Boolean value indicating whether the response body can be fetched now.
     public var canFetchResponseBody: Bool {
         guard state == .finished else {
             return false
@@ -640,6 +835,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         return responseBody.needsFetch
     }
 
+    /// A Boolean value indicating whether any response metadata has been received.
     public var hasResponse: Bool {
         responseReceivedTimestamp != nil
             || status != nil
@@ -650,10 +846,12 @@ public final class NetworkRequest: WebInspectorFetchableModel {
             || responseSource != nil
     }
 
+    /// A Boolean value indicating whether the request can have a response body.
     public var hasResponseBody: Bool {
         hasResponse && resourceType != .webSocket
     }
 
+    /// The coarse category inferred for filtering and display.
     public var resourceCategory: ResourceCategory {
         Self.resourceCategory(
             resourceType: resourceType,
@@ -663,6 +861,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         )
     }
 
+    /// Text used by Network list filtering.
     public var searchableText: String {
         return Self.uniqueNonEmpty([
             url,
@@ -679,10 +878,12 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         .joined(separator: "\n")
     }
 
+    /// The HTTP status code, exposed as a stable fetch key path.
     public var statusCode: Int? {
         status
     }
 
+    /// Fetches the response body when it is available and not already loaded.
     public func fetchResponseBody(isolation: isolated (any Actor) = #isolation) async {
         guard canFetchResponseBody else {
             return

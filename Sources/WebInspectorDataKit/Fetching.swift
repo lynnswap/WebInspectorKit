@@ -28,19 +28,26 @@ public struct WebInspectorFetchDescriptor<Model: WebInspectorFetchableModel>: Se
     }
 
     let kind: Kind
+    /// Predicate used to filter fetched models.
     public var predicate: Predicate<Model>?
+
+    /// Sort descriptors used to order fetched models.
     public var sortBy: [SortDescriptor<Model>]
+
+    /// Maximum number of models to fetch.
     public var fetchLimit: Int? {
         didSet {
             Self.validate(fetchLimit: fetchLimit)
         }
     }
+    /// Number of models to skip before returning results.
     public var fetchOffset: Int {
         didSet {
             Self.validate(fetchOffset: fetchOffset)
         }
     }
 
+    /// Creates a fetch descriptor.
     public init(
         predicate: Predicate<Model>? = nil,
         sortBy: [SortDescriptor<Model>] = [],
@@ -83,19 +90,26 @@ public struct WebInspectorFetchDescriptor<Model: WebInspectorFetchableModel>: Se
 
 /// Mutable builder for a ``WebInspectorFetchDescriptor``.
 public final class WebInspectorFetchRequest<Model: WebInspectorFetchableModel> {
+    /// Predicate used to filter fetched models.
     public var predicate: Predicate<Model>?
+
+    /// Sort descriptors used to order fetched models.
     public var sortDescriptors: [SortDescriptor<Model>]
+
+    /// Maximum number of models to fetch.
     public var fetchLimit: Int? {
         didSet {
             Self.validate(fetchLimit: fetchLimit)
         }
     }
+    /// Number of models to skip before returning results.
     public var fetchOffset: Int {
         didSet {
             Self.validate(fetchOffset: fetchOffset)
         }
     }
 
+    /// Creates a mutable fetch request.
     public init(
         predicate: Predicate<Model>? = nil,
         sortDescriptors: [SortDescriptor<Model>] = [],
@@ -110,6 +124,7 @@ public final class WebInspectorFetchRequest<Model: WebInspectorFetchableModel> {
         self.fetchOffset = fetchOffset
     }
 
+    /// Immutable descriptor representing the request's current values.
     public var fetchDescriptor: WebInspectorFetchDescriptor<Model> {
         WebInspectorFetchDescriptor(
             predicate: predicate,
@@ -138,31 +153,44 @@ final class WeakWebInspectorFetchedResults<Model: WebInspectorFetchableModel> {
     }
 }
 
+/// Stable identity for a fetched-results section.
 public struct WebInspectorFetchSectionID: RawRepresentable, Hashable, Sendable, Codable,
     CustomStringConvertible, ExpressibleByStringLiteral
 {
+    /// The raw section identity.
     public var rawValue: String
 
+    /// Creates a section identity from a raw value.
     public init(rawValue: String) {
         self.rawValue = rawValue
     }
 
+    /// Creates a section identity from a string literal.
     public init(stringLiteral value: String) {
         rawValue = value
     }
 
+    /// The display representation of the section identity.
     public var description: String {
         rawValue
     }
 
+    /// The section identity used when results are not sectioned.
     public static let defaultSection = WebInspectorFetchSectionID(rawValue: "__default")
 }
 
+/// One fetched-results section and its models.
 public struct WebInspectorFetchSection<Model: WebInspectorFetchableModel>: Identifiable {
+    /// The stable section identity.
     public var id: WebInspectorFetchSectionID
+
+    /// The display title for the section.
     public var title: String?
+
+    /// The models in the section.
     public var items: [Model]
 
+    /// Creates a fetched-results section.
     public init(id: WebInspectorFetchSectionID, title: String?, items: [Model]) {
         self.id = id
         self.title = title
@@ -181,23 +209,28 @@ enum WebInspectorSectionKey: Hashable, Sendable {
     case consoleURL
 }
 
+/// Descriptor for sectioning fetched results by a supported model key path.
 public struct WebInspectorSectionDescriptor<Model: WebInspectorFetchableModel>: Hashable, Sendable {
     let key: WebInspectorSectionKey
 
+    /// Creates a section descriptor from a non-optional string key path.
     public init(_ keyPath: KeyPath<Model, String>) {
         key = Self.requireKnownSectionKey(for: keyPath)
     }
 
+    /// Creates a section descriptor from an optional string key path.
     public init(_ keyPath: KeyPath<Model, String?>) {
         key = Self.requireKnownSectionKey(for: keyPath)
     }
 
+    /// Creates a section descriptor from a raw-representable string value key path.
     public init<Value: RawRepresentable & Hashable & Sendable>(
         _ keyPath: KeyPath<Model, Value>
     ) where Value.RawValue == String {
         key = Self.requireKnownSectionKey(for: keyPath)
     }
 
+    /// Creates a section descriptor from an optional raw-representable string value key path.
     public init<Value: RawRepresentable & Hashable & Sendable>(
         _ keyPath: KeyPath<Model, Value?>
     ) where Value.RawValue == String {
@@ -265,11 +298,19 @@ private enum WebInspectorKnownKeyPaths {
     }
 }
 
+/// Observable collection of models produced by a fetch descriptor.
 @Observable
 public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel> {
+    /// The descriptor currently used by the results.
     public private(set) var fetchDescriptor: WebInspectorFetchDescriptor<Model>
+
+    /// The section descriptor currently used by the results.
     public private(set) var sectionBy: WebInspectorSectionDescriptor<Model>?
+
+    /// The fetched models in display order.
     public private(set) var items: [Model]
+
+    /// The fetched models grouped into display sections.
     public private(set) var sections: [WebInspectorFetchSection<Model>]
     package private(set) var topologyRevision: Int
 
@@ -348,6 +389,7 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
         resetItems(items)
     }
 
+    /// Replaces the fetch descriptor and updates the result contents.
     public func updateFetchDescriptor(
         _ descriptor: WebInspectorFetchDescriptor<Model>,
         isolation: isolated (any Actor) = #isolation

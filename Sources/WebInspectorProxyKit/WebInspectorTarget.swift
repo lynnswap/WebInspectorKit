@@ -56,9 +56,16 @@ public struct WebInspectorTarget: Identifiable, Sendable {
 
     /// The kind of backend target represented by a ``WebInspectorTarget``.
     public enum Kind: Sendable {
+        /// A top-level page target.
         case page
+
+        /// A frame target.
         case frame
+
+        /// A worker target.
         case worker
+
+        /// A service worker target.
         case serviceWorker
     }
 

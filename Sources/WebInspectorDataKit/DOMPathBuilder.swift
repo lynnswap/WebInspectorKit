@@ -19,6 +19,7 @@ private extension UnicodeScalar {
 }
 
 public extension DOMTreeSnapshot {
+    /// Returns a CSS selector path for the node, or an empty string when one cannot be built.
     func selectorPath(for id: DOMNode.ID) -> String {
         guard let node = node(for: id) else {
             return ""
@@ -26,6 +27,7 @@ public extension DOMTreeSnapshot {
         return DOMPathBuilder(snapshot: self).selectorPath(for: node)
     }
 
+    /// Returns an XPath expression for the node, or an empty string when one cannot be built.
     func xPath(for id: DOMNode.ID) -> String {
         guard let node = node(for: id) else {
             return ""

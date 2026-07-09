@@ -23,6 +23,7 @@ import UIKit
 /// ```
 @MainActor
 public struct WebInspectorTab: Equatable, Hashable, Identifiable {
+    /// Stable identity type for an inspector tab.
     public typealias ID = String
 
     /// Stable tab identity.
@@ -57,10 +58,12 @@ public struct WebInspectorTab: Equatable, Hashable, Identifiable {
         return builtIn
     }
 
+    /// Compares tabs by their stable identity.
     public static nonisolated func == (lhs: WebInspectorTab, rhs: WebInspectorTab) -> Bool {
         lhs.id == rhs.id
     }
 
+    /// Hashes the tab identity.
     public nonisolated func hash(into hasher: inout Hasher) {
         hasher.combine(id)
     }

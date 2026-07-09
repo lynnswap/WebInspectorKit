@@ -2,8 +2,10 @@ import Foundation
 import Observation
 import WebInspectorProxyKit
 
+/// Observable model for a Runtime remote object.
 @Observable
 public final class RuntimeObject: WebInspectorPersistentModel {
+    /// Stable identity for a runtime object within a context.
     public struct ID: Hashable, Sendable {
         enum Storage: Hashable, Sendable {
             case remote(Runtime.RemoteObject.ID)
@@ -21,11 +23,18 @@ public final class RuntimeObject: WebInspectorPersistentModel {
         }
     }
 
+    /// Display model for a property returned from a ``RuntimeObject``.
     public struct Property {
+        /// The property name.
         public let name: String
+
+        /// The primitive property value text, if one is available.
         public let value: String?
+
+        /// The remote object value, if the property value has object identity.
         public let object: RuntimeObject?
 
+        /// Creates a runtime object property.
         public init(name: String, value: String? = nil, object: RuntimeObject? = nil) {
             self.name = name
             self.value = value
@@ -33,28 +42,49 @@ public final class RuntimeObject: WebInspectorPersistentModel {
         }
     }
 
+    /// Display model for a collection entry returned from a ``RuntimeObject``.
     public struct Entry {
+        /// The entry key object, if present.
         public let key: RuntimeObject?
+
+        /// The entry value object, if present.
         public let value: RuntimeObject?
 
+        /// Creates a runtime collection entry.
         public init(key: RuntimeObject? = nil, value: RuntimeObject? = nil) {
             self.key = key
             self.value = value
         }
     }
 
+    /// The stable runtime object identity.
     public let id: ID
+
+    /// The primary JavaScript value kind.
     public private(set) var kind: Runtime.Kind
+
+    /// WebKit's more specific object subtype, if any.
     public private(set) var subtype: Runtime.Subtype?
+
+    /// The JavaScript class name, if known.
     public private(set) var className: String?
+
+    /// The inline JSON value for primitive values.
     public private(set) var value: Runtime.JSONValue?
+
+    /// A display description supplied by WebKit.
     public private(set) var description: String?
+
+    /// The collection size reported by WebKit.
     public private(set) var size: Int?
+
+    /// A compact preview for the value, if included in the payload.
     public private(set) var preview: Runtime.ObjectPreview?
 
     @ObservationIgnored weak var modelContext: WebInspectorContext?
     @ObservationIgnored var proxyID: Runtime.RemoteObject.ID?
 
+    /// A Boolean value indicating whether this object has a live remote handle.
     public var canRequestProperties: Bool {
         proxyID != nil
     }
@@ -76,6 +106,7 @@ public final class RuntimeObject: WebInspectorPersistentModel {
         self.modelContext = modelContext
     }
 
+    /// Requests own property values for this object.
     public func properties(isolation: isolated (any Actor) = #isolation) async throws -> [Property] {
         guard canRequestProperties else {
             return []
@@ -86,6 +117,7 @@ public final class RuntimeObject: WebInspectorPersistentModel {
         return try await modelContext.properties(for: self, isolation: isolation)
     }
 
+    /// Requests collection entries for this object.
     public func collectionEntries(isolation: isolated (any Actor) = #isolation) async throws -> [Entry] {
         guard canRequestProperties else {
             return []
@@ -108,10 +140,15 @@ public final class RuntimeObject: WebInspectorPersistentModel {
     }
 }
 
+/// Result of evaluating JavaScript through DataKit.
 public struct RuntimeEvaluation {
+    /// The evaluated value.
     public let object: RuntimeObject
+
+    /// A Boolean value indicating whether evaluation threw an exception.
     public let isException: Bool
 
+    /// Creates a runtime evaluation result.
     public init(object: RuntimeObject, isException: Bool) {
         self.object = object
         self.isException = isException

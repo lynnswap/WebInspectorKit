@@ -1,21 +1,34 @@
 import Foundation
 
+/// Section/item position inside fetched results.
 public struct WebInspectorFetchedResultsIndexPath: Hashable, Sendable {
+    /// The section index.
     public var section: Int
+
+    /// The item index within the section.
     public var item: Int
 
+    /// Creates an index path.
     public init(section: Int, item: Int) {
         self.section = section
         self.item = item
     }
 }
 
+/// Immutable snapshot of fetched-result section and item identities.
 public struct WebInspectorFetchedResultsSnapshot<ItemID: Hashable & Sendable>: Hashable, Sendable {
+    /// One section in a fetched-results snapshot.
     public struct Section: Identifiable, Hashable, Sendable {
+        /// The stable section identity.
         public let id: WebInspectorFetchSectionID
+
+        /// The display title for the section.
         public let title: String?
+
+        /// Item identities in section order.
         public let itemIDs: [ItemID]
 
+        /// Creates a snapshot section.
         public init(id: WebInspectorFetchSectionID, title: String?, itemIDs: [ItemID]) {
             self.id = id
             self.title = title
@@ -23,8 +36,10 @@ public struct WebInspectorFetchedResultsSnapshot<ItemID: Hashable & Sendable>: H
         }
     }
 
+    /// Sections in display order.
     public let sections: [Section]
 
+    /// Creates a fetched-results snapshot.
     public init(sections: [Section] = []) {
         self.sections = sections
         let itemIDs = sections.flatMap(\.itemIDs)
@@ -34,20 +49,24 @@ public struct WebInspectorFetchedResultsSnapshot<ItemID: Hashable & Sendable>: H
         )
     }
 
+    /// Creates a single-section snapshot from item identities.
     public init(itemIDs: [ItemID]) {
         self.init(sections: [
             Section(id: .defaultSection, title: nil, itemIDs: itemIDs)
         ])
     }
 
+    /// Section identities in display order.
     public var sectionIDs: [WebInspectorFetchSectionID] {
         sections.map(\.id)
     }
 
+    /// All item identities in display order.
     public var itemIDs: [ItemID] {
         sections.flatMap(\.itemIDs)
     }
 
+    /// Returns item identities for a section.
     public func itemIDs(in sectionID: WebInspectorFetchSectionID) -> [ItemID]? {
         sections.first { $0.id == sectionID }?.itemIDs
     }
@@ -67,37 +86,65 @@ extension WebInspectorFetchedResultsSnapshot {
     }
 }
 
+/// Section-level change in a fetched-results transaction.
 public enum WebInspectorFetchedResultsSectionChange: Hashable, Sendable {
+    /// A section was inserted.
     case insert(sectionID: WebInspectorFetchSectionID, index: Int)
+
+    /// A section was deleted.
     case delete(sectionID: WebInspectorFetchSectionID, index: Int)
+
+    /// A section moved.
     case move(sectionID: WebInspectorFetchSectionID, from: Int, to: Int)
+
+    /// A section's display metadata changed.
     case update(sectionID: WebInspectorFetchSectionID, index: Int)
 }
 
+/// Item-level change in a fetched-results transaction.
 public enum WebInspectorFetchedResultsItemChange<ItemID: Hashable & Sendable>: Hashable, Sendable {
+    /// An item was inserted.
     case insert(itemID: ItemID, indexPath: WebInspectorFetchedResultsIndexPath)
+
+    /// An item was deleted.
     case delete(itemID: ItemID, indexPath: WebInspectorFetchedResultsIndexPath)
+
+    /// An item moved.
     case move(
         itemID: ItemID,
         from: WebInspectorFetchedResultsIndexPath,
         to: WebInspectorFetchedResultsIndexPath
     )
+    /// An item's model changed without moving.
     case update(itemID: ItemID, indexPath: WebInspectorFetchedResultsIndexPath)
 }
 
+/// A batch of fetched-results changes between two snapshots.
 public struct WebInspectorFetchedResultsTransaction<Model: WebInspectorFetchableModel>: Hashable, Sendable {
+    /// Item identity type for the model.
     public typealias ItemID = Model.ID
 
+    /// Snapshot before the transaction.
     public let oldSnapshot: WebInspectorFetchedResultsSnapshot<ItemID>
+
+    /// Snapshot after the transaction.
     public let newSnapshot: WebInspectorFetchedResultsSnapshot<ItemID>
+
+    /// A Boolean value indicating whether consumers should treat the change as a full reset.
     public let isReset: Bool
+
+    /// Section changes in application order.
     public let sectionChanges: [WebInspectorFetchedResultsSectionChange]
+
+    /// Item changes in application order.
     public let itemChanges: [WebInspectorFetchedResultsItemChange<ItemID>]
 
+    /// A Boolean value indicating whether the transaction contains any changes.
     public var hasChanges: Bool {
         isReset || sectionChanges.isEmpty == false || itemChanges.isEmpty == false
     }
 
+    /// Creates a fetched-results transaction.
     public init(
         oldSnapshot: WebInspectorFetchedResultsSnapshot<ItemID>,
         newSnapshot: WebInspectorFetchedResultsSnapshot<ItemID>,
@@ -279,6 +326,7 @@ extension WebInspectorFetchedResultsItemChange {
 }
 
 extension WebInspectorFetchedResultsIndexPath: Comparable {
+    /// Orders index paths by section and then item.
     public static func < (
         lhs: WebInspectorFetchedResultsIndexPath,
         rhs: WebInspectorFetchedResultsIndexPath
@@ -290,29 +338,37 @@ extension WebInspectorFetchedResultsIndexPath: Comparable {
     }
 }
 
+/// Controller wrapper around ``WebInspectorFetchedResults``.
 public final class WebInspectorFetchedResultsController<Model: WebInspectorFetchableModel> {
+    /// The observable fetched-results model.
     public let fetchedResults: WebInspectorFetchedResults<Model>
 
+    /// The descriptor currently used by the results.
     public var fetchDescriptor: WebInspectorFetchDescriptor<Model> {
         fetchedResults.fetchDescriptor
     }
 
+    /// The fetched models in display order.
     public var items: [Model] {
         fetchedResults.items
     }
 
+    /// The current fetched-results snapshot.
     public var snapshot: WebInspectorFetchedResultsSnapshot<Model.ID> {
         WebInspectorFetchedResultsSnapshot(sections: fetchedResults.sections)
     }
 
+    /// Stream of transactions emitted after result changes.
     public var transactions: AsyncStream<WebInspectorFetchedResultsTransaction<Model>> {
         fetchedResults.makeTransactionStream()
     }
 
+    /// Creates a controller for fetched results.
     public init(fetchedResults: WebInspectorFetchedResults<Model>) {
         self.fetchedResults = fetchedResults
     }
 
+    /// Replaces the fetch descriptor and updates the result contents.
     public func updateFetchDescriptor(
         _ descriptor: WebInspectorFetchDescriptor<Model>,
         isolation: isolated (any Actor) = #isolation

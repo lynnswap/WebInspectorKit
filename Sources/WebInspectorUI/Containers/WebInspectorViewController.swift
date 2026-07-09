@@ -120,6 +120,7 @@ public final class WebInspectorViewController: UIViewController {
         nil
     }
 
+    /// Configures the inspector layout after the view loads.
     public override func viewDidLoad() {
         super.viewDidLoad()
         applyBackgroundFromTraits()
@@ -134,6 +135,7 @@ public final class WebInspectorViewController: UIViewController {
         }
     }
 
+    /// Starts presentation lifecycle tracking before the view appears.
     public override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         presentationLifecycleCoordinator.beginPresentation()
@@ -141,11 +143,13 @@ public final class WebInspectorViewController: UIViewController {
         installPresentationHostWindowObserverIfNeeded()
     }
 
+    /// Installs presentation lifecycle observation after the view appears.
     public override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         installPresentationHostWindowObserverIfNeeded()
     }
 
+    /// Finishes root presentation lifecycle tracking after terminal disappearance.
     public override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         guard isTerminalRootDisappearance,
@@ -155,6 +159,7 @@ public final class WebInspectorViewController: UIViewController {
         finishRootPresentationLifecycle()
     }
 
+    /// Dismisses the inspector and retires the root presentation when needed.
     public override func dismiss(animated flag: Bool, completion: (() -> Void)? = nil) {
         let wasPresentedAsRoot = isRootPresentationActive
         super.dismiss(animated: flag) { [weak self] in
@@ -174,6 +179,7 @@ public final class WebInspectorViewController: UIViewController {
         }
     }
 
+    /// Retires presentation state when the controller is removed from its parent.
     public override func didMove(toParent parent: UIViewController?) {
         super.didMove(toParent: parent)
         guard parent == nil,

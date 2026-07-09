@@ -10,6 +10,7 @@ public enum Page {
             self.context = context
         }
 
+        /// Reloads the inspected page.
         public func reload(ignoringCache: Bool = false) async throws {
             try await context.dispatchVoid(
                 domain: .page,

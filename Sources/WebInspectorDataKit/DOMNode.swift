@@ -2,8 +2,10 @@ import Foundation
 import Observation
 import WebInspectorProxyKit
 
+/// Observable model for a DOM node owned by a ``WebInspectorContext``.
 @Observable
 public final class DOMNode: WebInspectorPersistentModel {
+    /// Stable identity for a DOM node within a context.
     public struct ID: Hashable, Sendable {
         let proxyID: DOM.Node.ID
 
@@ -12,71 +14,155 @@ public final class DOMNode: WebInspectorPersistentModel {
         }
     }
 
+    /// Numeric DOM node kind.
     public struct Kind: RawRepresentable, Hashable, Sendable {
+        /// The raw DOM node type value.
         public let rawValue: Int
 
+        /// Creates a node kind from its raw DOM node type.
         public init(rawValue: Int) {
             self.rawValue = rawValue
         }
 
+        /// An element node.
         public static let element = Kind(rawValue: 1)
+
+        /// An attribute node.
         public static let attribute = Kind(rawValue: 2)
+
+        /// A text node.
         public static let text = Kind(rawValue: 3)
+
+        /// A CDATA section node.
         public static let cdataSection = Kind(rawValue: 4)
+
+        /// An entity reference node.
         public static let entityReference = Kind(rawValue: 5)
+
+        /// An entity node.
         public static let entity = Kind(rawValue: 6)
+
+        /// A processing instruction node.
         public static let processingInstruction = Kind(rawValue: 7)
+
+        /// A comment node.
         public static let comment = Kind(rawValue: 8)
+
+        /// A document node.
         public static let document = Kind(rawValue: 9)
+
+        /// A document type node.
         public static let documentType = Kind(rawValue: 10)
+
+        /// A document fragment node.
         public static let documentFragment = Kind(rawValue: 11)
+
+        /// A notation node.
         public static let notation = Kind(rawValue: 12)
     }
 
+    /// A DOM element attribute.
     public struct Attribute: Hashable, Sendable {
+        /// The attribute name.
         public let name: String
+
+        /// The attribute value.
         public let value: String
 
+        /// Creates an attribute value.
         public init(name: String, value: String) {
             self.name = name
             self.value = value
         }
     }
 
+    /// Text formats available for copying a DOM node.
     public enum CopyTextKind: Hashable, Sendable {
+        /// Serialized outer HTML.
         case html
+
+        /// A CSS selector path.
         case selectorPath
+
+        /// An XPath expression.
         case xPath
     }
 
+    /// Loading state for a node's regular children.
     public enum Children {
+        /// Children have not been requested yet, but WebKit reported a count.
         case unrequested(count: Int)
+
+        /// Children have been loaded into DataKit models.
         case loaded([DOMNode])
     }
 
+    /// The stable node identity.
     public let id: ID
+
+    /// The protocol node name.
     public private(set) var nodeName: String
+
+    /// The local element name, if available.
     public private(set) var localName: String
+
+    /// The node value for text-like nodes.
     public private(set) var nodeValue: String
+
+    /// The raw numeric DOM node type.
     public private(set) var nodeType: Int
+
+    /// The DOM node kind derived from ``nodeType``.
     public var kind: Kind {
         Kind(rawValue: nodeType)
     }
+
+    /// The frame that owns the node, if WebKit reported one.
     public private(set) var frameID: FrameID?
+
+    /// The document URL associated with the node.
     public private(set) var documentURL: String?
+
+    /// The base URL associated with the node.
     public private(set) var baseURL: String?
+
+    /// Attributes keyed by name.
     public private(set) var attributes: [String: String]
+
+    /// Attributes in protocol order.
     public private(set) var attributeList: [Attribute]
+
+    /// The number of regular children reported by WebKit.
     public private(set) var childNodeCount: Int
+
+    /// Loading state for regular child nodes.
     public private(set) var children: Children
+
+    /// The content document for frame-like elements.
     public private(set) var contentDocument: DOMNode?
+
+    /// Shadow roots attached to the node.
     public private(set) var shadowRoots: [DOMNode]
+
+    /// Template content associated with the node.
     public private(set) var templateContent: DOMNode?
+
+    /// The `::before` pseudo element, if present.
     public private(set) var beforePseudoElement: DOMNode?
+
+    /// Additional pseudo elements reported by WebKit.
     public private(set) var otherPseudoElements: [DOMNode]
+
+    /// The `::after` pseudo element, if present.
     public private(set) var afterPseudoElement: DOMNode?
+
+    /// The node's pseudo-element kind.
     public private(set) var pseudoType: DOM.PseudoType?
+
+    /// The node's shadow-root kind.
     public private(set) var shadowRootType: DOM.ShadowRootType?
+
+    /// CSS styles associated with the element, when styles have been requested.
     public private(set) var elementStyles: CSSStyles?
     var isFrameOwner: Bool {
         let name = localName.isEmpty ? nodeName : localName
@@ -111,6 +197,7 @@ public final class DOMNode: WebInspectorPersistentModel {
         self.modelContext = modelContext
     }
 
+    /// Requests regular child nodes for this node.
     public func requestChildren(
         depth: Int = 1,
         isolation: isolated (any Actor) = #isolation
@@ -121,6 +208,7 @@ public final class DOMNode: WebInspectorPersistentModel {
         await modelContext.requestChildren(for: self, depth: depth, isolation: isolation)
     }
 
+    /// Returns copied text for the node in the requested format.
     public func copyText(
         _ kind: CopyTextKind,
         isolation: isolated (any Actor) = #isolation
@@ -131,6 +219,7 @@ public final class DOMNode: WebInspectorPersistentModel {
         return try await modelContext.copyText(kind, for: self, isolation: isolation)
     }
 
+    /// Removes this node from the inspected document.
     public func delete(isolation: isolated (any Actor) = #isolation) async throws {
         guard let modelContext else {
             preconditionFailure("DOMNode is not registered in a WebInspectorContext.")
@@ -138,6 +227,7 @@ public final class DOMNode: WebInspectorPersistentModel {
         try await modelContext.delete(self, isolation: isolation)
     }
 
+    /// Highlights this node in the inspected page.
     public func highlight(isolation: isolated (any Actor) = #isolation) async throws {
         guard let modelContext else {
             preconditionFailure("DOMNode is not registered in a WebInspectorContext.")
