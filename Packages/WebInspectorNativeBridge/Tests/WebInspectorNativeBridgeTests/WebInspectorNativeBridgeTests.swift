@@ -1,7 +1,7 @@
 #if os(iOS) || os(macOS)
 import Testing
 import WebKit
-import WebInspectorNativeBridge
+@testable import WebInspectorNativeBridge
 
 struct WebInspectorNativeBridgeTests {
     @Test

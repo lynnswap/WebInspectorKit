@@ -97,7 +97,9 @@ Runtime WebKit version mapping notes live in
 
 `WebInspectorNativeBridge` and the internal protocol-routing code are
 implementation details of `WebInspectorProxyKit`; SDK consumers should not
-import or depend on them.
+import or depend on them. The native bridge lives in a local Swift 6.2 package
+so CI can keep testing iOS 18 simulator runtimes while the public SDK package
+uses Swift 6.3+.
 
 ## License
 

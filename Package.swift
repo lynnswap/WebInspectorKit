@@ -47,15 +47,14 @@ let package = Package(
             exact: "0.16.5"
         ),
         .package(
-            url: "https://github.com/p-x9/MachOKit.git",
-            exact: "0.51.0"
+            path: "Packages/WebInspectorNativeBridge"
         )
     ],
     targets: [
         .target(
             name: "WebInspectorProxyKit",
             dependencies: [
-                "WebInspectorNativeBridge"
+                .product(name: "WebInspectorNativeBridge", package: "WebInspectorNativeBridge")
             ],
             exclude: ["README.md"],
             swiftSettings: strictSwiftSettings
@@ -74,24 +73,6 @@ let package = Package(
             ],
             exclude: ["README.md"],
             swiftSettings: strictSwiftSettings
-        ),
-        .target(
-            name: "WebInspectorNativeBridge",
-            dependencies: [
-                "WebInspectorNativeBridgeObjC",
-                .product(name: "MachOKit", package: "MachOKit")
-            ],
-            swiftSettings: strictSwiftSettings
-        ),
-        .target(
-            name: "WebInspectorNativeBridgeObjC",
-            publicHeadersPath: "include",
-            linkerSettings: [
-                .linkedFramework("Foundation"),
-                .linkedFramework("JavaScriptCore"),
-                .linkedFramework("WebKit"),
-                .linkedFramework("AppKit", .when(platforms: [.macOS])),
-            ]
         ),
         .target(
             name: "WebInspectorUIBase",
@@ -162,20 +143,6 @@ let package = Package(
                 "WebInspectorProxyKit"
             ],
             path: "Tests/WebInspectorTestSupport",
-            swiftSettings: strictSwiftSettings
-        ),
-        .target(
-            name: "WebInspectorNativeSymbolFixtures",
-            path: "Tests/WebInspectorNativeSymbolFixtures",
-            publicHeadersPath: "include"
-        ),
-        .testTarget(
-            name: "WebInspectorNativeBridgeTests",
-            dependencies: [
-                "WebInspectorNativeBridge",
-                "WebInspectorNativeSymbolFixtures"
-            ],
-            path: "Tests/WebInspectorNativeBridgeTests",
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(

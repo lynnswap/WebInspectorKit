@@ -120,27 +120,39 @@ jobs:
         include:
           - name: iOS 18 native
             runner: macos-15
-            xcode_major: '26'
+            xcode_major: '26.3'
             ios_major: '18'
-            test_scheme: WebInspectorNativeTests
+            test_mode: native-package
+            test_scheme: WebInspectorNativeBridgeTests
+            test_package_path: Packages/WebInspectorNativeBridge
+            test_workspace: Packages/WebInspectorNativeBridge/WebInspectorNativeBridge.xcworkspace
           - name: iOS 26 all
             runner: macos-26
             xcode_major: '26'
             ios_major: '26'
+            test_mode: workspace
             test_scheme: WebInspectorKitTests
+            test_package_path: .
+            test_workspace: WebInspectorKit.xcworkspace
             simulator_device: iPhone 17 Pro
           - name: iOS 26 native
             runner: macos-26
             xcode_major: '26'
             ios_major: '26'
-            test_scheme: WebInspectorNativeTests
+            test_mode: native-package
+            test_scheme: WebInspectorNativeBridgeTests
+            test_package_path: Packages/WebInspectorNativeBridge
+            test_workspace: Packages/WebInspectorNativeBridge/WebInspectorNativeBridge.xcworkspace
             simulator_device: iPhone 17 Pro
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
     env:
       XCODE_MAJOR: ${{ matrix.xcode_major }}
       IOS_MAJOR: ${{ matrix.ios_major }}
+      TEST_MODE: ${{ matrix.test_mode }}
       TEST_SCHEME: ${{ matrix.test_scheme }}
+      TEST_PACKAGE_PATH: ${{ matrix.test_package_path }}
+      TEST_WORKSPACE: ${{ matrix.test_workspace }}
       SIMULATOR_DEVICE: ${{ matrix.simulator_device }}
     steps:
       - name: Check out repository
@@ -182,8 +194,11 @@ jobs:
       - name: Check Swift tools compatibility
         run: |
           ruby <<'RUBY'
-          required = File.read("Package.swift")[/swift-tools-version:\s*(\d+(?:\.\d+)*)/, 1]
-          abort("Package.swift does not declare swift-tools-version") unless required
+          package_path = ENV.fetch("TEST_PACKAGE_PATH", ".")
+          package_path = "." if package_path.empty?
+          manifest_path = File.join(package_path, "Package.swift")
+          required = File.read(manifest_path)[/swift-tools-version:\s*(\d+(?:\.\d+)*)/, 1]
+          abort("#{manifest_path} does not declare swift-tools-version") unless required
 
           output = `swift package --version 2>&1`
           abort(output) unless $?.success?
@@ -211,9 +226,9 @@ jobs:
 
           if unsupported
             puts output
-            puts "::warning::Skipping #{ENV.fetch("TEST_SCHEME")} because SwiftPM #{installed} cannot resolve swift-tools-version #{required}."
+            puts "::warning::Skipping #{ENV.fetch("TEST_SCHEME")} at #{package_path} because SwiftPM #{installed} cannot resolve swift-tools-version #{required}."
           else
-            puts "SwiftPM #{installed} satisfies swift-tools-version #{required}."
+            puts "SwiftPM #{installed} satisfies #{manifest_path} swift-tools-version #{required}."
           end
           RUBY
 
@@ -286,30 +301,125 @@ jobs:
           xcodebuild -showsdks
           echo "Destination: ${DESTINATION}"
           echo "Resolved iOS: ${RESOLVED_IOS_VERSION}"
+          echo "Test mode: ${TEST_MODE}"
           echo "Test scheme: ${TEST_SCHEME}"
+          echo "Test package path: ${TEST_PACKAGE_PATH}"
+          echo "Test workspace: ${TEST_WORKSPACE}"
 
       - name: Run iOS tests
         run: |
-          set -o pipefail
+          set -e -o pipefail
 
           if [ "${SKIP_IOS_TESTS:-false}" = "true" ]; then
             echo "Skipping ${TEST_SCHEME}: selected Xcode cannot resolve this Swift tools version."
             exit 0
           fi
 
-          xcodebuild test \
-            -workspace WebInspectorKit.xcworkspace \
-            -scheme "${TEST_SCHEME}" \
-            -destination "${DESTINATION}" \
-            -enableCodeCoverage NO \
-            -parallel-testing-enabled NO \
-            -maximum-concurrent-test-simulator-destinations 1 \
-            -test-timeouts-enabled YES \
-            -default-test-execution-time-allowance 30 \
-            -maximum-test-execution-time-allowance 60 \
-            -showBuildTimingSummary \
-            -resultBundlePath "${RUNNER_TEMP}/${TEST_SCHEME}.xcresult" \
-            | tee "${RUNNER_TEMP}/xcodebuild-${TEST_SCHEME}.log"
+          if [ "${TEST_MODE}" = "native-package" ]; then
+            derived_data="${RUNNER_TEMP}/${TEST_SCHEME}-DerivedData"
+            log_path="${RUNNER_TEMP}/xcodebuild-${TEST_SCHEME}.log"
+
+            rm -rf "${derived_data}" "${log_path}"
+
+            xcodebuild build-for-testing \
+              -workspace "${TEST_WORKSPACE}" \
+              -scheme "${TEST_SCHEME}" \
+              -sdk iphonesimulator \
+              -derivedDataPath "${derived_data}" \
+              -enableCodeCoverage NO \
+              ARCHS=arm64 \
+              ONLY_ACTIVE_ARCH=YES \
+              -showBuildTimingSummary \
+              | tee "${log_path}"
+
+            xctestrun="$(find "${derived_data}/Build/Products" -name '*.xctestrun' -print -quit)"
+            if [ -z "${xctestrun}" ]; then
+              echo "No .xctestrun generated under ${derived_data}/Build/Products" >&2
+              exit 1
+            fi
+
+            patched_xctestrun="${xctestrun%.xctestrun}-iphonesimulator.xctestrun"
+            rm -f "${patched_xctestrun}"
+            cp "${xctestrun}" "${patched_xctestrun}"
+            plutil -convert xml1 "${patched_xctestrun}"
+
+            PATCHED_XCTESTRUN="${patched_xctestrun}" ruby <<'RUBY'
+            path = ENV.fetch("PATCHED_XCTESTRUN")
+            scheme = ENV.fetch("TEST_SCHEME")
+            test_bundle = "#{scheme}.xctest"
+
+            data = File.read(path)
+            macos_bundle_path = "__TESTROOT__/Debug/#{test_bundle}"
+            simulator_bundle_path = "__TESTROOT__/Debug-iphonesimulator/#{test_bundle}"
+            macos_xctest_agent = "__PLATFORMS__/MacOSX.platform/Developer/Library/Xcode/Agents/xctest"
+            simulator_xctest_agent = "__PLATFORMS__/iPhoneSimulator.platform/Developer/Library/Xcode/Agents/xctest"
+
+            already_simulator = data.include?(simulator_bundle_path) && data.include?(simulator_xctest_agent)
+            exit if already_simulator
+
+            required = [macos_bundle_path, macos_xctest_agent]
+            missing = required.reject { |needle| data.include?(needle) }
+            abort("Unexpected xctestrun layout for #{scheme}: missing #{missing.join(", ")}") unless missing.empty?
+
+            replacements = {
+              macos_bundle_path => simulator_bundle_path,
+              macos_xctest_agent => simulator_xctest_agent,
+              "__PLATFORMS__/MacOSX.platform/Developer/Library/Frameworks" => "__PLATFORMS__/iPhoneSimulator.platform/Developer/Library/Frameworks",
+              "__PLATFORMS__/MacOSX.platform/Developer/usr/lib" => "__PLATFORMS__/iPhoneSimulator.platform/Developer/usr/lib",
+              "<string>arm64e</string>" => "<string>arm64</string>",
+            }
+
+            replacements.each do |from, to|
+              data = data.gsub(from, to)
+            end
+            data = data.gsub("__TESTROOT__/Debug:", "__TESTROOT__/Debug-iphonesimulator:")
+            data = data.gsub("__TESTROOT__/Debug<", "__TESTROOT__/Debug-iphonesimulator<")
+
+            File.write(path, data)
+          RUBY
+
+            plutil -lint "${patched_xctestrun}"
+
+            xcodebuild test-without-building \
+              -xctestrun "${patched_xctestrun}" \
+              -destination "${DESTINATION}" \
+              -parallel-testing-enabled NO \
+              -maximum-concurrent-test-simulator-destinations 1 \
+              -test-timeouts-enabled YES \
+              -default-test-execution-time-allowance 30 \
+              -maximum-test-execution-time-allowance 60 \
+              -resultBundlePath "${RUNNER_TEMP}/${TEST_SCHEME}.xcresult" \
+              | tee -a "${log_path}"
+          elif [ -n "${TEST_WORKSPACE}" ]; then
+            xcodebuild test \
+              -workspace "${TEST_WORKSPACE}" \
+              -scheme "${TEST_SCHEME}" \
+              -destination "${DESTINATION}" \
+              -enableCodeCoverage NO \
+              -parallel-testing-enabled NO \
+              -maximum-concurrent-test-simulator-destinations 1 \
+              -test-timeouts-enabled YES \
+              -default-test-execution-time-allowance 30 \
+              -maximum-test-execution-time-allowance 60 \
+              -showBuildTimingSummary \
+              -resultBundlePath "${RUNNER_TEMP}/${TEST_SCHEME}.xcresult" \
+              | tee "${RUNNER_TEMP}/xcodebuild-${TEST_SCHEME}.log"
+          else
+            (
+              cd "${TEST_PACKAGE_PATH}"
+              xcodebuild test \
+                -scheme "${TEST_SCHEME}" \
+                -destination "${DESTINATION}" \
+                -enableCodeCoverage NO \
+                -parallel-testing-enabled NO \
+                -maximum-concurrent-test-simulator-destinations 1 \
+                -test-timeouts-enabled YES \
+                -default-test-execution-time-allowance 30 \
+                -maximum-test-execution-time-allowance 60 \
+                -showBuildTimingSummary \
+                -resultBundlePath "${RUNNER_TEMP}/${TEST_SCHEME}.xcresult"
+            ) | tee "${RUNNER_TEMP}/xcodebuild-${TEST_SCHEME}.log"
+          fi
 
       - name: Upload iOS test diagnostics
         if: always()

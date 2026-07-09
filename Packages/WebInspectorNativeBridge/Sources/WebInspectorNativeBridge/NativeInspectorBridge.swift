@@ -2,15 +2,19 @@ import Foundation
 import WebKit
 import WebInspectorNativeBridgeObjC
 
-package struct NativeInspectorResolvedSymbols: Equatable, Sendable {
-    package var connectFrontendAddress: UInt64
-    package var disconnectFrontendAddress: UInt64
-    package var stringFromUTF8Address: UInt64
-    package var stringImplToNSStringAddress: UInt64
-    package var destroyStringImplAddress: UInt64
-    package var backendDispatcherDispatchAddress: UInt64
+public enum NativeInspectorSymbolResolutionError: Error, Equatable, Sendable {
+    case missingSymbols([String])
+}
 
-    package init(
+public struct NativeInspectorResolvedSymbols: Equatable, Sendable {
+    var connectFrontendAddress: UInt64
+    var disconnectFrontendAddress: UInt64
+    var stringFromUTF8Address: UInt64
+    var stringImplToNSStringAddress: UInt64
+    var destroyStringImplAddress: UInt64
+    var backendDispatcherDispatchAddress: UInt64
+
+    init(
         connectFrontendAddress: UInt64,
         disconnectFrontendAddress: UInt64,
         stringFromUTF8Address: UInt64,
@@ -36,18 +40,44 @@ package struct NativeInspectorResolvedSymbols: Equatable, Sendable {
             backendDispatcherDispatchAddress: backendDispatcherDispatchAddress
         )
     }
+
+    public static func resolveCurrent() throws -> NativeInspectorResolvedSymbols {
+        try makeResolvedSymbols(from: NativeInspectorSymbolResolver.resolveCurrent())
+    }
+
+    public static func resolveCurrentDetached() async throws -> NativeInspectorResolvedSymbols {
+        let resolution = await NativeInspectorSymbolResolver.resolveCurrentDetached()
+        return try makeResolvedSymbols(from: resolution)
+    }
+
+    private static func makeResolvedSymbols(
+        from resolution: NativeInspectorSymbolResolution
+    ) throws -> NativeInspectorResolvedSymbols {
+        guard resolution.isSupported else {
+            throw NativeInspectorSymbolResolutionError.missingSymbols(resolution.missingFunctions)
+        }
+
+        return NativeInspectorResolvedSymbols(
+            connectFrontendAddress: resolution.connectFrontendAddress,
+            disconnectFrontendAddress: resolution.disconnectFrontendAddress,
+            stringFromUTF8Address: resolution.stringFromUTF8Address,
+            stringImplToNSStringAddress: resolution.stringImplToNSStringAddress,
+            destroyStringImplAddress: resolution.destroyStringImplAddress,
+            backendDispatcherDispatchAddress: resolution.backendDispatcherDispatchAddress
+        )
+    }
 }
 
 @MainActor
-package final class NativeInspectorBridge {
-    package var messageHandler: ((String) -> Void)? {
+public final class NativeInspectorBridge {
+    public var messageHandler: ((String) -> Void)? {
         didSet {
             objcBridge.messageHandler = messageHandler.map { handler in
                 { message in handler(message) }
             }
         }
     }
-    package var fatalFailureHandler: ((String) -> Void)? {
+    public var fatalFailureHandler: ((String) -> Void)? {
         didSet {
             objcBridge.fatalFailureHandler = fatalFailureHandler.map { handler in
                 { message in handler(message) }
@@ -57,34 +87,34 @@ package final class NativeInspectorBridge {
 
     private let objcBridge: WebInspectorNativeBridgeObjC.WebInspectorNativeBridge
 
-    package init(webView: WKWebView) {
+    public init(webView: WKWebView) {
         objcBridge = WebInspectorNativeBridgeObjC.WebInspectorNativeBridge(webView: webView)
     }
 
-    package func attach(with resolvedSymbols: NativeInspectorResolvedSymbols) throws {
+    public func attach(with resolvedSymbols: NativeInspectorResolvedSymbols) throws {
         try objcBridge.attach(with: resolvedSymbols.objcSymbols)
     }
 
-    package func sendJSONString(_ message: String) throws {
+    public func sendJSONString(_ message: String) throws {
         try objcBridge.sendJSONString(message)
     }
 
-    package func detach() {
+    public func detach() {
         objcBridge.detach()
     }
 
-    package func handleFrontendMessageForTesting(_ message: String) {
+    func handleFrontendMessageForTesting(_ message: String) {
         _ = unsafe objcBridge.perform(NSSelectorFromString("handleFrontendMessageString:"), with: message)
     }
 }
 
-package struct NativeInspectorControllerDiscoveryTestResult: Equatable, Sendable {
-    package var found: Bool
-    package var usedFallbackRange: Bool
-    package var resolvedOffset: Int
-    package var attemptedOffsetCount: Int
-    package var validCandidateCount: Int
-    package var scannedByteCount: Int
+struct NativeInspectorControllerDiscoveryTestResult: Equatable, Sendable {
+    var found: Bool
+    var usedFallbackRange: Bool
+    var resolvedOffset: Int
+    var attemptedOffsetCount: Int
+    var validCandidateCount: Int
+    var scannedByteCount: Int
 
     init(_ result: WebInspectorNativeControllerDiscoveryTestResult) {
         found = result.found.boolValue
@@ -96,8 +126,8 @@ package struct NativeInspectorControllerDiscoveryTestResult: Equatable, Sendable
     }
 }
 
-package enum NativeInspectorBridgeTesting {
-    package static func runControllerDiscoveryScenario(
+enum NativeInspectorBridgeTesting {
+    static func runControllerDiscoveryScenario(
         pageAllocationSize: Int,
         cachedOffset: Int,
         primaryControllerOffset: Int,
@@ -113,7 +143,7 @@ package enum NativeInspectorBridgeTesting {
         )
     }
 
-    package static func runControllerDiscoveryScenarioWithInvalidCandidates(
+    static func runControllerDiscoveryScenarioWithInvalidCandidates(
         pageAllocationSize: Int,
         cachedOffset: Int,
         primaryControllerOffset: Int,

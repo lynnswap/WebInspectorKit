@@ -20,11 +20,11 @@ the built-in UIKit UI.
 | `WebInspectorKit` | Built-in UIKit inspector UI backed by `WebInspectorDataKit`. |
 | `WebInspectorProxyKitTesting` | Public test runtime for exercising ProxyKit/DataKit consumers without the native WebKit bridge. |
 
-`WebInspectorNativeBridge` remains the Swift-facing package support target for
-the native bridge and private symbol-resolution mechanics.
-`WebInspectorNativeBridgeObjC` is only the ObjC++ implementation shim required
-by SwiftPM's target language boundary. Neither is an SDK layer and neither
-should be imported by consumers. Internal transport types such as
+`WebInspectorNativeBridge` is a local Swift 6.2 package used by
+`WebInspectorProxyKit` for the native bridge and private symbol-resolution
+mechanics. `WebInspectorNativeBridgeObjC` is only the ObjC++ implementation shim
+required by SwiftPM's target language boundary. Neither is an SDK layer and
+neither should be imported by consumers. Internal transport types such as
 `TransportSession`, `TransportBackend`, and protocol envelopes are owned by
 `WebInspectorProxyKit`.
 
@@ -37,7 +37,7 @@ flowchart TD
     Data["WebInspectorDataKit<br/>WebInspectorContainer + WebInspectorContext"]
     UI["WebInspectorKit / WebInspectorUI<br/>UIKit inspector"]
     Native["ProxyKit internals<br/>native attach + protocol routing"]
-    Bridge["Support target<br/>NativeBridge"]
+    Bridge["Local Swift 6.2 package<br/>NativeBridge"]
     ObjC["ObjC++ shim<br/>NativeBridgeObjC"]
     WebKit["WebKit private inspector backend"]
 
@@ -65,7 +65,8 @@ Responsibilities stay narrow:
   split presentation, DOM row expansion, selection scrolling, keyboard commands,
   and view-local interaction state.
 - `WebInspectorNativeBridge`: owns only the native C/ObjC++ bridge and private
-  symbol lookup needed by ProxyKit internals.
+  symbol lookup needed by ProxyKit internals, with Swift tools 6.2 compatibility
+  for iOS 18 simulator CI.
 
 ## Event And Command Flow
 
