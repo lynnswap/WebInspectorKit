@@ -1,6 +1,8 @@
 import Foundation
 
+/// Types and commands for the Web Inspector CSS domain.
 public enum CSS {
+    /// A target-scoped client for CSS commands and events.
     public struct Client: Sendable {
         package let context: DomainClientContext
 

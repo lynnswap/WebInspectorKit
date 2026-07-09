@@ -1,6 +1,26 @@
 import Foundation
 import Observation
 
+/// Value configuration for fetching DataKit model objects.
+///
+/// A descriptor describes predicate, sort, limit, and offset behavior for
+/// models such as ``NetworkRequest`` and ``ConsoleMessage``.
+///
+/// Example:
+///
+/// ```swift
+/// let descriptor = WebInspectorFetchDescriptor<NetworkRequest>(
+///     predicate: #Predicate { request in
+///         request.method == "POST"
+///     },
+///     sortBy: [
+///         SortDescriptor(\.requestSentTimestamp, order: .reverse)
+///     ],
+///     fetchLimit: 100
+/// )
+///
+/// let results = context.network.fetchedResults(for: descriptor)
+/// ```
 public struct WebInspectorFetchDescriptor<Model: WebInspectorFetchableModel>: Sendable {
     enum Kind: Hashable, Sendable {
         case networkRequests
@@ -61,6 +81,7 @@ public struct WebInspectorFetchDescriptor<Model: WebInspectorFetchableModel>: Se
     }
 }
 
+/// Mutable builder for a ``WebInspectorFetchDescriptor``.
 public final class WebInspectorFetchRequest<Model: WebInspectorFetchableModel> {
     public var predicate: Predicate<Model>?
     public var sortDescriptors: [SortDescriptor<Model>]

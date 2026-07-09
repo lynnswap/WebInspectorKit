@@ -1,6 +1,8 @@
 import Foundation
 
+/// Types and commands for the Web Inspector Network domain.
 public enum Network {
+    /// A target-scoped client for Network commands and events.
     public struct Client: Sendable {
         package let context: DomainClientContext
 

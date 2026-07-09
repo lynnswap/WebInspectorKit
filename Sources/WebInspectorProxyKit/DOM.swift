@@ -1,6 +1,8 @@
 import Foundation
 
+/// Types and commands for the Web Inspector DOM domain.
 public enum DOM {
+    /// A DOM element attribute.
     public struct Attribute: Hashable, Sendable {
         public let name: String
         public let value: String
@@ -11,6 +13,7 @@ public enum DOM {
         }
     }
 
+    /// A target-scoped client for DOM commands and events.
     public struct Client: Sendable {
         package let context: DomainClientContext
 

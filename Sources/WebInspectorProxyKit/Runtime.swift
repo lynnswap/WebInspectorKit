@@ -1,6 +1,8 @@
 import Foundation
 
+/// Types and commands for the Web Inspector Runtime domain.
 public enum Runtime {
+    /// A target-scoped client for Runtime commands and events.
     public struct Client: Sendable {
         package let context: DomainClientContext
 

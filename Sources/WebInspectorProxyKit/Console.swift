@@ -1,6 +1,8 @@
 import Foundation
 
+/// Types and commands for the Web Inspector Console domain.
 public enum Console {
+    /// A target-scoped client for Console commands and events.
     public struct Client: Sendable {
         package let context: DomainClientContext
 

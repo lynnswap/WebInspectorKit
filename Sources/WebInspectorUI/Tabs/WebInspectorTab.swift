@@ -1,12 +1,37 @@
 #if canImport(UIKit)
 import UIKit
 
+/// A tab shown by the built-in WebInspectorKit UI.
+///
+/// Use the built-in ``dom`` and ``network`` tabs, or create a custom tab backed
+/// by a UIKit view controller factory.
+///
+/// Example:
+///
+/// ```swift
+/// let consoleTab = WebInspectorTab(
+///     id: "app_console",
+///     title: "Console",
+///     systemImage: "terminal"
+/// ) { session in
+///     ConsoleViewController(inspectorSession: session)
+/// }
+///
+/// let inspector = WebInspectorViewController(
+///     tabs: [.dom, .network, consoleTab]
+/// )
+/// ```
 @MainActor
 public struct WebInspectorTab: Equatable, Hashable, Identifiable {
     public typealias ID = String
 
+    /// Stable tab identity.
     public let id: ID
+
+    /// Display title used by tab UI.
     public let title: String
+
+    /// Optional tab image.
     public let image: UIImage?
     package let content: Content
 
@@ -84,6 +109,7 @@ public struct WebInspectorTab: Equatable, Hashable, Identifiable {
         )
     }
 
+    /// Built-in DOM inspector tab.
     public static let dom = WebInspectorTab(
         id: "webinspector_dom",
         title: "DOM",
@@ -91,6 +117,7 @@ public struct WebInspectorTab: Equatable, Hashable, Identifiable {
         builtIn: .dom
     )
 
+    /// Built-in Network inspector tab.
     public static let network = WebInspectorTab(
         id: "webinspector_network",
         title: "Network",

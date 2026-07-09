@@ -1,5 +1,6 @@
 import Foundation
 
+/// A WebKit frame identifier reported by the inspector protocol.
 public struct FrameID: Hashable, Sendable {
     package let rawValue: String
 
@@ -36,7 +37,13 @@ package struct RoutingTargetID: Hashable, Sendable {
     }
 }
 
+/// A typed handle for a Web Inspector protocol target.
+///
+/// Targets vend domain clients such as ``dom``, ``network``, and ``runtime``.
+/// Keep the target that DataKit or ProxyKit gives you instead of constructing
+/// transport target identifiers yourself.
 public struct WebInspectorTarget: Identifiable, Sendable {
+    /// Stable identity for a protocol target within one proxy connection.
     public struct ID: Hashable, Sendable {
         package let rawValue: String
 
@@ -47,6 +54,7 @@ public struct WebInspectorTarget: Identifiable, Sendable {
         package static let currentPage = ID("current-page")
     }
 
+    /// The kind of backend target represented by a ``WebInspectorTarget``.
     public enum Kind: Sendable {
         case page
         case frame
@@ -54,9 +62,17 @@ public struct WebInspectorTarget: Identifiable, Sendable {
         case serviceWorker
     }
 
+    /// The target identity used by typed domain clients.
     public let id: ID
+
+    /// The backend target kind.
     public let kind: Kind
+
+    /// The frame identifier for frame-backed targets.
     public let frameID: FrameID?
+
+    /// A Boolean value indicating whether the target is provisional during
+    /// navigation.
     public let isProvisional: Bool
 
     package let proxy: WebInspectorProxy
@@ -93,26 +109,32 @@ public struct WebInspectorTarget: Identifiable, Sendable {
         )
     }
 
+    /// A typed client for DOM protocol commands and events.
     public var dom: DOM.Client {
         DOM.Client(context: DomainClientContext(proxy: proxy, targetID: id, route: route))
     }
 
+    /// A typed client for CSS protocol commands and events.
     public var css: CSS.Client {
         CSS.Client(context: DomainClientContext(proxy: proxy, targetID: id, route: route))
     }
 
+    /// A typed client for Network protocol commands and events.
     public var network: Network.Client {
         Network.Client(context: DomainClientContext(proxy: proxy, targetID: id, route: route))
     }
 
+    /// A typed client for Console protocol commands and events.
     public var console: Console.Client {
         Console.Client(context: DomainClientContext(proxy: proxy, targetID: id, route: route))
     }
 
+    /// A typed client for Runtime protocol commands and events.
     public var runtime: Runtime.Client {
         Runtime.Client(context: DomainClientContext(proxy: proxy, targetID: id, route: route))
     }
 
+    /// A typed client for Page protocol commands.
     public var page: Page.Client {
         Page.Client(context: DomainClientContext(proxy: proxy, targetID: id, route: route))
     }

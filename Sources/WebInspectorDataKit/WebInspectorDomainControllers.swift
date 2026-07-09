@@ -1,7 +1,10 @@
 import Foundation
 import WebInspectorProxyKit
 
+/// Shared options for DataKit model mutations.
 public struct WebInspectorMutationOptions: Sendable, Hashable {
+    /// Default mutation behavior: participate in WebKit undo history and fail
+    /// on stale model references.
     public static let automatic = WebInspectorMutationOptions(
         undo: .automatic,
         staleModel: .fail
@@ -19,21 +22,25 @@ public struct WebInspectorMutationOptions: Sendable, Hashable {
     }
 }
 
+/// Controls whether a mutation participates in WebKit inspector undo history.
 public enum WebInspectorUndoPolicy: Sendable, Hashable {
     case automatic
     case disabled
 }
 
+/// Controls how DataKit handles stale model references.
 public enum WebInspectorStaleModelPolicy: Sendable, Hashable {
     case fail
 }
 
+/// Controls how DOM selection changes should be revealed to UI tree views.
 public enum DOMRevealPolicy: Sendable, Hashable {
     case none
     case selectOnly
     case selectAndScroll
 }
 
+/// The accepted subset of a requested DOM mutation.
 public struct DOMMutationResult: Sendable, Hashable {
     public var requestedNodeIDs: [DOMNode.ID]
     public var acceptedNodeIDs: [DOMNode.ID]
@@ -44,6 +51,10 @@ public struct DOMMutationResult: Sendable, Hashable {
     }
 }
 
+/// Domain operation surface for DOM model commands.
+///
+/// Use this controller instead of dispatching ProxyKit DOM commands directly
+/// when working with DataKit-owned DOM nodes.
 public final class DOMModelController {
     private let context: WebInspectorContext
 
@@ -117,6 +128,7 @@ public final class DOMModelController {
     }
 }
 
+/// Domain operation surface for CSS model commands.
 public final class CSSModelController {
     private let context: WebInspectorContext
 
@@ -192,6 +204,7 @@ public final class CSSModelController {
     }
 }
 
+/// Domain operation surface for page-level commands.
 public final class PageModelController {
     private let context: WebInspectorContext
 
@@ -207,6 +220,7 @@ public final class PageModelController {
     }
 }
 
+/// Domain operation surface for Runtime model commands.
 public final class RuntimeModelController {
     private let context: WebInspectorContext
 
@@ -223,6 +237,7 @@ public final class RuntimeModelController {
     }
 }
 
+/// Domain operation surface for Network model queries and commands.
 public final class NetworkModelController {
     private let context: WebInspectorContext
 
@@ -253,6 +268,7 @@ public final class NetworkModelController {
     }
 }
 
+/// Domain operation surface for Console model queries and commands.
 public final class ConsoleModelController {
     private let context: WebInspectorContext
 
@@ -277,6 +293,7 @@ public final class ConsoleModelController {
     }
 }
 
+/// Undo/redo surface for edits recorded through DataKit model operations.
 public final class WebInspectorEditHistory {
     private let context: WebInspectorContext
 
@@ -294,30 +311,37 @@ public final class WebInspectorEditHistory {
 }
 
 public extension WebInspectorContext {
+    /// DOM model operations for this context.
     var dom: DOMModelController {
         DOMModelController(context: self)
     }
 
+    /// CSS model operations for this context.
     var css: CSSModelController {
         CSSModelController(context: self)
     }
 
+    /// Network model operations and fetch surfaces for this context.
     var network: NetworkModelController {
         NetworkModelController(context: self)
     }
 
+    /// Runtime model operations for this context.
     var runtime: RuntimeModelController {
         RuntimeModelController(context: self)
     }
 
+    /// Console model operations and fetch surfaces for this context.
     var console: ConsoleModelController {
         ConsoleModelController(context: self)
     }
 
+    /// Page-level operations for this context.
     var page: PageModelController {
         PageModelController(context: self)
     }
 
+    /// Undo and redo operations for edits recorded by this context.
     var editHistory: WebInspectorEditHistory {
         WebInspectorEditHistory(context: self)
     }

@@ -25,6 +25,15 @@ UIKit Web Inspector for `WKWebView`.
 - The current implementation targets UIKit on iOS.
 - AppKit support is planned to be rebuilt separately.
 
+## Products
+
+| Product | Use when |
+| --- | --- |
+| `WebInspectorKit` | You want the built-in UIKit inspector UI. |
+| `WebInspectorDataKit` | You want observable DOM, Network, Console, Runtime, and CSS models for a custom UI. |
+| `WebInspectorProxyKit` | You want typed Web Inspector protocol commands and events directly over an inspected `WKWebView`. |
+| `WebInspectorProxyKitTesting` | You want a public test runtime for ProxyKit/DataKit consumers without the native WebKit bridge. |
+
 ## Quick Start
 
 ### UIKit
@@ -79,27 +88,31 @@ let inspector = WebInspectorViewController(
 
 ## Documentation
 
-Start with [`MIGRATION.md`](Docs/MIGRATION.md) when updating from an older
-release.
+Generate DocC documentation from the package when you need symbol-level details
+for `WebInspectorKit`, `WebInspectorDataKit`, `WebInspectorProxyKit`, or
+`WebInspectorUI`.
 
-For implementation work, [`ArchitectureOverview.md`](Docs/ArchitectureOverview.md)
-is the top-level map for module boundaries, runtime ownership, and WebKit
-communication flow. The current SDK split is:
+| Document | Purpose |
+| --- | --- |
+| [Migration Guide](Docs/MIGRATION.md) | Version-by-version source migration notes for app code. |
+| [WebInspectorUI](Sources/WebInspectorUI/README.md) | UIKit inspector implementation notes and UI/DataKit ownership boundaries. |
+| [WebKit Version Mapping](Docs/WebKitVersionMapping.md) | Local notes for mapping iOS WebKit framework versions to public WebKit source refs. |
 
-Runtime WebKit version mapping notes live in
-[`WebKitVersionMapping.md`](Docs/WebKitVersionMapping.md).
+## Project Structure
 
-- `WebInspectorProxyKit` for custom UIs that want typed domain commands and
-  events directly over an inspected `WKWebView`.
-- `WebInspectorDataKit` for custom UIs that want observable DOM, Network,
-  Console, Runtime, and CSS models built on top of `WebInspectorProxyKit`.
-- `WebInspectorKit` for the built-in UIKit inspector UI.
-
-`WebInspectorNativeBridge` and the internal protocol-routing code are
-implementation details of `WebInspectorProxyKit`; SDK consumers should not
-import or depend on them. The native bridge lives in a local Swift 6.2 package
-so CI can keep testing iOS 18 simulator runtimes while the public SDK package
-uses Swift 6.3+.
+```text
+Sources/
+  WebInspectorKit/             Public built-in inspector product.
+  WebInspectorDataKit/         Observable inspector model product.
+  WebInspectorProxyKit/        Typed protocol proxy product.
+  WebInspectorProxyKitTesting/ Test runtime for proxy/model consumers.
+  WebInspectorUI*/             Internal UIKit implementation targets.
+Packages/
+  WebInspectorNativeBridge/    Local native bridge package for ProxyKit internals.
+Docs/
+  MIGRATION.md                 Version-by-version migration notes.
+  WebKitVersionMapping.md      WebKit runtime/source mapping notes.
+```
 
 ## License
 

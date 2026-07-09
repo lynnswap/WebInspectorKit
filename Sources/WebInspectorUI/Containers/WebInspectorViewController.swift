@@ -44,6 +44,23 @@ private final class WebInspectorPresentationHostWindowObserverView: UIView {
     }
 }
 
+/// A UIKit view controller that presents the built-in WebInspectorKit UI.
+///
+/// Create an instance, attach it to a `WKWebView`, and present it from your app
+/// UI. The controller adapts between compact tab presentation and regular split
+/// presentation.
+///
+/// Example:
+///
+/// ```swift
+/// let inspector = WebInspectorViewController()
+/// inspector.modalPresentationStyle = .pageSheet
+///
+/// Task { @MainActor in
+///     try await inspector.attach(to: webView)
+///     present(inspector, animated: true)
+/// }
+/// ```
 @MainActor
 public final class WebInspectorViewController: UIViewController {
     private enum HostKind {
@@ -51,7 +68,11 @@ public final class WebInspectorViewController: UIViewController {
         case regular
     }
 
+    /// The inspection session backing the view controller.
     public let session: WebInspectorSession
+
+    /// A Boolean value indicating whether the controller detaches its session
+    /// after the root presentation ends.
     public var automaticallyDetachesOnDismiss = true
     private var drawsBackgroundStorage = true
     private let presentationLifecycleCoordinator = WebInspectorRootPresentationLifecycleCoordinator()
@@ -67,6 +88,7 @@ public final class WebInspectorViewController: UIViewController {
     private weak var observedPresentationHostView: UIView?
     private var suppressPresentationHostWindowObserver = false
 
+    /// Controls whether the inspector draws its own background.
     @available(iOS 26.0, *)
     public var drawsBackground: Bool {
         get { drawsBackgroundStorage }
@@ -81,12 +103,14 @@ public final class WebInspectorViewController: UIViewController {
         }
     }
 
+    /// Creates a view controller backed by an inspection session.
     public init(session: WebInspectorSession = WebInspectorSession()) {
         self.session = session
         super.init(nibName: nil, bundle: nil)
         webInspectorSetDrawsBackgroundTraitOverride(drawsBackgroundStorage)
     }
 
+    /// Creates a view controller with a custom tab set.
     public convenience init(tabs: [WebInspectorTab]) {
         self.init(session: WebInspectorSession(tabs: tabs))
     }
@@ -160,10 +184,12 @@ public final class WebInspectorViewController: UIViewController {
         finishRootPresentationLifecycle()
     }
 
+    /// Attaches the backing session to a web view.
     public func attach(to webView: WKWebView) async throws {
         try await session.attach(to: webView)
     }
 
+    /// Detaches the backing session.
     public func detach() async {
         await session.detach()
     }

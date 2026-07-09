@@ -1,6 +1,11 @@
 import Foundation
 import WebInspectorProxyKit
 
+/// The identity-preserving model context for an inspected page.
+///
+/// A context owns observable DOM, Network, Console, Runtime, and CSS models.
+/// It is isolated to the actor passed at initialization; callers must use the
+/// same actor when reading or mutating context-owned state.
 public final class WebInspectorContext {
     package struct DOMUndoRedoCommands {
         private weak var context: WebInspectorContext?
@@ -59,6 +64,7 @@ public final class WebInspectorContext {
 
     private typealias LoadedDOMDocument = (node: DOM.Node, generation: Int)
 
+    /// The attachment state of a context.
     public enum State: Equatable, Sendable {
         case attaching
         case attached
@@ -66,6 +72,7 @@ public final class WebInspectorContext {
         case failed(WebInspectorProxyError)
     }
 
+    /// A compact status value suitable for UI binding.
     public struct Status: Equatable, Sendable {
         public let state: State
         public let selectedNodeID: DOMNode.ID?
@@ -76,12 +83,26 @@ public final class WebInspectorContext {
     private let proxy: WebInspectorProxy
     private let domainEnablement: WebInspectorDomainEnablementRegistry
     private let owner: any Actor
+    /// The current attachment state.
     public private(set) var state: State
+
+    /// The terminal teardown error, if the context failed or detached because
+    /// of an inspector error.
     public private(set) var teardownError: WebInspectorProxyError?
+
+    /// The current root DOM node, if a document is loaded.
     public private(set) var rootNode: DOMNode?
+
+    /// The currently selected DOM node.
     public private(set) var selectedNode: DOMNode?
+
+    /// A Boolean value indicating whether WebKit inspect mode is enabled.
     public private(set) var isElementPickerEnabled: Bool
+
+    /// Runtime execution contexts known to the current page.
     public private(set) var executionContexts: [RuntimeContext]
+
+    /// The selected Runtime execution context.
     public private(set) var selectedContext: RuntimeContext?
 
     private var currentPage: WebInspectorTarget?
@@ -134,6 +155,7 @@ public final class WebInspectorContext {
     private var consoleObjectGroupReleaseTasks: [WebInspectorTarget.ID: Task<Void, Never>]
     private var pageHighlightDocumentGeneration: Int?
 
+    /// Creates a context owned by the supplied actor.
     public init(_ container: WebInspectorContainer, isolation: isolated (any Actor)) {
         self.container = container
         proxy = container.proxy
@@ -231,6 +253,7 @@ public final class WebInspectorContext {
         }
     }
 
+    /// Starts observing the inspected page and rebuilding DataKit models.
     public func start(isolation: isolated (any Actor) = #isolation) {
         requireOwner(isolation)
         let previousStartupTask = startupTask
@@ -268,6 +291,7 @@ public final class WebInspectorContext {
         statusRelay.makeStream(initialElement: status)
     }
 
+    /// Returns the registered DOM node for an identifier.
     public func node(for id: DOMNode.ID, isolation: isolated (any Actor) = #isolation) -> DOMNode? {
         requireOwner(isolation)
         return nodesByID[id]
@@ -281,6 +305,7 @@ public final class WebInspectorContext {
         return node
     }
 
+    /// Returns the registered Network request for an identifier.
     public func registeredRequest(
         for id: NetworkRequest.ID,
         isolation: isolated (any Actor) = #isolation
@@ -301,11 +326,13 @@ public final class WebInspectorContext {
         return requestsByID[NetworkRequest.ID(id)]
     }
 
+    /// Clears retained Network requests and emits reset transactions.
     public func clearNetworkRequests(isolation: isolated (any Actor) = #isolation) {
         requireOwner(isolation)
         clearNetworkRequests()
     }
 
+    /// Returns the registered Console message for an identifier.
     public func registeredMessage(
         for id: ConsoleMessage.ID,
         isolation: isolated (any Actor) = #isolation
@@ -314,6 +341,7 @@ public final class WebInspectorContext {
         return consoleMessagesByID[id]
     }
 
+    /// Selects a DOM node and reveals it in registered tree controllers.
     public func select(_ node: DOMNode?, isolation: isolated (any Actor) = #isolation) {
         select(node, reveal: .selectAndScroll, isolation: isolation)
     }
@@ -1110,6 +1138,7 @@ public final class WebInspectorContext {
         }
     }
 
+    /// Stops observing the inspected page and tears down context-owned state.
     public func stop(isolation: isolated (any Actor) = #isolation) async {
         requireOwner(isolation)
         await detach(isolation: isolation)
