@@ -108,6 +108,7 @@ jobs:
       TEST_PACKAGE_PATH: ${{ matrix.test_package_path }}
       TEST_WORKSPACE: ${{ matrix.test_workspace }}
       SIMULATOR_DEVICE: ${{ matrix.simulator_device }}
+      SPM_CACHE_DIR: ${{ github.workspace }}/.ci/spm-cache/${{ matrix.xcode_major }}-${{ matrix.test_scheme }}
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -186,6 +187,17 @@ jobs:
           end
           RUBY
 
+      - name: Restore Swift package cache
+        if: env.SKIP_IOS_TESTS != 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ env.SPM_CACHE_DIR }}
+            ~/Library/Caches/org.swift.swiftpm
+          key: spm-${{ runner.os }}-${{ runner.arch }}-xcode-${{ matrix.xcode_major }}-${{ matrix.test_scheme }}-${{ hashFiles('Package.resolved', 'WebInspectorKit.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'ContractTests/Package.resolved', 'Packages/WebInspectorNativeBridge/Package.resolved') }}
+          restore-keys: |
+            spm-${{ runner.os }}-${{ runner.arch }}-xcode-${{ matrix.xcode_major }}-${{ matrix.test_scheme }}-
+
       - name: Resolve iOS simulator destination
         run: |
           ruby <<'RUBY'
@@ -244,27 +256,11 @@ jobs:
           end
 
           if ios_major == xcode_major && !simulator_device.empty?
-            sdk_version = `xcodebuild -version -sdk iphonesimulator SDKVersion`.strip
-            abort("Unable to resolve iPhoneSimulator SDK version") unless $?.success? && !sdk_version.empty?
-            abort("Resolved iPhoneSimulator SDK #{sdk_version}, expected iOS #{ios_major}.x") unless sdk_version.split(".").first == ios_major
-
-            exact_matches = available_ios_simulators(ios_major: ios_major)
-              .select { |_, version, name, _| version == sdk_version && name == simulator_device }
-            if exact_matches.empty?
-              warn "No available #{simulator_device} simulator found for iOS #{sdk_version}"
-              system("xcrun simctl list devices available")
-              exit 1
-            end
-
-            _, version, device_name, udid = selected_simulator(
-              matches: exact_matches,
-              simulator_device: simulator_device
-            )
             write_destination(
-              destination: "platform=iOS Simulator,id=#{udid}",
-              version: version
+              destination: "platform=iOS Simulator,name=#{simulator_device},OS=latest",
+              version: "latest"
             )
-            puts "Resolved simulator destination from iOS SDK: #{device_name} iOS #{version} (#{udid})"
+            puts "Using simulator destination from selected Xcode SDK: #{simulator_device} iOS latest"
             exit 0
           end
 
@@ -301,6 +297,7 @@ jobs:
           echo "Test scheme: ${TEST_SCHEME}"
           echo "Test package path: ${TEST_PACKAGE_PATH}"
           echo "Test workspace: ${TEST_WORKSPACE}"
+          echo "Swift package cache: ${SPM_CACHE_DIR}"
 
       - name: Run iOS tests
         run: |
@@ -321,6 +318,9 @@ jobs:
               -workspace "${TEST_WORKSPACE}" \
               -scheme "${TEST_SCHEME}" \
               -sdk iphonesimulator \
+              -clonedSourcePackagesDirPath "${SPM_CACHE_DIR}" \
+              -disableAutomaticPackageResolution \
+              -skipPackageUpdates \
               -derivedDataPath "${derived_data}" \
               -enableCodeCoverage NO \
               ARCHS=arm64 \
@@ -391,6 +391,9 @@ jobs:
               -workspace "${TEST_WORKSPACE}" \
               -scheme "${TEST_SCHEME}" \
               -destination "${DESTINATION}" \
+              -clonedSourcePackagesDirPath "${SPM_CACHE_DIR}" \
+              -disableAutomaticPackageResolution \
+              -skipPackageUpdates \
               -enableCodeCoverage NO \
               -parallel-testing-enabled NO \
               -maximum-concurrent-test-simulator-destinations 1 \
@@ -406,6 +409,9 @@ jobs:
               xcodebuild test \
                 -scheme "${TEST_SCHEME}" \
                 -destination "${DESTINATION}" \
+                -clonedSourcePackagesDirPath "${SPM_CACHE_DIR}" \
+                -disableAutomaticPackageResolution \
+                -skipPackageUpdates \
                 -enableCodeCoverage NO \
                 -parallel-testing-enabled NO \
                 -maximum-concurrent-test-simulator-destinations 1 \
