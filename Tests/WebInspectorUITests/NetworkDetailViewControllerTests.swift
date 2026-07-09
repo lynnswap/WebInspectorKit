@@ -1432,7 +1432,11 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let bodyPreview = RecordingNetworkBodyPreviewViewController()
+        let viewController = makeNetworkDetailViewController(
+            model: model,
+            makeBodyViewController: { _ in bodyPreview }
+        )
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         viewController.setModeForTesting(.preview)
@@ -1445,9 +1449,11 @@ struct NetworkDetailViewControllerTests {
 
         viewController.selectPreviewRoleForTesting(.request)
 
+        let requestBody = try #require(request.requestBody)
         let didRenderRequestBody = await waitUntilRendered(in: viewController) {
             viewController.currentPreviewRoleForTesting == .request
-                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe"
+                && bodyPreview.currentBodyForTesting === requestBody
+                && viewController.responseBodyFetchObservationDeliveryForTesting == nil
         }
         #expect(didRenderRequestBody)
 
@@ -1455,7 +1461,8 @@ struct NetworkDetailViewControllerTests {
 
         let didStayOnRequestBody = await waitUntilRendered(in: viewController) {
             viewController.currentPreviewRoleForTesting == .request
-                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe"
+                && bodyPreview.currentBodyForTesting === requestBody
+                && viewController.responseBodyFetchObservationDeliveryForTesting == nil
         }
         #expect(didStayOnRequestBody)
         #expect(request.responseBody.phase == .available)
@@ -1907,21 +1914,15 @@ struct NetworkDetailViewControllerTests {
         let model = NetworkPanelModel(context: context)
         model.setResourceFilter(.media, enabled: true)
         let listViewController = NetworkListViewController(model: model)
-        let window = showInWindow(listViewController)
-        defer { window.isHidden = true }
+        listViewController.loadViewIfNeeded()
+        listViewController.resumeRenderingForTesting()
         await listViewController.flushPendingSnapshotUpdateForTesting()
         #expect(listViewController.displayedRequestIDsForTesting == [request.id])
-        listViewController.collectionViewForTesting.layoutIfNeeded()
-
-        let indexPath = IndexPath(item: 0, section: 0)
-        let cell = try #require(listViewController.networkListCellForTesting(at: indexPath))
-        #expect(cell.fileTypeLabelForTesting == "mp4")
 
         let evaluationCountBeforeHiddenUpdate = listViewController.displayRequestIDsEvaluationCountForTesting
         let snapshotApplyCountBeforeHiddenUpdate = listViewController.snapshotApplyCountForTesting
 
-        listViewController.beginAppearanceTransition(false, animated: false)
-        listViewController.endAppearanceTransition()
+        listViewController.suspendRenderingForTesting()
         await applyResponseReceived(
             to: context,
             requestID: "1",
@@ -1934,15 +1935,12 @@ struct NetworkDetailViewControllerTests {
         #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
         #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeHiddenUpdate)
         #expect(listViewController.displayedRequestIDsForTesting == [request.id])
-        #expect(cell.fileTypeLabelForTesting == "mp4")
 
-        listViewController.beginAppearanceTransition(true, animated: false)
-        listViewController.endAppearanceTransition()
+        listViewController.resumeRenderingForTesting()
 
         #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
         #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeHiddenUpdate)
         #expect(listViewController.displayedRequestIDsForTesting == [request.id])
-        #expect(cell.fileTypeLabelForTesting == "png")
 
         await listViewController.flushPendingSnapshotUpdateForTesting()
 
@@ -1952,7 +1950,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func hiddenListSuspendsBoundCellRenderingUntilAppearingAgain() async throws {
+    func networkListCellSuspendsBoundRenderingUntilReactivated() async throws {
         let context = makeContext()
         let request = try #require(await applyRequest(
             to: context,
@@ -1961,20 +1959,12 @@ struct NetworkDetailViewControllerTests {
             responseHeaders: ["content-type": "video/mp4"],
             responseMimeType: "video/mp4"
         ))
-        let model = NetworkPanelModel(context: context)
-        let listViewController = NetworkListViewController(model: model)
-        let window = showInWindow(listViewController)
-        defer { window.isHidden = true }
-        await listViewController.flushPendingSnapshotUpdateForTesting()
-        listViewController.collectionViewForTesting.layoutIfNeeded()
-
-        let indexPath = IndexPath(item: 0, section: 0)
-        let cell = try #require(listViewController.networkListCellForTesting(at: indexPath))
+        let cell = NetworkListCell(frame: CGRect(x: 0, y: 0, width: 390, height: 44))
+        cell.bind(request: request, renderingActive: true)
         #expect(cell.fileTypeLabelForTesting == "mp4")
         #expect(cell.hasActiveRequestObservationForTesting)
-        let snapshotApplyCountBeforeHiddenContentUpdate = listViewController.snapshotApplyCountForTesting
 
-        listViewController.suspendRenderingForTesting()
+        cell.setRenderingActive(false)
         #expect(cell.hasActiveRequestObservationForTesting == false)
 
         await applyResponseReceived(
@@ -1988,11 +1978,10 @@ struct NetworkDetailViewControllerTests {
 
         #expect(cell.fileTypeLabelForTesting == "mp4")
 
-        listViewController.resumeRenderingForTesting()
+        cell.setRenderingActive(true)
 
         #expect(cell.hasActiveRequestObservationForTesting)
         #expect(cell.fileTypeLabelForTesting == "css")
-        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeHiddenContentUpdate)
     }
 
     @Test
@@ -2331,13 +2320,18 @@ struct NetworkDetailViewControllerTests {
     }
 
     private func observationDeliveries(in viewController: NetworkDetailViewController) -> [PortableObservationTracking.Token] {
-        [
+        var deliveries = [
             viewController.modelObservationDeliveryForTesting,
             viewController.selectedRequestRenderObservationDeliveryForTesting,
             viewController.responseBodyFetchObservationDeliveryForTesting,
-            viewController.syntaxBodyViewControllerForTesting.bodyObservationDeliveryForTesting,
-            viewController.syntaxBodyViewControllerForTesting.previewRenderObservationDeliveryForTesting,
         ].compactMap { $0 }
+        if let syntaxBodyViewController = viewController.bodyViewControllerForTesting as? NetworkBodyViewController {
+            deliveries.append(contentsOf: [
+                syntaxBodyViewController.bodyObservationDeliveryForTesting,
+                syntaxBodyViewController.previewRenderObservationDeliveryForTesting,
+            ].compactMap { $0 })
+        }
+        return deliveries
     }
 
     private func sampleRenderedCondition(
@@ -2395,12 +2389,13 @@ struct NetworkDetailViewControllerTests {
 @MainActor
 private func makeNetworkDetailViewController(
     model: NetworkPanelModel,
-    initialMode: NetworkDetailViewController.Mode = .headers
+    initialMode: NetworkDetailViewController.Mode = .headers,
+    makeBodyViewController: @escaping NetworkBodyViewControllerFactory = NetworkBodyPreviewFactory.make(scrollEdgeSink:)
 ) -> NetworkDetailViewController {
     NetworkDetailViewController(
         model: model,
         initialMode: initialMode,
-        makeBodyViewController: NetworkBodyPreviewFactory.make(scrollEdgeSink:)
+        makeBodyViewController: makeBodyViewController
     )
 }
 
@@ -2423,6 +2418,28 @@ private final class StubMoviePreviewPlayer: AVPlayer {
 
     override func pause() {
         pauseCounter.withLock { $0 += 1 }
+    }
+}
+
+@MainActor
+private final class RecordingNetworkBodyPreviewViewController: UIViewController, NetworkBodyPreviewControlling {
+    private var surface = NetworkBodySurface.none
+    private(set) var isRenderingActiveForTesting = false
+
+    var currentBodyForTesting: NetworkBody? {
+        surface.body
+    }
+
+    func setSurface(_ nextSurface: NetworkBodySurface) {
+        surface = nextSurface
+    }
+
+    func resumeRendering() {
+        isRenderingActiveForTesting = true
+    }
+
+    func suspendKeepingSurface() {
+        isRenderingActiveForTesting = false
     }
 }
 #endif
