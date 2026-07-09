@@ -882,6 +882,33 @@ struct BrowserSessionRestoreTests {
     }
 
     @Test
+    func historyButtonItemsKeepImagesWhenPrimaryActionsAreInstalled() throws {
+        let initialURL = try #require(URL(string: "about:blank"))
+        let store = BrowserWindow(
+            initialState: .fresh(
+                url: initialURL,
+                automaticallyLoadsInitialRequest: false
+            ),
+            sessionPersistence: .ephemeral
+        )
+        let pageViewController = BrowserPageViewController(
+            browserWindow: store,
+            inspectorSession: WebInspectorSession(),
+            launchConfiguration: BrowserLaunchConfiguration(initialURL: initialURL),
+            progressHideScheduler: ManualDelayScheduler()
+        )
+
+        pageViewController.loadViewIfNeeded()
+        let backButtonItem = pageViewController.backButtonItemForTesting
+        let forwardButtonItem = pageViewController.forwardButtonItemForTesting
+
+        #expect(backButtonItem.image != nil)
+        #expect(backButtonItem.primaryAction?.image != nil)
+        #expect(forwardButtonItem.image != nil)
+        #expect(forwardButtonItem.primaryAction?.image != nil)
+    }
+
+    @Test
     func toolbarItemsAreNotRecreatedForSelectedTabRenderingChanges() async throws {
         let initialURL = try #require(URL(string: "about:blank"))
         let store = BrowserWindow(
@@ -912,9 +939,13 @@ struct BrowserSessionRestoreTests {
         #expect(pageViewController.backButtonItemForTesting === backButtonItem)
         #expect(pageViewController.forwardButtonItemForTesting === forwardButtonItem)
         #expect(pageViewController.inspectorButtonItemForTesting === inspectorButtonItem)
-        #expect(pageViewController.toolbarItems?.contains { $0 === backButtonItem } == true)
-        #expect(pageViewController.toolbarItems?.contains { $0 === forwardButtonItem } == true)
-        #expect(pageViewController.toolbarItems?.contains { $0 === inspectorButtonItem } == true)
+
+        let installedChromeItems = pageViewController.toolbarItems
+            ?? pageViewController.navigationItem.leadingItemGroups.flatMap(\.barButtonItems)
+            + pageViewController.navigationItem.trailingItemGroups.flatMap(\.barButtonItems)
+        #expect(installedChromeItems.contains { $0 === backButtonItem })
+        #expect(installedChromeItems.contains { $0 === forwardButtonItem })
+        #expect(installedChromeItems.contains { $0 === inspectorButtonItem })
     }
 
     @Test
