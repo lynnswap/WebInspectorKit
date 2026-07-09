@@ -982,7 +982,6 @@ struct DOMContainerTests {
         #expect(didClearRedo)
 
         navigationItems.redoForTesting(undoManager: undoManager)
-        await Task.yield()
 
         let commands = await fixture.runtime.backend.recordedCommands()
         #expect(commands.domMutationUndoMethods == ["removeNode", "undo"])
@@ -1006,7 +1005,6 @@ struct DOMContainerTests {
         let operationBaseline = DOMDeletionUndoRegistration.operationCompletionCountForTesting(on: undoManager)
         undoManager.undo()
         _ = await recordedDOMCommands(on: fixture.runtime.backend, method: "undo", count: 1)
-        await Task.yield()
 
         let marker = UndoRegistrationMarker()
         undoManager.beginUndoGrouping()
@@ -1022,7 +1020,6 @@ struct DOMContainerTests {
         #expect(!navigationItems.canRedoForTesting(undoManager: undoManager))
 
         navigationItems.redoForTesting(undoManager: undoManager)
-        await Task.yield()
 
         let commands = await fixture.runtime.backend.recordedCommands()
         #expect(commands.domMutationUndoMethods == ["removeNode", "undo"])

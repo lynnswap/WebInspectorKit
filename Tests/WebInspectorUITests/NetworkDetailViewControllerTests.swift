@@ -1901,10 +1901,14 @@ struct NetworkDetailViewControllerTests {
         #expect(listViewController.displayedRequestIDsForTesting.count == 1)
 
         let evaluationCountBeforeHiddenUpdate = listViewController.displayRequestIDsEvaluationCountForTesting
+        let transactionDeliveryCountBeforeHiddenUpdate = listViewController
+            .fetchedResultsTransactionDeliveryCountForTesting
 
         listViewController.suspendRenderingForTesting()
         model.setSearchText("does-not-match")
-        await settleNetworkListTransactions()
+        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+            after: transactionDeliveryCountBeforeHiddenUpdate
+        ))
 
         #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
         #expect(listViewController.displayedRequestIDsForTesting.count == 1)
@@ -1989,7 +1993,6 @@ struct NetworkDetailViewControllerTests {
             responseMimeType: "image/png",
             timestamp: 4
         )
-        await settleNetworkListTransactions()
 
         #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
         #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeHiddenUpdate)
@@ -2324,12 +2327,6 @@ struct NetworkDetailViewControllerTests {
         }
         await viewController.flushPendingSnapshotUpdateForTesting()
         return viewController.displayedRequestIDsForTesting == requestIDs
-    }
-
-    private func settleNetworkListTransactions() async {
-        for _ in 0..<5 {
-            await Task.yield()
-        }
     }
 
     private func waitUntilMediaPreviewPrepared(

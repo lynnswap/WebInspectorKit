@@ -102,8 +102,12 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     weak var inputDelegate: UITextInputDelegate?
 #if DEBUG
     private let performanceCounters = DOMTreeTextView.PerformanceCounters()
+    private var observedTreeRevisionWaitersForTesting: [UInt64: TreeRevisionWaiterForTesting] = [:]
+    private var nextObservedTreeRevisionWaiterIDForTesting: UInt64 = 0
+    private var pendingDOMInvalidationWaitersForTesting: [UInt64: TreeRevisionWaiterForTesting] = [:]
+    private var nextPendingDOMInvalidationWaiterIDForTesting: UInt64 = 0
     private var rowDocumentAppliedTreeRevisionForTestingStorage: UInt64 = 0
-    private var rowDocumentAppliedTreeRevisionWaitersForTesting: [UInt64: RowDocumentAppliedTreeRevisionWaiter] = [:]
+    private var rowDocumentAppliedTreeRevisionWaitersForTesting: [UInt64: TreeRevisionWaiterForTesting] = [:]
     private var nextRowDocumentAppliedTreeRevisionWaiterIDForTesting: UInt64 = 0
 #endif
 
@@ -175,7 +179,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
 #if DEBUG
-    private struct RowDocumentAppliedTreeRevisionWaiter {
+    private struct TreeRevisionWaiterForTesting {
         var minimumRevision: UInt64
         var continuation: CheckedContinuation<Bool, Never>
         var timeoutTask: Task<Void, Never>
@@ -225,6 +229,8 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         treeTransactionTask?.cancel()
         rowRenderBuildCoordinator.cancel()
 #if DEBUG
+        cancelObservedTreeRevisionWaitersForTesting()
+        cancelPendingDOMInvalidationWaitersForTesting()
         cancelRowDocumentAppliedTreeRevisionWaitersForTesting()
 #endif
     }
@@ -552,6 +558,22 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         }
     }
 
+    private func setCurrentTreeSnapshot(_ snapshot: DOMTreeSnapshot) {
+        currentTreeSnapshot = snapshot
+#if DEBUG
+        recordObservedTreeRevisionForTesting(snapshot.revision)
+#endif
+    }
+
+    private func mergePendingDOMTreeRenderInvalidation(_ invalidation: DOMTreeRenderInvalidation) {
+        pendingDOMTreeRenderInvalidation = pendingDOMTreeRenderInvalidation?.merging(with: invalidation) ?? invalidation
+#if DEBUG
+        if let pendingDOMTreeRenderInvalidation {
+            recordPendingDOMInvalidationRevisionForTesting(pendingDOMTreeRenderInvalidation.revision)
+        }
+#endif
+    }
+
     private func startObservingDocument() {
         treeTransactionTask = Task { @MainActor [weak self, treeController] in
             for await update in treeController.updates {
@@ -564,7 +586,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
                 let isInitial: Bool
                 switch update {
                 case let .snapshot(snapshot, reason):
-                    currentTreeSnapshot = snapshot
+                    setCurrentTreeSnapshot(snapshot)
                     invalidation = .snapshot(snapshot, reason: reason)
                     isSelectionChange = previousSnapshot.selectedNodeID != snapshot.selectedNodeID
                     isInitial = reason == .initialDocument && lastRoutedTreeRevision == nil
@@ -579,7 +601,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
                     isSelectionChange = delta.isSelectionChange
                         || previousSnapshot.selectedNodeID != currentSelectedNodeID
                     if isSelectionChange {
-                        currentTreeSnapshot = treeController.snapshot
+                        setCurrentTreeSnapshot(treeController.snapshot)
                     }
                     isInitial = false
                 }
@@ -602,7 +624,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         rowRenderBuildCoordinator.cancel()
         if hadCurrentRowRenderBuild {
             let invalidation = DOMTreeRenderInvalidation.initial(snapshot: currentTreeSnapshot)
-            pendingDOMTreeRenderInvalidation = pendingDOMTreeRenderInvalidation?.merging(with: invalidation) ?? invalidation
+            mergePendingDOMTreeRenderInvalidation(invalidation)
             pendingDOMTreeRenderInvalidationRequiresRoute = true
         }
         if needsHoveredPageHighlightRestore {
@@ -636,7 +658,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         isInitial: Bool,
         forceRoute: Bool = false
     ) {
-        pendingDOMTreeRenderInvalidation = pendingDOMTreeRenderInvalidation?.merging(with: invalidation) ?? invalidation
+        mergePendingDOMTreeRenderInvalidation(invalidation)
         pendingDOMTreeRenderInvalidationIsInitial = pendingDOMTreeRenderInvalidationIsInitial || isInitial
         pendingDOMTreeRenderInvalidationRequiresRoute = pendingDOMTreeRenderInvalidationRequiresRoute
             || forceRoute
@@ -692,7 +714,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         forceRoute: Bool = false
     ) {
         guard isRenderingActive else {
-            pendingDOMTreeRenderInvalidation = pendingDOMTreeRenderInvalidation?.merging(with: invalidation) ?? invalidation
+            mergePendingDOMTreeRenderInvalidation(invalidation)
             pendingDOMTreeRenderInvalidationIsInitial = pendingDOMTreeRenderInvalidationIsInitial || isInitial
             pendingDOMTreeRenderInvalidationRequiresRoute = pendingDOMTreeRenderInvalidationRequiresRoute || forceRoute
             return
@@ -730,7 +752,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         guard currentTreeSnapshot.revision < targetRevision else {
             return
         }
-        currentTreeSnapshot = treeController.snapshot
+        setCurrentTreeSnapshot(treeController.snapshot)
     }
 
     private func shouldRouteDOMInvalidation(
@@ -817,7 +839,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     ) {
         guard isRenderingActive else {
             let invalidation = DOMTreeRenderInvalidation.initial(snapshot: currentTreeSnapshot)
-            pendingDOMTreeRenderInvalidation = pendingDOMTreeRenderInvalidation?.merging(with: invalidation) ?? invalidation
+            mergePendingDOMTreeRenderInvalidation(invalidation)
             pendingDOMTreeRenderInvalidationRequiresRoute = true
             return
         }
@@ -1063,7 +1085,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             return false
         }
         multiSelection.notePrimarySelection(nodeID)
-        currentTreeSnapshot = treeController.snapshot
+        setCurrentTreeSnapshot(treeController.snapshot)
         selectionRevision = currentTreeSnapshot.revision
         if isRenderingActive {
             handleSelectedNodeChange(selectionRevision: selectionRevision)
@@ -2659,28 +2681,52 @@ extension DOMTreeTextView {
         _ minimumRevision: UInt64,
         timeout: Duration = .seconds(1)
     ) async -> Bool {
-        let start = ContinuousClock.now
-        while currentTreeSnapshot.revision < minimumRevision {
-            if ContinuousClock.now - start >= timeout {
-                return false
-            }
-            await Task.yield()
+        if currentTreeSnapshot.revision >= minimumRevision {
+            return true
         }
-        return true
+
+        return await withCheckedContinuation { continuation in
+            let waiterID = nextObservedTreeRevisionWaiterIDForTesting
+            nextObservedTreeRevisionWaiterIDForTesting &+= 1
+            let timeoutTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: timeout)
+                self?.resolveObservedTreeRevisionWaiterForTesting(id: waiterID, result: false)
+            }
+            observedTreeRevisionWaitersForTesting[waiterID] = TreeRevisionWaiterForTesting(
+                minimumRevision: minimumRevision,
+                continuation: continuation,
+                timeoutTask: timeoutTask
+            )
+            if currentTreeSnapshot.revision >= minimumRevision {
+                resolveObservedTreeRevisionWaiterForTesting(id: waiterID, result: true)
+            }
+        }
     }
 
     func waitForPendingDOMInvalidationForTesting(
         _ minimumRevision: UInt64,
         timeout: Duration = .seconds(1)
     ) async -> Bool {
-        let start = ContinuousClock.now
-        while pendingDOMTreeRenderInvalidation?.revision ?? 0 < minimumRevision {
-            if ContinuousClock.now - start >= timeout {
-                return false
-            }
-            await Task.yield()
+        if (pendingDOMTreeRenderInvalidation?.revision ?? 0) >= minimumRevision {
+            return true
         }
-        return true
+
+        return await withCheckedContinuation { continuation in
+            let waiterID = nextPendingDOMInvalidationWaiterIDForTesting
+            nextPendingDOMInvalidationWaiterIDForTesting &+= 1
+            let timeoutTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: timeout)
+                self?.resolvePendingDOMInvalidationWaiterForTesting(id: waiterID, result: false)
+            }
+            pendingDOMInvalidationWaitersForTesting[waiterID] = TreeRevisionWaiterForTesting(
+                minimumRevision: minimumRevision,
+                continuation: continuation,
+                timeoutTask: timeoutTask
+            )
+            if (pendingDOMTreeRenderInvalidation?.revision ?? 0) >= minimumRevision {
+                resolvePendingDOMInvalidationWaiterForTesting(id: waiterID, result: true)
+            }
+        }
     }
 
     func resetPerformanceCountersForTesting() {
@@ -2705,11 +2751,65 @@ extension DOMTreeTextView {
                     result: false
                 )
             }
-            rowDocumentAppliedTreeRevisionWaitersForTesting[waiterID] = RowDocumentAppliedTreeRevisionWaiter(
+            rowDocumentAppliedTreeRevisionWaitersForTesting[waiterID] = TreeRevisionWaiterForTesting(
                 minimumRevision: minimumRevision,
                 continuation: continuation,
                 timeoutTask: timeoutTask
             )
+        }
+    }
+
+    private func recordObservedTreeRevisionForTesting(_ revision: UInt64) {
+        let completedWaiterIDs = observedTreeRevisionWaitersForTesting.compactMap { id, waiter in
+            waiter.minimumRevision <= revision ? id : nil
+        }
+        for waiterID in completedWaiterIDs {
+            resolveObservedTreeRevisionWaiterForTesting(id: waiterID, result: true)
+        }
+    }
+
+    private func resolveObservedTreeRevisionWaiterForTesting(
+        id: UInt64,
+        result: Bool
+    ) {
+        guard let waiter = observedTreeRevisionWaitersForTesting.removeValue(forKey: id) else {
+            return
+        }
+        waiter.timeoutTask.cancel()
+        waiter.continuation.resume(returning: result)
+    }
+
+    private func cancelObservedTreeRevisionWaitersForTesting() {
+        let waiterIDs = Array(observedTreeRevisionWaitersForTesting.keys)
+        for waiterID in waiterIDs {
+            resolveObservedTreeRevisionWaiterForTesting(id: waiterID, result: false)
+        }
+    }
+
+    private func recordPendingDOMInvalidationRevisionForTesting(_ revision: UInt64) {
+        let completedWaiterIDs = pendingDOMInvalidationWaitersForTesting.compactMap { id, waiter in
+            waiter.minimumRevision <= revision ? id : nil
+        }
+        for waiterID in completedWaiterIDs {
+            resolvePendingDOMInvalidationWaiterForTesting(id: waiterID, result: true)
+        }
+    }
+
+    private func resolvePendingDOMInvalidationWaiterForTesting(
+        id: UInt64,
+        result: Bool
+    ) {
+        guard let waiter = pendingDOMInvalidationWaitersForTesting.removeValue(forKey: id) else {
+            return
+        }
+        waiter.timeoutTask.cancel()
+        waiter.continuation.resume(returning: result)
+    }
+
+    private func cancelPendingDOMInvalidationWaitersForTesting() {
+        let waiterIDs = Array(pendingDOMInvalidationWaitersForTesting.keys)
+        for waiterID in waiterIDs {
+            resolvePendingDOMInvalidationWaiterForTesting(id: waiterID, result: false)
         }
     }
 

@@ -290,14 +290,13 @@ struct ParentContainerTests {
         viewController.loadViewIfNeeded()
         #expect(session.interface.contentCacheCountForTesting > 0)
 
+        let retirementBaseline = viewController.rootPresentationRetirementTaskCompletionCountForTesting
         viewController.finishRootPresentationLifecycleForTesting()
         // Begin the next presentation before the deferred retirement task runs.
         viewController.beginAppearanceTransition(true, animated: false)
         viewController.endAppearanceTransition()
 
-        for _ in 0..<20 {
-            await Task.yield()
-        }
+        #expect(await viewController.waitForRootPresentationRetirementTaskCompletionForTesting(after: retirementBaseline))
 
         #expect(session.detachCountForTesting == 0)
         #expect(session.interface.contentCacheCountForTesting > 0)
@@ -730,7 +729,6 @@ struct ParentContainerTests {
         let cacheCountBeforeCancel = session.interface.contentCacheCountForTesting
 
         viewController.finishRootPresentationLifecycleForTesting(cancelled: true)
-        await Task.yield()
 
         #expect(session.detachCountForTesting == 0)
         #expect(viewController.hasFinishedRootPresentationLifecycleForTesting == false)
@@ -748,9 +746,11 @@ struct ParentContainerTests {
         let compactHost = try #require(viewController.activeHostViewControllerForTesting as? CompactTabBarController)
         compactHost.loadViewIfNeeded()
         session.interface.selectItem(withID: WebInspectorTab.DisplayItem.domElementID)
-        await Task.yield()
+        #expect(await waitUntilCompactHostRendered(in: compactHost) {
+            compactHost.selectedDisplayItemIDForTesting == WebInspectorTab.DisplayItem.domElementID
+        })
         viewController.horizontalSizeClassOverrideForTesting = .regular
-        await Task.yield()
+        #expect(viewController.activeHostViewControllerForTesting is RegularTabContentViewController)
 
         #expect(session.detachCountForTesting == 0)
         #expect(viewController.hasFinishedRootPresentationLifecycleForTesting == false)
@@ -775,8 +775,9 @@ struct ParentContainerTests {
         #expect(session.interface.contentCacheCountForTesting > 0)
         let contentRevisionBeforeRetirement = session.interface.contextBoundContentRevision
 
+        let retirementBaseline = viewController.rootPresentationRetirementTaskCompletionCountForTesting
         viewController.finishRootPresentationLifecycleForTesting()
-        await Task.yield()
+        #expect(await viewController.waitForRootPresentationRetirementTaskCompletionForTesting(after: retirementBaseline))
 
         #expect(session.detachCountForTesting == 0)
         #expect(session.interface.contentCacheCountForTesting == 0)
