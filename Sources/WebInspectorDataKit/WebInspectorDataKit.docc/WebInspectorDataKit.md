@@ -1,4 +1,4 @@
-# WebInspectorDataKit
+# ``WebInspectorDataKit``
 
 Observable Web Inspector models for building custom inspector interfaces.
 

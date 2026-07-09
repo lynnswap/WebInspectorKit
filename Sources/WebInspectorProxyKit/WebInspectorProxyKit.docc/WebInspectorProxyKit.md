@@ -1,4 +1,4 @@
-# WebInspectorProxyKit
+# ``WebInspectorProxyKit``
 
 Typed Web Inspector protocol transport for an inspected `WKWebView`.
 
