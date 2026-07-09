@@ -561,6 +561,10 @@ package enum ConnectionModelFeedRecord: Sendable {
         domain: ModelDomain,
         through: UInt64
     )
+    case synchronizationComplete(
+        generation: WebInspectorPage.Generation,
+        through: UInt64
+    )
 }
 
 package enum ModelProtocolEvent: Sendable { /* typed domain payloads */ }
@@ -571,8 +575,12 @@ package enum ModelDomain: Hashable, Sendable { /* configured domains */ }
 One DataKit feed consumer applies records serially. Reaching
 `replayComplete` therefore proves that every earlier event through that
 watermark has been applied to the model, not merely placed in a stream buffer.
-The feed is package-only because its mixed-domain payload and acknowledgement
-boundary are model-adapter mechanics, not a direct ProxyKit consumer concept.
+After all configured domain boundaries, `synchronizationComplete` proves the
+physical binding itself is ready. This explicit record is required for an empty
+domain configuration and for unavailable-to-ready rebinding, where no
+domain-specific marker can carry readiness. The feed is package-only because
+its mixed-domain payload and acknowledgement boundaries are model-adapter
+mechanics, not a direct ProxyKit consumer concept.
 Opening the feed registers it and its initial reset record before acquiring any
 configured capability. Capability acquisition is transactional: if one enable
 fails, the core releases every capability acquired for that attempt, terminates
@@ -589,8 +597,9 @@ and later events follow it in sequence order. If `DOM.documentUpdated` advances
 the document epoch between request and reply, the snapshot is discarded and
 the command is retried. A valid snapshot is followed by `bootstrapComplete`.
 Every configured domain must reach either its replay or bootstrap completion
-boundary before attachment or retarget synchronization is ready. A later
-`DOM.documentUpdated` resets the DOM/CSS epochs and starts the same ordered
+boundary before ProxyKit emits `synchronizationComplete`; DataKit applies that
+final record before attachment or retarget synchronization becomes ready. A
+later `DOM.documentUpdated` resets the DOM/CSS epochs and starts the same ordered
 snapshot bootstrap again rather than exposing an empty tree as ready state.
 
 One-off commands internally acquire their declared prerequisites for the
@@ -644,8 +653,9 @@ performs one ordered transition:
    activation state for that binding while continuing to buffer provisional
    and enable-time events with transport sequence numbers;
 5. release the new-generation buffer in original transport order, then publish
-   each capability's replay-complete watermark;
-6. mark the binding ready and resume command admission.
+   each capability's replay/bootstrap-complete watermark;
+6. publish `synchronizationComplete`, mark the binding ready, and resume command
+   admission.
 
 No old-generation event can be enqueued after the reset boundary. A destroyed
 old target is not sent disable commands through the new binding; its activation
@@ -906,11 +916,12 @@ public final class WebInspectorModelContext {
 
 `attach(to:)` returns only after every configured domain has acquired its event
 scope and the single ordered feed has applied every configured domain's initial
-replay or bootstrap completion boundary. It also establishes the context's
-owner actor; the context must already be stored and used on that actor and may
-not be transferred after attachment. A second attach to the same proxy while an
-attach is in flight joins that transition. A physical retarget moves the state
-to `.synchronizing(newGeneration)` until the same readiness condition is met.
+replay or bootstrap completion boundary followed by the binding-level
+`synchronizationComplete`. It also establishes the context's owner actor; the
+context must already be stored and used on that actor and may not be transferred
+after attachment. A second attach to the same proxy while an attach is in flight
+joins that transition. A physical retarget moves the state to
+`.synchronizing(newGeneration)` until the same readiness condition is met.
 Attaching a different proxy supersedes the old transition, makes its waiters
 throw `TransitionError.superseded`, awaits complete teardown, and begins the new
 attachment. `detach()` is idempotent and leaves the context reusable on the same
@@ -1567,8 +1578,10 @@ Tests are added before each owner is replaced. Required cases:
    without leaking a waiter; final-disable failure follows the documented
    body/cleanup error precedence.
 5. Target destroy/commit updates routing with no external lifecycle consumer.
-6. Reset, provisional-message drain, enable replay, and replay-complete markers
-   preserve transport ordering even when an old-generation consumer is slow.
+6. Reset, provisional-message drain, enable replay, domain-complete markers,
+   and `synchronizationComplete` preserve transport ordering even when an
+   old-generation consumer is slow. An empty-domain feed still receives the
+   binding-level completion record.
 7. A pending reply for the committing provisional target retargets correctly;
    unrelated old-target replies fail rather than moving generations.
 8. A stable logical page sends subsequent commands to the new physical binding
@@ -1577,7 +1590,8 @@ Tests are added before each owner is replaced. Required cases:
    never encoded for the new target.
 10. Old-generation model identities become stale before new replay is applied,
     and attach/retarget synchronization returns only after every configured
-    replay/bootstrap-complete record is applied.
+    replay/bootstrap-complete record and the following binding-level
+    `synchronizationComplete` are applied.
 11. DOM attachment and retarget return with a root snapshot ready; a
     `DOM.documentUpdated` racing `getDocument` discards the stale reply, retries,
     and orders the accepted snapshot before later DOM deltas.
@@ -1599,7 +1613,7 @@ Tests are added before each owner is replaced. Required cases:
 19. The isolated-deinit fallback synchronously detaches/restores/finishes exactly
    once without launching async work.
 20. DataKit `attach()` exposes startup failure and does not return before the
-   configured models are ready.
+   configured models and binding-level synchronization record are ready.
 21. Same-proxy concurrent attach joins, different-proxy attach supersedes, caller
     cancellation cancels only its wait, detach cancels transition state, a
     same-proxy attach during retarget joins `.synchronizing`, and a failed
@@ -1670,8 +1684,8 @@ Validation gates:
 - Physical current-page routing decisions exist only in the connection core;
   no proxy/page cache duplicates registry state.
 - Model adaptation consumes one mixed-domain ordered feed with reset,
-  enable-replay, and DOM bootstrap boundaries; DataKit has no independent
-  per-domain event pumps.
+  enable-replay, DOM bootstrap, and binding synchronization boundaries; DataKit
+  has no independent per-domain event pumps.
 - Every target-scoped public DTO ID carries and validates its opaque generation.
 - Known decode failures and root-envelope failures have no `try?`/silent-drop or
   `preconditionFailure` path.
