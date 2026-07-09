@@ -253,36 +253,68 @@ jobs:
             end
           end
 
+          def available_ios_simulators(ios_major:)
+            devices = JSON.parse(`xcrun simctl list devices available --json`).fetch("devices")
+            matches = []
+
+            devices.each do |runtime, runtime_devices|
+              next unless runtime =~ /SimRuntime\.iOS-(\d+(?:-\d+)*)$/
+
+              version = Regexp.last_match(1).tr("-", ".")
+              next if version.split(".").first != ios_major
+
+              runtime_devices
+                .select { |device| device.fetch("isAvailable", true) }
+                .each do |device|
+                  matches << [
+                    version.split(".").map(&:to_i),
+                    version,
+                    device.fetch("name"),
+                    device.fetch("udid"),
+                  ]
+                end
+            end
+
+            matches
+          end
+
+          def selected_simulator(matches:, simulator_device:)
+            available_matches = simulator_device.empty? ? matches : matches.select { |_, _, name, _| name == simulator_device }
+            return nil if available_matches.empty?
+
+            preferred_matches = available_matches.select { |_, _, name, _| name.start_with?("iPhone") }
+            selected_matches = preferred_matches.empty? ? available_matches : preferred_matches
+            return selected_matches.max_by { |components, _, _, _| components } if simulator_device.empty?
+
+            selected_matches.sort_by { |components, _, name, udid| [components, name, udid] }.last
+          end
+
           if ios_major == xcode_major && !simulator_device.empty?
             sdk_version = `xcodebuild -version -sdk iphonesimulator SDKVersion`.strip
             abort("Unable to resolve iPhoneSimulator SDK version") unless $?.success? && !sdk_version.empty?
             abort("Resolved iPhoneSimulator SDK #{sdk_version}, expected iOS #{ios_major}.x") unless sdk_version.split(".").first == ios_major
 
-            write_destination(
-              destination: "platform=iOS Simulator,name=#{simulator_device},OS=#{sdk_version}",
-              version: sdk_version
+            exact_matches = available_ios_simulators(ios_major: ios_major)
+              .select { |_, version, name, _| version == sdk_version && name == simulator_device }
+            if exact_matches.empty?
+              warn "No available #{simulator_device} simulator found for iOS #{sdk_version}"
+              system("xcrun simctl list devices available")
+              exit 1
+            end
+
+            _, version, device_name, udid = selected_simulator(
+              matches: exact_matches,
+              simulator_device: simulator_device
             )
-            puts "Resolved simulator destination from iOS SDK: #{simulator_device} iOS #{sdk_version}"
+            write_destination(
+              destination: "platform=iOS Simulator,id=#{udid}",
+              version: version
+            )
+            puts "Resolved simulator destination from iOS SDK: #{device_name} iOS #{version} (#{udid})"
             exit 0
           end
 
-          devices = JSON.parse(`xcrun simctl list devices available --json`).fetch("devices")
-          matches = []
-
-          devices.each do |runtime, runtime_devices|
-            next unless runtime =~ /SimRuntime\.iOS-(\d+(?:-\d+)*)$/
-
-            version = Regexp.last_match(1).tr("-", ".")
-            next if version.split(".").first != ios_major
-
-            available_devices = runtime_devices.select { |device| device.fetch("isAvailable", true) }
-            preferred_devices = available_devices.select { |device| device["name"].start_with?("iPhone") }
-            selected_devices = preferred_devices.empty? ? available_devices : preferred_devices
-
-            selected_devices.each do |device|
-              matches << [version.split(".").map(&:to_i), version, device.fetch("name"), device.fetch("udid")]
-            end
-          end
+          matches = available_ios_simulators(ios_major: ios_major)
 
           if matches.empty?
             warn "No available iOS #{ios_major}.x simulator found"
@@ -290,7 +322,17 @@ jobs:
             exit 1
           end
 
-          _, version, device_name, udid = matches.max_by { |components, _, _, _| components }
+          selected = selected_simulator(
+            matches: matches,
+            simulator_device: simulator_device
+          )
+          unless selected
+            warn "No available #{simulator_device} simulator found for iOS #{ios_major}.x"
+            system("xcrun simctl list devices available")
+            exit 1
+          end
+
+          _, version, device_name, udid = selected
           write_destination(destination: "platform=iOS Simulator,id=#{udid}", version: version)
           puts "Resolved simulator: #{device_name} iOS #{version} (#{udid})"
           RUBY
