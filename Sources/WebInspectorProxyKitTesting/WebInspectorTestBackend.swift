@@ -93,6 +93,13 @@ private struct SubscriberWaiter: Sendable {
     var continuation: CheckedContinuation<Void, Never>
 }
 
+private struct RecordedCommandWaiter: Sendable {
+    var domain: String
+    var method: String
+    var count: Int
+    var continuation: CheckedContinuation<[RecordedCommand], Never>
+}
+
 /// Errors thrown by ``WebInspectorTestBackend`` helpers.
 public enum WebInspectorTestBackendError: Error, Equatable, Sendable {
     /// The requested event domain is not supported by the test backend.
@@ -106,6 +113,7 @@ public actor WebInspectorTestBackend {
     private var heldCommands: [HeldCommand]
     private var eventContinuations: [EventSubscriptionKey: [UUID: AsyncStream<WebInspectorProxyEvent>.Continuation]]
     private var subscriberWaiters: [SubscriberWaiter]
+    private var recordedCommandWaiters: [RecordedCommandWaiter]
 
     /// Creates an empty test backend.
     public init() {
@@ -114,6 +122,7 @@ public actor WebInspectorTestBackend {
         heldCommands = []
         eventContinuations = [:]
         subscriberWaiters = []
+        recordedCommandWaiters = []
     }
 
     /// Enqueues a successful reply for the next matching command.
@@ -206,6 +215,31 @@ public actor WebInspectorTestBackend {
     /// Returns commands recorded by the backend.
     public func recordedCommands() async -> [RecordedCommand] {
         commands
+    }
+
+    /// Waits until at least the requested number of matching commands has been recorded.
+    public func waitForRecordedCommands(
+        domain: String,
+        method: String,
+        count: Int
+    ) async -> [RecordedCommand] {
+        let matches = recordedCommands(domain: domain, method: method)
+        guard matches.count < count else {
+            return matches
+        }
+        return await withCheckedContinuation { continuation in
+            let matches = recordedCommands(domain: domain, method: method)
+            if matches.count >= count {
+                continuation.resume(returning: matches)
+            } else {
+                recordedCommandWaiters.append(RecordedCommandWaiter(
+                    domain: domain,
+                    method: method,
+                    count: count,
+                    continuation: continuation
+                ))
+            }
+        }
     }
 
     /// Waits until a target identity has at least the requested subscriber count.
@@ -352,6 +386,23 @@ public actor WebInspectorTestBackend {
         }
         subscriberWaiters = unresolved
     }
+
+    private func recordedCommands(domain: String, method: String) -> [RecordedCommand] {
+        commands.filter { $0.domain == domain && $0.method == method }
+    }
+
+    private func resolveRecordedCommandWaiters() {
+        var unresolved: [RecordedCommandWaiter] = []
+        for waiter in recordedCommandWaiters {
+            let matches = recordedCommands(domain: waiter.domain, method: waiter.method)
+            if matches.count >= waiter.count {
+                waiter.continuation.resume(returning: matches)
+            } else {
+                unresolved.append(waiter)
+            }
+        }
+        recordedCommandWaiters = unresolved
+    }
 }
 
 private func lifecycleDomain(for event: WebInspectorTargetLifecycleEvent) -> WebInspectorProxyEventDomain {
@@ -370,6 +421,7 @@ extension WebInspectorTestBackend: WebInspectorProxyBackend {
         _ command: WebInspectorProxyCommand<Payload, Result>
     ) async throws -> Result {
         commands.append(RecordedCommand(command: command))
+        resolveRecordedCommandWaiters()
 
         if let gate = heldCommands.first(where: {
             $0.domain == command.domain.rawValue && $0.method == command.method

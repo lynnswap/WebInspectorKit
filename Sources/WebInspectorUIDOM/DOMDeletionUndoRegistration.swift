@@ -63,6 +63,11 @@ private final class DOMUndoCommandTarget: NSObject {
     private func performUndo() {
         undoManager?.domUndoCommandTargetStore.markRedoPending(self)
         Task { @MainActor [self] in
+#if DEBUG
+            defer {
+                undoManager?.domUndoCommandTargetStore.recordOperationCompletionForTesting()
+            }
+#endif
             do {
                 try await undoDeletedNodes()
                 registerRedo()
@@ -74,6 +79,11 @@ private final class DOMUndoCommandTarget: NSObject {
 
     private func performRedo() {
         Task { @MainActor [self] in
+#if DEBUG
+            defer {
+                undoManager?.domUndoCommandTargetStore.recordOperationCompletionForTesting()
+            }
+#endif
             do {
                 try await redoDeletedNodes()
                 registerUndo()
@@ -123,6 +133,37 @@ private final class DOMUndoCommandTarget: NSObject {
     }
 }
 
+#if DEBUG
+extension DOMDeletionUndoRegistration {
+    static func operationCompletionCountForTesting(on undoManager: UndoManager?) -> Int {
+        guard let undoManager else {
+            return 0
+        }
+        return undoManager.domUndoCommandTargetStore.operationCompletionCountForTesting
+    }
+
+    static func waitForOperationCompletionForTesting(
+        after baseline: Int,
+        on undoManager: UndoManager?
+    ) async -> Bool {
+        guard let undoManager else {
+            return false
+        }
+        return await undoManager.domUndoCommandTargetStore.waitForOperationCompletionForTesting(after: baseline)
+    }
+
+    static func waitForRedoAvailabilityForTesting(
+        _ isAvailable: Bool,
+        on undoManager: UndoManager?
+    ) async -> Bool {
+        guard let undoManager else {
+            return false
+        }
+        return await undoManager.domUndoCommandTargetStore.waitForRedoAvailabilityForTesting(isAvailable)
+    }
+}
+#endif
+
 private final class DOMUndoGroupCloseObserver {
     private let observer: NSObjectProtocol
 
@@ -143,6 +184,20 @@ private final class DOMUndoGroupCloseObserver {
     }
 }
 
+#if DEBUG
+@MainActor
+private struct DOMUndoRedoAvailabilityWaiter {
+    var isAvailable: Bool
+    var continuation: CheckedContinuation<Bool, Never>
+}
+
+@MainActor
+private struct DOMUndoOperationCompletionWaiter {
+    var baseline: Int
+    var continuation: CheckedContinuation<Bool, Never>
+}
+#endif
+
 @MainActor
 private final class DOMUndoCommandTargetStore {
     private weak var undoManager: UndoManager?
@@ -151,6 +206,11 @@ private final class DOMUndoCommandTargetStore {
     private var pendingRedoTargets: [DOMUndoCommandTarget] = []
     private var redoTargets: [DOMUndoCommandTarget] = []
     private var internalUndoRegistrationDepth = 0
+#if DEBUG
+    private var redoAvailabilityWaitersForTesting: [DOMUndoRedoAvailabilityWaiter] = []
+    private var operationCompletionWaitersForTesting: [DOMUndoOperationCompletionWaiter] = []
+    private(set) var operationCompletionCountForTesting = 0
+#endif
 
     init(undoManager: UndoManager) {
         self.undoManager = undoManager
@@ -171,6 +231,9 @@ private final class DOMUndoCommandTargetStore {
         retainedTargets.removeAll { $0 === target }
         pendingRedoTargets.removeAll { $0 === target }
         redoTargets.removeAll { $0 === target }
+#if DEBUG
+        resolveRedoAvailabilityWaitersForTesting()
+#endif
     }
 
     func markRedoPending(_ target: DOMUndoCommandTarget) {
@@ -188,6 +251,9 @@ private final class DOMUndoCommandTargetStore {
         }
         pendingRedoTargets.removeAll { $0 === target }
         redoTargets.append(target)
+#if DEBUG
+        resolveRedoAvailabilityWaitersForTesting()
+#endif
     }
 
     func redo() {
@@ -195,6 +261,9 @@ private final class DOMUndoCommandTargetStore {
             return
         }
         target.redo()
+#if DEBUG
+        resolveRedoAvailabilityWaitersForTesting()
+#endif
     }
 
     func registerInternalUndoAction(_ body: () -> Void) {
@@ -223,7 +292,73 @@ private final class DOMUndoCommandTargetStore {
         retainedTargets.removeAll { target in
             staleRedoTargets.contains { $0 === target }
         }
+#if DEBUG
+        resolveRedoAvailabilityWaitersForTesting()
+#endif
     }
+
+#if DEBUG
+    func waitForRedoAvailabilityForTesting(_ isAvailable: Bool) async -> Bool {
+        if canRedo == isAvailable {
+            return true
+        }
+        return await withCheckedContinuation { continuation in
+            if canRedo == isAvailable {
+                continuation.resume(returning: true)
+            } else {
+                redoAvailabilityWaitersForTesting.append(DOMUndoRedoAvailabilityWaiter(
+                    isAvailable: isAvailable,
+                    continuation: continuation
+                ))
+            }
+        }
+    }
+
+    func waitForOperationCompletionForTesting(after baseline: Int) async -> Bool {
+        if operationCompletionCountForTesting > baseline {
+            return true
+        }
+        return await withCheckedContinuation { continuation in
+            if operationCompletionCountForTesting > baseline {
+                continuation.resume(returning: true)
+            } else {
+                operationCompletionWaitersForTesting.append(DOMUndoOperationCompletionWaiter(
+                    baseline: baseline,
+                    continuation: continuation
+                ))
+            }
+        }
+    }
+
+    func recordOperationCompletionForTesting() {
+        operationCompletionCountForTesting += 1
+        resolveOperationCompletionWaitersForTesting()
+    }
+
+    private func resolveRedoAvailabilityWaitersForTesting() {
+        var unresolved: [DOMUndoRedoAvailabilityWaiter] = []
+        for waiter in redoAvailabilityWaitersForTesting {
+            if canRedo == waiter.isAvailable {
+                waiter.continuation.resume(returning: true)
+            } else {
+                unresolved.append(waiter)
+            }
+        }
+        redoAvailabilityWaitersForTesting = unresolved
+    }
+
+    private func resolveOperationCompletionWaitersForTesting() {
+        var unresolved: [DOMUndoOperationCompletionWaiter] = []
+        for waiter in operationCompletionWaitersForTesting {
+            if operationCompletionCountForTesting > waiter.baseline {
+                waiter.continuation.resume(returning: true)
+            } else {
+                unresolved.append(waiter)
+            }
+        }
+        operationCompletionWaitersForTesting = unresolved
+    }
+#endif
 }
 
 @MainActor

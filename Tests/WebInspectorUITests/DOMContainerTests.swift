@@ -909,9 +909,7 @@ struct DOMContainerTests {
         undoManager.undo()
         _ = await recordedDOMCommands(on: fixture.runtime.backend, method: "undo", count: 1)
 
-        let didEnableRedo = await waitUntil {
-            navigationItems.canRedoForTesting(undoManager: undoManager)
-        }
+        let didEnableRedo = await waitForDOMRedoAvailability(true, undoManager: undoManager)
         #expect(didEnableRedo)
 
         await fixture.runtime.backend.enqueue((), for: "DOM", method: "redo")
@@ -973,18 +971,14 @@ struct DOMContainerTests {
         await fixture.runtime.backend.enqueue((), for: "DOM", method: "undo")
         undoManager.undo()
         _ = await recordedDOMCommands(on: fixture.runtime.backend, method: "undo", count: 1)
-        let didEnableRedo = await waitUntil {
-            navigationItems.canRedoForTesting(undoManager: undoManager)
-        }
+        let didEnableRedo = await waitForDOMRedoAvailability(true, undoManager: undoManager)
         #expect(didEnableRedo)
 
         let marker = UndoRegistrationMarker()
         undoManager.beginUndoGrouping()
         undoManager.registerUndo(withTarget: marker) { _ in }
         undoManager.endUndoGrouping()
-        let didClearRedo = await waitUntil {
-            !navigationItems.canRedoForTesting(undoManager: undoManager)
-        }
+        let didClearRedo = await waitForDOMRedoAvailability(false, undoManager: undoManager)
         #expect(didClearRedo)
 
         navigationItems.redoForTesting(undoManager: undoManager)
@@ -1009,6 +1003,7 @@ struct DOMContainerTests {
         let undoGate = WebInspectorTestGate()
         await fixture.runtime.backend.hold(domain: "DOM", method: "undo", gate: undoGate)
         await fixture.runtime.backend.enqueue((), for: "DOM", method: "undo")
+        let operationBaseline = DOMDeletionUndoRegistration.operationCompletionCountForTesting(on: undoManager)
         undoManager.undo()
         _ = await recordedDOMCommands(on: fixture.runtime.backend, method: "undo", count: 1)
         await Task.yield()
@@ -1019,10 +1014,12 @@ struct DOMContainerTests {
         undoManager.endUndoGrouping()
 
         await undoGate.open()
-        let didReenableRedo = await waitUntil(timeout: .milliseconds(100)) {
-            navigationItems.canRedoForTesting(undoManager: undoManager)
-        }
-        #expect(!didReenableRedo)
+        let didFinishUndo = await DOMDeletionUndoRegistration.waitForOperationCompletionForTesting(
+            after: operationBaseline,
+            on: undoManager
+        )
+        #expect(didFinishUndo)
+        #expect(!navigationItems.canRedoForTesting(undoManager: undoManager))
 
         navigationItems.redoForTesting(undoManager: undoManager)
         await Task.yield()
@@ -1046,9 +1043,7 @@ struct DOMContainerTests {
         await fixture.runtime.backend.enqueue((), for: "DOM", method: "undo")
         undoManager.undo()
         _ = await recordedDOMCommands(on: fixture.runtime.backend, method: "undo", count: 1)
-        let didEnableRedo = await waitUntil {
-            navigationItems.canRedoForTesting(undoManager: undoManager)
-        }
+        let didEnableRedo = await waitForDOMRedoAvailability(true, undoManager: undoManager)
         #expect(didEnableRedo)
 
         navigationItems.redoForTesting(undoManager: undoManager)
@@ -1079,9 +1074,7 @@ struct DOMContainerTests {
         await fixture.runtime.backend.enqueue((), for: "DOM", method: "undo")
         undoManager.undo()
         _ = await recordedDOMCommands(on: fixture.runtime.backend, method: "undo", count: 1)
-        let didEnableRedo = await waitUntil {
-            navigationItems.canRedoForTesting(undoManager: undoManager)
-        }
+        let didEnableRedo = await waitForDOMRedoAvailability(true, undoManager: undoManager)
         #expect(didEnableRedo)
 
         await fixture.runtime.backend.enqueue((), for: "DOM", method: "redo")
@@ -1117,9 +1110,7 @@ struct DOMContainerTests {
         await fixture.runtime.backend.enqueue((), for: "DOM", method: "undo")
         undoManager.undo()
         _ = await recordedDOMCommands(on: fixture.runtime.backend, method: "undo", count: 2)
-        let didEnableRedo = await waitUntil {
-            navigationItems.canRedoForTesting(undoManager: undoManager)
-        }
+        let didEnableRedo = await waitForDOMRedoAvailability(true, undoManager: undoManager)
         #expect(didEnableRedo)
 
         await fixture.runtime.backend.enqueue((), for: "DOM", method: "redo")
@@ -1161,9 +1152,7 @@ struct DOMContainerTests {
         await fixture.runtime.backend.enqueue((), for: "DOM", method: "undo")
         undoManager.undo()
         _ = await recordedDOMCommands(on: fixture.runtime.backend, method: "undo", count: 1)
-        let didEnableRedo = await waitUntil {
-            navigationItems.canRedoForTesting(undoManager: undoManager)
-        }
+        let didEnableRedo = await waitForDOMRedoAvailability(true, undoManager: undoManager)
         #expect(didEnableRedo)
 
         let commands = await fixture.runtime.backend.recordedCommands()
@@ -1390,7 +1379,7 @@ struct DOMContainerTests {
         let container = WebInspectorContainer(proxy: runtime.proxy)
         let context = container.mainContext
         try await waitForLiveStartupSubscribers(runtime: runtime, target: target)
-        let didAttach = await waitUntil { context.state == .attached }
+        let didAttach = await waitForAttachedState(in: context)
         try #require(didAttach)
         return LiveDOMContextFixture(runtime: runtime, context: context)
     }
@@ -1416,40 +1405,31 @@ struct DOMContainerTests {
         try await runtime.backend.waitForSubscribers(domain: "Runtime", target: target, count: 1)
     }
 
-    private func waitUntil(
-        timeout: Duration = .seconds(1),
-        condition: @escaping @MainActor () -> Bool
-    ) async -> Bool {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: timeout)
-        while clock.now < deadline {
-            if condition() {
+    private func waitForAttachedState(in context: WebInspectorContext) async -> Bool {
+        if context.state == .attached {
+            return true
+        }
+        for await status in context.statusUpdates {
+            if status.state == .attached {
                 return true
             }
-            await Task.yield()
+            if status.state != .attaching {
+                return false
+            }
         }
-        return condition()
+        return context.state == .attached
+    }
+
+    private func waitForDOMRedoAvailability(_ isAvailable: Bool, undoManager: UndoManager?) async -> Bool {
+        await DOMDeletionUndoRegistration.waitForRedoAvailabilityForTesting(isAvailable, on: undoManager)
     }
 
     private func recordedDOMCommands(
         on backend: WebInspectorTestBackend,
         method: String,
-        count: Int,
-        timeout: Duration = .seconds(1)
+        count: Int
     ) async -> [RecordedCommand] {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: timeout)
-        var matches: [RecordedCommand] = []
-        while clock.now < deadline {
-            matches = await backend.recordedCommands()
-                .filter { $0.domain == "DOM" && $0.method == method }
-            if matches.count >= count {
-                return matches
-            }
-            await Task.yield()
-        }
-        return await backend.recordedCommands()
-            .filter { $0.domain == "DOM" && $0.method == method }
+        await backend.waitForRecordedCommands(domain: "DOM", method: method, count: count)
     }
 
     private func enqueueDOMRemoveNodeWithUndoMark(on backend: WebInspectorTestBackend) async {
