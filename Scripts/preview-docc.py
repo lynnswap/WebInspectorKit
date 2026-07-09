@@ -45,7 +45,10 @@ def parse_port(value: str) -> int:
     return port
 
 
-def default_port() -> int:
+def resolve_port(parsed_port: int | None) -> int:
+    if parsed_port is not None:
+        return parsed_port
+
     value = os.environ.get("PORT", "8080")
     try:
         return parse_port(value)
@@ -64,7 +67,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--port",
         type=parse_port,
-        default=default_port(),
+        default=None,
         help="preferred local port; increments if the port is already in use",
     )
     parser.add_argument(
@@ -275,6 +278,7 @@ def serve(site_root: Path, port: int, *, open_browser: bool) -> None:
 
 def main() -> None:
     args = parse_arguments()
+    args.port = resolve_port(args.port)
     root = repo_root()
     output_path = root / ".build" / "docs"
     scratch_path = root / ".build" / "docc-preview"
