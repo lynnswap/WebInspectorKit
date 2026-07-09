@@ -61,7 +61,6 @@ jobs:
             --triple arm64-apple-ios18.0-simulator \
             --allow-writing-to-directory .build/docs \
             generate-documentation \
-            --target WebInspectorKit \
             --target WebInspectorUI \
             --target WebInspectorDataKit \
             --target WebInspectorProxyKit \
