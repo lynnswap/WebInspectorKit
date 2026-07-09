@@ -88,9 +88,13 @@ let inspector = WebInspectorViewController(
 
 ## Documentation
 
-Generate DocC documentation from the package when you need symbol-level details
-for `WebInspectorKit`, `WebInspectorDataKit`, `WebInspectorProxyKit`, or
-`WebInspectorUI`.
+The DocC workflow publishes symbol-level documentation to GitHub Pages:
+
+- [WebInspectorKit](https://lynnswap.github.io/WebInspectorKit/documentation/webinspectorkit/)
+- [WebInspectorUI](https://lynnswap.github.io/WebInspectorKit/documentation/webinspectorui/)
+- [WebInspectorDataKit](https://lynnswap.github.io/WebInspectorKit/documentation/webinspectordatakit/)
+- [WebInspectorProxyKit](https://lynnswap.github.io/WebInspectorKit/documentation/webinspectorproxykit/)
+- [WebInspectorProxyKitTesting](https://lynnswap.github.io/WebInspectorKit/documentation/webinspectorproxykittesting/)
 
 | Document | Purpose |
 | --- | --- |
