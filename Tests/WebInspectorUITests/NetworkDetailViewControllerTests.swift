@@ -1158,7 +1158,7 @@ struct NetworkDetailViewControllerTests {
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
-        let window = showInWindow(viewController, makeVisible: true, useUIKitVisibility: true)
+        let window = showInWindow(viewController)
         defer { window.isHidden = true }
         viewController.setModeForTesting(.preview)
         await waitUntilMediaPreviewPrepared(in: viewController)
@@ -1172,6 +1172,9 @@ struct NetworkDetailViewControllerTests {
         let initialBounds = imageScrollView.bounds
         let initialMinimumZoomScale = imageScrollView.minimumZoomScale
         window.frame = CGRect(x: 0, y: 0, width: 390, height: 700)
+        viewController.view.frame = window.bounds
+        viewController.view.setNeedsLayout()
+        viewController.view.layoutIfNeeded()
         window.layoutIfNeeded()
 
         let didRefitAfterBoundsChange = await waitUntilRendered(in: viewController) {
@@ -1971,8 +1974,7 @@ struct NetworkDetailViewControllerTests {
         #expect(cell.hasActiveRequestObservationForTesting)
         let snapshotApplyCountBeforeHiddenContentUpdate = listViewController.snapshotApplyCountForTesting
 
-        listViewController.beginAppearanceTransition(false, animated: false)
-        listViewController.endAppearanceTransition()
+        listViewController.suspendRenderingForTesting()
         #expect(cell.hasActiveRequestObservationForTesting == false)
 
         await applyResponseReceived(
@@ -1986,8 +1988,7 @@ struct NetworkDetailViewControllerTests {
 
         #expect(cell.fileTypeLabelForTesting == "mp4")
 
-        listViewController.beginAppearanceTransition(true, animated: false)
-        listViewController.endAppearanceTransition()
+        listViewController.resumeRenderingForTesting()
 
         #expect(cell.hasActiveRequestObservationForTesting)
         #expect(cell.fileTypeLabelForTesting == "css")

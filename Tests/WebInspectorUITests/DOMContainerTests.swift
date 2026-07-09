@@ -702,13 +702,12 @@ struct DOMContainerTests {
         )
 
         let viewController = makeElementViewController(context: context)
-        let window = showInWindow(viewController)
+        let window = showInWindow(viewController, useUIKitVisibility: false)
         defer { window.isHidden = true }
 
         let didCollapseOnlyUnusedVariable = await waitUntilRendered(in: viewController) {
             hiddenVariableCells(in: viewController).count == 1
         }
-        window.layoutIfNeeded()
 
         #expect(didCollapseOnlyUnusedVariable)
         let collapsedDeclarations = stylePropertyViews(in: viewController).map(\.declarationTextForTesting)
