@@ -5,14 +5,14 @@ import WebInspectorNativeBridge
 @MainActor
 package final class NativeInspectorBackend: TransportBackend {
     private let webView: WKWebView
-    private let resolvedSymbols: WebInspectorNativeResolvedSymbols
+    private let resolvedSymbols: NativeInspectorResolvedSymbols
     private nonisolated let messageHandler: @Sendable (String) -> Void
     private nonisolated let fatalFailureHandler: @Sendable (String) -> Void
-    private var bridge: WebInspectorNativeBridge?
+    private var bridge: NativeInspectorBridge?
 
     package init(
         webView: WKWebView,
-        resolvedSymbols: WebInspectorNativeResolvedSymbols,
+        resolvedSymbols: NativeInspectorResolvedSymbols,
         messageHandler: @escaping @Sendable (String) -> Void,
         fatalFailureHandler: @escaping @Sendable (String) -> Void = { _ in }
     ) {
@@ -23,7 +23,7 @@ package final class NativeInspectorBackend: TransportBackend {
     }
 
     package func attach() throws {
-        let bridge = WebInspectorNativeBridge(webView: webView)
+        let bridge = NativeInspectorBridge(webView: webView)
         bridge.messageHandler = { [messageHandler] message in
             messageHandler(message)
         }

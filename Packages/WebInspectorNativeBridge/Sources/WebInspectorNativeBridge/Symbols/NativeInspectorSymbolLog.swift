@@ -4,7 +4,7 @@ import OSLog
 enum NativeInspectorSymbolLog {
     private static let logger = Logger(
         subsystem: "com.lynnswap.WebInspectorKit",
-        category: "NativeSymbols"
+        category: "NativeBridgeSymbols"
     )
 
     static func info(_ message: String) {

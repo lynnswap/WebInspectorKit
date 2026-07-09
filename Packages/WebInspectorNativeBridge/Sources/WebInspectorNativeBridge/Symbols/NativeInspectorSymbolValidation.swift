@@ -43,7 +43,7 @@ extension NativeInspectorSymbolResolverCore {
         if let phase {
             NativeInspectorSymbolLog.info(
                 unsafe String(
-                    format: "[WebInspectorNativeSymbols] native inspector symbols resolved backend=native-inspector status=complete phase=%@ source=%@ connectFrontend=0x%llx disconnectFrontend=0x%llx stringFromUTF8=0x%llx stringImplToNSString=0x%llx destroyStringImpl=0x%llx backendDispatcherDispatch=0x%llx textScanFallback=%@",
+                    format: "[WebInspectorNativeBridge] native inspector symbols resolved backend=native-inspector status=complete phase=%@ source=%@ connectFrontend=0x%llx disconnectFrontend=0x%llx stringFromUTF8=0x%llx stringImplToNSString=0x%llx destroyStringImpl=0x%llx backendDispatcherDispatch=0x%llx textScanFallback=%@",
                     phase.message,
                     source ?? "unknown",
                     functionAddresses.connectFrontendAddress,

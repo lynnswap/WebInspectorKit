@@ -21,20 +21,6 @@
                ReferencedContainer = "container:">
             </BuildableReference>
          </BuildActionEntry>
-         <BuildActionEntry
-            buildForTesting = "YES"
-            buildForRunning = "NO"
-            buildForProfiling = "NO"
-            buildForArchiving = "NO"
-            buildForAnalyzing = "YES">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "WebInspectorNativeSymbolsTests"
-               BuildableName = "WebInspectorNativeSymbolsTests"
-               BlueprintName = "WebInspectorNativeSymbolsTests"
-               ReferencedContainer = "container:">
-            </BuildableReference>
-         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction
@@ -51,16 +37,6 @@
                BlueprintIdentifier = "WebInspectorNativeBridgeTests"
                BuildableName = "WebInspectorNativeBridgeTests"
                BlueprintName = "WebInspectorNativeBridgeTests"
-               ReferencedContainer = "container:">
-            </BuildableReference>
-         </TestableReference>
-         <TestableReference
-            skipped = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "WebInspectorNativeSymbolsTests"
-               BuildableName = "WebInspectorNativeSymbolsTests"
-               BlueprintName = "WebInspectorNativeSymbolsTests"
                ReferencedContainer = "container:">
             </BuildableReference>
          </TestableReference>

@@ -1,12 +1,12 @@
 import Foundation
 
 #if os(iOS) || os(macOS)
-package enum NativeInspectorSymbolResolver {
-    package static func resolveCurrent() -> NativeInspectorSymbolResolution {
+enum NativeInspectorSymbolResolver {
+    static func resolveCurrent() -> NativeInspectorSymbolResolution {
         makeAttachResolution(from: NativeInspectorSymbolResolverCore.resolveCurrentWebKitAttachSymbols())
     }
 
-    package static func resolveCurrentDetached() async -> NativeInspectorSymbolResolution {
+    static func resolveCurrentDetached() async -> NativeInspectorSymbolResolution {
         await Task.detached(priority: .userInitiated) {
             resolveCurrent()
         }.value
@@ -106,8 +106,8 @@ package enum NativeInspectorSymbolResolver {
 #endif
 
 #if !os(iOS) && !os(macOS)
-package enum NativeInspectorSymbolResolver {
-    package static func resolveCurrent() -> NativeInspectorSymbolResolution {
+enum NativeInspectorSymbolResolver {
+    static func resolveCurrent() -> NativeInspectorSymbolResolution {
         NativeInspectorSymbolResolution(
             addresses: .zero,
             failureReason: "Native inspector transport is only available on iOS and macOS.",
@@ -119,7 +119,7 @@ package enum NativeInspectorSymbolResolver {
         )
     }
 
-    package static func resolveCurrentDetached() async -> NativeInspectorSymbolResolution {
+    static func resolveCurrentDetached() async -> NativeInspectorSymbolResolution {
         resolveCurrent()
     }
 

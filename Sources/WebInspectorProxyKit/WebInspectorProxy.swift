@@ -1,6 +1,7 @@
 import Foundation
 import OSLog
 import WebKit
+import WebInspectorNativeBridge
 
 private let logger = Logger(subsystem: "WebInspectorKit", category: "WebInspectorProxy")
 
@@ -909,8 +910,8 @@ public actor WebInspectorProxy {
         if let transportError = error as? TransportSession.Error {
             return mapBootstrapTargetError(transportError)
         }
-        if let factoryError = error as? NativeInspectorBackendFactoryError {
-            switch factoryError {
+        if let symbolResolutionError = error as? NativeInspectorSymbolResolutionError {
+            switch symbolResolutionError {
             case let .missingSymbols(functions):
                 let missingFunctions = functions.sorted().joined(separator: ", ")
                 if missingFunctions.isEmpty {
