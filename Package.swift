@@ -49,6 +49,10 @@ let package = Package(
         .package(
             url: "https://github.com/p-x9/MachOKit.git",
             exact: "0.51.0"
+        ),
+        .package(
+            url: "https://github.com/swiftlang/swift-docc-plugin",
+            from: "1.5.0"
         )
     ],
     targets: [
