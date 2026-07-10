@@ -102,7 +102,7 @@ package actor ConsoleMessageIndex {
         oldSnapshot: WebInspectorFetchedResultsSnapshot<ConsoleMessage.ID>,
         changedSince sequence: UInt64
     ) -> ConsoleResultSetDelta {
-        precondition(plan.requiresModelPredicate == false)
+        precondition(plan.requiresModelQuery == false)
         let indexSequence = lastAppliedSequence
         let newSnapshot = snapshot(plan: plan, sectionBy: sectionBy)
         let oldItemIDs = Set(oldSnapshot.itemIDs)

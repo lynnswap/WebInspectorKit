@@ -742,11 +742,11 @@ extension WebInspectorFetchedResults where Model == ConsoleMessage {
         consoleIndexSequence
     }
 
-    func currentConsoleQueryPlan(context: WebInspectorContext) -> ConsoleMessageQueryPlan {
+    func currentConsoleQueryPlan() -> ConsoleMessageQueryPlan {
         if let consoleQueryPlan {
             return consoleQueryPlan
         }
-        let plan = ConsoleMessageQueryPlan(descriptor: state.fetchDescriptor, context: context)
+        let plan = ConsoleMessageQueryPlan(descriptor: state.fetchDescriptor)
         consoleQueryPlan = plan
         return plan
     }

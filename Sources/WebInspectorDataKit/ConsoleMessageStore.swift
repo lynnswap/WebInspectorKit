@@ -82,7 +82,7 @@ package final class ConsoleMessageStore {
         modelContext: WebInspectorContext,
         isolation: isolated (any Actor) = #isolation
     ) {
-        let plan = ConsoleMessageQueryPlan(descriptor: results.fetchDescriptor, context: modelContext)
+        let plan = ConsoleMessageQueryPlan(descriptor: results.fetchDescriptor)
         results.setConsoleItems(
             currentMessages(isolation: isolation),
             plan: plan,
@@ -98,7 +98,7 @@ package final class ConsoleMessageStore {
         modelContext: WebInspectorContext,
         isolation: isolated (any Actor) = #isolation
     ) {
-        let plan = ConsoleMessageQueryPlan(descriptor: descriptor, context: modelContext)
+        let plan = ConsoleMessageQueryPlan(descriptor: descriptor)
         results.applyConsoleFetchDescriptor(
             descriptor,
             plan: plan,
@@ -412,8 +412,8 @@ package final class ConsoleMessageStore {
             guard let results = registration.value else {
                 continue
             }
-            let plan = results.currentConsoleQueryPlan(context: modelContext)
-            if plan.requiresModelPredicate {
+            let plan = results.currentConsoleQueryPlan()
+            if plan.requiresModelQuery {
                 if inserted {
                     results.insertConsoleMessage(
                         message,
@@ -459,7 +459,7 @@ package final class ConsoleMessageStore {
             guard let results = registration.value else {
                 continue
             }
-            let plan = ConsoleMessageQueryPlan(descriptor: results.fetchDescriptor, context: modelContext)
+            let plan = ConsoleMessageQueryPlan(descriptor: results.fetchDescriptor)
             results.setConsoleItems(
                 messages,
                 plan: plan,

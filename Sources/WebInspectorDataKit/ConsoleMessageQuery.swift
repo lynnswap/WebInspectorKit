@@ -93,23 +93,32 @@ package struct ConsoleMessageQueryPlan: Sendable {
 
     package var filter: Filter?
     package var sortComparators: [ConsoleMessageRecordSortComparator]
+    package var modelSortDescriptors: [SortDescriptor<ConsoleMessage>]?
     package var fetchLimit: Int?
     package var fetchOffset: Int
 
-    package init(
-        descriptor: WebInspectorFetchDescriptor<ConsoleMessage>,
-        context: WebInspectorContext
-    ) {
+    package init(descriptor: WebInspectorFetchDescriptor<ConsoleMessage>) {
         filter = descriptor.predicate.map(makeConsoleMessageFilter)
-        sortComparators = descriptor.sortBy.map {
-            ConsoleMessageRecordSortComparator(descriptor: $0, context: context)
+        let recordSortComparators = descriptor.sortBy.compactMap {
+            ConsoleMessageRecordSortComparator(descriptor: $0)
+        }
+        if recordSortComparators.count == descriptor.sortBy.count {
+            sortComparators = recordSortComparators
+            modelSortDescriptors = nil
+        } else {
+            sortComparators = []
+            modelSortDescriptors = descriptor.sortBy
         }
         fetchLimit = descriptor.fetchLimit
         fetchOffset = descriptor.fetchOffset
     }
 
     package var requiresQuery: Bool {
-        filter != nil || sortComparators.isEmpty == false || fetchLimit != nil || fetchOffset > 0
+        filter != nil
+            || sortComparators.isEmpty == false
+            || modelSortDescriptors?.isEmpty == false
+            || fetchLimit != nil
+            || fetchOffset > 0
     }
 
     package var requiresModelPredicate: Bool {
@@ -117,6 +126,10 @@ package struct ConsoleMessageQueryPlan: Sendable {
             return false
         }
         return true
+    }
+
+    package var requiresModelQuery: Bool {
+        requiresModelPredicate || modelSortDescriptors != nil
     }
 
     package func matches(record: ConsoleMessageRecord) -> Bool? {
@@ -139,8 +152,31 @@ package struct ConsoleMessageQueryPlan: Sendable {
     }
 
     package func ordersBefore(_ lhs: ConsoleMessageRecord, _ rhs: ConsoleMessageRecord) -> Bool {
+        precondition(modelSortDescriptors == nil)
         for comparator in sortComparators {
             switch comparator.compare(lhs, rhs) {
+            case .orderedAscending:
+                return true
+            case .orderedDescending:
+                return false
+            case .orderedSame:
+                continue
+            }
+        }
+        return lhs.orderIndex < rhs.orderIndex
+    }
+
+    package func ordersBefore(
+        _ lhs: ConsoleMessageRecord,
+        message lhsMessage: ConsoleMessage,
+        _ rhs: ConsoleMessageRecord,
+        message rhsMessage: ConsoleMessage
+    ) -> Bool {
+        guard let modelSortDescriptors else {
+            return ordersBefore(lhs, rhs)
+        }
+        for descriptor in modelSortDescriptors {
+            switch descriptor.compare(lhsMessage, rhsMessage) {
             case .orderedAscending:
                 return true
             case .orderedDescending:
@@ -156,12 +192,15 @@ package struct ConsoleMessageQueryPlan: Sendable {
 package struct ConsoleMessageQueryState {
     package var plan: ConsoleMessageQueryPlan
     private var recordsByID: [ConsoleMessage.ID: ConsoleMessageRecord]
+    private var messagesByID: [ConsoleMessage.ID: ConsoleMessage]
     private var matchingIDs: [ConsoleMessage.ID]
 
     package init(plan: ConsoleMessageQueryPlan, messages: [ConsoleMessage]) {
         self.plan = plan
         recordsByID = [:]
         recordsByID.reserveCapacity(messages.count)
+        messagesByID = [:]
+        messagesByID.reserveCapacity(messages.count)
         matchingIDs = []
         matchingIDs.reserveCapacity(messages.count)
         for (index, message) in messages.enumerated() {
@@ -172,6 +211,7 @@ package struct ConsoleMessageQueryState {
     private mutating func upsert(message: ConsoleMessage, orderIndex: Int) {
         let record = ConsoleMessageRecord(message: message, orderIndex: orderIndex)
         recordsByID[record.id] = record
+        messagesByID[record.id] = message
         matchingIDs.removeAll { $0 == record.id }
         guard plan.matches(record: record, message: message) else {
             return
@@ -191,18 +231,24 @@ package struct ConsoleMessageQueryState {
     }
 
     private mutating func insertMatchingID(_ id: ConsoleMessage.ID) {
-        guard let record = recordsByID[id] else {
-            return
+        guard let record = recordsByID[id], let message = messagesByID[id] else {
+            preconditionFailure("Console query state lost the record or model for an inserted identity.")
         }
         var lowerBound = 0
         var upperBound = matchingIDs.count
         while lowerBound < upperBound {
             let midpoint = (lowerBound + upperBound) / 2
-            guard let midpointRecord = recordsByID[matchingIDs[midpoint]] else {
-                lowerBound = midpoint + 1
-                continue
+            let midpointID = matchingIDs[midpoint]
+            guard let midpointRecord = recordsByID[midpointID],
+                  let midpointMessage = messagesByID[midpointID] else {
+                preconditionFailure("Console query state lost a matching record or model.")
             }
-            if plan.ordersBefore(midpointRecord, record) {
+            if plan.ordersBefore(
+                midpointRecord,
+                message: midpointMessage,
+                record,
+                message: message
+            ) {
                 lowerBound = midpoint + 1
             } else {
                 upperBound = midpoint
@@ -229,12 +275,9 @@ package struct ConsoleMessageRecordSortComparator: Sendable {
     private var key: Key
     private var order: SortOrder
 
-    fileprivate init(
-        descriptor: SortDescriptor<ConsoleMessage>,
-        context: WebInspectorContext
-    ) {
-        guard let key = Self.key(for: descriptor, context: context) else {
-            preconditionFailure("Unsupported ConsoleMessage sort descriptor: \(descriptor)")
+    fileprivate init?(descriptor: SortDescriptor<ConsoleMessage>) {
+        guard let key = Self.key(for: descriptor) else {
+            return nil
         }
         self.key = key
         order = descriptor.order
@@ -247,15 +290,15 @@ package struct ConsoleMessageRecordSortComparator: Sendable {
         let result: ComparisonResult
         switch key {
         case .source:
-            result = compareValues(lhs.sourceRawValue, rhs.sourceRawValue)
+            result = compareStrings(lhs.sourceRawValue, rhs.sourceRawValue)
         case .level:
-            result = compareValues(lhs.levelRawValue, rhs.levelRawValue)
+            result = compareStrings(lhs.levelRawValue, rhs.levelRawValue)
         case .kind:
-            result = compareOptional(lhs.kindRawValue, rhs.kindRawValue)
+            result = compareOptionalStrings(lhs.kindRawValue, rhs.kindRawValue)
         case .text:
-            result = compareValues(lhs.text, rhs.text)
+            result = compareStrings(lhs.text, rhs.text)
         case .url:
-            result = compareOptional(lhs.url, rhs.url)
+            result = compareOptionalStrings(lhs.url, rhs.url)
         case .line:
             result = compareOptional(lhs.line, rhs.line)
         case .column:
@@ -275,66 +318,41 @@ package struct ConsoleMessageRecordSortComparator: Sendable {
         }
     }
 
-    private static func key(
-        for descriptor: SortDescriptor<ConsoleMessage>,
-        context: WebInspectorContext
-    ) -> Key? {
-        let candidates: [(Key, Console.Message, Console.Message, ConsoleMessage.ID, ConsoleMessage.ID)] = [
-            (.source, payload(source: "a"), payload(source: "b"), .init(0), .init(0)),
-            (.level, payload(level: "a"), payload(level: "b"), .init(0), .init(0)),
-            (.kind, payload(kind: "a"), payload(kind: "b"), .init(0), .init(0)),
-            (.text, payload(text: "a"), payload(text: "b"), .init(0), .init(0)),
-            (.url, payload(url: "a"), payload(url: "b"), .init(0), .init(0)),
-            (.line, payload(line: 1), payload(line: 2), .init(0), .init(0)),
-            (.column, payload(column: 1), payload(column: 2), .init(0), .init(0)),
-            (.repeatCount, payload(repeatCount: 1), payload(repeatCount: 2), .init(0), .init(0)),
-            (.timestamp, payload(timestamp: 1), payload(timestamp: 2), .init(0), .init(0)),
-            (.id, payload(), payload(), .init(1), .init(2)),
+    private static func key(for descriptor: SortDescriptor<ConsoleMessage>) -> Key? {
+        let order = descriptor.order
+        let candidates: [(Key, SortDescriptor<ConsoleMessage>)] = [
+            (.source, SortDescriptor(\.source.rawValue, order: order)),
+            (.level, SortDescriptor(\.level.rawValue, order: order)),
+            (.kind, SortDescriptor(\.kind?.rawValue, order: order)),
+            (.text, SortDescriptor(\.text, order: order)),
+            (.url, SortDescriptor(\.url, order: order)),
+            (.line, SortDescriptor(\.line, order: order)),
+            (.column, SortDescriptor(\.column, order: order)),
+            (.repeatCount, SortDescriptor(\.repeatCount, order: order)),
+            (.timestamp, SortDescriptor(\.timestamp, order: order)),
+            (.id, SortDescriptor(\.id, order: order)),
         ]
-        for (key, lhsPayload, rhsPayload, lhsID, rhsID) in candidates {
-            let lhs = ConsoleMessage(
-                id: lhsID,
-                message: lhsPayload,
-                parameters: [],
-                targetID: nil,
-                modelContext: context
-            )
-            let rhs = ConsoleMessage(
-                id: rhsID,
-                message: rhsPayload,
-                parameters: [],
-                targetID: nil,
-                modelContext: context
-            )
-            if descriptor.compare(lhs, rhs) != .orderedSame {
-                return key
-            }
+        for (key, candidate) in candidates where descriptor == candidate {
+            return key
         }
         return nil
     }
 
-    private static func payload(
-        source: String = "source",
-        level: String = "level",
-        kind: String? = nil,
-        text: String = "text",
-        url: String? = nil,
-        line: Int? = nil,
-        column: Int? = nil,
-        repeatCount: Int = 1,
-        timestamp: Double? = nil
-    ) -> Console.Message {
-        Console.Message(
-            source: Console.Source(rawValue: source),
-            level: Console.Level(rawValue: level),
-            type: kind.map(Console.Kind.init(rawValue:)),
-            text: text,
-            url: url,
-            line: line,
-            column: column,
-            repeatCount: repeatCount,
-            timestamp: timestamp
-        )
+    private func compareStrings(_ lhs: String, _ rhs: String) -> ComparisonResult {
+        String.StandardComparator.localizedStandard.compare(lhs, rhs)
+    }
+
+    private func compareOptionalStrings(_ lhs: String?, _ rhs: String?) -> ComparisonResult {
+        switch (lhs, rhs) {
+        case (nil, nil):
+            return .orderedSame
+        case (nil, _):
+            return .orderedAscending
+        case (_, nil):
+            return .orderedDescending
+        case let (lhs?, rhs?):
+            return compareStrings(lhs, rhs)
+        }
     }
 
     private func compareValues<Value: Comparable>(_ lhs: Value, _ rhs: Value) -> ComparisonResult {

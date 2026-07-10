@@ -56,7 +56,6 @@ func networkAndConsoleStoresFollowTheCallingActor() async {
 @MainActor
 @Test
 func consoleMessageQueryPlanKeepsSupportedPredicatesOffTheModelActor() {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
     let descriptor = WebInspectorFetchDescriptor<ConsoleMessage>(
         predicate: #Predicate { message in
             message.level.rawValue == "warning"
@@ -65,10 +64,59 @@ func consoleMessageQueryPlanKeepsSupportedPredicatesOffTheModelActor() {
         fetchLimit: 100
     )
 
-    let plan = ConsoleMessageQueryPlan(descriptor: descriptor, context: context)
+    let plan = ConsoleMessageQueryPlan(descriptor: descriptor)
 
     #expect(plan.requiresQuery)
     #expect(plan.requiresModelPredicate == false)
+    #expect(plan.requiresModelQuery == false)
+}
+
+@MainActor
+@Test
+func consoleMessageSortPlanningPreservesStandardAndCustomComparators() async {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let store = ConsoleMessageStore()
+    let customDescriptor = WebInspectorFetchDescriptor<ConsoleMessage>(
+        sortBy: [SortDescriptor(\.text, comparator: .lexical)]
+    )
+    let customPlan = ConsoleMessageQueryPlan(descriptor: customDescriptor)
+    #expect(customPlan.requiresModelQuery)
+    #expect(customPlan.sortComparators.isEmpty)
+    #expect(customPlan.modelSortDescriptors?.count == 1)
+    let standardDescriptor = WebInspectorFetchDescriptor<ConsoleMessage>(
+        sortBy: [SortDescriptor(\.text)]
+    )
+    let standardPlan = ConsoleMessageQueryPlan(descriptor: standardDescriptor)
+    #expect(standardPlan.requiresModelQuery == false)
+    #expect(standardPlan.sortComparators.count == 1)
+    #expect(standardPlan.modelSortDescriptors == nil)
+
+    let customResults = WebInspectorFetchedResults<ConsoleMessage>(
+        fetchDescriptor: customDescriptor,
+        modelContext: context
+    )
+    let standardResults = WebInspectorFetchedResults<ConsoleMessage>(
+        fetchDescriptor: standardDescriptor,
+        modelContext: context
+    )
+    store.register(customResults, modelContext: context, isolation: MainActor.shared)
+    store.register(standardResults, modelContext: context, isolation: MainActor.shared)
+    for text in ["item2", "item10"] {
+        _ = await store.apply(
+            .messageAdded(Console.Message(
+                source: Console.Source(rawValue: "console-api"),
+                level: Console.Level(rawValue: "log"),
+                text: text
+            )),
+            targetID: nil,
+            modelContext: context,
+            registerRuntimeObject: { _ in fatalError("The fixture has no Runtime parameters.") },
+            isolation: MainActor.shared
+        )
+    }
+
+    #expect(customResults.items.map(\.text) == ["item10", "item2"])
+    #expect(standardResults.items.map(\.text) == ["item2", "item10"])
 }
 
 @MainActor
@@ -120,10 +168,7 @@ func consoleMessageIndexDrainsMutationsInSequenceOrder() async throws {
     await secondMutation.value
 
     let delta = await index.delta(
-        plan: ConsoleMessageQueryPlan(
-            descriptor: WebInspectorFetchDescriptor(),
-            context: context
-        ),
+        plan: ConsoleMessageQueryPlan(descriptor: WebInspectorFetchDescriptor()),
         sectionBy: nil,
         oldSnapshot: WebInspectorFetchedResultsSnapshot(),
         changedSince: 0
