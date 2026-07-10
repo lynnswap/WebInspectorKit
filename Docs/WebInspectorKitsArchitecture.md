@@ -1,6 +1,6 @@
 # WebInspectorProxyKit and WebInspectorDataKit Architecture
 
-- Status: proposed design gate
+- Status: implemented and validated
 - Scope: breaking redesign of WebInspectorProxyKit, WebInspectorDataKit, their
   testing products, and the built-in UIKit consumers
 - Minimum deployment: iOS 18.4 and macOS 15.4
@@ -2271,10 +2271,10 @@ reviewable invariant. It must not combine unrelated cleanup merely to reduce the
 commit count. Worker commits are reviewed and integrated locally; pushing and a
 pull request are separate explicit actions.
 
-## Design Gate
+## Design Gate Approval
 
-Implementation begins only after explicit approval of this document. Approval
-accepts the breaking removals, the SwiftData-like caller-confined DataKit
+Implementation proceeded after explicit approval of this document. Approval
+accepted the breaking removals, the SwiftData-like caller-confined DataKit
 context/identity graph, retained snapshot-plus-delta tree and fetched-results
 contracts, no new public per-domain Model/Store facades, the split between
 DataKit's `WebInspectorModelContext` and UIKit's presentation-only
