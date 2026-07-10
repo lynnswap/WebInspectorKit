@@ -3,10 +3,68 @@ import WebInspectorProxyKit
 
 /// Owns Network request identity, order, query projection, and publication.
 ///
-/// `WebInspectorContext` remains the attachment and transport coordinator. The
-/// store is confined by the actor supplied by each caller and never retains an
-/// actor token or starts transport work.
+/// `WebInspectorModelContext` remains the attachment and transport coordinator. The
+/// model context confines access to the store, which never retains an actor token
+/// or starts transport work.
 package final class NetworkRequestStore {
+    package struct IndexWork: Sendable {
+        fileprivate enum Action: Sendable {
+            case replace(
+                inputs: [NetworkRequestRecordInput],
+                sequence: UInt64,
+                sourceEpoch: UInt64
+            )
+            case upsert(input: NetworkRequestRecordInput, sequence: UInt64)
+        }
+
+        fileprivate let index: NetworkRequestIndex
+        fileprivate let actions: [Action]
+
+        package nonisolated(nonsending) func run() async -> IndexResult {
+            var deliveries: [NetworkRequestIndex.QueryDelivery] = []
+            for action in actions {
+                switch action {
+                case let .replace(inputs, sequence, sourceEpoch):
+                    deliveries += await index.replace(
+                        with: inputs,
+                        sequence: sequence,
+                        sourceEpoch: sourceEpoch
+                    )
+                case let .upsert(input, sequence):
+                    deliveries += await index.upsert(input, sequence: sequence)
+                }
+            }
+            return IndexResult(deliveries: deliveries)
+        }
+    }
+
+    package struct IndexResult: Sendable {
+        fileprivate let deliveries: [NetworkRequestIndex.QueryDelivery]
+    }
+
+    package struct IndexAcknowledgementWork: Sendable {
+        fileprivate struct Entry: Sendable {
+            let id: WebInspectorQueryRegistrationID
+            let generation: UInt64
+            let sourceEpoch: UInt64
+            let sequence: UInt64
+        }
+
+        fileprivate let index: NetworkRequestIndex
+        fileprivate let entries: [Entry]
+
+        package nonisolated(nonsending) func run() async {
+            for entry in entries {
+                await index.acknowledge(
+                    id: entry.id,
+                    generation: entry.generation,
+                    sourceEpoch: entry.sourceEpoch,
+                    sequence: entry.sequence
+                )
+            }
+        }
+    }
+
     private enum ConcreteQueryBufferDestination {
         case candidate
         case committing
@@ -31,6 +89,11 @@ package final class NetworkRequestStore {
         fileprivate var sourceEpoch: UInt64
     }
 
+    private struct ModelChange {
+        let request: NetworkRequest
+        let inserted: Bool
+    }
+
 #if DEBUG
     package struct PerformanceCounters: Equatable {
         package var fullModelProjectionCount = 0
@@ -49,7 +112,6 @@ package final class NetworkRequestStore {
     private let queryIndex: NetworkRequestIndex
     private var queryIndexSequence: UInt64
     private var queryIndexNeedsRebuild: Bool
-    private var fetchedResults: [WeakWebInspectorFetchedResults<NetworkRequest>]
     private var querySourceEpoch: UInt64
     private var nextConcreteQueryRegistrationID: UInt64
     private var initializingConcreteQueries: [
@@ -71,7 +133,6 @@ package final class NetworkRequestStore {
         queryIndex = NetworkRequestIndex()
         queryIndexSequence = 0
         queryIndexNeedsRebuild = false
-        fetchedResults = []
         querySourceEpoch = 0
         nextConcreteQueryRegistrationID = 0
         initializingConcreteQueries = [:]
@@ -86,69 +147,38 @@ package final class NetworkRequestStore {
         performanceCounters
     }
 
-    package func resetPerformanceCountersForTesting(
-        isolation: isolated (any Actor) = #isolation
-    ) {
-        _ = isolation
+    package func resetPerformanceCountersForTesting() {
         performanceCounters = PerformanceCounters()
     }
 #endif
 
-    package func request(
-        for id: NetworkRequest.ID,
-        isolation: isolated (any Actor) = #isolation
-    ) -> NetworkRequest? {
-        _ = isolation
-        return requestsByID[id]
+    package func request(for id: NetworkRequest.ID) -> NetworkRequest? {
+        requestsByID[id]
     }
 
-    package func request(
-        forProxyID id: Network.Request.ID,
-        isolation: isolated (any Actor) = #isolation
-    ) -> NetworkRequest? {
-        request(for: NetworkRequest.ID(id), isolation: isolation)
+    package func request(forProxyID id: Network.Request.ID) -> NetworkRequest? {
+        request(for: NetworkRequest.ID(id))
     }
 
     package func finishResponseBodyFetch(
         _ result: Result<Network.Body, WebInspectorProxyError>,
         for request: NetworkRequest,
-        expectedBody: NetworkBody,
-        isolation: isolated (any Actor) = #isolation
+        expectedBody: NetworkBody
     ) {
-        _ = isolation
         guard requestsByID[request.id] === request else {
             return
         }
         request.finishResponseBodyFetch(result: result, expectedBody: expectedBody)
     }
 
-    package func register(
-        _ results: WebInspectorFetchedResults<NetworkRequest>,
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor) = #isolation
-    ) {
-        let plan = NetworkRequestQueryPlan(descriptor: results.fetchDescriptor, context: modelContext)
-        results.setNetworkItems(
-            currentRequests(isolation: isolation),
-            plan: plan,
-            indexSequence: queryIndexSequence,
-            lookup: { id in self.requestsByID[id] }
-        )
-        fetchedResults.append(WeakWebInspectorFetchedResults(results))
-    }
-
-    package func results(
+    package nonisolated(nonsending) func results(
         matching query: NetworkQuery,
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor) = #isolation
+        modelContext: WebInspectorModelContext
     ) async throws -> WebInspectorFetchedResults<NetworkRequest> {
-        await syncQueryIndexIfNeeded(isolation: isolation)
-        let id = allocateConcreteQueryRegistrationID(isolation: isolation)
+        await syncQueryIndexIfNeeded()
+        let id = allocateConcreteQueryRegistrationID()
         let lifetime = WebInspectorQueryRegistrationLifetime()
-        let results = WebInspectorFetchedResults<NetworkRequest>(
-            fetchDescriptor: WebInspectorFetchDescriptor(),
-            modelContext: modelContext
-        )
+        let results = WebInspectorFetchedResults<NetworkRequest>(modelContext: modelContext)
         results.installQueryRegistration(id: id, lifetime: lifetime)
         let generation = results.nextConcreteQueryGeneration()
         initializingConcreteQueries[id] = PendingConcreteQuery(
@@ -187,7 +217,7 @@ package final class NetworkRequestStore {
             query,
             generation: generation,
             projection: installedProjection,
-            lookup: { id in self.requestForResult(id, isolation: isolation) }
+            lookup: { id in self.requestForResult(id) }
         )
         concreteQueryRegistrations[id] = ConcreteQueryRegistration(
             results: WeakWebInspectorFetchedResults(results),
@@ -205,15 +235,14 @@ package final class NetworkRequestStore {
         return results
     }
 
-    package func update(
+    package nonisolated(nonsending) func update(
         _ query: NetworkQuery,
-        for results: WebInspectorFetchedResults<NetworkRequest>,
-        isolation: isolated (any Actor) = #isolation
+        for results: WebInspectorFetchedResults<NetworkRequest>
     ) async throws {
         guard let id = results.concreteQueryRegistrationID else {
             preconditionFailure("Network fetched results are not registered in this store.")
         }
-        await syncQueryIndexIfNeeded(isolation: isolation)
+        await syncQueryIndexIfNeeded()
         guard var registration = concreteQueryRegistrations[id],
               registration.results.value === results else {
             preconditionFailure("Network fetched results are not registered in this store.")
@@ -284,7 +313,7 @@ package final class NetworkRequestStore {
             query: query,
             generation: generation,
             isReplacement: true,
-            lookup: { id in self.requestForResult(id, isolation: isolation) }
+            lookup: { id in self.requestForResult(id) }
         )
         if generation > afterCommit.activeGeneration {
             afterCommit.activeGeneration = generation
@@ -301,48 +330,27 @@ package final class NetworkRequestStore {
         }
     }
 
-    package func updateFetchDescriptor(
-        _ descriptor: WebInspectorFetchDescriptor<NetworkRequest>,
-        for results: WebInspectorFetchedResults<NetworkRequest>,
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor) = #isolation
-    ) {
-        let plan = NetworkRequestQueryPlan(descriptor: descriptor, context: modelContext)
-        results.applyNetworkFetchDescriptor(
-            descriptor,
-            plan: plan,
-            requests: currentRequests(isolation: isolation),
-            indexSequence: queryIndexSequence,
-            lookup: { id in self.requestsByID[id] }
-        )
-    }
-
     /// Clears requests while remembering their protocol identities so late
     /// terminal events from the cleared loads remain ignorable.
-    package func clear(isolation: isolated (any Actor) = #isolation) async {
+    package nonisolated(nonsending) func clear() async {
         clearedRequestIDs.formUnion(requestsByID.keys)
-        let reset = prepareRemoveAllRequests(isolation: isolation)
-        await finishQueryIndexReset(reset, isolation: isolation)
+        let reset = prepareRemoveAllRequests()
+        await finishQueryIndexReset(reset)
     }
 
     /// Begins a new attachment epoch and immediately removes prior identities.
-    package func prepareResetForNewAttachment(
-        isolation: isolated (any Actor) = #isolation
-    ) -> QueryIndexReset {
+    package func prepareResetForNewAttachment() -> QueryIndexReset {
         clearedRequestIDs = []
-        return prepareRemoveAllRequests(isolation: isolation)
+        return prepareRemoveAllRequests()
     }
 
-    package func finishQueryIndexReset(
-        _ reset: QueryIndexReset,
-        isolation: isolated (any Actor) = #isolation
-    ) async {
+    package nonisolated(nonsending) func finishQueryIndexReset(_ reset: QueryIndexReset) async {
         let deliveries = await queryIndex.replace(
             with: [],
             sequence: reset.sequence,
             sourceEpoch: reset.sourceEpoch
         )
-        await applyConcreteDeliveries(deliveries, isolation: isolation)
+        await applyConcreteDeliveries(deliveries)
     }
 
     @discardableResult
@@ -360,10 +368,8 @@ package final class NetworkRequestStore {
         responseBody: String? = nil,
         timestamp: Double,
         encodedBodyLength: Int = 0,
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor) = #isolation
+        modelContext: WebInspectorModelContext
     ) -> NetworkRequest.ID {
-        _ = isolation
         let requestID = Network.Request.ID(rawRequestID)
         let resourceType = resourceTypeRawValue.map(Network.ResourceType.init(rawValue:))
         let payload = Network.Request(
@@ -392,7 +398,7 @@ package final class NetworkRequestStore {
                 modelContext: modelContext
             )
             requestsByID[id] = request
-            appendRequestID(id, isolation: isolation)
+            appendRequestID(id)
             inserted = true
         }
         request.applyResponse(
@@ -425,22 +431,8 @@ package final class NetworkRequestStore {
             request.responseBody.load(Network.Body(data: responseBody, base64Encoded: false))
         }
         queryIndexNeedsRebuild = true
-        pruneFetchedResults(isolation: isolation)
         if inserted {
             collectionState.didInsertRequest()
-            for registration in fetchedResults {
-                registration.value?.insertNetworkRequest(
-                    request,
-                    lookup: { id in self.requestsByID[id] }
-                )
-            }
-        } else {
-            for registration in fetchedResults {
-                registration.value?.refreshNetworkRequestAfterMutation(
-                    request,
-                    lookup: { id in self.requestsByID[id] }
-                )
-            }
         }
         return request.id
     }
@@ -450,10 +442,8 @@ package final class NetworkRequestStore {
         body: String,
         base64Encoded: Bool = false,
         size: Int? = nil,
-        isTruncated: Bool = false,
-        isolation: isolated (any Actor) = #isolation
+        isTruncated: Bool = false
     ) {
-        _ = isolation
         guard let request = requestsByID[requestID] else {
             preconditionFailure("Cannot seed a response body for an unregistered NetworkRequest.")
         }
@@ -465,10 +455,304 @@ package final class NetworkRequestStore {
         ))
     }
 
-    package func apply(
+    package func indexWork(for reset: QueryIndexReset) -> IndexWork {
+        IndexWork(
+            index: queryIndex,
+            actions: [
+                .replace(
+                    inputs: [],
+                    sequence: reset.sequence,
+                    sourceEpoch: reset.sourceEpoch
+                )
+            ]
+        )
+    }
+
+    /// Applies the semantic portion of one ordered feed event synchronously and
+    /// returns index-only work that can run without retaining this store or its
+    /// model context.
+    package func prepareModelEvent(
         _ event: Network.Event,
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor) = #isolation
+        modelContext: WebInspectorModelContext
+    ) -> IndexWork? {
+        let change: ModelChange?
+        switch event {
+        case let .requestWillBeSent(id, payload, resourceType, redirectResponse, timestamp):
+            change = prepareRequestWillBeSent(
+                id: id,
+                request: payload,
+                resourceType: resourceType,
+                redirectResponse: redirectResponse,
+                timestamp: timestamp,
+                modelContext: modelContext
+            )
+        case let .responseReceived(id, response, resourceType, timestamp):
+            change = prepareResponseReceived(
+                id: id,
+                response: response,
+                resourceType: resourceType,
+                timestamp: timestamp,
+                modelContext: modelContext
+            )
+        case let .dataReceived(id, dataLength, encodedDataLength, timestamp):
+            guard let request = request(for: id, method: "dataReceived") else {
+                return nil
+            }
+            request.applyDataReceived(
+                dataLength: dataLength,
+                encodedDataLength: encodedDataLength,
+                timestamp: timestamp
+            )
+            change = ModelChange(request: request, inserted: false)
+        case let .loadingFinished(id, timestamp, sourceMapURL, metrics):
+            guard let request = request(for: id, method: "loadingFinished") else {
+                return nil
+            }
+            request.finish(timestamp: timestamp, sourceMapURL: sourceMapURL, metrics: metrics)
+            change = ModelChange(request: request, inserted: false)
+        case let .loadingFailed(id, errorText, canceled, timestamp):
+            guard let request = request(for: id, method: "loadingFailed") else {
+                return nil
+            }
+            request.fail(errorText: errorText, canceled: canceled, timestamp: timestamp)
+            change = ModelChange(request: request, inserted: false)
+        case let .webSocket(event):
+            change = prepareWebSocketEvent(event, modelContext: modelContext)
+        case let .requestServedFromMemoryCache(id, response, resourceType, timestamp):
+            change = prepareRequestServedFromMemoryCache(
+                id: id,
+                response: response,
+                resourceType: resourceType,
+                timestamp: timestamp,
+                modelContext: modelContext
+            )
+        case .unknown:
+            return nil
+        }
+        guard let change else {
+            return nil
+        }
+        if change.inserted {
+            collectionState.didInsertRequest()
+        }
+        var actions: [IndexWork.Action] = []
+        if queryIndexNeedsRebuild {
+            queryIndexNeedsRebuild = false
+            actions.append(.replace(
+                inputs: currentRecordInputs(),
+                sequence: nextQueryIndexSequence(),
+                sourceEpoch: querySourceEpoch
+            ))
+        }
+        actions.append(.upsert(
+            input: recordInput(for: change.request),
+            sequence: nextQueryIndexSequence()
+        ))
+        return IndexWork(index: queryIndex, actions: actions)
+    }
+
+    package func commit(_ result: IndexResult) -> IndexAcknowledgementWork? {
+        let entries = applyConcreteDeliveriesSynchronously(result.deliveries)
+        guard !entries.isEmpty else {
+            return nil
+        }
+        return IndexAcknowledgementWork(index: queryIndex, entries: entries)
+    }
+
+    private func prepareRequestWillBeSent(
+        id proxyID: Network.Request.ID,
+        request payload: Network.Request,
+        resourceType: Network.ResourceType?,
+        redirectResponse: Network.Response?,
+        timestamp: Double,
+        modelContext: WebInspectorModelContext
+    ) -> ModelChange? {
+        let id = NetworkRequest.ID(proxyID)
+        guard !clearedRequestIDs.contains(id) || redirectResponse == nil else {
+            return nil
+        }
+        clearedRequestIDs.remove(id)
+        if let request = requestsByID[id] {
+            if let redirectResponse, request.isActive {
+                request.applyRedirect(
+                    to: payload,
+                    redirectResponse: redirectResponse,
+                    timestamp: timestamp,
+                    resourceType: resourceType
+                )
+                return ModelChange(request: request, inserted: false)
+            }
+            guard !request.isActive else {
+                return nil
+            }
+            request.applyRequestWillBeSent(
+                request: payload,
+                resourceType: resourceType,
+                timestamp: timestamp
+            )
+            return ModelChange(request: request, inserted: false)
+        }
+        let request = NetworkRequest(
+            request: payload,
+            resourceType: resourceType,
+            timestamp: timestamp,
+            modelContext: modelContext
+        )
+        requestsByID[id] = request
+        appendRequestID(id)
+        return ModelChange(request: request, inserted: true)
+    }
+
+    private func prepareResponseReceived(
+        id proxyID: Network.Request.ID,
+        response: Network.Response,
+        resourceType: Network.ResourceType?,
+        timestamp: Double,
+        modelContext: WebInspectorModelContext
+    ) -> ModelChange? {
+        let id = NetworkRequest.ID(proxyID)
+        guard !clearedRequestIDs.contains(id) else {
+            return nil
+        }
+        let request: NetworkRequest
+        let inserted: Bool
+        if let existing = requestsByID[id] {
+            request = existing
+            inserted = false
+        } else {
+            guard let url = response.url else {
+                skipEvent("Network.responseReceived omitted response URL for an untracked request")
+                return nil
+            }
+            request = NetworkRequest(
+                request: Network.Request(
+                    id: proxyID,
+                    url: url,
+                    method: "GET",
+                    headers: response.requestHeaders ?? [:]
+                ),
+                resourceType: resourceType,
+                timestamp: timestamp,
+                modelContext: modelContext
+            )
+            requestsByID[id] = request
+            appendRequestID(id)
+            inserted = true
+        }
+        request.applyResponse(response, resourceType: resourceType, timestamp: timestamp)
+        return ModelChange(request: request, inserted: inserted)
+    }
+
+    private func prepareRequestServedFromMemoryCache(
+        id proxyID: Network.Request.ID,
+        response: Network.Response,
+        resourceType: Network.ResourceType?,
+        timestamp: Double,
+        modelContext: WebInspectorModelContext
+    ) -> ModelChange? {
+        let id = NetworkRequest.ID(proxyID)
+        guard !clearedRequestIDs.contains(id) else {
+            return nil
+        }
+        let request: NetworkRequest
+        let inserted: Bool
+        if let existing = requestsByID[id] {
+            request = existing
+            inserted = false
+        } else {
+            guard let url = response.url else {
+                skipEvent("Network.requestServedFromMemoryCache omitted response URL for a new request")
+                return nil
+            }
+            request = NetworkRequest(
+                request: Network.Request(
+                    id: proxyID,
+                    url: url,
+                    method: "GET",
+                    headers: response.requestHeaders ?? [:]
+                ),
+                resourceType: resourceType,
+                timestamp: timestamp,
+                modelContext: modelContext
+            )
+            requestsByID[id] = request
+            appendRequestID(id)
+            inserted = true
+        }
+        request.applyMemoryCache(response: response, resourceType: resourceType, timestamp: timestamp)
+        return ModelChange(request: request, inserted: inserted)
+    }
+
+    private func prepareWebSocketEvent(
+        _ event: Network.WebSocketEvent,
+        modelContext: WebInspectorModelContext
+    ) -> ModelChange? {
+        switch event {
+        case let .created(proxyID, url):
+            let id = NetworkRequest.ID(proxyID)
+            clearedRequestIDs.remove(id)
+            let request: NetworkRequest
+            let inserted: Bool
+            if let existing = requestsByID[id] {
+                request = existing
+                inserted = false
+            } else {
+                request = NetworkRequest(
+                    request: Network.Request(id: proxyID, url: url, method: "GET"),
+                    resourceType: .webSocket,
+                    timestamp: nil,
+                    modelContext: modelContext
+                )
+                requestsByID[id] = request
+                appendRequestID(id)
+                inserted = true
+            }
+            request.applyWebSocketCreated(url: url)
+            return ModelChange(request: request, inserted: inserted)
+        case let .handshakeRequest(id, payload, timestamp):
+            guard let request = request(for: id, method: "webSocketWillSendHandshakeRequest") else {
+                return nil
+            }
+            request.applyWebSocketHandshakeRequest(payload, timestamp: timestamp)
+            return ModelChange(request: request, inserted: false)
+        case let .handshakeResponse(id, response, timestamp):
+            guard let request = request(for: id, method: "webSocketHandshakeResponseReceived") else {
+                return nil
+            }
+            request.applyWebSocketHandshakeResponse(response, timestamp: timestamp)
+            return ModelChange(request: request, inserted: false)
+        case let .frameSent(id, frame, timestamp):
+            guard let request = request(for: id, method: "webSocketFrameSent") else {
+                return nil
+            }
+            request.appendWebSocketFrame(frame, direction: .sent, timestamp: timestamp)
+            return ModelChange(request: request, inserted: false)
+        case let .frameReceived(id, frame, timestamp):
+            guard let request = request(for: id, method: "webSocketFrameReceived") else {
+                return nil
+            }
+            request.appendWebSocketFrame(frame, direction: .received, timestamp: timestamp)
+            return ModelChange(request: request, inserted: false)
+        case let .error(id, message, timestamp):
+            guard let request = request(for: id, method: "webSocketFrameError") else {
+                return nil
+            }
+            request.appendWebSocketError(message, timestamp: timestamp)
+            return ModelChange(request: request, inserted: false)
+        case let .closed(id, timestamp):
+            guard let request = request(for: id, method: "webSocketClosed") else {
+                return nil
+            }
+            request.closeWebSocket(timestamp: timestamp)
+            return ModelChange(request: request, inserted: false)
+        case .other:
+            return nil
+        }
+    }
+
+    package nonisolated(nonsending) func apply(
+        _ event: Network.Event,
+        modelContext: WebInspectorModelContext
     ) async {
         switch event {
         case let .requestWillBeSent(id, request, resourceType, redirectResponse, timestamp):
@@ -478,8 +762,7 @@ package final class NetworkRequestStore {
                 resourceType: resourceType,
                 redirectResponse: redirectResponse,
                 timestamp: timestamp,
-                modelContext: modelContext,
-                isolation: isolation
+                modelContext: modelContext
             )
         case let .responseReceived(id, response, resourceType, timestamp):
             await applyResponseReceived(
@@ -487,11 +770,10 @@ package final class NetworkRequestStore {
                 response: response,
                 resourceType: resourceType,
                 timestamp: timestamp,
-                modelContext: modelContext,
-                isolation: isolation
+                modelContext: modelContext
             )
         case let .dataReceived(id, dataLength, encodedDataLength, timestamp):
-            guard let request = request(for: id, method: "dataReceived", isolation: isolation) else {
+            guard let request = request(for: id, method: "dataReceived") else {
                 return
             }
             request.applyDataReceived(
@@ -499,43 +781,41 @@ package final class NetworkRequestStore {
                 encodedDataLength: encodedDataLength,
                 timestamp: timestamp
             )
-            await notifyRequestMutated(request, modelContext: modelContext, isolation: isolation)
+            await notifyRequestMutated(request, modelContext: modelContext)
         case let .loadingFinished(id, timestamp, sourceMapURL, metrics):
-            guard let request = request(for: id, method: "loadingFinished", isolation: isolation) else {
+            guard let request = request(for: id, method: "loadingFinished") else {
                 return
             }
             request.finish(timestamp: timestamp, sourceMapURL: sourceMapURL, metrics: metrics)
-            await notifyRequestMutated(request, modelContext: modelContext, isolation: isolation)
+            await notifyRequestMutated(request, modelContext: modelContext)
         case let .loadingFailed(id, errorText, canceled, timestamp):
-            guard let request = request(for: id, method: "loadingFailed", isolation: isolation) else {
+            guard let request = request(for: id, method: "loadingFailed") else {
                 return
             }
             request.fail(errorText: errorText, canceled: canceled, timestamp: timestamp)
-            await notifyRequestMutated(request, modelContext: modelContext, isolation: isolation)
+            await notifyRequestMutated(request, modelContext: modelContext)
         case let .webSocket(event):
-            await apply(event, modelContext: modelContext, isolation: isolation)
+            await apply(event, modelContext: modelContext)
         case let .requestServedFromMemoryCache(id, response, resourceType, timestamp):
             await applyRequestServedFromMemoryCache(
                 id: id,
                 response: response,
                 resourceType: resourceType,
                 timestamp: timestamp,
-                modelContext: modelContext,
-                isolation: isolation
+                modelContext: modelContext
             )
         case .unknown:
             break
         }
     }
 
-    private func applyRequestWillBeSent(
+    private nonisolated(nonsending) func applyRequestWillBeSent(
         id proxyID: Network.Request.ID,
         request payload: Network.Request,
         resourceType: Network.ResourceType?,
         redirectResponse: Network.Response?,
         timestamp: Double,
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor)
+        modelContext: WebInspectorModelContext
     ) async {
         let id = NetworkRequest.ID(proxyID)
         guard clearedRequestIDs.contains(id) == false || redirectResponse == nil else {
@@ -567,23 +847,22 @@ package final class NetworkRequestStore {
                 modelContext: modelContext
             )
             requestsByID[id] = request
-            appendRequestID(id, isolation: isolation)
+            appendRequestID(id)
             inserted = true
         }
         if inserted {
-            await notifyRequestInserted(request, modelContext: modelContext, isolation: isolation)
+            await notifyRequestInserted(request, modelContext: modelContext)
         } else if topologyMayHaveChanged {
-            await notifyRequestMutated(request, modelContext: modelContext, isolation: isolation)
+            await notifyRequestMutated(request, modelContext: modelContext)
         }
     }
 
-    private func applyRequestServedFromMemoryCache(
+    private nonisolated(nonsending) func applyRequestServedFromMemoryCache(
         id proxyID: Network.Request.ID,
         response: Network.Response,
         resourceType: Network.ResourceType?,
         timestamp: Double,
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor)
+        modelContext: WebInspectorModelContext
     ) async {
         let id = NetworkRequest.ID(proxyID)
         guard clearedRequestIDs.contains(id) == false else {
@@ -610,22 +889,21 @@ package final class NetworkRequestStore {
                 modelContext: modelContext
             )
             requestsByID[id] = request
-            appendRequestID(id, isolation: isolation)
+            appendRequestID(id)
             request.applyMemoryCache(response: response, resourceType: resourceType, timestamp: timestamp)
-            await notifyRequestInserted(request, modelContext: modelContext, isolation: isolation)
+            await notifyRequestInserted(request, modelContext: modelContext)
             return
         }
         request.applyMemoryCache(response: response, resourceType: resourceType, timestamp: timestamp)
-        await notifyRequestMutated(request, modelContext: modelContext, isolation: isolation)
+        await notifyRequestMutated(request, modelContext: modelContext)
     }
 
-    private func applyResponseReceived(
+    private nonisolated(nonsending) func applyResponseReceived(
         id proxyID: Network.Request.ID,
         response: Network.Response,
         resourceType: Network.ResourceType?,
         timestamp: Double,
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor)
+        modelContext: WebInspectorModelContext
     ) async {
         let id = NetworkRequest.ID(proxyID)
         guard clearedRequestIDs.contains(id) == false else {
@@ -657,100 +935,91 @@ package final class NetworkRequestStore {
                 modelContext: modelContext
             )
             requestsByID[id] = request
-            appendRequestID(id, isolation: isolation)
+            appendRequestID(id)
             inserted = true
         }
         request.applyResponse(response, resourceType: resourceType, timestamp: timestamp)
         if inserted {
-            await notifyRequestInserted(request, modelContext: modelContext, isolation: isolation)
+            await notifyRequestInserted(request, modelContext: modelContext)
         } else {
-            await notifyRequestMutated(request, modelContext: modelContext, isolation: isolation)
+            await notifyRequestMutated(request, modelContext: modelContext)
         }
     }
 
-    private func apply(
+    private nonisolated(nonsending) func apply(
         _ event: Network.WebSocketEvent,
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor)
+        modelContext: WebInspectorModelContext
     ) async {
         switch event {
         case let .created(id, url):
             await applyWebSocketCreated(
                 id: id,
                 url: url,
-                modelContext: modelContext,
-                isolation: isolation
+                modelContext: modelContext
             )
         case let .handshakeRequest(id, payload, timestamp):
             guard let networkRequest = request(
                 for: id,
-                method: "webSocketWillSendHandshakeRequest",
-                isolation: isolation
+                method: "webSocketWillSendHandshakeRequest"
             ) else {
                 return
             }
             networkRequest.applyWebSocketHandshakeRequest(payload, timestamp: timestamp)
-            await notifyRequestMutated(networkRequest, modelContext: modelContext, isolation: isolation)
+            await notifyRequestMutated(networkRequest, modelContext: modelContext)
         case let .handshakeResponse(id, response, timestamp):
             guard let networkRequest = request(
                 for: id,
-                method: "webSocketHandshakeResponseReceived",
-                isolation: isolation
+                method: "webSocketHandshakeResponseReceived"
             ) else {
                 return
             }
             networkRequest.applyWebSocketHandshakeResponse(response, timestamp: timestamp)
-            await notifyRequestMutated(networkRequest, modelContext: modelContext, isolation: isolation)
+            await notifyRequestMutated(networkRequest, modelContext: modelContext)
         case let .frameSent(id, frame, timestamp):
             guard let networkRequest = request(
                 for: id,
-                method: "webSocketFrameSent",
-                isolation: isolation
+                method: "webSocketFrameSent"
             ) else {
                 return
             }
             networkRequest.appendWebSocketFrame(frame, direction: .sent, timestamp: timestamp)
-            await notifyRequestMutated(networkRequest, modelContext: modelContext, isolation: isolation)
+            await notifyRequestMutated(networkRequest, modelContext: modelContext)
         case let .frameReceived(id, frame, timestamp):
             guard let networkRequest = request(
                 for: id,
-                method: "webSocketFrameReceived",
-                isolation: isolation
+                method: "webSocketFrameReceived"
             ) else {
                 return
             }
             networkRequest.appendWebSocketFrame(frame, direction: .received, timestamp: timestamp)
-            await notifyRequestMutated(networkRequest, modelContext: modelContext, isolation: isolation)
+            await notifyRequestMutated(networkRequest, modelContext: modelContext)
         case let .error(id, message, timestamp):
             guard let networkRequest = request(
                 for: id,
-                method: "webSocketFrameError",
-                isolation: isolation
+                method: "webSocketFrameError"
             ) else {
                 return
             }
             networkRequest.appendWebSocketError(message, timestamp: timestamp)
-            await notifyRequestMutated(networkRequest, modelContext: modelContext, isolation: isolation)
+            await notifyRequestMutated(networkRequest, modelContext: modelContext)
         case let .closed(id, timestamp):
             guard let networkRequest = request(
                 for: id,
-                method: "webSocketClosed",
-                isolation: isolation
+                method: "webSocketClosed"
             ) else {
                 return
             }
             networkRequest.closeWebSocket(timestamp: timestamp)
-            await notifyRequestMutated(networkRequest, modelContext: modelContext, isolation: isolation)
+            await notifyRequestMutated(networkRequest, modelContext: modelContext)
         case .other:
             break
         }
     }
 
-    private func applyWebSocketCreated(
+    private nonisolated(nonsending) func applyWebSocketCreated(
         id proxyID: Network.Request.ID,
         url: String,
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor)
+        modelContext: WebInspectorModelContext
     ) async {
         let id = NetworkRequest.ID(proxyID)
         clearedRequestIDs.remove(id)
@@ -767,23 +1036,21 @@ package final class NetworkRequestStore {
                 modelContext: modelContext
             )
             requestsByID[id] = request
-            appendRequestID(id, isolation: isolation)
+            appendRequestID(id)
             inserted = true
         }
         request.applyWebSocketCreated(url: url)
         if inserted {
-            await notifyRequestInserted(request, modelContext: modelContext, isolation: isolation)
+            await notifyRequestInserted(request, modelContext: modelContext)
         } else {
-            await notifyRequestMutated(request, modelContext: modelContext, isolation: isolation)
+            await notifyRequestMutated(request, modelContext: modelContext)
         }
     }
 
     private func request(
         for proxyID: Network.Request.ID,
-        method: String,
-        isolation: isolated (any Actor)
+        method: String
     ) -> NetworkRequest? {
-        _ = isolation
         let id = NetworkRequest.ID(proxyID)
         guard let request = requestsByID[id] else {
             if clearedRequestIDs.contains(id) == false {
@@ -794,30 +1061,24 @@ package final class NetworkRequestStore {
         return request
     }
 
-    private func prepareRemoveAllRequests(
-        isolation: isolated (any Actor)
-    ) -> QueryIndexReset {
+    private func prepareRemoveAllRequests() -> QueryIndexReset {
         requestsByID = [:]
         orderedRequestIDs = []
         orderIndicesByID = [:]
         queryIndexNeedsRebuild = false
-        advanceQuerySourceEpoch(isolation: isolation)
-        let sequence = nextQueryIndexSequence(isolation: isolation)
+        advanceQuerySourceEpoch()
+        let sequence = nextQueryIndexSequence()
         collectionState.replaceCount(0)
-        resetFetchedResults(isolation: isolation)
         let reset = QueryIndexReset(
             sequence: sequence,
             sourceEpoch: querySourceEpoch
         )
-        publishEmptyConcreteQueryResults(for: reset, isolation: isolation)
+        publishEmptyConcreteQueryResults(for: reset)
         return reset
     }
 
-    private func publishEmptyConcreteQueryResults(
-        for reset: QueryIndexReset,
-        isolation: isolated (any Actor)
-    ) {
-        pruneConcreteQueryRegistrations(isolation: isolation)
+    private func publishEmptyConcreteQueryResults(for reset: QueryIndexReset) {
+        pruneConcreteQueryRegistrations()
         let projection = NetworkRequestIndex.QueryProjection(
             sourceEpoch: reset.sourceEpoch,
             sequence: reset.sequence,
@@ -837,8 +1098,7 @@ package final class NetworkRequestStore {
         }
     }
 
-    private func advanceQuerySourceEpoch(isolation: isolated (any Actor)) {
-        _ = isolation
+    private func advanceQuerySourceEpoch() {
         precondition(
             querySourceEpoch < UInt64.max,
             "Network query source epoch overflowed."
@@ -846,27 +1106,12 @@ package final class NetworkRequestStore {
         querySourceEpoch += 1
     }
 
-    private func currentRequests(isolation: isolated (any Actor)) -> [NetworkRequest] {
-        _ = isolation
-#if DEBUG
-        performanceCounters.fullModelProjectionCount += orderedRequestIDs.count
-#endif
-        return orderedRequestIDs.compactMap { requestsByID[$0] }
-    }
-
-    private func appendRequestID(
-        _ id: NetworkRequest.ID,
-        isolation: isolated (any Actor)
-    ) {
-        _ = isolation
+    private func appendRequestID(_ id: NetworkRequest.ID) {
         orderIndicesByID[id] = orderedRequestIDs.count
         orderedRequestIDs.append(id)
     }
 
-    private func currentRecordInputs(
-        isolation: isolated (any Actor)
-    ) -> [NetworkRequestRecordInput] {
-        _ = isolation
+    private func currentRecordInputs() -> [NetworkRequestRecordInput] {
 #if DEBUG
         performanceCounters.fullRecordProjectionCount += orderedRequestIDs.count
 #endif
@@ -875,11 +1120,7 @@ package final class NetworkRequestStore {
         }
     }
 
-    private func recordInput(
-        for request: NetworkRequest,
-        isolation: isolated (any Actor)
-    ) -> NetworkRequestRecordInput {
-        _ = isolation
+    private func recordInput(for request: NetworkRequest) -> NetworkRequestRecordInput {
 #if DEBUG
         performanceCounters.incrementalRecordProjectionCount += 1
 #endif
@@ -887,16 +1128,11 @@ package final class NetworkRequestStore {
         return NetworkRequestRecordInput(request: request, orderIndex: orderIndex)
     }
 
-    private func isCurrent(
-        _ request: NetworkRequest,
-        isolation: isolated (any Actor)
-    ) -> Bool {
-        _ = isolation
+    private func isCurrent(_ request: NetworkRequest) -> Bool {
         return requestsByID[request.id] === request
     }
 
-    private func nextQueryIndexSequence(isolation: isolated (any Actor)) -> UInt64 {
-        _ = isolation
+    private func nextQueryIndexSequence() -> UInt64 {
         // The index drains a contiguous operation log, so every allocated
         // sequence must be submitted exactly once to replace or upsert.
         precondition(
@@ -907,122 +1143,57 @@ package final class NetworkRequestStore {
         return queryIndexSequence
     }
 
-    private func syncQueryIndexIfNeeded(isolation: isolated (any Actor)) async {
+    private nonisolated(nonsending) func syncQueryIndexIfNeeded() async {
         guard queryIndexNeedsRebuild else {
             return
         }
         queryIndexNeedsRebuild = false
-        let sequence = nextQueryIndexSequence(isolation: isolation)
-        let inputs = currentRecordInputs(isolation: isolation)
+        let sequence = nextQueryIndexSequence()
+        let inputs = currentRecordInputs()
         let deliveries = await queryIndex.replace(
             with: inputs,
             sequence: sequence,
             sourceEpoch: querySourceEpoch
         )
-        await applyConcreteDeliveries(deliveries, isolation: isolation)
+        await applyConcreteDeliveries(deliveries)
     }
 
-    private func notifyRequestInserted(
+    private nonisolated(nonsending) func notifyRequestInserted(
         _ request: NetworkRequest,
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor)
+        modelContext: WebInspectorModelContext
     ) async {
         collectionState.didInsertRequest()
-        await syncQueryIndexIfNeeded(isolation: isolation)
-        guard isCurrent(request, isolation: isolation) else {
+        await syncQueryIndexIfNeeded()
+        guard isCurrent(request) else {
             return
         }
-        let sequence = nextQueryIndexSequence(isolation: isolation)
-        let input = recordInput(for: request, isolation: isolation)
+        let sequence = nextQueryIndexSequence()
+        let input = recordInput(for: request)
         let deliveries = await queryIndex.upsert(input, sequence: sequence)
-        await applyConcreteDeliveries(deliveries, isolation: isolation)
-        guard isCurrent(request, isolation: isolation) else {
+        await applyConcreteDeliveries(deliveries)
+        guard isCurrent(request) else {
             return
         }
-        await applyResultDeltas(
-            for: request,
-            inserted: true,
-            modelContext: modelContext,
-            isolation: isolation
-        )
     }
 
-    private func notifyRequestMutated(
+    private nonisolated(nonsending) func notifyRequestMutated(
         _ request: NetworkRequest,
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor)
+        modelContext: WebInspectorModelContext
     ) async {
-        await syncQueryIndexIfNeeded(isolation: isolation)
-        guard isCurrent(request, isolation: isolation) else {
+        await syncQueryIndexIfNeeded()
+        guard isCurrent(request) else {
             return
         }
-        let sequence = nextQueryIndexSequence(isolation: isolation)
-        let input = recordInput(for: request, isolation: isolation)
+        let sequence = nextQueryIndexSequence()
+        let input = recordInput(for: request)
         let deliveries = await queryIndex.upsert(input, sequence: sequence)
-        await applyConcreteDeliveries(deliveries, isolation: isolation)
-        guard isCurrent(request, isolation: isolation) else {
+        await applyConcreteDeliveries(deliveries)
+        guard isCurrent(request) else {
             return
         }
-        await applyResultDeltas(
-            for: request,
-            inserted: false,
-            modelContext: modelContext,
-            isolation: isolation
-        )
     }
 
-    private func applyResultDeltas(
-        for request: NetworkRequest,
-        inserted: Bool,
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor)
-    ) async {
-        pruneFetchedResults(isolation: isolation)
-        for registration in fetchedResults {
-            guard let results = registration.value else {
-                continue
-            }
-            let plan = results.currentNetworkQueryPlan(context: modelContext)
-            if plan.requiresModelPredicate {
-                if inserted {
-                    results.insertNetworkRequest(
-                        request,
-                        lookup: { id in self.requestsByID[id] }
-                    )
-                } else {
-                    results.refreshNetworkRequestAfterMutation(
-                        request,
-                        lookup: { id in self.requestsByID[id] }
-                    )
-                }
-                continue
-            }
-            let oldSnapshot = results.networkSnapshotForDelta
-            let resultTopologyRevision = results.topologyRevision
-            let resultIndexSequence = results.networkIndexSequenceForDelta
-            let indexSequence = queryIndexSequence
-            let delta = await queryIndex.delta(
-                plan: plan,
-                sectionBy: results.sectionBy,
-                oldSnapshot: oldSnapshot,
-                changedSince: resultIndexSequence
-            )
-            guard queryIndexSequence == indexSequence,
-                  results.topologyRevision == resultTopologyRevision,
-                  results.networkSnapshotForDelta == oldSnapshot else {
-                continue
-            }
-            results.applyNetworkDelta(
-                delta,
-                lookup: { id in self.requestForResult(id, isolation: isolation) }
-            )
-        }
-    }
-
-    private func allocateConcreteQueryRegistrationID(
-        isolation: isolated (any Actor)
-    ) -> WebInspectorQueryRegistrationID {
-        _ = isolation
+    private func allocateConcreteQueryRegistrationID() -> WebInspectorQueryRegistrationID {
         precondition(
             nextConcreteQueryRegistrationID < UInt64.max,
             "Network concrete query registration identity overflowed."
@@ -1032,17 +1203,19 @@ package final class NetworkRequestStore {
         return id
     }
 
-    private func applyConcreteDeliveries(
-        _ deliveries: [NetworkRequestIndex.QueryDelivery],
-        isolation: isolated (any Actor)
-    ) async {
-        pruneConcreteQueryRegistrations(isolation: isolation)
-        var acknowledgements: [(
-            id: WebInspectorQueryRegistrationID,
-            generation: UInt64,
-            sourceEpoch: UInt64,
-            sequence: UInt64
-        )] = []
+    private nonisolated(nonsending) func applyConcreteDeliveries(_ deliveries: [NetworkRequestIndex.QueryDelivery]) async {
+        let acknowledgements = applyConcreteDeliveriesSynchronously(deliveries)
+        await IndexAcknowledgementWork(
+            index: queryIndex,
+            entries: acknowledgements
+        ).run()
+    }
+
+    private func applyConcreteDeliveriesSynchronously(
+        _ deliveries: [NetworkRequestIndex.QueryDelivery]
+    ) -> [IndexAcknowledgementWork.Entry] {
+        pruneConcreteQueryRegistrations()
+        var acknowledgements: [IndexAcknowledgementWork.Entry] = []
         for delivery in deliveries {
             guard delivery.projection.sourceEpoch == querySourceEpoch else {
                 continue
@@ -1070,14 +1243,14 @@ package final class NetworkRequestStore {
                     query: registration.activeQuery,
                     generation: delivery.generation,
                     isReplacement: false,
-                    lookup: { id in self.requestForResult(id, isolation: isolation) }
+                    lookup: { id in self.requestForResult(id) }
                 )
                 if applied {
-                    acknowledgements.append((
-                        id,
-                        delivery.generation,
-                        delivery.projection.sourceEpoch,
-                        delivery.projection.sequence
+                    acknowledgements.append(IndexAcknowledgementWork.Entry(
+                        id: id,
+                        generation: delivery.generation,
+                        sourceEpoch: delivery.projection.sourceEpoch,
+                        sequence: delivery.projection.sequence
                     ))
                 }
             } else if var candidate = registration.candidate,
@@ -1093,14 +1266,7 @@ package final class NetworkRequestStore {
             }
             concreteQueryRegistrations[id] = registration
         }
-        for acknowledgement in acknowledgements {
-            await queryIndex.acknowledge(
-                id: acknowledgement.id,
-                generation: acknowledgement.generation,
-                sourceEpoch: acknowledgement.sourceEpoch,
-                sequence: acknowledgement.sequence
-            )
-        }
+        return acknowledgements
     }
 
     private func buffer(
@@ -1177,43 +1343,23 @@ package final class NetworkRequestStore {
         )
     }
 
-    private func pruneConcreteQueryRegistrations(isolation: isolated (any Actor)) {
-        _ = isolation
+    private func pruneConcreteQueryRegistrations() {
         concreteQueryRegistrations = concreteQueryRegistrations.filter { _, registration in
             registration.results.value != nil
         }
     }
 
 #if DEBUG
-    package func concreteQueryRegistrationCountForTesting(
-        isolation: isolated (any Actor) = #isolation
-    ) async -> Int {
-        _ = isolation
+    package nonisolated(nonsending) func concreteQueryRegistrationCountForTesting() async -> Int {
         return await queryIndex.queryRegistrationCountForTesting()
     }
 #endif
 
-    private func requestForResult(
-        _ id: NetworkRequest.ID,
-        isolation: isolated (any Actor)
-    ) -> NetworkRequest? {
-        _ = isolation
+    private func requestForResult(_ id: NetworkRequest.ID) -> NetworkRequest? {
 #if DEBUG
         performanceCounters.resultIdentityLookupCount += 1
 #endif
         return requestsByID[id]
-    }
-
-    private func pruneFetchedResults(isolation: isolated (any Actor)) {
-        _ = isolation
-        fetchedResults.removeAll { $0.value == nil }
-    }
-
-    private func resetFetchedResults(isolation: isolated (any Actor)) {
-        pruneFetchedResults(isolation: isolation)
-        for registration in fetchedResults {
-            registration.value?.resetNetworkItems(indexSequence: queryIndexSequence)
-        }
     }
 
     private func skipEvent(_ reason: String) {

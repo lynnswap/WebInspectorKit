@@ -54,7 +54,7 @@ package struct DOMTabController: WebInspectorTab.BuiltInController {
                     session: session,
                     contentStore: contentStore
                 ),
-                context: session.context
+                context: session.model
             )
         case (.compact, .domElement):
             DOMCompactNavigationController(
@@ -76,7 +76,7 @@ package struct DOMTabController: WebInspectorTab.BuiltInController {
                         session: session,
                         contentStore: contentStore
                     ),
-                    context: session.context
+                    context: session.model
                 )
             )
         }
@@ -90,7 +90,7 @@ package struct DOMTabController: WebInspectorTab.BuiltInController {
             for: contentKey(ContentID.tree),
             contextEpoch: session.interface.contextBoundContentRevision
         ) {
-            DOMTreeViewController(context: session.context)
+            DOMTreeViewController(context: session.model)
         }
     }
 
@@ -102,7 +102,7 @@ package struct DOMTabController: WebInspectorTab.BuiltInController {
             for: contentKey(ContentID.element),
             contextEpoch: session.interface.contextBoundContentRevision
         ) {
-            DOMElementViewController(context: session.context)
+            DOMElementViewController(context: session.model)
         }
     }
 

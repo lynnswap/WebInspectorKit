@@ -52,11 +52,16 @@ public struct Runtime: Sendable, WebInspectorEventDomainHandle {
     /// Evaluates a JavaScript expression in an execution context.
     public func evaluate(
         _ expression: String,
-        in context: ExecutionContext.ID? = nil
+        in context: ExecutionContext.ID? = nil,
+        objectGroup: ObjectGroup? = nil
     ) async throws -> EvaluationResult {
         try await dispatch(
             method: "evaluate",
-            payload: EvaluatePayload(expression: expression, context: context),
+            payload: EvaluatePayload(
+                expression: expression,
+                context: context,
+                objectGroup: objectGroup
+            ),
             returning: EvaluationResult.self
         )
     }
@@ -125,10 +130,16 @@ public struct Runtime: Sendable, WebInspectorEventDomainHandle {
     package struct EvaluatePayload: Sendable {
         package let expression: String
         package let context: ExecutionContext.ID?
+        package let objectGroup: ObjectGroup?
 
-        package init(expression: String, context: ExecutionContext.ID?) {
+        package init(
+            expression: String,
+            context: ExecutionContext.ID?,
+            objectGroup: ObjectGroup?
+        ) {
             self.expression = expression
             self.context = context
+            self.objectGroup = objectGroup
         }
     }
 

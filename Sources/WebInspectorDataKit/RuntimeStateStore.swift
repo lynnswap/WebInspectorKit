@@ -3,7 +3,7 @@ import WebInspectorProxyKit
 /// Owns Runtime execution-context identity, selection, remote-object identity,
 /// and local object membership.
 ///
-/// `WebInspectorContext` remains the attachment and transport coordinator. It
+/// `WebInspectorModelContext` remains the attachment and transport coordinator. It
 /// validates command inputs through this store, performs protocol I/O, and
 /// returns replies for post-suspension validation and materialization. The
 /// store never retains an actor token or starts a task.
@@ -22,7 +22,7 @@ package final class RuntimeStateStore {
     }
 
     private enum ObjectOwner: Hashable {
-        case client
+        case group(RuntimeObjectGroup.ID)
         case console
     }
 
@@ -37,6 +37,8 @@ package final class RuntimeStateStore {
     private var objectsByID: [RuntimeObject.ID: ObjectRecord]
     private var nextSyntheticObjectOrdinal: Int
     private var defaultExecutionGeneration: UInt64
+    private var nextGroupOrdinal: UInt64
+    private var activeGroupIDs: Set<RuntimeObjectGroup.ID>
 
     package init() {
         contextsByID = [:]
@@ -45,6 +47,8 @@ package final class RuntimeStateStore {
         objectsByID = [:]
         nextSyntheticObjectOrdinal = 0
         defaultExecutionGeneration = 0
+        nextGroupOrdinal = 0
+        activeGroupIDs = []
     }
 
     package var executionContexts: [RuntimeContext] {
@@ -67,25 +71,21 @@ package final class RuntimeStateStore {
     }
 
     package func select(
-        _ context: RuntimeContext?,
-        isolation: isolated (any Actor) = #isolation
+        _ context: RuntimeContext?
     ) {
-        _ = isolation
         guard let context else {
             selectedContextID = nil
             return
         }
         guard contextsByID[context.id] === context else {
-            preconditionFailure("RuntimeContext is not registered in this WebInspectorContext.")
+            preconditionFailure("RuntimeContext is not registered in this WebInspectorModelContext.")
         }
         selectedContextID = context.id
     }
 
     package func evaluationBinding(
-        for context: RuntimeContext?,
-        isolation: isolated (any Actor) = #isolation
+        for context: RuntimeContext?
     ) throws -> EvaluationBinding {
-        _ = isolation
         let executionContext: RuntimeContext?
         if let context {
             try requireRegisteredContext(context)
@@ -103,44 +103,42 @@ package final class RuntimeStateStore {
     package func finishEvaluation(
         _ result: Runtime.EvaluationResult,
         binding: EvaluationBinding,
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor) = #isolation
+        groupID: RuntimeObjectGroup.ID
     ) throws -> RuntimeEvaluation {
-        _ = isolation
+        try requireActiveGroup(groupID)
         if let executionContext = binding.executionContext {
             try requireRegisteredContext(executionContext)
         } else if binding.defaultExecutionGeneration != defaultExecutionGeneration {
             throw WebInspectorProxyError.disconnected(
-                "Runtime evaluation target is no longer current in this WebInspectorContext."
+                "Runtime evaluation target is no longer current in this WebInspectorModelContext."
             )
         }
         return RuntimeEvaluation(
-            object: register(result.object, owner: .client, modelContext: modelContext),
+            object: register(result.object, owner: .group(groupID)),
             isException: result.wasThrown
         )
     }
 
     package func objectBinding(
         for object: RuntimeObject,
-        isolation: isolated (any Actor) = #isolation
+        groupID: RuntimeObjectGroup.ID
     ) throws -> ObjectBinding? {
-        _ = isolation
-        let object = try requireRegisteredObject(object)
+        try requireActiveGroup(groupID)
+        let object = try requireRegisteredObject(object, owner: .group(groupID))
         return object.proxyID.map { ObjectBinding(remoteID: $0, object: object) }
     }
 
     package func finishProperties(
         _ descriptors: [Runtime.PropertyDescriptor],
         binding: ObjectBinding,
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor) = #isolation
+        groupID: RuntimeObjectGroup.ID
     ) throws -> [RuntimeObject.Property] {
-        _ = isolation
-        try requireRegisteredObject(binding.object)
+        try requireActiveGroup(groupID)
+        try requireRegisteredObject(binding.object, owner: .group(groupID))
         return descriptors.map { descriptor in
             let remoteValue = descriptor.value
             let childObject = remoteValue.flatMap { value in
-                value.id == nil ? nil : register(value, owner: .client, modelContext: modelContext)
+                value.id == nil ? nil : register(value, owner: .group(groupID))
             }
             return RuntimeObject.Property(
                 name: descriptor.name,
@@ -153,33 +151,27 @@ package final class RuntimeStateStore {
     package func finishCollectionEntries(
         _ entries: [Runtime.CollectionEntry],
         binding: ObjectBinding,
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor) = #isolation
+        groupID: RuntimeObjectGroup.ID
     ) throws -> [RuntimeObject.Entry] {
-        _ = isolation
-        try requireRegisteredObject(binding.object)
+        try requireActiveGroup(groupID)
+        try requireRegisteredObject(binding.object, owner: .group(groupID))
         return entries.map { entry in
             RuntimeObject.Entry(
-                key: entry.key.map { register($0, owner: .client, modelContext: modelContext) },
-                value: register(entry.value, owner: .client, modelContext: modelContext)
+                key: entry.key.map { register($0, owner: .group(groupID)) },
+                value: register(entry.value, owner: .group(groupID))
             )
         }
     }
 
     package func registerConsoleParameter(
-        _ payload: Runtime.RemoteObject,
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor) = #isolation
+        _ payload: Runtime.RemoteObject
     ) -> RuntimeObject {
-        _ = isolation
-        return register(payload, owner: .console, modelContext: modelContext)
+        return register(payload, owner: .console)
     }
 
     package func removeConsoleOwnership(
-        from objects: [RuntimeObject],
-        isolation: isolated (any Actor) = #isolation
+        from objects: [RuntimeObject]
     ) {
-        _ = isolation
         for object in objects {
             guard var record = objectsByID[object.id], record.object === object else {
                 continue
@@ -194,9 +186,7 @@ package final class RuntimeStateStore {
     }
 
     package func removeAllConsoleOwnership(
-        isolation: isolated (any Actor) = #isolation
     ) {
-        _ = isolation
         for (id, var record) in objectsByID.map({ ($0.key, $0.value) }) {
             record.owners.remove(.console)
             if record.owners.isEmpty {
@@ -209,10 +199,8 @@ package final class RuntimeStateStore {
 
     package func apply(
         _ event: Runtime.Event,
-        sourceTargetID: WebInspectorTarget.ID?,
-        isolation: isolated (any Actor) = #isolation
+        sourceTargetID: WebInspectorTarget.ID?
     ) {
-        _ = isolation
         switch event {
         case let .executionContextCreated(context):
             applyExecutionContextCreated(context)
@@ -220,7 +208,7 @@ package final class RuntimeStateStore {
             applyExecutionContextDestroyed(id)
         case let .executionContextsCleared(eventTargetID):
             if eventTargetID == .currentPage || eventTargetID == sourceTargetID {
-                reset(isolation: isolation)
+                reset()
             } else {
                 clear(targetID: eventTargetID)
             }
@@ -229,13 +217,39 @@ package final class RuntimeStateStore {
         }
     }
 
-    package func reset(isolation: isolated (any Actor) = #isolation) {
-        _ = isolation
+    package func reset() {
         contextsByID = [:]
         orderedContextIDs = []
         selectedContextID = nil
         objectsByID = [:]
+        activeGroupIDs = []
         advanceDefaultExecutionGeneration()
+    }
+
+    package func createGroupID() -> RuntimeObjectGroup.ID {
+        precondition(nextGroupOrdinal < UInt64.max, "Runtime object-group identity overflowed.")
+        let id = RuntimeObjectGroup.ID(rawValue: nextGroupOrdinal)
+        nextGroupOrdinal += 1
+        precondition(activeGroupIDs.insert(id).inserted)
+        return id
+    }
+
+    package func isActiveGroup(_ id: RuntimeObjectGroup.ID) -> Bool {
+        activeGroupIDs.contains(id)
+    }
+
+    package func invalidateGroup(_ id: RuntimeObjectGroup.ID) {
+        guard activeGroupIDs.remove(id) != nil else {
+            return
+        }
+        for (objectID, var record) in objectsByID.map({ ($0.key, $0.value) }) {
+            record.owners.remove(.group(id))
+            if record.owners.isEmpty {
+                objectsByID.removeValue(forKey: objectID)
+            } else {
+                objectsByID[objectID] = record
+            }
+        }
     }
 
     private func applyExecutionContextCreated(_ payload: Runtime.ExecutionContext) {
@@ -285,8 +299,7 @@ package final class RuntimeStateStore {
 
     private func register(
         _ payload: Runtime.RemoteObject,
-        owner: ObjectOwner,
-        modelContext: WebInspectorContext
+        owner: ObjectOwner
     ) -> RuntimeObject {
         let id: RuntimeObject.ID
         if let proxyID = payload.id {
@@ -307,7 +320,7 @@ package final class RuntimeStateStore {
             return record.object
         }
 
-        let object = RuntimeObject(id: id, remoteObject: payload, modelContext: modelContext)
+        let object = RuntimeObject(id: id, remoteObject: payload)
         objectsByID[id] = ObjectRecord(object: object, owners: [owner])
         return object
     }
@@ -316,20 +329,31 @@ package final class RuntimeStateStore {
     private func requireRegisteredContext(_ context: RuntimeContext) throws -> RuntimeContext {
         guard contextsByID[context.id] === context else {
             throw WebInspectorProxyError.disconnected(
-                "RuntimeContext is not registered in this WebInspectorContext."
+                "RuntimeContext is not registered in this WebInspectorModelContext."
             )
         }
         return context
     }
 
     @discardableResult
-    private func requireRegisteredObject(_ object: RuntimeObject) throws -> RuntimeObject {
-        guard objectsByID[object.id]?.object === object else {
+    private func requireRegisteredObject(
+        _ object: RuntimeObject,
+        owner: ObjectOwner? = nil
+    ) throws -> RuntimeObject {
+        guard let record = objectsByID[object.id],
+              record.object === object,
+              owner.map({ record.owners.contains($0) }) ?? true else {
             throw WebInspectorProxyError.disconnected(
-                "RuntimeObject is not registered in this WebInspectorContext."
+                "RuntimeObject is not registered in this WebInspectorModelContext."
             )
         }
         return object
+    }
+
+    private func requireActiveGroup(_ id: RuntimeObjectGroup.ID) throws {
+        guard activeGroupIDs.contains(id) else {
+            throw WebInspectorModelError.staleModel
+        }
     }
 
     private func advanceDefaultExecutionGeneration() {

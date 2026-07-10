@@ -156,7 +156,8 @@ let package = Package(
         .target(
             name: "WebInspectorKit",
             dependencies: [
-                "WebInspectorUI"
+                "WebInspectorUI",
+                "WebInspectorDataKit"
             ],
             swiftSettings: strictSwiftSettings
         ),

@@ -85,6 +85,7 @@ public struct WebInspectorTarget: Identifiable, Sendable {
     package let proxyReference: WebInspectorProxyReference
     package let route: RoutingTargetID
     package let pageBindingID: String?
+    package let authority: WebInspectorCommandAuthority
 
     package var proxy: WebInspectorProxy {
         guard let proxy = proxyReference.resolve() else {
@@ -100,7 +101,8 @@ public struct WebInspectorTarget: Identifiable, Sendable {
         isProvisional: Bool,
         proxy: WebInspectorProxy,
         route: RoutingTargetID,
-        pageBindingID: String? = nil
+        pageBindingID: String? = nil,
+        authority: WebInspectorCommandAuthority = .direct
     ) {
         self.id = id
         self.kind = kind
@@ -109,6 +111,7 @@ public struct WebInspectorTarget: Identifiable, Sendable {
         proxyReference = WebInspectorProxyReference(proxy)
         self.route = route
         self.pageBindingID = pageBindingID
+        self.authority = authority
     }
 
     private init(
@@ -118,7 +121,8 @@ public struct WebInspectorTarget: Identifiable, Sendable {
         isProvisional: Bool,
         proxyReference: WebInspectorProxyReference,
         route: RoutingTargetID,
-        pageBindingID: String?
+        pageBindingID: String?,
+        authority: WebInspectorCommandAuthority
     ) {
         self.id = id
         self.kind = kind
@@ -127,6 +131,7 @@ public struct WebInspectorTarget: Identifiable, Sendable {
         self.proxyReference = proxyReference
         self.route = route
         self.pageBindingID = pageBindingID
+        self.authority = authority
     }
 
     package func withPageBinding(from lifecycleTarget: WebInspectorLifecycleTarget) -> WebInspectorTarget {
@@ -137,7 +142,8 @@ public struct WebInspectorTarget: Identifiable, Sendable {
             isProvisional: lifecycleTarget.isProvisional,
             proxyReference: proxyReference,
             route: route,
-            pageBindingID: lifecycleTarget.pageBindingID
+            pageBindingID: lifecycleTarget.pageBindingID,
+            authority: authority
         )
     }
 
@@ -207,7 +213,7 @@ public struct WebInspectorTarget: Identifiable, Sendable {
             proxyReference: proxyReference,
             targetID: id,
             route: route,
-            authority: .direct
+            authority: authority
         )
     }
 }
@@ -221,6 +227,21 @@ package extension WebInspectorProxy {
             isProvisional: false,
             proxy: self,
             route: RoutingTargetID(id.rawValue)
+        )
+    }
+
+    nonisolated func modelTarget(
+        _ target: ModelTarget,
+        authorization: ConnectionModelCommandAuthorization
+    ) -> WebInspectorTarget {
+        WebInspectorTarget(
+            id: target.id,
+            kind: target.kind,
+            frameID: target.frameID,
+            isProvisional: false,
+            proxy: self,
+            route: RoutingTargetID(target.id.rawValue),
+            authority: .modelFeed(authorization)
         )
     }
 }

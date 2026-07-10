@@ -2,10 +2,68 @@ import WebInspectorProxyKit
 
 /// Owns Console message identity, order, query projection, and publication.
 ///
-/// Runtime-object membership remains in `WebInspectorContext`; clear
+/// Runtime-object membership remains in `WebInspectorModelContext`; clear
 /// operations return explicit ownership effects for that owner to apply. The
 /// store never retains an actor token or starts a task.
 package final class ConsoleMessageStore {
+    package struct IndexWork: Sendable {
+        fileprivate enum Action: Sendable {
+            case replace(
+                inputs: [ConsoleMessageRecordInput],
+                sequence: UInt64,
+                sourceEpoch: UInt64
+            )
+            case upsert(input: ConsoleMessageRecordInput, sequence: UInt64)
+        }
+
+        fileprivate let index: ConsoleMessageIndex
+        fileprivate let actions: [Action]
+
+        package nonisolated(nonsending) func run() async -> IndexResult {
+            var deliveries: [ConsoleMessageIndex.QueryDelivery] = []
+            for action in actions {
+                switch action {
+                case let .replace(inputs, sequence, sourceEpoch):
+                    deliveries += await index.replace(
+                        with: inputs,
+                        sequence: sequence,
+                        sourceEpoch: sourceEpoch
+                    )
+                case let .upsert(input, sequence):
+                    deliveries += await index.upsert(input, sequence: sequence)
+                }
+            }
+            return IndexResult(deliveries: deliveries)
+        }
+    }
+
+    package struct IndexResult: Sendable {
+        fileprivate let deliveries: [ConsoleMessageIndex.QueryDelivery]
+    }
+
+    package struct IndexAcknowledgementWork: Sendable {
+        fileprivate struct Entry: Sendable {
+            let id: WebInspectorQueryRegistrationID
+            let generation: UInt64
+            let sourceEpoch: UInt64
+            let sequence: UInt64
+        }
+
+        fileprivate let index: ConsoleMessageIndex
+        fileprivate let entries: [Entry]
+
+        package nonisolated(nonsending) func run() async {
+            for entry in entries {
+                await index.acknowledge(
+                    id: entry.id,
+                    generation: entry.generation,
+                    sourceEpoch: entry.sourceEpoch,
+                    sequence: entry.sequence
+                )
+            }
+        }
+    }
+
     private enum ConcreteQueryBufferDestination {
         case candidate
         case committing
@@ -36,6 +94,11 @@ package final class ConsoleMessageStore {
         fileprivate var sourceEpoch: UInt64
     }
 
+    package struct PreparedModelEvent {
+        package let effects: Effects
+        package let indexWork: IndexWork?
+    }
+
 #if DEBUG
     package struct PerformanceCounters: Equatable {
         package var fullModelProjectionCount = 0
@@ -54,7 +117,6 @@ package final class ConsoleMessageStore {
     private let queryIndex: ConsoleMessageIndex
     private var queryIndexSequence: UInt64
     private var queryIndexNeedsRebuild: Bool
-    private var fetchedResults: [WeakWebInspectorFetchedResults<ConsoleMessage>]
     private var querySourceEpoch: UInt64
     private var nextConcreteQueryRegistrationID: UInt64
     private var initializingConcreteQueries: [
@@ -77,7 +139,6 @@ package final class ConsoleMessageStore {
         queryIndex = ConsoleMessageIndex()
         queryIndexSequence = 0
         queryIndexNeedsRebuild = false
-        fetchedResults = []
         querySourceEpoch = 0
         nextConcreteQueryRegistrationID = 0
         initializingConcreteQueries = [:]
@@ -92,49 +153,23 @@ package final class ConsoleMessageStore {
         performanceCounters
     }
 
-    package func resetPerformanceCountersForTesting(
-        isolation: isolated (any Actor) = #isolation
-    ) {
-        _ = isolation
+    package func resetPerformanceCountersForTesting() {
         performanceCounters = PerformanceCounters()
     }
 #endif
 
-    package func message(
-        for id: ConsoleMessage.ID,
-        isolation: isolated (any Actor) = #isolation
-    ) -> ConsoleMessage? {
-        _ = isolation
-        return messagesByID[id]
+    package func message(for id: ConsoleMessage.ID) -> ConsoleMessage? {
+        messagesByID[id]
     }
 
-    package func register(
-        _ results: WebInspectorFetchedResults<ConsoleMessage>,
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor) = #isolation
-    ) {
-        let plan = ConsoleMessageQueryPlan(descriptor: results.fetchDescriptor)
-        results.setConsoleItems(
-            currentMessages(isolation: isolation),
-            plan: plan,
-            indexSequence: queryIndexSequence,
-            lookup: { id in self.messagesByID[id] }
-        )
-        fetchedResults.append(WeakWebInspectorFetchedResults(results))
-    }
-
-    package func results(
+    package nonisolated(nonsending) func results(
         matching query: ConsoleQuery,
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor) = #isolation
+        modelContext: WebInspectorModelContext
     ) async throws -> WebInspectorFetchedResults<ConsoleMessage> {
-        await syncQueryIndexIfNeeded(isolation: isolation)
-        let id = allocateConcreteQueryRegistrationID(isolation: isolation)
+        await syncQueryIndexIfNeeded()
+        let id = allocateConcreteQueryRegistrationID()
         let lifetime = WebInspectorQueryRegistrationLifetime()
-        let results = WebInspectorFetchedResults<ConsoleMessage>(
-            fetchDescriptor: WebInspectorFetchDescriptor(),
-            modelContext: modelContext
-        )
+        let results = WebInspectorFetchedResults<ConsoleMessage>(modelContext: modelContext)
         results.installQueryRegistration(id: id, lifetime: lifetime)
         let generation = results.nextConcreteQueryGeneration()
         initializingConcreteQueries[id] = PendingConcreteQuery(
@@ -173,7 +208,7 @@ package final class ConsoleMessageStore {
             query,
             generation: generation,
             projection: installedProjection,
-            lookup: { id in self.messageForResult(id, isolation: isolation) }
+            lookup: { id in self.messageForResult(id) }
         )
         concreteQueryRegistrations[id] = ConcreteQueryRegistration(
             results: WeakWebInspectorFetchedResults(results),
@@ -191,15 +226,14 @@ package final class ConsoleMessageStore {
         return results
     }
 
-    package func update(
+    package nonisolated(nonsending) func update(
         _ query: ConsoleQuery,
-        for results: WebInspectorFetchedResults<ConsoleMessage>,
-        isolation: isolated (any Actor) = #isolation
+        for results: WebInspectorFetchedResults<ConsoleMessage>
     ) async throws {
         guard let id = results.concreteQueryRegistrationID else {
             preconditionFailure("Console fetched results are not registered in this store.")
         }
-        await syncQueryIndexIfNeeded(isolation: isolation)
+        await syncQueryIndexIfNeeded()
         guard var registration = concreteQueryRegistrations[id],
               registration.results.value === results else {
             preconditionFailure("Console fetched results are not registered in this store.")
@@ -270,7 +304,7 @@ package final class ConsoleMessageStore {
             query: query,
             generation: generation,
             isReplacement: true,
-            lookup: { id in self.messageForResult(id, isolation: isolation) }
+            lookup: { id in self.messageForResult(id) }
         )
         if generation > afterCommit.activeGeneration {
             afterCommit.activeGeneration = generation
@@ -287,28 +321,109 @@ package final class ConsoleMessageStore {
         }
     }
 
-    package func updateFetchDescriptor(
-        _ descriptor: WebInspectorFetchDescriptor<ConsoleMessage>,
-        for results: WebInspectorFetchedResults<ConsoleMessage>,
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor) = #isolation
-    ) {
-        let plan = ConsoleMessageQueryPlan(descriptor: descriptor)
-        results.applyConsoleFetchDescriptor(
-            descriptor,
-            plan: plan,
-            messages: currentMessages(isolation: isolation),
-            indexSequence: queryIndexSequence,
-            lookup: { id in self.messagesByID[id] }
+    package func indexWork(for reset: QueryIndexReset) -> IndexWork {
+        IndexWork(
+            index: queryIndex,
+            actions: [
+                .replace(
+                    inputs: reset.inputs,
+                    sequence: reset.sequence,
+                    sourceEpoch: reset.sourceEpoch
+                )
+            ]
         )
     }
 
-    package func apply(
+    package func prepareModelEvent(
         _ event: Console.Event,
         targetID: WebInspectorTarget.ID?,
-        modelContext: WebInspectorContext,
-        registerRuntimeObject: (Runtime.RemoteObject) -> RuntimeObject,
-        isolation: isolated (any Actor) = #isolation
+        modelContext: WebInspectorModelContext,
+        registerRuntimeObject: (Runtime.RemoteObject) -> RuntimeObject
+    ) -> PreparedModelEvent {
+        switch event {
+        case let .messageAdded(payload):
+            precondition(nextMessageOrdinal < Int.max, "ConsoleMessage identity ordinal overflowed.")
+            let id = ConsoleMessage.ID(nextMessageOrdinal)
+            nextMessageOrdinal += 1
+            let message = ConsoleMessage(
+                id: id,
+                message: payload,
+                parameters: payload.parameters.map(registerRuntimeObject),
+                targetID: targetID,
+                modelContext: modelContext
+            )
+            messagesByID[id] = message
+            orderIndicesByID[id] = orderedMessageIDs.count
+            orderedMessageIDs.append(id)
+            lastMessageID = id
+            if let targetID {
+                lastMessageIDByTargetID[targetID] = id
+            }
+            return PreparedModelEvent(
+                effects: Effects(),
+                indexWork: upsertWork(for: message)
+            )
+        case let .messageRepeatCountUpdated(count, timestamp):
+            let candidateID = targetID.flatMap { lastMessageIDByTargetID[$0] } ?? lastMessageID
+            guard let candidateID, let message = messagesByID[candidateID] else {
+                skipEvent("Console.messageRepeatCountUpdated arrived before any tracked message")
+                return PreparedModelEvent(effects: Effects(), indexWork: nil)
+            }
+            message.updateRepeatCount(count, timestamp: timestamp)
+            return PreparedModelEvent(
+                effects: Effects(),
+                indexWork: upsertWork(for: message)
+            )
+        case .messagesCleared:
+            let removedMessages = removeMessages(targetID: targetID)
+            let objects = targetID == nil
+                ? []
+                : unreferencedRuntimeObjects(from: removedMessages)
+            let reset = targetID == nil
+                ? prepareEmptyQueryIndexReset()
+                : prepareQueryIndexReset()
+            return PreparedModelEvent(
+                effects: Effects(
+                    runtimeObjectsToUnregister: objects,
+                    clearedAllMessages: targetID == nil
+                ),
+                indexWork: indexWork(for: reset)
+            )
+        case .unknown:
+            return PreparedModelEvent(effects: Effects(), indexWork: nil)
+        }
+    }
+
+    package func commit(_ result: IndexResult) -> IndexAcknowledgementWork? {
+        let entries = applyConcreteDeliveriesSynchronously(result.deliveries)
+        guard !entries.isEmpty else {
+            return nil
+        }
+        return IndexAcknowledgementWork(index: queryIndex, entries: entries)
+    }
+
+    private func upsertWork(for message: ConsoleMessage) -> IndexWork {
+        var actions: [IndexWork.Action] = []
+        if queryIndexNeedsRebuild {
+            queryIndexNeedsRebuild = false
+            actions.append(.replace(
+                inputs: currentRecordInputs(),
+                sequence: nextQueryIndexSequence(),
+                sourceEpoch: querySourceEpoch
+            ))
+        }
+        actions.append(.upsert(
+            input: recordInput(for: message),
+            sequence: nextQueryIndexSequence()
+        ))
+        return IndexWork(index: queryIndex, actions: actions)
+    }
+
+    package nonisolated(nonsending) func apply(
+        _ event: Console.Event,
+        targetID: WebInspectorTarget.ID?,
+        modelContext: WebInspectorModelContext,
+        registerRuntimeObject: (Runtime.RemoteObject) -> RuntimeObject
     ) async -> Effects {
         switch event {
         case let .messageAdded(payload):
@@ -317,8 +432,7 @@ package final class ConsoleMessageStore {
                 payload,
                 parameters: parameters,
                 targetID: targetID,
-                modelContext: modelContext,
-                isolation: isolation
+                modelContext: modelContext
             )
             return Effects()
         case let .messageRepeatCountUpdated(count, timestamp):
@@ -326,58 +440,47 @@ package final class ConsoleMessageStore {
                 count,
                 timestamp: timestamp,
                 targetID: targetID,
-                modelContext: modelContext,
-                isolation: isolation
+                modelContext: modelContext
             )
             return Effects()
         case .messagesCleared:
-            return await clear(targetID: targetID, modelContext: modelContext, isolation: isolation)
+            return await clear(targetID: targetID, modelContext: modelContext)
         case .unknown:
             return Effects()
         }
     }
 
-    package func resetForReplay(
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor) = #isolation
-    ) async {
-        _ = removeMessages(targetID: nil, isolation: isolation)
-        refreshAllResults(modelContext: modelContext, isolation: isolation)
-        let reset = prepareEmptyQueryIndexReset(isolation: isolation)
-        await finishQueryIndexReset(reset, isolation: isolation)
+    package nonisolated(nonsending) func resetForReplay(modelContext: WebInspectorModelContext) async {
+        _ = removeMessages(targetID: nil)
+        let reset = prepareEmptyQueryIndexReset()
+        await finishQueryIndexReset(reset)
     }
 
     package func prepareClearForLifecycle(
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor) = #isolation
+        modelContext: WebInspectorModelContext
     ) -> (effects: Effects, queryIndexReset: QueryIndexReset) {
-        _ = removeMessages(targetID: nil, isolation: isolation)
-        refreshAllResults(modelContext: modelContext, isolation: isolation)
-        let reset = prepareEmptyQueryIndexReset(isolation: isolation)
+        _ = removeMessages(targetID: nil)
+        let reset = prepareEmptyQueryIndexReset()
         return (
             Effects(clearedAllMessages: true),
             reset
         )
     }
 
-    package func finishQueryIndexReset(
-        _ reset: QueryIndexReset,
-        isolation: isolated (any Actor) = #isolation
-    ) async {
+    package nonisolated(nonsending) func finishQueryIndexReset(_ reset: QueryIndexReset) async {
         let deliveries = await queryIndex.replace(
             with: reset.inputs,
             sequence: reset.sequence,
             sourceEpoch: reset.sourceEpoch
         )
-        await applyConcreteDeliveries(deliveries, isolation: isolation)
+        await applyConcreteDeliveries(deliveries)
     }
 
-    private func insertMessage(
+    private nonisolated(nonsending) func insertMessage(
         _ payload: Console.Message,
         parameters: [RuntimeObject],
         targetID: WebInspectorTarget.ID?,
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor)
+        modelContext: WebInspectorModelContext
     ) async {
         precondition(nextMessageOrdinal < Int.max, "ConsoleMessage identity ordinal overflowed.")
         let id = ConsoleMessage.ID(nextMessageOrdinal)
@@ -396,15 +499,14 @@ package final class ConsoleMessageStore {
         if let targetID {
             lastMessageIDByTargetID[targetID] = id
         }
-        await notifyMessageInserted(message, modelContext: modelContext, isolation: isolation)
+        await notifyMessageInserted(message, modelContext: modelContext)
     }
 
-    private func updateRepeatCount(
+    private nonisolated(nonsending) func updateRepeatCount(
         _ count: Int,
         timestamp: Double?,
         targetID: WebInspectorTarget.ID?,
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor)
+        modelContext: WebInspectorModelContext
     ) async {
         let candidateID: ConsoleMessage.ID?
         if let targetID {
@@ -418,26 +520,21 @@ package final class ConsoleMessageStore {
             return
         }
         message.updateRepeatCount(count, timestamp: timestamp)
-        await notifyMessageMutated(message, modelContext: modelContext, isolation: isolation)
+        await notifyMessageMutated(message, modelContext: modelContext)
     }
 
-    private func clear(
+    private nonisolated(nonsending) func clear(
         targetID: WebInspectorTarget.ID?,
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor)
+        modelContext: WebInspectorModelContext
     ) async -> Effects {
-        let removedMessages = removeMessages(targetID: targetID, isolation: isolation)
+        let removedMessages = removeMessages(targetID: targetID)
         let runtimeObjectsToUnregister = targetID == nil
             ? []
-            : unreferencedRuntimeObjects(
-                from: removedMessages,
-                isolation: isolation
-            )
-        refreshAllResults(modelContext: modelContext, isolation: isolation)
+            : unreferencedRuntimeObjects(from: removedMessages)
         let reset = targetID == nil
-            ? prepareEmptyQueryIndexReset(isolation: isolation)
-            : prepareQueryIndexReset(isolation: isolation)
-        await finishQueryIndexReset(reset, isolation: isolation)
+            ? prepareEmptyQueryIndexReset()
+            : prepareQueryIndexReset()
+        await finishQueryIndexReset(reset)
         return Effects(
             runtimeObjectsToUnregister: runtimeObjectsToUnregister,
             clearedAllMessages: targetID == nil
@@ -445,11 +542,7 @@ package final class ConsoleMessageStore {
     }
 
     @discardableResult
-    private func removeMessages(
-        targetID: WebInspectorTarget.ID?,
-        isolation: isolated (any Actor)
-    ) -> [ConsoleMessage] {
-        _ = isolation
+    private func removeMessages(targetID: WebInspectorTarget.ID?) -> [ConsoleMessage] {
         queryIndexNeedsRebuild = false
         guard let targetID else {
             let removedMessages = Array(messagesByID.values)
@@ -472,7 +565,7 @@ package final class ConsoleMessageStore {
             orderIndicesByID[id] = nil
         }
         orderedMessageIDs.removeAll { removedIDs.contains($0) }
-        rebuildOrderIndices(isolation: isolation)
+        rebuildOrderIndices()
         if let lastMessageID, removedIDs.contains(lastMessageID) {
             self.lastMessageID = orderedMessageIDs.last
         }
@@ -483,10 +576,8 @@ package final class ConsoleMessageStore {
     }
 
     private func unreferencedRuntimeObjects(
-        from removedMessages: [ConsoleMessage],
-        isolation: isolated (any Actor)
+        from removedMessages: [ConsoleMessage]
     ) -> [RuntimeObject] {
-        _ = isolation
         let removedObjectsByID = Dictionary(
             removedMessages.flatMap(\.parameters).map { ($0.id, $0) },
             uniquingKeysWith: { first, _ in first }
@@ -500,8 +591,7 @@ package final class ConsoleMessageStore {
         }
     }
 
-    private func rebuildOrderIndices(isolation: isolated (any Actor)) {
-        _ = isolation
+    private func rebuildOrderIndices() {
         orderIndicesByID = Dictionary(
             uniqueKeysWithValues: orderedMessageIDs.enumerated().map { index, id in
                 (id, index)
@@ -509,18 +599,7 @@ package final class ConsoleMessageStore {
         )
     }
 
-    private func currentMessages(isolation: isolated (any Actor)) -> [ConsoleMessage] {
-        _ = isolation
-#if DEBUG
-        performanceCounters.fullModelProjectionCount += orderedMessageIDs.count
-#endif
-        return orderedMessageIDs.compactMap { messagesByID[$0] }
-    }
-
-    private func currentRecordInputs(
-        isolation: isolated (any Actor)
-    ) -> [ConsoleMessageRecordInput] {
-        _ = isolation
+    private func currentRecordInputs() -> [ConsoleMessageRecordInput] {
 #if DEBUG
         performanceCounters.fullRecordProjectionCount += orderedMessageIDs.count
 #endif
@@ -529,11 +608,7 @@ package final class ConsoleMessageStore {
         }
     }
 
-    private func recordInput(
-        for message: ConsoleMessage,
-        isolation: isolated (any Actor)
-    ) -> ConsoleMessageRecordInput {
-        _ = isolation
+    private func recordInput(for message: ConsoleMessage) -> ConsoleMessageRecordInput {
 #if DEBUG
         performanceCounters.incrementalRecordProjectionCount += 1
 #endif
@@ -541,16 +616,11 @@ package final class ConsoleMessageStore {
         return ConsoleMessageRecordInput(message: message, orderIndex: orderIndex)
     }
 
-    private func isCurrent(
-        _ message: ConsoleMessage,
-        isolation: isolated (any Actor)
-    ) -> Bool {
-        _ = isolation
+    private func isCurrent(_ message: ConsoleMessage) -> Bool {
         return messagesByID[message.id] === message
     }
 
-    private func nextQueryIndexSequence(isolation: isolated (any Actor)) -> UInt64 {
-        _ = isolation
+    private func nextQueryIndexSequence() -> UInt64 {
         precondition(
             queryIndexSequence < UInt64.max,
             "ConsoleMessageIndex mutation sequence overflowed."
@@ -559,17 +629,15 @@ package final class ConsoleMessageStore {
         return queryIndexSequence
     }
 
-    private func prepareQueryIndexReset(
-        isolation: isolated (any Actor)
-    ) -> QueryIndexReset {
+    private func prepareQueryIndexReset() -> QueryIndexReset {
         precondition(
             querySourceEpoch < UInt64.max,
             "Console query source epoch overflowed."
         )
         querySourceEpoch += 1
         queryIndexNeedsRebuild = false
-        let sequence = nextQueryIndexSequence(isolation: isolation)
-        let inputs = currentRecordInputs(isolation: isolation)
+        let sequence = nextQueryIndexSequence()
+        let inputs = currentRecordInputs()
         return QueryIndexReset(
             inputs: inputs,
             sequence: sequence,
@@ -577,23 +645,18 @@ package final class ConsoleMessageStore {
         )
     }
 
-    private func prepareEmptyQueryIndexReset(
-        isolation: isolated (any Actor)
-    ) -> QueryIndexReset {
-        let reset = prepareQueryIndexReset(isolation: isolation)
-        publishEmptyConcreteQueryResults(for: reset, isolation: isolation)
+    private func prepareEmptyQueryIndexReset() -> QueryIndexReset {
+        let reset = prepareQueryIndexReset()
+        publishEmptyConcreteQueryResults(for: reset)
         return reset
     }
 
-    private func publishEmptyConcreteQueryResults(
-        for reset: QueryIndexReset,
-        isolation: isolated (any Actor)
-    ) {
+    private func publishEmptyConcreteQueryResults(for reset: QueryIndexReset) {
         precondition(
             reset.inputs.isEmpty,
             "Only a full Console lifecycle reset can publish an immediate empty query state."
         )
-        pruneConcreteQueryRegistrations(isolation: isolation)
+        pruneConcreteQueryRegistrations()
         let projection = ConsoleMessageIndex.QueryProjection(
             sourceEpoch: reset.sourceEpoch,
             sequence: reset.sequence,
@@ -613,144 +676,56 @@ package final class ConsoleMessageStore {
         }
     }
 
-    private func syncQueryIndexIfNeeded(isolation: isolated (any Actor)) async {
+    private nonisolated(nonsending) func syncQueryIndexIfNeeded() async {
         guard queryIndexNeedsRebuild else {
             return
         }
         queryIndexNeedsRebuild = false
-        let sequence = nextQueryIndexSequence(isolation: isolation)
-        let inputs = currentRecordInputs(isolation: isolation)
+        let sequence = nextQueryIndexSequence()
+        let inputs = currentRecordInputs()
         let deliveries = await queryIndex.replace(
             with: inputs,
             sequence: sequence,
             sourceEpoch: querySourceEpoch
         )
-        await applyConcreteDeliveries(deliveries, isolation: isolation)
+        await applyConcreteDeliveries(deliveries)
     }
 
-    private func notifyMessageInserted(
+    private nonisolated(nonsending) func notifyMessageInserted(
         _ message: ConsoleMessage,
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor)
+        modelContext: WebInspectorModelContext
     ) async {
-        await syncQueryIndexIfNeeded(isolation: isolation)
-        guard isCurrent(message, isolation: isolation) else {
+        await syncQueryIndexIfNeeded()
+        guard isCurrent(message) else {
             return
         }
-        let sequence = nextQueryIndexSequence(isolation: isolation)
-        let input = recordInput(for: message, isolation: isolation)
+        let sequence = nextQueryIndexSequence()
+        let input = recordInput(for: message)
         let deliveries = await queryIndex.upsert(input, sequence: sequence)
-        await applyConcreteDeliveries(deliveries, isolation: isolation)
-        guard isCurrent(message, isolation: isolation) else {
+        await applyConcreteDeliveries(deliveries)
+        guard isCurrent(message) else {
             return
         }
-        await applyResultDeltas(
-            for: message,
-            inserted: true,
-            modelContext: modelContext,
-            isolation: isolation
-        )
     }
 
-    private func notifyMessageMutated(
+    private nonisolated(nonsending) func notifyMessageMutated(
         _ message: ConsoleMessage,
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor)
+        modelContext: WebInspectorModelContext
     ) async {
-        await syncQueryIndexIfNeeded(isolation: isolation)
-        guard isCurrent(message, isolation: isolation) else {
+        await syncQueryIndexIfNeeded()
+        guard isCurrent(message) else {
             return
         }
-        let sequence = nextQueryIndexSequence(isolation: isolation)
-        let input = recordInput(for: message, isolation: isolation)
+        let sequence = nextQueryIndexSequence()
+        let input = recordInput(for: message)
         let deliveries = await queryIndex.upsert(input, sequence: sequence)
-        await applyConcreteDeliveries(deliveries, isolation: isolation)
-        guard isCurrent(message, isolation: isolation) else {
+        await applyConcreteDeliveries(deliveries)
+        guard isCurrent(message) else {
             return
         }
-        await applyResultDeltas(
-            for: message,
-            inserted: false,
-            modelContext: modelContext,
-            isolation: isolation
-        )
     }
 
-    private func applyResultDeltas(
-        for message: ConsoleMessage,
-        inserted: Bool,
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor)
-    ) async {
-        pruneFetchedResults(isolation: isolation)
-        for registration in fetchedResults {
-            guard let results = registration.value else {
-                continue
-            }
-            let plan = results.currentConsoleQueryPlan()
-            if plan.requiresModelQuery {
-                if inserted {
-                    results.insertConsoleMessage(
-                        message,
-                        lookup: { id in self.messagesByID[id] }
-                    )
-                } else {
-                    results.refreshConsoleMessageAfterMutation(
-                        message,
-                        lookup: { id in self.messagesByID[id] }
-                    )
-                }
-                continue
-            }
-            let oldSnapshot = results.consoleSnapshotForDelta
-            let resultTopologyRevision = results.topologyRevision
-            let resultIndexSequence = results.consoleIndexSequenceForDelta
-            let indexSequence = queryIndexSequence
-            let delta = await queryIndex.delta(
-                plan: plan,
-                sectionBy: results.sectionBy,
-                oldSnapshot: oldSnapshot,
-                changedSince: resultIndexSequence
-            )
-            guard queryIndexSequence == indexSequence,
-                  results.topologyRevision == resultTopologyRevision,
-                  results.consoleSnapshotForDelta == oldSnapshot else {
-                continue
-            }
-            results.applyConsoleDelta(
-                delta,
-                lookup: { id in self.messageForResult(id, isolation: isolation) }
-            )
-        }
-    }
-
-    private func refreshAllResults(
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor)
-    ) {
-        pruneFetchedResults(isolation: isolation)
-        guard fetchedResults.isEmpty == false else {
-            return
-        }
-        let messages = currentMessages(isolation: isolation)
-        for registration in fetchedResults {
-            guard let results = registration.value else {
-                continue
-            }
-            let plan = ConsoleMessageQueryPlan(descriptor: results.fetchDescriptor)
-            results.setConsoleItems(
-                messages,
-                plan: plan,
-                indexSequence: queryIndexSequence,
-                lookup: { id in self.messagesByID[id] }
-            )
-        }
-    }
-
-    private func allocateConcreteQueryRegistrationID(
-        isolation: isolated (any Actor)
-    ) -> WebInspectorQueryRegistrationID {
-        _ = isolation
+    private func allocateConcreteQueryRegistrationID() -> WebInspectorQueryRegistrationID {
         precondition(
             nextConcreteQueryRegistrationID < UInt64.max,
             "Console concrete query registration identity overflowed."
@@ -760,17 +735,19 @@ package final class ConsoleMessageStore {
         return id
     }
 
-    private func applyConcreteDeliveries(
-        _ deliveries: [ConsoleMessageIndex.QueryDelivery],
-        isolation: isolated (any Actor)
-    ) async {
-        pruneConcreteQueryRegistrations(isolation: isolation)
-        var acknowledgements: [(
-            id: WebInspectorQueryRegistrationID,
-            generation: UInt64,
-            sourceEpoch: UInt64,
-            sequence: UInt64
-        )] = []
+    private nonisolated(nonsending) func applyConcreteDeliveries(_ deliveries: [ConsoleMessageIndex.QueryDelivery]) async {
+        let acknowledgements = applyConcreteDeliveriesSynchronously(deliveries)
+        await IndexAcknowledgementWork(
+            index: queryIndex,
+            entries: acknowledgements
+        ).run()
+    }
+
+    private func applyConcreteDeliveriesSynchronously(
+        _ deliveries: [ConsoleMessageIndex.QueryDelivery]
+    ) -> [IndexAcknowledgementWork.Entry] {
+        pruneConcreteQueryRegistrations()
+        var acknowledgements: [IndexAcknowledgementWork.Entry] = []
         for delivery in deliveries {
             guard delivery.projection.sourceEpoch == querySourceEpoch else {
                 continue
@@ -798,14 +775,14 @@ package final class ConsoleMessageStore {
                     query: registration.activeQuery,
                     generation: delivery.generation,
                     isReplacement: false,
-                    lookup: { id in self.messageForResult(id, isolation: isolation) }
+                    lookup: { id in self.messageForResult(id) }
                 )
                 if applied {
-                    acknowledgements.append((
-                        id,
-                        delivery.generation,
-                        delivery.projection.sourceEpoch,
-                        delivery.projection.sequence
+                    acknowledgements.append(IndexAcknowledgementWork.Entry(
+                        id: id,
+                        generation: delivery.generation,
+                        sourceEpoch: delivery.projection.sourceEpoch,
+                        sequence: delivery.projection.sequence
                     ))
                 }
             } else if var candidate = registration.candidate,
@@ -821,14 +798,7 @@ package final class ConsoleMessageStore {
             }
             concreteQueryRegistrations[id] = registration
         }
-        for acknowledgement in acknowledgements {
-            await queryIndex.acknowledge(
-                id: acknowledgement.id,
-                generation: acknowledgement.generation,
-                sourceEpoch: acknowledgement.sourceEpoch,
-                sequence: acknowledgement.sequence
-            )
-        }
+        return acknowledgements
     }
 
     private func buffer(
@@ -905,36 +875,23 @@ package final class ConsoleMessageStore {
         )
     }
 
-    private func pruneConcreteQueryRegistrations(isolation: isolated (any Actor)) {
-        _ = isolation
+    private func pruneConcreteQueryRegistrations() {
         concreteQueryRegistrations = concreteQueryRegistrations.filter { _, registration in
             registration.results.value != nil
         }
     }
 
 #if DEBUG
-    package func concreteQueryRegistrationCountForTesting(
-        isolation: isolated (any Actor) = #isolation
-    ) async -> Int {
-        _ = isolation
+    package nonisolated(nonsending) func concreteQueryRegistrationCountForTesting() async -> Int {
         return await queryIndex.queryRegistrationCountForTesting()
     }
 #endif
 
-    private func messageForResult(
-        _ id: ConsoleMessage.ID,
-        isolation: isolated (any Actor)
-    ) -> ConsoleMessage? {
-        _ = isolation
+    private func messageForResult(_ id: ConsoleMessage.ID) -> ConsoleMessage? {
 #if DEBUG
         performanceCounters.resultIdentityLookupCount += 1
 #endif
         return messagesByID[id]
-    }
-
-    private func pruneFetchedResults(isolation: isolated (any Actor)) {
-        _ = isolation
-        fetchedResults.removeAll { $0.value == nil }
     }
 
     private func skipEvent(_ reason: String) {

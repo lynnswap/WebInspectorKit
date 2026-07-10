@@ -1,5 +1,6 @@
 #if canImport(UIKit)
 import UIKit
+import WebInspectorDataKit
 
 /// A tab shown by the built-in WebInspectorKit UI.
 ///
@@ -34,6 +35,9 @@ public struct WebInspectorTab: Equatable, Hashable, Identifiable {
 
     /// Optional tab image.
     public let image: UIImage?
+
+    /// Model domains that must be ready before this tab is used.
+    public let requiredDomains: Set<WebInspectorModelContext.Domain>
     package let content: Content
 
     package enum BuiltIn: Hashable {
@@ -72,11 +76,13 @@ public struct WebInspectorTab: Equatable, Hashable, Identifiable {
         id: ID,
         title: String,
         image: UIImage?,
-        builtIn: BuiltIn
+        builtIn: BuiltIn,
+        requiredDomains: Set<WebInspectorModelContext.Domain>
     ) {
         self.id = id
         self.title = title
         self.image = image
+        self.requiredDomains = requiredDomains
         self.content = .builtIn(builtIn)
     }
 
@@ -90,11 +96,13 @@ public struct WebInspectorTab: Equatable, Hashable, Identifiable {
         id: ID,
         title: String,
         image: UIImage? = nil,
+        requiredDomains: Set<WebInspectorModelContext.Domain> = [],
         makeViewController: @escaping @MainActor (_ session: WebInspectorSession) -> UIViewController
     ) {
         self.id = id
         self.title = title
         self.image = image
+        self.requiredDomains = requiredDomains
         self.content = .custom(CustomContent(makeViewController: makeViewController))
     }
 
@@ -103,12 +111,14 @@ public struct WebInspectorTab: Equatable, Hashable, Identifiable {
         id: ID,
         title: String,
         systemImage: String,
+        requiredDomains: Set<WebInspectorModelContext.Domain> = [],
         makeViewController: @escaping @MainActor (_ session: WebInspectorSession) -> UIViewController
     ) {
         self.init(
             id: id,
             title: title,
             image: UIImage(systemName: systemImage),
+            requiredDomains: requiredDomains,
             makeViewController: makeViewController
         )
     }
@@ -118,7 +128,8 @@ public struct WebInspectorTab: Equatable, Hashable, Identifiable {
         id: "webinspector_dom",
         title: "DOM",
         image: UIImage(systemName: "chevron.left.forwardslash.chevron.right"),
-        builtIn: .dom
+        builtIn: .dom,
+        requiredDomains: [.dom, .css]
     )
 
     /// Built-in Network inspector tab.
@@ -126,7 +137,8 @@ public struct WebInspectorTab: Equatable, Hashable, Identifiable {
         id: "webinspector_network",
         title: "Network",
         image: UIImage(systemName: "waveform.path.ecg.rectangle"),
-        builtIn: .network
+        builtIn: .network,
+        requiredDomains: [.network]
     )
 }
 #endif

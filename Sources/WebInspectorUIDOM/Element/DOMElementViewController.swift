@@ -7,7 +7,7 @@ import UIKit
 
 @MainActor
 package final class DOMElementViewController: UICollectionViewController {
-    private let context: WebInspectorContext
+    private let context: WebInspectorModelContext
     private var statusTask: Task<Void, Never>?
     private var selectedStylesObservation: PortableObservationTracking.Token?
     private var observedSelectedNodeObjectID: ObjectIdentifier?
@@ -31,7 +31,7 @@ package final class DOMElementViewController: UICollectionViewController {
 
     private lazy var dataSource = makeDataSource()
 
-    package init(context: WebInspectorContext) {
+    package init(context: WebInspectorModelContext) {
         self.context = context
         super.init(collectionViewLayout: Self.makeLayout())
     }

@@ -2,7 +2,7 @@ import WebInspectorProxyKit
 
 /// Owns the semantic DOM graph and every mutation that can change it.
 ///
-/// `WebInspectorContext` remains the attachment and I/O coordinator. It gives
+/// `WebInspectorModelContext` remains the attachment and I/O coordinator. It gives
 /// this store protocol payloads and applies the explicit effects returned by
 /// the store. The store itself never starts transport work.
 package final class DOMStateStore {
@@ -43,6 +43,7 @@ package final class DOMStateStore {
     package private(set) var selectedNode: DOMNode?
     package private(set) var isElementPickerEnabled: Bool
     package private(set) var documentEpoch: Int
+    package private(set) var selectionRevision: UInt64
 
     private var nodesByID: [DOMNode.ID: DOMNode]
     private var frameDocumentProjectionIndex: FrameDocumentProjectionIndex
@@ -57,6 +58,7 @@ package final class DOMStateStore {
         selectedNode = nil
         isElementPickerEnabled = false
         documentEpoch = 0
+        selectionRevision = 0
         nodesByID = [:]
         frameDocumentProjectionIndex = FrameDocumentProjectionIndex()
         treeStates = []
@@ -67,45 +69,60 @@ package final class DOMStateStore {
     }
 
     package func node(
-        for id: DOMNode.ID,
-        isolation: isolated (any Actor) = #isolation
+        for id: DOMNode.ID
     ) -> DOMNode? {
-        _ = isolation
         return nodesByID[id]
     }
 
     package func requiredNode(
-        for id: DOMNode.ID,
-        isolation: isolated (any Actor) = #isolation
+        for id: DOMNode.ID
     ) throws -> DOMNode {
-        _ = isolation
         guard let node = nodesByID[id] else {
-            throw WebInspectorProxyError.disconnected("DOMNode is not registered in this WebInspectorContext.")
+            throw WebInspectorProxyError.disconnected("DOMNode is not registered in this WebInspectorModelContext.")
         }
         return node
     }
 
     @discardableResult
     package func registeredNode(
-        _ node: DOMNode,
-        isolation: isolated (any Actor) = #isolation
+        _ node: DOMNode
     ) throws -> DOMNode {
-        _ = isolation
         guard nodesByID[node.id] === node else {
-            throw WebInspectorProxyError.disconnected("DOMNode is not registered in this WebInspectorContext.")
+            throw WebInspectorProxyError.disconnected("DOMNode is not registered in this WebInspectorModelContext.")
         }
         return node
     }
 
+    package func styles(
+        containing propertyID: CSSStyleProperty.ID
+    ) -> CSSStyles? {
+        nodesByID.values.lazy.compactMap(\.elementStyles).first {
+            $0.contains(propertyID: propertyID)
+        }
+    }
+
+    package func styles(
+        containing ruleID: CSSStyleRule.ID
+    ) -> CSSStyles? {
+        nodesByID.values.lazy.compactMap(\.elementStyles).first {
+            $0.contains(ruleID: ruleID)
+        }
+    }
+
+    package func markAllStylesNeedsRefresh() {
+        for styles in nodesByID.values.compactMap(\.elementStyles) {
+            styles.markNeedsRefresh()
+        }
+    }
+
     package func select(
         _ node: DOMNode?,
-        reveal: DOMRevealPolicy,
-        isolation: isolated (any Actor) = #isolation
+        reveal: DOMRevealPolicy
     ) -> Effects {
-        _ = isolation
         if let node, nodesByID[node.id] !== node {
-            preconditionFailure("DOMNode is not registered in this WebInspectorContext.")
+            preconditionFailure("DOMNode is not registered in this WebInspectorModelContext.")
         }
+        advanceSelectionRevision()
         pendingInspectedNodeID = nil
         selectedNode = node
         notifyDOMTreeSelectionChanged(node, reveal: reveal)
@@ -113,15 +130,13 @@ package final class DOMStateStore {
     }
 
     package func treeController(
-        root requestedRoot: DOMNode?,
-        isolation: isolated (any Actor) = #isolation
+        root requestedRoot: DOMNode?
     ) throws -> DOMTreeController {
-        _ = isolation
         guard let root = requestedRoot ?? rootNode else {
             throw WebInspectorProxyError.disconnected("WebInspectorDataKit has no DOM root node.")
         }
         guard nodesByID[root.id] === root else {
-            preconditionFailure("DOMTreeController root is not registered in this WebInspectorContext.")
+            preconditionFailure("DOMTreeController root is not registered in this WebInspectorModelContext.")
         }
 
         let tree = DOMTreeState(rootNode: root, selectedNode: selectedNode)
@@ -131,9 +146,7 @@ package final class DOMStateStore {
     }
 
     package func rootTreeController(
-        isolation: isolated (any Actor) = #isolation
     ) -> DOMTreeController {
-        _ = isolation
         let tree = DOMTreeState(rootNode: rootNode, selectedNode: selectedNode)
         treeStates.append(WeakDOMTreeState(tree))
         pruneReleasedTreeStates()
@@ -141,18 +154,14 @@ package final class DOMStateStore {
     }
 
     package func currentTreeSnapshot(
-        isolation: isolated (any Actor) = #isolation
     ) -> DOMTreeSnapshot {
-        _ = isolation
         return DOMTreeSnapshot.make(revision: 0, rootNode: rootNode, selectedNode: selectedNode)
     }
 
     package func currentTreeSnapshot(
-        containing nodes: [DOMNode],
-        isolation: isolated (any Actor) = #isolation
+        containing nodes: [DOMNode]
     ) throws -> DOMTreeSnapshot {
-        _ = isolation
-        let snapshot = currentTreeSnapshot(isolation: isolation)
+        let snapshot = currentTreeSnapshot()
         for node in nodes where snapshot.node(for: node.id) == nil {
             throw WebInspectorProxyError.disconnected("DOMNode is not in the current DOM tree.")
         }
@@ -160,15 +169,13 @@ package final class DOMStateStore {
     }
 
     package func sortedDeletionNodes(
-        for nodeIDs: [DOMNode.ID],
-        isolation: isolated (any Actor) = #isolation
+        for nodeIDs: [DOMNode.ID]
     ) throws -> (nodes: [DOMNode], snapshot: DOMTreeSnapshot) {
-        _ = isolation
         var seenNodeIDs: Set<DOMNode.ID> = []
         let nodes = try nodeIDs
-            .map { try requiredNode(for: $0, isolation: isolation) }
+            .map { try requiredNode(for: $0) }
             .filter { seenNodeIDs.insert($0.id).inserted }
-        let snapshot = try currentTreeSnapshot(containing: nodes, isolation: isolation)
+        let snapshot = try currentTreeSnapshot(containing: nodes)
         let sortedNodes = nodes.sorted {
             snapshot.ancestorNodeIDs(of: $0.id).count > snapshot.ancestorNodeIDs(of: $1.id).count
         }
@@ -176,15 +183,13 @@ package final class DOMStateStore {
     }
 
     package func sortedDeletionNodes(
-        for nodes: [DOMNode],
-        isolation: isolated (any Actor) = #isolation
+        for nodes: [DOMNode]
     ) throws -> (nodes: [DOMNode], snapshot: DOMTreeSnapshot) {
-        _ = isolation
         var seenNodeIDs: Set<DOMNode.ID> = []
         let registeredNodes = try nodes
-            .map { try registeredNode($0, isolation: isolation) }
+            .map { try registeredNode($0) }
             .filter { seenNodeIDs.insert($0.id).inserted }
-        let snapshot = try currentTreeSnapshot(containing: registeredNodes, isolation: isolation)
+        let snapshot = try currentTreeSnapshot(containing: registeredNodes)
         let sortedNodes = registeredNodes.sorted {
             snapshot.ancestorNodeIDs(of: $0.id).count > snapshot.ancestorNodeIDs(of: $1.id).count
         }
@@ -193,10 +198,8 @@ package final class DOMStateStore {
 
     package func clearSelectionIfDeleted(
         _ deletedRootIDs: [DOMNode.ID],
-        snapshot: DOMTreeSnapshot,
-        isolation: isolated (any Actor) = #isolation
+        snapshot: DOMTreeSnapshot
     ) -> Effects {
-        _ = isolation
         guard let selectedNode else {
             return Effects()
         }
@@ -217,41 +220,31 @@ package final class DOMStateStore {
     }
 
     package func setElementPickerEnabled(
-        _ enabled: Bool,
-        isolation: isolated (any Actor) = #isolation
+        _ enabled: Bool
     ) -> Effects {
-        _ = isolation
         isElementPickerEnabled = enabled
         return Effects(statusChanged: true)
     }
 
     package func recordPageHighlight(
-        isolation: isolated (any Actor) = #isolation
     ) {
-        _ = isolation
         pageHighlightDocumentEpoch = documentEpoch
     }
 
     package func clearPageHighlight(
-        isolation: isolated (any Actor) = #isolation
     ) {
-        _ = isolation
         pageHighlightDocumentEpoch = nil
     }
 
     package func shouldSendPageHighlightClearAfterReset(
-        isolation: isolated (any Actor) = #isolation
     ) -> Bool {
-        _ = isolation
         return pageHighlightDocumentEpoch == nil
     }
 
     package func recordEditHistoryTarget(
         _ target: WebInspectorTarget,
-        options: WebInspectorMutationOptions,
-        isolation: isolated (any Actor) = #isolation
+        options: DOMMutationPolicy
     ) {
-        _ = isolation
         guard options.undo == .automatic else {
             return
         }
@@ -262,10 +255,8 @@ package final class DOMStateStore {
     package func undoRedoTarget(
         capturedTarget: WebInspectorTarget?,
         fallbackTarget: WebInspectorTarget?,
-        documentEpoch capturedDocumentEpoch: Int,
-        isolation: isolated (any Actor) = #isolation
+        documentEpoch capturedDocumentEpoch: Int
     ) throws -> WebInspectorTarget {
-        _ = isolation
         guard documentEpoch == capturedDocumentEpoch else {
             throw WebInspectorProxyError.disconnected("DOM undo/redo target is no longer current.")
         }
@@ -283,25 +274,20 @@ package final class DOMStateStore {
     }
 
     package func capturedEditHistoryTarget(
-        isolation: isolated (any Actor) = #isolation
     ) -> WebInspectorTarget? {
-        _ = isolation
         return editHistoryTarget
     }
 
     @discardableResult
     package func advanceDocumentEpoch(
-        isolation: isolated (any Actor) = #isolation
     ) -> Int {
-        _ = isolation
         documentEpoch += 1
         return documentEpoch
     }
 
     package func resetDocument(
-        isolation: isolated (any Actor) = #isolation
     ) -> Effects {
-        _ = isolation
+        advanceSelectionRevision()
         let shouldClearPageHighlight = pageHighlightDocumentEpoch != nil
         rootNode = nil
         selectedNode = nil
@@ -325,30 +311,26 @@ package final class DOMStateStore {
 
     package func apply(
         _ event: DOM.Event,
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor) = #isolation
+        modelContext: WebInspectorModelContext
     ) -> Effects {
-        _ = isolation
         var effects = Effects()
         switch event {
         case .documentUpdated:
-            advanceDocumentEpoch(isolation: isolation)
-            effects.merge(resetDocument(isolation: isolation))
+            advanceDocumentEpoch()
+            effects.merge(resetDocument())
             effects.shouldReloadDocument = true
         case let .setChildNodes(parent, nodes):
             effects.merge(applySetChildNodes(
                 parent: parent,
                 nodes: nodes,
-                modelContext: modelContext,
-                isolation: isolation
+                modelContext: modelContext
             ))
         case let .childNodeInserted(parent, previous, node):
             effects.merge(applyChildNodeInserted(
                 parent: parent,
                 previous: previous,
                 node: node,
-                modelContext: modelContext,
-                isolation: isolation
+                modelContext: modelContext
             ))
         case let .childNodeRemoved(parent, node):
             effects.merge(applyChildNodeRemoved(parent: parent, node: node))
@@ -411,6 +393,7 @@ package final class DOMStateStore {
             effects.statusChanged = true
             let inspectedNodeID = DOMNode.ID(id)
             guard let node = nodesByID[inspectedNodeID], isNodeAttachedToCurrentTree(node) else {
+                advanceSelectionRevision()
                 requestFrameDocumentIfNeeded(
                     forNodeID: inspectedNodeID,
                     reason: "DOM.inspect",
@@ -418,13 +401,12 @@ package final class DOMStateStore {
                 )
                 pendingInspectedNodeID = inspectedNodeID
                 effects.merge(resolvePendingInspectedNode(
-                    requestSubtreeIfNeeded: true,
-                    isolation: isolation
+                    requestSubtreeIfNeeded: true
                 ))
                 return effects
             }
             pendingInspectedNodeID = nil
-            effects.merge(select(node, reveal: .selectAndScroll, isolation: isolation))
+            effects.merge(select(node, reveal: .selectAndScroll))
             effects.inspectedNode = node
         case .detachedRoot:
             skipEvent("DOM.setChildNodes detached root deferred; subtree not indexed")
@@ -432,8 +414,7 @@ package final class DOMStateStore {
             effects.merge(applyShadowRootPushed(
                 host: host,
                 root: root,
-                modelContext: modelContext,
-                isolation: isolation
+                modelContext: modelContext
             ))
         case let .shadowRootPopped(host, root):
             effects.merge(applyShadowRootPopped(host: host, root: root))
@@ -441,8 +422,7 @@ package final class DOMStateStore {
             effects.merge(applyPseudoElementAdded(
                 parent: parent,
                 element: element,
-                modelContext: modelContext,
-                isolation: isolation
+                modelContext: modelContext
             ))
         case let .pseudoElementRemoved(parent, element):
             effects.merge(applyPseudoElementRemoved(parent: parent, element: element))
@@ -453,15 +433,21 @@ package final class DOMStateStore {
         return effects
     }
 
+    private func advanceSelectionRevision() {
+        precondition(
+            selectionRevision < UInt64.max,
+            "DOM selection revision exhausted UInt64."
+        )
+        selectionRevision += 1
+    }
+
     @discardableResult
     package func applyDocument(
         _ payload: DOM.Node,
         expectedEpoch: Int,
         reason: DOMTreeSnapshotReason,
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor) = #isolation
+        modelContext: WebInspectorModelContext
     ) -> Effects? {
-        _ = isolation
         guard expectedEpoch == documentEpoch else {
             return nil
         }
@@ -476,8 +462,7 @@ package final class DOMStateStore {
         )
         notifyDOMTreeSnapshot(reason: reason)
         effects.merge(resolvePendingInspectedNode(
-            requestSubtreeIfNeeded: true,
-            isolation: isolation
+            requestSubtreeIfNeeded: true
         ))
         return effects
     }
@@ -487,10 +472,8 @@ package final class DOMStateStore {
         _ document: DOM.Node,
         frameTargetID: WebInspectorTarget.ID,
         expectedEpoch: Int,
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor) = #isolation
+        modelContext: WebInspectorModelContext
     ) -> Effects? {
-        _ = isolation
         guard expectedEpoch == documentEpoch else {
             return nil
         }
@@ -518,17 +501,14 @@ package final class DOMStateStore {
             notifyDOMTreeChildrenReplaced(parent: owner)
         }
         effects.merge(resolvePendingInspectedNode(
-            requestSubtreeIfNeeded: true,
-            isolation: isolation
+            requestSubtreeIfNeeded: true
         ))
         return effects
     }
 
     package func detachProjectedFrameDocument(
-        forFrameID frameID: FrameID,
-        isolation: isolated (any Actor) = #isolation
+        forFrameID frameID: FrameID
     ) -> Effects {
-        _ = isolation
         var effects = Effects()
         let owners = nodesByID.values.filter { $0.isFrameOwner && $0.frameID == frameID }
         for owner in owners {
@@ -549,8 +529,7 @@ package final class DOMStateStore {
     private func applySetChildNodes(
         parent: DOM.Node.ID,
         nodes: [DOM.Node],
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor)
+        modelContext: WebInspectorModelContext
     ) -> Effects {
         var effects = Effects()
         guard let parentNode = nodesByID[DOMNode.ID(parent)] else {
@@ -583,8 +562,7 @@ package final class DOMStateStore {
         parentNode.setChildren(newChildren)
         notifyDOMTreeChildrenReplaced(parent: parentNode)
         effects.merge(resolvePendingInspectedNode(
-            requestSubtreeIfNeeded: false,
-            isolation: isolation
+            requestSubtreeIfNeeded: false
         ))
         return effects
     }
@@ -593,8 +571,7 @@ package final class DOMStateStore {
         parent: DOM.Node.ID,
         previous: DOM.Node.ID?,
         node: DOM.Node,
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor)
+        modelContext: WebInspectorModelContext
     ) -> Effects {
         var effects = Effects()
         guard let parentNode = nodesByID[DOMNode.ID(parent)] else {
@@ -628,8 +605,7 @@ package final class DOMStateStore {
             previousSiblingID: previous.map(DOMNode.ID.init)
         )
         effects.merge(resolvePendingInspectedNode(
-            requestSubtreeIfNeeded: false,
-            isolation: isolation
+            requestSubtreeIfNeeded: false
         ))
         return effects
     }
@@ -663,8 +639,7 @@ package final class DOMStateStore {
     private func applyShadowRootPushed(
         host: DOM.Node.ID,
         root payload: DOM.Node,
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor)
+        modelContext: WebInspectorModelContext
     ) -> Effects {
         var effects = Effects()
         guard let hostNode = nodesByID[DOMNode.ID(host)] else {
@@ -684,8 +659,7 @@ package final class DOMStateStore {
         hostNode.appendShadowRoot(rootNode)
         notifyDOMTreeChildrenReplaced(parent: hostNode)
         effects.merge(resolvePendingInspectedNode(
-            requestSubtreeIfNeeded: false,
-            isolation: isolation
+            requestSubtreeIfNeeded: false
         ))
         return effects
     }
@@ -711,8 +685,7 @@ package final class DOMStateStore {
     private func applyPseudoElementAdded(
         parent: DOM.Node.ID,
         element payload: DOM.Node,
-        modelContext: WebInspectorContext,
-        isolation: isolated (any Actor)
+        modelContext: WebInspectorModelContext
     ) -> Effects {
         var effects = Effects()
         guard let parentNode = nodesByID[DOMNode.ID(parent)] else {
@@ -734,8 +707,7 @@ package final class DOMStateStore {
         }
         notifyDOMTreeChildrenReplaced(parent: parentNode)
         effects.merge(resolvePendingInspectedNode(
-            requestSubtreeIfNeeded: false,
-            isolation: isolation
+            requestSubtreeIfNeeded: false
         ))
         return effects
     }
@@ -811,7 +783,7 @@ package final class DOMStateStore {
     private func model(
         for payload: DOM.Node,
         preserving materializedPayloadIDs: Set<DOMNode.ID>,
-        modelContext: WebInspectorContext,
+        modelContext: WebInspectorModelContext,
         effects: inout Effects
     ) -> DOMNode {
         let id = DOMNode.ID(payload.id)
@@ -826,12 +798,11 @@ package final class DOMStateStore {
             }
             previousAssociatedRoots = existing.associatedSubtreeRoots()
             existing.update(from: payload)
-            existing.setModelContext(modelContext)
             node = existing
         } else {
             previousChildren = []
             previousAssociatedRoots = []
-            node = DOMNode(node: payload, modelContext: modelContext)
+            node = DOMNode(node: payload)
             nodesByID[id] = node
         }
 
@@ -1086,8 +1057,7 @@ package final class DOMStateStore {
     }
 
     private func resolvePendingInspectedNode(
-        requestSubtreeIfNeeded: Bool,
-        isolation: isolated (any Actor)
+        requestSubtreeIfNeeded: Bool
     ) -> Effects {
         var effects = Effects()
         guard let pendingInspectedNodeID else {
@@ -1108,7 +1078,7 @@ package final class DOMStateStore {
             "DOM.inspect resolved pending nodeID=\(String(describing: pendingInspectedNodeID))"
         )
         self.pendingInspectedNodeID = nil
-        effects.merge(select(inspectedNode, reveal: .selectAndScroll, isolation: isolation))
+        effects.merge(select(inspectedNode, reveal: .selectAndScroll))
         effects.inspectedNode = inspectedNode
         return effects
     }

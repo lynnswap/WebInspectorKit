@@ -44,13 +44,13 @@ package enum NetworkPreviewFixtures {
     }
     #endif
 
-    package static func makeContext(mode: Mode) -> WebInspectorContext {
-        let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    package static func makeContext(mode: Mode) -> WebInspectorModelContext {
+        let context = WebInspectorModelContext.preview()
         applySampleData(to: context, mode: mode)
         return context
     }
 
-    package static func applySampleData(to context: WebInspectorContext, mode: Mode) {
+    package static func applySampleData(to context: WebInspectorModelContext, mode: Mode) {
         switch mode {
         case .detailResponseOnlyShort:
             applyRequest(
@@ -161,7 +161,7 @@ package enum NetworkPreviewFixtures {
 
     @discardableResult
     private static func applyRequest(
-        to context: WebInspectorContext,
+        to context: WebInspectorModelContext,
         requestID: String,
         url: String,
         method: String = "GET",

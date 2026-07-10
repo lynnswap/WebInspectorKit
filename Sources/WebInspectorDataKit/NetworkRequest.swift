@@ -644,7 +644,7 @@ public final class NetworkBody {
 
 /// Observable model for one network request.
 @Observable
-public final class NetworkRequest: WebInspectorFetchableModel {
+public final class NetworkRequest: WebInspectorPersistentModel {
     /// Stable identity for a network request within a context.
     public struct ID: Hashable, Sendable {
         let proxyID: Network.Request.ID
@@ -771,7 +771,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
     /// Response body state.
     public private(set) var responseBody: NetworkBody
 
-    @ObservationIgnored weak var modelContext: WebInspectorContext?
+    @ObservationIgnored weak var modelContext: WebInspectorModelContext?
     @ObservationIgnored private var currentRequest: Network.Request
 
     var proxyID: Network.Request.ID {
@@ -797,7 +797,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         request: Network.Request,
         resourceType: Network.ResourceType?,
         timestamp: Double?,
-        modelContext: WebInspectorContext
+        modelContext: WebInspectorModelContext
     ) {
         id = ID(request.id)
         url = request.url
@@ -881,20 +881,6 @@ public final class NetworkRequest: WebInspectorFetchableModel {
     /// The HTTP status code, exposed as a stable fetch key path.
     public var statusCode: Int? {
         status
-    }
-
-    /// Fetches the response body when it is available and not already loaded.
-    public func fetchResponseBody(isolation: isolated (any Actor) = #isolation) async {
-        guard canFetchResponseBody else {
-            return
-        }
-        let expectedBody = responseBody
-        expectedBody.markFetching()
-        guard let modelContext else {
-            expectedBody.fail(.disconnected("NetworkRequest is not registered in a WebInspectorContext."))
-            return
-        }
-        await modelContext.fetchResponseBody(for: self, expectedBody: expectedBody, isolation: isolation)
     }
 
     func applyRequestWillBeSent(

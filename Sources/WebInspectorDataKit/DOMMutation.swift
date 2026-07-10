@@ -10,17 +10,50 @@ public enum DOMRevealPolicy: Sendable, Hashable {
     case selectAndScroll
 }
 
-/// The accepted subset of a requested DOM mutation.
-public struct DOMMutationResult: Sendable, Hashable {
-    /// Node identities requested by the caller.
-    public var requestedNodeIDs: [DOMNode.ID]
+/// One node-specific failure from a multi-node DOM mutation.
+public struct DOMMutationFailure: Error, Hashable, Sendable {
+    public let nodeID: DOMNode.ID
+    public let message: String
 
-    /// Node identities accepted by the backend mutation.
-    public var acceptedNodeIDs: [DOMNode.ID]
+    public init(nodeID: DOMNode.ID, message: String) {
+        self.nodeID = nodeID
+        self.message = message
+    }
+}
 
-    /// Creates a DOM mutation result.
-    public init(requestedNodeIDs: [DOMNode.ID], acceptedNodeIDs: [DOMNode.ID]) {
+/// A document-epoch-bound capability for undoing one accepted DOM/CSS change.
+public final class DOMUndoCapability {
+    private let commands: WebInspectorModelContext.DOMUndoRedoCommands
+
+    package init(commands: WebInspectorModelContext.DOMUndoRedoCommands) {
+        self.commands = commands
+    }
+
+    public nonisolated(nonsending) func undo() async throws {
+        try await commands.undo()
+    }
+
+    public nonisolated(nonsending) func redo() async throws {
+        try await commands.redo()
+    }
+}
+
+/// The applied subset and explicit failures from a requested DOM mutation.
+public struct DOMMutationOutcome {
+    public let requestedNodeIDs: [DOMNode.ID]
+    public let appliedNodeIDs: [DOMNode.ID]
+    public let failures: [DOMMutationFailure]
+    public let undo: DOMUndoCapability?
+
+    public init(
+        requestedNodeIDs: [DOMNode.ID],
+        appliedNodeIDs: [DOMNode.ID],
+        failures: [DOMMutationFailure],
+        undo: DOMUndoCapability?
+    ) {
         self.requestedNodeIDs = requestedNodeIDs
-        self.acceptedNodeIDs = acceptedNodeIDs
+        self.appliedNodeIDs = appliedNodeIDs
+        self.failures = failures
+        self.undo = undo
     }
 }

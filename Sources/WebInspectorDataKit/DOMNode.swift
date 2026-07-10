@@ -2,7 +2,7 @@ import Foundation
 import Observation
 import WebInspectorProxyKit
 
-/// Observable model for a DOM node owned by a ``WebInspectorContext``.
+/// Observable model for a DOM node owned by a ``WebInspectorModelContext``.
 @Observable
 public final class DOMNode: WebInspectorPersistentModel {
     /// Stable identity for a DOM node within a context.
@@ -170,9 +170,7 @@ public final class DOMNode: WebInspectorPersistentModel {
         return normalizedName == "iframe" || normalizedName == "frame"
     }
 
-    @ObservationIgnored weak var modelContext: WebInspectorContext?
-
-    init(node: DOM.Node, modelContext: WebInspectorContext) {
+    init(node: DOM.Node) {
         id = ID(node.id)
         nodeName = node.nodeName
         localName = node.localName
@@ -194,45 +192,6 @@ public final class DOMNode: WebInspectorPersistentModel {
         pseudoType = node.pseudoType
         shadowRootType = node.shadowRootType
         elementStyles = nil
-        self.modelContext = modelContext
-    }
-
-    /// Requests regular child nodes for this node.
-    public func requestChildren(
-        depth: Int = 1,
-        isolation: isolated (any Actor) = #isolation
-    ) async {
-        guard let modelContext else {
-            preconditionFailure("DOMNode is not registered in a WebInspectorContext.")
-        }
-        await modelContext.requestChildren(for: self, depth: depth, isolation: isolation)
-    }
-
-    /// Returns copied text for the node in the requested format.
-    public func copyText(
-        _ kind: CopyTextKind,
-        isolation: isolated (any Actor) = #isolation
-    ) async throws -> String {
-        guard let modelContext else {
-            preconditionFailure("DOMNode is not registered in a WebInspectorContext.")
-        }
-        return try await modelContext.copyText(kind, for: self, isolation: isolation)
-    }
-
-    /// Removes this node from the inspected document.
-    public func delete(isolation: isolated (any Actor) = #isolation) async throws {
-        guard let modelContext else {
-            preconditionFailure("DOMNode is not registered in a WebInspectorContext.")
-        }
-        try await modelContext.delete(self, isolation: isolation)
-    }
-
-    /// Highlights this node in the inspected page.
-    public func highlight(isolation: isolated (any Actor) = #isolation) async throws {
-        guard let modelContext else {
-            preconditionFailure("DOMNode is not registered in a WebInspectorContext.")
-        }
-        try await modelContext.highlight(self, isolation: isolation)
     }
 
     func update(from node: DOM.Node) {
@@ -369,9 +328,6 @@ public final class DOMNode: WebInspectorPersistentModel {
             .compactMap { $0 }
     }
 
-    func setModelContext(_ context: WebInspectorContext) {
-        modelContext = context
-    }
 }
 
 extension DOMNode.Attribute {

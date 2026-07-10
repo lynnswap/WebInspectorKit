@@ -9,7 +9,10 @@ private final class NetworkResponseBodyFetchCoordinator {
 
     init() {}
 
-    func fetchIfNeeded(for request: NetworkRequest) {
+    func fetchIfNeeded(
+        for request: NetworkRequest,
+        context: WebInspectorModelContext
+    ) {
         guard request.canFetchResponseBody,
               fetchesInFlight.contains(request.id) == false else {
             return
@@ -19,7 +22,11 @@ private final class NetworkResponseBodyFetchCoordinator {
             defer {
                 fetchesInFlight.remove(request.id)
             }
-            await request.fetchResponseBody()
+            do {
+                _ = try await context.responseBody(for: request)
+            } catch {
+                return
+            }
         }
     }
 }
@@ -33,7 +40,7 @@ package final class NetworkPanelModel {
         case retired
     }
 
-    package let context: WebInspectorContext
+    package let context: WebInspectorModelContext
     package let requests: WebInspectorFetchedResults<NetworkRequest>
     private let collectionState: NetworkRequestCollectionState
     package private(set) var selectedRequestID: NetworkRequest.ID?
@@ -49,7 +56,7 @@ package final class NetworkPanelModel {
     @ObservationIgnored private var lifecycle: Lifecycle
 
     private init(
-        context: WebInspectorContext,
+        context: WebInspectorModelContext,
         requests: WebInspectorFetchedResults<NetworkRequest>,
         query: NetworkQuery
     ) {
@@ -68,7 +75,7 @@ package final class NetworkPanelModel {
     }
 
     /// Creates a ready Network panel after its atomic initial query snapshot is available.
-    package static func make(context: WebInspectorContext) async throws -> NetworkPanelModel {
+    package static func make(context: WebInspectorModelContext) async throws -> NetworkPanelModel {
         let query = NetworkQuery(sort: .requestTimeDescending)
         let requests = try await context.networkRequests(matching: query)
         return NetworkPanelModel(context: context, requests: requests, query: query)
@@ -109,7 +116,7 @@ package final class NetworkPanelModel {
     }
 
     package func request(for id: NetworkRequest.ID) -> NetworkRequest? {
-        context.registeredRequest(for: id)
+        try? context.networkRequest(id: id)
     }
 
     package func selectRequest(_ request: NetworkRequest?) {
@@ -197,7 +204,7 @@ package final class NetworkPanelModel {
 
     package func fetchResponseBodyIfNeeded(for request: NetworkRequest) {
         requireActive()
-        responseBodyFetchCoordinator.fetchIfNeeded(for: request)
+        responseBodyFetchCoordinator.fetchIfNeeded(for: request, context: context)
     }
 
     /// Cancels and awaits the current query replacement before releasing this owner.

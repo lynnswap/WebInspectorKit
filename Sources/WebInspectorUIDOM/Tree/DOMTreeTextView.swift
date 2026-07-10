@@ -36,7 +36,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         paragraphStyle.paragraphSpacingBefore = 0
         return paragraphStyle
     }()
-    private let context: WebInspectorContext
+    private let context: WebInspectorModelContext
     private let treeController: DOMTreeController
     private var currentTreeSnapshot: DOMTreeSnapshot
     private var selectionRevision: UInt64
@@ -194,7 +194,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
 #endif
 
     init(
-        context: WebInspectorContext,
+        context: WebInspectorModelContext,
         requestChildrenAction: RequestChildrenAction? = nil,
         highlightNodeAction: HighlightNodeAction? = nil,
         restoreHighlightAction: RestoreHighlightAction? = nil,

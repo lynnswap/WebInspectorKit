@@ -25,7 +25,7 @@ package struct NetworkTabController: WebInspectorTab.BuiltInController {
     ) -> UIViewController {
         let contextEpoch = session.interface.contextBoundContentRevision
         return contentStore.networkViewController(
-            context: session.context,
+            context: session.model,
             contextEpoch: contextEpoch
         ) { [weak contentStore] model in
             guard let contentStore else {

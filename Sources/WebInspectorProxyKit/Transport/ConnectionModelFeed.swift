@@ -128,6 +128,7 @@ package enum ModelTargetLifecycleEvent: Sendable {
 package enum ModelProtocolEvent: Sendable {
     case target(ModelTargetLifecycleEvent)
     case dom(target: ModelTarget, event: DOM.Event)
+    case inspector(target: ModelTarget, event: Inspector.Event)
     case css(target: ModelTarget, event: CSS.Event)
     case network(target: ModelTarget, event: Network.Event)
     case console(target: ModelTarget, event: Console.Event)
@@ -455,6 +456,14 @@ package actor ConnectionModelFeed {
 
     package func close() async throws {
         try await owner.closeModelFeed(id)
+    }
+
+    package func acquireElementPicker() async throws {
+        try await owner.acquireModelFeedElementPicker(id)
+    }
+
+    package func releaseElementPicker() async throws {
+        try await owner.releaseModelFeedElementPicker(id)
     }
 
     isolated deinit {

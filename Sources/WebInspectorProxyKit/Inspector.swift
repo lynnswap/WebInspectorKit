@@ -1,12 +1,22 @@
 import Foundation
 
-package struct Inspector: Sendable, WebInspectorDomainHandle {
+package struct Inspector: Sendable, WebInspectorEventDomainHandle {
     package static let commandDomain = WebInspectorProxyDomain.inspector
+    package static let eventDomain = WebInspectorProxyEventDomain.inspector
 
     package let endpoint: DomainEndpoint
 
     package init(endpoint: DomainEndpoint) {
         self.endpoint = endpoint
+    }
+
+    package static func extractEvent(
+        _ event: WebInspectorProxyEvent
+    ) -> Event? {
+        guard case let .inspector(value) = event else {
+            return nil
+        }
+        return value
     }
 
     package func enable() async throws {

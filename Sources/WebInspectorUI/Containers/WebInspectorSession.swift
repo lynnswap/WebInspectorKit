@@ -3,22 +3,23 @@ import Observation
 import UIKit
 import WebKit
 import WebInspectorDataKit
+import WebInspectorProxyKit
 import WebInspectorUIBase
 
 /// The UIKit-facing inspection session used by `WebInspectorViewController`.
 ///
-/// A session owns attachment lifecycle, the current DataKit context, and
+/// A session owns attachment lifecycle, one stable DataKit model, and
 /// page-derived presentation preferences.
 @MainActor
 @Observable
 public final class WebInspectorSession {
     package let interface: InterfaceModel
+    /// The stable semantic model used by built-in and custom tabs.
+    @ObservationIgnored public let model: WebInspectorModelContext
     /// The user interface style inferred from the inspected page.
     ///
     /// The value is `.unspecified` until the page style is known or when no useful style can be inferred.
     public private(set) var pageUserInterfaceStyle: UIUserInterfaceStyle = .unspecified
-    @ObservationIgnored private var container: WebInspectorContainer?
-    @ObservationIgnored private var dataContext: WebInspectorContext
     @ObservationIgnored private var attachmentGeneration: UInt64 = 0
     @ObservationIgnored private let makePageUserInterfaceStyleObserver: @MainActor (
         WKWebView,
@@ -30,16 +31,23 @@ public final class WebInspectorSession {
     #endif
 
     /// Creates a session with the provided inspector tabs.
-    public init(tabs: [WebInspectorTab] = [.dom, .network]) {
+    public init(
+        tabs: [WebInspectorTab] = [.dom, .network],
+        additionalDomains: Set<WebInspectorModelContext.Domain> = []
+    ) {
         self.interface = InterfaceModel(tabs: tabs)
-        self.dataContext = Self.makeDetachedDataContext()
+        self.model = WebInspectorModelContext(configuration: .init(
+            domains: tabs.reduce(into: additionalDomains) { domains, tab in
+                domains.formUnion(tab.requiredDomains)
+            }
+        ))
         self.makePageUserInterfaceStyleObserver = { webView, apply in
             WebInspectorPageUserInterfaceStyleObserver(webView: webView, apply: apply)
         }
     }
 
     package init(
-        context: WebInspectorContext,
+        context: WebInspectorModelContext,
         tabs: [WebInspectorTab] = [.dom, .network],
         makePageUserInterfaceStyleObserver: @escaping @MainActor (
             WKWebView,
@@ -49,7 +57,7 @@ public final class WebInspectorSession {
         }
     ) {
         self.interface = InterfaceModel(tabs: tabs)
-        self.dataContext = context
+        self.model = context
         self.makePageUserInterfaceStyleObserver = makePageUserInterfaceStyleObserver
     }
 
@@ -57,18 +65,14 @@ public final class WebInspectorSession {
         stopPageUserInterfaceStyleObservation()
     }
 
-    package var context: WebInspectorContext {
-        dataContext
-    }
-
     /// Attaches the session to a web view.
     ///
-    /// Attaching replaces any previous inspection context owned by this
-    /// session.
+    /// Reattachment preserves model and result identity while replacing the
+    /// exclusively owned ProxyKit connection.
     public func attach(to webView: WKWebView) async throws {
         try await attach(
-            makeContainer: {
-                try await WebInspectorContainer(attachingTo: webView)
+            makeProxy: {
+                try await WebInspectorProxy(attachingTo: webView)
             },
             makePageUserInterfaceStyleObserver: { [makePageUserInterfaceStyleObserver] apply in
                 makePageUserInterfaceStyleObserver(webView, apply)
@@ -78,11 +82,11 @@ public final class WebInspectorSession {
 
     package func attach(
         to webView: WKWebView,
-        makeContainer: @MainActor (WKWebView) async throws -> WebInspectorContainer
+        makeProxy: @MainActor (WKWebView) async throws -> WebInspectorProxy
     ) async throws {
         try await attach(
-            makeContainer: {
-                try await makeContainer(webView)
+            makeProxy: {
+                try await makeProxy(webView)
             },
             makePageUserInterfaceStyleObserver: { [makePageUserInterfaceStyleObserver] apply in
                 makePageUserInterfaceStyleObserver(webView, apply)
@@ -91,78 +95,85 @@ public final class WebInspectorSession {
     }
 
     package func attachForTesting(
-        makeContainer: @escaping @MainActor () async throws -> WebInspectorContainer,
+        makeProxy: @escaping @MainActor () async throws -> WebInspectorProxy,
         makePageUserInterfaceStyleObserver: @escaping @MainActor (
             @escaping @MainActor (UIUserInterfaceStyle) -> Void
         ) -> (any WebInspectorPageUserInterfaceStyleObserving)? = { _ in nil }
     ) async throws {
         try await attach(
-            makeContainer: makeContainer,
+            makeProxy: makeProxy,
             makePageUserInterfaceStyleObserver: makePageUserInterfaceStyleObserver
         )
     }
 
     private func attach(
-        makeContainer: @MainActor () async throws -> WebInspectorContainer,
+        makeProxy: @MainActor () async throws -> WebInspectorProxy,
         makePageUserInterfaceStyleObserver: @MainActor (
             @escaping @MainActor (UIUserInterfaceStyle) -> Void
         ) -> (any WebInspectorPageUserInterfaceStyleObserving)?
     ) async throws {
         let generation = advanceAttachmentGeneration()
         stopPageUserInterfaceStyleObservation()
-        await stopContainer(replaceContextWithDetached: false)
         try Task.checkCancellation()
         guard isCurrentAttachmentGeneration(generation) else {
             throw CancellationError()
         }
         do {
-            let container = try await makeContainer()
+            let proxy = try await makeProxy()
             try Task.checkCancellation()
             guard isCurrentAttachmentGeneration(generation) else {
-                await container.close()
+                await proxy.close()
                 throw CancellationError()
             }
-            self.container = container
-            installDataContext(container.mainContext)
+            do {
+                try await model.attach(to: proxy, isolation: MainActor.shared)
+            } catch {
+                await proxy.close()
+                throw error
+            }
+            guard isCurrentAttachmentGeneration(generation) else {
+                throw CancellationError()
+            }
             startPageUserInterfaceStyleObservation(makePageUserInterfaceStyleObserver)
         } catch {
             guard isCurrentAttachmentGeneration(generation) else {
                 throw error
             }
-            installDataContext(Self.makeDetachedDataContext())
             stopPageUserInterfaceStyleObservation()
             throw error
         }
     }
 
-    /// Detaches the session and replaces the current context with a detached
-    /// placeholder context.
+    /// Detaches the session while preserving its model identity for reuse.
     public func detach() async {
-        await detachAndReplaceContext()
+        await detachModel()
     }
 
-    private func detachAndReplaceContext() async {
+    private func detachModel() async {
         advanceAttachmentGeneration()
         #if DEBUG
         detachCountForTesting += 1
         #endif
         stopPageUserInterfaceStyleObservation()
-        await stopContainer(replaceContextWithDetached: true)
+        await model.detach()
+    }
+
+    /// Permanently closes this session and its model connection.
+    public func close() async {
+        advanceAttachmentGeneration()
+        stopPageUserInterfaceStyleObservation()
+        await model.close()
     }
 
     /// Disables transient page interaction without tearing down the connection.
     package func suspendBackendInteraction() async {
-        // Bind the context once: a concurrent attach can swap dataContext
-        // across the awaits below, and this retirement must not touch the
-        // replacement context.
-        let context = dataContext
-        guard context.status.state == .attached else {
+        guard model.state == .attached else {
             return
         }
-        if context.isElementPickerEnabled {
-            try? await context.setElementPickerEnabled(false)
+        if (try? model.isElementPickerEnabled) == true {
+            try? await model.setElementPickerEnabled(false)
         }
-        try? await context.hideHighlight()
+        try? await model.hideDOMHighlight()
     }
 
     private func startPageUserInterfaceStyleObservation(
@@ -202,27 +213,6 @@ public final class WebInspectorSession {
         attachmentGeneration == generation
     }
 
-    package func installDataContext(_ context: WebInspectorContext) {
-        dataContext = context
-        interface.contextDidChange()
-    }
-
-    private func stopContainer(replaceContextWithDetached: Bool) async {
-        interface.contextDidChange()
-        if let container {
-            self.container = nil
-            await container.close()
-        } else {
-            await dataContext.stop()
-        }
-        if replaceContextWithDetached {
-            installDataContext(Self.makeDetachedDataContext())
-        }
-    }
-
-    private static func makeDetachedDataContext() -> WebInspectorContext {
-        WebInspectorContext.detached(isolation: MainActor.shared)
-    }
 }
 
 #if DEBUG

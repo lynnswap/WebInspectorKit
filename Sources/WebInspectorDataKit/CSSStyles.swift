@@ -68,10 +68,10 @@ public final class CSSStyles: WebInspectorPersistentModel {
     /// Computed properties for the element.
     public private(set) var computedProperties: [CSSComputedProperty]
 
-    @ObservationIgnored weak var modelContext: WebInspectorContext?
+    @ObservationIgnored weak var modelContext: WebInspectorModelContext?
     @ObservationIgnored private var inspectorBaselines: [CSSStyleProperty.ID: CSSPropertyInspectorBaseline]
 
-    init(nodeID: DOMNode.ID, modelContext: WebInspectorContext) {
+    init(nodeID: DOMNode.ID, modelContext: WebInspectorModelContext) {
         id = ID(nodeID: nodeID)
         phase = .loading
         sections = []
@@ -141,6 +141,16 @@ public final class CSSStyles: WebInspectorPersistentModel {
             return nil
         }
         return SetStyleTextIntent(styleID: style.id, text: text)
+    }
+
+    func contains(propertyID: CSSStyleProperty.ID) -> Bool {
+        sections.contains { section in
+            section.style.properties.contains { $0.id == propertyID }
+        }
+    }
+
+    func contains(ruleID: CSSStyleRule.ID) -> Bool {
+        sections.contains { $0.rule?.id == ruleID }
     }
 
     func setDeclarationTextIntent(for propertyID: CSSStyleProperty.ID, text replacementText: String) -> SetStyleTextIntent? {

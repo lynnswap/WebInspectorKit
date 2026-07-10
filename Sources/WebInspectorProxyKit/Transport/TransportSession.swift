@@ -177,7 +177,7 @@ private struct ConnectionCommandInvalidationEffects: Sendable {
 
 private struct ConnectionCapabilityTask: Sendable {
     let task: Task<Void, Never>
-    let pendingReplyOwnership: ConnectionPendingReplyOwnership?
+    var pendingReplyOwnership: ConnectionPendingReplyOwnership?
 }
 
 private struct ConnectionModelBootstrapTask: Sendable {
@@ -242,6 +242,7 @@ private struct ConnectionModelFeedRegistration: Sendable {
     let mailbox: ConnectionModelFeedMailbox
     var lifecycle: ConnectionModelFeedLifecycle
     var capabilityLeases: [ConnectionModelFeedCapabilityLease]
+    var elementPickerLease: ConnectionModelFeedCapabilityLease?
     var targetSnapshotThrough: UInt64?
     var resetGeneration: WebInspectorPage.Generation
     var synchronization: ConnectionModelFeedSynchronizationState?
@@ -270,6 +271,43 @@ private struct MainPageTargetNotification: Sendable {
 private struct EventEmissionEffects: Sendable {
     var mainPageTargetNotification: MainPageTargetNotification?
     var commandInvalidation = ConnectionCommandInvalidationEffects()
+}
+
+private struct ConnectionElementPickerMode: Sendable {
+    enum Physical: Sendable {
+        case inactive(WebInspectorPage.Generation)
+        case enabling(WebInspectorPage.Generation)
+        case enabled(WebInspectorPage.Generation)
+        case disabling(WebInspectorPage.Generation)
+
+        var generation: WebInspectorPage.Generation {
+            switch self {
+            case let .inactive(generation),
+                 let .enabling(generation),
+                 let .enabled(generation),
+                 let .disabling(generation):
+                generation
+            }
+        }
+    }
+
+    var owners: Set<ConnectionCapabilityLeaseOwner>
+    var activatedThrough: [ConnectionCapabilityLeaseOwner: UInt64]
+    var activationWaiters: [
+        ConnectionCapabilityLeaseOwner: ReplyPromise<Void>
+    ]
+    var releaseWaiters: [
+        ConnectionCapabilityLeaseOwner: ReplyPromise<Void>
+    ]
+    var physical: Physical
+
+    init(generation: WebInspectorPage.Generation) {
+        owners = []
+        activatedThrough = [:]
+        activationWaiters = [:]
+        releaseWaiters = [:]
+        physical = .inactive(generation)
+    }
 }
 
 /// Owns one physical inspector connection.
@@ -380,6 +418,12 @@ package actor ConnectionCore {
     private var modelFeed: ConnectionModelFeedRegistration?
     private var replayWasTaintedByDirectConsumer: Bool
     private var capabilities: ConnectionCapabilityRegistry
+    private var elementPickerModes: [
+        ConnectionCapabilityKey: ConnectionElementPickerMode
+    ]
+    private var inspectorInitializedGeneration: [
+        ConnectionCapabilityKey: WebInspectorPage.Generation
+    ]
     private var capabilityTasks: [UInt64: ConnectionCapabilityTask]
     private var nextModelBootstrapOperationID: UInt64
     private var modelBootstrapTasks: [UInt64: ConnectionModelBootstrapTask]
@@ -440,6 +484,8 @@ package actor ConnectionCore {
         modelFeed = nil
         replayWasTaintedByDirectConsumer = false
         capabilities = ConnectionCapabilityRegistry()
+        elementPickerModes = [:]
+        inspectorInitializedGeneration = [:]
         capabilityTasks = [:]
         nextModelBootstrapOperationID = 0
         modelBootstrapTasks = [:]
@@ -598,6 +644,7 @@ package actor ConnectionCore {
             mailbox: mailbox,
             lifecycle: .acquiring,
             capabilityLeases: [],
+            elementPickerLease: nil,
             targetSnapshotThrough: nil,
             resetGeneration: resetGeneration,
             synchronization: nil,
@@ -693,6 +740,8 @@ package actor ConnectionCore {
         }
 
         let completion = ReplyPromise<Void>()
+        let elementPickerLease = registration.elementPickerLease
+        registration.elementPickerLease = nil
         registration.lifecycle = .closing(completion)
         modelFeed = registration
         let commandInvalidation = invalidateModelCommands(
@@ -704,6 +753,15 @@ package actor ConnectionCore {
         await cancelAndAwaitModelBootstrapTasks(feedID: id)
 
         var cleanupError: (any Swift.Error)?
+        if let elementPickerLease {
+            if let error = await releaseElementPickerResources(
+                elementPickerLease.owner,
+                for: elementPickerLease.key
+            ) {
+                cleanupError = error
+                registration.mailbox.poison(throwing: error)
+            }
+        }
         for lease in registration.capabilityLeases.reversed() {
             do {
                 try await releaseCapabilityLease(lease.owner, for: lease.key)
@@ -759,6 +817,137 @@ package actor ConnectionCore {
         )
         registration.capabilityLeases.append(lease)
         modelFeed = registration
+    }
+
+    package func acquireModelFeedElementPicker(
+        _ feedID: ConnectionModelFeedID
+    ) async throws {
+        guard var registration = modelFeed,
+              registration.id == feedID,
+              case .active = registration.lifecycle else {
+            throw ConnectionModelCommandError.notActive
+        }
+        guard registration.configuredDomains.contains(.dom) else {
+            throw ConnectionModelCommandError.domainNotConfigured(.dom)
+        }
+        guard registration.elementPickerLease == nil else {
+            return
+        }
+
+        let leaseOwner = ConnectionCapabilityLeaseOwner.modelElementPicker(feedID)
+        let key = ConnectionCapabilityKey(
+            route: .currentPage,
+            targetID: .currentPage,
+            domain: .inspector
+        )
+        let lease = ConnectionModelFeedCapabilityLease(
+            owner: leaseOwner,
+            key: key
+        )
+        let activation = beginCapabilityLease(
+            leaseOwner,
+            for: key,
+            generation: currentPageGeneration
+        )
+        registration.elementPickerLease = lease
+        modelFeed = registration
+
+        do {
+            try await activateCapabilityLease(
+                leaseOwner,
+                for: key,
+                activation: activation
+            )
+            try await acquireElementPickerMode(leaseOwner, for: key)
+        } catch {
+            let operationError = error
+            if var current = modelFeed,
+               current.id == feedID,
+               current.elementPickerLease?.owner == leaseOwner {
+                current.elementPickerLease = nil
+                modelFeed = current
+            }
+            if let cleanupError = await releaseElementPickerResources(
+                leaseOwner,
+                for: key
+            ) {
+                throw WebInspectorScopeError(
+                    operationError: operationError,
+                    cleanupError: cleanupError
+                )
+            }
+            throw operationError
+        }
+
+        guard let current = modelFeed,
+              current.id == feedID,
+              case .active = current.lifecycle,
+              current.elementPickerLease?.owner == leaseOwner else {
+            if let cleanupError = await releaseElementPickerResources(
+                leaseOwner,
+                for: key
+            ) {
+                throw cleanupError
+            }
+            throw ConnectionModelCommandError.notActive
+        }
+    }
+
+    package func releaseModelFeedElementPicker(
+        _ feedID: ConnectionModelFeedID
+    ) async throws {
+        guard var registration = modelFeed,
+              registration.id == feedID,
+              let lease = registration.elementPickerLease else {
+            return
+        }
+        registration.elementPickerLease = nil
+        modelFeed = registration
+        if let error = await releaseElementPickerResources(
+            lease.owner,
+            for: lease.key
+        ) {
+            registration.mailbox.poison(throwing: error)
+            await terminateForModelFeedCapabilityCleanupFailure(error)
+            throw error
+        }
+    }
+
+    private func releaseElementPickerResources(
+        _ owner: ConnectionCapabilityLeaseOwner,
+        for key: ConnectionCapabilityKey
+    ) async -> (any Swift.Error)? {
+        let modeResult: Result<Void, any Swift.Error>
+        do {
+            try await releaseElementPickerMode(owner, for: key)
+            modeResult = .success(())
+        } catch {
+            modeResult = .failure(error)
+        }
+        let capabilityResult: Result<Void, any Swift.Error>
+        do {
+            try await releaseCapabilityLease(owner, for: key)
+            capabilityResult = .success(())
+        } catch {
+            capabilityResult = .failure(error)
+        }
+        if case .failure = modeResult,
+           case .success = capabilityResult {
+            markElementPickerModeInactive(for: key)
+        }
+        switch (modeResult, capabilityResult) {
+        case (.success, .success):
+            return nil
+        case let (.failure(modeError), .success):
+            return modeError
+        case let (.success, .failure(capabilityError)):
+            return capabilityError
+        case let (.failure(modeError), .failure(capabilityError)):
+            return WebInspectorScopeError(
+                operationError: modeError,
+                cleanupError: capabilityError
+            )
+        }
     }
 
     private func rollbackModelFeedAcquisition(
@@ -913,22 +1102,20 @@ package actor ConnectionCore {
                 for: key,
                 activation: activation
             )
-        } catch is CancellationError {
-            let cancellation = CancellationError()
+            if domain == .inspector {
+                try await acquireElementPickerMode(leaseOwner, for: key)
+            }
+        } catch {
+            let operationError = error
             do {
                 try await releaseEventScope(scopeID)
             } catch {
                 throw WebInspectorScopeError(
-                    operationError: cancellation,
+                    operationError: operationError,
                     cleanupError: error
                 )
             }
-            throw cancellation
-        } catch {
-            eventScopes.remove(scopeID)?.sink?.finish(nil)
-            resumeEventScopeRegistrationWaitersIfNeeded()
-            await abandonCapabilityLease(leaseOwner, for: key)
-            throw error
+            throw operationError
         }
 
         return WebInspectorProxyEventScope(id: scopeID, events: stream)
@@ -942,7 +1129,14 @@ package actor ConnectionCore {
         entry.sink?.finish(nil)
 
         let key = entry.capability
-        try await releaseCapabilityLease(.eventScope(id), for: key)
+        let owner = ConnectionCapabilityLeaseOwner.eventScope(id)
+        if key.domain == .inspector {
+            if let error = await releaseElementPickerResources(owner, for: key) {
+                throw error
+            }
+            return
+        }
+        try await releaseCapabilityLease(owner, for: key)
     }
 
     package nonisolated func send(_ command: ProtocolCommand) async throws -> ProtocolCommand.Result {
@@ -2411,7 +2605,10 @@ package actor ConnectionCore {
         }
         capability.failedLeaseOwners.remove(leaseOwner)
         capability.activatedLeaseOwners.remove(leaseOwner)
-        capability.activationWaiters.removeValue(forKey: leaseOwner)
+        let activationWaiter = capability.activationWaiters.removeValue(
+            forKey: leaseOwner
+        )
+        activationWaiter?.fulfill(.failure(CancellationError()))
 
         guard case .open = state else {
             capabilities.states[key] = capability
@@ -2467,6 +2664,283 @@ package actor ConnectionCore {
         capabilities.states[key] = capability
         await reconcileCapability(for: key)
         capabilities.removeEmptyState(for: key)
+    }
+
+    private func acquireElementPickerMode(
+        _ owner: ConnectionCapabilityLeaseOwner,
+        for key: ConnectionCapabilityKey
+    ) async throws {
+        let generation = generation(for: key.route)
+        var mode = elementPickerModes[key]
+            ?? ConnectionElementPickerMode(generation: generation)
+        if mode.physical.generation != generation {
+            mode.physical = .inactive(generation)
+            mode.activatedThrough.removeAll(keepingCapacity: true)
+        }
+        precondition(
+            mode.owners.insert(owner).inserted,
+            "Duplicate element-picker mode owner."
+        )
+        if case .enabled(generation) = mode.physical {
+            mode.activatedThrough[owner] = eventSequences.current.sequence
+            elementPickerModes[key] = mode
+            return
+        }
+        let completion = ReplyPromise<Void>()
+        mode.activationWaiters[owner] = completion
+        elementPickerModes[key] = mode
+        await reconcileElementPickerMode(for: key)
+        do {
+            try await completion.value()
+        } catch {
+            await abandonElementPickerMode(owner, for: key)
+            throw error
+        }
+    }
+
+    private func releaseElementPickerMode(
+        _ owner: ConnectionCapabilityLeaseOwner,
+        for key: ConnectionCapabilityKey
+    ) async throws {
+        guard var mode = elementPickerModes[key],
+              mode.owners.remove(owner) != nil else {
+            return
+        }
+        mode.activatedThrough[owner] = nil
+        if let activation = mode.activationWaiters.removeValue(forKey: owner) {
+            activation.fulfill(.failure(CancellationError()))
+        }
+
+        let completion: ReplyPromise<Void>?
+        switch mode.physical {
+        case .inactive:
+            completion = nil
+        case .enabled where !mode.owners.isEmpty:
+            completion = nil
+        case .enabling, .enabled, .disabling:
+            let promise = ReplyPromise<Void>()
+            mode.releaseWaiters[owner] = promise
+            completion = promise
+        }
+        elementPickerModes[key] = mode
+        await reconcileElementPickerMode(for: key)
+        try await completion?.valueIgnoringCancellation()
+        removeEmptyElementPickerMode(for: key)
+    }
+
+    private func abandonElementPickerMode(
+        _ owner: ConnectionCapabilityLeaseOwner,
+        for key: ConnectionCapabilityKey
+    ) async {
+        guard var mode = elementPickerModes[key] else {
+            return
+        }
+        mode.owners.remove(owner)
+        mode.activatedThrough[owner] = nil
+        mode.activationWaiters.removeValue(forKey: owner)
+        mode.releaseWaiters.removeValue(forKey: owner)
+        elementPickerModes[key] = mode
+        await reconcileElementPickerMode(for: key)
+        removeEmptyElementPickerMode(for: key)
+    }
+
+    private func reconcileElementPickerMode(
+        for key: ConnectionCapabilityKey
+    ) async {
+        guard isOpen, var mode = elementPickerModes[key] else {
+            return
+        }
+        let generation = generation(for: key.route)
+        if mode.physical.generation != generation {
+            mode.physical = .inactive(generation)
+            mode.activatedThrough.removeAll(keepingCapacity: true)
+            elementPickerModes[key] = mode
+        }
+
+        switch mode.physical {
+        case .inactive where !mode.owners.isEmpty:
+            mode.physical = .enabling(generation)
+            elementPickerModes[key] = mode
+            let result: Result<ProtocolCommand.Result, any Swift.Error>
+            do {
+                result = .success(
+                    try await sendElementPickerModeCommand(
+                        enabled: true,
+                        key: key,
+                        generation: generation
+                    )
+                )
+            } catch {
+                result = .failure(
+                    Self.mapElementPickerModeError(error, enabled: true)
+                )
+            }
+            await completeElementPickerModeTransition(
+                enabled: true,
+                key: key,
+                generation: generation,
+                result: result
+            )
+
+        case .enabled where mode.owners.isEmpty:
+            mode.physical = .disabling(generation)
+            elementPickerModes[key] = mode
+            let result: Result<ProtocolCommand.Result, any Swift.Error>
+            do {
+                result = .success(
+                    try await sendElementPickerModeCommand(
+                        enabled: false,
+                        key: key,
+                        generation: generation
+                    )
+                )
+            } catch {
+                result = .failure(
+                    Self.mapElementPickerModeError(error, enabled: false)
+                )
+            }
+            await completeElementPickerModeTransition(
+                enabled: false,
+                key: key,
+                generation: generation,
+                result: result
+            )
+
+        case .inactive, .enabling, .enabled, .disabling:
+            break
+        }
+    }
+
+    private func completeElementPickerModeTransition(
+        enabled: Bool,
+        key: ConnectionCapabilityKey,
+        generation: WebInspectorPage.Generation,
+        result: Result<ProtocolCommand.Result, any Swift.Error>
+    ) async {
+        guard var mode = elementPickerModes[key],
+              mode.physical.generation == generation else {
+            return
+        }
+        if enabled {
+            guard case .enabling = mode.physical else {
+                return
+            }
+            switch result {
+            case let .success(reply):
+                mode.physical = .enabled(generation)
+                for owner in mode.owners {
+                    mode.activatedThrough[owner] = reply.receivedSequence
+                }
+                let waiters = Array(mode.activationWaiters.values)
+                mode.activationWaiters.removeAll()
+                elementPickerModes[key] = mode
+                for waiter in waiters {
+                    waiter.fulfill(.success(()))
+                }
+                await reconcileElementPickerMode(for: key)
+            case let .failure(error):
+                mode.physical = .inactive(generation)
+                let activationWaiters = Array(mode.activationWaiters.values)
+                mode.activationWaiters.removeAll()
+                let releaseWaiters = Array(mode.releaseWaiters.values)
+                mode.releaseWaiters.removeAll()
+                elementPickerModes[key] = mode
+                for waiter in activationWaiters {
+                    waiter.fulfill(.failure(error))
+                }
+                for waiter in releaseWaiters {
+                    waiter.fulfill(.success(()))
+                }
+            }
+            return
+        }
+
+        guard case .disabling = mode.physical else {
+            return
+        }
+        switch result {
+        case .success:
+            mode.physical = .inactive(generation)
+            let waiters = Array(mode.releaseWaiters.values)
+            mode.releaseWaiters.removeAll()
+            elementPickerModes[key] = mode
+            for waiter in waiters {
+                waiter.fulfill(.success(()))
+            }
+            await reconcileElementPickerMode(for: key)
+        case let .failure(error):
+            mode.physical = .enabled(generation)
+            let waiters = Array(mode.releaseWaiters.values)
+            mode.releaseWaiters.removeAll()
+            elementPickerModes[key] = mode
+            for waiter in waiters {
+                waiter.fulfill(.failure(error))
+            }
+        }
+    }
+
+    private func sendElementPickerModeCommand(
+        enabled: Bool,
+        key: ConnectionCapabilityKey,
+        generation: WebInspectorPage.Generation
+    ) async throws -> ProtocolCommand.Result {
+        guard generation == currentPageGeneration,
+              case .currentPage = key.route.storage else {
+            throw WebInspectorProxyError.staleIdentifier
+        }
+        let targetID = try currentMainPageTarget()
+        let command = ProtocolCommand(
+            domain: .dom,
+            method: "DOM.setInspectModeEnabled",
+            routing: .target(targetID),
+            parametersData: try elementPickerModeParametersData(
+                enabled: enabled
+            )
+        )
+        return try await sendTarget(
+            command,
+            targetID: targetID,
+            admission: ConnectionDirectCommandAdmission(
+                bindingGeneration: generation,
+                documentEpoch: modelDocumentEpoch(for: targetID)
+            )
+        )
+    }
+
+    private func elementPickerShouldDeliver(
+        _ eventSequence: UInt64,
+        to owner: ConnectionCapabilityLeaseOwner,
+        key: ConnectionCapabilityKey
+    ) -> Bool {
+        guard let through = elementPickerModes[key]?.activatedThrough[owner] else {
+            return false
+        }
+        return eventSequence > through
+    }
+
+    private func removeEmptyElementPickerMode(
+        for key: ConnectionCapabilityKey
+    ) {
+        guard let mode = elementPickerModes[key],
+              mode.owners.isEmpty,
+              mode.activationWaiters.isEmpty,
+              mode.releaseWaiters.isEmpty,
+              case .inactive = mode.physical else {
+            return
+        }
+        elementPickerModes[key] = nil
+    }
+
+    private func markElementPickerModeInactive(
+        for key: ConnectionCapabilityKey
+    ) {
+        guard var mode = elementPickerModes[key] else {
+            return
+        }
+        mode.physical = .inactive(generation(for: key.route))
+        mode.activatedThrough.removeAll(keepingCapacity: false)
+        elementPickerModes[key] = mode
+        removeEmptyElementPickerMode(for: key)
     }
 
     private func reconcileCapability(for key: ConnectionCapabilityKey) async {
@@ -2599,13 +3073,26 @@ package actor ConnectionCore {
         }
 
         let task = Task { [weak self, operation] in
-            let result: Result<Void, any Swift.Error>
+            let wireResult: Result<Void, any Swift.Error>
             do {
                 try await operation.value()
-                result = .success(())
+                wireResult = .success(())
             } catch {
-                result = .failure(Self.mapCapabilityError(error, action: action, domain: key.domain))
+                wireResult = .failure(
+                    Self.mapCapabilityError(
+                        error,
+                        action: action,
+                        domain: key.domain
+                    )
+                )
             }
+            let result = await self?.initializeInspectorAfterEnableIfNeeded(
+                id: id,
+                key: key,
+                generation: generation,
+                action: action,
+                wireResult: wireResult
+            ) ?? .failure(WebInspectorProxyError.closed)
             _ = await self?.completeCapabilityOperation(
                 id: id,
                 key: key,
@@ -2634,6 +3121,20 @@ package actor ConnectionCore {
         case .disable:
             method = "\(key.domain.rawValue).disable"
         }
+        return try makeCapabilityCommandOperation(
+            method: method,
+            for: key,
+            generation: generation,
+            operationID: operationID
+        )
+    }
+
+    private func makeCapabilityCommandOperation(
+        method: String,
+        for key: ConnectionCapabilityKey,
+        generation: WebInspectorPage.Generation,
+        operationID: UInt64
+    ) throws -> ConnectionOwnedCommandOperation {
         let targetID: ProtocolTarget.ID
         switch key.route.storage {
         case let .target(rawValue):
@@ -2715,6 +3216,71 @@ package actor ConnectionCore {
         )
     }
 
+    private func initializeInspectorAfterEnableIfNeeded(
+        id: UInt64,
+        key: ConnectionCapabilityKey,
+        generation: WebInspectorPage.Generation,
+        action: CapabilityWireAction,
+        wireResult: Result<Void, any Swift.Error>
+    ) async -> Result<Void, any Swift.Error> {
+        guard case .success = wireResult,
+              action == .enable,
+              key.domain == .inspector else {
+            return wireResult
+        }
+        if inspectorInitializedGeneration[key] == generation {
+            return wireResult
+        }
+        guard let capability = capabilities.states[key],
+              case let .enabling(
+                  activeGeneration,
+                  operationID,
+                  mustDisableAfterEnable
+              ) = capability.physical,
+              activeGeneration == generation,
+              operationID == id,
+              !mustDisableAfterEnable,
+              capability.desiredCount > 0 else {
+            return wireResult
+        }
+
+        let operation: ConnectionOwnedCommandOperation
+        do {
+            operation = try makeCapabilityCommandOperation(
+                method: "Inspector.initialized",
+                for: key,
+                generation: generation,
+                operationID: id
+            )
+        } catch {
+            return .failure(
+                Self.mapCapabilityError(
+                    error,
+                    action: action,
+                    domain: key.domain
+                )
+            )
+        }
+        guard var task = capabilityTasks[id] else {
+            return .failure(WebInspectorProxyError.closed)
+        }
+        task.pendingReplyOwnership = operation.pendingReplyOwnership
+        capabilityTasks[id] = task
+        do {
+            try await operation.value()
+            inspectorInitializedGeneration[key] = generation
+            return .success(())
+        } catch {
+            return .failure(
+                Self.mapCapabilityError(
+                    error,
+                    action: action,
+                    domain: key.domain
+                )
+            )
+        }
+    }
+
     private func completeCapabilityOperation(
         id: UInt64,
         key: ConnectionCapabilityKey,
@@ -2743,6 +3309,9 @@ package actor ConnectionCore {
                 if mustDisableAfterEnable, capability.desiredCount == 0 {
                     startCapabilityDisable(for: key, generation: generation)
                     return
+                }
+                if key.domain == .inspector {
+                    await reconcileElementPickerMode(for: key)
                 }
                 capability.activatedLeaseOwners.formUnion(capability.activationWaiters.keys)
                 let waiters = Array(capability.activationWaiters.values)
@@ -2914,6 +3483,43 @@ package actor ConnectionCore {
             return WebInspectorProxyError.protocolViolation("Malformed reply for \(method).")
         case .replyTimeout:
             return WebInspectorProxyError.timeout(domain: domain.rawValue, method: action == .enable ? "enable" : "disable")
+        }
+    }
+
+    private nonisolated static func mapElementPickerModeError(
+        _ error: any Swift.Error,
+        enabled: Bool
+    ) -> any Swift.Error {
+        if let proxyError = error as? WebInspectorProxyError {
+            return proxyError
+        }
+        let method = "DOM.setInspectModeEnabled"
+        guard let transportError = error as? TransportSession.Error else {
+            return WebInspectorProxyError.transportFailure(
+                String(describing: error)
+            )
+        }
+        switch transportError {
+        case .transportClosed:
+            return WebInspectorProxyError.closed
+        case let .transportFailure(message):
+            return WebInspectorProxyError.transportFailure(message)
+        case let .remoteError(_, _, message):
+            return WebInspectorProxyError.commandRejected(
+                method: method,
+                message: message
+            )
+        case .missingMainPageTarget, .missingTarget:
+            return WebInspectorProxyError.pageUnavailable
+        case .malformedMessage:
+            return WebInspectorProxyError.protocolViolation(
+                "Malformed reply for \(method)."
+            )
+        case .replyTimeout:
+            return WebInspectorProxyError.timeout(
+                domain: "DOM",
+                method: enabled ? "setInspectModeEnabled(true)" : "setInspectModeEnabled(false)"
+            )
         }
     }
 
@@ -3931,6 +4537,14 @@ package actor ConnectionCore {
         currentPageGeneration = WebInspectorPage.Generation(
             rawValue: currentPageGeneration.rawValue &+ 1
         )
+        for key in elementPickerModes.keys where key.route == .currentPage {
+            guard var mode = elementPickerModes[key] else {
+                continue
+            }
+            mode.physical = .inactive(currentPageGeneration)
+            mode.activatedThrough.removeAll(keepingCapacity: true)
+            elementPickerModes[key] = mode
+        }
         eventScopes.publishReset(currentPageGeneration) { sink in
             sink.route == .currentPage
         }
@@ -4302,10 +4916,25 @@ package actor ConnectionCore {
             var terminalViolation: String?
             let targetSnapshot = snapshot()
             let sinks = eventScopes.sinks(for: eventDomain).filter { sink in
-                ConnectionEventProjection.shouldDeliver(
+                guard ConnectionEventProjection.shouldDeliver(
                     envelope,
                     to: sink.route,
                     in: targetSnapshot
+                ) else {
+                    return false
+                }
+                guard eventDomain == .inspector else {
+                    return true
+                }
+                let key = ConnectionCapabilityKey(
+                    route: sink.route,
+                    targetID: sink.targetID,
+                    domain: .inspector
+                )
+                return elementPickerShouldDeliver(
+                    eventSequence.sequence,
+                    to: .eventScope(sink.id),
+                    key: key
                 )
             }
             var projectedEvents: [ConnectionCapabilityKey: WebInspectorProxyEvent] = [:]
@@ -4435,8 +5064,25 @@ package actor ConnectionCore {
         }
 
         let configuredDomain = modelDomain(for: event.domain)
+        let elementPickerOwner = ConnectionCapabilityLeaseOwner.modelElementPicker(
+            registration.id
+        )
+        let elementPickerKey = ConnectionCapabilityKey(
+            route: .currentPage,
+            targetID: .currentPage,
+            domain: .inspector
+        )
+        let isElementPickerEvent = event.domain == .inspector
+            && registration.configuredDomains.contains(.dom)
+            && registration.elementPickerLease != nil
+            && elementPickerShouldDeliver(
+                event.sequence,
+                to: elementPickerOwner,
+                key: elementPickerKey
+            )
         guard event.domain == .page
-                || configuredDomain.map(registration.configuredDomains.contains) == true else {
+                || configuredDomain.map(registration.configuredDomains.contains) == true
+                || isElementPickerEvent else {
             return
         }
         guard ConnectionEventProjection.shouldDeliver(
@@ -4509,8 +5155,11 @@ package actor ConnectionCore {
                 throw TransportSession.Error.malformedMessage
             }
             payload = .runtime(target: target, event: value)
-        case .inspector:
-            payload = nil
+        case let .inspector(value):
+            guard isElementPickerEvent else {
+                return
+            }
+            payload = .inspector(target: target, event: value)
         }
 
         guard let payload else {

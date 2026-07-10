@@ -449,11 +449,7 @@ private enum LiveProxyCommandEncoder {
 
         case (.dom, "setInspectModeEnabled"):
             let payload = try payload(command.payload, as: DOM.SetInspectModeEnabledPayload.self, command: command)
-            var object: [String: Any] = ["enabled": payload.enabled]
-            if payload.enabled {
-                object["highlightConfig"] = highlightConfig()
-            }
-            return try data(object)
+            return try elementPickerModeParametersData(enabled: payload.enabled)
 
         case (.network, "getResponseBody"):
             let payload = try payload(command.payload, as: Network.GetResponseBodyPayload.self, command: command)
@@ -479,6 +475,9 @@ private enum LiveProxyCommandEncoder {
             if let context = payload.context {
                 let rawValue = context.unscopedRawValue
                 object["contextId"] = Int(rawValue) ?? rawValue
+            }
+            if let objectGroup = payload.objectGroup {
+                object["objectGroup"] = Self.objectGroupRawValue(objectGroup)
             }
             return try data(object)
 

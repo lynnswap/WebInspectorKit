@@ -9,6 +9,7 @@ struct ConnectionCapabilityKey: Hashable, Sendable {
 enum ConnectionCapabilityLeaseOwner: Hashable, Sendable {
     case eventScope(WebInspectorProxyEventScopeID)
     case modelFeed(ConnectionModelFeedID, ModelDomain)
+    case modelElementPicker(ConnectionModelFeedID)
 }
 
 struct ConnectionEventScopeRegistry {

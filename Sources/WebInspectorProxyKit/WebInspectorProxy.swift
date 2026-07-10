@@ -285,39 +285,11 @@ public actor WebInspectorProxy {
         targetID: WebInspectorTarget.ID,
         route: RoutingTargetID
     ) -> AsyncStream<DOM.Event> {
-        guard let backend else {
-            preconditionFailure("WebInspectorProxy has no backend for DOM events.")
-        }
-        return AsyncStream<DOM.Event> { continuation in
-            let task = Task {
-                await withTaskGroup(of: Void.self) { group in
-                    group.addTask {
-                        for await event in backend.events(route: route, targetID: targetID, domain: .dom) {
-                            guard case let .dom(value) = event else {
-                                preconditionFailure("Backend emitted a mismatched event for DOM.")
-                            }
-                            continuation.yield(value)
-                        }
-                    }
-                    group.addTask {
-                        for await event in backend.events(route: route, targetID: targetID, domain: .inspector) {
-                            guard case let .inspector(value) = event else {
-                                preconditionFailure("Backend emitted a mismatched event for Inspector.")
-                            }
-                            await self.emitDOMInspectEvent(
-                                for: value,
-                                route: route,
-                                continuation: continuation
-                            )
-                        }
-                    }
-                    await group.waitForAll()
-                    continuation.finish()
-                }
+        eventStream(targetID: targetID, route: route, domain: .dom) { event in
+            guard case let .dom(value) = event else {
+                return nil
             }
-            continuation.onTermination = { _ in
-                task.cancel()
-            }
+            return value
         }
     }
 
@@ -444,53 +416,6 @@ public actor WebInspectorProxy {
             continuation.onTermination = { _ in
                 task.cancel()
             }
-        }
-    }
-
-    private nonisolated func emitDOMInspectEvent(
-        for event: Inspector.Event,
-        route: RoutingTargetID,
-        continuation: AsyncStream<DOM.Event>.Continuation
-    ) async {
-        guard case let .inspect(object, _) = event else {
-            return
-        }
-        guard object.subtype?.rawValue == "node", let objectID = object.id else {
-            logger.debug(
-                "Inspector.inspect ignored reason=non-node route=\(Self.logDescription(route), privacy: .public) subtype=\(String(describing: object.subtype), privacy: .public)"
-            )
-            return
-        }
-        logger.debug(
-            "Inspector.inspect resolving route=\(Self.logDescription(route), privacy: .public) objectID=\(objectID.rawValue, privacy: .public)"
-        )
-        // Inspector.inspect is a page-target event. WebInspectorUI resolves it
-        // through the main page DOM agent, whose node namespace is unscoped.
-        do {
-            let nodeID: DOM.Node.ID = try await dispatchCommand(
-                targetID: .currentPage,
-                route: .currentPage,
-                domain: .dom,
-                method: "requestNode",
-                payload: DOM.RequestNodePayload(objectID: objectID)
-            )
-            logger.debug(
-                "Inspector.inspect resolved objectID=\(objectID.rawValue, privacy: .public) nodeID=\(nodeID.rawValue, privacy: .public)"
-            )
-            continuation.yield(.inspect(nodeID))
-        } catch {
-            logger.debug(
-                "Inspector.inspect requestNode failed objectID=\(objectID.rawValue, privacy: .public) error=\(String(describing: error), privacy: .public)"
-            )
-        }
-    }
-
-    private nonisolated static func logDescription(_ route: RoutingTargetID) -> String {
-        switch route.storage {
-        case .currentPage:
-            return "current-page"
-        case let .target(rawValue):
-            return rawValue
         }
     }
 

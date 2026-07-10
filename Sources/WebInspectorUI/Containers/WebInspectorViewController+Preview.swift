@@ -7,7 +7,7 @@ import WebInspectorUINetwork
 @MainActor
 enum WebInspectorViewControllerPreviewFixtures {
     static func makeSession() -> WebInspectorSession {
-        let dataContext = DOMPreviewFixtures.makeWebInspectorContext()
+        let dataContext = DOMPreviewFixtures.makeWebInspectorModelContext()
         NetworkPreviewFixtures.applySampleData(to: dataContext, mode: .detail)
         return WebInspectorSession(context: dataContext)
     }

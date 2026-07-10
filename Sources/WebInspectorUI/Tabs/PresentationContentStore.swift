@@ -32,7 +32,7 @@ package final class PresentationContentStore {
     }
 
     package typealias NetworkPanelModelFactory = @MainActor (
-        _ context: WebInspectorContext
+        _ context: WebInspectorModelContext
     ) async throws -> NetworkPanelModel
 
     @ObservationIgnored private let contentCache = WebInspectorTab.ContentCache()
@@ -40,7 +40,7 @@ package final class PresentationContentStore {
     @ObservationIgnored private var networkResourceTask: Task<Void, Never>?
     @ObservationIgnored private var networkRetirementTask: Task<Void, Never>?
     @ObservationIgnored private var networkResourceViewControllers: [WeakNetworkResourceViewController] = []
-    @ObservationIgnored private var networkContext: WebInspectorContext?
+    @ObservationIgnored private var networkContext: WebInspectorModelContext?
     private var networkResourceState: NetworkResourceState = .idle
     package private(set) var contextEpoch: Int?
     package private(set) var networkResourceGeneration: UInt64 = 0
@@ -90,7 +90,7 @@ package final class PresentationContentStore {
     }
 
     package func networkViewController(
-        context: WebInspectorContext,
+        context: WebInspectorModelContext,
         contextEpoch: Int,
         makeReadyViewController: @escaping @MainActor (NetworkPanelModel) -> UIViewController
     ) -> NetworkTabResourceViewController {
@@ -155,7 +155,7 @@ package final class PresentationContentStore {
     }
 
     private func startNetworkResource(
-        context: WebInspectorContext,
+        context: WebInspectorModelContext,
         contextEpoch: Int
     ) {
         precondition(

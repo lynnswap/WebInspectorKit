@@ -165,12 +165,88 @@ public struct DOM: Sendable, WebInspectorEventDomainHandle {
         )
     }
 
-    /// Enables or disables WebKit's element picker.
-    public func setInspectMode(enabled: Bool) async throws {
+    package func setInspectMode(enabled: Bool) async throws {
         try await dispatchVoid(
             method: "setInspectModeEnabled",
             payload: SetInspectModeEnabledPayload(enabled: enabled)
         )
+    }
+
+    /// Runs an operation while WebKit's element picker is enabled.
+    ///
+    /// The Inspector capability and its event subscriber are installed before
+    /// inspect mode is enabled. The scope disables inspect mode and releases
+    /// the capability on success, failure, and cancellation.
+    public func withElementPicker<Output>(
+        buffering: WebInspectorEventBufferingPolicy = .bounded(16),
+        isolation: isolated (any Actor)? = #isolation,
+        _ operation: (
+            AsyncThrowingStream<WebInspectorPageEvent<Node.ID>, any Error>
+        ) async throws -> Output
+    ) async throws -> Output {
+        let inspector = Inspector(endpoint: endpoint)
+        return try await inspector._withEvents(
+            buffering: buffering,
+            isolation: isolation
+        ) { inspectorEvents in
+            let pair = AsyncThrowingStream.makeStream(
+                of: WebInspectorPageEvent<Node.ID>.self
+            )
+            let projectionTask = Task {
+                do {
+                    for try await pageEvent in inspectorEvents {
+                        switch pageEvent {
+                        case let .reset(generation):
+                            pair.continuation.yield(.reset(generation))
+                        case let .event(generation, event):
+                            guard case let .inspect(object, _) = event,
+                                  object.subtype?.rawValue == "node",
+                                  let objectID = object.id else {
+                                continue
+                            }
+                            let nodeID: Node.ID
+                            do {
+                                nodeID = try await requestNode(
+                                    forRemoteObject: objectID
+                                )
+                            } catch WebInspectorProxyError.staleIdentifier {
+                                continue
+                            } catch WebInspectorProxyError.pageUnavailable {
+                                continue
+                            }
+                            pair.continuation.yield(
+                                .event(generation, nodeID)
+                            )
+                        }
+                    }
+                    pair.continuation.finish()
+                } catch {
+                    pair.continuation.finish(throwing: error)
+                }
+            }
+            pair.continuation.onTermination = { _ in
+                projectionTask.cancel()
+            }
+
+            let operationResult: Result<Output, any Error>
+            do {
+                operationResult = .success(
+                    try await operation(pair.stream)
+                )
+            } catch {
+                operationResult = .failure(error)
+            }
+
+            projectionTask.cancel()
+            await projectionTask.value
+            pair.continuation.finish()
+            switch operationResult {
+            case let .success(output):
+                return output
+            case let .failure(error):
+                throw error
+            }
+        }
     }
 
     /// Undoes the most recent DOM edit recorded by WebKit.
