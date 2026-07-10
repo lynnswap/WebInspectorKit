@@ -9,7 +9,6 @@ package final class RegularTabContentViewController: UINavigationController {
     private let contentStore: PresentationContentStore
     private var segmentDisplayItemIDs: [WebInspectorTab.DisplayItem.ID] = []
     private var displayedDisplayItemID: WebInspectorTab.DisplayItem.ID?
-    private var renderedContentRevision: Int?
     private var interfaceObservation: PortableObservationTracking.Token?
 
     private lazy var segmentBarButtonItem: UIBarButtonItem = {
@@ -93,17 +92,13 @@ package final class RegularTabContentViewController: UINavigationController {
     private func renderInterface(_ interface: InterfaceModel) {
         let displayItems = interface.displayItems(for: .regular)
         let selectedDisplayItem = interface.resolvedSelection(for: .regular)
-        let contentRevision = interface.contextBoundContentRevision
-        contentStore.prepare(for: contentRevision)
-        let shouldRebuildContent = renderedContentRevision.map { $0 != contentRevision } ?? false
         let activeItemIDs = Set(displayItems.map(\.id))
         if let displayedDisplayItemID,
            activeItemIDs.contains(displayedDisplayItemID) == false {
             self.displayedDisplayItemID = nil
         }
         setSegments(for: displayItems)
-        renderSelection(selectedDisplayItem, forceContentReplacement: shouldRebuildContent)
-        renderedContentRevision = contentRevision
+        renderSelection(selectedDisplayItem)
     }
 
     private func setSegments(for displayItems: [WebInspectorTab.DisplayItem]) {
@@ -124,8 +119,7 @@ package final class RegularTabContentViewController: UINavigationController {
     }
 
     private func renderSelection(
-        _ selectedDisplayItem: WebInspectorTab.DisplayItem?,
-        forceContentReplacement: Bool = false
+        _ selectedDisplayItem: WebInspectorTab.DisplayItem?
     ) {
         let selectedSegmentIndex = selectedDisplayItem.flatMap {
             segmentDisplayItemIDs.firstIndex(of: $0.id)
@@ -134,14 +128,14 @@ package final class RegularTabContentViewController: UINavigationController {
             segmentedControl.selectedSegmentIndex = selectedSegmentIndex
         }
         guard let selectedDisplayItem else {
-            guard forceContentReplacement || displayedDisplayItemID != nil || viewControllers.isEmpty == false else {
+            guard displayedDisplayItemID != nil || viewControllers.isEmpty == false else {
                 return
             }
             displayedDisplayItemID = nil
             setViewControllers([], animated: false)
             return
         }
-        guard forceContentReplacement || displayedDisplayItemID != selectedDisplayItem.id || viewControllers.isEmpty else {
+        guard displayedDisplayItemID != selectedDisplayItem.id || viewControllers.isEmpty else {
             return
         }
 

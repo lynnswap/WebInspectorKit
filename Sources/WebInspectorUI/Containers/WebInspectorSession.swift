@@ -250,7 +250,6 @@ extension WebInspectorSession {
 package final class InterfaceModel {
     package let tabs: [WebInspectorTab]
     package private(set) var selectedItemID: WebInspectorTab.DisplayItem.ID?
-    package private(set) var contextBoundContentRevision = 0
     @ObservationIgnored private let projection = WebInspectorTab.DisplayProjection()
 
     package init(tabs: [WebInspectorTab] = [.dom, .network]) {
@@ -303,14 +302,6 @@ package final class InterfaceModel {
             return
         }
         selectedItemID = displayItemID
-    }
-
-    package func contextDidChange() {
-        precondition(
-            contextBoundContentRevision < Int.max,
-            "A presentation content revision must not overflow."
-        )
-        contextBoundContentRevision += 1
     }
 
     package var selectedTab: WebInspectorTab? {

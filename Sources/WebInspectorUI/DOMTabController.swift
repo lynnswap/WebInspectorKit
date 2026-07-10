@@ -87,8 +87,7 @@ package struct DOMTabController: WebInspectorTab.BuiltInController {
         contentStore: PresentationContentStore
     ) -> DOMTreeViewController {
         contentStore.viewController(
-            for: contentKey(ContentID.tree),
-            contextEpoch: session.interface.contextBoundContentRevision
+            for: contentKey(ContentID.tree)
         ) {
             DOMTreeViewController(context: session.model)
         }
@@ -99,8 +98,7 @@ package struct DOMTabController: WebInspectorTab.BuiltInController {
         contentStore: PresentationContentStore
     ) -> DOMElementViewController {
         contentStore.viewController(
-            for: contentKey(ContentID.element),
-            contextEpoch: session.interface.contextBoundContentRevision
+            for: contentKey(ContentID.element)
         ) {
             DOMElementViewController(context: session.model)
         }
