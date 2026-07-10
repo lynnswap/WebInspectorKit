@@ -1756,7 +1756,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func visibleListAppliesLiveInsertThroughFetchedResultsTransactions() async throws {
+    func visibleListAppliesLiveInsertThroughFetchedResultsUpdates() async throws {
         let context = makeContext()
         let firstRequest = try #require(await applyRequest(
             to: context,
@@ -1773,7 +1773,7 @@ struct NetworkDetailViewControllerTests {
 
         let evaluationCountBeforeInsert = listViewController.displayRequestIDsEvaluationCountForTesting
         let snapshotApplyCountBeforeInsert = listViewController.snapshotApplyCountForTesting
-        let transactionDeliveryCountBeforeInsert = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        let updateDeliveryCountBeforeInsert = listViewController.fetchedResultsUpdateDeliveryCountForTesting
         let secondRequest = try #require(await applyRequest(
             to: context,
             requestID: "2",
@@ -1783,7 +1783,7 @@ struct NetworkDetailViewControllerTests {
         let didRenderInsert = await waitUntilListShows(
             [secondRequest.id, firstRequest.id],
             in: listViewController,
-            afterTransactionDeliveryCount: transactionDeliveryCountBeforeInsert
+            afterUpdateDeliveryCount: updateDeliveryCountBeforeInsert
         )
         #expect(didRenderInsert)
         #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeInsert)
@@ -1791,7 +1791,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func visibleListAppliesDescriptorResetThroughFetchedResultsTransactions() async throws {
+    func visibleListAppliesDescriptorResetThroughFetchedResultsUpdates() async throws {
         let context = makeContext()
         _ = try #require(await applyRequest(
             to: context,
@@ -1811,13 +1811,13 @@ struct NetworkDetailViewControllerTests {
 
         let evaluationCountBeforeUpdate = listViewController.displayRequestIDsEvaluationCountForTesting
         let snapshotApplyCountBeforeUpdate = listViewController.snapshotApplyCountForTesting
-        let transactionDeliveryCountBeforeUpdate = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        let updateDeliveryCountBeforeUpdate = listViewController.fetchedResultsUpdateDeliveryCountForTesting
 
         model.setSearchText("does-not-match")
         let didRenderReset = await waitUntilListShows(
             [],
             in: listViewController,
-            afterTransactionDeliveryCount: transactionDeliveryCountBeforeUpdate
+            afterUpdateDeliveryCount: updateDeliveryCountBeforeUpdate
         )
 
         #expect(didRenderReset)
@@ -1845,13 +1845,13 @@ struct NetworkDetailViewControllerTests {
         #expect(listViewController.displayedRequestIDsForTesting.count == 1)
 
         let evaluationCountBeforeHiddenUpdate = listViewController.displayRequestIDsEvaluationCountForTesting
-        let transactionDeliveryCountBeforeHiddenUpdate = listViewController
-            .fetchedResultsTransactionDeliveryCountForTesting
+        let updateDeliveryCountBeforeHiddenUpdate = listViewController
+            .fetchedResultsUpdateDeliveryCountForTesting
 
         listViewController.suspendRenderingForTesting()
         model.setSearchText("does-not-match")
-        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
-            after: transactionDeliveryCountBeforeHiddenUpdate
+        #expect(await listViewController.waitForFetchedResultsUpdateDeliveryForTesting(
+            after: updateDeliveryCountBeforeHiddenUpdate
         ))
 
         #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
@@ -1985,7 +1985,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func listControllerDeallocatesWhileFetchedResultsTransactionTaskIsActive() async throws {
+    func listControllerDeallocatesWhileFetchedResultsUpdateTaskIsActive() async throws {
         let model = NetworkPanelModel(context: makeContext())
         let deinitProbe = UITestDeinitProbe()
         weak var weakViewController: NetworkListViewController?
@@ -2271,10 +2271,10 @@ struct NetworkDetailViewControllerTests {
     private func waitUntilListShows(
         _ requestIDs: [NetworkRequest.ID],
         in viewController: NetworkListViewController,
-        afterTransactionDeliveryCount transactionDeliveryCount: Int
+        afterUpdateDeliveryCount updateDeliveryCount: Int
     ) async -> Bool {
-        guard await viewController.waitForFetchedResultsTransactionDeliveryForTesting(
-            after: transactionDeliveryCount
+        guard await viewController.waitForFetchedResultsUpdateDeliveryForTesting(
+            after: updateDeliveryCount
         ) else {
             return false
         }

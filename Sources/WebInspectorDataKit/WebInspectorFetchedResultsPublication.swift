@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// Section/item position inside fetched results.
 public struct WebInspectorFetchedResultsIndexPath: Hashable, Sendable {
@@ -73,9 +74,9 @@ public struct WebInspectorFetchedResultsSnapshot<ItemID: Hashable & Sendable>: H
 }
 
 extension WebInspectorFetchedResultsSnapshot {
-    init<Model: WebInspectorFetchableModel>(
+    init<Model: Identifiable>(
         sections: [WebInspectorFetchSection<Model>]
-    ) where Model.ID == ItemID {
+    ) where Model.ID == ItemID, Model.ID: Hashable & Sendable {
         self.init(sections: sections.map { section in
             Section(
                 id: section.id,
@@ -120,10 +121,7 @@ public enum WebInspectorFetchedResultsItemChange<ItemID: Hashable & Sendable>: H
 }
 
 /// A batch of fetched-results changes between two snapshots.
-public struct WebInspectorFetchedResultsTransaction<Model: WebInspectorFetchableModel>: Hashable, Sendable {
-    /// Item identity type for the model.
-    public typealias ItemID = Model.ID
-
+public struct WebInspectorFetchedResultsTransaction<ItemID: Hashable & Sendable>: Hashable, Sendable {
     /// Snapshot before the transaction.
     public let oldSnapshot: WebInspectorFetchedResultsSnapshot<ItemID>
 
@@ -312,6 +310,250 @@ public struct WebInspectorFetchedResultsTransaction<Model: WebInspectorFetchable
     }
 }
 
+/// One atomic fetched-results publication.
+///
+/// The initial value and every later transaction contain a complete identity
+/// snapshot. Consumers that observe a revision gap can therefore replace their
+/// local snapshot instead of applying a delta across missing revisions.
+public enum WebInspectorFetchedResultsUpdate<ItemID: Hashable & Sendable>: Hashable, Sendable {
+    /// The complete result state that begins a subscription.
+    ///
+    /// If the producer advances before first consumption, the pending initial
+    /// value coalesces to the newest complete snapshot.
+    case initial(
+        revision: UInt64,
+        snapshot: WebInspectorFetchedResultsSnapshot<ItemID>
+    )
+
+    /// One later result publication.
+    ///
+    /// `reconfigureItemIDs` contains identities present in the new snapshot
+    /// whose model-backed presentation changed, including coalesced updates.
+    case transaction(
+        revision: UInt64,
+        transaction: WebInspectorFetchedResultsTransaction<ItemID>,
+        reconfigureItemIDs: Set<ItemID>
+    )
+}
+
+extension WebInspectorFetchedResultsUpdate {
+    fileprivate func coalescing(
+        _ pending: WebInspectorFetchedResultsUpdate<ItemID>
+    ) -> WebInspectorFetchedResultsUpdate<ItemID> {
+        switch (pending, self) {
+        case (_, .initial):
+            return self
+        case (.initial, .transaction(let revision, let transaction, _)):
+            return .initial(
+                revision: revision,
+                snapshot: transaction.newSnapshot
+            )
+        case let (
+            .transaction(_, _, pendingReconfigureItemIDs),
+            .transaction(revision, transaction, reconfigureItemIDs)
+        ):
+            return .transaction(
+                revision: revision,
+                transaction: transaction,
+                reconfigureItemIDs: reconfigureItemIDs
+                    .union(pendingReconfigureItemIDs)
+                    .intersection(transaction.newSnapshot.itemIDs)
+            )
+        }
+    }
+}
+
+private final class WebInspectorFetchedResultsUpdateSubscriber<
+    ItemID: Hashable & Sendable
+>: Sendable {
+    typealias Update = WebInspectorFetchedResultsUpdate<ItemID>
+
+    private struct State {
+        var pending: Update?
+        var waiters: [CheckedContinuation<Update?, Never>] = []
+        var isFinished = false
+    }
+
+    private struct Resumption {
+        var continuation: CheckedContinuation<Update?, Never>
+        var update: Update?
+    }
+
+    private let state: Mutex<State>
+    private let onTermination: @Sendable () -> Void
+
+    init(initial: Update, onTermination: @escaping @Sendable () -> Void) {
+        state = Mutex(State(pending: initial))
+        self.onTermination = onTermination
+    }
+
+    func makeStream() -> AsyncStream<Update> {
+        AsyncStream(
+            unfolding: { [self] in
+                await next()
+            },
+            onCancel: { [self] in
+                finish()
+            }
+        )
+    }
+
+    func offer(_ update: Update) {
+        let waiter = state.withLock { state -> CheckedContinuation<Update?, Never>? in
+            guard state.isFinished == false else {
+                return nil
+            }
+            if state.waiters.isEmpty == false {
+                return state.waiters.removeFirst()
+            }
+            if let pending = state.pending {
+                state.pending = update.coalescing(pending)
+            } else {
+                state.pending = update
+            }
+            return nil
+        }
+        waiter?.resume(returning: update)
+    }
+
+    func finish() {
+        let resumptions = state.withLock { state -> [Resumption]? in
+            guard state.isFinished == false else {
+                return nil
+            }
+            state.isFinished = true
+
+            var resumptions: [Resumption] = []
+            if state.waiters.isEmpty == false, let pending = state.pending {
+                resumptions.append(Resumption(
+                    continuation: state.waiters.removeFirst(),
+                    update: pending
+                ))
+                state.pending = nil
+            }
+            resumptions.append(contentsOf: state.waiters.map {
+                Resumption(continuation: $0, update: nil)
+            })
+            state.waiters.removeAll(keepingCapacity: false)
+            return resumptions
+        }
+        guard let resumptions else {
+            return
+        }
+        for resumption in resumptions {
+            resumption.continuation.resume(returning: resumption.update)
+        }
+        onTermination()
+    }
+
+    private func next() async -> Update? {
+        if Task.isCancelled {
+            finish()
+            return nil
+        }
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                let immediate = state.withLock { state -> (shouldResume: Bool, update: Update?) in
+                    if let pending = state.pending {
+                        state.pending = nil
+                        return (true, pending)
+                    }
+                    if state.isFinished {
+                        return (true, nil)
+                    }
+                    state.waiters.append(continuation)
+                    return (false, nil)
+                }
+                if immediate.shouldResume {
+                    continuation.resume(returning: immediate.update)
+                }
+            }
+        } onCancel: { [self] in
+            finish()
+        }
+    }
+
+    deinit {
+        finish()
+    }
+}
+
+private final class WeakWebInspectorFetchedResultsUpdateSubscriber<
+    ItemID: Hashable & Sendable
+> {
+    weak var value: WebInspectorFetchedResultsUpdateSubscriber<ItemID>?
+
+    init(_ value: WebInspectorFetchedResultsUpdateSubscriber<ItemID>) {
+        self.value = value
+    }
+}
+
+final class WebInspectorFetchedResultsUpdateBroker<ItemID: Hashable & Sendable>: Sendable {
+    typealias Update = WebInspectorFetchedResultsUpdate<ItemID>
+    private typealias Subscriber = WebInspectorFetchedResultsUpdateSubscriber<ItemID>
+
+    private struct State {
+        var subscribers: [UUID: WeakWebInspectorFetchedResultsUpdateSubscriber<ItemID>] = [:]
+        var isFinished = false
+    }
+
+    private let state = Mutex(State())
+
+    func makeStream(initial: Update) -> AsyncStream<Update> {
+        let id = UUID()
+        let subscriber = Subscriber(initial: initial) { [weak self] in
+            self?.removeStream(id)
+        }
+        let shouldFinish = state.withLock { state in
+            guard state.isFinished == false else {
+                return true
+            }
+            state.subscribers = state.subscribers.filter { $0.value.value != nil }
+            state.subscribers[id] = WeakWebInspectorFetchedResultsUpdateSubscriber(subscriber)
+            return false
+        }
+        if shouldFinish {
+            subscriber.finish()
+        }
+        return subscriber.makeStream()
+    }
+
+    func yield(_ update: Update) {
+        let subscribers = state.withLock { state -> [Subscriber] in
+            state.subscribers = state.subscribers.filter { $0.value.value != nil }
+            return state.subscribers.values.compactMap(\.value)
+        }
+        for subscriber in subscribers {
+            subscriber.offer(update)
+        }
+    }
+
+    func finish() {
+        let subscribers = state.withLock { state -> [Subscriber] in
+            guard state.isFinished == false else {
+                return []
+            }
+            state.isFinished = true
+            let subscribers = state.subscribers.values.compactMap(\.value)
+            state.subscribers.removeAll(keepingCapacity: false)
+            return subscribers
+        }
+        for subscriber in subscribers {
+            subscriber.finish()
+        }
+    }
+
+    private func removeStream(_ id: UUID) {
+        _ = state.withLock { state in
+            state.subscribers.removeValue(forKey: id)
+        }
+    }
+
+    deinit {
+        finish()
+    }
+}
+
 extension WebInspectorFetchedResultsItemChange {
     fileprivate var newIndexPathForOrdering: WebInspectorFetchedResultsIndexPath {
         switch self {
@@ -335,44 +577,5 @@ extension WebInspectorFetchedResultsIndexPath: Comparable {
             return lhs.section < rhs.section
         }
         return lhs.item < rhs.item
-    }
-}
-
-/// Controller wrapper around ``WebInspectorFetchedResults``.
-public final class WebInspectorFetchedResultsController<Model: WebInspectorFetchableModel> {
-    /// The observable fetched-results model.
-    public let fetchedResults: WebInspectorFetchedResults<Model>
-
-    /// The descriptor currently used by the results.
-    public var fetchDescriptor: WebInspectorFetchDescriptor<Model> {
-        fetchedResults.fetchDescriptor
-    }
-
-    /// The fetched models in display order.
-    public var items: [Model] {
-        fetchedResults.items
-    }
-
-    /// The current fetched-results snapshot.
-    public var snapshot: WebInspectorFetchedResultsSnapshot<Model.ID> {
-        WebInspectorFetchedResultsSnapshot(sections: fetchedResults.sections)
-    }
-
-    /// Stream of transactions emitted after result changes.
-    public var transactions: AsyncStream<WebInspectorFetchedResultsTransaction<Model>> {
-        fetchedResults.makeTransactionStream()
-    }
-
-    /// Creates a controller for fetched results.
-    public init(fetchedResults: WebInspectorFetchedResults<Model>) {
-        self.fetchedResults = fetchedResults
-    }
-
-    /// Replaces the fetch descriptor and updates the result contents.
-    public func updateFetchDescriptor(
-        _ descriptor: WebInspectorFetchDescriptor<Model>,
-        isolation: isolated (any Actor) = #isolation
-    ) {
-        fetchedResults.updateFetchDescriptor(descriptor, isolation: isolation)
     }
 }

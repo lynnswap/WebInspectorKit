@@ -14,11 +14,6 @@ private actor DataKitImportOnlyActor {
             context.fetchedResults(sectionBy: \.method)
         let messagesByLevel: WebInspectorFetchedResults<ConsoleMessage> =
             context.fetchedResults(sectionBy: \.level)
-        let requestController: WebInspectorFetchedResultsController<NetworkRequest> =
-            context.fetchedResultsController()
-        let messageController: WebInspectorFetchedResultsController<ConsoleMessage> =
-            context.fetchedResultsController()
-
         _ = context.state
         _ = context.rootNode?.children
         _ = context.selectedNode?.attributes
@@ -55,19 +50,21 @@ private actor DataKitImportOnlyActor {
         _ = requests.items.first?.metrics
         _ = requestsByMethod.sections.first?.title
         let requestSnapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID> =
-            requestController.snapshot
-        let requestTransaction = WebInspectorFetchedResultsTransaction<NetworkRequest>(
+            requests.snapshot
+        let requestTransaction = WebInspectorFetchedResultsTransaction<NetworkRequest.ID>(
             oldSnapshot: requestSnapshot,
             newSnapshot: requestSnapshot,
             itemChanges: []
         )
-        _ = requestController.transactions
+        _ = requests.revision
+        _ = requests.updates()
         _ = requestTransaction.hasChanges
         _ = messages.items.first?.text
         _ = messages.items.first?.parameters.first?.description
         _ = messagesByLevel.sections.first?.id
-        _ = messageController.snapshot
-        _ = messageController.transactions
+        _ = messages.snapshot
+        _ = messages.revision
+        _ = messages.updates()
         _ = try await context.evaluate("1 + 1").object.description
 
         let request = NetworkRequestSnapshot(url: "https://example.com", method: "GET")

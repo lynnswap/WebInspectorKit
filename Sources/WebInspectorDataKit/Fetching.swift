@@ -180,7 +180,8 @@ public struct WebInspectorFetchSectionID: RawRepresentable, Hashable, Sendable, 
 }
 
 /// One fetched-results section and its models.
-public struct WebInspectorFetchSection<Model: WebInspectorFetchableModel>: Identifiable {
+public struct WebInspectorFetchSection<Model: Identifiable>: Identifiable
+where Model.ID: Hashable & Sendable {
     /// The stable section identity.
     public var id: WebInspectorFetchSectionID
 
@@ -301,26 +302,57 @@ private enum WebInspectorKnownKeyPaths {
 /// Observable collection of models produced by a fetch descriptor.
 @Observable
 public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel> {
-    /// The descriptor currently used by the results.
-    public private(set) var fetchDescriptor: WebInspectorFetchDescriptor<Model>
+    private struct State {
+        var fetchDescriptor: WebInspectorFetchDescriptor<Model>
+        var sectionBy: WebInspectorSectionDescriptor<Model>?
+        var items: [Model]
+        var sections: [WebInspectorFetchSection<Model>]
+        var snapshot: WebInspectorFetchedResultsSnapshot<Model.ID>
+        var revision: UInt64
+        var topologyRevision: UInt64
+    }
 
-    /// The section descriptor currently used by the results.
-    public private(set) var sectionBy: WebInspectorSectionDescriptor<Model>?
-
-    /// The fetched models in display order.
-    public private(set) var items: [Model]
-
-    /// The fetched models grouped into display sections.
-    public private(set) var sections: [WebInspectorFetchSection<Model>]
-    package private(set) var topologyRevision: Int
-
-    @ObservationIgnored private let transactionRelay = WebInspectorAsyncStreamRelay<
-        WebInspectorFetchedResultsTransaction<Model>
-    >()
+    private var state: State
+    @ObservationIgnored private let updateBroker =
+        WebInspectorFetchedResultsUpdateBroker<Model.ID>()
     @ObservationIgnored weak var modelContext: WebInspectorContext?
     @ObservationIgnored private var networkQueryPlan: NetworkRequestQueryPlan?
     @ObservationIgnored private var networkQueryState: NetworkRequestQueryState?
-    @ObservationIgnored private var networkResultSnapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID>?
+    @ObservationIgnored private var networkIndexSequence: UInt64
+
+    /// The descriptor currently used by the results.
+    public var fetchDescriptor: WebInspectorFetchDescriptor<Model> {
+        state.fetchDescriptor
+    }
+
+    /// The section descriptor currently used by the results.
+    public var sectionBy: WebInspectorSectionDescriptor<Model>? {
+        state.sectionBy
+    }
+
+    /// The fetched models in display order.
+    public var items: [Model] {
+        state.items
+    }
+
+    /// The fetched models grouped into display sections.
+    public var sections: [WebInspectorFetchSection<Model>] {
+        state.sections
+    }
+
+    /// The complete current section and item identity snapshot.
+    public var snapshot: WebInspectorFetchedResultsSnapshot<Model.ID> {
+        state.snapshot
+    }
+
+    /// Monotonically increasing publication revision.
+    public var revision: UInt64 {
+        state.revision
+    }
+
+    package var topologyRevision: UInt64 {
+        state.topologyRevision
+    }
 
     init(
         fetchDescriptor: WebInspectorFetchDescriptor<Model>,
@@ -328,65 +360,76 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
         items: [Model] = [],
         modelContext: WebInspectorContext? = nil
     ) {
-        self.fetchDescriptor = fetchDescriptor
-        self.sectionBy = sectionBy
-        self.items = items
-        sections = Self.sections(for: items, sectionBy: sectionBy)
+        let sections = Self.sections(for: items, sectionBy: sectionBy)
+        state = State(
+            fetchDescriptor: fetchDescriptor,
+            sectionBy: sectionBy,
+            items: items,
+            sections: sections,
+            snapshot: WebInspectorFetchedResultsSnapshot(sections: sections),
+            revision: 0,
+            topologyRevision: 0
+        )
         self.modelContext = modelContext
-        topologyRevision = 0
         networkQueryPlan = nil
         networkQueryState = nil
-        networkResultSnapshot = nil
+        networkIndexSequence = 0
     }
 
     deinit {
-        transactionRelay.finish()
+        updateBroker.finish()
     }
 
-    func makeTransactionStream() -> AsyncStream<WebInspectorFetchedResultsTransaction<Model>> {
-        transactionRelay.makeStream()
+    /// Returns an atomic bounded stream beginning with the current result state.
+    ///
+    /// The first consumed element is always `.initial`; it advances to the
+    /// newest complete state if publications arrive before consumption. The
+    /// stream then retains only its newest unconsumed transaction. Every
+    /// transaction includes a full current snapshot, so consumers recover from
+    /// a revision gap by replacing their local snapshot.
+    public func updates() -> AsyncStream<WebInspectorFetchedResultsUpdate<Model.ID>> {
+        updateBroker.makeStream(initial: .initial(
+            revision: state.revision,
+            snapshot: state.snapshot
+        ))
     }
 
     func setItems(_ items: [Model], updatedItemIDs: Set<Model.ID> = []) {
-        let oldSnapshot = currentSnapshot
-        self.items = items
-        sections = Self.sections(for: items, sectionBy: sectionBy)
-        bumpTopologyRevisionIfNeeded(oldSnapshot: oldSnapshot)
-        yieldTransaction(oldSnapshot: oldSnapshot, updatedItemIDs: updatedItemIDs)
+        let sections = Self.sections(for: items, sectionBy: state.sectionBy)
+        publish(items: items, sections: sections, updatedItemIDs: updatedItemIDs)
     }
 
     func insertItem(_ item: Model) {
-        precondition(items.contains { $0.id == item.id } == false, "WebInspectorFetchedResults cannot insert a duplicate item ID.")
-        let oldSnapshot = currentSnapshot
-        items.append(item)
-        sections = Self.sections(for: items, sectionBy: sectionBy)
-        bumpTopologyRevisionIfNeeded(oldSnapshot: oldSnapshot)
-        yieldTransaction(oldSnapshot: oldSnapshot, updatedItemIDs: [])
+        precondition(
+            state.items.contains { $0.id == item.id } == false,
+            "WebInspectorFetchedResults cannot insert a duplicate item ID."
+        )
+        let items = state.items + [item]
+        let sections = Self.sections(for: items, sectionBy: state.sectionBy)
+        publish(items: items, sections: sections)
     }
 
     func refreshAfterItemMutation(_ item: Model) {
-        guard items.contains(where: { $0.id == item.id }) else {
+        guard state.items.contains(where: { $0.id == item.id }) else {
             return
         }
-        let oldSnapshot = currentSnapshot
-        if sectionBy != nil {
-            sections = Self.sections(for: items, sectionBy: sectionBy)
-        }
-        bumpTopologyRevisionIfNeeded(oldSnapshot: oldSnapshot)
-        yieldTransaction(oldSnapshot: oldSnapshot, updatedItemIDs: [item.id])
+        let sections = Self.sections(for: state.items, sectionBy: state.sectionBy)
+        publish(items: state.items, sections: sections, updatedItemIDs: [item.id])
     }
 
     func resetItems(_ items: [Model]) {
-        let oldSnapshot = currentSnapshot
-        self.items = items
-        sections = Self.sections(for: items, sectionBy: sectionBy)
-        bumpTopologyRevision()
-        yieldResetTransaction(oldSnapshot: oldSnapshot)
+        let sections = Self.sections(for: items, sectionBy: state.sectionBy)
+        publish(items: items, sections: sections, isReset: true)
     }
 
     func applyFetchDescriptor(_ descriptor: WebInspectorFetchDescriptor<Model>, items: [Model]) {
-        fetchDescriptor = descriptor
-        resetItems(items)
+        let sections = Self.sections(for: items, sectionBy: state.sectionBy)
+        publish(
+            items: items,
+            sections: sections,
+            fetchDescriptor: descriptor,
+            isReset: true
+        )
     }
 
     /// Replaces the fetch descriptor and updates the result contents.
@@ -400,52 +443,67 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
         modelContext.updateFetchDescriptor(descriptor, for: self, isolation: isolation)
     }
 
-    private var currentSnapshot: WebInspectorFetchedResultsSnapshot<Model.ID> {
-        WebInspectorFetchedResultsSnapshot(sections: sections)
-    }
-
-    private func bumpTopologyRevisionIfNeeded(oldSnapshot: WebInspectorFetchedResultsSnapshot<Model.ID>) {
-        guard oldSnapshot != currentSnapshot else {
-            return
-        }
-        bumpTopologyRevision()
-    }
-
-    private func bumpTopologyRevision() {
-        topologyRevision &+= 1
-    }
-
-    private func yieldTransaction(
-        oldSnapshot: WebInspectorFetchedResultsSnapshot<Model.ID>,
-        updatedItemIDs: Set<Model.ID>
+    private func publish(
+        items: [Model],
+        sections: [WebInspectorFetchSection<Model>],
+        snapshot: WebInspectorFetchedResultsSnapshot<Model.ID>? = nil,
+        fetchDescriptor: WebInspectorFetchDescriptor<Model>? = nil,
+        isReset: Bool = false,
+        transaction suppliedTransaction: WebInspectorFetchedResultsTransaction<Model.ID>? = nil,
+        updatedItemIDs: Set<Model.ID> = []
     ) {
-        guard transactionRelay.hasContinuations else {
+        let oldState = state
+        let newSnapshot = snapshot ?? WebInspectorFetchedResultsSnapshot(sections: sections)
+        let reconfigureItemIDs = updatedItemIDs.intersection(newSnapshot.itemIDs)
+        guard isReset
+            || oldState.snapshot != newSnapshot
+            || reconfigureItemIDs.isEmpty == false else {
             return
         }
-        let transaction = WebInspectorFetchedResultsTransaction<Model>(
-            oldSnapshot: oldSnapshot,
-            newSnapshot: currentSnapshot,
-            updatedItemIDs: updatedItemIDs
-        )
-        guard transaction.hasChanges else {
-            return
-        }
-        transactionRelay.yield(transaction)
-    }
 
-    private func yieldResetTransaction(
-        oldSnapshot: WebInspectorFetchedResultsSnapshot<Model.ID>
-    ) {
-        guard transactionRelay.hasContinuations else {
-            return
+        let transaction: WebInspectorFetchedResultsTransaction<Model.ID>
+        if let suppliedTransaction {
+            precondition(
+                suppliedTransaction.oldSnapshot == oldState.snapshot
+                    && suppliedTransaction.newSnapshot == newSnapshot,
+                "A fetched-results transaction must describe the state publication it accompanies."
+            )
+            transaction = suppliedTransaction
+        } else if isReset {
+            transaction = WebInspectorFetchedResultsTransaction(
+                oldSnapshot: oldState.snapshot,
+                newSnapshot: newSnapshot,
+                isReset: true,
+                itemChanges: []
+            )
+        } else {
+            transaction = WebInspectorFetchedResultsTransaction(
+                oldSnapshot: oldState.snapshot,
+                newSnapshot: newSnapshot,
+                updatedItemIDs: reconfigureItemIDs
+            )
         }
-        let transaction = WebInspectorFetchedResultsTransaction<Model>(
-            oldSnapshot: oldSnapshot,
-            newSnapshot: currentSnapshot,
-            isReset: true,
-            itemChanges: []
+
+        let revision = oldState.revision &+ 1
+        let topologyRevision = if isReset || oldState.snapshot != newSnapshot {
+            oldState.topologyRevision &+ 1
+        } else {
+            oldState.topologyRevision
+        }
+        state = State(
+            fetchDescriptor: fetchDescriptor ?? oldState.fetchDescriptor,
+            sectionBy: oldState.sectionBy,
+            items: items,
+            sections: sections,
+            snapshot: newSnapshot,
+            revision: revision,
+            topologyRevision: topologyRevision
         )
-        transactionRelay.yield(transaction)
+        updateBroker.yield(.transaction(
+            revision: revision,
+            transaction: transaction,
+            reconfigureItemIDs: reconfigureItemIDs
+        ))
     }
 
     private static func sections(
@@ -510,19 +568,18 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
 
 extension WebInspectorFetchedResults where Model == NetworkRequest {
     var networkSnapshotForDelta: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID> {
-        if let networkResultSnapshot {
-            return networkResultSnapshot
-        }
-        let snapshot = WebInspectorFetchedResultsSnapshot(sections: sections)
-        networkResultSnapshot = snapshot
-        return snapshot
+        state.snapshot
+    }
+
+    var networkIndexSequenceForDelta: UInt64 {
+        networkIndexSequence
     }
 
     func currentNetworkQueryPlan(context: WebInspectorContext) -> NetworkRequestQueryPlan {
         if let networkQueryPlan {
             return networkQueryPlan
         }
-        let plan = NetworkRequestQueryPlan(descriptor: fetchDescriptor, context: context)
+        let plan = NetworkRequestQueryPlan(descriptor: state.fetchDescriptor, context: context)
         networkQueryPlan = plan
         return plan
     }
@@ -530,6 +587,7 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
     func setNetworkItems(
         _ requests: [NetworkRequest],
         plan: NetworkRequestQueryPlan,
+        indexSequence: UInt64,
         lookup: (NetworkRequest.ID) -> NetworkRequest?
     ) {
         networkQueryPlan = plan
@@ -541,34 +599,42 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
             networkQueryState = nil
             setItems(requests)
         }
-        networkResultSnapshot = WebInspectorFetchedResultsSnapshot(sections: sections)
+        networkIndexSequence = indexSequence
     }
 
     func applyNetworkFetchDescriptor(
         _ descriptor: WebInspectorFetchDescriptor<NetworkRequest>,
         plan: NetworkRequestQueryPlan,
         requests: [NetworkRequest],
+        indexSequence: UInt64,
         lookup: (NetworkRequest.ID) -> NetworkRequest?
     ) {
-        fetchDescriptor = descriptor
         networkQueryPlan = plan
+        let visibleRequests: [NetworkRequest]
         if plan.requiresQuery {
             let state = NetworkRequestQueryState(plan: plan, requests: requests)
             networkQueryState = state
-            resetItems(state.visibleRequests(lookup: lookup))
+            visibleRequests = state.visibleRequests(lookup: lookup)
         } else {
             networkQueryState = nil
-            resetItems(requests)
+            visibleRequests = requests
         }
-        networkResultSnapshot = WebInspectorFetchedResultsSnapshot(sections: sections)
+        let sections = Self.sections(for: visibleRequests, sectionBy: state.sectionBy)
+        publish(
+            items: visibleRequests,
+            sections: sections,
+            fetchDescriptor: descriptor,
+            isReset: true
+        )
+        networkIndexSequence = indexSequence
     }
 
-    func resetNetworkItems() {
+    func resetNetworkItems(indexSequence: UInt64) {
         if let state = networkQueryState {
             networkQueryState = NetworkRequestQueryState(plan: state.plan, requests: [])
         }
         resetItems([])
-        networkResultSnapshot = WebInspectorFetchedResultsSnapshot()
+        networkIndexSequence = indexSequence
     }
 
     func insertNetworkRequest(
@@ -577,13 +643,11 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
     ) {
         guard var state = networkQueryState else {
             insertItem(request)
-            networkResultSnapshot = WebInspectorFetchedResultsSnapshot(sections: sections)
             return
         }
         state.upsert(request: request)
         networkQueryState = state
         setItems(state.visibleRequests(lookup: lookup))
-        networkResultSnapshot = WebInspectorFetchedResultsSnapshot(sections: sections)
     }
 
     func refreshNetworkRequestAfterMutation(
@@ -592,37 +656,45 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
     ) {
         guard var state = networkQueryState else {
             refreshAfterItemMutation(request)
-            networkResultSnapshot = WebInspectorFetchedResultsSnapshot(sections: sections)
             return
         }
         state.upsert(request: request)
         networkQueryState = state
         setItems(state.visibleRequests(lookup: lookup), updatedItemIDs: [request.id])
-        networkResultSnapshot = WebInspectorFetchedResultsSnapshot(sections: sections)
     }
 
     func applyNetworkDelta(
         _ delta: NetworkResultSetDelta,
         lookup: (NetworkRequest.ID) -> NetworkRequest?
     ) {
-        let oldSnapshot = networkSnapshotForDelta
-        items = delta.snapshot.itemIDs.compactMap(lookup)
-        sections = delta.snapshot.sections.map { section in
+        guard delta.sequence > networkIndexSequence else {
+            return
+        }
+        let items = delta.snapshot.itemIDs.map { id in
+            guard let request = lookup(id) else {
+                preconditionFailure("A NetworkRequestIndex snapshot referenced an unregistered request.")
+            }
+            return request
+        }
+        let sections = delta.snapshot.sections.map { section in
             WebInspectorFetchSection(
                 id: section.id,
                 title: section.title,
-                items: section.itemIDs.compactMap(lookup)
+                items: section.itemIDs.map { id in
+                    guard let request = lookup(id) else {
+                        preconditionFailure("A NetworkRequestIndex section referenced an unregistered request.")
+                    }
+                    return request
+                }
             )
         }
-        networkResultSnapshot = delta.snapshot
-        if oldSnapshot != delta.snapshot {
-            bumpTopologyRevision()
-        }
-        guard transactionRelay.hasContinuations,
-              let transaction = delta.transaction,
-              transaction.hasChanges else {
-            return
-        }
-        transactionRelay.yield(transaction)
+        publish(
+            items: items,
+            sections: sections,
+            snapshot: delta.snapshot,
+            transaction: delta.transaction,
+            updatedItemIDs: delta.reconfigureItemIDs
+        )
+        networkIndexSequence = delta.sequence
     }
 }

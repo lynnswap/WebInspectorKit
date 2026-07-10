@@ -1,49 +1,95 @@
 import Foundation
 
 package struct NetworkResultSetDelta: Sendable {
+    package var sequence: UInt64
     package var snapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID>
-    package var transaction: WebInspectorFetchedResultsTransaction<NetworkRequest>?
+    package var transaction: WebInspectorFetchedResultsTransaction<NetworkRequest.ID>
+    package var reconfigureItemIDs: Set<NetworkRequest.ID>
 }
 
 package actor NetworkRequestIndex {
+    private enum Mutation {
+        case replace([NetworkRequestRecordInput])
+        case upsert(NetworkRequestRecordInput)
+    }
+
+    private struct PendingMutation {
+        var mutation: Mutation
+        var continuation: CheckedContinuation<Void, Never>
+    }
+
     private var recordsByID: [NetworkRequest.ID: NetworkRequestRecord] = [:]
     private var orderedIDs: [NetworkRequest.ID] = []
+    private var lastUpdatedSequenceByID: [NetworkRequest.ID: UInt64] = [:]
     private var lastAppliedSequence: UInt64 = 0
+    private var pendingMutationsBySequence: [UInt64: PendingMutation] = [:]
 
     package init() {}
 
-    package func replace(with inputs: [NetworkRequestRecordInput], sequence: UInt64) {
-        guard apply(sequence: sequence) else {
-            return
-        }
-        recordsByID = [:]
-        recordsByID.reserveCapacity(inputs.count)
-        orderedIDs = []
-        orderedIDs.reserveCapacity(inputs.count)
-        for input in inputs {
-            upsertRecord(input)
+    package func replace(with inputs: [NetworkRequestRecordInput], sequence: UInt64) async {
+        await enqueue(.replace(inputs), sequence: sequence)
+    }
+
+    package func upsert(_ input: NetworkRequestRecordInput, sequence: UInt64) async {
+        await enqueue(.upsert(input), sequence: sequence)
+    }
+
+    private func enqueue(_ mutation: Mutation, sequence: UInt64) async {
+        precondition(
+            sequence > lastAppliedSequence,
+            "NetworkRequestIndex received an already-applied mutation sequence."
+        )
+        precondition(
+            pendingMutationsBySequence[sequence] == nil,
+            "NetworkRequestIndex received a duplicate mutation sequence."
+        )
+        await withCheckedContinuation { continuation in
+            pendingMutationsBySequence[sequence] = PendingMutation(
+                mutation: mutation,
+                continuation: continuation
+            )
+            drainContiguousMutations()
         }
     }
 
-    package func upsert(_ input: NetworkRequestRecordInput, sequence: UInt64) {
-        guard apply(sequence: sequence) else {
-            return
+    private func drainContiguousMutations() {
+        while lastAppliedSequence < UInt64.max {
+            let sequence = lastAppliedSequence + 1
+            guard let pending = pendingMutationsBySequence.removeValue(forKey: sequence) else {
+                return
+            }
+            apply(pending.mutation, sequence: sequence)
+            lastAppliedSequence = sequence
+            pending.continuation.resume()
         }
-        upsertRecord(input)
+        precondition(
+            pendingMutationsBySequence.isEmpty,
+            "NetworkRequestIndex mutation sequence overflowed."
+        )
     }
 
-    private func apply(sequence: UInt64) -> Bool {
-        guard sequence > lastAppliedSequence else {
-            return false
+    private func apply(_ mutation: Mutation, sequence: UInt64) {
+        switch mutation {
+        case let .replace(inputs):
+            recordsByID = [:]
+            recordsByID.reserveCapacity(inputs.count)
+            orderedIDs = []
+            orderedIDs.reserveCapacity(inputs.count)
+            lastUpdatedSequenceByID = [:]
+            lastUpdatedSequenceByID.reserveCapacity(inputs.count)
+            for input in inputs {
+                upsertRecord(input, sequence: sequence)
+            }
+        case let .upsert(input):
+            upsertRecord(input, sequence: sequence)
         }
-        lastAppliedSequence = sequence
-        return true
     }
 
-    private func upsertRecord(_ input: NetworkRequestRecordInput) {
+    private func upsertRecord(_ input: NetworkRequestRecordInput, sequence: UInt64) {
         let isNewRecord = recordsByID[input.id] == nil
         let record = NetworkRequestRecord(input: input)
         recordsByID[record.id] = record
+        lastUpdatedSequenceByID[record.id] = sequence
         if isNewRecord {
             orderedIDs.append(record.id)
         }
@@ -53,22 +99,33 @@ package actor NetworkRequestIndex {
         plan: NetworkRequestQueryPlan,
         sectionBy: WebInspectorSectionDescriptor<NetworkRequest>?,
         oldSnapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID>,
-        changedID: NetworkRequest.ID?
-    ) -> NetworkResultSetDelta? {
-        guard plan.requiresModelPredicate == false else {
-            return nil
-        }
+        changedSince sequence: UInt64
+    ) -> NetworkResultSetDelta {
+        precondition(plan.requiresModelPredicate == false)
+        let indexSequence = lastAppliedSequence
         let newSnapshot = snapshot(plan: plan, sectionBy: sectionBy)
-        guard oldSnapshot != newSnapshot else {
-            return nil
-        }
+        let oldItemIDs = Set(oldSnapshot.itemIDs)
+        let updatedItemIDs = Set(newSnapshot.itemIDs.filter { id in
+            oldItemIDs.contains(id) && lastUpdatedSequenceByID[id, default: 0] > sequence
+        })
         let transaction = NetworkResultSetTransactionBuilder.transaction(
             oldSnapshot: oldSnapshot,
             newSnapshot: newSnapshot,
-            changedID: changedID
+            updatedItemIDs: updatedItemIDs
         )
-        return NetworkResultSetDelta(snapshot: newSnapshot, transaction: transaction)
+        return NetworkResultSetDelta(
+            sequence: indexSequence,
+            snapshot: newSnapshot,
+            transaction: transaction,
+            reconfigureItemIDs: updatedItemIDs
+        )
     }
+
+#if DEBUG
+    package func isMutationPendingForTesting(sequence: UInt64) -> Bool {
+        pendingMutationsBySequence[sequence] != nil
+    }
+#endif
 
     private func snapshot(
         plan: NetworkRequestQueryPlan,
@@ -170,18 +227,21 @@ private enum NetworkResultSetTransactionBuilder {
     static func transaction(
         oldSnapshot: Snapshot,
         newSnapshot: Snapshot,
-        changedID: ItemID?
-    ) -> WebInspectorFetchedResultsTransaction<NetworkRequest>? {
+        updatedItemIDs: Set<ItemID>
+    ) -> WebInspectorFetchedResultsTransaction<NetworkRequest.ID> {
         let sectionChanges = sectionChanges(from: oldSnapshot, to: newSnapshot)
-        let itemChanges = itemChanges(from: oldSnapshot, to: newSnapshot, changedID: changedID)
-        let transaction = WebInspectorFetchedResultsTransaction<NetworkRequest>(
+        let itemChanges = itemChanges(
+            from: oldSnapshot,
+            to: newSnapshot,
+            updatedItemIDs: updatedItemIDs
+        )
+        return WebInspectorFetchedResultsTransaction<NetworkRequest.ID>(
             oldSnapshot: oldSnapshot,
             newSnapshot: newSnapshot,
             isReset: false,
             sectionChanges: sectionChanges,
             itemChanges: itemChanges
         )
-        return transaction.hasChanges ? transaction : nil
     }
 
     private static func sectionChanges(
@@ -229,7 +289,7 @@ private enum NetworkResultSetTransactionBuilder {
     private static func itemChanges(
         from oldSnapshot: Snapshot,
         to newSnapshot: Snapshot,
-        changedID: ItemID?
+        updatedItemIDs: Set<ItemID>
     ) -> [WebInspectorFetchedResultsItemChange<ItemID>] {
         let oldPositions = indexItems(oldSnapshot)
         let newPositions = indexItems(newSnapshot)
@@ -266,11 +326,22 @@ private enum NetworkResultSetTransactionBuilder {
             to: newSnapshot,
             oldPositions: oldPositions,
             newPositions: newPositions,
-            changedID: changedID,
+            updatedItemIDs: updatedItemIDs,
             excludedItemIDs: Set(sectionMembershipChanges.map(itemID))
         )
 
-        return deletes + inserts + sectionMembershipChanges + moves
+        let updates = newSnapshot.itemIDs.compactMap { itemID -> WebInspectorFetchedResultsItemChange<ItemID>? in
+            guard updatedItemIDs.contains(itemID),
+                  let oldPosition = oldPositions[itemID],
+                  let newPosition = newPositions[itemID],
+                  oldPosition.sectionID == newPosition.sectionID,
+                  oldPosition.indexPath == newPosition.indexPath else {
+                return nil
+            }
+            return .update(itemID: itemID, indexPath: newPosition.indexPath)
+        }
+
+        return deletes + inserts + sectionMembershipChanges + moves + updates
     }
 
     private static func sectionMembershipChanges(
@@ -314,7 +385,7 @@ private enum NetworkResultSetTransactionBuilder {
         to newSnapshot: Snapshot,
         oldPositions: [ItemID: ItemPosition],
         newPositions: [ItemID: ItemPosition],
-        changedID: ItemID?,
+        updatedItemIDs: Set<ItemID>,
         excludedItemIDs: Set<ItemID>
     ) -> [WebInspectorFetchedResultsItemChange<ItemID>] {
         let oldCommonOrder = oldSnapshot.itemIDs.filter { newPositions[$0] != nil }
@@ -323,7 +394,8 @@ private enum NetworkResultSetTransactionBuilder {
             return []
         }
 
-        if let changedID,
+        if updatedItemIDs.count == 1,
+           let changedID = updatedItemIDs.first,
            excludedItemIDs.contains(changedID) == false,
            let oldPosition = oldPositions[changedID],
            let newPosition = newPositions[changedID],

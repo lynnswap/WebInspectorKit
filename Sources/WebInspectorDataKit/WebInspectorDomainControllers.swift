@@ -290,17 +290,6 @@ public final class NetworkModelController {
         context.fetchedResults(for: descriptor, sectionBy: sectionBy, isolation: isolation)
     }
 
-    /// Creates a controller for observable network request results.
-    public func fetchedResultsController(
-        for descriptor: WebInspectorFetchDescriptor<NetworkRequest> = .init(),
-        sectionBy: WebInspectorSectionDescriptor<NetworkRequest>? = nil,
-        isolation: isolated (any Actor) = #isolation
-    ) -> WebInspectorFetchedResultsController<NetworkRequest> {
-        WebInspectorFetchedResultsController(
-            fetchedResults: fetchedResults(for: descriptor, sectionBy: sectionBy, isolation: isolation)
-        )
-    }
-
     /// Clears recorded network requests.
     public func clearRequests(isolation: isolated (any Actor) = #isolation) {
         context.clearNetworkRequests(isolation: isolation)
@@ -323,15 +312,6 @@ public final class ConsoleModelController {
         context.fetchedResults(for: descriptor, isolation: isolation)
     }
 
-    /// Creates a controller for observable console message results.
-    public func fetchedResultsController(
-        for descriptor: WebInspectorFetchDescriptor<ConsoleMessage> = .init(),
-        isolation: isolated (any Actor) = #isolation
-    ) -> WebInspectorFetchedResultsController<ConsoleMessage> {
-        WebInspectorFetchedResultsController(
-            fetchedResults: fetchedResults(for: descriptor, isolation: isolation)
-        )
-    }
 }
 
 /// Undo/redo surface for edits recorded through DataKit model operations.

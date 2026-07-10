@@ -84,7 +84,8 @@ access with no model layer.
 - ``NetworkRequest``
 - ``ConsoleMessage``
 - ``WebInspectorFetchRequest``
-- ``WebInspectorFetchedResultsController``
+- ``WebInspectorFetchedResults``
+- ``WebInspectorFetchedResultsUpdate``
 
 ### Runtime and CSS Models
 

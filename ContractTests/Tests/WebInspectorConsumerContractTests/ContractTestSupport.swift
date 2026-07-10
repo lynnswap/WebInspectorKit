@@ -197,19 +197,14 @@ actor ContractDataKitActor {
             context.fetchedResults(sectionBy: \.method)
         let sectionedConsole: WebInspectorFetchedResults<ConsoleMessage> =
             context.fetchedResults(sectionBy: \.level)
-        let requestController: WebInspectorFetchedResultsController<NetworkRequest> =
-            context.fetchedResultsController()
-        let consoleController: WebInspectorFetchedResultsController<ConsoleMessage> =
-            context.fetchedResultsController()
-
         #expect(requestResults.items.isEmpty)
         #expect(consoleResults.items.isEmpty)
         #expect(sectionedRequests.sections.isEmpty)
         #expect(sectionedConsole.sections.isEmpty)
-        #expect(requestController.snapshot.itemIDs.isEmpty)
-        #expect(consoleController.snapshot.itemIDs.isEmpty)
-        _ = requestController.transactions
-        _ = consoleController.transactions
+        #expect(requestResults.snapshot.itemIDs.isEmpty)
+        #expect(consoleResults.snapshot.itemIDs.isEmpty)
+        _ = requestResults.updates()
+        _ = consoleResults.updates()
         #expect(context.state == .attached)
 
         let root = try #require(context.rootNode)
@@ -316,8 +311,7 @@ actor ContractDataKitActor {
             url: "https://example.com/data.json",
             headers: ["Accept": "application/json"]
         )
-        let requestController: WebInspectorFetchedResultsController<NetworkRequest> =
-            context.fetchedResultsController()
+        let requestResults: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
         await ContractTestSupport.emitFinishedRequest(request, target: target, backend: runtime.backend)
 
         let requests: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
@@ -342,7 +336,7 @@ actor ContractDataKitActor {
         #expect(requestModel.metrics?.encodedDataLength == 4)
         #expect(requestModel.metrics?.decodedBodyLength == 7)
         #expect(context.registeredRequest(for: requestModel.id) === requestModel)
-        #expect(requestController.snapshot.itemIDs == [requestModel.id])
+        #expect(requestResults.snapshot.itemIDs == [requestModel.id])
 
         await runtime.backend.enqueue(
             Network.Body(data: "{\"ok\":true}", base64Encoded: false),

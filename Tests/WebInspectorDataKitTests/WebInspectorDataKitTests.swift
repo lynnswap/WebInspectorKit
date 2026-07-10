@@ -3092,12 +3092,363 @@ func setChildNodesReplacementPublishesSelectionClearingForRemovedDescendant() as
 
 @MainActor
 @Test
-func fetchedResultsControllerPublishesNetworkTopologyTransactionsOnly() async throws {
+func fetchedResultsUpdatesStartWithExactCurrentState() async throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let requestID = seedFetchedResultsRequest(
+        "initial-publication",
+        url: "https://example.com/initial",
+        timestamp: 1,
+        in: context
+    )
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    var iterator = results.updates().makeAsyncIterator()
+
+    guard case let .initial(revision, snapshot)? = await iterator.next() else {
+        Issue.record("Expected the first fetched-results publication to be initial state.")
+        return
+    }
+
+    #expect(revision == results.revision)
+    #expect(snapshot == results.snapshot)
+    #expect(snapshot.itemIDs == [requestID])
+}
+
+@MainActor
+@Test
+func fetchedResultsUpdatesCannotMissMutationAfterRegistration() async throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    var iterator = results.updates().makeAsyncIterator()
+
+    let requestID = seedFetchedResultsRequest(
+        "registered-before-mutation",
+        url: "https://example.com/registered",
+        timestamp: 1,
+        in: context
+    )
+
+    guard case let .initial(revision, snapshot)? = await iterator.next() else {
+        Issue.record("Expected the pending initial value to coalesce to current state.")
+        return
+    }
+
+    #expect(revision == results.revision)
+    #expect(snapshot == results.snapshot)
+    #expect(snapshot.itemIDs == [requestID])
+}
+
+@MainActor
+@Test
+func fetchedResultsPropertyUpdatesDoNotInvalidateTopologyQueries() {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let requestID = seedFetchedResultsRequest(
+        "property-generation",
+        url: "https://example.com/original",
+        timestamp: 1,
+        in: context
+    )
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let initialRevision = results.revision
+    let initialTopologyRevision = results.topologyRevision
+
+    seedFetchedResultsRequest(
+        "property-generation",
+        url: "https://example.com/updated",
+        timestamp: 2,
+        in: context
+    )
+
+    #expect(results.revision == initialRevision &+ 1)
+    #expect(results.topologyRevision == initialTopologyRevision)
+    #expect(results.snapshot.itemIDs == [requestID])
+}
+
+@MainActor
+@Test
+func networkRequestIndexDrainsDifferentIDMutationsInSequenceOrder() async throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let firstID = seedFetchedResultsRequest(
+        "ordered-first",
+        url: "https://example.com/first",
+        timestamp: 1,
+        in: context
+    )
+    let secondID = seedFetchedResultsRequest(
+        "ordered-second",
+        url: "https://example.com/second",
+        timestamp: 2,
+        in: context
+    )
+    let first = try #require(context.registeredRequest(for: firstID))
+    let second = try #require(context.registeredRequest(for: secondID))
+    let index = NetworkRequestIndex()
+
+    let secondMutation = Task {
+        await index.upsert(
+            NetworkRequestRecordInput(request: second, orderIndex: 1),
+            sequence: 2
+        )
+    }
+    try await waitUntil {
+        await index.isMutationPendingForTesting(sequence: 2)
+    }
+    await index.upsert(
+        NetworkRequestRecordInput(request: first, orderIndex: 0),
+        sequence: 1
+    )
+    await secondMutation.value
+
+    let delta = await index.delta(
+        plan: NetworkRequestQueryPlan(
+            descriptor: WebInspectorFetchDescriptor<NetworkRequest>(),
+            context: context
+        ),
+        sectionBy: nil,
+        oldSnapshot: WebInspectorFetchedResultsSnapshot(),
+        changedSince: 0
+    )
+    #expect(delta.sequence == 2)
+    #expect(delta.snapshot.itemIDs == [firstID, secondID])
+}
+
+@MainActor
+@Test
+func networkRequestIndexBuffersUpsertUntilEarlierReplaceArrives() async throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let firstID = seedFetchedResultsRequest(
+        "replace-first",
+        url: "https://example.com/first",
+        timestamp: 1,
+        in: context
+    )
+    let secondID = seedFetchedResultsRequest(
+        "replace-second",
+        url: "https://example.com/second",
+        timestamp: 2,
+        in: context
+    )
+    let first = try #require(context.registeredRequest(for: firstID))
+    let second = try #require(context.registeredRequest(for: secondID))
+    let index = NetworkRequestIndex()
+
+    let upsert = Task {
+        await index.upsert(
+            NetworkRequestRecordInput(request: second, orderIndex: 1),
+            sequence: 2
+        )
+    }
+    try await waitUntil {
+        await index.isMutationPendingForTesting(sequence: 2)
+    }
+    await index.replace(
+        with: [NetworkRequestRecordInput(request: first, orderIndex: 0)],
+        sequence: 1
+    )
+    await upsert.value
+
+    let delta = await index.delta(
+        plan: NetworkRequestQueryPlan(
+            descriptor: WebInspectorFetchDescriptor<NetworkRequest>(),
+            context: context
+        ),
+        sectionBy: nil,
+        oldSnapshot: WebInspectorFetchedResultsSnapshot(),
+        changedSince: 0
+    )
+    #expect(delta.sequence == 2)
+    #expect(delta.snapshot.itemIDs == [firstID, secondID])
+}
+
+@MainActor
+@Test
+func networkRequestIndexCheckpointRecoversSkippedOverlappingPropertyUpdates() async throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let firstID = seedFetchedResultsRequest(
+        "overlap-first",
+        url: "https://example.com/first",
+        timestamp: 1,
+        in: context
+    )
+    let secondID = seedFetchedResultsRequest(
+        "overlap-second",
+        url: "https://example.com/second",
+        timestamp: 2,
+        in: context
+    )
+    let first = try #require(context.registeredRequest(for: firstID))
+    let second = try #require(context.registeredRequest(for: secondID))
+    let plan = NetworkRequestQueryPlan(
+        descriptor: WebInspectorFetchDescriptor<NetworkRequest>(),
+        context: context
+    )
+    let index = NetworkRequestIndex()
+    await index.replace(
+        with: [
+            NetworkRequestRecordInput(request: first, orderIndex: 0),
+            NetworkRequestRecordInput(request: second, orderIndex: 1),
+        ],
+        sequence: 1
+    )
+    let initial = await index.delta(
+        plan: plan,
+        sectionBy: nil,
+        oldSnapshot: WebInspectorFetchedResultsSnapshot(),
+        changedSince: 0
+    )
+    #expect(initial.sequence == 1)
+    #expect(initial.snapshot.itemIDs == [firstID, secondID])
+
+    seedFetchedResultsRequest(
+        "overlap-first",
+        url: "https://example.com/first-updated",
+        timestamp: 3,
+        in: context
+    )
+    await index.upsert(
+        NetworkRequestRecordInput(request: first, orderIndex: 0),
+        sequence: 2
+    )
+    let skippedFirstDelta = await index.delta(
+        plan: plan,
+        sectionBy: nil,
+        oldSnapshot: initial.snapshot,
+        changedSince: initial.sequence
+    )
+    #expect(skippedFirstDelta.reconfigureItemIDs == [firstID])
+
+    seedFetchedResultsRequest(
+        "overlap-second",
+        url: "https://example.com/second-updated",
+        timestamp: 4,
+        in: context
+    )
+    await index.upsert(
+        NetworkRequestRecordInput(request: second, orderIndex: 1),
+        sequence: 3
+    )
+
+    // Model the context discarding `skippedFirstDelta` after a newer index
+    // sequence arrived. The next delta starts at the result's unchanged
+    // checkpoint and must recover both property notifications.
+    let recoveredDelta = await index.delta(
+        plan: plan,
+        sectionBy: nil,
+        oldSnapshot: initial.snapshot,
+        changedSince: initial.sequence
+    )
+    #expect(recoveredDelta.sequence == 3)
+    #expect(recoveredDelta.reconfigureItemIDs == Set([firstID, secondID]))
+    #expect(recoveredDelta.snapshot == initial.snapshot)
+}
+
+@MainActor
+@Test
+func stalledFetchedResultsSubscriberKeepsOnlyNewestUpdateAndUnionsReconfigurations() async throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let firstID = seedFetchedResultsRequest(
+        "stalled-first",
+        url: "https://example.com/first",
+        timestamp: 1,
+        in: context
+    )
+    let secondID = seedFetchedResultsRequest(
+        "stalled-second",
+        url: "https://example.com/second",
+        timestamp: 2,
+        in: context
+    )
+    let firstIdentity = try #require(context.registeredRequest(for: firstID))
+    let secondIdentity = try #require(context.registeredRequest(for: secondID))
+
+    var results: WebInspectorFetchedResults<NetworkRequest>? = context.fetchedResults()
+    weak let weakResults = results
+    var iterator = try #require(results).updates().makeAsyncIterator()
+    guard case .initial? = await iterator.next() else {
+        Issue.record("Expected fetched-results initial state before stalling the subscriber.")
+        return
+    }
+
+    seedFetchedResultsRequest(
+        "stalled-first",
+        url: "https://example.com/first-updated",
+        timestamp: 3,
+        in: context
+    )
+    seedFetchedResultsRequest(
+        "stalled-second",
+        url: "https://example.com/second-updated",
+        timestamp: 4,
+        in: context
+    )
+
+    let expectedRevision = try #require(results).revision
+    let expectedSnapshot = try #require(results).snapshot
+    results = nil
+    #expect(weakResults == nil)
+    #expect(context.registeredRequest(for: firstID) === firstIdentity)
+    #expect(context.registeredRequest(for: secondID) === secondIdentity)
+
+    guard case let .transaction(revision, transaction, reconfigureItemIDs)? = await iterator.next() else {
+        Issue.record("Expected the newest coalesced fetched-results transaction.")
+        return
+    }
+    #expect(revision == expectedRevision)
+    #expect(transaction.newSnapshot == expectedSnapshot)
+    #expect(reconfigureItemIDs == Set([firstID, secondID]))
+
+    let remainingUpdate = await iterator.next()
+    #expect(remainingUpdate == nil)
+}
+
+@MainActor
+@Test
+func stalledFetchedResultsSubscriberDoesNotReconfigureRemovedItems() async throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let requestID = seedFetchedResultsRequest(
+        "stalled-removed",
+        url: "https://example.com/original",
+        timestamp: 1,
+        in: context
+    )
+    var results: WebInspectorFetchedResults<NetworkRequest>? = context.fetchedResults()
+    var iterator = try #require(results).updates().makeAsyncIterator()
+    guard case .initial? = await iterator.next() else {
+        Issue.record("Expected fetched-results initial state before stalling the subscriber.")
+        return
+    }
+
+    seedFetchedResultsRequest(
+        "stalled-removed",
+        url: "https://example.com/updated",
+        timestamp: 2,
+        in: context
+    )
+    context.clearNetworkRequests()
+
+    let expectedRevision = try #require(results).revision
+    results = nil
+
+    guard case let .transaction(revision, transaction, reconfigureItemIDs)? = await iterator.next() else {
+        Issue.record("Expected the coalesced removal transaction.")
+        return
+    }
+    #expect(revision == expectedRevision)
+    #expect(transaction.isReset)
+    #expect(transaction.newSnapshot.itemIDs.isEmpty)
+    #expect(reconfigureItemIDs.isEmpty)
+    #expect(context.registeredRequest(for: requestID) == nil)
+
+    let remainingUpdate = await iterator.next()
+    #expect(remainingUpdate == nil)
+}
+
+@MainActor
+@Test
+func fetchedResultsPublishNetworkTopologyAndPropertyUpdates() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
-    let controller = WebInspectorFetchedResultsController(fetchedResults: results)
-    let recorder = FetchedResultsTransactionRecorder(stream: controller.transactions)
+    let recorder = FetchedResultsTransactionRecorder(stream: results.updates())
     defer { recorder.cancel() }
     try await recorder.waitUntilStarted()
 
@@ -3120,7 +3471,8 @@ func fetchedResultsControllerPublishesNetworkTopologyTransactionsOnly() async th
     #expect(inserted.itemChanges == [.insert(itemID: modelID, indexPath: firstIndexPath)])
     #expect(inserted.oldSnapshot.itemIDs == [])
     #expect(inserted.newSnapshot.itemIDs == [modelID])
-    #expect(controller.snapshot.itemIDs == [modelID])
+    #expect(recorder.reconfigureItemIDSets.last == [])
+    #expect(results.snapshot.itemIDs == [modelID])
     let request = try #require(results.items.first)
 
     await runtime.backend.emit(
@@ -3134,8 +3486,10 @@ func fetchedResultsControllerPublishesNetworkTopologyTransactionsOnly() async th
     )
 
     try await waitUntil { request.status == 200 }
+    try await recorder.waitForTransactionCount(2)
     #expect(results.items.first === request)
-    #expect(recorder.transactions.count == 1)
+    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: modelID, indexPath: firstIndexPath)])
+    #expect(recorder.reconfigureItemIDSets.last == [modelID])
 
     await runtime.backend.emit(
         .dataReceived(id: requestID, dataLength: 7, encodedDataLength: 3, timestamp: 3),
@@ -3143,8 +3497,10 @@ func fetchedResultsControllerPublishesNetworkTopologyTransactionsOnly() async th
     )
 
     try await waitUntil { request.decodedDataLength == 7 && request.encodedDataLength == 3 }
+    try await recorder.waitForTransactionCount(3)
     #expect(results.items.first === request)
-    #expect(recorder.transactions.count == 1)
+    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: modelID, indexPath: firstIndexPath)])
+    #expect(recorder.reconfigureItemIDSets.last == [modelID])
 
     await runtime.backend.emit(
         .loadingFinished(id: requestID, timestamp: 4, sourceMapURL: nil, metrics: nil),
@@ -3152,8 +3508,10 @@ func fetchedResultsControllerPublishesNetworkTopologyTransactionsOnly() async th
     )
 
     try await waitUntil { request.state == .finished }
+    try await recorder.waitForTransactionCount(4)
     #expect(results.items.first === request)
-    #expect(recorder.transactions.count == 1)
+    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: modelID, indexPath: firstIndexPath)])
+    #expect(recorder.reconfigureItemIDSets.last == [modelID])
 
     await runtime.backend.emit(
         .requestServedFromMemoryCache(
@@ -3166,8 +3524,10 @@ func fetchedResultsControllerPublishesNetworkTopologyTransactionsOnly() async th
     )
 
     try await waitUntil { request.finishedOrFailedTimestamp == 5 }
+    try await recorder.waitForTransactionCount(5)
     #expect(results.items.first === request)
-    #expect(recorder.transactions.count == 1)
+    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: modelID, indexPath: firstIndexPath)])
+    #expect(recorder.reconfigureItemIDSets.last == [modelID])
 
     let failedRequestID = Network.Request.ID("controller-failed-request")
     let failedModelID = NetworkRequest.ID(failedRequestID)
@@ -3183,8 +3543,9 @@ func fetchedResultsControllerPublishesNetworkTopologyTransactionsOnly() async th
         target: target
     )
 
-    try await recorder.waitForTransactionCount(2)
+    try await recorder.waitForTransactionCount(6)
     #expect(recorder.transactions.last?.itemChanges == [.insert(itemID: failedModelID, indexPath: failedIndexPath)])
+    #expect(recorder.reconfigureItemIDSets.last == [])
     let failedRequest = try #require(results.items.last)
 
     await runtime.backend.emit(
@@ -3198,8 +3559,10 @@ func fetchedResultsControllerPublishesNetworkTopologyTransactionsOnly() async th
         }
         return false
     }
+    try await recorder.waitForTransactionCount(7)
     #expect(results.items.last === failedRequest)
-    #expect(recorder.transactions.count == 2)
+    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: failedModelID, indexPath: failedIndexPath)])
+    #expect(recorder.reconfigureItemIDSets.last == [failedModelID])
 
     let socketRequestID = Network.Request.ID("controller-socket-request")
     let socketModelID = NetworkRequest.ID(socketRequestID)
@@ -3209,8 +3572,9 @@ func fetchedResultsControllerPublishesNetworkTopologyTransactionsOnly() async th
         target: target
     )
 
-    try await recorder.waitForTransactionCount(3)
+    try await recorder.waitForTransactionCount(8)
     #expect(recorder.transactions.last?.itemChanges == [.insert(itemID: socketModelID, indexPath: socketIndexPath)])
+    #expect(recorder.reconfigureItemIDSets.last == [])
     let socketRequest = try #require(results.items.last)
 
     await runtime.backend.emit(
@@ -3228,8 +3592,10 @@ func fetchedResultsControllerPublishesNetworkTopologyTransactionsOnly() async th
     )
 
     try await waitUntil { socketRequest.webSocket?.handshakeRequest?.headers["Upgrade"] == "websocket" }
+    try await recorder.waitForTransactionCount(9)
     #expect(results.items.last === socketRequest)
-    #expect(recorder.transactions.count == 3)
+    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: socketModelID, indexPath: socketIndexPath)])
+    #expect(recorder.reconfigureItemIDSets.last == [socketModelID])
 
     await runtime.backend.emit(
         .webSocket(.handshakeResponse(
@@ -3241,8 +3607,10 @@ func fetchedResultsControllerPublishesNetworkTopologyTransactionsOnly() async th
     )
 
     try await waitUntil { socketRequest.status == 101 }
+    try await recorder.waitForTransactionCount(10)
     #expect(results.items.last === socketRequest)
-    #expect(recorder.transactions.count == 3)
+    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: socketModelID, indexPath: socketIndexPath)])
+    #expect(recorder.reconfigureItemIDSets.last == [socketModelID])
 
     await runtime.backend.emit(
         .webSocket(.frameSent(
@@ -3254,8 +3622,10 @@ func fetchedResultsControllerPublishesNetworkTopologyTransactionsOnly() async th
     )
 
     try await waitUntil { socketRequest.webSocket?.frames.count == 1 }
+    try await recorder.waitForTransactionCount(11)
     #expect(results.items.last === socketRequest)
-    #expect(recorder.transactions.count == 3)
+    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: socketModelID, indexPath: socketIndexPath)])
+    #expect(recorder.reconfigureItemIDSets.last == [socketModelID])
 
     await runtime.backend.emit(
         .webSocket(.frameReceived(
@@ -3267,8 +3637,10 @@ func fetchedResultsControllerPublishesNetworkTopologyTransactionsOnly() async th
     )
 
     try await waitUntil { socketRequest.webSocket?.frames.count == 2 }
+    try await recorder.waitForTransactionCount(12)
     #expect(results.items.last === socketRequest)
-    #expect(recorder.transactions.count == 3)
+    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: socketModelID, indexPath: socketIndexPath)])
+    #expect(recorder.reconfigureItemIDSets.last == [socketModelID])
 
     await runtime.backend.emit(
         .webSocket(.error(id: socketRequestID, message: "decode failed", timestamp: 12)),
@@ -3276,8 +3648,10 @@ func fetchedResultsControllerPublishesNetworkTopologyTransactionsOnly() async th
     )
 
     try await waitUntil { socketRequest.webSocket?.frames.count == 3 }
+    try await recorder.waitForTransactionCount(13)
     #expect(results.items.last === socketRequest)
-    #expect(recorder.transactions.count == 3)
+    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: socketModelID, indexPath: socketIndexPath)])
+    #expect(recorder.reconfigureItemIDSets.last == [socketModelID])
 
     await runtime.backend.emit(
         .webSocket(.closed(id: socketRequestID, timestamp: 13)),
@@ -3285,8 +3659,10 @@ func fetchedResultsControllerPublishesNetworkTopologyTransactionsOnly() async th
     )
 
     try await waitUntil { socketRequest.state == .finished && socketRequest.webSocket?.readyState == .closed }
+    try await recorder.waitForTransactionCount(14)
     #expect(results.items.last === socketRequest)
-    #expect(recorder.transactions.count == 3)
+    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: socketModelID, indexPath: socketIndexPath)])
+    #expect(recorder.reconfigureItemIDSets.last == [socketModelID])
 }
 
 @MainActor
@@ -3295,8 +3671,7 @@ func sectionedNetworkResultsPublishTopologyWhenSectionKeyChanges() async throws 
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(sectionBy: \.mimeType)
-    let controller = WebInspectorFetchedResultsController(fetchedResults: results)
-    let recorder = FetchedResultsTransactionRecorder(stream: controller.transactions)
+    let recorder = FetchedResultsTransactionRecorder(stream: results.updates())
     defer { recorder.cancel() }
     try await recorder.waitUntilStarted()
 
@@ -3314,8 +3689,8 @@ func sectionedNetworkResultsPublishTopologyWhenSectionKeyChanges() async throws 
     )
 
     try await recorder.waitForTransactionCount(1)
-    #expect(controller.snapshot.sectionIDs == [WebInspectorFetchSectionID(rawValue: "")])
-    #expect(controller.snapshot.itemIDs == [modelID])
+    #expect(results.snapshot.sectionIDs == [WebInspectorFetchSectionID(rawValue: "")])
+    #expect(results.snapshot.itemIDs == [modelID])
 
     await runtime.backend.emit(
         .responseReceived(
@@ -3350,8 +3725,7 @@ func sectionedNetworkResultsPublishTopologyWhenSectionKeyChanges() async throws 
 func sectionedNetworkResultsPublishItemMoveWhenSectionKeyChangesBetweenExistingSections() async throws {
     let context = WebInspectorContext.preview(isolation: MainActor.shared)
     let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(sectionBy: \.resourceCategory)
-    let controller = WebInspectorFetchedResultsController(fetchedResults: results)
-    let recorder = FetchedResultsTransactionRecorder(stream: controller.transactions)
+    let recorder = FetchedResultsTransactionRecorder(stream: results.updates())
     defer { recorder.cancel() }
     try await recorder.waitUntilStarted()
 
@@ -3394,11 +3768,11 @@ func sectionedNetworkResultsPublishItemMoveWhenSectionKeyChangesBetweenExistingS
     ))
 
     try await recorder.waitForTransactionCount(4)
-    #expect(controller.snapshot.sections.map(\.id) == [
+    #expect(results.snapshot.sections.map(\.id) == [
         WebInspectorFetchSectionID(rawValue: "image"),
         WebInspectorFetchSectionID(rawValue: "xhrFetch"),
     ])
-    #expect(controller.snapshot.sections.map(\.itemIDs) == [
+    #expect(results.snapshot.sections.map(\.itemIDs) == [
         [NetworkRequest.ID(imageID), movingModelID],
         [NetworkRequest.ID(remainingXHRID)],
     ])
@@ -3587,8 +3961,7 @@ func networkFetchDescriptorOrdersEqualTimestampsByNewestInsertionFirst() async t
         sortBy: [SortDescriptor(\.requestSentTimestamp, order: .reverse)]
     )
     let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: descriptor)
-    let controller = WebInspectorFetchedResultsController(fetchedResults: results)
-    let recorder = FetchedResultsTransactionRecorder(stream: controller.transactions)
+    let recorder = FetchedResultsTransactionRecorder(stream: results.updates())
     defer { recorder.cancel() }
     try await recorder.waitUntilStarted()
 
@@ -3632,8 +4005,7 @@ func networkFetchDescriptorPublishesPredicateEnterAndLeave() async throws {
         }
     )
     let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: descriptor)
-    let controller = WebInspectorFetchedResultsController(fetchedResults: results)
-    let recorder = FetchedResultsTransactionRecorder(stream: controller.transactions)
+    let recorder = FetchedResultsTransactionRecorder(stream: results.updates())
     defer { recorder.cancel() }
     try await recorder.waitUntilStarted()
 
@@ -3814,8 +4186,7 @@ func clearNetworkRequestsPublishesResetAndIgnoresClearedEvents() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
-    let controller = WebInspectorFetchedResultsController(fetchedResults: results)
-    let recorder = FetchedResultsTransactionRecorder(stream: controller.transactions)
+    let recorder = FetchedResultsTransactionRecorder(stream: results.updates())
     defer { recorder.cancel() }
     try await recorder.waitUntilStarted()
 
@@ -3846,7 +4217,7 @@ func clearNetworkRequestsPublishesResetAndIgnoresClearedEvents() async throws {
         target: target
     )
     try await recorder.waitForTransactionCount(2)
-    #expect(controller.snapshot.itemIDs == [firstModelID, secondModelID])
+    #expect(results.snapshot.itemIDs == [firstModelID, secondModelID])
 
     context.clearNetworkRequests()
 
@@ -3857,7 +4228,7 @@ func clearNetworkRequestsPublishesResetAndIgnoresClearedEvents() async throws {
     #expect(reset.newSnapshot.itemIDs == [])
     #expect(reset.sectionChanges == [])
     #expect(reset.itemChanges == [])
-    #expect(controller.snapshot.itemIDs == [])
+    #expect(results.snapshot.itemIDs == [])
     #expect(results.items.isEmpty)
     #expect(context.registeredRequest(for: firstModelID) == nil)
     #expect(context.registeredRequest(for: secondModelID) == nil)
@@ -4008,12 +4379,11 @@ func networkRequestExposesDataKitQueryableProperties() async throws {
 
 @MainActor
 @Test
-func fetchedResultsControllerPublishesConsoleInsertUpdateAndDeleteTransactions() async throws {
+func fetchedResultsPublishConsoleInsertUpdateAndDeleteTransactions() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
-    let controller = WebInspectorFetchedResultsController(fetchedResults: results)
-    let recorder = FetchedResultsTransactionRecorder(stream: controller.transactions)
+    let recorder = FetchedResultsTransactionRecorder(stream: results.updates())
     defer { recorder.cancel() }
     try await recorder.waitUntilStarted()
 
@@ -4027,7 +4397,7 @@ func fetchedResultsControllerPublishesConsoleInsertUpdateAndDeleteTransactions()
     )
 
     try await recorder.waitForTransactionCount(1)
-    let firstID = try #require(controller.snapshot.itemIDs.first)
+    let firstID = try #require(results.snapshot.itemIDs.first)
     #expect(recorder.transactions.last?.itemChanges == [.insert(itemID: firstID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0))])
 
     await runtime.backend.emit(
@@ -4048,7 +4418,7 @@ func fetchedResultsControllerPublishesConsoleInsertUpdateAndDeleteTransactions()
     )
 
     try await recorder.waitForTransactionCount(3)
-    let secondID = try #require(controller.snapshot.itemIDs.last)
+    let secondID = try #require(results.snapshot.itemIDs.last)
     #expect(recorder.transactions.last?.itemChanges == [.insert(itemID: secondID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 1))])
 
     await runtime.backend.emit(
@@ -4061,7 +4431,7 @@ func fetchedResultsControllerPublishesConsoleInsertUpdateAndDeleteTransactions()
         .delete(itemID: secondID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 1)),
         .delete(itemID: firstID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)),
     ])
-    #expect(controller.snapshot.itemIDs == [])
+    #expect(results.snapshot.itemIDs == [])
 }
 
 @MainActor
@@ -4070,8 +4440,7 @@ func fetchedResultsCanBeSectionedByStringKeyPath() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(sectionBy: \.method)
-    let controller = WebInspectorFetchedResultsController(fetchedResults: results)
-    let recorder = FetchedResultsTransactionRecorder(stream: controller.transactions)
+    let recorder = FetchedResultsTransactionRecorder(stream: results.updates())
     defer { recorder.cancel() }
     try await recorder.waitUntilStarted()
 
@@ -4089,7 +4458,7 @@ func fetchedResultsCanBeSectionedByStringKeyPath() async throws {
 
     try await recorder.waitForTransactionCount(1)
     #expect(results.sections.map(\.title) == ["GET"])
-    #expect(controller.snapshot.sectionIDs == [WebInspectorFetchSectionID(rawValue: "GET")])
+    #expect(results.snapshot.sectionIDs == [WebInspectorFetchSectionID(rawValue: "GET")])
     #expect(recorder.transactions.last?.sectionChanges == [
         .insert(sectionID: WebInspectorFetchSectionID(rawValue: "GET"), index: 0)
     ])
@@ -4176,7 +4545,7 @@ func fetchedResultsTransactionDiffsMovesByItemID() {
     let oldSnapshot = WebInspectorFetchedResultsSnapshot(itemIDs: [first, second])
     let newSnapshot = WebInspectorFetchedResultsSnapshot(itemIDs: [second, first])
 
-    let transaction = WebInspectorFetchedResultsTransaction<NetworkRequest>(
+    let transaction = WebInspectorFetchedResultsTransaction<NetworkRequest.ID>(
         oldSnapshot: oldSnapshot,
         newSnapshot: newSnapshot
     )
@@ -7335,23 +7704,49 @@ private final class DOMTreeRevealRequestRecorder {
 }
 
 @MainActor
-private final class FetchedResultsTransactionRecorder<Model: WebInspectorFetchableModel> {
-    private(set) var transactions: [WebInspectorFetchedResultsTransaction<Model>] = []
+@discardableResult
+private func seedFetchedResultsRequest(
+    _ requestID: String,
+    url: String,
+    timestamp: Double,
+    in context: WebInspectorContext
+) -> NetworkRequest.ID {
+    context.seedNetworkRequest(
+        requestID: requestID,
+        url: url,
+        resourceTypeRawValue: "Fetch",
+        responseMIMEType: "text/plain",
+        responseStatus: 200,
+        responseStatusText: "OK",
+        timestamp: timestamp
+    )
+}
+
+@MainActor
+private final class FetchedResultsTransactionRecorder<ItemID: Hashable & Sendable> {
+    private(set) var updates: [WebInspectorFetchedResultsUpdate<ItemID>] = []
+    private(set) var transactions: [WebInspectorFetchedResultsTransaction<ItemID>] = []
+    private(set) var reconfigureItemIDSets: [Set<ItemID>] = []
 
     private var task: Task<Void, Never>?
-    private var hasStarted = false
+    private var hasConsumedInitialUpdate = false
 
-    init(stream: AsyncStream<WebInspectorFetchedResultsTransaction<Model>>) {
+    init(stream: AsyncStream<WebInspectorFetchedResultsUpdate<ItemID>>) {
         task = Task { @MainActor [weak self] in
-            self?.hasStarted = true
-            for await transaction in stream {
+            for await update in stream {
+                self?.updates.append(update)
+                guard case let .transaction(_, transaction, reconfigureItemIDs) = update else {
+                    self?.hasConsumedInitialUpdate = true
+                    continue
+                }
                 self?.transactions.append(transaction)
+                self?.reconfigureItemIDSets.append(reconfigureItemIDs)
             }
         }
     }
 
     func waitUntilStarted() async throws {
-        try await waitUntil { self.hasStarted }
+        try await waitUntil { self.hasConsumedInitialUpdate }
     }
 
     func waitForTransactionCount(_ count: Int) async throws {

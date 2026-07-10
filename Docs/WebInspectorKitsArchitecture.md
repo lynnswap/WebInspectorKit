@@ -1207,10 +1207,10 @@ subscription, closing the current public `snapshot`-then-`transactions` gap.
 The stream uses newest-one buffering. Every transaction carries both old and
 new full identity snapshots plus its delta and revision, so a consumer that
 misses an intermediate revision replaces its local diffable snapshot with the
-new full snapshot; a contiguous consumer applies the delta. Coalescing may
-replace an unconsumed `.initial`, but the surviving transaction is itself a
-complete current snapshot. Thus slow consumers converge without unbounded
-backlog or silent stale state.
+new full snapshot; a contiguous consumer applies the delta. Before first
+consumption, coalescing advances the pending `.initial` to the newest complete
+snapshot while preserving it as the stream's first element. Thus slow consumers
+converge without unbounded backlog or silent stale state.
 
 Identity objects remain stable. A property-only mutation emits updated item IDs
 when rendering must refresh; a topology-affecting mutation also emits the
@@ -1223,12 +1223,13 @@ keeping the model context alive.
 The zero-state `WebInspectorFetchedResultsController` forwarding wrapper is
 deleted; the snapshot, transaction, and result types are retained.
 
-Concretely, when `Continuation.yield(new)` reports `.dropped(old)`, the broker
-forms `merged` with `old.reconfigureItemIDs ∪ new.reconfigureItemIDs` and the
-newest revision/snapshot, then yields that replacement once; the just-enqueued
-unmerged value is the element displaced. The resulting revision gap tells the
-consumer to use the full newest snapshot, while the union preserves all cell
-reconfiguration work.
+Concretely, each subscriber owns one mutex-protected pending update. A
+publication resumes a waiting consumer directly; otherwise it atomically
+replaces the pending update with the newest revision/snapshot and unions the
+still-present IDs from both reconfiguration sets. The resulting revision gap
+tells the consumer to use the full newest snapshot, while the union preserves
+all applicable cell reconfiguration work. Delivery never relies on a second
+`AsyncStream.Continuation.yield` racing to replace an already-visible element.
 
 The existing `NetworkRequestIndex` actor remains the off-owner query/diff
 owner and is improved rather than replaced. It consumes compact Sendable record
@@ -1236,6 +1237,18 @@ changes, maintains registered query membership/order, and returns identity
 snapshots and deltas; query replacement may perform a full scan on that actor,
 but a live insert must not dereference or filter every identity model on its
 owner actor.
+The index is also the sole owner of each identity's last mutation sequence.
+Replace and upsert operations enter one sequence-keyed queue; the index drains
+only the next contiguous operation, and each caller waits until its operation
+has been applied. Cross-actor job scheduling therefore cannot create a hole in
+the scalar high-water checkpoint.
+Every result keeps its own successfully applied index checkpoint, and a delta
+contains all still-visible identities changed after that checkpoint. Therefore,
+if an overlapping query is discarded because a newer index sequence arrived,
+the next delta recovers its property-only reconfiguration work instead of only
+reporting the mutation that happened to trigger the newer query. Query
+replacement and reset establish the checkpoint explicitly; stale or duplicate
+deltas cannot advance it.
 The facade's result-creation methods are `async` so their first filtered/sorted
 snapshot is complete before return without doing that scan on the owner actor.
 Console receives the same internal index boundary. Newest-one delivery caps

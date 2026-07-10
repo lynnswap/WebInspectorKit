@@ -794,6 +794,7 @@ public final class WebInspectorContext {
             networkResults.setNetworkItems(
                 currentNetworkRequests(),
                 plan: plan,
+                indexSequence: networkRequestIndexSequence,
                 lookup: { id in self.requestsByID[id] }
             )
             networkFetchedResults.append(WeakWebInspectorFetchedResults(networkResults))
@@ -874,79 +875,6 @@ public final class WebInspectorContext {
         )
     }
 
-    /// Creates a fetched-results controller for a supported model type.
-    public func fetchedResultsController<Model: WebInspectorFetchableModel>(
-        for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
-        sectionBy: WebInspectorSectionDescriptor<Model>? = nil,
-        isolation: isolated (any Actor) = #isolation
-    ) -> WebInspectorFetchedResultsController<Model> {
-        requireOwner(isolation)
-        return WebInspectorFetchedResultsController(
-            fetchedResults: fetchedResults(for: descriptor, sectionBy: sectionBy, isolation: isolation)
-        )
-    }
-
-    /// Creates a fetched-results controller from a mutable fetch request.
-    public func fetchedResultsController<Model: WebInspectorFetchableModel>(
-        for request: WebInspectorFetchRequest<Model>,
-        sectionBy: WebInspectorSectionDescriptor<Model>? = nil,
-        isolation: isolated (any Actor) = #isolation
-    ) -> WebInspectorFetchedResultsController<Model> {
-        WebInspectorFetchedResultsController(
-            fetchedResults: fetchedResults(for: request, sectionBy: sectionBy, isolation: isolation)
-        )
-    }
-
-    /// Creates a fetched-results controller sectioned by a string key path.
-    public func fetchedResultsController<Model: WebInspectorFetchableModel>(
-        for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
-        sectionBy keyPath: KeyPath<Model, String>,
-        isolation: isolated (any Actor) = #isolation
-    ) -> WebInspectorFetchedResultsController<Model> {
-        WebInspectorFetchedResultsController(
-            fetchedResults: fetchedResults(for: descriptor, sectionBy: keyPath, isolation: isolation)
-        )
-    }
-
-    /// Creates a fetched-results controller sectioned by an optional string key path.
-    public func fetchedResultsController<Model: WebInspectorFetchableModel>(
-        for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
-        sectionBy keyPath: KeyPath<Model, String?>,
-        isolation: isolated (any Actor) = #isolation
-    ) -> WebInspectorFetchedResultsController<Model> {
-        WebInspectorFetchedResultsController(
-            fetchedResults: fetchedResults(for: descriptor, sectionBy: keyPath, isolation: isolation)
-        )
-    }
-
-    /// Creates a fetched-results controller sectioned by a raw-representable string key path.
-    public func fetchedResultsController<
-        Model: WebInspectorFetchableModel,
-        Value: RawRepresentable & Hashable & Sendable
-    >(
-        for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
-        sectionBy keyPath: KeyPath<Model, Value>,
-        isolation: isolated (any Actor) = #isolation
-    ) -> WebInspectorFetchedResultsController<Model> where Value.RawValue == String {
-        WebInspectorFetchedResultsController(
-            fetchedResults: fetchedResults(for: descriptor, sectionBy: keyPath, isolation: isolation)
-        )
-    }
-
-    /// Creates a fetched-results controller sectioned by an optional raw-representable string key path.
-    public func fetchedResultsController<
-        Model: WebInspectorFetchableModel,
-        Value: RawRepresentable & Hashable & Sendable
-    >(
-        for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
-        sectionBy keyPath: KeyPath<Model, Value?>,
-        isolation: isolated (any Actor) = #isolation
-    ) -> WebInspectorFetchedResultsController<Model> where Value.RawValue == String {
-        WebInspectorFetchedResultsController(
-            fetchedResults: fetchedResults(for: descriptor, sectionBy: keyPath, isolation: isolation)
-        )
-    }
-
     func updateFetchDescriptor<Model: WebInspectorFetchableModel>(
         _ descriptor: WebInspectorFetchDescriptor<Model>,
         for results: WebInspectorFetchedResults<Model>,
@@ -968,6 +896,7 @@ public final class WebInspectorContext {
                 networkDescriptor,
                 plan: plan,
                 requests: currentNetworkRequests(),
+                indexSequence: networkRequestIndexSequence,
                 lookup: { id in self.requestsByID[id] }
             )
         case .consoleMessages:
@@ -3960,7 +3889,13 @@ extension WebInspectorContext {
     }
 
     private func nextNetworkRequestIndexSequence() -> UInt64 {
-        networkRequestIndexSequence &+= 1
+        // The index drains a contiguous operation log, so every allocated
+        // sequence must be submitted exactly once to replace or upsert.
+        precondition(
+            networkRequestIndexSequence < UInt64.max,
+            "NetworkRequestIndex mutation sequence overflowed."
+        )
+        networkRequestIndexSequence += 1
         return networkRequestIndexSequence
     }
 
@@ -4037,15 +3972,14 @@ extension WebInspectorContext {
             }
             let oldSnapshot = results.networkSnapshotForDelta
             let resultTopologyRevision = results.topologyRevision
+            let resultIndexSequence = results.networkIndexSequenceForDelta
             let indexSequence = networkRequestIndexSequence
-            guard let delta = await networkRequestIndex.delta(
+            let delta = await networkRequestIndex.delta(
                 plan: plan,
                 sectionBy: results.sectionBy,
                 oldSnapshot: oldSnapshot,
-                changedID: request.id
-            ) else {
-                continue
-            }
+                changedSince: resultIndexSequence
+            )
             guard networkRequestIndexSequence == indexSequence,
                   results.topologyRevision == resultTopologyRevision,
                   results.networkSnapshotForDelta == oldSnapshot else {
@@ -4058,7 +3992,7 @@ extension WebInspectorContext {
     private func resetNetworkFetchedResults() {
         networkFetchedResults.removeAll { $0.value == nil }
         for registration in networkFetchedResults {
-            registration.value?.resetNetworkItems()
+            registration.value?.resetNetworkItems(indexSequence: networkRequestIndexSequence)
         }
     }
 }
