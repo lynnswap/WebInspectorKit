@@ -19,6 +19,11 @@ package final class TransportReceiver: Sendable {
         let continuation: CheckedContinuation<Void, Never>
     }
 
+    private struct SealedWaiters: Sendable {
+        let drain: [DrainWaiter]
+        let drainRegistration: [CheckedContinuation<Void, Never>]
+    }
+
     private struct State: Sendable {
         var core = WeakCore()
         var messages: [QueuedMessage] = []
@@ -28,6 +33,7 @@ package final class TransportReceiver: Sendable {
         var tailOrdinal: UInt64 = 0
         var completedOrdinal: UInt64 = 0
         var drainWaiters: [DrainWaiter] = []
+        var drainWaiterRegistrationWaiters: [CheckedContinuation<Void, Never>] = []
         var isClosed = false
         var closeWaiters: [CheckedContinuation<Void, Never>] = []
     }
@@ -100,43 +106,52 @@ package final class TransportReceiver: Sendable {
     /// through `ordinal`, or until the receiver closes.
     package func waitUntilDrained(through ordinal: UInt64) async {
         await withCheckedContinuation { continuation in
-            let shouldResume = state.withLock { state in
+            let result = state.withLock { state in
                 precondition(
                     ordinal <= state.tailOrdinal,
                     "Cannot wait for a TransportReceiver ordinal that has not been accepted."
                 )
                 guard !state.isClosed, state.completedOrdinal < ordinal else {
-                    return true
+                    return (
+                        shouldResume: true,
+                        registrationWaiters: [] as [CheckedContinuation<Void, Never>]
+                    )
                 }
                 state.drainWaiters.append(
                     DrainWaiter(through: ordinal, continuation: continuation)
                 )
-                return false
+                let registrationWaiters = state.drainWaiterRegistrationWaiters
+                state.drainWaiterRegistrationWaiters.removeAll(keepingCapacity: false)
+                return (
+                    shouldResume: false,
+                    registrationWaiters: registrationWaiters
+                )
             }
-            if shouldResume {
+            if result.shouldResume {
                 continuation.resume()
             }
+            Self.resume(result.registrationWaiters)
         }
     }
 
     package func close() async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             let readyWaiters = state.withLock { state in
-                let drainWaiters = Self.seal(&state)
+                let sealedWaiters = Self.seal(&state)
                 guard state.isDraining else {
                     return (
                         close: [continuation],
-                        drain: drainWaiters
+                        sealed: sealedWaiters
                     )
                 }
                 state.closeWaiters.append(continuation)
                 return (
                     close: [] as [CheckedContinuation<Void, Never>],
-                    drain: drainWaiters
+                    sealed: sealedWaiters
                 )
             }
             Self.resume(readyWaiters.close)
-            Self.resumeDrainWaiters(readyWaiters.drain)
+            Self.resumeSealedWaiters(readyWaiters.sealed)
         }
     }
 
@@ -146,18 +161,33 @@ package final class TransportReceiver: Sendable {
     /// active drain before detaching the native frontend.
     package func closeSynchronously() {
         let readyWaiters = state.withLock { state in
-            let drainWaiters = Self.seal(&state)
+            let sealedWaiters = Self.seal(&state)
             return (
                 close: Self.takeCloseWaitersIfQuiescent(from: &state),
-                drain: drainWaiters
+                sealed: sealedWaiters
             )
         }
         Self.resume(readyWaiters.close)
-        Self.resumeDrainWaiters(readyWaiters.drain)
+        Self.resumeSealedWaiters(readyWaiters.sealed)
     }
 
     package func closeWaiterCountForTesting() -> Int {
         state.withLock { $0.closeWaiters.count }
+    }
+
+    package func waitForDrainWaiterForTesting() async {
+        await withCheckedContinuation { continuation in
+            let shouldResume = state.withLock { state in
+                guard !state.isClosed, state.drainWaiters.isEmpty else {
+                    return true
+                }
+                state.drainWaiterRegistrationWaiters.append(continuation)
+                return false
+            }
+            if shouldResume {
+                continuation.resume()
+            }
+        }
     }
 
     @discardableResult
@@ -165,21 +195,21 @@ package final class TransportReceiver: Sendable {
         let result: (
             core: ConnectionCore?,
             readyCloseWaiters: [CheckedContinuation<Void, Never>],
-            readyDrainWaiters: [DrainWaiter]
+            sealedWaiters: SealedWaiters
         ) = state.withLock { state in
             guard !state.isClosed else {
-                return (nil, [], [])
+                return (nil, [], SealedWaiters(drain: [], drainRegistration: []))
             }
             let core = state.core.value
-            let drainWaiters = Self.seal(&state)
+            let sealedWaiters = Self.seal(&state)
             return (
                 core,
                 Self.takeCloseWaitersIfQuiescent(from: &state),
-                drainWaiters
+                sealedWaiters
             )
         }
         Self.resume(result.readyCloseWaiters)
-        Self.resumeDrainWaiters(result.readyDrainWaiters)
+        Self.resumeSealedWaiters(result.sealedWaiters)
         guard let core = result.core else {
             return nil
         }
@@ -235,9 +265,9 @@ package final class TransportReceiver: Sendable {
         Self.resumeDrainWaiters(readyWaiters)
     }
 
-    private static func seal(_ state: inout State) -> [DrainWaiter] {
+    private static func seal(_ state: inout State) -> SealedWaiters {
         guard !state.isClosed else {
-            return []
+            return SealedWaiters(drain: [], drainRegistration: [])
         }
         state.isClosed = true
         state.generation &+= 1
@@ -246,7 +276,12 @@ package final class TransportReceiver: Sendable {
         state.messageStartIndex = 0
         let drainWaiters = state.drainWaiters
         state.drainWaiters.removeAll(keepingCapacity: false)
-        return drainWaiters
+        let drainWaiterRegistrationWaiters = state.drainWaiterRegistrationWaiters
+        state.drainWaiterRegistrationWaiters.removeAll(keepingCapacity: false)
+        return SealedWaiters(
+            drain: drainWaiters,
+            drainRegistration: drainWaiterRegistrationWaiters
+        )
     }
 
     private static func takeReadyDrainWaiters(
@@ -286,6 +321,11 @@ package final class TransportReceiver: Sendable {
         for waiter in waiters {
             waiter.continuation.resume()
         }
+    }
+
+    private static func resumeSealedWaiters(_ waiters: SealedWaiters) {
+        resumeDrainWaiters(waiters.drain)
+        resume(waiters.drainRegistration)
     }
 
     private func compactMessagesIfNeeded(in state: inout State) {

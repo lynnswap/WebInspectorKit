@@ -23,6 +23,7 @@ func nativeInitialTargetDiscoveryAwaitsMainQueueCallbacksAndCoreDrain() async th
     }
 
     await parser.waitUntilBlocked()
+    await graph.receiver.waitForDrainWaiterForTesting()
     #expect(await completion.isFinished == false)
     #expect(await graph.core.snapshot().targetsByID.isEmpty)
 
@@ -80,6 +81,7 @@ func nativeInitialTargetDiscoveryFailsWhenCloseInterruptsItsDrain() async {
     }
 
     await parser.waitUntilBlocked()
+    await graph.receiver.waitForDrainWaiterForTesting()
     let closeTask = Task {
         await graph.core.close()
     }
