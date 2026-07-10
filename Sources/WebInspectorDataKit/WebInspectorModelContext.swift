@@ -2500,65 +2500,70 @@ public final class WebInspectorModelContext {
     }
 
     /// Loads and returns the request's stable response-body resource.
-    public nonisolated(nonsending) func responseBody(
-        for request: NetworkRequest
+    ///
+    /// Concurrent callers for the same body join one protocol request. Cancelling
+    /// one caller stops only that caller's wait; the shared request continues
+    /// until it completes or the body becomes stale.
+    public func responseBody(
+        for request: NetworkRequest,
+        isolation: isolated (any Actor) = #isolation
     ) async throws -> NetworkBody {
         try requireConfigured(.network)
         guard networkRequests.request(for: request.id) === request else {
             throw WebInspectorModelError.staleModel
         }
         let body = request.responseBody
-        switch body.phase {
-        case .loaded:
-            return body
-        case let .failed(error):
-            throw error
-        case .fetching:
-            throw WebInspectorModelError.commandRejected(
-                method: "Network.getResponseBody",
-                message: "A response-body fetch is already in progress."
-            )
-        case .available:
+        let page: WebInspectorTarget?
+        if case .available = body.phase {
             guard request.canFetchResponseBody else {
                 throw WebInspectorModelError.commandRejected(
                     method: "Network.getResponseBody",
                     message: "The response body is not available for this request."
                 )
             }
+            page = try currentPageOrThrow()
+        } else {
+            page = nil
         }
-        let page = try currentPageOrThrow()
-        body.markFetching()
-        do {
-            let payload = try await page.network.responseBody(
-                for: request.proxyID,
-                backendResourceIdentifier: request.backendResourceIdentifier
-            )
-            networkRequests.finishResponseBodyFetch(
-                .success(payload),
-                for: request,
-                expectedBody: body
-            )
+
+        let lease: NetworkBody.ResponseFetchLease
+        switch body.acquireResponseFetch() {
+        case .loaded:
             return body
-        } catch let error as WebInspectorProxyError {
-            networkRequests.finishResponseBodyFetch(
-                .failure(error),
-                for: request,
-                expectedBody: body
-            )
+        case let .failed(error):
             throw error
-        } catch {
-            let proxyError = WebInspectorProxyError.commandFailed(
-                domain: "Network",
-                method: "getResponseBody",
-                message: String(describing: error)
-            )
-            networkRequests.finishResponseBodyFetch(
-                .failure(proxyError),
-                for: request,
-                expectedBody: body
-            )
-            throw proxyError
+        case let .waiter(existingLease):
+            lease = existingLease
+        case let .owner(newLease):
+            guard let page else {
+                preconditionFailure("A new response fetch requires a current page binding.")
+            }
+            lease = newLease
+            let requestID = request.proxyID
+            let backendResourceIdentifier = request.backendResourceIdentifier
+            let completion = newLease.completion
+            let task = Task { [weak body] in
+                _ = isolation
+                let result = await Self.loadResponseBody(
+                    from: page,
+                    requestID: requestID,
+                    backendResourceIdentifier: backendResourceIdentifier
+                )
+                guard let body else {
+                    completion.fulfill(.failure(WebInspectorProxyError.staleIdentifier))
+                    return
+                }
+                body.finishResponseFetch(result, for: newLease)
+            }
+            body.installResponseFetchTask(task, for: newLease)
         }
+
+        _ = try await lease.completion.value()
+        guard networkRequests.request(for: request.id) === request,
+              request.responseBody === body else {
+            throw WebInspectorModelError.staleModel
+        }
+        return body
     }
 
     nonisolated(nonsending) func updateNetworkQuery(
@@ -2581,58 +2586,27 @@ public final class WebInspectorModelContext {
         try await consoleMessages.update(query, for: results)
     }
 
-    func fetchResponseBody(
-        for request: NetworkRequest,
-        expectedBody: NetworkBody
-    ) async {
-        guard let currentPage else {
-            finishResponseBodyFetch(
-                .failure(.disconnected("WebInspectorDataKit has no current page target.")),
-                for: request,
-                expectedBody: expectedBody
-            )
-            return
-        }
-
+    private nonisolated static func loadResponseBody(
+        from page: WebInspectorTarget,
+        requestID: Network.Request.ID,
+        backendResourceIdentifier: Network.BackendResourceID?
+    ) async -> Result<Network.Body, WebInspectorProxyError> {
         do {
-            let body = try await currentPage.network.responseBody(
-                for: request.proxyID,
-                backendResourceIdentifier: request.backendResourceIdentifier
-            )
-            finishResponseBodyFetch(
-                .success(body),
-                for: request,
-                expectedBody: expectedBody
-            )
+            return .success(try await page.network.responseBody(
+                for: requestID,
+                backendResourceIdentifier: backendResourceIdentifier
+            ))
+        } catch is CancellationError {
+            return .failure(.staleIdentifier)
         } catch let error as WebInspectorProxyError {
-            finishResponseBodyFetch(
-                .failure(error),
-                for: request,
-                expectedBody: expectedBody
-            )
+            return .failure(error)
         } catch {
-            finishResponseBodyFetch(
-                .failure(.commandFailed(
-                    domain: "Network",
-                    method: "getResponseBody",
-                    message: String(describing: error)
-                )),
-                for: request,
-                expectedBody: expectedBody
-            )
+            return .failure(.commandFailed(
+                domain: "Network",
+                method: "getResponseBody",
+                message: String(describing: error)
+            ))
         }
-    }
-
-    private func finishResponseBodyFetch(
-        _ result: Result<Network.Body, WebInspectorProxyError>,
-        for request: NetworkRequest,
-        expectedBody: NetworkBody
-    ) {
-        networkRequests.finishResponseBodyFetch(
-            result,
-            for: request,
-            expectedBody: expectedBody
-        )
     }
 
     private func makeRuntimeObjectGroup(
@@ -3223,7 +3197,7 @@ extension WebInspectorModelContext {
         )
     }
 
-    package func apply(
+    package nonisolated(nonsending) func apply(
         _ event: Network.Event
     ) async {
         await networkRequests.apply(event, modelContext: self)

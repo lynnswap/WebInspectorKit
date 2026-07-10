@@ -160,17 +160,6 @@ package final class NetworkRequestStore {
         request(for: NetworkRequest.ID(id))
     }
 
-    package func finishResponseBodyFetch(
-        _ result: Result<Network.Body, WebInspectorProxyError>,
-        for request: NetworkRequest,
-        expectedBody: NetworkBody
-    ) {
-        guard requestsByID[request.id] === request else {
-            return
-        }
-        request.finishResponseBodyFetch(result: result, expectedBody: expectedBody)
-    }
-
     package nonisolated(nonsending) func results(
         matching query: NetworkQuery,
         modelContext: WebInspectorModelContext
@@ -1062,6 +1051,9 @@ package final class NetworkRequestStore {
     }
 
     private func prepareRemoveAllRequests() -> QueryIndexReset {
+        for request in requestsByID.values {
+            request.invalidateResponseBodyFetch()
+        }
         requestsByID = [:]
         orderedRequestIDs = []
         orderIndicesByID = [:]
