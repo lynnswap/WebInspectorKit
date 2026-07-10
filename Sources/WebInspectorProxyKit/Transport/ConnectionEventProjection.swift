@@ -1,6 +1,16 @@
 import Foundation
 
 package enum ConnectionEventProjection {
+    package nonisolated static func projectedDOMBootstrapNode(
+        _ node: DOM.Node,
+        target: ModelTarget
+    ) -> DOM.Node {
+        guard target.kind == .frame else {
+            return node
+        }
+        return scopedDOMNode(node, targetRawValue: target.id.rawValue)
+    }
+
     package nonisolated static func shouldDeliver(
         _ event: ProtocolEvent,
         to route: RoutingTargetID,

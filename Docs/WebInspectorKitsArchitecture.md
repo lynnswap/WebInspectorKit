@@ -137,7 +137,15 @@ External source evidence was read at fixed local revisions:
   commit ordering in `WebPageInspectorController.cpp`; page-only Inspector and
   `DOM.requestNode` contracts in `Inspector.json` / `DOM.json`, the unsupported
   frame stub in `FrameDOMAgentStubs.cpp`, and main-target picker resolution in
-  `InspectorObserver.js` / `DOMManager.js`.
+  `InspectorObserver.js` / `DOMManager.js`. In both
+  `Source/WebCore/inspector/agents/InspectorDOMAgent.cpp` and
+  `Source/WebCore/inspector/agents/frame/FrameDOMAgent.cpp`, `getDocument`
+  resets the agent's current node bindings before rebuilding the document root
+  at depth two. `setDocument` also resets those bindings and emits
+  `documentUpdated` once a previously requested document is ready. This is the
+  source evidence for treating every `documentUpdated` as a node-identity epoch
+  change and retrying an in-flight bootstrap rather than merging its stale
+  reply.
 - Swift Evolution [SE-0371: Isolated synchronous deinit](https://github.com/swiftlang/swift-evolution/blob/main/proposals/0371-isolated-synchronous-deinit.md)
   for the language-level lifecycle contract.
 
@@ -607,10 +615,15 @@ package enum ModelDomain: Hashable, Sendable { /* configured domains */ }
 
 The current transport slice implements the bounded exclusive feed, initial
 `reset`/`targetSnapshot`, future target lifecycle deltas, future events for
-configured domains, transactional capability leases, and enable-replay
-boundaries for CSS, Network, Console, and Runtime. Acquisition follows the
-deterministic domain order DOM, CSS, Network, Console, Runtime; CSS shares the
-DOM prerequisite, while DOM's capability is local and sends no wire command.
+configured domains, transactional capability leases, enable-replay boundaries
+for CSS, Network, Console, and Runtime, DOM snapshot bootstrap, and one
+binding-level synchronization boundary. Configuration is normalized once at
+registration: CSS implies DOM, while Network alone does not. Capability
+acquisition uses that same normalized set in the deterministic domain order
+DOM, CSS, Network, Console, Runtime. Completion records remain reply-driven and
+may interleave across domains; the single `synchronizationComplete` record is
+the only all-domain-ready barrier. DOM's capability lease itself is local and
+sends no `DOM.enable`; the separate bootstrap owner sends `DOM.getDocument`.
 The feed is registered and its initial records are published before the first
 capability await, and `openModelFeed` returns only after every configured
 capability is active. An acquisition failure or cancellation releases the
@@ -627,11 +640,14 @@ rejected or superseded operations publish none, and a replacement physical
 binding publishes its marker in the replacement generation. Local DOM never
 publishes an invented replay boundary.
 
-DOM bootstrap, non-empty configured-domain `synchronizationComplete`, and the
-complete ordered retarget readiness sequence described below remain later
-slices. Their record cases define the package contract but are not yet all
-emitted. This distinction prevents wire replay completion from being mistaken
-for complete model readiness.
+DOM bootstrap completion and all normalized replay completions are tracked per
+binding generation. Only after every configured domain completes does the core
+emit one `synchronizationComplete`; a later document epoch or added frame may
+emit another DOM bootstrap boundary, but never a second synchronization record
+for that generation. Reset and retarget replace the completion state, so a late
+reply from an old operation cannot complete the new binding. This distinction
+prevents wire replay completion from being mistaken for complete model
+readiness.
 
 The target snapshot contains the physical current page first, followed by its
 relevant committed frame targets in deterministic parent-before-child order.
@@ -686,10 +702,11 @@ takes exclusive ownership of its Proxy connection, so it is always the first
 model-feed subscriber and does not depend on a late subscriber receiving
 historical replay.
 
-The completed DOM readiness slice will use the same ordered feed even though DOM
-has no enable-time replay. After the feed is registered, the core will issue
-`DOM.getDocument`. Its
-reply arrival sequence becomes a `bootstrapSnapshot` record; DOM mutation
+DOM readiness uses the same ordered feed even though DOM has no enable-time
+replay. After the feed is registered, the core issues `DOM.getDocument`
+sequentially for the physical current page and each committed relevant frame in
+the target snapshot's deterministic order. Its reply arrival sequence becomes
+a `bootstrapSnapshot` record; DOM mutation
 events at or before that watermark are subsumed by the returned full snapshot,
 and later events follow it in sequence order. If `DOM.documentUpdated` advances
 the document epoch between request and reply, the snapshot is discarded and
@@ -697,8 +714,14 @@ the command is retried. A valid snapshot will be followed by `bootstrapComplete`
 Every configured domain must reach either its replay or bootstrap completion
 boundary before ProxyKit emits `synchronizationComplete`; DataKit applies that
 final record before attachment or retarget synchronization becomes ready. A
-later `DOM.documentUpdated` resets the DOM/CSS epochs and starts the same ordered
-snapshot bootstrap again rather than exposing an empty tree as ready state.
+later `DOM.documentUpdated` advances that physical target's DOM epoch and starts
+the same ordered snapshot bootstrap again rather than exposing an empty tree as
+ready state. A frame added before initial synchronization joins the outstanding
+bootstrap set; a destroyed, superseded, or old-epoch reply is stale and cannot
+publish. Required-target command failure is terminal. Bootstrap commands are
+Core-owned tasks: close, rollback, retarget, and terminal teardown cancel and
+await them, and a failed feed enqueue is an operation-terminal result that
+cannot advance to the next target.
 
 One-off commands internally acquire their declared prerequisites for the
 duration of the command. Long-lived event/model state holds a structured event
@@ -758,12 +781,13 @@ old scoped ID to a current-generation command fails locally with
 `staleIdentifier`; it is never sent to the replacement target.
 
 When no physical page is temporarily committed, a command fails with
-`pageUnavailable`; it does not guess a stale target. During commit the core will
-eventually perform the following full ordered transition. The current slice
+`pageUnavailable`; it does not guess a stale target. During commit the core
+performs the following ordered transport transition. The current ProxyKit slice
 establishes its synchronous reset, physical target snapshot, future-delta
-prefix, capability-owner reconciliation onto the new physical target, and the
-wire capability replay watermarks described above; DOM bootstrap and binding
-readiness remain later slices:
+prefix, capability-owner reconciliation onto the new physical target, DOM
+bootstrap, wire capability replay watermarks, and the binding-level
+synchronization record described above. DataKit application of that feed
+remains a later slice:
 
 1. stop admission of new target-scoped commands and increment page generation;
 2. publish `.reset(newGeneration)` to public scopes and the package model feed;

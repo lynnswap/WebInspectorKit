@@ -6,7 +6,7 @@ private struct ConnectionPendingReplyOwnership: Equatable, Sendable {
     let purpose: TransportSession.PendingReply.Purpose
 }
 
-private struct ConnectionCapabilityCommandOperation: Sendable {
+private struct ConnectionOwnedCommandOperation: Sendable {
     let backend: any TransportBackend
     let message: String
     let promise: ReplyPromise<ProtocolCommand.Result>
@@ -41,6 +41,13 @@ private struct ConnectionCapabilityTask: Sendable {
     let pendingReplyOwnership: ConnectionPendingReplyOwnership?
 }
 
+private struct ConnectionModelBootstrapTask: Sendable {
+    let task: Task<Void, Never>
+    let pendingReplyOwnership: ConnectionPendingReplyOwnership
+    let feedID: ConnectionModelFeedID
+    let generation: WebInspectorPage.Generation
+}
+
 private struct PhysicalTargetDisappearanceWaiters: Sendable {
     var activation: [ReplyPromise<Void>] = []
     var release: [ReplyPromise<Void>] = []
@@ -51,9 +58,42 @@ private struct ConnectionModelFeedCapabilityLease: Sendable {
     let key: ConnectionCapabilityKey
 }
 
+private struct ConnectionModelFeedSynchronizationState: Sendable {
+    let generation: WebInspectorPage.Generation
+    var completedDomains: Set<ModelDomain> = []
+    var didPublish = false
+}
+
+private struct ConnectionDOMBootstrapState: Sendable {
+    enum ReplyDisposition: Equatable, Sendable {
+        case published
+        case stale
+        case terminal
+    }
+
+    struct TargetState: Sendable {
+        let target: ModelTarget
+        var completedEpoch: ModelDocumentEpoch?
+    }
+
+    struct ActiveOperation: Sendable {
+        let id: UInt64
+        let targetID: ProtocolTarget.ID
+        let documentEpoch: ModelDocumentEpoch
+        var replyDisposition: ReplyDisposition?
+    }
+
+    let generation: WebInspectorPage.Generation
+    var orderedTargetIDs: [ProtocolTarget.ID]
+    var targetsByID: [ProtocolTarget.ID: TargetState]
+    var activeOperation: ActiveOperation?
+    var needsCompletionMarker: Bool
+}
+
 private enum ConnectionModelFeedLifecycle: Sendable {
     case acquiring
     case active
+    case rollingBack
     case closing(ReplyPromise<Void>)
 }
 
@@ -65,11 +105,14 @@ private struct ConnectionModelFeedRegistration: Sendable {
     var capabilityLeases: [ConnectionModelFeedCapabilityLease]
     var targetSnapshotThrough: UInt64?
     var resetGeneration: WebInspectorPage.Generation
+    var synchronization: ConnectionModelFeedSynchronizationState?
+    var domBootstrap: ConnectionDOMBootstrapState?
 }
 
 private struct CurrentPageBindingChangeEffects: Sendable {
     var capabilityKeysToReconcile: [ConnectionCapabilityKey] = []
     var releaseWaiters: [ReplyPromise<Void>] = []
+    var modelBootstrapTasksToAwait: [Task<Void, Never>] = []
 }
 
 private struct RootEventMutation: Sendable {
@@ -140,6 +183,7 @@ package actor ConnectionCore {
         let activationWaiters: [ReplyPromise<Void>]
         let releaseWaiters: [ReplyPromise<Void>]
         let capabilityTasks: [Task<Void, Never>]
+        let modelBootstrapTasks: [Task<Void, Never>]
         let closeAction: CloseAction
 
         func run() async {
@@ -160,6 +204,9 @@ package actor ConnectionCore {
                 }
             }
             for task in capabilityTasks {
+                await task.value
+            }
+            for task in modelBootstrapTasks {
                 await task.value
             }
             await closeAction()
@@ -186,6 +233,9 @@ package actor ConnectionCore {
     private var replayWasTaintedByDirectConsumer: Bool
     private var capabilities: ConnectionCapabilityRegistry
     private var capabilityTasks: [UInt64: ConnectionCapabilityTask]
+    private var nextModelBootstrapOperationID: UInt64
+    private var modelBootstrapTasks: [UInt64: ConnectionModelBootstrapTask]
+    private var modelDocumentEpochs: [ProtocolTarget.ID: ModelDocumentEpoch]
     private var currentPageGeneration: WebInspectorPage.Generation
     private var currentPageBindingGapIsOpen: Bool
     private var eventScopeRegistrationWaiters: [(
@@ -234,6 +284,9 @@ package actor ConnectionCore {
         replayWasTaintedByDirectConsumer = false
         capabilities = ConnectionCapabilityRegistry()
         capabilityTasks = [:]
+        nextModelBootstrapOperationID = 0
+        modelBootstrapTasks = [:]
+        modelDocumentEpochs = [:]
         currentPageGeneration = WebInspectorPage.Generation(rawValue: 0)
         currentPageBindingGapIsOpen = false
         eventScopeRegistrationWaiters = []
@@ -271,6 +324,17 @@ package actor ConnectionCore {
                 precondition(
                     pending.purpose == ownership.purpose,
                     "A capability task attempted to remove a reply owned by another purpose."
+                )
+            }
+        }
+        let bootstrapTasks = Array(modelBootstrapTasks.values)
+        modelBootstrapTasks.removeAll()
+        for task in bootstrapTasks {
+            task.task.cancel()
+            if let pending = replyStore.removePendingReply(task.pendingReplyOwnership.key) {
+                precondition(
+                    pending.purpose == task.pendingReplyOwnership.purpose,
+                    "A model bootstrap task attempted to remove a reply owned by another purpose."
                 )
             }
         }
@@ -340,6 +404,7 @@ package actor ConnectionCore {
             throw ConnectionModelFeedError.connectionAlreadyUsedByDirectConsumer
         }
 
+        let configuredDomains = ModelDomain.normalized(configuredDomains)
         let id = ConnectionModelFeedID()
         let mailbox = ConnectionModelFeedMailbox(capacity: capacity)
         let feed = ConnectionModelFeed(id: id, owner: self, mailbox: mailbox)
@@ -358,7 +423,9 @@ package actor ConnectionCore {
             lifecycle: .acquiring,
             capabilityLeases: [],
             targetSnapshotThrough: nil,
-            resetGeneration: resetGeneration
+            resetGeneration: resetGeneration,
+            synchronization: nil,
+            domBootstrap: nil
         )
 
         guard enqueueModelFeedRecord(.reset(resetGeneration)) else {
@@ -437,6 +504,8 @@ package actor ConnectionCore {
         switch registration.lifecycle {
         case .acquiring:
             preconditionFailure("A model feed cannot close before openModelFeed returns.")
+        case .rollingBack:
+            preconditionFailure("A model feed cannot close while its failed open is rolling back.")
         case .closing(let completion):
             return try await completion.value()
         case .active:
@@ -446,6 +515,7 @@ package actor ConnectionCore {
         let completion = ReplyPromise<Void>()
         registration.lifecycle = .closing(completion)
         modelFeed = registration
+        await cancelAndAwaitModelBootstrapTasks(feedID: id)
 
         var cleanupError: (any Swift.Error)?
         for lease in registration.capabilityLeases.reversed() {
@@ -508,10 +578,16 @@ package actor ConnectionCore {
     private func rollbackModelFeedAcquisition(
         _ id: ConnectionModelFeedID
     ) async -> (any Swift.Error)? {
-        guard let registration = modelFeed,
+        guard var registration = modelFeed,
               registration.id == id else {
             return await modelFeedTerminalErrorIfNeeded()
         }
+        guard case .acquiring = registration.lifecycle else {
+            preconditionFailure("Only an acquiring model feed can roll back its capabilities.")
+        }
+        registration.lifecycle = .rollingBack
+        modelFeed = registration
+        await cancelAndAwaitModelBootstrapTasks(feedID: id)
         var cleanupError: (any Swift.Error)?
         for lease in registration.capabilityLeases.reversed() {
             do {
@@ -560,6 +636,27 @@ package actor ConnectionCore {
         } else {
             _ = await modelFeedTerminalErrorIfNeeded()
         }
+    }
+
+    private func cancelAndAwaitModelBootstrapTasks(
+        feedID: ConnectionModelFeedID
+    ) async {
+        if var registration = modelFeed,
+           registration.id == feedID {
+            registration.domBootstrap = nil
+            modelFeed = registration
+        }
+        let tasks = modelBootstrapTasks.values.filter { $0.feedID == feedID }
+        for task in tasks {
+            task.task.cancel()
+        }
+        for task in tasks {
+            await task.task.value
+        }
+        precondition(
+            modelBootstrapTasks.values.allSatisfy { $0.feedID != feedID },
+            "A model feed stopped before its DOM bootstrap tasks completed."
+        )
     }
 
     package func pageGeneration() throws -> WebInspectorPage.Generation {
@@ -1000,17 +1097,450 @@ package actor ConnectionCore {
             return false
         }
         registration.targetSnapshotThrough = through
+        registration.synchronization = ConnectionModelFeedSynchronizationState(
+            generation: currentPageGeneration
+        )
+        if registration.configuredDomains.contains(.dom) {
+            registration.domBootstrap = makeDOMBootstrapState(
+                snapshot: snapshot,
+                generation: currentPageGeneration
+            )
+        } else {
+            registration.domBootstrap = nil
+        }
         modelFeed = registration
 
-        guard registration.configuredDomains.isEmpty else {
+        guard publishModelSynchronizationIfReady() else {
+            return false
+        }
+        startNextDOMBootstrapIfNeeded()
+        return isOpen
+    }
+
+    @discardableResult
+    private func completeModelDomain(
+        _ domain: ModelDomain,
+        generation: WebInspectorPage.Generation
+    ) -> Bool {
+        guard var registration = modelFeed,
+              var synchronization = registration.synchronization,
+              synchronization.generation == generation else {
             return true
         }
-        return enqueueModelFeedRecord(
-            .synchronizationComplete(
-                generation: currentPageGeneration,
-                through: through
-            )
+        guard registration.configuredDomains.contains(domain) else {
+            preconditionFailure("A model feed completed a domain that it did not configure.")
+        }
+        precondition(
+            synchronization.completedDomains.insert(domain).inserted,
+            "A model feed domain completed more than once in one binding generation."
         )
+        registration.synchronization = synchronization
+        modelFeed = registration
+        return publishModelSynchronizationIfReady()
+    }
+
+    @discardableResult
+    private func publishModelSynchronizationIfReady() -> Bool {
+        guard var registration = modelFeed,
+              var synchronization = registration.synchronization else {
+            return true
+        }
+        guard synchronization.completedDomains == registration.configuredDomains else {
+            return true
+        }
+        precondition(
+            !synchronization.didPublish,
+            "A model feed published synchronization more than once in one binding generation."
+        )
+        guard enqueueModelFeedRecord(
+            .synchronizationComplete(
+                generation: synchronization.generation,
+                through: eventSequences.current.sequence
+            )
+        ) else {
+            return false
+        }
+        synchronization.didPublish = true
+        registration.synchronization = synchronization
+        modelFeed = registration
+        return true
+    }
+
+    private func makeDOMBootstrapState(
+        snapshot: ModelTargetSnapshot,
+        generation: WebInspectorPage.Generation
+    ) -> ConnectionDOMBootstrapState {
+        var targetsByID: [ProtocolTarget.ID: ConnectionDOMBootstrapState.TargetState] = [:]
+        let orderedTargetIDs = snapshot.targets.map { target in
+            let targetID = ProtocolTarget.ID(target.id.rawValue)
+            precondition(
+                !targetsByID.keys.contains(targetID),
+                "A model target snapshot contains duplicate physical targets."
+            )
+            targetsByID[targetID] = ConnectionDOMBootstrapState.TargetState(
+                target: target,
+                completedEpoch: nil
+            )
+            _ = modelDocumentEpoch(for: targetID)
+            return targetID
+        }
+        return ConnectionDOMBootstrapState(
+            generation: generation,
+            orderedTargetIDs: orderedTargetIDs,
+            targetsByID: targetsByID,
+            activeOperation: nil,
+            needsCompletionMarker: true
+        )
+    }
+
+    private func modelDocumentEpoch(
+        for targetID: ProtocolTarget.ID
+    ) -> ModelDocumentEpoch {
+        if let epoch = modelDocumentEpochs[targetID] {
+            return epoch
+        }
+        let epoch = ModelDocumentEpoch(rawValue: 0)
+        modelDocumentEpochs[targetID] = epoch
+        return epoch
+    }
+
+    private func advanceModelDocumentEpoch(
+        for targetID: ProtocolTarget.ID
+    ) -> ModelDocumentEpoch {
+        let current = modelDocumentEpoch(for: targetID)
+        precondition(
+            current.rawValue < UInt64.max,
+            "A DOM document epoch exhausted UInt64."
+        )
+        let next = ModelDocumentEpoch(rawValue: current.rawValue + 1)
+        modelDocumentEpochs[targetID] = next
+        return next
+    }
+
+    private func startNextDOMBootstrapIfNeeded() {
+        guard isOpen,
+              var registration = modelFeed,
+              var bootstrap = registration.domBootstrap,
+              bootstrap.generation == currentPageGeneration,
+              bootstrap.activeOperation == nil else {
+            return
+        }
+        switch registration.lifecycle {
+        case .acquiring, .active:
+            break
+        case .rollingBack, .closing:
+            return
+        }
+
+        let nextTargetID = bootstrap.orderedTargetIDs.first { targetID in
+            guard let target = bootstrap.targetsByID[targetID] else {
+                preconditionFailure("A DOM bootstrap order entry lost its target state.")
+            }
+            return target.completedEpoch != modelDocumentEpoch(for: targetID)
+        }
+        guard let targetID = nextTargetID else {
+            guard bootstrap.needsCompletionMarker else {
+                return
+            }
+            guard enqueueModelFeedRecord(
+                .bootstrapComplete(
+                    generation: bootstrap.generation,
+                    domain: .dom,
+                    through: eventSequences.current.sequence
+                )
+            ) else {
+                return
+            }
+            bootstrap.needsCompletionMarker = false
+            let generation = bootstrap.generation
+            let domWasAlreadyComplete = registration.synchronization?
+                .completedDomains.contains(.dom) == true
+            registration.domBootstrap = bootstrap
+            modelFeed = registration
+            if !domWasAlreadyComplete {
+                _ = completeModelDomain(.dom, generation: generation)
+            }
+            return
+        }
+
+        precondition(
+            nextModelBootstrapOperationID < UInt64.max,
+            "A DOM bootstrap operation identifier exhausted UInt64."
+        )
+        nextModelBootstrapOperationID += 1
+        let operationID = nextModelBootstrapOperationID
+        let documentEpoch = modelDocumentEpoch(for: targetID)
+        bootstrap.activeOperation = ConnectionDOMBootstrapState.ActiveOperation(
+            id: operationID,
+            targetID: targetID,
+            documentEpoch: documentEpoch,
+            replyDisposition: nil
+        )
+        registration.domBootstrap = bootstrap
+        modelFeed = registration
+
+        let feedID = registration.id
+        let generation = bootstrap.generation
+        let operation: ConnectionOwnedCommandOperation
+        do {
+            operation = try makeDOMBootstrapCommandOperation(
+                feedID: feedID,
+                generation: generation,
+                targetID: targetID,
+                documentEpoch: documentEpoch,
+                operationID: operationID
+            )
+        } catch {
+            handoffTermination(.fatal(
+                "Failed to construct DOM.getDocument for target \(targetID.rawValue): \(error)"
+            ))
+            return
+        }
+
+        let task = Task { [weak self, operation] in
+            let result: Result<Void, any Swift.Error>
+            do {
+                try await operation.value()
+                result = .success(())
+            } catch {
+                result = .failure(error)
+            }
+            await self?.completeDOMBootstrapOperation(
+                id: operationID,
+                feedID: feedID,
+                generation: generation,
+                targetID: targetID,
+                documentEpoch: documentEpoch,
+                result: result
+            )
+        }
+        let ownership = operation.pendingReplyOwnership
+        precondition(
+            modelBootstrapTasks[operationID] == nil,
+            "A DOM bootstrap operation identifier already has an owner."
+        )
+        modelBootstrapTasks[operationID] = ConnectionModelBootstrapTask(
+            task: task,
+            pendingReplyOwnership: ownership,
+            feedID: feedID,
+            generation: generation
+        )
+    }
+
+    private func makeDOMBootstrapCommandOperation(
+        feedID: ConnectionModelFeedID,
+        generation: WebInspectorPage.Generation,
+        targetID: ProtocolTarget.ID,
+        documentEpoch: ModelDocumentEpoch,
+        operationID: UInt64
+    ) throws -> ConnectionOwnedCommandOperation {
+        guard targetRegistry.containsTarget(targetID) else {
+            throw TransportSession.Error.missingTarget(targetID)
+        }
+        let innerCommandID = allocateCommandID()
+        let outerCommandID = allocateCommandID()
+        let replyKey = TransportSession.ReplyKey(
+            targetID: targetID,
+            commandID: innerCommandID
+        )
+        let pendingKey = TransportSession.PendingKey.target(replyKey)
+        let message = try TransportMessageParser.makeCommandString(
+            id: innerCommandID,
+            method: "DOM.getDocument",
+            parametersData: Data("{}".utf8)
+        )
+        let wrapperMessage = try TransportMessageParser.makeTargetWrapperCommandString(
+            id: outerCommandID,
+            targetIdentifier: targetID.rawValue,
+            message: message
+        )
+        let promise = ReplyPromise<ProtocolCommand.Result>()
+        let pendingReply = TransportSession.PendingReply.modelBootstrap(
+            targetID: targetID,
+            promise: promise,
+            feedID: feedID,
+            generation: generation,
+            documentEpoch: documentEpoch,
+            operationID: operationID
+        )
+        replyStore.insertTargetReply(
+            pendingReply,
+            key: replyKey,
+            rootWrapperID: outerCommandID
+        )
+        let ownership = ConnectionPendingReplyOwnership(
+            key: pendingKey,
+            purpose: pendingReply.purpose
+        )
+
+        let timeoutAction: (@Sendable () async -> Void)?
+        if let responseTimeout {
+            let timeoutSleep = self.timeoutSleep
+            let responseTimeoutDidFire = self.responseTimeoutDidFire
+            timeoutAction = { [weak self] in
+                do {
+                    try await timeoutSleep(responseTimeout)
+                } catch {
+                    return
+                }
+                await self?.failPendingReplyFromTimeout(
+                    pendingKey,
+                    error: TransportSession.Error.replyTimeout(
+                        method: "DOM.getDocument",
+                        targetID: targetID
+                    )
+                )
+                await responseTimeoutDidFire()
+            }
+        } else {
+            timeoutAction = nil
+        }
+
+        return ConnectionOwnedCommandOperation(
+            backend: backend,
+            message: wrapperMessage,
+            promise: promise,
+            pendingReplyOwnership: ownership,
+            timeoutAction: timeoutAction
+        )
+    }
+
+    private func completeDOMBootstrapOperation(
+        id: UInt64,
+        feedID: ConnectionModelFeedID,
+        generation: WebInspectorPage.Generation,
+        targetID: ProtocolTarget.ID,
+        documentEpoch: ModelDocumentEpoch,
+        result: Result<Void, any Swift.Error>
+    ) {
+        if let ownership = modelBootstrapTasks.removeValue(forKey: id)?.pendingReplyOwnership,
+           let pending = replyStore.removePendingReply(ownership.key) {
+            precondition(
+                pending.purpose == ownership.purpose,
+                "A DOM bootstrap task attempted to remove a reply owned by another purpose."
+            )
+        }
+        guard var registration = modelFeed,
+              registration.id == feedID,
+              var bootstrap = registration.domBootstrap,
+              bootstrap.generation == generation,
+              let active = bootstrap.activeOperation,
+              active.id == id,
+              active.targetID == targetID,
+              active.documentEpoch == documentEpoch else {
+            return
+        }
+        bootstrap.activeOperation = nil
+        registration.domBootstrap = bootstrap
+        modelFeed = registration
+
+        if active.replyDisposition == .terminal {
+            // Reply publication is the operation's terminal authority. The
+            // connection teardown races its cancellation against promise
+            // fulfillment, so consume this disposition before interpreting
+            // the task's generic success or cancellation result.
+            return
+        }
+        guard isOpen else {
+            return
+        }
+
+        switch result {
+        case .success:
+            guard let replyDisposition = active.replyDisposition else {
+                preconditionFailure(
+                    "A successful DOM bootstrap operation has no reply-side disposition."
+                )
+            }
+            switch replyDisposition {
+            case .published, .stale:
+                startNextDOMBootstrapIfNeeded()
+            case .terminal:
+                preconditionFailure(
+                    "A terminal DOM bootstrap reply disposition escaped its operation boundary."
+                )
+            }
+        case let .failure(error):
+            let targetIsStillRequired = bootstrap.targetsByID[targetID] != nil
+                && modelDocumentEpoch(for: targetID) == documentEpoch
+                && targetRegistry.target(for: targetID).map(
+                    targetRegistry.isCurrentPageModelTarget
+                ) == true
+            guard targetIsStillRequired else {
+                startNextDOMBootstrapIfNeeded()
+                return
+            }
+            handoffTermination(.fatal(
+                "DOM.getDocument failed for required target \(targetID.rawValue): \(error)"
+            ))
+        }
+    }
+
+    private func reconcileDOMBootstrapTargets() {
+        guard var registration = modelFeed,
+              var bootstrap = registration.domBootstrap,
+              bootstrap.generation == currentPageGeneration,
+              let snapshot = targetRegistry.modelTargetSnapshot() else {
+            return
+        }
+
+        var targetsByID: [ProtocolTarget.ID: ConnectionDOMBootstrapState.TargetState] = [:]
+        var addedTarget = false
+        let orderedTargetIDs = snapshot.targets.map { target in
+            let targetID = ProtocolTarget.ID(target.id.rawValue)
+            precondition(
+                !targetsByID.keys.contains(targetID),
+                "A reconciled model target snapshot contains duplicate physical targets."
+            )
+            let currentEpoch = modelDocumentEpoch(for: targetID)
+            if var existing = bootstrap.targetsByID[targetID] {
+                existing = ConnectionDOMBootstrapState.TargetState(
+                    target: target,
+                    completedEpoch: existing.completedEpoch
+                )
+                targetsByID[targetID] = existing
+                if existing.completedEpoch != currentEpoch {
+                    bootstrap.needsCompletionMarker = true
+                }
+            } else {
+                targetsByID[targetID] = ConnectionDOMBootstrapState.TargetState(
+                    target: target,
+                    completedEpoch: nil
+                )
+                addedTarget = true
+            }
+            return targetID
+        }
+        if addedTarget {
+            bootstrap.needsCompletionMarker = true
+        }
+        bootstrap.orderedTargetIDs = orderedTargetIDs
+        bootstrap.targetsByID = targetsByID
+        registration.domBootstrap = bootstrap
+        modelFeed = registration
+        startNextDOMBootstrapIfNeeded()
+    }
+
+    private func prepareDOMDocumentUpdateForModelFeed(
+        _ event: ProtocolEvent
+    ) {
+        guard event.method == "DOM.documentUpdated",
+              var registration = modelFeed,
+              var bootstrap = registration.domBootstrap,
+              bootstrap.generation == currentPageGeneration else {
+            return
+        }
+        let targetID = event.sourceTargetID
+            ?? event.targetID
+            ?? targetRegistry.currentMainPageTargetID
+        guard let targetID,
+              bootstrap.targetsByID[targetID] != nil else {
+            return
+        }
+        _ = advanceModelDocumentEpoch(for: targetID)
+        bootstrap.needsCompletionMarker = true
+        registration.domBootstrap = bootstrap
+        modelFeed = registration
     }
 
     private func publishModelTargetLifecycleEvent(
@@ -1265,7 +1795,7 @@ package actor ConnectionCore {
         generation: WebInspectorPage.Generation,
         action: CapabilityWireAction
     ) {
-        let operation: ConnectionCapabilityCommandOperation
+        let operation: ConnectionOwnedCommandOperation
         do {
             operation = try makeCapabilityCommandOperation(
                 action,
@@ -1322,7 +1852,7 @@ package actor ConnectionCore {
         for key: ConnectionCapabilityKey,
         generation: WebInspectorPage.Generation,
         operationID: UInt64
-    ) throws -> ConnectionCapabilityCommandOperation {
+    ) throws -> ConnectionOwnedCommandOperation {
         let method: String
         switch action {
         case .enable:
@@ -1402,7 +1932,7 @@ package actor ConnectionCore {
             timeoutAction = nil
         }
 
-        return ConnectionCapabilityCommandOperation(
+        return ConnectionOwnedCommandOperation(
             backend: backend,
             message: wrapperMessage,
             promise: promise,
@@ -2076,7 +2606,16 @@ package actor ConnectionCore {
             receivedDomainSequences: eventSequence.receivedDomainSequences,
             resultData: parsed.resultData
         )
-        processSuccessfulReply(result, for: pending)
+        do {
+            try processSuccessfulReply(result, for: pending)
+        } catch {
+            let message = "Failed to decode \(pending.method) reply: \(error)"
+            handoffTermination(.protocolViolation(message))
+            await pending.promise.fulfill(
+                .failure(WebInspectorProxyError.protocolViolation(message))
+            )
+            return
+        }
         await pending.promise.fulfill(
             .success(result)
         )
@@ -2101,6 +2640,18 @@ package actor ConnectionCore {
                 ownership.purpose == pending.purpose,
                 "A capability reply purpose does not match its operation owner."
             )
+        case let .modelBootstrap(_, _, _, _, operationID):
+            guard let ownership = modelBootstrapTasks[operationID]?.pendingReplyOwnership else {
+                preconditionFailure("A model bootstrap reply has no task owner.")
+            }
+            precondition(
+                ownership.key == key,
+                "A model bootstrap reply key does not match its task owner."
+            )
+            precondition(
+                ownership.purpose == pending.purpose,
+                "A model bootstrap reply purpose does not match its task owner."
+            )
         }
     }
 
@@ -2111,7 +2662,7 @@ package actor ConnectionCore {
     private func processSuccessfulReply(
         _ result: ProtocolCommand.Result,
         for pending: TransportSession.PendingReply
-    ) {
+    ) throws {
         switch pending.purpose {
         case .client:
             // Client replies have no internal publication side effect.
@@ -2124,7 +2675,92 @@ package actor ConnectionCore {
                 generation: generation,
                 operationID: operationID
             )
+        case let .modelBootstrap(
+            feedID,
+            generation,
+            targetID,
+            documentEpoch,
+            operationID
+        ):
+            try publishDOMBootstrapSnapshotIfCurrent(
+                result,
+                feedID: feedID,
+                generation: generation,
+                targetID: targetID,
+                documentEpoch: documentEpoch,
+                operationID: operationID
+            )
         }
+    }
+
+    private func publishDOMBootstrapSnapshotIfCurrent(
+        _ result: ProtocolCommand.Result,
+        feedID: ConnectionModelFeedID,
+        generation: WebInspectorPage.Generation,
+        targetID: ProtocolTarget.ID,
+        documentEpoch: ModelDocumentEpoch,
+        operationID: UInt64
+    ) throws {
+        guard var registration = modelFeed,
+              registration.id == feedID,
+              var bootstrap = registration.domBootstrap,
+              bootstrap.generation == generation,
+              var active = bootstrap.activeOperation,
+              active.id == operationID,
+              active.targetID == targetID,
+              active.documentEpoch == documentEpoch else {
+            // A superseded binding no longer owns this operation. Its task
+            // completion is ignored by the same generation/operation guards.
+            return
+        }
+
+        guard generation == currentPageGeneration,
+              modelDocumentEpoch(for: targetID) == documentEpoch,
+              let targetState = bootstrap.targetsByID[targetID],
+              let physicalRecord = targetRegistry.target(for: targetID),
+              targetRegistry.isCurrentPageModelTarget(physicalRecord) else {
+            // Superseded generation, membership, target, or document replies
+            // are normal stale results and cannot publish into current state.
+            active.replyDisposition = .stale
+            bootstrap.activeOperation = active
+            registration.domBootstrap = bootstrap
+            modelFeed = registration
+            return
+        }
+        precondition(
+            result.targetID == targetID,
+            "A DOM bootstrap reply does not belong to its physical target."
+        )
+        let document = try JSONDecoder()
+            .decode(ProtocolDOMDocumentResult.self, from: result.resultData)
+            .proxyRoot()
+        let projectedDocument = ConnectionEventProjection.projectedDOMBootstrapNode(
+            document,
+            target: targetState.target
+        )
+        guard enqueueModelFeedRecord(
+            .bootstrapSnapshot(
+                generation: generation,
+                domain: .dom,
+                sequence: result.receivedSequence,
+                payload: .domDocument(
+                    target: targetState.target,
+                    documentEpoch: documentEpoch,
+                    root: projectedDocument
+                )
+            )
+        ) else {
+            active.replyDisposition = .terminal
+            bootstrap.activeOperation = active
+            registration.domBootstrap = bootstrap
+            modelFeed = registration
+            return
+        }
+        bootstrap.targetsByID[targetID]?.completedEpoch = documentEpoch
+        active.replyDisposition = .published
+        bootstrap.activeOperation = active
+        registration.domBootstrap = bootstrap
+        modelFeed = registration
     }
 
     private func publishModelReplayCompletionIfNeeded(
@@ -2154,6 +2790,10 @@ package actor ConnectionCore {
         guard let registration = modelFeed else {
             return
         }
+        guard let synchronization = registration.synchronization,
+              synchronization.generation == generation else {
+            return
+        }
         let replayDomains = ModelDomain.ordered(registration.configuredDomains).filter { domain in
             domain.replayCapability == key.domain
                 && capability.desiredLeaseOwners.contains(.modelFeed(registration.id, domain))
@@ -2175,6 +2815,10 @@ package actor ConnectionCore {
         )
 
         for domain in replayDomains {
+            precondition(
+                !synchronization.completedDomains.contains(domain),
+                "A model feed received duplicate replay completion in one binding generation."
+            )
             guard enqueueModelFeedRecord(
                 .replayComplete(
                     generation: generation,
@@ -2184,6 +2828,9 @@ package actor ConnectionCore {
             ) else {
                 // enqueueModelFeedRecord synchronously claims terminal
                 // ownership for overflow or a terminated consumer.
+                return
+            }
+            guard completeModelDomain(domain, generation: generation) else {
                 return
             }
         }
@@ -2301,6 +2948,7 @@ package actor ConnectionCore {
                 sequence: eventSequence
             )
         }
+        reconcileDOMBootstrapTargets()
         guard isOpen else {
             return RootEventMutation()
         }
@@ -2342,6 +2990,7 @@ package actor ConnectionCore {
             targetRegistry.isCurrentPageModelTarget
         ) ?? false
         targetRegistry.removeTarget(targetID)
+        modelDocumentEpochs.removeValue(forKey: targetID)
         modelTargetMutationActionForTesting?()
         let capabilityWaiters = physicalTargetDidDisappear(targetID)
         let pendingReplies = replyStore.removeTargetReplies(for: targetID)
@@ -2360,6 +3009,7 @@ package actor ConnectionCore {
                 sequence: eventSequence
             )
         }
+        reconcileDOMBootstrapTargets()
         return RootEventMutation(
             bindingEffects: bindingEffects,
             physicalTargetWaiters: capabilityWaiters,
@@ -2403,6 +3053,8 @@ package actor ConnectionCore {
                 sequence: eventSequence
             )
         }
+        modelDocumentEpochs.removeValue(forKey: oldTargetID)
+        reconcileDOMBootstrapTargets()
         guard isOpen else {
             return RootEventMutation()
         }
@@ -2423,6 +3075,10 @@ package actor ConnectionCore {
             return CurrentPageBindingChangeEffects()
         }
 
+        let obsoleteBootstrapTasks = cancelModelBootstrapTasks(
+            generation: currentPageGeneration
+        )
+
         if oldTargetID == nil,
            newTargetID != nil,
            currentPageBindingGapIsOpen {
@@ -2439,7 +3095,8 @@ package actor ConnectionCore {
             }
             return CurrentPageBindingChangeEffects(
                 capabilityKeysToReconcile: keys,
-                releaseWaiters: []
+                releaseWaiters: [],
+                modelBootstrapTasksToAwait: obsoleteBootstrapTasks
             )
         }
 
@@ -2469,13 +3126,17 @@ package actor ConnectionCore {
 
         return CurrentPageBindingChangeEffects(
             capabilityKeysToReconcile: newTargetID == nil ? [] : keys,
-            releaseWaiters: releaseWaiters
+            releaseWaiters: releaseWaiters,
+            modelBootstrapTasksToAwait: obsoleteBootstrapTasks
         )
     }
 
     private func completeCurrentPageBindingChange(
         _ effects: CurrentPageBindingChangeEffects
     ) async {
+        for task in effects.modelBootstrapTasksToAwait {
+            await task.value
+        }
         for key in effects.capabilityKeysToReconcile {
             await reconcileCapability(for: key)
             if !isOpen {
@@ -2485,6 +3146,21 @@ package actor ConnectionCore {
         for waiter in effects.releaseWaiters {
             await waiter.fulfill(.success(()))
         }
+    }
+
+    private func cancelModelBootstrapTasks(
+        generation: WebInspectorPage.Generation
+    ) -> [Task<Void, Never>] {
+        guard let feedID = modelFeed?.id else {
+            return []
+        }
+        let tasks = modelBootstrapTasks.values.filter {
+            $0.feedID == feedID && $0.generation == generation
+        }.map(\.task)
+        for task in tasks {
+            task.cancel()
+        }
+        return tasks
     }
 
     private func completeRootEventMutation(
@@ -2514,6 +3190,8 @@ package actor ConnectionCore {
         if registration.targetSnapshotThrough != nil {
             registration.targetSnapshotThrough = nil
             registration.resetGeneration = currentPageGeneration
+            registration.synchronization = nil
+            registration.domBootstrap = nil
             modelFeed = registration
             guard enqueueModelFeedRecord(.reset(currentPageGeneration)) else {
                 return
@@ -2791,6 +3469,10 @@ package actor ConnectionCore {
             paramsData: paramsData,
             destroyedCurrentMainPageTarget: destroyedCurrentMainPageTarget
         )
+        // WebKit invalidates every bound node identifier before emitting
+        // documentUpdated. Advance the target epoch before this event can be
+        // projected into the ordered model feed.
+        prepareDOMDocumentUpdateForModelFeed(envelope)
         if let eventDomain = webInspectorEventDomain(for: domain) {
             var terminalViolation: String?
             let targetSnapshot = snapshot()
@@ -2880,6 +3562,7 @@ package actor ConnectionCore {
             )
             return nil
         }
+        startNextDOMBootstrapIfNeeded()
         guard isOpen else {
             return nil
         }
@@ -3222,6 +3905,11 @@ package actor ConnectionCore {
         for task in runningCapabilityTasks {
             task.cancel()
         }
+        let runningModelBootstrapTasks = modelBootstrapTasks.values.map(\.task)
+        modelBootstrapTasks.removeAll()
+        for task in runningModelBootstrapTasks {
+            task.cancel()
+        }
         let eventScopeWaiters = eventScopeRegistrationWaiters
         eventScopeRegistrationWaiters.removeAll()
         for waiter in eventScopeWaiters {
@@ -3243,6 +3931,7 @@ package actor ConnectionCore {
             activationWaiters: activationWaiters,
             releaseWaiters: releaseWaiters,
             capabilityTasks: runningCapabilityTasks,
+            modelBootstrapTasks: runningModelBootstrapTasks,
             closeAction: closeAction
         )
     }

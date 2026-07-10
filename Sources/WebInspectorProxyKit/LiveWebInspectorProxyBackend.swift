@@ -673,8 +673,8 @@ private enum LiveProxyCommandDecoder {
             return () as! Result
         }
         if Result.self == DOM.Node.self {
-            let payload = try decode(DocumentResult.self, from: result.resultData)
-            return try payload.root.proxyNode() as! Result
+            let payload = try decode(ProtocolDOMDocumentResult.self, from: result.resultData)
+            return try payload.proxyRoot() as! Result
         }
         if Result.self == DOM.Node.ID.self {
             let payload = try decode(RequestNodeResult.self, from: result.resultData)
@@ -745,10 +745,6 @@ private enum LiveProxyCommandDecoder {
 
     private static func decode<Payload: Decodable>(_ type: Payload.Type, from data: Data) throws -> Payload {
         try JSONDecoder().decode(type, from: data)
-    }
-
-    private struct DocumentResult: Decodable {
-        var root: ProtocolDOMNodePayload
     }
 
     private struct RequestNodeResult: Decodable {

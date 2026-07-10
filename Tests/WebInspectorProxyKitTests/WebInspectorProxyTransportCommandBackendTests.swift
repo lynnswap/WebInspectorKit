@@ -4155,6 +4155,9 @@ private func requireCapabilityReplyPurpose(
     case .client:
         Issue.record("Expected a capability reply purpose.")
         return 0
+    case .modelBootstrap:
+        Issue.record("Expected a capability reply purpose.")
+        return 0
     case let .capability(key, generation, operationID):
         #expect(key.route == .currentPage)
         #expect(key.targetID == .currentPage)

@@ -1,5 +1,13 @@
 import Foundation
 
+struct ProtocolDOMDocumentResult: Decodable {
+    let root: ProtocolDOMNodePayload
+
+    func proxyRoot() throws -> DOM.Node {
+        try root.proxyNode()
+    }
+}
+
 final class ProtocolDOMNodePayload: Decodable {
     var nodeId: String
     var nodeType: Int

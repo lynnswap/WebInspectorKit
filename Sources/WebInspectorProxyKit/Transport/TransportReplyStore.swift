@@ -9,6 +9,13 @@ extension TransportSession {
                 generation: WebInspectorPage.Generation,
                 operationID: UInt64
             )
+            case modelBootstrap(
+                feedID: ConnectionModelFeedID,
+                generation: WebInspectorPage.Generation,
+                targetID: ProtocolTarget.ID,
+                documentEpoch: ModelDocumentEpoch,
+                operationID: UInt64
+            )
         }
 
         let purpose: Purpose
@@ -65,6 +72,29 @@ extension TransportSession {
                 ),
                 domain: domain,
                 method: method,
+                targetID: targetID,
+                promise: promise
+            )
+        }
+
+        static func modelBootstrap(
+            targetID: ProtocolTarget.ID,
+            promise: ReplyPromise<ProtocolCommand.Result>,
+            feedID: ConnectionModelFeedID,
+            generation: WebInspectorPage.Generation,
+            documentEpoch: ModelDocumentEpoch,
+            operationID: UInt64
+        ) -> PendingReply {
+            PendingReply(
+                purpose: .modelBootstrap(
+                    feedID: feedID,
+                    generation: generation,
+                    targetID: targetID,
+                    documentEpoch: documentEpoch,
+                    operationID: operationID
+                ),
+                domain: .dom,
+                method: "DOM.getDocument",
                 targetID: targetID,
                 promise: promise
             )

@@ -22,6 +22,17 @@ package enum ModelDomain: Hashable, Sendable {
         acquisitionOrder.filter(domains.contains)
     }
 
+    static func normalized(
+        _ domains: Set<ModelDomain>
+    ) -> Set<ModelDomain> {
+        guard domains.contains(.css) else {
+            return domains
+        }
+        var normalizedDomains = domains
+        normalizedDomains.insert(.dom)
+        return normalizedDomains
+    }
+
     var capabilityDependencies: [WebInspectorProxyEventDomain] {
         switch self {
         case .dom:
