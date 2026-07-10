@@ -9,18 +9,31 @@ package final class TransportReceiver: Sendable {
         weak var value: ConnectionCore?
     }
 
+    private struct QueuedMessage: Sendable {
+        let ordinal: UInt64
+        let payload: String
+    }
+
+    private struct DrainWaiter: Sendable {
+        let through: UInt64
+        let continuation: CheckedContinuation<Void, Never>
+    }
+
     private struct State: Sendable {
         var core = WeakCore()
-        var messages: [String] = []
+        var messages: [QueuedMessage] = []
         var messageStartIndex = 0
         var isDraining = false
         var generation: UInt64 = 0
+        var tailOrdinal: UInt64 = 0
+        var completedOrdinal: UInt64 = 0
+        var drainWaiters: [DrainWaiter] = []
         var isClosed = false
         var closeWaiters: [CheckedContinuation<Void, Never>] = []
     }
 
     private enum DrainStep: Sendable {
-        case deliver(core: ConnectionCore, message: String)
+        case deliver(core: ConnectionCore, message: QueuedMessage)
         case stop(closeWaiters: [CheckedContinuation<Void, Never>])
     }
 
@@ -54,7 +67,9 @@ package final class TransportReceiver: Sendable {
             guard !$0.isClosed else {
                 return nil as UInt64?
             }
-            $0.messages.append(message)
+            precondition($0.tailOrdinal < UInt64.max, "TransportReceiver exhausted its message ordinal space.")
+            $0.tailOrdinal += 1
+            $0.messages.append(QueuedMessage(ordinal: $0.tailOrdinal, payload: message))
             guard $0.core.value != nil else {
                 return nil
             }
@@ -73,17 +88,55 @@ package final class TransportReceiver: Sendable {
         }
     }
 
+    /// Returns the ordinal of the newest message accepted by this receiver.
+    ///
+    /// A caller can snapshot this value and then await exactly that prefix
+    /// without waiting for messages that arrive later on the live connection.
+    package func tailOrdinal() -> UInt64 {
+        state.withLock { $0.tailOrdinal }
+    }
+
+    /// Suspends until `ConnectionCore` has completed every accepted message
+    /// through `ordinal`, or until the receiver closes.
+    package func waitUntilDrained(through ordinal: UInt64) async {
+        await withCheckedContinuation { continuation in
+            let shouldResume = state.withLock { state in
+                precondition(
+                    ordinal <= state.tailOrdinal,
+                    "Cannot wait for a TransportReceiver ordinal that has not been accepted."
+                )
+                guard !state.isClosed, state.completedOrdinal < ordinal else {
+                    return true
+                }
+                state.drainWaiters.append(
+                    DrainWaiter(through: ordinal, continuation: continuation)
+                )
+                return false
+            }
+            if shouldResume {
+                continuation.resume()
+            }
+        }
+    }
+
     package func close() async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             let readyWaiters = state.withLock { state in
-                Self.seal(&state)
+                let drainWaiters = Self.seal(&state)
                 guard state.isDraining else {
-                    return [continuation]
+                    return (
+                        close: [continuation],
+                        drain: drainWaiters
+                    )
                 }
                 state.closeWaiters.append(continuation)
-                return []
+                return (
+                    close: [] as [CheckedContinuation<Void, Never>],
+                    drain: drainWaiters
+                )
             }
-            Self.resume(readyWaiters)
+            Self.resume(readyWaiters.close)
+            Self.resumeDrainWaiters(readyWaiters.drain)
         }
     }
 
@@ -93,10 +146,14 @@ package final class TransportReceiver: Sendable {
     /// active drain before detaching the native frontend.
     package func closeSynchronously() {
         let readyWaiters = state.withLock { state in
-            Self.seal(&state)
-            return Self.takeCloseWaitersIfQuiescent(from: &state)
+            let drainWaiters = Self.seal(&state)
+            return (
+                close: Self.takeCloseWaitersIfQuiescent(from: &state),
+                drain: drainWaiters
+            )
         }
-        Self.resume(readyWaiters)
+        Self.resume(readyWaiters.close)
+        Self.resumeDrainWaiters(readyWaiters.drain)
     }
 
     package func closeWaiterCountForTesting() -> Int {
@@ -107,16 +164,22 @@ package final class TransportReceiver: Sendable {
     package func fail(_ message: String) -> Task<Void, Never>? {
         let result: (
             core: ConnectionCore?,
-            readyWaiters: [CheckedContinuation<Void, Never>]
+            readyCloseWaiters: [CheckedContinuation<Void, Never>],
+            readyDrainWaiters: [DrainWaiter]
         ) = state.withLock { state in
             guard !state.isClosed else {
-                return (nil, [])
+                return (nil, [], [])
             }
             let core = state.core.value
-            Self.seal(&state)
-            return (core, Self.takeCloseWaitersIfQuiescent(from: &state))
+            let drainWaiters = Self.seal(&state)
+            return (
+                core,
+                Self.takeCloseWaitersIfQuiescent(from: &state),
+                drainWaiters
+            )
         }
-        Self.resume(result.readyWaiters)
+        Self.resume(result.readyCloseWaiters)
+        Self.resumeDrainWaiters(result.readyDrainWaiters)
         guard let core = result.core else {
             return nil
         }
@@ -127,7 +190,8 @@ package final class TransportReceiver: Sendable {
         while true {
             switch nextDrainStep(generation: generation) {
             case let .deliver(core, message):
-                await core.receiveRootMessage(message)
+                await core.receiveRootMessage(message.payload)
+                complete(message.ordinal)
             case let .stop(closeWaiters):
                 Self.resume(closeWaiters)
                 return
@@ -159,15 +223,46 @@ package final class TransportReceiver: Sendable {
         }
     }
 
-    private static func seal(_ state: inout State) {
+    private func complete(_ ordinal: UInt64) {
+        let readyWaiters = state.withLock { state in
+            precondition(
+                ordinal == state.completedOrdinal &+ 1,
+                "TransportReceiver completed messages outside FIFO order."
+            )
+            state.completedOrdinal = ordinal
+            return Self.takeReadyDrainWaiters(from: &state)
+        }
+        Self.resumeDrainWaiters(readyWaiters)
+    }
+
+    private static func seal(_ state: inout State) -> [DrainWaiter] {
         guard !state.isClosed else {
-            return
+            return []
         }
         state.isClosed = true
         state.generation &+= 1
         state.core.value = nil
         state.messages.removeAll(keepingCapacity: false)
         state.messageStartIndex = 0
+        let drainWaiters = state.drainWaiters
+        state.drainWaiters.removeAll(keepingCapacity: false)
+        return drainWaiters
+    }
+
+    private static func takeReadyDrainWaiters(
+        from state: inout State
+    ) -> [DrainWaiter] {
+        var pending: [DrainWaiter] = []
+        var ready: [DrainWaiter] = []
+        for waiter in state.drainWaiters {
+            if waiter.through <= state.completedOrdinal {
+                ready.append(waiter)
+            } else {
+                pending.append(waiter)
+            }
+        }
+        state.drainWaiters = pending
+        return ready
     }
 
     private static func takeCloseWaitersIfQuiescent(
@@ -184,6 +279,12 @@ package final class TransportReceiver: Sendable {
     private static func resume(_ waiters: [CheckedContinuation<Void, Never>]) {
         for waiter in waiters {
             waiter.resume()
+        }
+    }
+
+    private static func resumeDrainWaiters(_ waiters: [DrainWaiter]) {
+        for waiter in waiters {
+            waiter.continuation.resume()
         }
     }
 

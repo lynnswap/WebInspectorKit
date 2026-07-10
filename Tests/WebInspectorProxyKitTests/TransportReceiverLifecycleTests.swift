@@ -1,7 +1,98 @@
+import Dispatch
 import Foundation
 import Testing
 import WebInspectorTestSupport
 @testable import WebInspectorProxyKit
+
+@MainActor
+@Test
+func nativeInitialTargetDiscoveryAwaitsMainQueueCallbacksAndCoreDrain() async throws {
+    let parser = ControlledMessageParser(blockingInvocation: 1)
+    let graph = ReceiverCoreGraph(parser: parser.parse)
+    let completion = ReceiverCompletionProbe()
+
+    DispatchQueue.main.async {
+        graph.receiver.receive(pageTargetCreatedMessage(id: "initial-page"))
+    }
+    let discoveryTask = Task { @MainActor in
+        try await NativeConnectionCoreFactory.awaitInitialTargetDiscovery(
+            receiver: graph.receiver,
+            core: graph.core
+        )
+        await completion.finish()
+    }
+
+    await parser.waitUntilBlocked()
+    #expect(await completion.isFinished == false)
+    #expect(await graph.core.snapshot().targetsByID.isEmpty)
+
+    await parser.release()
+    try await discoveryTask.value
+
+    #expect(await completion.isFinished)
+    #expect(await graph.core.snapshot().currentMainPageTargetID == ProtocolTarget.ID("initial-page"))
+    await graph.core.close()
+}
+
+@Test
+func receiverDrainWatermarkDoesNotWaitForNewerLiveMessages() async {
+    let parser = ControlledMessageParser(blockingInvocation: 2)
+    let graph = ReceiverCoreGraph(parser: parser.parse)
+
+    graph.receiver.receive(pageTargetCreatedMessage(id: "initial-page"))
+    let initialTail = graph.receiver.tailOrdinal()
+    await graph.receiver.waitUntilDrained(through: initialTail)
+
+    graph.receiver.receive(pageTargetCreatedMessage(id: "live-page"))
+    await parser.waitUntilBlocked()
+    let liveTail = graph.receiver.tailOrdinal()
+    #expect(liveTail > initialTail)
+
+    let initialWaitCompletion = ReceiverCompletionProbe()
+    let initialWait = Task {
+        await graph.receiver.waitUntilDrained(through: initialTail)
+        await initialWaitCompletion.finish()
+    }
+    await initialWaitCompletion.waitUntilFinished()
+
+    #expect(await graph.core.snapshot().targetsByID[ProtocolTarget.ID("live-page")] == nil)
+    await parser.release()
+    await graph.receiver.waitUntilDrained(through: liveTail)
+    await initialWait.value
+    #expect(await graph.core.snapshot().targetsByID[ProtocolTarget.ID("live-page")] != nil)
+    await graph.core.close()
+}
+
+@MainActor
+@Test
+func nativeInitialTargetDiscoveryFailsWhenCloseInterruptsItsDrain() async {
+    let parser = ControlledMessageParser(blockingInvocation: 1)
+    let graph = ReceiverCoreGraph(parser: parser.parse)
+
+    DispatchQueue.main.async {
+        graph.receiver.receive(pageTargetCreatedMessage(id: "never-ready"))
+    }
+    let discoveryTask = Task { @MainActor in
+        try await NativeConnectionCoreFactory.awaitInitialTargetDiscovery(
+            receiver: graph.receiver,
+            core: graph.core
+        )
+    }
+
+    await parser.waitUntilBlocked()
+    let closeTask = Task {
+        await graph.core.close()
+    }
+    await waitForReceiverCloseWaiterCount(1, receiver: graph.receiver)
+
+    await #expect(throws: TransportSession.Error.transportClosed) {
+        try await discoveryTask.value
+    }
+
+    await parser.release()
+    await closeTask.value
+    #expect(await graph.core.snapshot().targetsByID.isEmpty)
+}
 
 @Test
 func receiverCloseWaitsForRootParseAndPreventsPostCloseMutation() async {

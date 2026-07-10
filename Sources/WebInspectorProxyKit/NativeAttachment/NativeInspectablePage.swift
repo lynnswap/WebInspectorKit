@@ -1,3 +1,4 @@
+import Dispatch
 import WebKit
 import WebInspectorNativeBridge
 
@@ -58,6 +59,10 @@ package enum NativeConnectionCoreFactory {
             receiver.setCore(createdCore)
 
             try backend.attach()
+            try await awaitInitialTargetDiscovery(
+                receiver: receiver,
+                core: createdCore
+            )
 
             return createdCore
         } catch {
@@ -71,6 +76,28 @@ package enum NativeConnectionCoreFactory {
             }
             throw error
         }
+    }
+
+    /// Waits for the initial target messages queued by WebKit while attaching.
+    ///
+    /// `connectFrontend` synchronously enumerates targets but delivers its
+    /// frontend callbacks through the main queue. The queue barrier observes
+    /// the complete initial callback prefix. The receiver ordinal then waits
+    /// for exactly that prefix to finish mutating `ConnectionCore`; later live
+    /// messages do not extend this attachment barrier.
+    @MainActor
+    package static func awaitInitialTargetDiscovery(
+        receiver: TransportReceiver,
+        core: ConnectionCore
+    ) async throws {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async {
+                continuation.resume()
+            }
+        }
+        let initialTailOrdinal = receiver.tailOrdinal()
+        await receiver.waitUntilDrained(through: initialTailOrdinal)
+        try await core.requireOpen()
     }
 }
 
