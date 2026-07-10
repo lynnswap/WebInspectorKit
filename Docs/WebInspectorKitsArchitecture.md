@@ -155,13 +155,15 @@ External source evidence was read at fixed local revisions:
   for the language-level lifecycle contract.
 
 Local Swift 6.3.3 probes were compiled through SIL with strict concurrency, not
-only type-checked. They prove that a non-Sendable context stored by one actor is
-rejected when sent to another; `nonisolated(nonsending)` async methods preserve
-the caller executor; a detached feed task with weak actor/context edges
-deallocates its owner; and a fully checked actor bridge cannot transfer the weak
-non-Sendable context back to an arbitrary runtime actor. The last limitation is
-why the design permits one narrow private unchecked weak bridge and no other
-unchecked model ownership.
+only type-checked. They prove that `WebInspectorModelContext` cannot satisfy a
+`Sendable` requirement; `nonisolated(nonsending)` async methods preserve the
+caller executor; a detached feed task with weak actor/context edges deallocates
+its owner; and a fully checked actor bridge cannot transfer the weak
+non-Sendable context back to an arbitrary runtime actor. Swift's region rules
+cannot reject every deliberate escape hidden behind an actor method, so the
+single delivery bridge also preconditions the actor executor bound at attach.
+This is why the design permits one narrow private unchecked weak bridge and no
+other unchecked model ownership.
 
 ## Findings and Broken Invariants
 
@@ -1828,6 +1830,37 @@ let analyzer = NetworkAnalyzer()
 try await analyzer.attach(to: proxy)
 ```
 
+### DataKit testing scenarios
+
+`WebInspectorDataKitTesting` owns only the model-level scenario that a DataKit
+consumer needs. It composes `WebInspectorProxyTestRuntime`; it does not inject
+model records, sequence numbers, generations, snapshots, or semantic store
+state.
+
+```swift
+let runtime = try await WebInspectorDataKitTestRuntime.start(
+    scenario: .init(
+        configuration: .init(domains: [.dom, .network]),
+        document: .init(children: [
+            .element(id: "button", name: "button")
+        ]),
+        networkReplay: [
+            .init(id: "request-1", url: "https://example.test/")
+        ]
+    )
+)
+
+let selected = try await runtime.selectElementWithPicker(nodeID: "button")
+try await runtime.replacePage(with: .init())
+await runtime.close()
+```
+
+The scenario driver replies to the configured domain bootstrap, emits replay
+before the matching enable reply, and fails unknown commands immediately. Raw
+wire tests remain in ProxyKitTesting; DataKitTesting is the ready-model consumer
+contract. The runtime and model inherit the actor supplied to `start`, while
+fixture values are Sendable.
+
 ## Isolation and Deterministic Teardown
 
 The platform floor is iOS 18.4 and macOS 15.4 in the root package, the native
@@ -2133,8 +2166,10 @@ Tests are added before each owner is replaced. Required cases:
     loading, remains covered.
 36. The same public model API runs on MainActor and on a custom actor; feed
     application and Observation callbacks execute on the owning actor. A strict
-    concurrency compile-fail fixture proves that a context, identity, or result
-    cannot cross to another actor, while its Sendable snapshots and deltas can.
+    concurrency compile-fail fixture proves that the context cannot satisfy a
+    `Sendable` requirement, while its Sendable snapshots and deltas can cross
+    actors. The delivery bridge preconditions the bound executor at runtime for
+    deliberate escapes the region checker cannot reject.
 
 Validation gates:
 

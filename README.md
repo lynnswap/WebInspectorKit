@@ -32,6 +32,7 @@ UIKit Web Inspector for `WKWebView`.
 | --- | --- |
 | `WebInspectorKit` | You want the built-in UIKit inspector UI. |
 | `WebInspectorDataKit` | You want observable DOM, Network, Console, Runtime, and CSS models for a custom UI. |
+| `WebInspectorDataKitTesting` | You want a ready DataKit model scenario with replay, picker, replacement, and failure controls. |
 | `WebInspectorProxyKit` | You want typed Web Inspector protocol commands and events directly over an inspected `WKWebView`. |
 | `WebInspectorProxyKitTesting` | You want to drive ProxyKit's production connection path from a concrete raw WebKit peer in tests. |
 
@@ -120,6 +121,31 @@ the peer's target lifecycle and event methods when a test needs inbound WebKit
 traffic. The testing product does not provide a semantic backend or synthetic
 model-state injection path.
 
+## Testing DataKit Models
+
+`WebInspectorDataKitTesting` composes the raw peer into model-level scenarios.
+It answers only the protocol bootstrap owned by the scenario; replay and target
+replacement still traverse ProxyKit's production connection core:
+
+```swift
+import WebInspectorDataKitTesting
+
+let runtime = try await WebInspectorDataKitTestRuntime.start(
+    scenario: .init(
+        document: .init(children: [
+            .element(id: "button", name: "button")
+        ]),
+        networkReplay: [
+            .init(id: "initial-request", url: "https://example.test/")
+        ]
+    )
+)
+
+let selected = try await runtime.selectElementWithPicker(nodeID: "button")
+precondition(selected.localName == "button")
+await runtime.close()
+```
+
 ## Documentation
 
 The DocC workflow publishes [package documentation](https://lynnswap.github.io/WebInspectorKit/documentation/)
@@ -137,6 +163,7 @@ to GitHub Pages.
 Sources/
   WebInspectorKit/             Public built-in inspector product.
   WebInspectorDataKit/         Observable inspector model product.
+  WebInspectorDataKitTesting/  Ready production-path DataKit test scenarios.
   WebInspectorProxyKit/        Typed protocol proxy product.
   WebInspectorProxyKitTesting/ Production-path raw peer test runtime.
   WebInspectorUI*/             Internal UIKit implementation targets.

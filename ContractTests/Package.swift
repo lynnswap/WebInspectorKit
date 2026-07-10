@@ -29,6 +29,7 @@ let package = Package(
             name: "WebInspectorConsumerContractTests",
             dependencies: [
                 .product(name: "WebInspectorDataKit", package: "WebInspectorKit"),
+                .product(name: "WebInspectorDataKitTesting", package: "WebInspectorKit"),
                 .product(name: "WebInspectorProxyKit", package: "WebInspectorKit"),
                 .product(name: "WebInspectorProxyKitTesting", package: "WebInspectorKit"),
                 .product(

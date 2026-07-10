@@ -137,6 +137,33 @@ Apply these mappings to other tests:
   production core derive event sequence, generation, replay, and snapshot
   boundaries.
 
+### Use ready DataKit test scenarios for model-level tests
+
+Tests whose subject is a DataKit model no longer need to consume and reply to
+unrelated startup commands. Add the `WebInspectorDataKitTesting` product and
+start an actor-confined, ready context:
+
+```swift
+let runtime = try await WebInspectorDataKitTestRuntime.start(
+    scenario: .init(
+        configuration: .init(domains: [.dom, .network]),
+        document: .init(children: [
+            .element(id: "result", name: "article")
+        ]),
+        networkReplay: [
+            .init(id: "request-1", url: "https://example.test/result")
+        ]
+    )
+)
+
+let model = runtime.model // already attached and replay is applied
+try await runtime.replacePage(with: .init())
+await runtime.close()
+```
+
+Use `WebInspectorProxyKitTesting` directly when the wire command, raw JSON,
+target registry, or exact reply ordering is the subject of the test.
+
 ## v0.2.0
 
 These notes apply when upgrading from `v0.1.5` or earlier to `v0.2.0`.
