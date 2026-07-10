@@ -166,14 +166,36 @@ public final class WebInspectorSession {
     }
 
     /// Disables transient page interaction without tearing down the connection.
-    package func suspendBackendInteraction() async {
+    package func suspendBackendInteraction() async throws {
         guard model.state == .attached else {
             return
         }
-        if (try? model.isElementPickerEnabled) == true {
-            try? await model.setElementPickerEnabled(false)
+        guard model.configuredDomains.contains(.dom) else {
+            return
         }
-        try? await model.hideDOMHighlight()
+
+        var pickerError: (any Error)?
+        if try model.isElementPickerEnabled {
+            do {
+                try await model.setElementPickerEnabled(false)
+            } catch {
+                pickerError = error
+            }
+        }
+        do {
+            try await model.hideDOMHighlight()
+        } catch {
+            if let pickerError {
+                throw WebInspectorScopeError(
+                    operationError: pickerError,
+                    cleanupError: error
+                )
+            }
+            throw error
+        }
+        if let pickerError {
+            throw pickerError
+        }
     }
 
     private func startPageUserInterfaceStyleObservation(

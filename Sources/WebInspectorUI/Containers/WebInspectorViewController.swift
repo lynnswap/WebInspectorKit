@@ -1,7 +1,13 @@
 #if canImport(UIKit)
+import OSLog
 import UIKit
 import WebKit
 import WebInspectorUIBase
+
+private let lifecycleLogger = Logger(
+    subsystem: "com.lynnswap.WebInspectorKit",
+    category: "WebInspectorUI.Lifecycle"
+)
 
 @MainActor
 private final class WebInspectorRootPresentationLifecycleCoordinator {
@@ -315,7 +321,13 @@ public final class WebInspectorViewController: UIViewController {
                 if automaticallyDetachesOnDismiss {
                     await session.detach()
                 } else {
-                    await session.suspendBackendInteraction()
+                    do {
+                        try await session.suspendBackendInteraction()
+                    } catch {
+                        lifecycleLogger.error(
+                            "Root presentation cleanup failed: \(String(describing: error), privacy: .public)"
+                        )
+                    }
                 }
             }
         }
