@@ -12,7 +12,6 @@ package final class ConsoleMessageStore {
     }
 
     package struct Effects {
-        package var removedMessages: [ConsoleMessage] = []
         package var runtimeObjectsToUnregister: [RuntimeObject] = []
         package var clearedAllMessages = false
         package var runtimeObjectGroupRelease: RuntimeObjectGroupRelease?
@@ -26,8 +25,6 @@ package final class ConsoleMessageStore {
         package var resultIdentityLookupCount = 0
     }
 #endif
-
-    package private(set) var collectionEpoch: UInt64
 
     private var messagesByID: [ConsoleMessage.ID: ConsoleMessage]
     private var orderedMessageIDs: [ConsoleMessage.ID]
@@ -44,7 +41,6 @@ package final class ConsoleMessageStore {
 #endif
 
     package init() {
-        collectionEpoch = 0
         messagesByID = [:]
         orderedMessageIDs = []
         orderIndicesByID = [:]
@@ -158,10 +154,9 @@ package final class ConsoleMessageStore {
         modelContext: WebInspectorContext,
         isolation: isolated (any Actor) = #isolation
     ) -> Effects {
-        let removedMessages = removeMessages(targetID: nil, isolation: isolation)
+        _ = removeMessages(targetID: nil, isolation: isolation)
         refreshAllResults(modelContext: modelContext, isolation: isolation)
         return Effects(
-            removedMessages: removedMessages,
             clearedAllMessages: true
         )
     }
@@ -190,7 +185,6 @@ package final class ConsoleMessageStore {
         if let targetID {
             lastMessageIDByTargetID[targetID] = id
         }
-        collectionEpoch &+= 1
         await notifyMessageInserted(message, modelContext: modelContext, isolation: isolation)
     }
 
@@ -201,7 +195,12 @@ package final class ConsoleMessageStore {
         modelContext: WebInspectorContext,
         isolation: isolated (any Actor)
     ) async {
-        let candidateID = targetID.flatMap { lastMessageIDByTargetID[$0] } ?? lastMessageID
+        let candidateID: ConsoleMessage.ID?
+        if let targetID {
+            candidateID = lastMessageIDByTargetID[targetID]
+        } else {
+            candidateID = lastMessageID
+        }
         guard let candidateID,
               let message = messagesByID[candidateID] else {
             skipEvent("Console.messageRepeatCountUpdated arrived before any tracked message")
@@ -225,7 +224,6 @@ package final class ConsoleMessageStore {
             )
         refreshAllResults(modelContext: modelContext, isolation: isolation)
         return Effects(
-            removedMessages: removedMessages,
             runtimeObjectsToUnregister: runtimeObjectsToUnregister,
             clearedAllMessages: targetID == nil,
             runtimeObjectGroupRelease: targetID.map(RuntimeObjectGroupRelease.target) ?? .currentPage
@@ -238,7 +236,6 @@ package final class ConsoleMessageStore {
         isolation: isolated (any Actor)
     ) -> [ConsoleMessage] {
         _ = isolation
-        collectionEpoch &+= 1
         queryIndexNeedsRebuild = true
         guard let targetID else {
             let removedMessages = Array(messagesByID.values)

@@ -4,7 +4,7 @@ import Testing
 import WebInspectorProxyKit
 
 private actor StoreIsolationProbe {
-    func exercise() async -> (networkCount: Int, consoleEpoch: UInt64) {
+    func exercise() async -> (networkCount: Int, consoleItemCount: Int) {
         let context = WebInspectorContext.preview(isolation: self)
         let networkStore = NetworkRequestStore()
         let networkID = Network.Request.ID("custom-actor-request")
@@ -25,6 +25,11 @@ private actor StoreIsolationProbe {
         )
 
         let consoleStore = ConsoleMessageStore()
+        let consoleResults = WebInspectorFetchedResults<ConsoleMessage>(
+            fetchDescriptor: WebInspectorFetchDescriptor(),
+            modelContext: context
+        )
+        consoleStore.register(consoleResults, modelContext: context, isolation: self)
         _ = await consoleStore.apply(
             .messageAdded(Console.Message(
                 source: Console.Source(rawValue: "console-api"),
@@ -36,7 +41,7 @@ private actor StoreIsolationProbe {
             registerRuntimeObject: { _ in fatalError("The fixture has no Runtime parameters.") },
             isolation: self
         )
-        return (networkStore.collectionState.requestCount, consoleStore.collectionEpoch)
+        return (networkStore.collectionState.requestCount, consoleResults.items.count)
     }
 }
 
@@ -45,7 +50,7 @@ func networkAndConsoleStoresFollowTheCallingActor() async {
     let values = await StoreIsolationProbe().exercise()
 
     #expect(values.networkCount == 1)
-    #expect(values.consoleEpoch == 1)
+    #expect(values.consoleItemCount == 1)
 }
 
 @MainActor
@@ -129,7 +134,7 @@ func consoleMessageIndexDrainsMutationsInSequenceOrder() async throws {
 
 @MainActor
 @Test
-func consoleMessageStoreOwnsTargetOrderEpochAndClearEffects() async throws {
+func consoleMessageStoreOwnsTargetOrderAndClearEffects() async throws {
     let context = WebInspectorContext.preview(isolation: MainActor.shared)
     let store = ConsoleMessageStore()
     let firstTargetID = WebInspectorTarget.ID("first-target")
@@ -158,8 +163,33 @@ func consoleMessageStoreOwnsTargetOrderEpochAndClearEffects() async throws {
         isolation: MainActor.shared
     )
     _ = await store.apply(
+        .messageAdded(Console.Message(
+            source: Console.Source(rawValue: "console-api"),
+            level: Console.Level(rawValue: "log"),
+            text: "page"
+        )),
+        targetID: nil,
+        modelContext: context,
+        registerRuntimeObject: { _ in fatalError("The fixture has no Runtime parameters.") },
+        isolation: MainActor.shared
+    )
+    _ = await store.apply(
         .messageRepeatCountUpdated(count: 3, timestamp: 4),
         targetID: firstTargetID,
+        modelContext: context,
+        registerRuntimeObject: { _ in fatalError("Repeat updates have no Runtime parameters.") },
+        isolation: MainActor.shared
+    )
+    _ = await store.apply(
+        .messageRepeatCountUpdated(count: 9, timestamp: 5),
+        targetID: WebInspectorTarget.ID("unknown-target"),
+        modelContext: context,
+        registerRuntimeObject: { _ in fatalError("Repeat updates have no Runtime parameters.") },
+        isolation: MainActor.shared
+    )
+    _ = await store.apply(
+        .messageRepeatCountUpdated(count: 4, timestamp: 6),
+        targetID: nil,
         modelContext: context,
         registerRuntimeObject: { _ in fatalError("Repeat updates have no Runtime parameters.") },
         isolation: MainActor.shared
@@ -170,9 +200,9 @@ func consoleMessageStoreOwnsTargetOrderEpochAndClearEffects() async throws {
         modelContext: context
     )
     store.register(results, modelContext: context, isolation: MainActor.shared)
-    #expect(results.items.map(\.text) == ["first", "second"])
-    #expect(results.items.first?.repeatCount == 3)
-    #expect(store.collectionEpoch == 2)
+    #expect(results.items.map(\.text) == ["first", "second", "page"])
+    #expect(results.items.map(\.repeatCount) == [3, 1, 4])
+    let firstMessageID = try #require(results.items.first?.id)
 
     let effects = await store.apply(
         .messagesCleared(reason: Console.ClearReason(rawValue: "console-api")),
@@ -182,11 +212,11 @@ func consoleMessageStoreOwnsTargetOrderEpochAndClearEffects() async throws {
         isolation: MainActor.shared
     )
 
-    #expect(effects.removedMessages.map(\.text) == ["first"])
     #expect(effects.clearedAllMessages == false)
     #expect(effects.runtimeObjectGroupRelease == .target(firstTargetID))
-    #expect(results.items.map(\.text) == ["second"])
-    #expect(store.collectionEpoch == 3)
+    #expect(results.items.map(\.text) == ["second", "page"])
+    let clearedMessage = store.message(for: firstMessageID, isolation: MainActor.shared)
+    #expect(clearedMessage == nil)
 }
 
 @MainActor
