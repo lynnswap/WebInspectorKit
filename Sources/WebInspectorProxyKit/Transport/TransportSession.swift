@@ -1882,7 +1882,7 @@ package actor ConnectionCore {
             var terminalViolation: String?
             let targetSnapshot = snapshot()
             let sinks = eventScopes.sinks(for: eventDomain).filter { sink in
-                LiveWebInspectorProxyBackend.shouldDeliver(
+                ConnectionEventProjection.shouldDeliver(
                     envelope,
                     to: sink.route,
                     in: targetSnapshot
@@ -1895,7 +1895,7 @@ package actor ConnectionCore {
                     _ = try LiveProxyEventDecoder.proxyEvent(
                         from: envelope,
                         targetID: targetID,
-                        lifecycleTarget: LiveWebInspectorProxyBackend.lifecycleTarget(
+                        lifecycleTarget: ConnectionEventProjection.lifecycleTarget(
                             for: envelope,
                             route: .currentPage,
                             targetID: targetID,
@@ -1917,14 +1917,14 @@ package actor ConnectionCore {
                         let decodedEvent = try LiveProxyEventDecoder.proxyEvent(
                             from: envelope,
                             targetID: sink.targetID,
-                            lifecycleTarget: LiveWebInspectorProxyBackend.lifecycleTarget(
+                            lifecycleTarget: ConnectionEventProjection.lifecycleTarget(
                                 for: envelope,
                                 route: sink.route,
                                 targetID: sink.targetID,
                                 in: targetSnapshot
                             )
                         )
-                        projectedEvent = LiveWebInspectorProxyBackend.projectedEvent(
+                        projectedEvent = ConnectionEventProjection.projectedEvent(
                             decodedEvent,
                             from: envelope,
                             route: sink.route,

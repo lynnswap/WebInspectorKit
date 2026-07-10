@@ -2338,6 +2338,99 @@ func structuredNetworkScopePreservesFrameScopedIdentifiers() async throws {
 }
 
 @Test
+func structuredRuntimeScopePreservesFrameScopedIdentifiers() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+
+    let scopeTask = Task {
+        try await proxy.page.runtime.withEvents { events in
+            var iterator = events.makeAsyncIterator()
+            _ = try await iterator.next()
+            return try await iterator.next()
+        }
+    }
+
+    let enable = try await waitForTargetMessage(backend, method: "Runtime.enable")
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("frame-target"),
+        method: "Runtime.executionContextCreated",
+        params: #"{"context":{"id":7,"name":"Frame","frameId":"child-frame","type":"normal"}}"#
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: enable.targetIdentifier,
+        messageID: try messageID(enable.message),
+        result: "{}"
+    )
+    let disable = try await waitForTargetMessage(backend, method: "Runtime.disable")
+    await receiveTargetReply(
+        transport,
+        targetID: disable.targetIdentifier,
+        messageID: try messageID(disable.message),
+        result: "{}"
+    )
+
+    guard case let .event(_, .executionContextCreated(context))? = try await throwingValue(of: scopeTask) else {
+        Issue.record("Expected a projected frame Runtime event.")
+        return
+    }
+    #expect(context.id.targetScopeRawValue == "frame-target")
+}
+
+@Test
+func structuredConsoleScopePreservesFrameScopedIdentifiers() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+
+    let scopeTask = Task {
+        try await proxy.page.console.withEvents { events in
+            var iterator = events.makeAsyncIterator()
+            _ = try await iterator.next()
+            return try await iterator.next()
+        }
+    }
+
+    let enable = try await waitForTargetMessage(backend, method: "Console.enable")
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("frame-target"),
+        method: "Console.messageAdded",
+        params: #"{"message":{"source":"javascript","level":"log","text":"frame","parameters":[{"objectId":"frame-object","type":"object"}],"networkRequestId":"frame-request"}}"#
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: enable.targetIdentifier,
+        messageID: try messageID(enable.message),
+        result: "{}"
+    )
+    let disable = try await waitForTargetMessage(backend, method: "Console.disable")
+    await receiveTargetReply(
+        transport,
+        targetID: disable.targetIdentifier,
+        messageID: try messageID(disable.message),
+        result: "{}"
+    )
+
+    guard case let .event(_, .messageAdded(message))? = try await throwingValue(of: scopeTask) else {
+        Issue.record("Expected a projected frame Console event.")
+        return
+    }
+    #expect(message.parameters.first?.id?.targetScopeRawValue == "frame-target")
+    #expect(message.networkRequestID?.targetScopeRawValue == "frame-target")
+}
+
+@Test
 func structuredNetworkScopesShareOneLeaseAndLateScopeIsFutureOnly() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
