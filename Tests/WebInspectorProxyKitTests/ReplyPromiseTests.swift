@@ -77,7 +77,7 @@ func replyPromiseUnresolvedWaitObservesPreexistingCancellation() async throws {
     let promise = ReplyPromise<Int>()
     let startGate = WebInspectorTestGate()
     let waiter = Task {
-        await startGate.wait()
+        await startGate.waiter.wait()
         return try await promise.value()
     }
 
@@ -95,7 +95,7 @@ func replyPromiseCleanupWaitIgnoresCallerCancellationUntilTerminal() async throw
     let promise = ReplyPromise<Int>()
     let startGate = WebInspectorTestGate()
     let waiter = Task {
-        await startGate.wait()
+        await startGate.waiter.wait()
         return try await promise.valueIgnoringCancellation()
     }
 
@@ -136,7 +136,7 @@ func replyPromiseTerminalResultWinsCancellationAfterFulfillment() async throws {
     #expect(promise.fulfill(.success(47)))
 
     let waiter = Task {
-        await startGate.wait()
+        await startGate.waiter.wait()
         return try await promise.value()
     }
     waiter.cancel()
@@ -156,14 +156,14 @@ func replyPromiseCancellationAndFulfillmentRaceResumesExactlyOnce() async throws
         #expect(await waitForReplyPromiseWaiterCount(1, in: promise))
 
         let cancellation = Task {
-            await raceGate.wait()
+            await raceGate.waiter.wait()
             waiter.cancel()
         }
         let fulfillment = Task {
-            await raceGate.wait()
+            await raceGate.waiter.wait()
             return promise.fulfill(.success(value))
         }
-        await raceGate.open()
+        raceGate.open()
         await cancellation.value
         #expect(await fulfillment.value)
 
