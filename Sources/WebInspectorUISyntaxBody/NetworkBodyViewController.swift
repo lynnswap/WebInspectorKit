@@ -349,7 +349,7 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
 
     private func localizedDescription(for error: WebInspectorProxyError) -> String {
         switch error {
-        case .closed, .pageUnavailable, .staleIdentifier:
+        case .closed, .pageUnavailable, .staleIdentifier, .connectionInUse:
             String(localized: "network.body.fetch.error.unavailable", bundle: WebInspectorUILocalization.bundle)
         case .unsupported(let messages):
             messages.joined(separator: "\n")

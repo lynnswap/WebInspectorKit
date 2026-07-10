@@ -32,6 +32,9 @@ public enum WebInspectorProxyError: Error, Sendable, Equatable {
     /// A structured event subscriber could not retain another pending event.
     case eventBufferOverflow(capacity: Int)
 
+    /// Another exclusive consumer already owns this connection.
+    case connectionInUse
+
     /// The underlying inspector transport failed.
     case transportFailure(String)
 

@@ -548,12 +548,17 @@ new binding.
 
 DataKit does not infer readiness from the public stream. ProxyKit provides one
 package-level ordered model feed whose internal records carry transport sequence,
-page generation, domain, and a replay-complete boundary derived from the enable
-reply watermark:
+page generation, physical target identity, and explicit synchronization
+boundaries:
 
 ```swift
 package enum ConnectionModelFeedRecord: Sendable {
     case reset(WebInspectorPage.Generation)
+    case targetSnapshot(
+        generation: WebInspectorPage.Generation,
+        through: UInt64,
+        snapshot: ModelTargetSnapshot
+    )
     case event(
         generation: WebInspectorPage.Generation,
         sequence: UInt64,
@@ -581,12 +586,65 @@ package enum ConnectionModelFeedRecord: Sendable {
     )
 }
 
-package enum ModelProtocolEvent: Sendable { /* typed domain payloads */ }
-package enum ModelBootstrapSnapshot: Sendable { /* typed snapshots */ }
+package struct ModelTarget: Sendable {
+    let id: WebInspectorTarget.ID
+    let kind: WebInspectorTarget.Kind
+    let frameID: FrameID?
+    let parentFrameID: FrameID?
+}
+
+package struct ModelTargetSnapshot: Sendable {
+    let currentPageID: WebInspectorTarget.ID
+    let targets: [ModelTarget]
+}
+
+package enum ModelProtocolEvent: Sendable { /* physical target + typed payload */ }
+package enum ModelBootstrapSnapshot: Sendable { /* target + epoch + typed snapshot */ }
 package enum ModelDomain: Hashable, Sendable { /* configured domains */ }
 ```
 
-One DataKit feed consumer applies records serially. Reaching
+The initial transport slice implements the bounded exclusive feed, initial
+`reset`/`targetSnapshot`, future target lifecycle deltas, and future events for
+configured domains. For an empty configured-domain set it also emits
+`synchronizationComplete`. Capability leases, replay-complete boundaries, DOM
+bootstrap, configured-domain synchronization, and the full retarget sequence
+described below remain later slices; their record cases define the package
+contract but are not yet emitted. This distinction prevents schema availability
+from being mistaken for readiness behavior that the transport does not yet
+provide.
+
+The target snapshot contains the physical current page first, followed by its
+relevant committed frame targets in deterministic parent-before-child order.
+Its `through` watermark subsumes target lifecycle events at or before that
+sequence; every later lifecycle delta has a strictly greater sequence. If the
+feed opens while the page is unavailable, its reset reserves the generation
+that the next current-page binding will use. The later target snapshot and
+empty-domain synchronization record use that same generation and do not emit a
+duplicate same-sequence `targetCreated` delta.
+
+The feed is a bounded, oldest-first, single-consumer sequence. Overflow clears
+pending records and immediately poisons both the feed and connection; there is
+no silent drop, task relay, or unbounded default. Iterator cancellation or
+handle abandonment terminates that mailbox synchronously while retaining the
+exclusive connection claim. If the producer later attempts another enqueue to
+that terminated mailbox, that enqueue poisons the connection; an explicit
+`close()` before another enqueue remains a clean shutdown.
+Explicit `ConnectionModelFeed.close()` is the sole feed-close surface and
+releases the claim only after a clean close, allowing a replacement feed.
+Dropping the handle synchronously finishes its mailbox but intentionally keeps
+the connection claimed until connection close. Explicit connection close
+finishes the feed normally only after transport close work reaches quiescence;
+fatal and protocol termination fail it.
+
+The model feed and direct consumption are mutually exclusive. Once a client
+command owns a pending reply or a structured scope is admitted, a feed cannot
+later reconstruct the missed prefix. Conversely, while a feed owns the
+connection, public commands and structured scopes fail with
+`WebInspectorProxyError.connectionInUse`. Legacy cold passive streams are
+migration-only: starting one while the feed is open is a programmer error, and
+they must be deleted rather than adapted around this ownership boundary.
+
+The later DataKit feed consumer will apply records serially. Reaching
 `replayComplete` therefore proves that every earlier event through that
 watermark has been applied to the model, not merely placed in a stream buffer.
 After all configured domain boundaries, `synchronizationComplete` proves the
@@ -595,21 +653,22 @@ domain configuration and for unavailable-to-ready rebinding, where no
 domain-specific marker can carry readiness. The feed is package-only because
 its mixed-domain payload and acknowledgement boundaries are model-adapter
 mechanics, not a direct ProxyKit consumer concept.
-Opening the feed registers it and its initial reset record before acquiring any
-configured capability. Capability acquisition is transactional: if one enable
-fails, the core releases every capability acquired for that attempt, terminates
-the feed with the cause, and lets DataKit fail attachment. A DataKit model
-context takes exclusive ownership of its Proxy connection, so it is always the
-first model-feed subscriber and does not depend on a late subscriber receiving
-historical replay.
+The completed design opens the feed and registers its initial reset record
+before acquiring any configured capability. Capability acquisition will be
+transactional: if one enable fails, the core releases every capability acquired
+for that attempt, terminates the feed with the cause, and lets DataKit fail
+attachment. A DataKit model context takes exclusive ownership of its Proxy
+connection, so it is always the first model-feed subscriber and does not depend
+on a late subscriber receiving historical replay.
 
-DOM readiness uses the same ordered feed even though DOM has no enable-time
-replay. After the feed is registered, the core issues `DOM.getDocument`. Its
+The completed DOM readiness slice will use the same ordered feed even though DOM
+has no enable-time replay. After the feed is registered, the core will issue
+`DOM.getDocument`. Its
 reply arrival sequence becomes a `bootstrapSnapshot` record; DOM mutation
 events at or before that watermark are subsumed by the returned full snapshot,
 and later events follow it in sequence order. If `DOM.documentUpdated` advances
 the document epoch between request and reply, the snapshot is discarded and
-the command is retried. A valid snapshot is followed by `bootstrapComplete`.
+the command is retried. A valid snapshot will be followed by `bootstrapComplete`.
 Every configured domain must reach either its replay or bootstrap completion
 boundary before ProxyKit emits `synchronizationComplete`; DataKit applies that
 final record before attachment or retarget synchronization becomes ready. A
@@ -656,7 +715,9 @@ old scoped ID to a current-generation command fails locally with
 
 When no physical page is temporarily committed, a command fails with
 `pageUnavailable`; it does not guess a stale target. During commit the core
-performs one ordered transition:
+will eventually perform the following full ordered transition. The current
+slice establishes only its synchronous reset, physical target snapshot, and
+future-delta prefix:
 
 1. stop admission of new target-scoped commands and increment page generation;
 2. publish `.reset(newGeneration)` to public scopes and the package model feed;
@@ -712,9 +773,10 @@ public enum WebInspectorProxyError: Error, Sendable {
 - Protocol event streams use bounded oldest-first buffering. The first drop
   terminates only that subscriber with `eventBufferOverflow`; peer subscribers
   continue.
-- The package model feed is also bounded. Overflow terminates the model
-attachment and moves its context to `.failed`; it cannot fabricate a full
-  domain resynchronization.
+- The package model feed is also bounded. Overflow currently terminates the feed
+  and connection. The later DataKit driver will map that terminal failure to a
+  failed model attachment; neither layer may fabricate a full domain
+  resynchronization.
 - Coalescible state notifications use newest-one buffering.
 - Unexpected disconnect throws from event scopes. Explicit close ends scopes
   normally after all close work completes.

@@ -224,6 +224,16 @@ public actor WebInspectorProxy {
         await core.close()
     }
 
+    package func openModelFeed(
+        configuredDomains: Set<ModelDomain>,
+        capacity: Int = 256
+    ) async throws -> ConnectionModelFeed {
+        try await core.openModelFeed(
+            configuredDomains: configuredDomains,
+            capacity: capacity
+        )
+    }
+
     /// Suspends until ``close()`` has finished.
     ///
     /// If the proxy is already closed, this method returns immediately. If the

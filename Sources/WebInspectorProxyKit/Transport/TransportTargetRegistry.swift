@@ -158,6 +158,83 @@ struct TransportTargetRegistry: Sendable {
         )
     }
 
+    func modelTargetSnapshot() -> ModelTargetSnapshot? {
+        guard let currentMainPageTargetID,
+              let currentPageRecord = targetsByID[currentMainPageTargetID],
+              !currentPageRecord.isProvisional,
+              let currentPageTarget = ModelTarget(record: currentPageRecord) else {
+            return nil
+        }
+
+        let frames = targetsByID.values.compactMap { record -> (
+            depth: Int,
+            target: ModelTarget
+        )? in
+            guard let depth = currentPageFrameDepth(for: record),
+                  let target = ModelTarget(record: record) else {
+                return nil
+            }
+            return (depth, target)
+        }.sorted { lhs, rhs in
+            if lhs.depth != rhs.depth {
+                return lhs.depth < rhs.depth
+            }
+            return lhs.target.id.rawValue < rhs.target.id.rawValue
+        }.map(\.target)
+
+        return ModelTargetSnapshot(
+            currentPageID: currentPageTarget.id,
+            targets: [currentPageTarget] + frames
+        )
+    }
+
+    func isCurrentPageModelTarget(_ record: ProtocolTarget.Record) -> Bool {
+        guard !record.isProvisional else {
+            return false
+        }
+        if record.id == currentMainPageTargetID {
+            return true
+        }
+        return currentPageFrameDepth(for: record) != nil
+    }
+
+    private func currentPageFrameDepth(
+        for record: ProtocolTarget.Record
+    ) -> Int? {
+        guard record.kind == .frame,
+              !record.isProvisional,
+              let frameID = record.frameID,
+              let currentMainPageTargetID,
+              let mainFrameID = targetsByID[currentMainPageTargetID]?.frameID,
+              frameID != mainFrameID else {
+            return nil
+        }
+        guard var parentFrameID = record.parentFrameID else {
+            // The registry has already classified this physical record as a
+            // frame. With no parent ancestry signal, its distinct frame ID is
+            // the only current-page membership fact owned by this registry.
+            return 1
+        }
+
+        var depth = 1
+        var visited = Set<ProtocolFrame.ID>()
+        while visited.insert(parentFrameID).inserted {
+            if parentFrameID == mainFrameID {
+                return depth
+            }
+            guard let parentTargetID = frameTargetIDsByFrameID[parentFrameID],
+                  let parentRecord = targetsByID[parentTargetID],
+                  parentRecord.kind == .frame,
+                  !parentRecord.isProvisional,
+                  let nextParentFrameID = parentRecord.parentFrameID else {
+                return nil
+            }
+            depth += 1
+            parentFrameID = nextParentFrameID
+        }
+        preconditionFailure("The current-page frame target graph contains a cycle.")
+    }
+
     private func committedFrameTargetResolution(
         for record: ProtocolTarget.Record
     ) -> TransportFrameTargetResolution? {
