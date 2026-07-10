@@ -12,7 +12,8 @@ private actor RuntimeStateStoreIsolationProbe {
                 name: "Custom actor",
                 kind: .normal
             )),
-            sourceTargetID: WebInspectorTarget.ID("page")
+            sourceTargetID: WebInspectorTarget.ID("page"),
+            isCurrentPageTarget: true
         )
         return (store.executionContexts.count, store.selectedContext?.name)
     }
@@ -47,7 +48,8 @@ func runtimeStateStoreOwnsContextIdentityOrderAndSelection() throws {
             name: "First",
             kind: .normal
         )),
-        sourceTargetID: WebInspectorTarget.ID("page")
+        sourceTargetID: WebInspectorTarget.ID("page"),
+        isCurrentPageTarget: true
     )
     let first = try #require(store.executionContexts.first)
     #expect(store.selectedContext === first)
@@ -58,7 +60,8 @@ func runtimeStateStoreOwnsContextIdentityOrderAndSelection() throws {
             name: "First updated",
             kind: .user
         )),
-        sourceTargetID: WebInspectorTarget.ID("page")
+        sourceTargetID: WebInspectorTarget.ID("page"),
+        isCurrentPageTarget: true
     )
     #expect(store.executionContexts == [first])
     #expect(first.name == "First updated")
@@ -70,7 +73,8 @@ func runtimeStateStoreOwnsContextIdentityOrderAndSelection() throws {
             name: "Second",
             kind: .normal
         )),
-        sourceTargetID: WebInspectorTarget.ID("page")
+        sourceTargetID: WebInspectorTarget.ID("page"),
+        isCurrentPageTarget: true
     )
     let second = try #require(store.executionContexts.last)
     store.select(second)
@@ -78,7 +82,8 @@ func runtimeStateStoreOwnsContextIdentityOrderAndSelection() throws {
 
     store.apply(
         .executionContextDestroyed(secondID),
-        sourceTargetID: WebInspectorTarget.ID("page")
+        sourceTargetID: WebInspectorTarget.ID("page"),
+        isCurrentPageTarget: true
     )
     #expect(store.executionContexts == [first])
     #expect(store.selectedContext === first)
@@ -203,7 +208,8 @@ func runtimeStateStoreTargetClearPreservesOtherTargetState() throws {
             name: "Page",
             kind: .normal
         )),
-        sourceTargetID: pageTargetID
+        sourceTargetID: pageTargetID,
+        isCurrentPageTarget: true
     )
     store.apply(
         .executionContextCreated(Runtime.ExecutionContext(
@@ -211,7 +217,8 @@ func runtimeStateStoreTargetClearPreservesOtherTargetState() throws {
             name: "Frame",
             kind: .normal
         )),
-        sourceTargetID: frameTargetID
+        sourceTargetID: frameTargetID,
+        isCurrentPageTarget: false
     )
     let pageContext = try #require(store.executionContexts.first)
     let frameContext = try #require(store.executionContexts.last)
@@ -243,8 +250,9 @@ func runtimeStateStoreTargetClearPreservesOtherTargetState() throws {
     ).object
 
     store.apply(
-        .executionContextsCleared(target: frameTargetID),
-        sourceTargetID: pageTargetID
+        .executionContextsCleared,
+        sourceTargetID: frameTargetID,
+        isCurrentPageTarget: false
     )
 
     #expect(store.executionContexts.count == 1)
@@ -269,14 +277,16 @@ func runtimeStateStoreRejectsEvaluationReplyAfterContextIdentityReplacement() th
             name: "Before",
             kind: .normal
         )),
-        sourceTargetID: WebInspectorTarget.ID("page")
+        sourceTargetID: WebInspectorTarget.ID("page"),
+        isCurrentPageTarget: true
     )
     let original = try #require(store.executionContexts.first)
     let binding = try store.evaluationBinding(for: original)
 
     store.apply(
         .executionContextDestroyed(contextID),
-        sourceTargetID: WebInspectorTarget.ID("page")
+        sourceTargetID: WebInspectorTarget.ID("page"),
+        isCurrentPageTarget: true
     )
     store.apply(
         .executionContextCreated(Runtime.ExecutionContext(
@@ -284,7 +294,8 @@ func runtimeStateStoreRejectsEvaluationReplyAfterContextIdentityReplacement() th
             name: "After",
             kind: .normal
         )),
-        sourceTargetID: WebInspectorTarget.ID("page")
+        sourceTargetID: WebInspectorTarget.ID("page"),
+        isCurrentPageTarget: true
     )
     let groupID = store.createGroupID()
 

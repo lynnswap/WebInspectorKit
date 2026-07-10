@@ -161,11 +161,9 @@ actor ContractDataKitActor {
         commands = []
     }
 
-    @discardableResult
     func start(
         document: WebInspectorTestJSONObject? = nil
-    ) async throws -> WebInspectorTarget {
-        let target = try await runtime.proxy.waitForCurrentPage()
+    ) async throws {
         let documentResult = try document ?? ContractTestSupport.documentResult()
         let attachTask = Task {
             try await context.attach(to: runtime.proxy, isolation: self)
@@ -191,7 +189,6 @@ actor ContractDataKitActor {
         ])
         try await attachTask.value
         #expect(context.state == .attached)
-        return target
     }
 
     func observedCommands() -> [WebInspectorTestPeer.Command] {
