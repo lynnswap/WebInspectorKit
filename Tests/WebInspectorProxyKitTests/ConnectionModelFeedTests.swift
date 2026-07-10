@@ -2699,6 +2699,44 @@ func terminalDuringModelFeedRollbackCompletesWithoutLeakingClaim() async throws 
 }
 
 @Test
+func explicitCloseDuringModelFeedRollbackLetsTerminalOwnerRetireRegistration() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let openTask = Task {
+        try await core.openModelFeed(
+            configuredDomains: [.network, .console],
+            capacity: 16
+        )
+    }
+    let networkEnable = try await backend.waitForTargetMessage(method: "Network.enable")
+    await modelFeedRespond(to: networkEnable, core: core)
+    let consoleEnable = try await backend.waitForTargetMessage(method: "Console.enable")
+    await modelFeedRespond(
+        to: consoleEnable,
+        core: core,
+        errorMessage: "console rejected"
+    )
+    _ = try await backend.waitForTargetMessage(method: "Network.disable")
+
+    await core.close()
+
+    await #expect(throws: ConnectionModelFeedError.bootstrapFailed(
+        domain: .console,
+        message: "console rejected"
+    )) {
+        try await openTask.value
+    }
+    #expect(await core.terminalCause == .explicitClose)
+    #expect(await modelFeedAllCapabilityLeaseOwners(core).isEmpty)
+    #expect(await backend.isDetached())
+}
+
+@Test
 func modelFeedRollbackDisableRejectionTerminatesInsteadOfReusingEnabledState() async throws {
     let backend = FakeTransportBackend()
     let core = ConnectionCore(backend: backend, responseTimeout: nil)

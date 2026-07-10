@@ -966,7 +966,15 @@ package actor ConnectionCore {
         }
         guard let currentRegistration = modelFeed,
               currentRegistration.id == id else {
-            preconditionFailure("A model feed lost its registration before rollback completed.")
+            guard !isOpen else {
+                preconditionFailure(
+                    "A model feed lost its registration before rollback completed."
+                )
+            }
+            // Explicit connection close owns terminal feed retirement and has
+            // already finished the mailbox. A fatal terminal cause returned
+            // its error above; normal close therefore completes rollback.
+            return nil
         }
         modelFeed = nil
         return nil
