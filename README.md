@@ -71,15 +71,17 @@ let inspector = WebInspectorViewController(
 ```
 
 The built-in tab surface exposes DOM and Network tabs. Apps can also add UIKit
-tabs with a `UIViewController` factory:
+tabs with an asynchronous `UIViewController` factory:
 
 ```swift
 let consoleTab = WebInspectorTab(
     id: "app_console",
     title: "Console",
-    systemImage: "terminal"
+    systemImage: "terminal",
+    requiredDomains: [.console]
 ) { session in
-    ConsoleViewController(inspectorSession: session)
+    let messages = try await session.model.consoleMessages()
+    return ConsoleViewController(messages: messages)
 }
 
 let inspector = WebInspectorViewController(

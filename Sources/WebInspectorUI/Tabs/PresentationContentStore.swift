@@ -16,6 +16,12 @@ package final class PresentationContentStore {
         case failed(String)
     }
 
+    package enum CustomResourceStatus: Equatable, Sendable {
+        case loading
+        case ready
+        case failed(String)
+    }
+
     private enum NetworkResourceState {
         case idle
         case loading(contextEpoch: Int, generation: UInt64)
@@ -23,10 +29,33 @@ package final class PresentationContentStore {
         case failed(contextEpoch: Int, generation: UInt64, message: String)
     }
 
+    private enum CustomResourceState {
+        case loading(generation: UInt64)
+        case ready(generation: UInt64, viewController: UIViewController)
+        case failed(generation: UInt64, message: String)
+
+        var generation: UInt64 {
+            switch self {
+            case let .loading(generation),
+                 let .ready(generation, _),
+                 let .failed(generation, _):
+                generation
+            }
+        }
+    }
+
     private final class WeakNetworkResourceViewController {
         weak var value: NetworkTabResourceViewController?
 
         init(_ value: NetworkTabResourceViewController) {
+            self.value = value
+        }
+    }
+
+    private final class WeakCustomResourceViewController {
+        weak var value: CustomTabResourceViewController?
+
+        init(_ value: CustomTabResourceViewController) {
             self.value = value
         }
     }
@@ -41,6 +70,21 @@ package final class PresentationContentStore {
     @ObservationIgnored private var networkRetirementTask: Task<Void, Never>?
     @ObservationIgnored private var networkResourceViewControllers: [WeakNetworkResourceViewController] = []
     @ObservationIgnored private var networkContext: WebInspectorModelContext?
+    @ObservationIgnored private var customResourceStates: [
+        WebInspectorTab.ContentKey: CustomResourceState
+    ] = [:]
+    @ObservationIgnored private var customResourceTasks: [
+        WebInspectorTab.ContentKey: Task<Void, Never>
+    ] = [:]
+    @ObservationIgnored private var customResourceViewControllers: [
+        WebInspectorTab.ContentKey: [WeakCustomResourceViewController]
+    ] = [:]
+    @ObservationIgnored private var customResourceGenerations: [
+        WebInspectorTab.ContentKey: UInt64
+    ] = [:]
+    @ObservationIgnored private var customResourceRevisions: [
+        WebInspectorTab.ContentKey: UInt64
+    ] = [:]
     private var networkResourceState: NetworkResourceState = .idle
     package private(set) var contextEpoch: Int?
     package private(set) var networkResourceGeneration: UInt64 = 0
@@ -58,11 +102,19 @@ package final class PresentationContentStore {
     isolated deinit {
         networkResourceTask?.cancel()
         networkRetirementTask?.cancel()
+        for task in customResourceTasks.values {
+            task.cancel()
+        }
         if case let .ready(_, _, model) = networkResourceState {
             model.synchronouslyCancelForOwnerDeinit()
         }
         for resourceViewController in networkResourceViewControllers {
             resourceViewController.value?.synchronouslyResetForOwnerDeinit()
+        }
+        for resourceViewControllers in customResourceViewControllers.values {
+            for resourceViewController in resourceViewControllers {
+                resourceViewController.value?.synchronouslyResetForOwnerDeinit()
+            }
         }
         contentCache.removeAll()
     }
@@ -126,6 +178,32 @@ package final class PresentationContentStore {
         return viewController
     }
 
+    package func customViewController(
+        for key: WebInspectorTab.ContentKey,
+        session: WebInspectorSession,
+        makeViewController: @escaping @MainActor (WebInspectorSession) async throws -> UIViewController
+    ) -> CustomTabResourceViewController {
+        let viewController = CustomTabResourceViewController { [weak self, session] in
+            self?.retryCustomResource(
+                for: key,
+                session: session,
+                makeViewController: makeViewController
+            )
+        }
+        customResourceViewControllers[key, default: []].append(
+            WeakCustomResourceViewController(viewController)
+        )
+        if customResourceStates[key] == nil {
+            startCustomResource(
+                for: key,
+                session: session,
+                makeViewController: makeViewController
+            )
+        }
+        renderCustomResource(for: key, on: viewController)
+        return viewController
+    }
+
     /// Begins a context transition synchronously. Any next Network load waits
     /// for the old load and model retirement before it can publish ready state.
     package func prepare(for contextEpoch: Int) {
@@ -142,16 +220,163 @@ package final class PresentationContentStore {
     /// Retires every presentation resource and waits for asynchronous owners.
     package func clear() async {
         beginNetworkRetirement()
+        let customTasks = Array(customResourceTasks.values)
+        for task in customTasks {
+            task.cancel()
+        }
+        for resourceViewControllers in customResourceViewControllers.values {
+            for resourceViewController in resourceViewControllers {
+                resourceViewController.value?.synchronouslyResetForOwnerDeinit()
+            }
+        }
+        customResourceStates.removeAll(keepingCapacity: false)
+        customResourceTasks.removeAll(keepingCapacity: false)
+        customResourceViewControllers.removeAll(keepingCapacity: false)
+        customResourceGenerations.removeAll(keepingCapacity: false)
+        customResourceRevisions.removeAll(keepingCapacity: false)
         contentCache.removeAll()
         networkResourceViewControllers.removeAll()
         networkContext = nil
         contextEpoch = nil
         let retirementGeneration = networkRetirementGeneration
         let retirementTask = networkRetirementTask
+        for task in customTasks {
+            await task.value
+        }
         await retirementTask?.value
         if networkRetirementGeneration == retirementGeneration {
             networkRetirementTask = nil
         }
+    }
+
+    private func retryCustomResource(
+        for key: WebInspectorTab.ContentKey,
+        session: WebInspectorSession,
+        makeViewController: @escaping @MainActor (WebInspectorSession) async throws -> UIViewController
+    ) {
+        guard case .failed? = customResourceStates[key] else {
+            return
+        }
+        startCustomResource(
+            for: key,
+            session: session,
+            makeViewController: makeViewController
+        )
+    }
+
+    private func startCustomResource(
+        for key: WebInspectorTab.ContentKey,
+        session: WebInspectorSession,
+        makeViewController: @escaping @MainActor (WebInspectorSession) async throws -> UIViewController
+    ) {
+        if case .loading? = customResourceStates[key] {
+            return
+        }
+        if case .ready? = customResourceStates[key] {
+            return
+        }
+        let generation = advanceCustomResourceGeneration(for: key)
+        customResourceStates[key] = .loading(generation: generation)
+        advanceCustomResourceRevision(for: key)
+        renderCustomResource(for: key)
+
+        customResourceTasks[key] = Task { @MainActor [weak self, session] in
+            do {
+                let viewController = try await makeViewController(session)
+                guard !Task.isCancelled else {
+                    return
+                }
+                self?.completeCustomResource(
+                    .success(viewController),
+                    for: key,
+                    generation: generation
+                )
+            } catch {
+                guard !Task.isCancelled else {
+                    return
+                }
+                self?.completeCustomResource(
+                    .failure(error),
+                    for: key,
+                    generation: generation
+                )
+            }
+        }
+    }
+
+    private func completeCustomResource(
+        _ result: Result<UIViewController, any Error>,
+        for key: WebInspectorTab.ContentKey,
+        generation: UInt64
+    ) {
+        guard customResourceStates[key]?.generation == generation else {
+            return
+        }
+        customResourceTasks[key] = nil
+        switch result {
+        case let .success(viewController):
+            customResourceStates[key] = .ready(
+                generation: generation,
+                viewController: viewController
+            )
+        case let .failure(error):
+            customResourceStates[key] = .failed(
+                generation: generation,
+                message: error.localizedDescription
+            )
+        }
+        advanceCustomResourceRevision(for: key)
+        renderCustomResource(for: key)
+    }
+
+    private func renderCustomResource(for key: WebInspectorTab.ContentKey) {
+        customResourceViewControllers[key] = customResourceViewControllers[key]?.filter { box in
+            guard let viewController = box.value else {
+                return false
+            }
+            renderCustomResource(for: key, on: viewController)
+            return true
+        } ?? []
+    }
+
+    private func renderCustomResource(
+        for key: WebInspectorTab.ContentKey,
+        on viewController: CustomTabResourceViewController
+    ) {
+        let revision = customResourceRevisions[key] ?? 0
+        switch customResourceStates[key] {
+        case .none, .loading:
+            viewController.showLoading(revision: revision)
+        case let .ready(_, content):
+            viewController.showReady(content, revision: revision)
+        case let .failed(_, message):
+            viewController.showFailure(message, revision: revision)
+        }
+    }
+
+    @discardableResult
+    private func advanceCustomResourceGeneration(
+        for key: WebInspectorTab.ContentKey
+    ) -> UInt64 {
+        let generation = customResourceGenerations[key] ?? 0
+        precondition(
+            generation < UInt64.max,
+            "Custom tab resource generation overflowed."
+        )
+        let nextGeneration = generation + 1
+        customResourceGenerations[key] = nextGeneration
+        return nextGeneration
+    }
+
+    private func advanceCustomResourceRevision(
+        for key: WebInspectorTab.ContentKey
+    ) {
+        let revision = customResourceRevisions[key] ?? 0
+        precondition(
+            revision < UInt64.max,
+            "Custom tab resource revision overflowed."
+        )
+        customResourceRevisions[key] = revision + 1
     }
 
     private func startNetworkResource(
@@ -341,6 +566,36 @@ package final class PresentationContentStore {
 
     package func waitForNetworkRetirementForTesting() async {
         await networkRetirementTask?.value
+    }
+
+    package func customResourceStatusForTesting(
+        for key: WebInspectorTab.ContentKey
+    ) -> CustomResourceStatus? {
+        switch customResourceStates[key] {
+        case .none:
+            nil
+        case .loading:
+            .loading
+        case .ready:
+            .ready
+        case let .failed(_, message):
+            .failed(message)
+        }
+    }
+
+    package func customReadyViewControllerForTesting(
+        for key: WebInspectorTab.ContentKey
+    ) -> UIViewController? {
+        guard case let .ready(_, viewController) = customResourceStates[key] else {
+            return nil
+        }
+        return viewController
+    }
+
+    package func waitForCustomResourceTaskForTesting(
+        for key: WebInspectorTab.ContentKey
+    ) async {
+        await customResourceTasks[key]?.value
     }
     #endif
 }

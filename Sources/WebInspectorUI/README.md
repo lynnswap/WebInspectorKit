@@ -13,11 +13,12 @@ package for symbol-level details.
 ## Main Areas
 
 - `WebInspectorSession`: UIKit facade and custom-tab compatibility owner. It
-  wraps `WebInspectorContainer` / `WebInspectorContext` and is the UI-facing
-  inspection lifecycle surface.
+  owns one stable `WebInspectorModelContext` and is the UI-facing inspection
+  lifecycle surface.
 - `WebInspectorViewController`: Public built-in inspector root controller.
 - `PresentationContentStore`: Root-owned cache for tab controllers and the
-  Network presentation model; it never belongs to the session.
+  Network/custom async presentation resources; it never belongs to the
+  session.
 - `Containers`: Host and wrapper view controllers for compact tab and regular
   split presentation.
 - `Tabs`: Public tab API, layout-specific display item projection, content
@@ -30,10 +31,11 @@ regular width uses split presentation.
 
 ## Data Flow
 
-`WebInspectorSession` owns the UI-facing session lifecycle and exposes the
-current `WebInspectorContext`. DOM and Network controllers observe DataKit
-models and submit DataKit commands. Each `WebInspectorViewController` owns its
-presentation resources and injects that store into compact or regular hosts.
+`WebInspectorSession` owns the UI-facing session lifecycle and publicly exposes
+one stable `WebInspectorModelContext`. DOM and Network controllers observe
+DataKit models and submit DataKit commands. Each `WebInspectorViewController`
+owns its presentation resources and injects that store into compact or regular
+hosts.
 
 The UI must not own native bridge objects, protocol envelopes,
 `TransportSession`, or `TransportBackend` directly. Protocol implementation is

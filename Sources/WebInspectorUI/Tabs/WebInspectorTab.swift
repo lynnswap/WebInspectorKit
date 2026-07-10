@@ -5,7 +5,7 @@ import WebInspectorDataKit
 /// A tab shown by the built-in WebInspectorKit UI.
 ///
 /// Use the built-in ``dom`` and ``network`` tabs, or create a custom tab backed
-/// by a UIKit view controller factory.
+/// by an asynchronous UIKit view controller factory.
 ///
 /// Example:
 ///
@@ -47,7 +47,7 @@ public struct WebInspectorTab: Equatable, Hashable, Identifiable {
 
     @MainActor
     package struct CustomContent {
-        package let makeViewController: @MainActor (WebInspectorSession) -> UIViewController
+        package let makeViewController: @MainActor (WebInspectorSession) async throws -> UIViewController
     }
 
     package enum Content {
@@ -89,15 +89,16 @@ public struct WebInspectorTab: Equatable, Hashable, Identifiable {
     /// Creates an app-provided inspector tab backed by a UIKit view controller.
     ///
     /// The factory is called the first time the tab content is needed for a
-    /// root inspector controller. WebInspectorKit caches the returned
-    /// controller for the tab ID and reuses it across that controller's compact
-    /// and regular hosts.
+    /// root inspector controller. While it runs, WebInspectorKit presents a
+    /// native loading configuration. A failure presents a retry action.
+    /// Concurrent host requests join one factory invocation, and the returned
+    /// controller is reused across compact and regular hosts.
     public init(
         id: ID,
         title: String,
         image: UIImage? = nil,
         requiredDomains: Set<WebInspectorModelContext.Domain> = [],
-        makeViewController: @escaping @MainActor (_ session: WebInspectorSession) -> UIViewController
+        makeViewController: @escaping @MainActor (_ session: WebInspectorSession) async throws -> UIViewController
     ) {
         self.id = id
         self.title = title
@@ -112,7 +113,7 @@ public struct WebInspectorTab: Equatable, Hashable, Identifiable {
         title: String,
         systemImage: String,
         requiredDomains: Set<WebInspectorModelContext.Domain> = [],
-        makeViewController: @escaping @MainActor (_ session: WebInspectorSession) -> UIViewController
+        makeViewController: @escaping @MainActor (_ session: WebInspectorSession) async throws -> UIViewController
     ) {
         self.init(
             id: id,

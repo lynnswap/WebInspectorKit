@@ -105,15 +105,13 @@ extension WebInspectorTab {
             }
 
             if case let .custom(content) = tab.content {
-                let viewController = contentStore.viewController(
+                let viewController = contentStore.customViewController(
                     for: customContentKey(for: tab),
-                    contextEpoch: session.interface.contextBoundContentRevision
-                ) {
-                    content.makeViewController(session)
-                }
+                    session: session,
+                    makeViewController: content.makeViewController
+                )
                 switch hostLayout {
                 case .compact:
-                    viewController.webInspectorDetachFromContainerForReuse()
                     return viewController
                 case .regular:
                     return RegularSplitRootViewController(contentViewController: viewController)

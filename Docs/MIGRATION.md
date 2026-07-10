@@ -8,6 +8,27 @@ when upgrading WebInspectorKit. Sections are grouped by release, newest first.
 Unreleased builds require Swift 6.3+ and a minimum deployment target of iOS
 18.4+ or macOS 15.4+. The built-in UIKit inspector remains iOS-only.
 
+### Make custom tab factories asynchronous
+
+`WebInspectorTab` factories are now `async throws` and declare the model
+domains they require. The root inspector joins concurrent requests for the same
+tab, presents native loading and failure states, supports retry, and cancels and
+awaits unfinished factories during root teardown:
+
+```swift
+let consoleTab = WebInspectorTab(
+    id: "console",
+    title: "Console",
+    requiredDomains: [.console]
+) { session in
+    let messages = try await session.model.consoleMessages()
+    return ConsoleViewController(messages: messages)
+}
+```
+
+The returned controller remains root-owned and is reused across compact and
+regular hosts. Attachment and page-generation changes do not recreate it.
+
 ### Use the logical page and scoped domain events
 
 `WebInspectorProxy.page` is now the only public page handle. Physical
