@@ -69,6 +69,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     private let rowRenderBuildCoordinator: DOMTreeTextView.RowRenderBuildCoordinator
     private var hoveredNodeID: DOMNode.ID?
     private var pageHighlightTask: Task<Void, Never>?
+    private var pageHighlightTaskID: UUID?
     private var pageHighlightIntent: PageHighlightIntent?
     private var requestedChildNodeIDs: Set<DOMNode.ID> = []
     private let findDecorationState = DOMTreeTextView.FindDecorationState()
@@ -1251,7 +1252,8 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
 
     private func reconcilePageSelectionHighlightIntentIfNeeded() {
         guard case .selection(let nodeID) = pageHighlightIntent,
-              currentTreeSnapshot.selectedNodeID == nodeID else {
+              currentTreeSnapshot.selectedNodeID == nodeID,
+              pageHighlightTask == nil else {
             return
         }
         highlightPageNode(nodeID, reason: .selection)
@@ -1268,11 +1270,16 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         case .hover:
             cancelPageHighlightTask()
         }
+        let taskID = UUID()
+        pageHighlightTaskID = taskID
         pageHighlightTask = Task { @MainActor [weak self, highlightNodeAction] in
             await Task.yield()
             guard !Task.isCancelled,
                   let self else {
                 return
+            }
+            defer {
+                self.finishPageHighlightTask(id: taskID)
             }
             switch reason {
             case .selection:
@@ -1307,11 +1314,16 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         cancelPageHighlightTask()
         clearHoveredRow()
         pageHighlightIntent = .restoreSelectionAfterHover
+        let taskID = UUID()
+        pageHighlightTaskID = taskID
         pageHighlightTask = Task { @MainActor [weak self, restoreHighlightAction] in
             await Task.yield()
             guard !Task.isCancelled,
                   let self else {
                 return
+            }
+            defer {
+                self.finishPageHighlightTask(id: taskID)
             }
             guard self.hoveredNodeID == nil else {
                 if self.pageHighlightIntent == .restoreSelectionAfterHover {
@@ -1335,9 +1347,18 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     private func cancelPageHighlightTask(preservingIntent: Bool = false) {
         pageHighlightTask?.cancel()
         pageHighlightTask = nil
+        pageHighlightTaskID = nil
         if !preservingIntent {
             pageHighlightIntent = nil
         }
+    }
+
+    private func finishPageHighlightTask(id: UUID) {
+        guard pageHighlightTaskID == id else {
+            return
+        }
+        pageHighlightTask = nil
+        pageHighlightTaskID = nil
     }
 
     private func presentDOMMenu(for nodeIDs: [DOMNode.ID], at location: CGPoint) {

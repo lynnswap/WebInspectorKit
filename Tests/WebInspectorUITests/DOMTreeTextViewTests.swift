@@ -1,6 +1,7 @@
 #if canImport(UIKit)
 import Testing
 import UIKit
+import WebInspectorTestSupport
 @testable import WebInspectorDataKit
 @testable import WebInspectorProxyKit
 @testable import WebInspectorUI
@@ -342,6 +343,68 @@ struct DOMTreeTextViewTests {
         #expect(session.selectedNode?.id == highlightedNodeID)
         #expect(session.node(for: highlightedNodeID)?.localName == "input")
         #expect(recorder.recordedOwners == [.selection])
+    }
+
+    @Test
+    func duplicateSelectionInvalidationCoalescesInFlightPageHighlight() async throws {
+        let session = makeDOMTreeFixture()
+        let recorder = ControlledNodeActionRecorder()
+        let view = DOMTreeTextView(
+            context: session.context,
+            highlightNodeAction: { nodeID, owner in
+                try await recorder.run(nodeID, owner: owner)
+            }
+        )
+        configureTreeViewForDeterministicTesting(view)
+        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
+        view.layoutIfNeeded()
+        view.setRenderingActive(true)
+        #expect(await view.waitForRowDocumentForTesting())
+
+        view.primaryClickRowForTesting(containing: "<input disabled>")
+        await recorder.waitForInvocationCount(1)
+        #expect(await view.waitForObservedTreeRevisionForTesting(session.treeRevision))
+
+        view.routeCurrentSelectionInvalidationForTesting()
+        view.routeCurrentSelectionInvalidationForTesting()
+        await Task.yield()
+
+        #expect(recorder.invocationCount == 1)
+        await recorder.resolveInvocation(at: 0, as: .success)
+        await view.waitForPageHighlightTaskForTesting()
+        #expect(recorder.recordedOwners == [.selection])
+    }
+
+    @Test
+    func selectionHighlightFailureAllowsLaterInvalidationRetry() async throws {
+        let session = makeDOMTreeFixture()
+        let recorder = ControlledNodeActionRecorder()
+        let view = DOMTreeTextView(
+            context: session.context,
+            highlightNodeAction: { nodeID, owner in
+                try await recorder.run(nodeID, owner: owner)
+            }
+        )
+        configureTreeViewForDeterministicTesting(view)
+        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
+        view.layoutIfNeeded()
+        view.setRenderingActive(true)
+        #expect(await view.waitForRowDocumentForTesting())
+
+        view.primaryClickRowForTesting(containing: "<input disabled>")
+        await recorder.waitForInvocationCount(1)
+        #expect(await view.waitForObservedTreeRevisionForTesting(session.treeRevision))
+        await recorder.resolveInvocation(at: 0, as: .failure)
+        await view.waitForPageHighlightTaskForTesting()
+
+        view.routeCurrentSelectionInvalidationForTesting()
+        await recorder.waitForInvocationCount(2)
+        await recorder.resolveInvocation(at: 1, as: .success)
+        await view.waitForPageHighlightTaskForTesting()
+
+        #expect(recorder.recordedNodeIDs.count == 2)
+        #expect(recorder.recordedNodeIDs[0] == recorder.recordedNodeIDs[1])
+        #expect(recorder.recordedOwners == [.selection, .selection])
     }
 
     @Test
@@ -1152,6 +1215,89 @@ private final class NodeActionRecorder {
     func removeAll() {
         nodeIDs.removeAll(keepingCapacity: true)
         owners.removeAll(keepingCapacity: true)
+    }
+}
+
+@MainActor
+private final class ControlledNodeActionRecorder {
+    enum Resolution {
+        case success
+        case failure
+    }
+
+    private struct IntentionalFailure: Error {}
+
+    private var nodeIDs: [DOMNode.ID] = []
+    private var owners: [DOMTreePageHighlightOwner] = []
+    private var gates: [WebInspectorTestGate] = []
+    private var failedInvocationIndexes: Set<Int> = []
+    private var invocationWaiters: [(
+        count: Int,
+        continuation: CheckedContinuation<Void, Never>
+    )] = []
+
+    func run(_ nodeID: DOMNode.ID, owner: DOMTreePageHighlightOwner) async throws {
+        let invocationIndex = nodeIDs.count
+        let gate = WebInspectorTestGate()
+        nodeIDs.append(nodeID)
+        owners.append(owner)
+        gates.append(gate)
+        resumeInvocationWaitersIfNeeded()
+
+        await gate.wait()
+        try Task.checkCancellation()
+        try Task.checkCancellation()
+        if failedInvocationIndexes.contains(invocationIndex) {
+            throw IntentionalFailure()
+        }
+    }
+
+    func waitForInvocationCount(_ count: Int) async {
+        guard nodeIDs.count < count else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            if nodeIDs.count >= count {
+                continuation.resume()
+            } else {
+                invocationWaiters.append((count, continuation))
+            }
+        }
+    }
+
+    func resolveInvocation(at index: Int, as resolution: Resolution) async {
+        precondition(gates.indices.contains(index), "The controlled highlight invocation must exist before resolution.")
+        if case .failure = resolution {
+            failedInvocationIndexes.insert(index)
+        }
+        await gates[index].open()
+    }
+
+    var invocationCount: Int {
+        nodeIDs.count
+    }
+
+    var recordedNodeIDs: [DOMNode.ID] {
+        nodeIDs
+    }
+
+    var recordedOwners: [DOMTreePageHighlightOwner] {
+        owners
+    }
+
+    private func resumeInvocationWaitersIfNeeded() {
+        var pending: [(
+            count: Int,
+            continuation: CheckedContinuation<Void, Never>
+        )] = []
+        for waiter in invocationWaiters {
+            if nodeIDs.count >= waiter.count {
+                waiter.continuation.resume()
+            } else {
+                pending.append(waiter)
+            }
+        }
+        invocationWaiters = pending
     }
 }
 
