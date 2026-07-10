@@ -418,7 +418,8 @@ private actor ScenarioDriver {
     }
 
     func registerPickerSelection(remoteObjectID: String, nodeID: String) throws {
-        guard document.children.contains(where: { $0.containsNode(id: nodeID) }) else {
+        guard document.id == nodeID
+                || document.children.contains(where: { $0.containsNode(id: nodeID) }) else {
             throw WebInspectorDataKitTestRuntime.RuntimeError.selectedNodeMissing(nodeID)
         }
         pickerSelections[remoteObjectID] = nodeID

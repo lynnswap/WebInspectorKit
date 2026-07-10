@@ -33,6 +33,10 @@ func readyDataKitScenarioIsUsableFromAConsumerPackage() async throws {
 
     try await runtime.replacePage(with: .init())
     #expect(try runtime.model.rootDOMNode?.nodeName == "#document")
+    let selectedDocument = try await runtime.selectElementWithPicker(
+        nodeID: "document"
+    )
+    #expect(selectedDocument.nodeName == "#document")
     do {
         _ = try await runtime.selectElementWithPicker(nodeID: "missing")
         Issue.record("Expected a missing picker fixture failure.")
