@@ -7140,6 +7140,181 @@ func staleRuntimeObjectThrowsWithoutFailingContext() async throws {
 
 @MainActor
 @Test
+func runtimeEvaluationRejectsReplyAfterRuntimeClearWithoutKnownContexts() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    #expect(context.executionContexts.isEmpty)
+    let gate = WebInspectorTestGate()
+    await runtime.backend.hold(domain: "Runtime", method: "evaluate", gate: gate)
+    await runtime.backend.enqueue(
+        Runtime.EvaluationResult(
+            object: Runtime.RemoteObject(
+                id: Runtime.RemoteObject.ID("stale-evaluation-reply"),
+                kind: .object
+            )
+        ),
+        for: "Runtime",
+        method: "evaluate"
+    )
+
+    let evaluationTask = Task { @MainActor () -> WebInspectorProxyError? in
+        do {
+            _ = try await context.evaluate("window")
+            return nil
+        } catch let error as WebInspectorProxyError {
+            return error
+        } catch {
+            Issue.record("Unexpected evaluation error: \(error)")
+            return nil
+        }
+    }
+    _ = await runtime.backend.waitForRecordedCommands(domain: "Runtime", method: "evaluate", count: 1)
+    let eventBaseline = context.eventPumpAppliedSequenceForTesting
+    await runtime.backend.emit(.executionContextsCleared(target: target.id), target: target)
+    #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: eventBaseline))
+    await gate.open()
+
+    #expect(await evaluationTask.value == .disconnected(
+        "Runtime evaluation target is no longer current in this WebInspectorContext."
+    ))
+    #expect(context.state == .attached)
+}
+
+@MainActor
+@Test
+func runtimePropertiesRejectReplyAfterObjectClear() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let contextID = Runtime.ExecutionContext.ID("properties-race")
+    await runtime.backend.emit(
+        .executionContextCreated(Runtime.ExecutionContext(
+            id: contextID,
+            name: "Properties race",
+            kind: .normal
+        )),
+        target: target
+    )
+    try await waitUntil { context.executionContexts.count == 1 }
+    await runtime.backend.enqueue(
+        Runtime.EvaluationResult(
+            object: Runtime.RemoteObject(
+                id: Runtime.RemoteObject.ID("properties-root"),
+                kind: .object
+            )
+        ),
+        for: "Runtime",
+        method: "evaluate"
+    )
+    let root = try await context.evaluate("window").object
+    let gate = WebInspectorTestGate()
+    await runtime.backend.hold(domain: "Runtime", method: "getProperties", gate: gate)
+    await runtime.backend.enqueue(
+        [
+            Runtime.PropertyDescriptor(
+                name: "child",
+                value: Runtime.RemoteObject(
+                    id: Runtime.RemoteObject.ID("stale-property-child"),
+                    kind: .object
+                )
+            )
+        ],
+        for: "Runtime",
+        method: "getProperties"
+    )
+
+    let propertiesTask = Task { @MainActor () -> WebInspectorProxyError? in
+        do {
+            _ = try await root.properties()
+            return nil
+        } catch let error as WebInspectorProxyError {
+            return error
+        } catch {
+            Issue.record("Unexpected Runtime.getProperties error: \(error)")
+            return nil
+        }
+    }
+    _ = await runtime.backend.waitForRecordedCommands(domain: "Runtime", method: "getProperties", count: 1)
+    let eventBaseline = context.eventPumpAppliedSequenceForTesting
+    await runtime.backend.emit(.executionContextsCleared(target: target.id), target: target)
+    #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: eventBaseline))
+    await gate.open()
+
+    #expect(await propertiesTask.value == .disconnected(
+        "RuntimeObject is not registered in this WebInspectorContext."
+    ))
+    #expect(context.state == .attached)
+}
+
+@MainActor
+@Test
+func runtimeCollectionEntriesRejectReplyAfterObjectClear() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let contextID = Runtime.ExecutionContext.ID("entries-race")
+    await runtime.backend.emit(
+        .executionContextCreated(Runtime.ExecutionContext(
+            id: contextID,
+            name: "Entries race",
+            kind: .normal
+        )),
+        target: target
+    )
+    try await waitUntil { context.executionContexts.count == 1 }
+    await runtime.backend.enqueue(
+        Runtime.EvaluationResult(
+            object: Runtime.RemoteObject(
+                id: Runtime.RemoteObject.ID("entries-root"),
+                kind: .object
+            )
+        ),
+        for: "Runtime",
+        method: "evaluate"
+    )
+    let root = try await context.evaluate("new Map()").object
+    let gate = WebInspectorTestGate()
+    await runtime.backend.hold(domain: "Runtime", method: "getCollectionEntries", gate: gate)
+    await runtime.backend.enqueue(
+        [
+            Runtime.CollectionEntry(
+                value: Runtime.RemoteObject(
+                    id: Runtime.RemoteObject.ID("stale-entry-value"),
+                    kind: .object
+                )
+            )
+        ],
+        for: "Runtime",
+        method: "getCollectionEntries"
+    )
+
+    let entriesTask = Task { @MainActor () -> WebInspectorProxyError? in
+        do {
+            _ = try await root.collectionEntries()
+            return nil
+        } catch let error as WebInspectorProxyError {
+            return error
+        } catch {
+            Issue.record("Unexpected Runtime.getCollectionEntries error: \(error)")
+            return nil
+        }
+    }
+    _ = await runtime.backend.waitForRecordedCommands(
+        domain: "Runtime",
+        method: "getCollectionEntries",
+        count: 1
+    )
+    let eventBaseline = context.eventPumpAppliedSequenceForTesting
+    await runtime.backend.emit(.executionContextsCleared(target: target.id), target: target)
+    #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: eventBaseline))
+    await gate.open()
+
+    #expect(await entriesTask.value == .disconnected(
+        "RuntimeObject is not registered in this WebInspectorContext."
+    ))
+    #expect(context.state == .attached)
+}
+
+@MainActor
+@Test
 func runtimeEventsPopulateContextsAndFallbackSelection() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
