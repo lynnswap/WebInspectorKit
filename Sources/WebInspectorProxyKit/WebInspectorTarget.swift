@@ -37,14 +37,10 @@ package struct RoutingTargetID: Hashable, Sendable {
     }
 }
 
-/// A typed handle for a Web Inspector protocol target.
-///
-/// Targets vend domain handles such as ``dom``, ``network``, and ``runtime``.
-/// Keep the target that DataKit or ProxyKit gives you instead of constructing
-/// transport target identifiers yourself.
-public struct WebInspectorTarget: Identifiable, Sendable {
-    /// Stable identity for a protocol target within one proxy connection.
-    public struct ID: Hashable, Sendable {
+/// A package-owned physical WebKit target used while projecting one logical
+/// ``WebInspectorPage``. Public consumers never own physical target identity.
+package struct WebInspectorTarget: Identifiable, Sendable {
+    package struct ID: Hashable, Sendable {
         package let rawValue: String
 
         package init(_ rawValue: String) {
@@ -54,33 +50,17 @@ public struct WebInspectorTarget: Identifiable, Sendable {
         package static let currentPage = ID("current-page")
     }
 
-    /// The kind of backend target represented by a ``WebInspectorTarget``.
-    public enum Kind: Equatable, Sendable {
-        /// A top-level page target.
+    package enum Kind: Equatable, Sendable {
         case page
-
-        /// A frame target.
         case frame
-
-        /// A worker target.
         case worker
-
-        /// A service worker target.
         case serviceWorker
     }
 
-    /// The target identity used by typed domain handles.
-    public let id: ID
-
-    /// The backend target kind.
-    public let kind: Kind
-
-    /// The frame identifier for frame-backed targets.
-    public let frameID: FrameID?
-
-    /// A Boolean value indicating whether the target is provisional during
-    /// navigation.
-    public let isProvisional: Bool
+    package let id: ID
+    package let kind: Kind
+    package let frameID: FrameID?
+    package let isProvisional: Bool
 
     package let proxyReference: WebInspectorProxyReference
     package let route: RoutingTargetID
@@ -147,65 +127,32 @@ public struct WebInspectorTarget: Identifiable, Sendable {
         )
     }
 
-    /// A target-scoped handle for DOM protocol commands and events.
-    public var dom: DOM {
+    package var dom: DOM {
         DOM(endpoint: endpoint)
     }
 
-    /// A target-scoped handle for CSS protocol commands and events.
-    public var css: CSS {
+    package var css: CSS {
         CSS(endpoint: endpoint)
     }
 
-    /// A target-scoped handle for Network protocol commands and events.
-    public var network: Network {
+    package var network: Network {
         Network(endpoint: endpoint)
     }
 
-    /// A target-scoped handle for Console protocol commands and events.
-    public var console: Console {
+    package var console: Console {
         Console(endpoint: endpoint)
     }
 
-    /// A target-scoped handle for Runtime protocol commands and events.
-    public var runtime: Runtime {
+    package var runtime: Runtime {
         Runtime(endpoint: endpoint)
     }
 
-    /// A target-scoped handle for Page protocol commands.
-    public var page: Page {
+    package var page: Page {
         Page(endpoint: endpoint)
     }
 
     package var inspector: Inspector {
         Inspector(endpoint: endpoint)
-    }
-
-    package var lifecycleEvents: AsyncStream<WebInspectorTargetLifecycleEvent> {
-        guard let proxy = proxyReference.resolve() else {
-            return AsyncStream { continuation in
-                continuation.finish()
-            }
-        }
-        return proxy.targetLifecycleEvents(targetID: id, route: route)
-    }
-
-    package var targetedConsoleEvents: AsyncStream<Console.TargetedEvent> {
-        guard let proxy = proxyReference.resolve() else {
-            return AsyncStream { continuation in
-                continuation.finish()
-            }
-        }
-        return proxy.targetedConsoleEvents(targetID: id, route: route)
-    }
-
-    package func waitForModelEventSubscriptions() async {
-        guard let proxy = proxyReference.resolve() else {
-            return
-        }
-        for domain in [WebInspectorProxyEventDomain.dom, .inspector, .css, .network, .console, .runtime] {
-            await proxy.waitForEventSubscription(targetID: id, route: route, domain: domain)
-        }
     }
 
     private var endpoint: DomainEndpoint {

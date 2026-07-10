@@ -18,22 +18,6 @@ public struct Runtime: Sendable, WebInspectorEventDomainHandle {
         return value
     }
 
-    /// Enables Runtime domain events and commands for the target.
-    public func enable() async throws {
-        try await dispatchVoid(
-            method: "enable",
-            payload: EnablePayload()
-        )
-    }
-
-    /// Disables Runtime domain events for the target.
-    public func disable() async throws {
-        try await dispatchVoid(
-            method: "disable",
-            payload: DisablePayload()
-        )
-    }
-
     /// Runs an operation with an atomically registered Runtime event scope.
     public func withEvents<Output>(
         buffering: WebInspectorEventBufferingPolicy = .bounded(256),
@@ -110,21 +94,6 @@ public struct Runtime: Sendable, WebInspectorEventDomainHandle {
             method: "releaseObjectGroup",
             payload: ReleaseObjectGroupPayload(group: group)
         )
-    }
-
-    /// Runtime domain events emitted by this target.
-    public var events: EventStream {
-        EventStream {
-            endpoint.runtimeEvents()
-        }
-    }
-
-    package struct EnablePayload: Sendable {
-        package init() {}
-    }
-
-    package struct DisablePayload: Sendable {
-        package init() {}
     }
 
     package struct EvaluatePayload: Sendable {
@@ -557,36 +526,13 @@ public struct Runtime: Sendable, WebInspectorEventDomainHandle {
         /// An execution context was destroyed.
         case executionContextDestroyed(ExecutionContext.ID)
 
-        /// Execution contexts were cleared for a target.
-        case executionContextsCleared(target: WebInspectorTarget.ID)
+        /// Execution contexts were cleared for this event scope.
+        case executionContextsCleared
 
         /// An event that is not modeled by this package.
         case unknown(RawEvent)
     }
 
-    /// An asynchronous stream of Runtime domain events.
-    public struct EventStream: AsyncSequence, Sendable {
-        /// The event yielded by the stream.
-        public typealias Element = Event
-
-        /// The iterator type used by the stream.
-        public typealias AsyncIterator = AsyncStream<Event>.Iterator
-
-        private let makeStream: @Sendable () -> AsyncStream<Event>
-
-        package init(
-            _ makeStream: @escaping @Sendable () -> AsyncStream<Event> = {
-                finishedStream(of: Event.self)
-            }
-        ) {
-            self.makeStream = makeStream
-        }
-
-        /// Creates an iterator over Runtime events.
-        public func makeAsyncIterator() -> AsyncIterator {
-            makeStream().makeAsyncIterator()
-        }
-    }
 }
 
 package extension Runtime.RemoteObject.ID {

@@ -22,16 +22,13 @@ private struct ProtocolCommandTarget: Sendable {
 ///
 /// `WebInspectorProxy` is a handle to the private WebKit inspector connection.
 /// Its connection core owns the current physical page binding and routes typed
-/// domain commands through
-/// ``WebInspectorTarget`` values.
+/// domain commands through its stable ``page`` handle.
 ///
 /// Example:
 ///
 /// ```swift
 /// let proxy = try await WebInspectorProxy(attachingTo: webView)
-/// let page = try await proxy.waitForCurrentPage()
-///
-/// try await page.runtime.enable()
+/// let page = proxy.page
 /// let evaluation = try await page.runtime.evaluate("document.title")
 /// print(evaluation.object.description ?? "")
 ///
@@ -72,8 +69,7 @@ public actor WebInspectorProxy {
 
     /// Attaches a Web Inspector protocol connection to a web view.
     ///
-    /// Attach from the main actor because `WKWebView` is a UI object. Use
-    /// ``waitForCurrentPage()`` before dispatching page-scoped commands.
+    /// Attach from the main actor because `WKWebView` is a UI object.
     @MainActor
     public init(
         attachingTo webView: WKWebView,
@@ -138,8 +134,7 @@ public actor WebInspectorProxy {
         }
     }
 
-    /// The currently known page target, if bootstrap has completed.
-    public var currentPage: WebInspectorTarget? {
+    package var currentPage: WebInspectorTarget? {
         get async {
             guard let record = await core.currentMainPageRecord() else {
                 return nil
@@ -154,20 +149,7 @@ public actor WebInspectorProxy {
         }
     }
 
-    /// A Boolean value indicating whether the proxy has an open page target
-    /// that can receive reload commands.
-    public var canReload: Bool {
-        get async {
-            await core.currentMainPageRecord() != nil
-        }
-    }
-
-    /// Waits for and returns the current page target.
-    ///
-    /// The proxy refreshes its current-page target from the transport when
-    /// possible. The method throws if the proxy is closed, detached, or no page
-    /// target can be discovered before the bootstrap timeout.
-    public func waitForCurrentPage() async throws -> WebInspectorTarget {
+    package func waitForCurrentPage() async throws -> WebInspectorTarget {
         try await ensureOpenForCurrentPageAccess()
         do {
             return try await currentPageTarget(
@@ -198,18 +180,6 @@ public actor WebInspectorProxy {
 
     package var bootstrapGracePeriod: Duration {
         configuration.bootstrapTimeout
-    }
-
-    /// Reloads the currently inspected page without ignoring cache.
-    public func reload() async throws {
-        let pageTarget = try await waitForCurrentPage()
-        let _: Void = try await dispatchCommand(
-            targetID: pageTarget.id,
-            route: pageTarget.route,
-            domain: .page,
-            method: "reload",
-            payload: Page.ReloadPayload(ignoringCache: false)
-        )
     }
 
     /// Closes the inspector connection.
@@ -279,144 +249,6 @@ public actor WebInspectorProxy {
             authority: authority
         )
         return try await backend.dispatchCommand(command)
-    }
-
-    package nonisolated func domEvents(
-        targetID: WebInspectorTarget.ID,
-        route: RoutingTargetID
-    ) -> AsyncStream<DOM.Event> {
-        eventStream(targetID: targetID, route: route, domain: .dom) { event in
-            guard case let .dom(value) = event else {
-                return nil
-            }
-            return value
-        }
-    }
-
-    package nonisolated func cssEvents(
-        targetID: WebInspectorTarget.ID,
-        route: RoutingTargetID
-    ) -> AsyncStream<CSS.Event> {
-        eventStream(targetID: targetID, route: route, domain: .css) { event in
-            guard case let .css(value) = event else {
-                return nil
-            }
-            return value
-        }
-    }
-
-    package nonisolated func networkEvents(
-        targetID: WebInspectorTarget.ID,
-        route: RoutingTargetID
-    ) -> AsyncStream<Network.Event> {
-        eventStream(targetID: targetID, route: route, domain: .network) { event in
-            guard case let .network(value) = event else {
-                return nil
-            }
-            return value
-        }
-    }
-
-    package nonisolated func consoleEvents(
-        targetID: WebInspectorTarget.ID,
-        route: RoutingTargetID
-    ) -> AsyncStream<Console.Event> {
-        eventStream(targetID: targetID, route: route, domain: .console) { event in
-            guard case let .console(value) = event else {
-                return nil
-            }
-            return value.event
-        }
-    }
-
-    package nonisolated func targetedConsoleEvents(
-        targetID: WebInspectorTarget.ID,
-        route: RoutingTargetID
-    ) -> AsyncStream<Console.TargetedEvent> {
-        eventStream(targetID: targetID, route: route, domain: .console) { event in
-            guard case let .console(value) = event else {
-                return nil
-            }
-            return value
-        }
-    }
-
-    package nonisolated func runtimeEvents(
-        targetID: WebInspectorTarget.ID,
-        route: RoutingTargetID
-    ) -> AsyncStream<Runtime.Event> {
-        eventStream(targetID: targetID, route: route, domain: .runtime) { event in
-            guard case let .runtime(value) = event else {
-                return nil
-            }
-            return value
-        }
-    }
-
-    package nonisolated func targetLifecycleEvents(
-        targetID: WebInspectorTarget.ID,
-        route: RoutingTargetID
-    ) -> AsyncStream<WebInspectorTargetLifecycleEvent> {
-        guard let backend else {
-            preconditionFailure("WebInspectorProxy has no backend for lifecycle events.")
-        }
-        return AsyncStream<WebInspectorTargetLifecycleEvent> { continuation in
-            let task = Task {
-                await withTaskGroup(of: Void.self) { group in
-                    for domain in [WebInspectorProxyEventDomain.target, .page] {
-                        group.addTask {
-                            for await event in backend.events(route: route, targetID: targetID, domain: domain) {
-                                guard case let .targetLifecycle(value) = event else {
-                                    preconditionFailure("Backend emitted a mismatched event for lifecycle.")
-                                }
-                                continuation.yield(value)
-                            }
-                        }
-                    }
-                    await group.waitForAll()
-                    continuation.finish()
-                }
-            }
-            continuation.onTermination = { _ in
-                task.cancel()
-            }
-        }
-    }
-
-    package nonisolated func waitForEventSubscription(
-        targetID: WebInspectorTarget.ID,
-        route: RoutingTargetID,
-        domain: WebInspectorProxyEventDomain
-    ) async {
-        guard let backend else {
-            preconditionFailure("WebInspectorProxy has no backend for \(domain.rawValue) events.")
-        }
-        await backend.waitForEventSubscription(route: route, targetID: targetID, domain: domain)
-    }
-
-    private nonisolated func eventStream<Element: Sendable>(
-        targetID: WebInspectorTarget.ID,
-        route: RoutingTargetID,
-        domain: WebInspectorProxyEventDomain,
-        extract: @escaping @Sendable (WebInspectorProxyEvent) -> Element?
-    ) -> AsyncStream<Element> {
-        guard let backend else {
-            preconditionFailure("WebInspectorProxy has no backend for \(domain.rawValue) events.")
-        }
-        return AsyncStream<Element> { continuation in
-            let task = Task {
-                for await event in backend.events(route: route, targetID: targetID, domain: domain) {
-                    guard let value = extract(event) else {
-                        preconditionFailure("Backend emitted a mismatched event for \(domain.rawValue).")
-                    }
-                    continuation.yield(value)
-                }
-                continuation.finish()
-            }
-            continuation.onTermination = { _ in
-                task.cancel()
-            }
-        }
     }
 
     private func resolvedCommandTarget<Payload: Sendable>(

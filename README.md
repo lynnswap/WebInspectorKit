@@ -100,10 +100,9 @@ import WebInspectorProxyKit
 import WebInspectorProxyKitTesting
 
 let runtime = try await WebInspectorProxyTestRuntime.start()
-let page = try await runtime.proxy.waitForCurrentPage()
 
 let reload = Task {
-    try await page.page.reload()
+    try await runtime.page.page.reload()
 }
 
 let command = try await runtime.peer.commands.next()

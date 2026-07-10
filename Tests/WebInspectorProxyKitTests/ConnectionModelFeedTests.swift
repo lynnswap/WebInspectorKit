@@ -560,7 +560,16 @@ func domDocumentInvalidationOverflowIsFirstTerminalAndDoesNotGuessResync() async
 @Test
 func modelFeedAndDirectConsumersClaimConnectionExclusivelyInBothOrders() async throws {
     let directFirstCore = ConnectionCore(backend: FakeTransportBackend(), responseTimeout: nil)
-    _ = await directFirstCore.events(for: .network)
+    _ = await directFirstCore.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    _ = try await directFirstCore.send(ProtocolCommand(
+        domain: .dom,
+        method: "DOM.enable",
+        routing: .octopus(pageTarget: nil)
+    ))
     await #expect(throws: ConnectionModelFeedError.connectionAlreadyUsedByDirectConsumer) {
         try await directFirstCore.openModelFeed(configuredDomains: [], capacity: 8)
     }
@@ -602,17 +611,6 @@ func modelFeedAndDirectConsumersClaimConnectionExclusivelyInBothOrders() async t
     try await feed.close()
     await feedFirstCore.close()
 }
-
-#if os(macOS)
-@Test
-func legacyPassiveStreamAfterModelFeedIsAProgrammerError() async {
-    await #expect(processExitsWith: .failure) {
-        let core = ConnectionCore(backend: FakeTransportBackend(), responseTimeout: nil)
-        _ = try await core.openModelFeed(configuredDomains: [], capacity: 8)
-        _ = await core.events(for: .network)
-    }
-}
-#endif
 
 @Test
 func explicitConnectionCloseFinishesModelFeedOnlyAfterCloseQuiescence() async throws {
@@ -815,13 +813,6 @@ func replacementMainPageWaiterResumesAfterCapabilityOwnershipIsReconciled() asyn
     _ = await core.receiveRootMessage(
         #"{"method":"Target.targetDestroyed","params":{"targetId":"page-old"}}"#
     )
-    let orderedEvents = await core.orderedEvents()
-    let eventObservationTask = Task {
-        var iterator = orderedEvents.makeAsyncIterator()
-        let event = await iterator.next()
-        let purposes = await core.pendingReplyPurposes()
-        return (event, purposes)
-    }
     let waiterTask = Task {
         try await core.waitForCurrentMainPageTarget(timeout: .seconds(1))
     }
@@ -833,13 +824,9 @@ func replacementMainPageWaiterResumesAfterCapabilityOwnershipIsReconciled() asyn
         frameID: "main-frame"
     ))
     let replacement = try await waiterTask.value
-    let eventObservation = await eventObservationTask.value
-    let replacementEvent = try #require(eventObservation.0)
-    let pendingPurposes = eventObservation.1
+    let pendingPurposes = await core.pendingReplyPurposes()
 
     #expect(replacement.targetID == ProtocolTarget.ID("page-new"))
-    #expect(replacementEvent.method == "Target.targetCreated")
-    #expect(replacementEvent.targetID == ProtocolTarget.ID("page-new"))
     #expect(pendingPurposes.count == 1)
     let pending = try #require(pendingPurposes.first)
     guard case let .target(replyKey) = pending.key,

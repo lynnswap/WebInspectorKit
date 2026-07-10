@@ -413,7 +413,6 @@ package actor ConnectionCore {
     private var provisionalTargetMessageStore: TransportProvisionalTargetMessageStore
     private var styleSheetRouting: TransportStyleSheetRouting
     private var runtimeContextRegistry: RuntimeContextRegistry
-    private var eventSubscribers: TransportEventSubscriberRegistry
     private var eventScopes: ConnectionEventScopeRegistry
     private var modelFeed: ConnectionModelFeedRegistration?
     private var replayWasTaintedByDirectConsumer: Bool
@@ -479,7 +478,6 @@ package actor ConnectionCore {
         provisionalTargetMessageStore = TransportProvisionalTargetMessageStore()
         styleSheetRouting = TransportStyleSheetRouting()
         runtimeContextRegistry = RuntimeContextRegistry()
-        eventSubscribers = TransportEventSubscriberRegistry()
         eventScopes = ConnectionEventScopeRegistry()
         modelFeed = nil
         replayWasTaintedByDirectConsumer = false
@@ -515,7 +513,6 @@ package actor ConnectionCore {
         // Asynchronous detach belongs to explicit close. The isolated
         // deinitializer is only a synchronous backstop for actor-owned local
         // resources; native resources have their own isolated backstop.
-        eventSubscribers.finishAndRemoveAll()
         eventScopes.finishAndRemoveAll(with: WebInspectorProxyError.closed)
         modelFeed?.mailbox.finish(throwing: WebInspectorProxyError.closed)
         modelFeed = nil
@@ -579,36 +576,6 @@ package actor ConnectionCore {
             preconditionFailure("ConnectionCore entered terminal state without a claim.")
         }
         return cause
-    }
-
-    package func events(for domain: ProtocolDomain) -> AsyncStream<ProtocolEvent> {
-        guard isOpen else {
-            return finishedStream(of: ProtocolEvent.self)
-        }
-        claimLegacyPassiveConsumer()
-        let pair = AsyncStream<ProtocolEvent>.makeStream(bufferingPolicy: .unbounded)
-        let subscriberID = eventSubscribers.insert(pair.continuation, domain: domain)
-        pair.continuation.onTermination = { [weak self] _ in
-            Task {
-                await self?.removeSubscriber(subscriberID, domain: domain)
-            }
-        }
-        return pair.stream
-    }
-
-    package func orderedEvents() -> AsyncStream<ProtocolEvent> {
-        guard isOpen else {
-            return finishedStream(of: ProtocolEvent.self)
-        }
-        claimLegacyPassiveConsumer()
-        let pair = AsyncStream<ProtocolEvent>.makeStream(bufferingPolicy: .unbounded)
-        let subscriberID = eventSubscribers.insertOrdered(pair.continuation)
-        pair.continuation.onTermination = { [weak self] _ in
-            Task {
-                await self?.removeOrderedSubscriber(subscriberID)
-            }
-        }
-        return pair.stream
     }
 
     package func openModelFeed(
@@ -1944,18 +1911,6 @@ package actor ConnectionCore {
             throw WebInspectorProxyError.connectionInUse
         }
         replayWasTaintedByDirectConsumer = true
-    }
-
-    private func claimLegacyPassiveConsumer() {
-        do {
-            try claimDirectConsumer()
-        } catch WebInspectorProxyError.connectionInUse {
-            preconditionFailure(
-                "Legacy passive event subscriptions cannot start while the connection is exclusively claimed by a model feed. This migration-only event surface must not be adapted around the feed claim."
-            )
-        } catch {
-            preconditionFailure("Unexpected direct-consumer claim failure: \(error)")
-        }
     }
 
     private func enqueueModelFeedRecord(
@@ -5020,12 +4975,6 @@ package actor ConnectionCore {
         guard isOpen else {
             return EventEmissionEffects(commandInvalidation: commandInvalidation)
         }
-        for continuation in eventSubscribers.continuations(for: domain) {
-            continuation.yield(envelope)
-        }
-        for continuation in eventSubscribers.orderedContinuations {
-            continuation.yield(envelope)
-        }
         return EventEmissionEffects(
             mainPageTargetNotification: prepareMainPageTargetNotificationIfNeeded(
                 receivedSequence: eventSequence.sequence
@@ -5245,14 +5194,6 @@ package actor ConnectionCore {
         waiter?.fulfill(.failure(error))
     }
 
-    private func removeSubscriber(_ subscriberID: UInt64, domain: ProtocolDomain) {
-        eventSubscribers.remove(subscriberID, domain: domain)
-    }
-
-    private func removeOrderedSubscriber(_ subscriberID: UInt64) {
-        eventSubscribers.removeOrdered(subscriberID)
-    }
-
     private func removePendingReply(_ key: TransportSession.PendingKey) {
         replyStore.removePendingReply(key)
     }
@@ -5433,7 +5374,6 @@ package actor ConnectionCore {
         provisionalTargetMessageStore.removeAll()
         inboundMessageQueue = TransportInboundMessageQueue()
         if cause != .explicitClose {
-            eventSubscribers.finishAndRemoveAll()
         }
 
         return TerminalOperation(
@@ -5462,7 +5402,6 @@ package actor ConnectionCore {
         state = .closed
         if cause == .explicitClose {
             eventScopes.finishSubscribers(with: nil)
-            eventSubscribers.finishAndRemoveAll()
             modelFeed?.mailbox.finish()
         }
         modelFeed = nil

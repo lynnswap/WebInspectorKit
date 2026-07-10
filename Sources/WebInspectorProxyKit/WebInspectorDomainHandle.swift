@@ -82,46 +82,6 @@ package struct DomainEndpoint: Sendable {
         )
     }
 
-    package func domEvents() -> AsyncStream<DOM.Event> {
-        guard let proxy = proxyReference.resolve() else {
-            return finishedStream()
-        }
-        return proxy.domEvents(targetID: targetID, route: route)
-    }
-
-    package func cssEvents() -> AsyncStream<CSS.Event> {
-        guard let proxy = proxyReference.resolve() else {
-            return finishedStream()
-        }
-        return proxy.cssEvents(targetID: targetID, route: route)
-    }
-
-    package func networkEvents() -> AsyncStream<Network.Event> {
-        guard let proxy = proxyReference.resolve() else {
-            return finishedStream()
-        }
-        return proxy.networkEvents(targetID: targetID, route: route)
-    }
-
-    package func consoleEvents() -> AsyncStream<Console.Event> {
-        guard let proxy = proxyReference.resolve() else {
-            return finishedStream()
-        }
-        return proxy.consoleEvents(targetID: targetID, route: route)
-    }
-
-    package func runtimeEvents() -> AsyncStream<Runtime.Event> {
-        guard let proxy = proxyReference.resolve() else {
-            return finishedStream()
-        }
-        return proxy.runtimeEvents(targetID: targetID, route: route)
-    }
-}
-
-private func finishedStream<Element: Sendable>() -> AsyncStream<Element> {
-    AsyncStream { continuation in
-        continuation.finish()
-    }
 }
 
 /// Package-owned contract shared by the closed set of Web Inspector domain

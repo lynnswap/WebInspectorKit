@@ -199,18 +199,19 @@ package final class RuntimeStateStore {
 
     package func apply(
         _ event: Runtime.Event,
-        sourceTargetID: WebInspectorTarget.ID?
+        sourceTargetID: WebInspectorTarget.ID?,
+        isCurrentPageTarget: Bool
     ) {
         switch event {
         case let .executionContextCreated(context):
             applyExecutionContextCreated(context)
         case let .executionContextDestroyed(id):
             applyExecutionContextDestroyed(id)
-        case let .executionContextsCleared(eventTargetID):
-            if eventTargetID == .currentPage || eventTargetID == sourceTargetID {
+        case .executionContextsCleared:
+            if isCurrentPageTarget {
                 reset()
-            } else {
-                clear(targetID: eventTargetID)
+            } else if let sourceTargetID {
+                clear(targetID: sourceTargetID)
             }
         case .unknown:
             break

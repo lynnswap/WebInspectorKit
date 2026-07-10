@@ -61,18 +61,6 @@ package protocol WebInspectorProxyBackend: Sendable {
         _ command: WebInspectorProxyCommand<Payload, Result>
     ) async throws -> Result
 
-    nonisolated func events(
-        route: RoutingTargetID,
-        targetID: WebInspectorTarget.ID,
-        domain: WebInspectorProxyEventDomain
-    ) -> AsyncStream<WebInspectorProxyEvent>
-
-    func waitForEventSubscription(
-        route: RoutingTargetID,
-        targetID: WebInspectorTarget.ID,
-        domain: WebInspectorProxyEventDomain
-    ) async
-
     func acquireEventScope<Element: Sendable>(
         route: RoutingTargetID,
         targetID: WebInspectorTarget.ID,

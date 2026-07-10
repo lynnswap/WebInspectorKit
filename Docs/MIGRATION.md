@@ -8,6 +8,35 @@ when upgrading WebInspectorKit. Sections are grouped by release, newest first.
 Unreleased builds require Swift 6.3+ and a minimum deployment target of iOS
 18.4+ or macOS 15.4+. The built-in UIKit inspector remains iOS-only.
 
+### Use the logical page and scoped domain events
+
+`WebInspectorProxy.page` is now the only public page handle. Physical
+`WebInspectorTarget` values, `currentPage`, `waitForCurrentPage()`, `canReload`,
+and the duplicate proxy-level `reload()` were removed. Commands resolve the
+current physical WebKit target when they are sent, so a stored page handle
+continues across navigation and process replacement.
+
+Separate domain `enable()` / `disable()` calls and cold `events` streams were
+also removed. Use `withEvents` to register the subscriber before WebKit domain
+activation and to await balanced cleanup:
+
+```swift
+let proxy = try await WebInspectorProxy(attachingTo: webView)
+
+try await proxy.page.network.withEvents { events in
+    for try await event in events {
+        switch event {
+        case .reset:
+            resetNetworkPresentation()
+        case let .event(_, event):
+            handleNetworkEvent(event)
+        }
+    }
+}
+
+try await proxy.page.page.reload(ignoringCache: true)
+```
+
 ### Replace the semantic test backend with the raw peer
 
 `WebInspectorProxyKitTesting` now drives ProxyKit's production connection core

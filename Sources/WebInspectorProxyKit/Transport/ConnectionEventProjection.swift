@@ -338,7 +338,7 @@ package enum ConnectionEventProjection {
         case let .executionContextDestroyed(id):
             return .executionContextDestroyed(scopedExecutionContextID(id, targetRawValue: targetScopeRawValue))
         case .executionContextsCleared:
-            return .executionContextsCleared(target: WebInspectorTarget.ID(targetScopeRawValue))
+            return .executionContextsCleared
         case let .unknown(rawEvent):
             return .unknown(rawEvent)
         }

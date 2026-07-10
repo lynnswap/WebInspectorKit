@@ -1686,7 +1686,8 @@ public final class WebInspectorModelContext {
             }
             runtimeState.apply(
                 event,
-                sourceTargetID: target.id
+                sourceTargetID: target.id,
+                isCurrentPageTarget: target.id == binding.currentPageID
             )
             return ReducerWork.none
         }

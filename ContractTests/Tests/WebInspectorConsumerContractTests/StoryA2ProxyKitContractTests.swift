@@ -29,21 +29,7 @@ func testJSONObjectPublicInitializersValidateAndCanonicalizeTypedFixtures() thro
 @Test
 func webInspectorProxyPublicLifecycleAndCommandSurfaceWorksFromConsumerPackage() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
-    let target = try await runtime.proxy.waitForCurrentPage()
-
-    guard case .page = target.kind else {
-        Issue.record("Expected WebInspectorProxyTestRuntime to install a page target.")
-        return
-    }
-    #expect(await runtime.proxy.canReload)
-
-    let page = runtime.proxy.page
-    let targetDOM: DOM = target.dom
-    let targetCSS: CSS = target.css
-    let targetNetwork: Network = target.network
-    let targetConsole: Console = target.console
-    let targetRuntime: Runtime = target.runtime
-    let targetPage: Page = target.page
+    let page = runtime.page
     let currentPageDOM: DOM = page.dom
     let currentPageCSS: CSS = page.css
     let currentPageNetwork: Network = page.network
@@ -51,11 +37,6 @@ func webInspectorProxyPublicLifecycleAndCommandSurfaceWorksFromConsumerPackage()
     let currentPageRuntime: Runtime = page.runtime
     let currentPageCommands: Page = page.page
     _ = (
-        targetDOM,
-        targetCSS,
-        targetConsole,
-        targetRuntime,
-        targetPage,
         currentPageDOM,
         currentPageCSS,
         currentPageNetwork,
@@ -64,28 +45,27 @@ func webInspectorProxyPublicLifecycleAndCommandSurfaceWorksFromConsumerPackage()
         currentPageCommands
     )
 
-    let enableTask = Task {
-        try await targetNetwork.enable()
+    let reloadTask = Task {
+        try await currentPageCommands.reload()
     }
     let command = try await runtime.peer.commands.next()
     #expect(command.destination == .target("page-main"))
-    #expect(command.method == "Network.enable")
+    #expect(command.method == "Page.reload")
     try await runtime.peer.reply(to: command)
-    try await enableTask.value
+    try await reloadTask.value
 
     await runtime.proxy.close()
     try await runtime.proxy.waitUntilClosed()
-    #expect(await runtime.proxy.canReload == false)
 }
 
 @Test
 func webInspectorProxyNetworkEventsMulticastToConsumerSubscribers() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
-    let target = try await runtime.proxy.waitForCurrentPage()
+    let page = runtime.page
 
     let eventTask = Task {
-        try await target.network.withEvents { firstEvents in
-            try await target.network.withEvents { secondEvents in
+        try await page.network.withEvents { firstEvents in
+            try await page.network.withEvents { secondEvents in
                 try await runtime.peer.emitTargetEvent(
                     targetID: "page-main",
                     method: "Network.responseReceived",

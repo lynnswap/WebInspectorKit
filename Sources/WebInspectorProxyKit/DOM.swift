@@ -265,13 +265,6 @@ public struct DOM: Sendable, WebInspectorEventDomainHandle {
         )
     }
 
-    /// DOM domain events emitted by this target.
-    public var events: EventStream {
-        EventStream {
-            endpoint.domEvents()
-        }
-    }
-
     package struct GetDocumentPayload: Sendable {
         package init() {}
     }
@@ -619,29 +612,6 @@ public struct DOM: Sendable, WebInspectorEventDomainHandle {
         case unknown(RawEvent)
     }
 
-    /// An asynchronous stream of DOM domain events.
-    public struct EventStream: AsyncSequence, Sendable {
-        /// The event yielded by the stream.
-        public typealias Element = Event
-
-        /// The iterator type used by the stream.
-        public typealias AsyncIterator = AsyncStream<Event>.Iterator
-
-        private let makeStream: @Sendable () -> AsyncStream<Event>
-
-        package init(
-            _ makeStream: @escaping @Sendable () -> AsyncStream<Event> = {
-                finishedStream(of: Event.self)
-            }
-        ) {
-            self.makeStream = makeStream
-        }
-
-        /// Creates an iterator over DOM events.
-        public func makeAsyncIterator() -> AsyncIterator {
-            makeStream().makeAsyncIterator()
-        }
-    }
 }
 
 package extension DOM.Node.ID {

@@ -18,22 +18,6 @@ public struct Console: Sendable, WebInspectorEventDomainHandle {
         return value.event
     }
 
-    /// Enables Console domain events and commands for the target.
-    public func enable() async throws {
-        try await dispatchVoid(
-            method: "enable",
-            payload: EnablePayload()
-        )
-    }
-
-    /// Disables Console domain events for the target.
-    public func disable() async throws {
-        try await dispatchVoid(
-            method: "disable",
-            payload: DisablePayload()
-        )
-    }
-
     /// Runs an operation with an atomically registered Console event scope.
     public func withEvents<Output>(
         buffering: WebInspectorEventBufferingPolicy = .bounded(256),
@@ -63,21 +47,6 @@ public struct Console: Sendable, WebInspectorEventDomainHandle {
             method: "setLoggingChannelLevel",
             payload: SetLoggingChannelLevelPayload(source: source, level: level)
         )
-    }
-
-    /// Console domain events emitted by this target.
-    public var events: EventStream {
-        EventStream {
-            endpoint.consoleEvents()
-        }
-    }
-
-    package struct EnablePayload: Sendable {
-        package init() {}
-    }
-
-    package struct DisablePayload: Sendable {
-        package init() {}
     }
 
     package struct ClearMessagesPayload: Sendable {
@@ -287,27 +256,4 @@ public struct Console: Sendable, WebInspectorEventDomainHandle {
         }
     }
 
-    /// An asynchronous stream of Console domain events.
-    public struct EventStream: AsyncSequence, Sendable {
-        /// The event yielded by the stream.
-        public typealias Element = Event
-
-        /// The iterator type used by the stream.
-        public typealias AsyncIterator = AsyncStream<Event>.Iterator
-
-        private let makeStream: @Sendable () -> AsyncStream<Event>
-
-        package init(
-            _ makeStream: @escaping @Sendable () -> AsyncStream<Event> = {
-                finishedStream(of: Event.self)
-            }
-        ) {
-            self.makeStream = makeStream
-        }
-
-        /// Creates an iterator over Console events.
-        public func makeAsyncIterator() -> AsyncIterator {
-            makeStream().makeAsyncIterator()
-        }
-    }
 }

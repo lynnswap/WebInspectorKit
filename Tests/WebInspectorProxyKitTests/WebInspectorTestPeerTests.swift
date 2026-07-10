@@ -268,7 +268,7 @@ func proxyOwnsRawPeerAfterRuntimeWrapperIsReleased() async throws {
         let retainedProxy = try #require(proxy)
         let retainedPeer = try #require(weakPeer)
         let operation = Task {
-            try await retainedProxy.reload()
+            try await retainedProxy.page.page.reload()
         }
         let command = try await retainedPeer.commands.next()
         #expect(command.destination == .target("page-main"))

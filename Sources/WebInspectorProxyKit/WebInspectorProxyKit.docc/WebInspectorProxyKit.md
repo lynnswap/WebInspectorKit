@@ -6,10 +6,11 @@ Typed Web Inspector protocol transport for an inspected `WKWebView`.
 
 Use WebInspectorProxyKit when you want direct access to WebKit's inspector
 protocol commands and events. ProxyKit attaches to a `WKWebView`, tracks the
-current page target, and exposes typed domain handles from ``WebInspectorTarget``.
+current physical page internally, and exposes typed domain handles from one
+stable ``WebInspectorPage``.
 
-Create a ``WebInspectorProxy``, wait for the current page, and send protocol
-commands through target-scoped clients:
+Create a ``WebInspectorProxy`` and send protocol commands through its logical
+page handle:
 
 ```swift
 import WebKit
@@ -24,23 +25,25 @@ func printPageTitle(from webView: WKWebView) async throws {
         }
     }
 
-    let page = try await proxy.waitForCurrentPage()
-    try await page.runtime.enable()
-
-    let evaluation = try await page.runtime.evaluate("document.title")
+    let evaluation = try await proxy.page.runtime.evaluate("document.title")
     print(evaluation.object.description ?? "")
 }
 ```
 
-Domain clients can also expose event streams. Enable the domain before consuming
-events that require WebKit to start reporting that domain:
+Domain clients expose atomically registered event scopes. The scope registers
+its subscriber before WebKit domain activation and balances deactivation when
+the operation finishes:
 
 ```swift
-let page = try await proxy.waitForCurrentPage()
-try await page.network.enable()
-
-for await event in page.network.events {
-    handleNetworkEvent(event)
+try await proxy.page.network.withEvents { events in
+    for try await pageEvent in events {
+        switch pageEvent {
+        case .reset:
+            resetNetworkPresentation()
+        case let .event(_, event):
+            handleNetworkEvent(event)
+        }
+    }
 }
 ```
 
@@ -54,7 +57,7 @@ selection, collection updates, and DOM tree snapshots.
 
 - ``WebInspectorProxy``
 - ``WebInspectorProxy/Configuration``
-- ``WebInspectorTarget``
+- ``WebInspectorPage``
 - ``WebInspectorProxyError``
 
 ### Protocol Domains
@@ -66,7 +69,9 @@ selection, collection updates, and DOM tree snapshots.
 - ``Runtime``
 - ``Page``
 
-### Events and Targets
+### Events and Identity
 
+- ``WebInspectorPageEvent``
+- ``WebInspectorEventBufferingPolicy``
 - ``RawEvent``
 - ``FrameID``

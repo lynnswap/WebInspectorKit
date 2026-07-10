@@ -282,7 +282,7 @@ enum LiveProxyEventDecoder {
             let params = try decode(ExecutionContextDestroyedParams.self, from: event)
             return .executionContextDestroyed(Runtime.ExecutionContext.ID(params.executionContextId))
         case "Runtime.executionContextsCleared":
-            return .executionContextsCleared(target: targetID)
+            return .executionContextsCleared
         default:
             return .unknown(rawEvent(from: event))
         }

@@ -18,22 +18,6 @@ public struct Network: Sendable, WebInspectorEventDomainHandle {
         return value
     }
 
-    /// Enables Network domain events and commands for the target.
-    public func enable() async throws {
-        try await dispatchVoid(
-            method: "enable",
-            payload: EnablePayload()
-        )
-    }
-
-    /// Disables Network domain events for the target.
-    public func disable() async throws {
-        try await dispatchVoid(
-            method: "disable",
-            payload: DisablePayload()
-        )
-    }
-
     /// Runs an operation with an atomically registered Network event scope.
     ///
     /// The first scope registers before `Network.enable` is sent. Scope
@@ -62,21 +46,6 @@ public struct Network: Sendable, WebInspectorEventDomainHandle {
             payload: GetResponseBodyPayload(id: id, backendResourceIdentifier: backendResourceIdentifier),
             returning: Body.self
         )
-    }
-
-    /// Network domain events emitted by this target.
-    public var events: EventStream {
-        EventStream {
-            endpoint.networkEvents()
-        }
-    }
-
-    package struct EnablePayload: Sendable {
-        package init() {}
-    }
-
-    package struct DisablePayload: Sendable {
-        package init() {}
     }
 
     package struct GetResponseBodyPayload: Sendable {
@@ -436,29 +405,6 @@ public struct Network: Sendable, WebInspectorEventDomainHandle {
         }
     }
 
-    /// An asynchronous stream of Network domain events.
-    public struct EventStream: AsyncSequence, Sendable {
-        /// The event yielded by the stream.
-        public typealias Element = Event
-
-        /// The iterator type used by the stream.
-        public typealias AsyncIterator = AsyncStream<Event>.Iterator
-
-        private let makeStream: @Sendable () -> AsyncStream<Event>
-
-        package init(
-            _ makeStream: @escaping @Sendable () -> AsyncStream<Event> = {
-                finishedStream(of: Event.self)
-            }
-        ) {
-            self.makeStream = makeStream
-        }
-
-        /// Creates an iterator over Network events.
-        public func makeAsyncIterator() -> AsyncIterator {
-            makeStream().makeAsyncIterator()
-        }
-    }
 }
 
 package extension Network.Request.ID {

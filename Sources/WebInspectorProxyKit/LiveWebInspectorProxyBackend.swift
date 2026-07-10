@@ -2,11 +2,9 @@ import Foundation
 
 package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
     private let transport: TransportSession
-    private let eventSubscriptions: LiveProxyEventSubscriptions
 
     package init(transport: TransportSession) {
         self.transport = transport
-        eventSubscriptions = LiveProxyEventSubscriptions()
     }
 
     package func dispatchCommand<Payload: Sendable, Result: Sendable>(
@@ -28,28 +26,6 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         )
     }
 
-    package func waitForEventSubscription(
-        route: RoutingTargetID,
-        targetID: WebInspectorTarget.ID,
-        domain: WebInspectorProxyEventDomain
-    ) async {
-        await eventSubscriptions.waitForActiveSubscriber(
-            LiveProxyEventSubscriptionKey(route: route, targetID: targetID, domain: domain)
-        )
-    }
-
-    package func waitForEventSubscriptions(
-        route: RoutingTargetID,
-        targetID: WebInspectorTarget.ID,
-        domain: WebInspectorProxyEventDomain,
-        minimumCount: Int
-    ) async {
-        await eventSubscriptions.waitForActiveSubscribers(
-            LiveProxyEventSubscriptionKey(route: route, targetID: targetID, domain: domain),
-            minimumCount: minimumCount
-        )
-    }
-
     package func acquireEventScope<Element: Sendable>(
         route: RoutingTargetID,
         targetID: WebInspectorTarget.ID,
@@ -68,52 +44,6 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
 
     package func releaseEventScope(_ id: WebInspectorProxyEventScopeID) async throws {
         try await transport.releaseEventScope(id)
-    }
-
-    package nonisolated func events(
-        route: RoutingTargetID,
-        targetID: WebInspectorTarget.ID,
-        domain: WebInspectorProxyEventDomain
-    ) -> AsyncStream<WebInspectorProxyEvent> {
-        AsyncStream<WebInspectorProxyEvent> { continuation in
-            let key = LiveProxyEventSubscriptionKey(route: route, targetID: targetID, domain: domain)
-            let subscriptionID = LiveProxyEventSubscriptionID()
-            let task = Task {
-                let stream = await transport.events(for: protocolDomain(for: domain))
-                guard Task.isCancelled == false else {
-                    continuation.finish()
-                    return
-                }
-                await eventSubscriptions.register(key, id: subscriptionID)
-                for await event in stream {
-                    guard Task.isCancelled == false else {
-                        break
-                    }
-                    guard await shouldDeliver(event, to: route) else {
-                        continue
-                    }
-                    do {
-                        let lifecycleTarget = await lifecycleTarget(for: event, route: route, targetID: targetID)
-                        let proxyEvent = try LiveProxyEventDecoder.proxyEvent(
-                            from: event,
-                            targetID: targetID,
-                            lifecycleTarget: lifecycleTarget
-                        )
-                        continuation.yield(await projectedEvent(proxyEvent, from: event, route: route))
-                    } catch {
-                        preconditionFailure("Failed to decode \(event.method): \(error)")
-                    }
-                }
-                await eventSubscriptions.unregister(key, id: subscriptionID)
-                continuation.finish()
-            }
-            continuation.onTermination = { _ in
-                task.cancel()
-                Task {
-                    await eventSubscriptions.unregister(key, id: subscriptionID)
-                }
-            }
-        }
     }
 
     private func mapTransportError(_ error: any Error, domain: String, method: String) -> any Error {
@@ -157,162 +87,6 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         return rawValue
     }
 
-    private nonisolated func shouldDeliver(_ event: ProtocolEvent, to route: RoutingTargetID) async -> Bool {
-        let snapshot = await transport.snapshot()
-        return ConnectionEventProjection.shouldDeliver(event, to: route, in: snapshot)
-    }
-
-    private nonisolated func projectedEvent(
-        _ proxyEvent: WebInspectorProxyEvent,
-        from event: ProtocolEvent,
-        route: RoutingTargetID
-    ) async -> WebInspectorProxyEvent {
-        let snapshot = await transport.snapshot()
-        return ConnectionEventProjection.projectedEvent(proxyEvent, from: event, route: route, in: snapshot)
-    }
-
-    private nonisolated func lifecycleTarget(
-        for event: ProtocolEvent,
-        route: RoutingTargetID,
-        targetID: WebInspectorTarget.ID
-    ) async -> WebInspectorLifecycleTarget? {
-        let snapshot = await transport.snapshot()
-        return ConnectionEventProjection.lifecycleTarget(
-            for: event,
-            route: route,
-            targetID: targetID,
-            in: snapshot
-        )
-    }
-
-}
-
-private func protocolDomain(for domain: WebInspectorProxyEventDomain) -> ProtocolDomain {
-    switch domain {
-    case .target:
-        .target
-    case .dom:
-        .dom
-    case .inspector:
-        .inspector
-    case .css:
-        .css
-    case .network:
-        .network
-    case .console:
-        .console
-    case .runtime:
-        .runtime
-    case .page:
-        .page
-    }
-}
-
-private struct LiveProxyEventSubscriptionKey: Hashable, Sendable {
-    var route: RoutingTargetID
-    var targetID: WebInspectorTarget.ID
-    var domain: WebInspectorProxyEventDomain
-}
-
-private struct LiveProxyEventSubscriptionID: Hashable, Sendable {
-    var rawValue = UUID()
-}
-
-private actor LiveProxyEventSubscriptions {
-    private struct Waiter {
-        let id: UInt64
-        let minimumCount: Int
-        let continuation: CheckedContinuation<Void, Never>
-    }
-
-    private var activeSubscriberIDs: [LiveProxyEventSubscriptionKey: Set<LiveProxyEventSubscriptionID>] = [:]
-    private var waiters: [LiveProxyEventSubscriptionKey: [Waiter]] = [:]
-    private var nextWaiterID: UInt64 = 0
-    private var cancelledWaiterIDs: Set<UInt64> = []
-
-    func register(_ key: LiveProxyEventSubscriptionKey, id: LiveProxyEventSubscriptionID) {
-        let inserted = activeSubscriberIDs[key, default: []].insert(id).inserted
-        guard inserted else {
-            return
-        }
-        guard let pending = waiters.removeValue(forKey: key) else {
-            return
-        }
-        let count = activeSubscriberIDs[key, default: []].count
-        var remaining: [Waiter] = []
-        for waiter in pending {
-            if count >= waiter.minimumCount {
-                waiter.continuation.resume()
-            } else {
-                remaining.append(waiter)
-            }
-        }
-        if remaining.isEmpty == false {
-            waiters[key] = remaining
-        }
-    }
-
-    func unregister(_ key: LiveProxyEventSubscriptionKey, id: LiveProxyEventSubscriptionID) {
-        guard var ids = activeSubscriberIDs[key],
-              ids.remove(id) != nil else {
-            return
-        }
-        if ids.isEmpty {
-            activeSubscriberIDs[key] = nil
-        } else {
-            activeSubscriberIDs[key] = ids
-        }
-    }
-
-    func waitForActiveSubscriber(_ key: LiveProxyEventSubscriptionKey) async {
-        await waitForActiveSubscribers(key, minimumCount: 1)
-    }
-
-    func waitForActiveSubscribers(_ key: LiveProxyEventSubscriptionKey, minimumCount: Int) async {
-        guard activeSubscriberIDs[key, default: []].count < minimumCount else {
-            return
-        }
-        let waiterID = nextWaiterID
-        nextWaiterID += 1
-        await withTaskCancellationHandler {
-            await withCheckedContinuation { continuation in
-                addWaiter(
-                    Waiter(id: waiterID, minimumCount: minimumCount, continuation: continuation),
-                    key: key
-                )
-            }
-        } onCancel: {
-            Task {
-                await self.cancelWaiter(waiterID, key: key)
-            }
-        }
-        cancelledWaiterIDs.remove(waiterID)
-    }
-
-    private func addWaiter(_ waiter: Waiter, key: LiveProxyEventSubscriptionKey) {
-        guard cancelledWaiterIDs.remove(waiter.id) == nil else {
-            waiter.continuation.resume()
-            return
-        }
-        waiters[key, default: []].append(waiter)
-    }
-
-    private func cancelWaiter(_ id: UInt64, key: LiveProxyEventSubscriptionKey) {
-        guard var pending = waiters[key],
-              let index = pending.firstIndex(where: { $0.id == id }) else {
-            cancelledWaiterIDs.insert(id)
-            return
-        }
-        let waiter = pending.remove(at: index)
-        if pending.isEmpty {
-            waiters[key] = nil
-        } else {
-            waiters[key] = pending
-        }
-        // Resuming lets the cancelled caller return and observe its own
-        // Task.isCancelled state instead of staying suspended forever.
-        waiter.continuation.resume()
-    }
 }
 
 private enum LiveProxyCommandEncoder {

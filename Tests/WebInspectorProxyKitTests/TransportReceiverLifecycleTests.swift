@@ -308,22 +308,14 @@ func terminalTaskDoesNotKeepCoreAliveAcrossExternalCloseWait() async {
 }
 
 @Test
-func explicitCloseKeepsLegacyAndStructuredStreamsOpenUntilReceiverQuiesces() async throws {
+func explicitCloseKeepsStructuredScopeOpenUntilReceiverQuiesces() async throws {
     let parser = ControlledMessageParser(blockingInvocation: 2)
     let graph = ReceiverCoreGraph(parser: parser.parse)
     await graph.core.receiveRootMessage(pageTargetCreatedMessage(id: "page-main"))
     let proxy = try await WebInspectorProxy(transport: graph.core)
-    let legacyStream = await graph.core.events(for: .network)
-    let legacyCompletion = ReceiverCompletionProbe()
     let structuredReady = ReceiverAsyncGate()
     let structuredCompletion = ReceiverCompletionProbe()
 
-    let legacyTask = Task {
-        var iterator = legacyStream.makeAsyncIterator()
-        let event = await iterator.next()
-        await legacyCompletion.finish()
-        return event
-    }
     let structuredTask = Task {
         do {
             return try await proxy.page.dom.withEvents { events in
@@ -349,16 +341,13 @@ func explicitCloseKeepsLegacyAndStructuredStreamsOpenUntilReceiverQuiesces() asy
     }
     await waitForReceiverCloseWaiterCount(1, receiver: graph.receiver)
 
-    #expect(await legacyCompletion.isFinished == false)
     #expect(await structuredCompletion.isFinished == false)
     #expect(await graph.core.activeEventScopeSubscriberCountForTesting() == 1)
 
     await parser.release()
     await closeTask.value
 
-    #expect(await legacyTask.value == nil)
     #expect(await structuredTask.value)
-    #expect(await legacyCompletion.isFinished)
     #expect(await structuredCompletion.isFinished)
 }
 
