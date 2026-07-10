@@ -1608,18 +1608,34 @@ failure is logged at that UI lifecycle boundary rather than swallowed.
 Page-style observation is invalidated synchronously by the UI session's isolated
 deinitializer.
 
-Because a tab factory may await an off-MainActor initial query, the root also
-owns one content-loading state machine per tab: `idle`, `loading`, `ready`, or
-`failed`. Synchronous UIKit selection/layout installs a loading placeholder;
-one weak-root task invokes the `@MainActor async throws` factory. Concurrent
-compact/regular requests for the same tab join that task and only one controller
-is cached. A normal tab switch keeps the in-flight load/cache for reuse;
-asynchronous descriptor removal or explicit root retirement/close cancels and
-awaits the affected loads before clearing their cache entries. A factory failure
-installs a retryable error controller rather than failing model attachment. The
-task may retain the UI session, but never the root; isolated root
-deinitialization synchronously cancels any remaining task as a backstop while
-explicit retirement remains the awaited correctness path.
+The built-in Network tab cannot synchronously create its first concrete query:
+`NetworkPanelModel.make(context:)` awaits the atomic initial `NetworkQuery`
+snapshot and has no empty/default initializer. The root
+`PresentationContentStore` therefore owns one Network resource state machine:
+`idle`, `loading`, `ready`, or `failed`, together with its context epoch,
+generation, task, and revision. Synchronous UIKit selection/layout returns a
+native `UIContentUnavailableConfiguration.loading()` container; the same
+container replaces loading with ready content or a native failure configuration
+in place, so no placeholder model or empty result flashes first.
+
+Resource state and the ready model are shared across compact/regular requests,
+but every `UITab` provider receives a fresh container view controller because
+UIKit owns that controller identity. A host/layout switch neither closes nor
+recreates the resource. Only a root `clear()` or context-epoch transition
+cancels and awaits the old load/model; a next generation waits for that
+retirement, and a late factory completion is retired before it can publish.
+`InterfaceModel.tabs` is immutable, so there is no runtime tab-removal owner in
+this design. If tabs become mutable, ContentKey eviction and awaited resource
+retirement must be introduced together instead of treating view disappearance
+as resource close.
+
+The Network panel owns its current concrete query. Search/filter mutations form
+one latest-wins cancel-and-await chain before calling
+`WebInspectorFetchedResults.update(_:)`; clear is a committed operation ordered
+in the same chain, and a later query waits for it. Explicit model retirement
+cancels and awaits that work. The resource task weakly references the root and
+the model's `isolated deinit` synchronously cancels remaining work as a backstop;
+explicit root retirement remains the awaited correctness path.
 
 Custom tabs become a real consumer story:
 

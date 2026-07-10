@@ -17,6 +17,12 @@ extension WebInspectorUIRenderingTests {
 struct ParentContainerTests {
     private struct AttachmentFailure: Error {}
 
+    private struct NetworkResourceFailure: LocalizedError {
+        var errorDescription: String? {
+            "Network bootstrap failed."
+        }
+    }
+
     @Test
     func sessionAndViewControllerUseDOMAndNetworkTabsByDefault() {
         let session = WebInspectorSession()
@@ -293,6 +299,233 @@ struct ParentContainerTests {
     }
 
     @Test
+    func networkResourceTransitionsFromNativeLoadingToReadyInPlace() async throws {
+        let context = makeContext()
+        let factoryStarted = WebInspectorTestGate()
+        let factoryRelease = WebInspectorTestGate()
+        let contentStore = PresentationContentStore { context in
+            await factoryStarted.open()
+            await factoryRelease.wait()
+            return try await NetworkPanelModel.make(context: context)
+        }
+        let observation = withPortableContinuousObservation { _ in
+            _ = contentStore.networkResourceRevision
+        }
+        let statuses = await observation.values {
+            contentStore.networkResourceStatus
+        }
+        defer {
+            statuses.cancel()
+            observation.cancel()
+        }
+
+        let resourceViewController = contentStore.networkViewController(
+            context: context,
+            contextEpoch: 1
+        ) { _ in
+            UIViewController()
+        }
+
+        #expect(resourceViewController.phase == .loading)
+        #expect(resourceViewController.readyViewControllerForTesting == nil)
+        #expect(resourceViewController.contentUnavailableConfiguration != nil)
+        #expect(contentStore.networkResourceStatus == .loading)
+
+        await factoryStarted.wait()
+        await factoryRelease.open()
+        await contentStore.waitForNetworkResourceTaskForTesting()
+
+        #expect(await statuses.waitUntilValue(.ready))
+        #expect(resourceViewController.phase == .ready)
+        #expect(resourceViewController.readyViewControllerForTesting != nil)
+        #expect(resourceViewController.contentUnavailableConfiguration == nil)
+
+        await contentStore.clear()
+    }
+
+    @Test
+    func networkResourceWrappersAreHostOwnedWhileModelRetirementIsRootOwned() async throws {
+        let context = makeContext()
+        let contentStore = PresentationContentStore()
+        let firstResourceViewController = contentStore.networkViewController(
+            context: context,
+            contextEpoch: 1
+        ) { _ in
+            UIViewController()
+        }
+        await contentStore.waitForNetworkResourceTaskForTesting()
+        let model = try #require(contentStore.networkPanelModelForTesting)
+
+        let secondResourceViewController = contentStore.networkViewController(
+            context: context,
+            contextEpoch: 1
+        ) { _ in
+            UIViewController()
+        }
+
+        #expect(secondResourceViewController !== firstResourceViewController)
+        #expect(firstResourceViewController.phase == .ready)
+        #expect(secondResourceViewController.phase == .ready)
+        #expect(contentStore.networkPanelModelForTesting === model)
+        #expect(model.isRetiredForTesting == false)
+
+        await contentStore.clear()
+
+        #expect(model.isRetiredForTesting)
+        #expect(contentStore.networkResourceStatus == .idle)
+        #expect(firstResourceViewController.phase == .loading)
+        #expect(secondResourceViewController.phase == .loading)
+        #expect(firstResourceViewController.readyViewControllerForTesting == nil)
+        #expect(secondResourceViewController.readyViewControllerForTesting == nil)
+    }
+
+    @Test
+    func contextReplacementRejectsLateNetworkModelBeforePublishingNewReadyState() async throws {
+        let firstContext = makeContext()
+        let secondContext = makeContext()
+        let firstFactoryStarted = WebInspectorTestGate()
+        let firstFactoryRelease = WebInspectorTestGate()
+        let secondFactoryStarted = WebInspectorTestGate()
+        let secondFactoryRelease = WebInspectorTestGate()
+        var firstModel: NetworkPanelModel?
+        let contentStore = PresentationContentStore { context in
+            let model = try await NetworkPanelModel.make(context: context)
+            if context === firstContext {
+                firstModel = model
+                await firstFactoryStarted.open()
+                await firstFactoryRelease.wait()
+            } else {
+                #expect(context === secondContext)
+                await secondFactoryStarted.open()
+                await secondFactoryRelease.wait()
+            }
+            return model
+        }
+
+        let firstResourceViewController = contentStore.networkViewController(
+            context: firstContext,
+            contextEpoch: 1
+        ) { _ in
+            UIViewController()
+        }
+        await firstFactoryStarted.wait()
+        let withheldFirstModel = try #require(firstModel)
+
+        let secondResourceViewController = contentStore.networkViewController(
+            context: secondContext,
+            contextEpoch: 2
+        ) { _ in
+            UIViewController()
+        }
+
+        #expect(firstResourceViewController.phase == .loading)
+        #expect(secondResourceViewController.phase == .loading)
+        #expect(contentStore.contextEpoch == 2)
+
+        await firstFactoryRelease.open()
+        await secondFactoryStarted.wait()
+
+        #expect(withheldFirstModel.isRetiredForTesting)
+        #expect(contentStore.networkResourceStatus == .loading)
+        #expect(secondResourceViewController.readyViewControllerForTesting == nil)
+
+        await secondFactoryRelease.open()
+        await contentStore.waitForNetworkResourceTaskForTesting()
+
+        let secondModel = try #require(contentStore.networkPanelModelForTesting)
+        #expect(secondModel.context === secondContext)
+        #expect(secondResourceViewController.phase == .ready)
+        #expect(firstResourceViewController.phase == .loading)
+
+        await contentStore.clear()
+    }
+
+    @Test
+    func networkResourceFailureReplacesLoadingWithoutCreatingPlaceholderContent() async {
+        let context = makeContext()
+        let contentStore = PresentationContentStore { _ in
+            throw NetworkResourceFailure()
+        }
+        let resourceViewController = contentStore.networkViewController(
+            context: context,
+            contextEpoch: 1
+        ) { _ in
+            Issue.record("A failed Network resource must not create ready content.")
+            return UIViewController()
+        }
+
+        #expect(resourceViewController.phase == .loading)
+        #expect(resourceViewController.readyViewControllerForTesting == nil)
+
+        await contentStore.waitForNetworkResourceTaskForTesting()
+
+        #expect(contentStore.networkResourceStatus == .failed("Network bootstrap failed."))
+        #expect(resourceViewController.phase == .failed("Network bootstrap failed."))
+        #expect(resourceViewController.readyViewControllerForTesting == nil)
+        #expect(
+            (resourceViewController.contentUnavailableConfiguration as? UIContentUnavailableConfiguration)?
+                .secondaryText
+                == "Network bootstrap failed."
+        )
+
+        await contentStore.clear()
+    }
+
+    @Test
+    func networkResourceLoadDoesNotRetainStore() async throws {
+        let context = makeContext()
+        let factoryStarted = WebInspectorTestGate()
+        let factoryRelease = WebInspectorTestGate()
+        var contentStore: PresentationContentStore? = PresentationContentStore { context in
+            let model = try await NetworkPanelModel.make(context: context)
+            await factoryStarted.open()
+            await factoryRelease.wait()
+            return model
+        }
+        weak var retainedStore = contentStore
+        let resourceViewController = try #require(contentStore).networkViewController(
+            context: context,
+            contextEpoch: 1
+        ) { _ in
+            UIViewController()
+        }
+        await factoryStarted.wait()
+
+        contentStore = nil
+
+        #expect(retainedStore == nil)
+        #expect(resourceViewController.phase == .loading)
+
+        await factoryRelease.open()
+        #expect(resourceViewController.readyViewControllerForTesting == nil)
+    }
+
+    @Test
+    func networkResourceStoreDeinitSynchronouslyRetiresReadyBackstop() async throws {
+        let context = makeContext()
+        var contentStore: PresentationContentStore? = PresentationContentStore()
+        weak var retainedStore = contentStore
+        let resourceViewController = try #require(contentStore).networkViewController(
+            context: context,
+            contextEpoch: 1
+        ) { _ in
+            UIViewController()
+        }
+        await contentStore?.waitForNetworkResourceTaskForTesting()
+        let model = try #require(contentStore?.networkPanelModelForTesting)
+
+        #expect(resourceViewController.phase == .ready)
+        #expect(model.isRetiredForTesting == false)
+
+        contentStore = nil
+
+        #expect(retainedStore == nil)
+        #expect(model.isRetiredForTesting)
+        #expect(resourceViewController.phase == .loading)
+        #expect(resourceViewController.readyViewControllerForTesting == nil)
+    }
+
+    @Test
     func representationBeforeDeferredRetirementKeepsContentAndSkipsDetach() async throws {
         let session = makeSessionWithNoOpAttachment()
         let viewController = WebInspectorViewController(session: session)
@@ -418,13 +651,9 @@ struct ParentContainerTests {
     }
 
     @Test
-    func viewControllerPreviewSessionInjectsMockDOMAndNetworkModels() throws {
+    func viewControllerPreviewSessionInjectsMockDOMAndNetworkModels() async throws {
         let session = WebInspectorViewControllerPreviewFixtures.makeSession()
-        let viewController = WebInspectorViewController(session: session)
-        let model = viewController.presentationContentStoreForTesting.networkPanelModel(
-            for: session.context,
-            contextEpoch: session.interface.contextBoundContentRevision
-        )
+        let model = try await NetworkPanelModel.make(context: session.context)
 
         #expect(session.context.rootNode?.nodeName == "#document")
         #expect(model.displayRequests.count >= 2)
@@ -524,7 +753,6 @@ struct ParentContainerTests {
         weak var retainedCache: WebInspectorTab.ContentCache?
         weak var retainedSession: WebInspectorSession?
         weak var retainedContent: UIViewController?
-        weak var retainedNetworkModel: NetworkPanelModel?
 
         autoreleasepool {
             let customTab = WebInspectorTab(
@@ -537,10 +765,6 @@ struct ParentContainerTests {
             let session = WebInspectorSession(tabs: [customTab])
             let root = WebInspectorViewController(session: session)
             let contentStore = root.presentationContentStoreForTesting
-            let networkModel = contentStore.networkPanelModel(
-                for: session.context,
-                contextEpoch: session.interface.contextBoundContentRevision
-            )
             let content = WebInspectorTab.ContentFactory.makeViewController(
                 for: .customTab(customTab.id),
                 session: session,
@@ -555,7 +779,6 @@ struct ParentContainerTests {
             retainedCache = contentStore.contentCacheForTesting
             retainedSession = session
             retainedContent = content
-            retainedNetworkModel = networkModel
         }
 
         #expect(retainedRoot == nil)
@@ -563,7 +786,6 @@ struct ParentContainerTests {
         #expect(retainedCache == nil)
         #expect(retainedSession == nil)
         #expect(retainedContent == nil)
-        #expect(retainedNetworkModel == nil)
     }
 
     @Test
@@ -943,7 +1165,7 @@ struct ParentContainerTests {
     }
 
     @Test
-    func compactFactoryUsesDomainNavigationControllers() throws {
+    func compactFactoryUsesDomainNavigationControllers() async throws {
         let session = WebInspectorSession(context: makeContext())
         let contentStore = PresentationContentStore()
 
@@ -965,13 +1187,19 @@ struct ParentContainerTests {
         let elementNavigationController = try #require(elementViewController as? DOMCompactNavigationController)
         #expect(elementNavigationController.viewControllers.first is DOMElementViewController)
 
-        let networkViewController = WebInspectorTab.ContentFactory.makeViewController(
-            for: .network,
-            session: session,
-            contentStore: contentStore,
-            hostLayout: .compact
+        let networkResourceViewController = try #require(
+            WebInspectorTab.ContentFactory.makeViewController(
+                for: .network,
+                session: session,
+                contentStore: contentStore,
+                hostLayout: .compact
+            ) as? NetworkTabResourceViewController
         )
-        let networkNavigationController = try #require(networkViewController as? NetworkCompactNavigationController)
+        await contentStore.waitForNetworkResourceTaskForTesting()
+        let networkNavigationController = try #require(
+            networkResourceViewController.readyViewControllerForTesting
+                as? NetworkCompactNavigationController
+        )
         #expect(networkNavigationController.viewControllers.first is NetworkListViewController)
     }
 
@@ -1046,17 +1274,19 @@ struct ParentContainerTests {
             url: "https://example.com/app.js"
         )
         let request = try #require(context.registeredRequest(for: requestID))
-        let model = contentStore.networkPanelModel(
-            for: context,
-            contextEpoch: session.interface.contextBoundContentRevision
-        )
-        let compactNavigationController = try #require(
+        let compactResourceViewController = try #require(
             WebInspectorTab.ContentFactory.makeViewController(
                 for: .network,
                 session: session,
                 contentStore: contentStore,
                 hostLayout: .compact
-            ) as? NetworkCompactNavigationController
+            ) as? NetworkTabResourceViewController
+        )
+        await contentStore.waitForNetworkResourceTaskForTesting()
+        let model = try #require(contentStore.networkPanelModelForTesting)
+        let compactNavigationController = try #require(
+            compactResourceViewController.readyViewControllerForTesting
+                as? NetworkCompactNavigationController
         )
         let window = showInWindow(compactNavigationController, useUIKitVisibility: false)
         defer { window.isHidden = true }
@@ -1068,11 +1298,17 @@ struct ParentContainerTests {
         }
         #expect(didPushDetail)
 
-        let regularRoot = WebInspectorTab.ContentFactory.makeViewController(
-            for: .network,
-            session: session,
-            contentStore: contentStore,
-            hostLayout: .regular
+        let regularResourceViewController = try #require(
+            WebInspectorTab.ContentFactory.makeViewController(
+                for: .network,
+                session: session,
+                contentStore: contentStore,
+                hostLayout: .regular
+            ) as? NetworkTabResourceViewController
+        )
+        await contentStore.waitForNetworkResourceTaskForTesting()
+        let regularRoot = try #require(
+            regularResourceViewController.readyViewControllerForTesting
         )
         regularRoot.loadViewIfNeeded()
         let splitViewController = try childViewController(

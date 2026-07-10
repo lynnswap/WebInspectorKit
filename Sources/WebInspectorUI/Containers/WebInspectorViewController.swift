@@ -306,7 +306,12 @@ public final class WebInspectorViewController: UIViewController {
                 guard presentationLifecycleCoordinator.isCurrentPresentation(generation) else {
                     return
                 }
-                presentationContentStore.clear()
+                await presentationContentStore.clear()
+                // Resource retirement may suspend long enough for this root to
+                // begin a new presentation. Never detach that newer lifetime.
+                guard presentationLifecycleCoordinator.isCurrentPresentation(generation) else {
+                    return
+                }
                 if automaticallyDetachesOnDismiss {
                     await session.detach()
                 } else {

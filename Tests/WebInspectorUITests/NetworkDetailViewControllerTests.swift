@@ -25,8 +25,8 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func listShowsSimpleEmptyStateWithoutRequests() {
-        let model = NetworkPanelModel(context: makeContext())
+    func listShowsSimpleEmptyStateWithoutRequests() async throws {
+        let model = try await NetworkPanelModel.make(context: makeContext())
         let viewController = NetworkListViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
@@ -41,8 +41,8 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func detailShowsEmptyStateWithoutSelection() {
-        let model = NetworkPanelModel(context: makeContext())
+    func detailShowsEmptyStateWithoutSelection() async throws {
+        let model = try await NetworkPanelModel.make(context: makeContext())
         let viewController = makeNetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
@@ -58,12 +58,12 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func detailCanDisableBackgroundDrawing() {
+    func detailCanDisableBackgroundDrawing() async throws {
         guard #available(iOS 26.0, *) else {
             return
         }
 
-        let model = NetworkPanelModel(context: makeContext())
+        let model = try await NetworkPanelModel.make(context: makeContext())
         let viewController = makeNetworkDetailViewController(model: model)
         viewController.traitOverrides.webInspectorDrawsBackground = false
 
@@ -91,12 +91,12 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func listCanDisableBackgroundDrawing() {
+    func listCanDisableBackgroundDrawing() async throws {
         guard #available(iOS 26.0, *) else {
             return
         }
 
-        let model = NetworkPanelModel(context: makeContext())
+        let model = try await NetworkPanelModel.make(context: makeContext())
         let viewController = NetworkListViewController(model: model)
         viewController.traitOverrides.webInspectorDrawsBackground = false
 
@@ -106,9 +106,10 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func listLoadDefersFilterMenuBuildUntilPresentation() throws {
-        let model = NetworkPanelModel(context: makeContext())
+    func listLoadDefersFilterMenuBuildUntilPresentation() async throws {
+        let model = try await NetworkPanelModel.make(context: makeContext())
         model.setResourceFilter(.media, enabled: true)
+        await model.waitForQueryUpdates()
         let viewController = NetworkListViewController(model: model)
 
         viewController.loadViewIfNeeded()
@@ -133,7 +134,7 @@ struct NetworkDetailViewControllerTests {
             responseHeaders: ["content-type": "application/json"],
             responseMimeType: "application/json"
         ))
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         let viewController = NetworkListViewController(model: model)
 
         viewController.loadViewIfNeeded()
@@ -151,8 +152,8 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func regularSplitKeepsPrimarySecondaryLayout() throws {
-        let model = NetworkPanelModel(context: makeContext())
+    func regularSplitKeepsPrimarySecondaryLayout() async throws {
+        let model = try await NetworkPanelModel.make(context: makeContext())
         let listViewController = NetworkListViewController(model: model)
         let detailViewController = makeNetworkDetailViewController(model: model)
         let splitViewController = NetworkSplitViewController(
@@ -180,8 +181,8 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func detailContentKeepsPreviewRoleControlInSafeArea() {
-        let model = NetworkPanelModel(context: makeContext())
+    func detailContentKeepsPreviewRoleControlInSafeArea() async throws {
+        let model = try await NetworkPanelModel.make(context: makeContext())
         let viewController = makeNetworkDetailViewController(model: model)
         viewController.additionalSafeAreaInsets = UIEdgeInsets(top: 44, left: 120, bottom: 10, right: 24)
         let window = showInWindow(viewController)
@@ -223,7 +224,7 @@ struct NetworkDetailViewControllerTests {
                 responseMimeType: "application/json"
             )
         )
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
@@ -282,7 +283,7 @@ struct NetworkDetailViewControllerTests {
                 url: "https://example.com/no-body"
             )
         )
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(bodyRequest)
         let viewController = makeNetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
@@ -331,7 +332,7 @@ struct NetworkDetailViewControllerTests {
                 responseMimeType: "application/json"
             )
         )
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(responseOnlyRequest)
         let viewController = makeNetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
@@ -378,7 +379,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         applyResponseBody(to: context, request: responseOnlyRequest, body: "response only body", base64Encoded: false)
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(requestAndResponse)
         let viewController = makeNetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
@@ -430,7 +431,7 @@ struct NetworkDetailViewControllerTests {
                 url: "https://example.com/no-body"
             )
         )
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
@@ -465,7 +466,7 @@ struct NetworkDetailViewControllerTests {
                 url: "https://example.com/api/data.json"
             )
         )
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
@@ -506,7 +507,7 @@ struct NetworkDetailViewControllerTests {
                 responseMimeType: "text/plain"
             )
         )
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
@@ -539,7 +540,7 @@ struct NetworkDetailViewControllerTests {
                 postData: "name=Jane+Doe"
             )
         )
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
@@ -571,7 +572,7 @@ struct NetworkDetailViewControllerTests {
                 responseMimeType: "application/json"
             )
         )
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
@@ -600,7 +601,7 @@ struct NetworkDetailViewControllerTests {
                 responseMimeType: "application/json"
             )
         )
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
@@ -647,7 +648,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         applyResponseBody(to: context, request: request, body: #"{"visible":true}"#, base64Encoded: false)
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
         let window = showInWindow(viewController)
@@ -688,7 +689,7 @@ struct NetworkDetailViewControllerTests {
         )
         let bodyText = String(repeating: "[", count: 160) + "0" + String(repeating: "]", count: 160)
         applyResponseBody(to: context, request: request, body: bodyText, base64Encoded: false)
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
         let window = showInWindow(viewController)
@@ -718,7 +719,7 @@ struct NetworkDetailViewControllerTests {
         )
         let bodyText = "{\r\n\"a\":1,\r\n\"b\":[true]\r\n}"
         applyResponseBody(to: context, request: request, body: bodyText, base64Encoded: false)
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
         let window = showInWindow(viewController)
@@ -842,7 +843,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         applyResponseBody(to: context, request: request, body: "not a real movie", base64Encoded: false)
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
         let playerFactory = MoviePreviewPlayerFactorySpy()
@@ -898,7 +899,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         applyResponseBody(to: context, request: request, body: "not a real movie", base64Encoded: false)
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
         let playerFactory = MoviePreviewPlayerFactorySpy()
@@ -947,7 +948,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         applyResponseBody(to: context, request: request, body: "not a real movie", base64Encoded: false)
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
         let playerFactory = MoviePreviewPlayerFactorySpy()
@@ -998,7 +999,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         applyResponseBody(to: context, request: request, body: "not a real movie", base64Encoded: false)
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
         let playerFactory = MoviePreviewPlayerFactorySpy()
@@ -1043,7 +1044,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         applyResponseBody(to: context, request: request, body: "not a real movie", base64Encoded: false)
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
         let playerFactory = MoviePreviewPlayerFactorySpy()
@@ -1098,7 +1099,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         applyResponseBody(to: context, request: request, body: pngBase64String(size: imageSize), base64Encoded: true)
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
         viewController.syntaxBodyViewControllerForTesting.additionalSafeAreaInsets = UIEdgeInsets(
@@ -1155,7 +1156,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         applyResponseBody(to: context, request: request, body: pngBase64String(size: imageSize), base64Encoded: true)
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
@@ -1202,7 +1203,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         applyResponseBody(to: context, request: request, body: pngBase64String(size: imageSize), base64Encoded: true)
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
@@ -1235,7 +1236,7 @@ struct NetworkDetailViewControllerTests {
                 finishes: false
             )
         )
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
@@ -1267,7 +1268,7 @@ struct NetworkDetailViewControllerTests {
                 responseMimeType: "application/json"
             )
         )
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         model.fetchResponseBodyIfNeeded(for: request)
         let didFailInitialFetch = await waitForNetworkBodyPhase(in: request.responseBody) { phase in
             if case .failed = phase {
@@ -1311,7 +1312,7 @@ struct NetworkDetailViewControllerTests {
                 responseMimeType: "application/json"
             )
         )
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
@@ -1339,7 +1340,7 @@ struct NetworkDetailViewControllerTests {
                 finishes: false
             )
         )
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
@@ -1380,7 +1381,7 @@ struct NetworkDetailViewControllerTests {
                 responseMimeType: "application/json"
             )
         )
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
@@ -1430,7 +1431,7 @@ struct NetworkDetailViewControllerTests {
                 finishes: false
             )
         )
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let bodyPreview = RecordingNetworkBodyPreviewViewController()
         let viewController = makeNetworkDetailViewController(
@@ -1489,7 +1490,7 @@ struct NetworkDetailViewControllerTests {
                 responseMimeType: "application/json"
             )
         )
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(firstRequest)
         let viewController = makeNetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
@@ -1594,7 +1595,7 @@ struct NetworkDetailViewControllerTests {
     func compactContainerPushesAndPopsDetailFromSelection() async throws {
         let context = makeContext()
         let request = try #require(await applyRequest(to: context, requestID: "1", url: "https://example.com/app.js"))
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         let listViewController = NetworkListViewController(model: model)
         let detailViewController = makeNetworkDetailViewController(model: model)
         let navigationController = NetworkCompactNavigationController(
@@ -1625,7 +1626,7 @@ struct NetworkDetailViewControllerTests {
     func compactContainerCanPushSameRequestAfterBackNavigation() async throws {
         let context = makeContext()
         _ = try #require(await applyRequest(to: context, requestID: "1", url: "https://example.com/app.js"))
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         let listViewController = NetworkListViewController(model: model)
         let detailViewController = makeNetworkDetailViewController(model: model)
         let navigationController = NetworkCompactNavigationController(
@@ -1677,7 +1678,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         applyResponseBody(to: context, request: request, body: "not a real movie", base64Encoded: false)
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         let listViewController = NetworkListViewController(model: model)
         let detailViewController = makeNetworkDetailViewController(model: model)
         detailViewController.setModeForTesting(.preview)
@@ -1725,7 +1726,7 @@ struct NetworkDetailViewControllerTests {
     func compactContainerPopsDetailWhenSelectedRequestDisappears() async throws {
         let context = makeContext()
         let request = try #require(await applyRequest(to: context, requestID: "1", url: "https://example.com/app.js"))
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         let listViewController = NetworkListViewController(model: model)
         let detailViewController = makeNetworkDetailViewController(model: model)
         let navigationController = NetworkCompactNavigationController(
@@ -1763,7 +1764,7 @@ struct NetworkDetailViewControllerTests {
             requestID: "1",
             url: "https://example.com/first.js"
         ))
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         let listViewController = NetworkListViewController(model: model)
         let window = showInWindow(listViewController, makeVisible: true)
         defer { window.isHidden = true }
@@ -1800,8 +1801,9 @@ struct NetworkDetailViewControllerTests {
             responseHeaders: ["content-type": "video/mp4"],
             responseMimeType: "video/mp4"
         ))
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         model.setResourceFilter(.media, enabled: true)
+        await model.waitForQueryUpdates()
         let listViewController = NetworkListViewController(model: model)
         let window = showInWindow(listViewController, makeVisible: true)
         defer { window.isHidden = true }
@@ -1837,7 +1839,7 @@ struct NetworkDetailViewControllerTests {
             responseHeaders: ["content-type": "video/mp4"],
             responseMimeType: "video/mp4"
         ))
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         let listViewController = NetworkListViewController(model: model)
         let window = showInWindow(listViewController)
         defer { window.isHidden = true }
@@ -1873,7 +1875,7 @@ struct NetworkDetailViewControllerTests {
             responseHeaders: ["content-type": "video/mp4"],
             responseMimeType: "video/mp4"
         ))
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         let listViewController = NetworkListViewController(model: model)
         let window = showInWindow(listViewController)
         defer { window.isHidden = true }
@@ -1881,6 +1883,8 @@ struct NetworkDetailViewControllerTests {
         #expect(listViewController.displayedRequestIDsForTesting == [request.id])
 
         let evaluationCountBeforeHiddenUpdate = listViewController.displayRequestIDsEvaluationCountForTesting
+        let updateDeliveryCountBeforeHiddenUpdate = listViewController
+            .fetchedResultsUpdateDeliveryCountForTesting
         listViewController.beginSnapshotApplyForTesting(requestIDs: [request.id])
         listViewController.queueSnapshotUpdateForTesting(requestIDs: [])
         #expect(listViewController.hasPendingSnapshotUpdateForTesting)
@@ -1889,6 +1893,9 @@ struct NetworkDetailViewControllerTests {
         #expect(listViewController.hasPendingSnapshotUpdateForTesting == false)
 
         model.setSearchText("does-not-match")
+        #expect(await listViewController.waitForFetchedResultsUpdateDeliveryForTesting(
+            after: updateDeliveryCountBeforeHiddenUpdate
+        ))
         listViewController.finishSnapshotApplyForTesting(requestIDs: [request.id])
         await listViewController.flushPendingSnapshotUpdateForTesting()
 
@@ -1911,8 +1918,9 @@ struct NetworkDetailViewControllerTests {
             responseHeaders: ["content-type": "video/mp4"],
             responseMimeType: "video/mp4"
         ))
-        let model = NetworkPanelModel(context: context)
+        let model = try await NetworkPanelModel.make(context: context)
         model.setResourceFilter(.media, enabled: true)
+        await model.waitForQueryUpdates()
         let listViewController = NetworkListViewController(model: model)
         listViewController.loadViewIfNeeded()
         listViewController.resumeRenderingForTesting()
@@ -1986,7 +1994,7 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func listControllerDeallocatesWhileFetchedResultsUpdateTaskIsActive() async throws {
-        let model = NetworkPanelModel(context: makeContext())
+        let model = try await NetworkPanelModel.make(context: makeContext())
         let deinitProbe = UITestDeinitProbe()
         weak var weakViewController: NetworkListViewController?
 

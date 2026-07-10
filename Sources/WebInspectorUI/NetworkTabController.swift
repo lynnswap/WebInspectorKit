@@ -23,18 +23,37 @@ package struct NetworkTabController: WebInspectorTab.BuiltInController {
         contentStore: PresentationContentStore,
         layout: WebInspectorTab.HostLayout
     ) -> UIViewController {
-        let model = contentStore.networkPanelModel(
-            for: session.context,
-            contextEpoch: session.interface.contextBoundContentRevision
-        )
+        let contextEpoch = session.interface.contextBoundContentRevision
+        return contentStore.networkViewController(
+            context: session.context,
+            contextEpoch: contextEpoch
+        ) { [weak contentStore] model in
+            guard let contentStore else {
+                preconditionFailure("A Network resource lost its presentation content store.")
+            }
+            return readyViewController(
+                layout: layout,
+                contentStore: contentStore,
+                contextEpoch: contextEpoch,
+                model: model
+            )
+        }
+    }
+
+    private func readyViewController(
+        layout: WebInspectorTab.HostLayout,
+        contentStore: PresentationContentStore,
+        contextEpoch: Int,
+        model: NetworkPanelModel
+    ) -> UIViewController {
         let listViewController = cachedListViewController(
-            session: session,
             contentStore: contentStore,
+            contextEpoch: contextEpoch,
             model: model
         )
         let detailViewController = cachedDetailViewController(
-            session: session,
             contentStore: contentStore,
+            contextEpoch: contextEpoch,
             model: model
         )
 
@@ -57,26 +76,26 @@ package struct NetworkTabController: WebInspectorTab.BuiltInController {
     }
 
     private func cachedListViewController(
-        session: WebInspectorSession,
         contentStore: PresentationContentStore,
+        contextEpoch: Int,
         model: NetworkPanelModel
     ) -> NetworkListViewController {
         contentStore.viewController(
             for: contentKey(ContentID.list),
-            contextEpoch: session.interface.contextBoundContentRevision
+            contextEpoch: contextEpoch
         ) {
             NetworkListViewController(model: model)
         }
     }
 
     private func cachedDetailViewController(
-        session: WebInspectorSession,
         contentStore: PresentationContentStore,
+        contextEpoch: Int,
         model: NetworkPanelModel
     ) -> NetworkDetailViewController {
         contentStore.viewController(
             for: contentKey(ContentID.detail),
-            contextEpoch: session.interface.contextBoundContentRevision
+            contextEpoch: contextEpoch
         ) {
             NetworkDetailViewController(
                 model: model,

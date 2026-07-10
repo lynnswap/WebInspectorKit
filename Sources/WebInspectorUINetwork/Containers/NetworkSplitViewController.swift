@@ -94,16 +94,13 @@ private final class NetworkListColumnNavigationController: UINavigationControlle
 }
 
 #Preview("Network Split") {
-    let model = NetworkPreviewFixtures.makePanelModel(mode: .detail)
-    NetworkCompactNavigationController(
-        model: model,
-        listViewController: NetworkListViewController(
-            model: model
-        ),
-        detailViewController: NetworkDetailViewController(
-            model: model
+    NetworkPreviewFixtures.makeViewController(mode: .detail) { model in
+        NetworkCompactNavigationController(
+            model: model,
+            listViewController: NetworkListViewController(model: model),
+            detailViewController: NetworkDetailViewController(model: model)
         )
-    )
+    }
 }
 
 #Preview("Network Split Log Preview") {
@@ -117,21 +114,20 @@ private final class NetworkListColumnNavigationController: UINavigationControlle
 private func makeNetworkSplitPreviewController(
     initialMode: NetworkDetailViewController.Mode = .headers,
     selectedDisplayName: String? = nil
-) -> NetworkCompactNavigationController {
-    let model = NetworkPreviewFixtures.makePanelModel(mode: .detail)
-    if let selectedDisplayName,
-       let request = model.displayRequests.first(where: { $0.displayName == selectedDisplayName }) {
-        model.selectRequest(request)
-    }
-    return NetworkCompactNavigationController(
-        model: model,
-        listViewController: NetworkListViewController(
-            model: model
-        ),
-        detailViewController: NetworkDetailViewController(
+) -> UIViewController {
+    NetworkPreviewFixtures.makeViewController(mode: .detail) { model in
+        if let selectedDisplayName,
+           let request = model.displayRequests.first(where: { $0.displayName == selectedDisplayName }) {
+            model.selectRequest(request)
+        }
+        return NetworkCompactNavigationController(
             model: model,
-            initialMode: initialMode
+            listViewController: NetworkListViewController(model: model),
+            detailViewController: NetworkDetailViewController(
+                model: model,
+                initialMode: initialMode
+            )
         )
-    )
+    }
 }
 #endif
