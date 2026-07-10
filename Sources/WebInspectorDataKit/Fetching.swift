@@ -670,6 +670,17 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
         guard delta.sequence > networkIndexSequence else {
             return
         }
+        if delta.snapshot == state.snapshot {
+            publish(
+                items: state.items,
+                sections: state.sections,
+                snapshot: delta.snapshot,
+                transaction: delta.transaction,
+                updatedItemIDs: delta.reconfigureItemIDs
+            )
+            networkIndexSequence = delta.sequence
+            return
+        }
         let items = delta.snapshot.itemIDs.map { id in
             guard let request = lookup(id) else {
                 preconditionFailure("A NetworkRequestIndex snapshot referenced an unregistered request.")

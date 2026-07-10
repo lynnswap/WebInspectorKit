@@ -153,15 +153,7 @@ public final class WebInspectorContext {
     private var runtimeTrackingTarget: WebInspectorTarget?
     private var consoleTrackingTarget: WebInspectorTarget?
     private let statusRelay: WebInspectorAsyncStreamRelay<Status>
-    private var requestsByID: [NetworkRequest.ID: NetworkRequest]
-    private var orderedRequestIDs: [NetworkRequest.ID]
-    private var networkRequestOrderIndicesByID: [NetworkRequest.ID: Int]
-    private var clearedNetworkRequestIDs: Set<NetworkRequest.ID>
-    private let networkRequestIndex: NetworkRequestIndex
-    private var networkRequestIndexSequence: UInt64
-    private var networkRequestIndexNeedsRebuild: Bool
-    private let networkCollectionState: NetworkRequestCollectionState
-    private var networkFetchedResults: [WeakWebInspectorFetchedResults<NetworkRequest>]
+    private let networkRequests: NetworkRequestStore
     private var consoleMessagesByID: [ConsoleMessage.ID: ConsoleMessage]
     private var orderedConsoleMessageIDs: [ConsoleMessage.ID]
     private var lastConsoleMessageID: ConsoleMessage.ID?
@@ -210,15 +202,7 @@ public final class WebInspectorContext {
         runtimeTrackingTarget = nil
         consoleTrackingTarget = nil
         statusRelay = WebInspectorAsyncStreamRelay()
-        requestsByID = [:]
-        orderedRequestIDs = []
-        networkRequestOrderIndicesByID = [:]
-        clearedNetworkRequestIDs = []
-        networkRequestIndex = NetworkRequestIndex()
-        networkRequestIndexSequence = 0
-        networkRequestIndexNeedsRebuild = false
-        networkCollectionState = NetworkRequestCollectionState()
-        networkFetchedResults = []
+        networkRequests = NetworkRequestStore()
         consoleMessagesByID = [:]
         orderedConsoleMessageIDs = []
         lastConsoleMessageID = nil
@@ -278,7 +262,7 @@ public final class WebInspectorContext {
         state = .attaching
         notifyStatusChanged()
         teardownError = nil
-        resetNetworkModelsForNewAttachment()
+        resetNetworkModelsForNewAttachment(isolation: isolation)
         startupTask = Task { [weak self, previousStartupTask, previousCurrentPageCleanupTask] in
             _ = isolation
             await previousStartupTask?.value
@@ -322,11 +306,11 @@ public final class WebInspectorContext {
         isolation: isolated (any Actor) = #isolation
     ) -> NetworkRequest? {
         requireOwner(isolation)
-        return requestsByID[id]
+        return networkRequests.request(for: id, isolation: isolation)
     }
 
     package var networkRequestsCollectionState: NetworkRequestCollectionState {
-        networkCollectionState
+        networkRequests.collectionState
     }
 
     package func registeredRequest(
@@ -334,13 +318,13 @@ public final class WebInspectorContext {
         isolation: isolated (any Actor) = #isolation
     ) -> NetworkRequest? {
         requireOwner(isolation)
-        return requestsByID[NetworkRequest.ID(id)]
+        return networkRequests.request(forProxyID: id, isolation: isolation)
     }
 
     /// Clears retained Network requests and emits reset transactions.
     public func clearNetworkRequests(isolation: isolated (any Actor) = #isolation) {
         requireOwner(isolation)
-        clearNetworkRequests()
+        networkRequests.clear(isolation: isolation)
     }
 
     /// Returns the registered Console message for an identifier.
@@ -780,14 +764,7 @@ public final class WebInspectorContext {
             guard let networkResults = results as? WebInspectorFetchedResults<NetworkRequest> else {
                 preconditionFailure("NetworkRequest descriptors can only fetch NetworkRequest models.")
             }
-            let plan = NetworkRequestQueryPlan(descriptor: networkResults.fetchDescriptor, context: self)
-            networkResults.setNetworkItems(
-                currentNetworkRequests(),
-                plan: plan,
-                indexSequence: networkRequestIndexSequence,
-                lookup: { id in self.requestsByID[id] }
-            )
-            networkFetchedResults.append(WeakWebInspectorFetchedResults(networkResults))
+            networkRequests.register(networkResults, modelContext: self, isolation: isolation)
         case .consoleMessages:
             guard let consoleResults = results as? WebInspectorFetchedResults<ConsoleMessage> else {
                 preconditionFailure("ConsoleMessage descriptors can only fetch ConsoleMessage models.")
@@ -881,13 +858,11 @@ public final class WebInspectorContext {
                   let networkResults = results as? WebInspectorFetchedResults<NetworkRequest> else {
                 preconditionFailure("NetworkRequest descriptors can only update NetworkRequest fetched results.")
             }
-            let plan = NetworkRequestQueryPlan(descriptor: networkDescriptor, context: self)
-            networkResults.applyNetworkFetchDescriptor(
+            networkRequests.updateFetchDescriptor(
                 networkDescriptor,
-                plan: plan,
-                requests: currentNetworkRequests(),
-                indexSequence: networkRequestIndexSequence,
-                lookup: { id in self.requestsByID[id] }
+                for: networkResults,
+                modelContext: self,
+                isolation: isolation
             )
         case .consoleMessages:
             guard let consoleDescriptor = descriptor as? WebInspectorFetchDescriptor<ConsoleMessage>,
@@ -921,7 +896,8 @@ public final class WebInspectorContext {
             finishResponseBodyFetch(
                 .failure(.disconnected("WebInspectorDataKit has no current page target.")),
                 for: request,
-                expectedBody: expectedBody
+                expectedBody: expectedBody,
+                isolation: isolation
             )
             return
         }
@@ -931,9 +907,19 @@ public final class WebInspectorContext {
                 for: request.proxyID,
                 backendResourceIdentifier: request.backendResourceIdentifier
             )
-            finishResponseBodyFetch(.success(body), for: request, expectedBody: expectedBody)
+            finishResponseBodyFetch(
+                .success(body),
+                for: request,
+                expectedBody: expectedBody,
+                isolation: isolation
+            )
         } catch let error as WebInspectorProxyError {
-            finishResponseBodyFetch(.failure(error), for: request, expectedBody: expectedBody)
+            finishResponseBodyFetch(
+                .failure(error),
+                for: request,
+                expectedBody: expectedBody,
+                isolation: isolation
+            )
         } catch {
             finishResponseBodyFetch(
                 .failure(.commandFailed(
@@ -942,7 +928,8 @@ public final class WebInspectorContext {
                     message: String(describing: error)
                 )),
                 for: request,
-                expectedBody: expectedBody
+                expectedBody: expectedBody,
+                isolation: isolation
             )
         }
     }
@@ -950,12 +937,15 @@ public final class WebInspectorContext {
     private func finishResponseBodyFetch(
         _ result: Result<Network.Body, WebInspectorProxyError>,
         for request: NetworkRequest,
-        expectedBody: NetworkBody
+        expectedBody: NetworkBody,
+        isolation: isolated (any Actor)
     ) {
-        guard requestsByID[request.id] === request else {
-            return
-        }
-        request.finishResponseBodyFetch(result: result, expectedBody: expectedBody)
+        networkRequests.finishResponseBodyFetch(
+            result,
+            for: request,
+            expectedBody: expectedBody,
+            isolation: isolation
+        )
     }
 
     func requestChildren(
@@ -1429,15 +1419,10 @@ public final class WebInspectorContext {
         refreshAllConsoleMessages()
     }
 
-    private func resetNetworkModelsForNewAttachment() {
-        clearedNetworkRequestIDs = []
-        requestsByID = [:]
-        orderedRequestIDs = []
-        networkRequestOrderIndicesByID = [:]
-        networkRequestIndexNeedsRebuild = true
-        clearNetworkRequestIndex()
-        networkCollectionState.replaceCount(0)
-        resetNetworkFetchedResults()
+    private func resetNetworkModelsForNewAttachment(
+        isolation: isolated (any Actor)
+    ) {
+        networkRequests.resetForNewAttachment(isolation: isolation)
     }
 
     private func resetCurrentPageLifecycleModels(isolation: isolated (any Actor)) {
@@ -1448,7 +1433,7 @@ public final class WebInspectorContext {
 
     private func resetAttachmentBackedModels(isolation: isolated (any Actor)) {
         resetCurrentPageLifecycleModels(isolation: isolation)
-        resetNetworkModelsForNewAttachment()
+        resetNetworkModelsForNewAttachment(isolation: isolation)
     }
 
     private func disableEnabledDomains(
@@ -2680,85 +2665,23 @@ extension WebInspectorContext {
         isolation: isolated (any Actor) = #isolation
     ) -> NetworkRequest.ID {
         requireOwner(isolation)
-        let requestID = Network.Request.ID(rawRequestID)
-        let resourceType = resourceTypeRawValue.map(Network.ResourceType.init(rawValue:))
-        let payload = Network.Request(
-            id: requestID,
+        return networkRequests.seedRequest(
+            requestID: rawRequestID,
             url: url,
             method: method,
-            headers: requestHeaders,
-            postData: postData
+            resourceTypeRawValue: resourceTypeRawValue,
+            requestHeaders: requestHeaders,
+            postData: postData,
+            responseMIMEType: responseMIMEType,
+            responseStatus: responseStatus,
+            responseStatusText: responseStatusText,
+            responseHeaders: responseHeaders,
+            responseBody: responseBody,
+            timestamp: timestamp,
+            encodedBodyLength: encodedBodyLength,
+            modelContext: self,
+            isolation: isolation
         )
-        let id = NetworkRequest.ID(requestID)
-        let request: NetworkRequest
-        let inserted: Bool
-        if let existing = requestsByID[id] {
-            request = existing
-            request.applyRequestWillBeSent(
-                request: payload,
-                resourceType: resourceType,
-                timestamp: timestamp
-            )
-            inserted = false
-        } else {
-            request = NetworkRequest(
-                request: payload,
-                resourceType: resourceType,
-                timestamp: timestamp,
-                modelContext: self
-            )
-            requestsByID[id] = request
-            appendNetworkRequestID(id)
-            inserted = true
-        }
-        request.applyResponse(
-            Network.Response(
-                url: url,
-                status: responseStatus,
-                statusText: responseStatusText,
-                mimeType: responseMIMEType,
-                headers: responseHeaders,
-                source: Network.Source(rawValue: "network"),
-                requestHeaders: requestHeaders
-            ),
-            resourceType: resourceType ?? .other,
-            timestamp: timestamp + 0.1
-        )
-        request.applyDataReceived(
-            dataLength: encodedBodyLength,
-            encodedDataLength: encodedBodyLength,
-            timestamp: timestamp + 0.11
-        )
-        request.finish(
-            timestamp: timestamp + 0.2,
-            sourceMapURL: nil,
-            metrics: Network.Metrics(
-                encodedDataLength: encodedBodyLength,
-                decodedBodyLength: encodedBodyLength
-            )
-        )
-        if let responseBody {
-            request.responseBody.load(Network.Body(data: responseBody, base64Encoded: false))
-        }
-        networkRequestIndexNeedsRebuild = true
-        networkFetchedResults.removeAll { $0.value == nil }
-        if inserted {
-            networkCollectionState.didInsertRequest()
-            for registration in networkFetchedResults {
-                registration.value?.insertNetworkRequest(
-                    request,
-                    lookup: { id in self.requestsByID[id] }
-                )
-            }
-        } else {
-            for registration in networkFetchedResults {
-                registration.value?.refreshNetworkRequestAfterMutation(
-                    request,
-                    lookup: { id in self.requestsByID[id] }
-                )
-            }
-        }
-        return request.id
     }
 
     package func seedResponseBody(
@@ -2770,435 +2693,22 @@ extension WebInspectorContext {
         isolation: isolated (any Actor) = #isolation
     ) {
         requireOwner(isolation)
-        guard let request = requestsByID[requestID] else {
-            preconditionFailure("Cannot seed a response body for an unregistered NetworkRequest.")
-        }
-        request.responseBody.load(NetworkBody.Payload(
+        networkRequests.seedResponseBody(
+            for: requestID,
             body: body,
             base64Encoded: base64Encoded,
             size: size,
-            isTruncated: isTruncated
-        ))
-    }
-
-    package func apply(_ event: Network.Event, isolation: isolated (any Actor) = #isolation) async {
-        requireOwner(isolation)
-        switch event {
-        case let .requestWillBeSent(id, request, resourceType, redirectResponse, timestamp):
-            await applyRequestWillBeSent(
-                id: id,
-                request: request,
-                resourceType: resourceType,
-                redirectResponse: redirectResponse,
-                timestamp: timestamp,
-                isolation: isolation
-            )
-        case let .responseReceived(id, response, resourceType, timestamp):
-            await applyResponseReceived(
-                id: id,
-                response: response,
-                resourceType: resourceType,
-                timestamp: timestamp,
-                isolation: isolation
-            )
-        case let .dataReceived(id, dataLength, encodedDataLength, timestamp):
-            guard let request = networkRequest(for: id, method: "dataReceived") else {
-                return
-            }
-            request.applyDataReceived(
-                dataLength: dataLength,
-                encodedDataLength: encodedDataLength,
-                timestamp: timestamp
-            )
-            await notifyNetworkRequestMutated(request, isolation: isolation)
-        case let .loadingFinished(id, timestamp, sourceMapURL, metrics):
-            guard let request = networkRequest(for: id, method: "loadingFinished") else {
-                return
-            }
-            request.finish(timestamp: timestamp, sourceMapURL: sourceMapURL, metrics: metrics)
-            await notifyNetworkRequestMutated(request, isolation: isolation)
-        case let .loadingFailed(id, errorText, canceled, timestamp):
-            guard let request = networkRequest(for: id, method: "loadingFailed") else {
-                return
-            }
-            request.fail(errorText: errorText, canceled: canceled, timestamp: timestamp)
-            await notifyNetworkRequestMutated(request, isolation: isolation)
-        case let .webSocket(event):
-            await apply(event, isolation: isolation)
-        case let .requestServedFromMemoryCache(id, response, resourceType, timestamp):
-            await applyRequestServedFromMemoryCache(
-                id: id,
-                response: response,
-                resourceType: resourceType,
-                timestamp: timestamp,
-                isolation: isolation
-            )
-        case .unknown:
-            break
-        }
-    }
-
-    private func applyRequestWillBeSent(
-        id proxyID: Network.Request.ID,
-        request payload: Network.Request,
-        resourceType: Network.ResourceType?,
-        redirectResponse: Network.Response?,
-        timestamp: Double,
-        isolation: isolated (any Actor)
-    ) async {
-        _ = isolation
-        let id = NetworkRequest.ID(proxyID)
-        guard clearedNetworkRequestIDs.contains(id) == false || redirectResponse == nil else {
-            return
-        }
-        clearedNetworkRequestIDs.remove(id)
-        let request: NetworkRequest
-        var inserted = false
-        var topologyMayHaveChanged = false
-        if let existing = requestsByID[id] {
-            request = existing
-            if let redirectResponse, existing.isActive {
-                request.applyRedirect(
-                    to: payload,
-                    redirectResponse: redirectResponse,
-                    timestamp: timestamp,
-                    resourceType: resourceType
-                )
-                topologyMayHaveChanged = true
-            } else if existing.isActive == false {
-                request.applyRequestWillBeSent(request: payload, resourceType: resourceType, timestamp: timestamp)
-                topologyMayHaveChanged = true
-            }
-        } else {
-            request = NetworkRequest(request: payload, resourceType: resourceType, timestamp: timestamp, modelContext: self)
-            requestsByID[id] = request
-            appendNetworkRequestID(id)
-            inserted = true
-        }
-        if inserted {
-            await notifyNetworkRequestInserted(request, isolation: isolation)
-        } else if topologyMayHaveChanged {
-            await notifyNetworkRequestMutated(request, isolation: isolation)
-        }
-    }
-
-    private func applyRequestServedFromMemoryCache(
-        id proxyID: Network.Request.ID,
-        response: Network.Response,
-        resourceType: Network.ResourceType?,
-        timestamp: Double,
-        isolation: isolated (any Actor)
-    ) async {
-        _ = isolation
-        let id = NetworkRequest.ID(proxyID)
-        guard clearedNetworkRequestIDs.contains(id) == false else {
-            return
-        }
-        let request: NetworkRequest
-        if let existing = requestsByID[id] {
-            request = existing
-        } else {
-            guard let url = response.url else {
-                skipEvent("Network.requestServedFromMemoryCache omitted response URL for a new request")
-                return
-            }
-            let payload = Network.Request(
-                id: proxyID,
-                url: url,
-                method: "GET",
-                headers: response.requestHeaders ?? [:]
-            )
-            request = NetworkRequest(request: payload, resourceType: resourceType, timestamp: timestamp, modelContext: self)
-            requestsByID[id] = request
-            appendNetworkRequestID(id)
-            request.applyMemoryCache(response: response, resourceType: resourceType, timestamp: timestamp)
-            await notifyNetworkRequestInserted(request, isolation: isolation)
-            return
-        }
-        request.applyMemoryCache(response: response, resourceType: resourceType, timestamp: timestamp)
-        await notifyNetworkRequestMutated(request, isolation: isolation)
-    }
-
-    private func applyResponseReceived(
-        id proxyID: Network.Request.ID,
-        response: Network.Response,
-        resourceType: Network.ResourceType?,
-        timestamp: Double,
-        isolation: isolated (any Actor)
-    ) async {
-        _ = isolation
-        let id = NetworkRequest.ID(proxyID)
-        guard clearedNetworkRequestIDs.contains(id) == false else {
-            return
-        }
-        let request: NetworkRequest
-        var inserted = false
-        if let existing = requestsByID[id] {
-            request = existing
-        } else {
-            guard let url = response.url else {
-                skipEvent("Network.responseReceived omitted response URL for an untracked request")
-                return
-            }
-            // WebKit's frontend creates a resource here when inspection starts
-            // after Network.requestWillBeSent. The response event has no method,
-            // so keep the same GET default WebKit uses when serializing such a
-            // resource later.
-            let payload = Network.Request(
-                id: proxyID,
-                url: url,
-                method: "GET",
-                headers: response.requestHeaders ?? [:]
-            )
-            request = NetworkRequest(request: payload, resourceType: resourceType, timestamp: timestamp, modelContext: self)
-            requestsByID[id] = request
-            appendNetworkRequestID(id)
-            inserted = true
-        }
-        request.applyResponse(response, resourceType: resourceType, timestamp: timestamp)
-        if inserted {
-            await notifyNetworkRequestInserted(request, isolation: isolation)
-        } else {
-            await notifyNetworkRequestMutated(request, isolation: isolation)
-        }
-    }
-
-    private func apply(_ event: Network.WebSocketEvent, isolation: isolated (any Actor)) async {
-        _ = isolation
-        switch event {
-        case let .created(id, url):
-            await applyWebSocketCreated(id: id, url: url, isolation: isolation)
-        case let .handshakeRequest(id, request, timestamp):
-            guard let networkRequest = networkRequest(for: id, method: "webSocketWillSendHandshakeRequest") else {
-                return
-            }
-            networkRequest.applyWebSocketHandshakeRequest(request, timestamp: timestamp)
-            await notifyNetworkRequestMutated(networkRequest, isolation: isolation)
-        case let .handshakeResponse(id, response, timestamp):
-            guard let networkRequest = networkRequest(for: id, method: "webSocketHandshakeResponseReceived") else {
-                return
-            }
-            networkRequest.applyWebSocketHandshakeResponse(response, timestamp: timestamp)
-            await notifyNetworkRequestMutated(networkRequest, isolation: isolation)
-        case let .frameSent(id, frame, timestamp):
-            guard let networkRequest = networkRequest(for: id, method: "webSocketFrameSent") else {
-                return
-            }
-            networkRequest.appendWebSocketFrame(frame, direction: .sent, timestamp: timestamp)
-            await notifyNetworkRequestMutated(networkRequest, isolation: isolation)
-        case let .frameReceived(id, frame, timestamp):
-            guard let networkRequest = networkRequest(for: id, method: "webSocketFrameReceived") else {
-                return
-            }
-            networkRequest.appendWebSocketFrame(frame, direction: .received, timestamp: timestamp)
-            await notifyNetworkRequestMutated(networkRequest, isolation: isolation)
-        case let .error(id, message, timestamp):
-            guard let networkRequest = networkRequest(for: id, method: "webSocketFrameError") else {
-                return
-            }
-            networkRequest.appendWebSocketError(message, timestamp: timestamp)
-            await notifyNetworkRequestMutated(networkRequest, isolation: isolation)
-        case let .closed(id, timestamp):
-            guard let networkRequest = networkRequest(for: id, method: "webSocketClosed") else {
-                return
-            }
-            networkRequest.closeWebSocket(timestamp: timestamp)
-            await notifyNetworkRequestMutated(networkRequest, isolation: isolation)
-        case .other:
-            break
-        }
-    }
-
-    private func applyWebSocketCreated(
-        id proxyID: Network.Request.ID,
-        url: String,
-        isolation: isolated (any Actor)
-    ) async {
-        _ = isolation
-        let id = NetworkRequest.ID(proxyID)
-        clearedNetworkRequestIDs.remove(id)
-        let request: NetworkRequest
-        var inserted = false
-        if let existing = requestsByID[id] {
-            request = existing
-        } else {
-            let payload = Network.Request(id: proxyID, url: url, method: "GET")
-            request = NetworkRequest(request: payload, resourceType: .webSocket, timestamp: nil, modelContext: self)
-            requestsByID[id] = request
-            appendNetworkRequestID(id)
-            inserted = true
-        }
-        request.applyWebSocketCreated(url: url)
-        if inserted {
-            await notifyNetworkRequestInserted(request, isolation: isolation)
-        } else {
-            await notifyNetworkRequestMutated(request, isolation: isolation)
-        }
-    }
-
-    private func networkRequest(
-        for proxyID: Network.Request.ID,
-        method: String
-    ) -> NetworkRequest? {
-        let id = NetworkRequest.ID(proxyID)
-        guard let request = requestsByID[id] else {
-            if clearedNetworkRequestIDs.contains(id) == false {
-                skipEvent("Network.\(method) referenced an untracked request")
-            }
-            return nil
-        }
-        return request
-    }
-
-    private func clearNetworkRequests() {
-        clearedNetworkRequestIDs.formUnion(requestsByID.keys)
-        requestsByID = [:]
-        orderedRequestIDs = []
-        networkRequestOrderIndicesByID = [:]
-        networkRequestIndexNeedsRebuild = true
-        clearNetworkRequestIndex()
-        networkCollectionState.replaceCount(0)
-        resetNetworkFetchedResults()
-    }
-
-    private func currentNetworkRequests() -> [NetworkRequest] {
-        orderedRequestIDs.compactMap { requestsByID[$0] }
-    }
-
-    private func appendNetworkRequestID(_ id: NetworkRequest.ID) {
-        networkRequestOrderIndicesByID[id] = orderedRequestIDs.count
-        orderedRequestIDs.append(id)
-    }
-
-    private func clearNetworkRequestIndex() {
-        let index = networkRequestIndex
-        let sequence = nextNetworkRequestIndexSequence()
-        Task {
-            await index.replace(with: [], sequence: sequence)
-        }
-    }
-
-    private func currentNetworkRecordInputs() -> [NetworkRequestRecordInput] {
-        orderedRequestIDs.enumerated().compactMap { index, id in
-            requestsByID[id].map { NetworkRequestRecordInput(request: $0, orderIndex: index) }
-        }
-    }
-
-    private func networkRecordInput(for request: NetworkRequest) -> NetworkRequestRecordInput {
-        let orderIndex = networkRequestOrderIndicesByID[request.id] ?? orderedRequestIDs.count
-        return NetworkRequestRecordInput(request: request, orderIndex: orderIndex)
-    }
-
-    private func isCurrentNetworkRequest(_ request: NetworkRequest) -> Bool {
-        requestsByID[request.id] === request
-    }
-
-    private func nextNetworkRequestIndexSequence() -> UInt64 {
-        // The index drains a contiguous operation log, so every allocated
-        // sequence must be submitted exactly once to replace or upsert.
-        precondition(
-            networkRequestIndexSequence < UInt64.max,
-            "NetworkRequestIndex mutation sequence overflowed."
+            isTruncated: isTruncated,
+            isolation: isolation
         )
-        networkRequestIndexSequence += 1
-        return networkRequestIndexSequence
     }
 
-    private func syncNetworkRequestIndexIfNeeded(isolation: isolated (any Actor)) async {
-        _ = isolation
-        guard networkRequestIndexNeedsRebuild else {
-            return
-        }
-        networkRequestIndexNeedsRebuild = false
-        let sequence = nextNetworkRequestIndexSequence()
-        await networkRequestIndex.replace(with: currentNetworkRecordInputs(), sequence: sequence)
-    }
-
-    private func notifyNetworkRequestInserted(
-        _ request: NetworkRequest,
-        isolation: isolated (any Actor)
+    package func apply(
+        _ event: Network.Event,
+        isolation: isolated (any Actor) = #isolation
     ) async {
-        _ = isolation
-        networkCollectionState.didInsertRequest()
-        await syncNetworkRequestIndexIfNeeded(isolation: isolation)
-        guard isCurrentNetworkRequest(request) else {
-            return
-        }
-        let sequence = nextNetworkRequestIndexSequence()
-        await networkRequestIndex.upsert(networkRecordInput(for: request), sequence: sequence)
-        guard isCurrentNetworkRequest(request) else {
-            return
-        }
-        await applyNetworkResultDeltas(for: request, inserted: true, isolation: isolation)
-    }
-
-    private func notifyNetworkRequestMutated(
-        _ request: NetworkRequest,
-        isolation: isolated (any Actor)
-    ) async {
-        _ = isolation
-        await syncNetworkRequestIndexIfNeeded(isolation: isolation)
-        guard isCurrentNetworkRequest(request) else {
-            return
-        }
-        let sequence = nextNetworkRequestIndexSequence()
-        await networkRequestIndex.upsert(networkRecordInput(for: request), sequence: sequence)
-        guard isCurrentNetworkRequest(request) else {
-            return
-        }
-        await applyNetworkResultDeltas(for: request, inserted: false, isolation: isolation)
-    }
-
-    private func applyNetworkResultDeltas(
-        for request: NetworkRequest,
-        inserted: Bool,
-        isolation: isolated (any Actor)
-    ) async {
-        _ = isolation
-        networkFetchedResults.removeAll { $0.value == nil }
-        for registration in networkFetchedResults {
-            guard let results = registration.value else {
-                continue
-            }
-            let plan = results.currentNetworkQueryPlan(context: self)
-            if plan.requiresModelPredicate {
-                if inserted {
-                    results.insertNetworkRequest(
-                        request,
-                        lookup: { id in self.requestsByID[id] }
-                    )
-                } else {
-                    results.refreshNetworkRequestAfterMutation(
-                        request,
-                        lookup: { id in self.requestsByID[id] }
-                    )
-                }
-                continue
-            }
-            let oldSnapshot = results.networkSnapshotForDelta
-            let resultTopologyRevision = results.topologyRevision
-            let resultIndexSequence = results.networkIndexSequenceForDelta
-            let indexSequence = networkRequestIndexSequence
-            let delta = await networkRequestIndex.delta(
-                plan: plan,
-                sectionBy: results.sectionBy,
-                oldSnapshot: oldSnapshot,
-                changedSince: resultIndexSequence
-            )
-            guard networkRequestIndexSequence == indexSequence,
-                  results.topologyRevision == resultTopologyRevision,
-                  results.networkSnapshotForDelta == oldSnapshot else {
-                continue
-            }
-            results.applyNetworkDelta(delta, lookup: { id in self.requestsByID[id] })
-        }
-    }
-
-    private func resetNetworkFetchedResults() {
-        networkFetchedResults.removeAll { $0.value == nil }
-        for registration in networkFetchedResults {
-            registration.value?.resetNetworkItems(indexSequence: networkRequestIndexSequence)
-        }
+        requireOwner(isolation)
+        await networkRequests.apply(event, modelContext: self, isolation: isolation)
     }
 }
 
