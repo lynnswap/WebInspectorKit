@@ -169,7 +169,7 @@ actor ContractDataKitActor {
             try await context.attach(to: runtime.proxy, isolation: self)
         }
         var observedMethods: Set<String> = []
-        for _ in 0..<5 {
+        for _ in 0..<6 {
             let command = try await runtime.peer.commands.next()
             commands.append(command)
             try #require(command.destination == .target("page-main"))
@@ -181,6 +181,7 @@ actor ContractDataKitActor {
             }
         }
         #expect(observedMethods == [
+            "Page.enable",
             "CSS.enable",
             "Network.enable",
             "Console.enable",
@@ -408,6 +409,7 @@ actor ContractDataKitActor {
             "Console.disable",
             "Network.disable",
             "CSS.disable",
+            "Page.disable",
         ] {
             _ = try await replyNext(expectedMethod: expectedMethod)
         }

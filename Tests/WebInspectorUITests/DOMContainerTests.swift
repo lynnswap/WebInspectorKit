@@ -1408,6 +1408,7 @@ struct DOMContainerTests {
         on wire: WebInspectorRawWireDriver,
         document: DOM.Node
     ) async throws {
+        await wire.respond(to: "Page.enable")
         await wire.respond(to: "CSS.enable")
         await wire.respond(to: "Network.enable")
         await wire.respond(to: "Console.enable")

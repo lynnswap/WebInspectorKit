@@ -566,6 +566,7 @@ private func enqueueStartupReplies(
     document: DOM.Node
 ) async {
     if configuration.domains.contains(.css) {
+        await wire.respond(to: "Page.enable")
         await wire.respond(to: "CSS.enable")
     }
     if configuration.domains.contains(.network) {
@@ -600,6 +601,7 @@ private func enqueueShutdownReplies(
     }
     if configuration.domains.contains(.css) {
         await wire.respond(to: "CSS.disable")
+        await wire.respond(to: "Page.disable")
     }
 }
 

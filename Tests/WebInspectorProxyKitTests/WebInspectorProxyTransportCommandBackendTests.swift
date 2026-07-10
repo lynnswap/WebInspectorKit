@@ -1338,6 +1338,110 @@ func pendingRepliesClassifyDirectAndCapabilityOwners() async throws {
 }
 
 @Test
+func structuredCSSScopeKeepsPageCapabilityAliveUntilCSSRelease() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let bodyGate = CloseConnectionGate()
+
+    let scopeTask = Task {
+        try await proxy.page.css.withEvents { _ in
+            await bodyGate.waitUntilReleased()
+        }
+    }
+
+    let pageEnable = try await waitForTargetMessage(backend, method: "Page.enable")
+    await receiveTargetReply(
+        transport,
+        targetID: pageEnable.targetIdentifier,
+        messageID: try messageID(pageEnable.message),
+        result: "{}"
+    )
+    let cssEnable = try await waitForTargetMessage(backend, method: "CSS.enable")
+    await receiveTargetReply(
+        transport,
+        targetID: cssEnable.targetIdentifier,
+        messageID: try messageID(cssEnable.message),
+        result: "{}"
+    )
+    await bodyGate.waitUntilStarted()
+
+    await bodyGate.release()
+    let cssDisable = try await waitForTargetMessage(backend, method: "CSS.disable")
+    await receiveTargetReply(
+        transport,
+        targetID: cssDisable.targetIdentifier,
+        messageID: try messageID(cssDisable.message),
+        result: "{}"
+    )
+    let pageDisable = try await waitForTargetMessage(backend, method: "Page.disable")
+    await receiveTargetReply(
+        transport,
+        targetID: pageDisable.targetIdentifier,
+        messageID: try messageID(pageDisable.message),
+        result: "{}"
+    )
+
+    try await scopeTask.value
+    #expect(await transport.pendingReplyPurposes().isEmpty)
+}
+
+@Test
+func structuredFrameCSSScopeDoesNotRequirePageCapability() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false,"domains":["CSS"]}}}"#
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let frame = WebInspectorTarget(
+        id: WebInspectorTarget.ID("frame-target"),
+        kind: .frame,
+        frameID: FrameID("child-frame"),
+        isProvisional: false,
+        proxy: proxy,
+        route: RoutingTargetID("frame-target")
+    )
+    let bodyGate = CloseConnectionGate()
+
+    let scopeTask = Task {
+        try await frame.css.withEvents { _ in
+            await bodyGate.waitUntilReleased()
+        }
+    }
+
+    let cssEnable = try await waitForTargetMessage(backend, method: "CSS.enable")
+    #expect(cssEnable.targetIdentifier == ProtocolTarget.ID("frame-target"))
+    let enableMethods = try await backend.sentTargetMessages().map {
+        try messageMethod($0.message)
+    }
+    #expect(enableMethods == ["CSS.enable"])
+    await receiveTargetReply(
+        transport,
+        targetID: cssEnable.targetIdentifier,
+        messageID: try messageID(cssEnable.message),
+        result: "{}"
+    )
+    await bodyGate.waitUntilStarted()
+
+    await bodyGate.release()
+    let cssDisable = try await waitForTargetMessage(backend, method: "CSS.disable")
+    await receiveTargetReply(
+        transport,
+        targetID: cssDisable.targetIdentifier,
+        messageID: try messageID(cssDisable.message),
+        result: "{}"
+    )
+    try await scopeTask.value
+    let completedMethods = try await backend.sentTargetMessages().map {
+        try messageMethod($0.message)
+    }
+    #expect(completedMethods == ["CSS.enable", "CSS.disable"])
+}
+
+@Test
 func structuredNetworkScopeBuffersReplayBeforeEnableReplyAndBalancesDisable() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))

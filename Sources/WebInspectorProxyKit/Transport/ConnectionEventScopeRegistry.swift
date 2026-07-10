@@ -6,6 +6,45 @@ struct ConnectionCapabilityKey: Hashable, Sendable {
     var domain: WebInspectorProxyEventDomain
 }
 
+enum ConnectionCapabilityActivationPlan {
+    static func domains(
+        for requestedDomains: [WebInspectorProxyEventDomain],
+        includePageDependencyForCSS: Bool
+    ) -> [WebInspectorProxyEventDomain] {
+        var seen: Set<WebInspectorProxyEventDomain> = []
+        var result: [WebInspectorProxyEventDomain] = []
+        for requestedDomain in requestedDomains {
+            for domain in dependencies(
+                for: requestedDomain,
+                includePageDependencyForCSS: includePageDependencyForCSS
+            ) {
+                if seen.insert(domain).inserted {
+                    result.append(domain)
+                }
+            }
+        }
+        return result
+    }
+
+    private static func dependencies(
+        for domain: WebInspectorProxyEventDomain,
+        includePageDependencyForCSS: Bool
+    ) -> [WebInspectorProxyEventDomain] {
+        switch domain {
+        case .css where includePageDependencyForCSS:
+            // WebKit 624's InspectorStyleSheet retains the enabled Page
+            // agent and dereferences it while publishing stylesheet headers.
+            // Keep Page enabled for the entire CSS capability lifetime. Newer
+            // WebKit revisions no longer require this on page targets, but
+            // preserve the protocol domain and accept the same ordering.
+            // Frame targets use FrameCSSAgent and may not expose Page at all.
+            [.page, .css]
+        default:
+            [domain]
+        }
+    }
+}
+
 enum ConnectionCapabilityLeaseOwner: Hashable, Sendable {
     case eventScope(WebInspectorProxyEventScopeID)
     case modelFeed(ConnectionModelFeedID, ModelDomain)
@@ -15,7 +54,7 @@ enum ConnectionCapabilityLeaseOwner: Hashable, Sendable {
 struct ConnectionEventScopeRegistry {
     struct Entry: Sendable {
         var sink: WebInspectorEventSink?
-        var capability: ConnectionCapabilityKey
+        var capabilities: [ConnectionCapabilityKey]
         var capacity: Int?
     }
 
@@ -27,13 +66,27 @@ struct ConnectionEventScopeRegistry {
 
     mutating func insert(
         _ sink: WebInspectorEventSink,
-        capability: ConnectionCapabilityKey,
         capacity: Int?,
         generation: WebInspectorPage.Generation
     ) {
         precondition(entries[sink.id] == nil, "Duplicate Web Inspector event scope identifier.")
-        entries[sink.id] = Entry(sink: sink, capability: capability, capacity: capacity)
+        entries[sink.id] = Entry(sink: sink, capabilities: [], capacity: capacity)
         handleInitialDelivery(sink.yieldReset(generation), id: sink.id, capacity: capacity)
+    }
+
+    mutating func appendCapability(
+        _ capability: ConnectionCapabilityKey,
+        to id: WebInspectorProxyEventScopeID
+    ) {
+        guard var entry = entries[id] else {
+            preconditionFailure("A Web Inspector event scope lost its registration during capability acquisition.")
+        }
+        precondition(
+            !entry.capabilities.contains(capability),
+            "A Web Inspector event scope acquired the same capability twice."
+        )
+        entry.capabilities.append(capability)
+        entries[id] = entry
     }
 
     mutating func remove(_ id: WebInspectorProxyEventScopeID) -> Entry? {

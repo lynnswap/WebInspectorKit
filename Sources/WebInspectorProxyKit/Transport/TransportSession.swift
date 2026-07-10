@@ -640,7 +640,11 @@ package actor ConnectionCore {
             for domain in ModelDomain.ordered(configuredDomains) {
                 do {
                     let leaseOwner = ConnectionCapabilityLeaseOwner.modelFeed(id, domain)
-                    for capabilityDomain in domain.capabilityDependencies {
+                    let capabilityDomains = ConnectionCapabilityActivationPlan.domains(
+                        for: domain.capabilityDependencies,
+                        includePageDependencyForCSS: true
+                    )
+                    for capabilityDomain in capabilityDomains {
                         try Task.checkCancellation()
                         guard isOpen else {
                             throw terminalScopeError
@@ -1053,7 +1057,6 @@ package actor ConnectionCore {
         let stream = mailbox.makeStream()
 
         let scopeID = WebInspectorProxyEventScopeID()
-        let key = ConnectionCapabilityKey(route: route, targetID: targetID, domain: domain)
         let generation = generation(for: route)
         let sink = WebInspectorEventSink(
             id: scopeID,
@@ -1068,26 +1071,42 @@ package actor ConnectionCore {
         // logical lease can send its first wire enable command.
         eventScopes.insert(
             sink,
-            capability: key,
             capacity: capacity,
             generation: generation
         )
         resumeEventScopeRegistrationWaitersIfNeeded()
 
         let leaseOwner = ConnectionCapabilityLeaseOwner.eventScope(scopeID)
-        let activation = beginCapabilityLease(
-            leaseOwner,
-            for: key,
-            generation: generation
-        )
 
         do {
-            try await activateCapabilityLease(
-                leaseOwner,
-                for: key,
-                activation: activation
+            let capabilityDomains = ConnectionCapabilityActivationPlan.domains(
+                for: [domain],
+                includePageDependencyForCSS: cssRequiresPageCapability(for: route)
             )
+            for capabilityDomain in capabilityDomains {
+                let key = ConnectionCapabilityKey(
+                    route: route,
+                    targetID: targetID,
+                    domain: capabilityDomain
+                )
+                let activation = beginCapabilityLease(
+                    leaseOwner,
+                    for: key,
+                    generation: generation
+                )
+                eventScopes.appendCapability(key, to: scopeID)
+                try await activateCapabilityLease(
+                    leaseOwner,
+                    for: key,
+                    activation: activation
+                )
+            }
             if domain == .inspector {
+                let key = ConnectionCapabilityKey(
+                    route: route,
+                    targetID: targetID,
+                    domain: domain
+                )
                 try await acquireElementPickerMode(leaseOwner, for: key)
             }
         } catch {
@@ -1113,15 +1132,40 @@ package actor ConnectionCore {
         resumeEventScopeRegistrationWaitersIfNeeded()
         entry.sink?.finish(nil)
 
-        let key = entry.capability
         let owner = ConnectionCapabilityLeaseOwner.eventScope(id)
-        if key.domain == .inspector {
-            if let error = await releaseElementPickerResources(owner, for: key) {
+        if let inspectorKey = entry.capabilities.last,
+           inspectorKey.domain == .inspector {
+            if let error = await releaseElementPickerResources(owner, for: inspectorKey) {
                 throw error
             }
             return
         }
-        try await releaseCapabilityLease(owner, for: key)
+        var cleanupError: (any Swift.Error)?
+        for key in entry.capabilities.reversed() {
+            do {
+                try await releaseCapabilityLease(owner, for: key)
+            } catch {
+                if cleanupError == nil {
+                    cleanupError = error
+                }
+            }
+        }
+        if let cleanupError {
+            throw cleanupError
+        }
+    }
+
+    private func cssRequiresPageCapability(
+        for route: RoutingTargetID
+    ) -> Bool {
+        switch route.storage {
+        case .currentPage:
+            return true
+        case let .target(rawValue):
+            return targetRegistry.target(
+                for: ProtocolTarget.ID(rawValue)
+            )?.kind == .page
+        }
     }
 
     package nonisolated func send(_ command: ProtocolCommand) async throws -> ProtocolCommand.Result {

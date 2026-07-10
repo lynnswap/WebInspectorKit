@@ -494,8 +494,8 @@ private actor ScenarioDriver {
         }
 
         switch command.method {
-        case "CSS.enable", "Console.enable", "Runtime.enable",
-             "CSS.disable", "Console.disable", "Runtime.disable", "Network.disable",
+        case "Page.enable", "CSS.enable", "Console.enable", "Runtime.enable",
+             "Page.disable", "CSS.disable", "Console.disable", "Runtime.disable", "Network.disable",
              "Inspector.enable", "Inspector.initialized", "Inspector.disable",
              "DOM.setInspectModeEnabled", "DOM.hideHighlight",
              "Runtime.releaseObjectGroup":

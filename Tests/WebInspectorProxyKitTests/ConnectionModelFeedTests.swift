@@ -434,7 +434,7 @@ func cssModelFeedUsesNormalizedDOMBootstrapAndOneSynchronization() async throws 
         core: core,
         backend: backend,
         targetID: "page-main",
-        enableMethods: ["CSS.enable"]
+        enableMethods: ["Page.enable", "CSS.enable"]
     )
     #expect(try await iterator.next() == nil)
     await core.close()
@@ -1180,6 +1180,7 @@ func modelFeedAcquiresAndReleasesConfiguredCapabilitiesInDeterministicOrder() as
     )
 
     #expect(enableMethods == [
+        "Page.enable",
         "CSS.enable",
         "Network.enable",
         "Console.enable",
@@ -1259,6 +1260,7 @@ func modelFeedAcquiresAndReleasesConfiguredCapabilitiesInDeterministicOrder() as
         "Console.disable",
         "Network.disable",
         "CSS.disable",
+        "Page.disable",
     ])
     // The shared local DOM lease emits no replay marker, and each physical
     // wire capability emits exactly one marker.
@@ -1432,7 +1434,7 @@ func cancelledActivationDoesNotPublishReplayMarkerAfterOwnerStopsBeingDesired() 
     await core.close()
 }
 
-@Test(arguments: [0, 1, 2, 3])
+@Test(arguments: [0, 1, 2, 3, 4])
 func modelFeedCapabilityFailureRollsBackSuccessfulPrefixInReverseOrder(
     failureIndex: Int
 ) async throws {
@@ -1446,6 +1448,7 @@ func modelFeedCapabilityFailureRollsBackSuccessfulPrefixInReverseOrder(
     let configuredDomains = Set(ModelDomain.acquisitionOrder)
     let enableMethods = modelFeedExpectedEnableMethods(configuredDomains)
     let enableModelDomains: [ModelDomain] = [
+        .css,
         .css,
         .network,
         .console,
@@ -1871,6 +1874,8 @@ func domDocumentInvalidationPrecedesMainTargetDeltasAndFreshBootstrap() async th
         method: "DOM.getDocument",
         ordinal: 0
     )
+    let pageEnable = try await backend.waitForTargetMessage(method: "Page.enable")
+    await modelFeedRespond(to: pageEnable, core: core)
     let cssEnable = try await backend.waitForTargetMessage(method: "CSS.enable")
     await modelFeedRespond(to: cssEnable, core: core)
     let feed = try await openTask.value
@@ -1958,7 +1963,7 @@ func domDocumentInvalidationPrecedesMainTargetDeltasAndFreshBootstrap() async th
         core: core,
         backend: backend,
         targetID: "page-main",
-        enableMethods: ["CSS.enable"]
+        enableMethods: ["Page.enable", "CSS.enable"]
     )
     #expect(try await iterator.next() == nil)
     await core.close()
@@ -3063,7 +3068,7 @@ func documentRefreshInvalidatesDocumentCommandsButPreservesBindingCommands() asy
         core: core,
         backend: backend,
         targetID: "page-main",
-        enableMethods: ["CSS.enable", "Network.enable"]
+        enableMethods: ["Page.enable", "CSS.enable", "Network.enable"]
     )
     await core.close()
 }
@@ -3514,7 +3519,11 @@ private func modelFeedExpectedEnableMethods(
     var seenDomains: Set<WebInspectorProxyEventDomain> = []
     var methods: [String] = []
     for domain in ModelDomain.ordered(configuredDomains) {
-        for dependency in domain.capabilityDependencies where dependency != .dom {
+        let capabilityDomains = ConnectionCapabilityActivationPlan.domains(
+            for: domain.capabilityDependencies,
+            includePageDependencyForCSS: true
+        )
+        for dependency in capabilityDomains where dependency != .dom {
             guard seenDomains.insert(dependency).inserted else {
                 continue
             }
