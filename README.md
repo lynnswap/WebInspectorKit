@@ -33,7 +33,7 @@ UIKit Web Inspector for `WKWebView`.
 | `WebInspectorKit` | You want the built-in UIKit inspector UI. |
 | `WebInspectorDataKit` | You want observable DOM, Network, Console, Runtime, and CSS models for a custom UI. |
 | `WebInspectorProxyKit` | You want typed Web Inspector protocol commands and events directly over an inspected `WKWebView`. |
-| `WebInspectorProxyKitTesting` | You want a public test runtime for ProxyKit/DataKit consumers without the native WebKit bridge. |
+| `WebInspectorProxyKitTesting` | You want to drive ProxyKit's production connection path from a concrete raw WebKit peer in tests. |
 
 ## Quick Start
 
@@ -87,6 +87,38 @@ let inspector = WebInspectorViewController(
 )
 ```
 
+## Testing the Raw Wire
+
+`WebInspectorProxyKitTesting` attaches a concrete ``WebInspectorTestPeer``
+below ProxyKit's real connection core. Commands still pass through the
+production target registry, router, JSON codecs, model feed, and authority
+checks. Tests receive raw commands in transport FIFO order and must complete
+each command exactly once:
+
+```swift
+import WebInspectorProxyKit
+import WebInspectorProxyKitTesting
+
+let runtime = try await WebInspectorProxyTestRuntime.start()
+let page = try await runtime.proxy.waitForCurrentPage()
+
+let reload = Task {
+    try await page.page.reload()
+}
+
+let command = try await runtime.peer.commands.next()
+precondition(command.method == "Page.reload")
+try await runtime.peer.reply(to: command)
+try await reload.value
+
+await runtime.close()
+```
+
+Use `WebInspectorTestJSONObject` for raw `params` and result objects, and use
+the peer's target lifecycle and event methods when a test needs inbound WebKit
+traffic. The testing product does not provide a semantic backend or synthetic
+model-state injection path.
+
 ## Documentation
 
 The DocC workflow publishes [package documentation](https://lynnswap.github.io/WebInspectorKit/documentation/)
@@ -105,7 +137,7 @@ Sources/
   WebInspectorKit/             Public built-in inspector product.
   WebInspectorDataKit/         Observable inspector model product.
   WebInspectorProxyKit/        Typed protocol proxy product.
-  WebInspectorProxyKitTesting/ Test runtime for proxy/model consumers.
+  WebInspectorProxyKitTesting/ Production-path raw peer test runtime.
   WebInspectorUI*/             Internal UIKit implementation targets.
 Packages/
   WebInspectorNativeBridge/    Local native bridge package for ProxyKit internals.

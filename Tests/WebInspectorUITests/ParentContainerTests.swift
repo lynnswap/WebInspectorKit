@@ -4,6 +4,7 @@ import Testing
 import WebInspectorDataKit
 import WebInspectorProxyKit
 import WebInspectorProxyKitTesting
+import WebInspectorTestSupport
 import UIKit
 @testable import WebInspectorUI
 @testable import WebInspectorUISyntaxBody
@@ -151,14 +152,14 @@ struct ParentContainerTests {
         let firstAttach = Task { @MainActor in
             try await session.attachForTesting(
                 makeContainer: { [self] in
-                    await firstAttachStarted.open()
-                    await firstAttachGate.wait()
+                    firstAttachStarted.open()
+                    await firstAttachGate.waiter.wait()
                     return try await makeFakeContainer()
                 },
                 makePageUserInterfaceStyleObserver: observerRecorder.makeObserver
             )
         }
-        await firstAttachStarted.wait()
+        await firstAttachStarted.waiter.wait()
 
         var secondContext: WebInspectorContext?
         try await session.attachForTesting(
@@ -171,7 +172,7 @@ struct ParentContainerTests {
         )
         let installedSecondContext = try #require(secondContext)
 
-        await firstAttachGate.open()
+        firstAttachGate.open()
         do {
             try await firstAttach.value
             Issue.record("Expected superseded attach to be cancelled.")
@@ -195,19 +196,19 @@ struct ParentContainerTests {
         let attachTask = Task { @MainActor in
             try await session.attachForTesting(
                 makeContainer: { [self] in
-                    await attachStarted.open()
-                    await attachGate.wait()
+                    attachStarted.open()
+                    await attachGate.waiter.wait()
                     return try await makeFakeContainer()
                 },
                 makePageUserInterfaceStyleObserver: observerRecorder.makeObserver
             )
         }
-        await attachStarted.wait()
+        await attachStarted.waiter.wait()
 
         await session.detach()
         let detachedContext = session.context
 
-        await attachGate.open()
+        attachGate.open()
         do {
             try await attachTask.value
             Issue.record("Expected attach completion after detach to be cancelled.")

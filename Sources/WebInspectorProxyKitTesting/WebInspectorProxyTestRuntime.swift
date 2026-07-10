@@ -1,25 +1,56 @@
-import Foundation
 import WebInspectorProxyKit
 
-/// In-memory proxy runtime for tests.
+/// A production-path ProxyKit runtime controlled by a raw WebKit test peer.
+///
+/// The runtime is the explicit resource owner for tests. Call ``close()`` and
+/// await its completion before releasing the runtime.
 public struct WebInspectorProxyTestRuntime: Sendable {
-    /// The proxy under test.
-    public var proxy: WebInspectorProxy
+    /// The real ProxyKit connection driven through `ConnectionCore`.
+    public let proxy: WebInspectorProxy
 
-    /// The controllable backend attached to the proxy.
-    public var backend: WebInspectorTestBackend
+    /// The raw-wire WebKit peer attached below `ConnectionCore`.
+    public let peer: WebInspectorTestPeer
 
-    /// Creates a test runtime from an existing proxy and backend.
-    public init(proxy: WebInspectorProxy, backend: WebInspectorTestBackend) {
-        self.proxy = proxy
-        self.backend = backend
+    /// The stable logical page created by the proxy.
+    public let page: WebInspectorPage
+
+    /// Starts a production-path proxy and installs one initial physical page
+    /// target through a raw `Target.targetCreated` event.
+    public static func start(
+        configuration: WebInspectorProxy.Configuration = .init(),
+        initialTarget: WebInspectorTestPeer.Target = .initialPage
+    ) async throws -> WebInspectorProxyTestRuntime {
+        let peer = WebInspectorTestPeer()
+        let core = await peer.makeConnection(configuration: configuration)
+        do {
+            try await peer.createTarget(initialTarget)
+            let proxy = try await WebInspectorProxy(
+                transport: core,
+                configuration: configuration
+            )
+            return WebInspectorProxyTestRuntime(
+                proxy: proxy,
+                peer: peer,
+                page: proxy.page
+            )
+        } catch {
+            await core.close()
+            throw error
+        }
     }
 
-    /// Starts a proxy backed by ``WebInspectorTestBackend`` and installs a page target.
-    public static func start() async throws -> WebInspectorProxyTestRuntime {
-        let backend = WebInspectorTestBackend()
-        let proxy = WebInspectorProxy(backend: backend)
-        _ = await proxy.installTargetForTesting(kind: .page)
-        return WebInspectorProxyTestRuntime(proxy: proxy, backend: backend)
+    /// Closes the owned proxy connection and waits for peer detachment.
+    public func close() async {
+        await proxy.close()
+    }
+
+    private init(
+        proxy: WebInspectorProxy,
+        peer: WebInspectorTestPeer,
+        page: WebInspectorPage
+    ) {
+        self.proxy = proxy
+        self.peer = peer
+        self.page = page
     }
 }

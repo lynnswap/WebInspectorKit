@@ -197,14 +197,14 @@ public final class WebInspectorContext {
     }
 
     package static func preview(isolation: isolated (any Actor)) -> WebInspectorContext {
-        let container = WebInspectorContainer(proxy: WebInspectorProxy())
+        let container = WebInspectorContainer(proxy: WebInspectorProxy(localStateOnly: ()))
         let context = WebInspectorContext(container, isolation: isolation)
         context.state = .attached
         return context
     }
 
     package static func detached(isolation: isolated (any Actor)) -> WebInspectorContext {
-        let container = WebInspectorContainer(proxy: WebInspectorProxy())
+        let container = WebInspectorContainer(proxy: WebInspectorProxy(localStateOnly: ()))
         let context = WebInspectorContext(container, isolation: isolation)
         context.state = .detached
         return context

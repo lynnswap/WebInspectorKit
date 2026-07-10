@@ -10,7 +10,7 @@ func transportCommandBackendDispatchesPageReloadThroughTargetRoute() async throw
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let proxy = try await WebInspectorProxy(transport: transport)
     let target = pageTarget(proxy: proxy)
 
     let reloadTask = Task {
@@ -36,7 +36,7 @@ func transportCommandBackendDecodesDOMRequestNodeResult() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let proxy = try await WebInspectorProxy(transport: transport)
     let target = pageTarget(proxy: proxy)
 
     let requestNodeTask = Task {
@@ -63,7 +63,7 @@ func transportCommandBackendPreservesDOMRequestChildNodesRecursiveDepth() async 
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let proxy = try await WebInspectorProxy(transport: transport)
     let target = pageTarget(proxy: proxy)
 
     let requestChildrenTask = Task {
@@ -91,7 +91,7 @@ func transportCommandBackendEncodesDOMEditingCommandsAndDecodesAttributes() asyn
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let proxy = try await WebInspectorProxy(transport: transport)
     let target = pageTarget(proxy: proxy)
 
     let attributesTask = Task {
@@ -179,7 +179,7 @@ func transportCommandBackendEncodesDOMHighlightAndInspectModeCommands() async th
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let proxy = try await WebInspectorProxy(transport: transport)
     let target = pageTarget(proxy: proxy)
 
     let highlightTask = Task {
@@ -254,7 +254,7 @@ func transportCommandBackendDecodesDOMDocumentResult() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let proxy = try await WebInspectorProxy(transport: transport)
     let target = pageTarget(proxy: proxy)
 
     let documentTask = Task {
@@ -290,7 +290,7 @@ func transportCommandBackendEncodesAndDecodesCSSStyleCommands() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let proxy = try await WebInspectorProxy(transport: transport)
     let target = pageTarget(proxy: proxy)
 
     let matchedStylesTask = Task {
@@ -616,7 +616,7 @@ func nativeFatalCallbackPropagatesThroughProxyTerminalAPI() async throws {
 
 @Test
 func proxyWaitUntilClosedReturnsImmediatelyAfterClose() async throws {
-    let proxy = WebInspectorProxy()
+    let proxy = WebInspectorProxy(localStateOnly: ())
 
     await proxy.close()
 
@@ -631,7 +631,7 @@ func proxyHandleDeallocatesAfterExplicitClose() async {
     weak var weakProxy: WebInspectorProxy?
 
     do {
-        let proxy = WebInspectorProxy()
+        let proxy = WebInspectorProxy(localStateOnly: ())
         weakProxy = proxy
         await proxy.close()
     }
@@ -644,7 +644,7 @@ func droppingOpenProxyHandleReachesConnectionCoreDeinit() {
     weak var weakProxy: WebInspectorProxy?
 
     do {
-        let proxy = WebInspectorProxy()
+        let proxy = WebInspectorProxy(localStateOnly: ())
         weakProxy = proxy
     }
 
@@ -659,7 +659,7 @@ func pageTargetAndDomainHandlesDoNotOwnTheProxyLifecycle() async {
     var dom: DOM?
 
     do {
-        let proxy = WebInspectorProxy()
+        let proxy = WebInspectorProxy(localStateOnly: ())
         weakProxy = proxy
         page = proxy.page
         target = WebInspectorTarget(
@@ -701,7 +701,7 @@ func pendingCapabilitySendDoesNotRetainDroppedConnectionCore() async throws {
         await transport.receiveRootMessage(
             #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
         )
-        let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+        let proxy = try await WebInspectorProxy(transport: transport)
         let frame = WebInspectorTarget(
             id: WebInspectorTarget.ID("frame-target"),
             kind: .frame,
@@ -736,7 +736,7 @@ func pendingCapabilitySendDoesNotRetainDroppedConnectionCore() async throws {
 @Test
 func proxyWaitUntilClosedWaitsForInFlightCloseConnection() async throws {
     let closeGate = CloseConnectionGate()
-    let proxy = WebInspectorProxy(closeConnection: {
+    let proxy = WebInspectorProxy(localStateOnly: (), closeConnection: {
         await closeGate.waitUntilReleased()
     })
 
@@ -761,7 +761,7 @@ func proxyWaitUntilClosedWaitsForInFlightCloseConnection() async throws {
 
 @Test
 func proxyWaitUntilClosedCancellationRemovesWaiter() async throws {
-    let proxy = WebInspectorProxy()
+    let proxy = WebInspectorProxy(localStateOnly: ())
 
     let waitTask = Task {
         try await proxy.waitUntilClosed()
@@ -1020,7 +1020,7 @@ func transportBackendDecodesRootScopedDOMDocumentUpdatedForCurrentPage() async t
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let proxy = try await WebInspectorProxy(transport: transport)
     let target = pageTarget(proxy: proxy)
 
     let eventTask = Task {
@@ -1043,7 +1043,7 @@ func transportBackendDecodesDOMShadowAndPseudoEventsForTargetRoute() async throw
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let proxy = try await WebInspectorProxy(transport: transport)
     let target = pageTarget(proxy: proxy)
 
     let eventTask = Task {
@@ -1116,7 +1116,7 @@ func transportBackendNormalizesInspectorInspectToDOMInspectEvent() async throws 
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let proxy = try await WebInspectorProxy(transport: transport)
     let target = pageTarget(proxy: proxy)
 
     let eventTask = Task {
@@ -1477,7 +1477,7 @@ func transportBackendDecodesNetworkResponseEventForTargetRoute() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let proxy = try await WebInspectorProxy(transport: transport)
     let target = pageTarget(proxy: proxy)
 
     let eventTask = Task {
@@ -1512,7 +1512,7 @@ func transportBackendDecodesNetworkResponseEventWithoutType() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let proxy = try await WebInspectorProxy(transport: transport)
     let target = pageTarget(proxy: proxy)
 
     let eventTask = Task {
@@ -1949,7 +1949,7 @@ func transportBackendDecodesWebSocketHandshakeEventsForTargetRoute() async throw
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let proxy = try await WebInspectorProxy(transport: transport)
     let target = pageTarget(proxy: proxy)
 
     let requestEventTask = Task {
@@ -2010,7 +2010,7 @@ func transportBackendFiltersEventsByRoute() async throws {
     await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"frame-1","isProvisional":false}}}"#
     )
-    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let proxy = try await WebInspectorProxy(transport: transport)
     let page = pageTarget(proxy: proxy)
     let frame = WebInspectorTarget(
         id: WebInspectorTarget.ID("frame-target"),
@@ -2060,8 +2060,8 @@ func transportBackendKeepsPeerSubscriberActiveWhenOneStreamTerminates() async th
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let proxyBackend = LiveWebInspectorProxyBackend(transport: transport)
-    let proxy = WebInspectorProxy(backend: proxyBackend)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let proxyBackend = try #require(proxy.structuredEventBackend as? LiveWebInspectorProxyBackend)
     let page = pageTarget(proxy: proxy)
     let probe = EventDeliveryProbe()
 
@@ -2124,7 +2124,7 @@ func transportBackendRuntimeClearedUsesSemanticTargetID() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let proxy = try await WebInspectorProxy(transport: transport)
     let retargeted = WebInspectorTarget(
         id: WebInspectorTarget.ID("semantic-page"),
         kind: .page,
@@ -2160,7 +2160,7 @@ func transportCommandBackendDecodesRuntimeEvaluationResult() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let proxy = try await WebInspectorProxy(transport: transport)
     let target = pageTarget(proxy: proxy)
 
     let evaluateTask = Task {
@@ -2194,7 +2194,7 @@ func transportCommandBackendDecodesRuntimePropertiesPreviewAndCollectionEntries(
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let proxy = try await WebInspectorProxy(transport: transport)
     let target = pageTarget(proxy: proxy)
     let objectID = Runtime.RemoteObject.ID("object-1")
 
@@ -3798,7 +3798,7 @@ func structuredPhysicalTargetScopeFinishesWithoutDisableWhenTargetIsDestroyed() 
     await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
     )
-    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let proxy = try await WebInspectorProxy(transport: transport)
     let frame = WebInspectorTarget(
         id: WebInspectorTarget.ID("frame-target"),
         kind: .frame,
@@ -3856,7 +3856,7 @@ func structuredPhysicalTargetScopeFailsAcquisitionWhenTargetDiesDuringEnable() a
     await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
     )
-    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let proxy = try await WebInspectorProxy(transport: transport)
     let frame = WebInspectorTarget(
         id: WebInspectorTarget.ID("frame-target"),
         kind: .frame,
@@ -3904,7 +3904,7 @@ func structuredFixedTargetScopeFailsAtCommitWithoutRetargetingPendingEnable() as
     await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-next","type":"page","frameId":"main-frame","isProvisional":true}}}"#
     )
-    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let proxy = try await WebInspectorProxy(transport: transport)
     let fixedPage = WebInspectorTarget(
         id: WebInspectorTarget.ID("page-main"),
         kind: .page,

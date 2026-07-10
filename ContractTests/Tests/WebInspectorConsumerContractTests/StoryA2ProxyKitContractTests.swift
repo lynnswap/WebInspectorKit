@@ -1,6 +1,30 @@
+import Foundation
 import Testing
 import WebInspectorProxyKit
 import WebInspectorProxyKitTesting
+
+@Test
+func testJSONObjectPublicInitializersValidateAndCanonicalizeTypedFixtures() throws {
+    struct Fixture: Codable, Equatable {
+        let name: String
+        let count: Int
+    }
+
+    let fixture = Fixture(name: "contract", count: 2)
+    let encoded = try WebInspectorTestJSONObject(encoding: fixture)
+    let fromData = try WebInspectorTestJSONObject(
+        data: Data(#"{"count":2,"name":"contract"}"#.utf8)
+    )
+
+    #expect(encoded == fromData)
+    #expect(try encoded.decode(Fixture.self) == fixture)
+    #expect(throws: WebInspectorTestPeerError.invalidJSONObject) {
+        try WebInspectorTestJSONObject(data: Data("[]".utf8))
+    }
+    #expect(throws: WebInspectorTestPeerError.invalidJSONObject) {
+        try WebInspectorTestJSONObject(encoding: [1, 2])
+    }
+}
 
 @Test
 func webInspectorProxyPublicLifecycleAndCommandSurfaceWorksFromConsumerPackage() async throws {
@@ -40,12 +64,14 @@ func webInspectorProxyPublicLifecycleAndCommandSurfaceWorksFromConsumerPackage()
         currentPageCommands
     )
 
-    await runtime.backend.enqueue((), for: "Network", method: "enable")
-    try await targetNetwork.enable()
-
-    let commands = await runtime.backend.recordedCommands()
-    #expect(commands.contains(RecordedCommand(domain: "Network", method: "enable")))
-    #expect(commands.first?.targetID == target.id)
+    let enableTask = Task {
+        try await targetNetwork.enable()
+    }
+    let command = try await runtime.peer.commands.next()
+    #expect(command.destination == .target("page-main"))
+    #expect(command.method == "Network.enable")
+    try await runtime.peer.reply(to: command)
+    try await enableTask.value
 
     await runtime.proxy.close()
     try await runtime.proxy.waitUntilClosed()
@@ -57,29 +83,56 @@ func webInspectorProxyNetworkEventsMulticastToConsumerSubscribers() async throws
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
 
-    let firstEventTask = Task {
-        var iterator = target.network.events.makeAsyncIterator()
-        return await iterator.next()
+    let eventTask = Task {
+        try await target.network.withEvents { firstEvents in
+            try await target.network.withEvents { secondEvents in
+                try await runtime.peer.emitTargetEvent(
+                    targetID: "page-main",
+                    method: "Network.responseReceived",
+                    parameters: ContractTestSupport.jsonObject([
+                        "requestId": "contract-multicast-request",
+                        "response": [
+                            "status": 204,
+                            "mimeType": "application/json",
+                        ],
+                        "type": "Fetch",
+                        "timestamp": 42,
+                    ])
+                )
+
+                var firstIterator = firstEvents.makeAsyncIterator()
+                var firstEvent: Network.Event?
+                while firstEvent == nil, let pageEvent = try await firstIterator.next() {
+                    if case let .event(_, event) = pageEvent {
+                        firstEvent = event
+                    }
+                }
+
+                var secondIterator = secondEvents.makeAsyncIterator()
+                var secondEvent: Network.Event?
+                while secondEvent == nil, let pageEvent = try await secondIterator.next() {
+                    if case let .event(_, event) = pageEvent {
+                        secondEvent = event
+                    }
+                }
+                return (firstEvent, secondEvent)
+            }
+        }
     }
-    let secondEventTask = Task {
-        var iterator = target.network.events.makeAsyncIterator()
-        return await iterator.next()
-    }
 
-    try await runtime.backend.waitForSubscribers(domain: "Network", target: target, count: 2)
+    var command = try await runtime.peer.commands.next()
+    #expect(command.destination == .target("page-main"))
+    #expect(command.method == "Network.enable")
+    try await runtime.peer.reply(to: command)
 
-    await runtime.backend.emit(
-        .responseReceived(
-            id: WebInspectorProxyTestFixtures.networkRequestID("contract-multicast-request"),
-            response: Network.Response(status: 204, mimeType: "application/json"),
-            resourceType: .fetch,
-            timestamp: 42
-        ),
-        target: target
-    )
+    command = try await runtime.peer.commands.next()
+    #expect(command.destination == .target("page-main"))
+    #expect(command.method == "Network.disable")
+    try await runtime.peer.reply(to: command)
 
-    let firstEvent = try #require(try await ContractTestSupport.value(of: firstEventTask))
-    let secondEvent = try #require(try await ContractTestSupport.value(of: secondEventTask))
+    let (firstValue, secondValue) = try await eventTask.value
+    let firstEvent = try #require(firstValue)
+    let secondEvent = try #require(secondValue)
 
     guard case let .responseReceived(firstID, firstResponse, firstType, firstTimestamp) = firstEvent else {
         Issue.record("Expected the first subscriber to receive Network.responseReceived.")
@@ -99,6 +152,7 @@ func webInspectorProxyNetworkEventsMulticastToConsumerSubscribers() async throws
     #expect(secondType == .fetch)
     #expect(firstTimestamp == 42)
     #expect(secondTimestamp == 42)
+    await runtime.close()
 }
 
 private func domStructuredEventSurfaceCompiles(_ handle: DOM) async throws {

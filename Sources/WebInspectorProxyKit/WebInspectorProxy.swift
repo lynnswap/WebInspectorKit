@@ -105,15 +105,14 @@ public actor WebInspectorProxy {
     }
 
     package init(
-        configuration: Configuration = .init(),
-        backend: (any WebInspectorProxyBackend)? = nil,
+        localStateOnly: Void,
         closeConnection: (@Sendable () async -> Void)? = nil
     ) {
-        self.configuration = configuration
-        self.backend = backend
+        configuration = .init()
+        backend = nil
         core = ConnectionCore(
             backend: UnavailableTransportBackend(),
-            responseTimeout: configuration.responseTimeout,
+            responseTimeout: nil,
             closeAction: closeConnection
         )
     }
@@ -237,27 +236,6 @@ public actor WebInspectorProxy {
     /// waiting task is cancelled, only that waiter is cancelled.
     public func waitUntilClosed() async throws {
         try await core.waitUntilClosed()
-    }
-
-    package func installTargetForTesting(
-        kind: WebInspectorTarget.Kind = .page,
-        frameID: FrameID? = nil,
-        isProvisional: Bool = false
-    ) async -> WebInspectorTarget {
-        let record = await core.installTargetForTesting(
-            kind: kind.protocolKind,
-            frameID: frameID.map { ProtocolFrame.ID($0.rawValue) },
-            isProvisional: isProvisional
-        )
-        let target = WebInspectorTarget(
-            id: WebInspectorTarget.ID(record.id.rawValue),
-            kind: kind,
-            frameID: frameID,
-            isProvisional: isProvisional,
-            proxy: self,
-            route: RoutingTargetID(record.id.rawValue)
-        )
-        return target
     }
 
     package func waitForCloseWaiterForTesting() async {

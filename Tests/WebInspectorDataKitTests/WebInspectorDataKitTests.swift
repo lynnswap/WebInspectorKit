@@ -8,615 +8,634 @@ import WebInspectorTestSupport
 @MainActor
 @Test
 func domEventsPopulateRootAndPreserveChildIdentity() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let target = try await runtime.proxy.waitForCurrentPage()
-    let documentID = DOM.Node.ID("document")
-    let childID = DOM.Node.ID("child")
-    let grandchildID = DOM.Node.ID("grandchild")
+    try await withDataKitTestRuntime { runtime in
+        let target = try await runtime.proxy.waitForCurrentPage()
+        let documentID = DOM.Node.ID("document")
+        let childID = DOM.Node.ID("child")
+        let grandchildID = DOM.Node.ID("grandchild")
 
-    await enqueueStartupReplies(
-        on: runtime.backend,
-        document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document", childNodeCount: 1)
-    )
+        try await enqueueStartupReplies(
+            on: runtime.wire,
+            document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document", childNodeCount: 1)
+        )
 
-    let container = WebInspectorContainer(proxy: runtime.proxy)
-    let context = container.mainContext
-    try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil { context.rootNode != nil }
+        let container = WebInspectorContainer(proxy: runtime.proxy)
+        let context = container.mainContext
+        try await waitForStartupSubscribers(runtime: runtime, target: target)
+        try await waitUntil { context.rootNode != nil }
 
-    await runtime.backend.emit(
-        .setChildNodes(parent: documentID, nodes: [
-            DOM.Node(
-                id: childID,
-                nodeType: 1,
-                nodeName: "DIV",
-                localName: "div",
-                attributes: ["class": "before"],
-                childNodeCount: 0
-            )
-        ]),
-        target: target
-    )
-    let child = try await waitForChild(in: context)
-    #expect(context.node(for: child.id) === child)
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: documentID, nodes: [
+                DOM.Node(
+                    id: childID,
+                    nodeType: 1,
+                    nodeName: "DIV",
+                    localName: "div",
+                    attributes: ["class": "before"],
+                    childNodeCount: 0
+                )
+            ]),
+            target: target
+        )
+        let child = try await waitForChild(in: context)
+        #expect(context.node(for: child.id) === child)
 
-    await runtime.backend.emit(
-        .attributeModified(childID, name: "class", value: "after"),
-        target: target
-    )
-    try await waitUntil { child.attributes["class"] == "after" }
-    #expect(context.node(for: child.id) === child)
+        try await runtime.wire.emitRaw(
+            .attributeModified(childID, name: "class", value: "after"),
+            target: target
+        )
+        try await waitUntil { child.attributes["class"] == "after" }
+        #expect(context.node(for: child.id) === child)
 
-    await runtime.backend.emit(
-        .childNodeCountUpdated(childID, count: 2),
-        target: target
-    )
-    try await waitUntil { child.childNodeCount == 2 }
-    #expect(context.node(for: child.id) === child)
+        try await runtime.wire.emitRaw(
+            .childNodeCountUpdated(childID, count: 2),
+            target: target
+        )
+        try await waitUntil { child.childNodeCount == 2 }
+        #expect(context.node(for: child.id) === child)
 
-    await runtime.backend.emit(
-        .setChildNodes(parent: childID, nodes: [
-            DOM.Node(id: grandchildID, nodeType: 3, nodeName: "#text", nodeValue: "hello")
-        ]),
-        target: target
-    )
-    try await waitUntil {
-        guard case let .loaded(children) = child.children else {
-            return false
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: childID, nodes: [
+                DOM.Node(id: grandchildID, nodeType: 3, nodeName: "#text", nodeValue: "hello")
+            ]),
+            target: target
+        )
+        try await waitUntil {
+            guard case let .loaded(children) = child.children else {
+                return false
+            }
+            return children.first?.id == DOMNode.ID(grandchildID)
         }
-        return children.first?.id == DOMNode.ID(grandchildID)
-    }
-    guard case let .loaded(grandchildren) = child.children else {
-        Issue.record("Expected loaded child subtree.")
-        return
-    }
-    let grandchild = try #require(grandchildren.first)
-    context.select(grandchild)
-
-    await runtime.backend.emit(
-        .childNodeRemoved(parent: documentID, node: childID),
-        target: target
-    )
-    try await waitUntil {
-        guard let root = context.rootNode, case let .loaded(children) = root.children else {
-            return false
+        guard case let .loaded(grandchildren) = child.children else {
+            Issue.record("Expected loaded child subtree.")
+            return
         }
-        return children.isEmpty
+        let grandchild = try #require(grandchildren.first)
+        context.select(grandchild)
+
+        try await runtime.wire.emitRaw(
+            .childNodeRemoved(parent: documentID, node: childID),
+            target: target
+        )
+        try await waitUntil {
+            guard let root = context.rootNode, case let .loaded(children) = root.children else {
+                return false
+            }
+            return children.isEmpty
+        }
+        #expect(context.node(for: child.id) == nil)
+        #expect(context.node(for: grandchild.id) == nil)
+        #expect(context.selectedNode == nil)
     }
-    #expect(context.node(for: child.id) == nil)
-    #expect(context.node(for: grandchild.id) == nil)
-    #expect(context.selectedNode == nil)
 }
 
 @MainActor
 @Test
 func requestChildrenDispatchesDOMCommandAndMaterializesSetChildNodes() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
-    let childID = DOM.Node.ID("requested-child")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let document = try #require(context.rootNode)
+        let childID = DOM.Node.ID("requested-child")
 
-    await runtime.backend.enqueue((), for: "DOM", method: "requestChildNodes")
+        await runtime.wire.respond(to: "DOM.requestChildNodes")
 
-    await document.requestChildren(depth: 2)
+        await document.requestChildren(depth: 2)
 
-    let commands = await runtime.backend.recordedCommands()
-    let command = try #require(commands.first {
-        $0.domain == "DOM" && $0.method == "requestChildNodes"
-    })
-    let payload = try #require(command.payload.cast(as: DOM.RequestChildNodesPayload.self))
-    #expect(payload.id == document.id.proxyID)
-    #expect(payload.depth == 2)
+        let commands = runtime.wire.observations.commands
+        let command = try #require(commands.first {
+            $0.method == "DOM.requestChildNodes"
+        })
+        #expect(try commandStringParameter(command, "nodeId") == document.id.proxyID.rawValue)
+        #expect(try commandIntegerParameter(command, "depth") == 2)
 
-    await runtime.backend.emit(
-        .setChildNodes(parent: document.id.proxyID, nodes: [
-            DOM.Node(id: childID, nodeType: 1, nodeName: "DIV", localName: "div")
-        ]),
-        target: target
-    )
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: document.id.proxyID, nodes: [
+                DOM.Node(id: childID, nodeType: 1, nodeName: "DIV", localName: "div")
+            ]),
+            target: target
+        )
 
-    try await waitUntil {
-        guard case let .loaded(children) = document.children else {
-            return false
+        try await waitUntil {
+            guard case let .loaded(children) = document.children else {
+                return false
+            }
+            return children.first?.id == DOMNode.ID(childID)
         }
-        return children.first?.id == DOMNode.ID(childID)
     }
 }
 
 @MainActor
 @Test
 func domTreeSnapshotBuildsSelectorAndXPathFromDataKitProjection() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let documentID = DOM.Node.ID("document")
-    let htmlID = DOM.Node.ID("html")
-    let bodyID = DOM.Node.ID("body")
-    let firstCardID = DOM.Node.ID("first-card")
-    let featuredCardID = DOM.Node.ID("featured-card")
-    let inputID = DOM.Node.ID("search")
-    let textID = DOM.Node.ID("body-text")
+    try await withDataKitTestRuntime { runtime in
+        let documentID = DOM.Node.ID("document")
+        let htmlID = DOM.Node.ID("html")
+        let bodyID = DOM.Node.ID("body")
+        let firstCardID = DOM.Node.ID("first-card")
+        let featuredCardID = DOM.Node.ID("featured-card")
+        let inputID = DOM.Node.ID("search")
+        let textID = DOM.Node.ID("body-text")
 
-    let document = DOM.Node(
-        id: documentID,
-        nodeType: 9,
-        nodeName: "#document",
-        children: [
-            DOM.Node(
-                id: htmlID,
-                nodeType: 1,
-                nodeName: "HTML",
-                localName: "html",
-                children: [
-                    DOM.Node(
-                        id: bodyID,
-                        nodeType: 1,
-                        nodeName: "BODY",
-                        localName: "body",
-                        children: [
-                            DOM.Node(
-                                id: firstCardID,
-                                nodeType: 1,
-                                nodeName: "DIV",
-                                localName: "div",
-                                attributes: ["class": "card"],
-                                attributeList: [DOM.Attribute(name: "class", value: "card")]
-                            ),
-                            DOM.Node(
-                                id: featuredCardID,
-                                nodeType: 1,
-                                nodeName: "DIV",
-                                localName: "div",
-                                attributes: ["class": "card featured"],
-                                attributeList: [DOM.Attribute(name: "class", value: "card featured")]
-                            ),
-                            DOM.Node(
-                                id: inputID,
-                                nodeType: 1,
-                                nodeName: "INPUT",
-                                localName: "input",
-                                attributes: ["type": "search"],
-                                attributeList: [DOM.Attribute(name: "type", value: "search")]
-                            ),
-                            DOM.Node(id: textID, nodeType: 3, nodeName: "#text", nodeValue: "hello"),
-                        ]
-                    )
-                ]
-            )
-        ]
-    )
-    let (_, context) = try await startContext(runtime: runtime, document: document)
-    let tree = try await context.treeController()
-    let snapshot = tree.snapshot
+        let document = DOM.Node(
+            id: documentID,
+            nodeType: 9,
+            nodeName: "#document",
+            children: [
+                DOM.Node(
+                    id: htmlID,
+                    nodeType: 1,
+                    nodeName: "HTML",
+                    localName: "html",
+                    children: [
+                        DOM.Node(
+                            id: bodyID,
+                            nodeType: 1,
+                            nodeName: "BODY",
+                            localName: "body",
+                            children: [
+                                DOM.Node(
+                                    id: firstCardID,
+                                    nodeType: 1,
+                                    nodeName: "DIV",
+                                    localName: "div",
+                                    attributes: ["class": "card"],
+                                    attributeList: [DOM.Attribute(name: "class", value: "card")]
+                                ),
+                                DOM.Node(
+                                    id: featuredCardID,
+                                    nodeType: 1,
+                                    nodeName: "DIV",
+                                    localName: "div",
+                                    attributes: ["class": "card featured"],
+                                    attributeList: [DOM.Attribute(name: "class", value: "card featured")]
+                                ),
+                                DOM.Node(
+                                    id: inputID,
+                                    nodeType: 1,
+                                    nodeName: "INPUT",
+                                    localName: "input",
+                                    attributes: ["type": "search"],
+                                    attributeList: [DOM.Attribute(name: "type", value: "search")]
+                                ),
+                                DOM.Node(id: textID, nodeType: 3, nodeName: "#text", nodeValue: "hello"),
+                            ]
+                        )
+                    ]
+                )
+            ]
+        )
+        let (_, context) = try await startContext(runtime: runtime, document: document)
+        let tree = try await context.treeController()
+        let snapshot = tree.snapshot
 
-    #expect(snapshot.selectorPath(for: DOMNode.ID(documentID)) == "")
-    #expect(snapshot.xPath(for: DOMNode.ID(documentID)) == "/")
-    #expect(snapshot.selectorPath(for: DOMNode.ID(featuredCardID)) == "body > div.featured")
-    #expect(snapshot.xPath(for: DOMNode.ID(featuredCardID)) == "/html/body/div[2]")
-    #expect(snapshot.selectorPath(for: DOMNode.ID(inputID)) == "body > input[type=\"search\"]")
-    #expect(snapshot.xPath(for: DOMNode.ID(textID)) == "/html/body/text()")
+        #expect(snapshot.selectorPath(for: DOMNode.ID(documentID)) == "")
+        #expect(snapshot.xPath(for: DOMNode.ID(documentID)) == "/")
+        #expect(snapshot.selectorPath(for: DOMNode.ID(featuredCardID)) == "body > div.featured")
+        #expect(snapshot.xPath(for: DOMNode.ID(featuredCardID)) == "/html/body/div[2]")
+        #expect(snapshot.selectorPath(for: DOMNode.ID(inputID)) == "body > input[type=\"search\"]")
+        #expect(snapshot.xPath(for: DOMNode.ID(textID)) == "/html/body/text()")
+    }
 }
 
 @MainActor
 @Test
 func domCommandsDispatchThroughDataKitContext() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let documentID = DOM.Node.ID("document")
-    let htmlID = DOM.Node.ID("html")
-    let bodyID = DOM.Node.ID("body")
-    let parentID = DOM.Node.ID("parent")
-    let childID = DOM.Node.ID("child")
-    let document = DOM.Node(
-        id: documentID,
-        nodeType: 9,
-        nodeName: "#document",
-        children: [
-            DOM.Node(
-                id: htmlID,
-                nodeType: 1,
-                nodeName: "HTML",
-                localName: "html",
-                children: [
-                    DOM.Node(
-                        id: bodyID,
-                        nodeType: 1,
-                        nodeName: "BODY",
-                        localName: "body",
-                        children: [
-                            DOM.Node(
-                                id: parentID,
-                                nodeType: 1,
-                                nodeName: "DIV",
-                                localName: "div",
-                                attributes: ["class": "card"],
-                                attributeList: [DOM.Attribute(name: "class", value: "card")],
-                                children: [
-                                    DOM.Node(
-                                        id: childID,
-                                        nodeType: 1,
-                                        nodeName: "SPAN",
-                                        localName: "span",
-                                        attributes: ["id": "title"],
-                                        attributeList: [DOM.Attribute(name: "id", value: "title")]
-                                    )
-                                ]
-                            )
-                        ]
-                    )
-                ]
-            )
-        ]
-    )
-    let (target, context) = try await startContext(runtime: runtime, document: document)
-    let parent = try #require(context.node(for: DOMNode.ID(parentID)))
-    let child = try #require(context.node(for: DOMNode.ID(childID)))
+    try await withDataKitTestRuntime { runtime in
+        let documentID = DOM.Node.ID("document")
+        let htmlID = DOM.Node.ID("html")
+        let bodyID = DOM.Node.ID("body")
+        let parentID = DOM.Node.ID("parent")
+        let childID = DOM.Node.ID("child")
+        let document = DOM.Node(
+            id: documentID,
+            nodeType: 9,
+            nodeName: "#document",
+            children: [
+                DOM.Node(
+                    id: htmlID,
+                    nodeType: 1,
+                    nodeName: "HTML",
+                    localName: "html",
+                    children: [
+                        DOM.Node(
+                            id: bodyID,
+                            nodeType: 1,
+                            nodeName: "BODY",
+                            localName: "body",
+                            children: [
+                                DOM.Node(
+                                    id: parentID,
+                                    nodeType: 1,
+                                    nodeName: "DIV",
+                                    localName: "div",
+                                    attributes: ["class": "card"],
+                                    attributeList: [DOM.Attribute(name: "class", value: "card")],
+                                    children: [
+                                        DOM.Node(
+                                            id: childID,
+                                            nodeType: 1,
+                                            nodeName: "SPAN",
+                                            localName: "span",
+                                            attributes: ["id": "title"],
+                                            attributeList: [DOM.Attribute(name: "id", value: "title")]
+                                        )
+                                    ]
+                                )
+                            ]
+                        )
+                    ]
+                )
+            ]
+        )
+        let (target, context) = try await startContext(runtime: runtime, document: document)
+        let parent = try #require(context.node(for: DOMNode.ID(parentID)))
+        let child = try #require(context.node(for: DOMNode.ID(childID)))
 
-    await runtime.backend.enqueue("<span id=\"title\"></span>", for: "DOM", method: "getOuterHTML")
-    #expect(try await child.copyText(.html) == "<span id=\"title\"></span>")
-    #expect(try await child.copyText(.selectorPath) == "#title")
-    #expect(try context.xPath(for: child) == "/html/body/div/span")
+        await runtime.wire.respond(
+            to: "DOM.getOuterHTML",
+            with: try rawOuterHTMLResult("<span id=\"title\"></span>")
+        )
+        #expect(try await child.copyText(.html) == "<span id=\"title\"></span>")
+        #expect(try await child.copyText(.selectorPath) == "#title")
+        #expect(try context.xPath(for: child) == "/html/body/div/span")
 
-    await runtime.backend.enqueue((), for: "DOM", method: "highlightNode")
-    try await context.highlightNode(for: child.id)
+        await runtime.wire.respond(to: "DOM.highlightNode")
+        try await context.highlightNode(for: child.id)
 
-    await runtime.backend.enqueue((), for: "DOM", method: "hideHighlight")
-    try await context.hideHighlight()
+        await runtime.wire.respond(to: "DOM.hideHighlight")
+        try await context.hideHighlight()
 
-    await runtime.backend.enqueue((), for: "DOM", method: "undo")
-    try await context.undoDOMChange()
+        await runtime.wire.respond(to: "DOM.undo")
+        try await context.undoDOMChange()
 
-    await runtime.backend.enqueue((), for: "DOM", method: "redo")
-    try await context.redoDOMChange()
+        await runtime.wire.respond(to: "DOM.redo")
+        try await context.redoDOMChange()
 
-    await runtime.backend.enqueue((), for: "DOM", method: "setInspectModeEnabled")
-    try await context.setElementPickerEnabled(true)
-    #expect(context.isElementPickerEnabled)
+        await runtime.wire.respond(to: "DOM.setInspectModeEnabled")
+        try await context.setElementPickerEnabled(true)
+        #expect(context.isElementPickerEnabled)
 
-    await enqueueCSSStyleReplies(on: runtime.backend)
-    await runtime.backend.enqueue((), for: "DOM", method: "highlightNode")
-    await runtime.backend.emit(.inspect(childID), target: target)
-    try await waitUntil { context.selectedNode === child }
-    try await waitUntil { child.elementStyles?.phase == .loaded }
-    #expect(context.isElementPickerEnabled == false)
+        try await enqueueCSSStyleReplies(on: runtime.wire)
+        await runtime.wire.respond(to: "DOM.highlightNode")
+        try await runtime.wire.emitRaw(.inspect(childID), target: target)
+        try await waitUntil { context.selectedNode === child }
+        try await waitUntil { child.elementStyles?.phase == .loaded }
+        #expect(context.isElementPickerEnabled == false)
 
-    await runtime.backend.enqueue((), for: "DOM", method: "setAttributeValue")
-    await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
-    try await context.setDOMAttribute(
-        "class",
-        value: "updated",
-        on: parent.id,
-        options: .automatic
-    )
+        await runtime.wire.respond(to: "DOM.setAttributeValue")
+        await runtime.wire.respond(to: "DOM.markUndoableState")
+        try await context.setDOMAttribute(
+            "class",
+            value: "updated",
+            on: parent.id,
+            options: .automatic
+        )
 
-    await runtime.backend.enqueue((), for: "DOM", method: "setOuterHTML")
-    await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
-    try await context.setDOMOuterHTML(
-        "<span id=\"title\"></span>",
-        of: child.id,
-        options: .automatic
-    )
+        await runtime.wire.respond(to: "DOM.setOuterHTML")
+        await runtime.wire.respond(to: "DOM.markUndoableState")
+        try await context.setDOMOuterHTML(
+            "<span id=\"title\"></span>",
+            of: child.id,
+            options: .automatic
+        )
 
-    await runtime.backend.enqueue((), for: "DOM", method: "removeNode")
-    await runtime.backend.enqueue((), for: "DOM", method: "removeNode")
-    await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
-    await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
-    let deletion = try await context.removeDOMNodes(
-        [parent.id, child.id],
-        options: .automatic
-    )
-    #expect(deletion.acceptedNodeIDs == [child.id, parent.id])
-    #expect(context.selectedNode == nil)
-    #expect(child.elementStyles == nil)
+        await runtime.wire.respond(to: "DOM.removeNode")
+        await runtime.wire.respond(to: "DOM.removeNode")
+        await runtime.wire.respond(to: "DOM.markUndoableState")
+        await runtime.wire.respond(to: "DOM.markUndoableState")
+        let deletion = try await context.removeDOMNodes(
+            [parent.id, child.id],
+            options: .automatic
+        )
+        #expect(deletion.acceptedNodeIDs == [child.id, parent.id])
+        #expect(context.selectedNode == nil)
+        #expect(child.elementStyles == nil)
 
-    await runtime.backend.enqueue((), for: "Page", method: "reload")
-    try await context.reloadPage(ignoringCache: true)
+        await runtime.wire.respond(to: "Page.reload")
+        try await context.reloadPage(ignoringCache: true)
 
-    let commands = await runtime.backend.recordedCommands()
-    let outerHTML = try #require(commands.first { $0.domain == "DOM" && $0.method == "getOuterHTML" })
-    #expect(outerHTML.payload.cast(as: DOM.GetOuterHTMLPayload.self)?.id == childID)
+        let commands = runtime.wire.observations.commands
+        let outerHTML = try #require(commands.first { $0.method == "DOM.getOuterHTML" })
+        #expect(try commandStringParameter(outerHTML, "nodeId") == childID.rawValue)
 
-    let highlight = try #require(commands.first { $0.domain == "DOM" && $0.method == "highlightNode" })
-    #expect(highlight.payload.cast(as: DOM.HighlightNodePayload.self)?.id == childID)
+        let highlight = try #require(commands.first { $0.method == "DOM.highlightNode" })
+        #expect(try commandStringParameter(highlight, "nodeId") == childID.rawValue)
 
-    #expect(commands.contains { $0.domain == "DOM" && $0.method == "undo" })
-    #expect(commands.contains { $0.domain == "DOM" && $0.method == "redo" })
+        #expect(commands.contains { $0.method == "DOM.undo" })
+        #expect(commands.contains { $0.method == "DOM.redo" })
 
-    let inspectMode = try #require(commands.first { $0.domain == "DOM" && $0.method == "setInspectModeEnabled" })
-    #expect(inspectMode.payload.cast(as: DOM.SetInspectModeEnabledPayload.self)?.enabled == true)
+        let inspectMode = try #require(commands.first { $0.method == "DOM.setInspectModeEnabled" })
+        #expect(try commandBooleanParameter(inspectMode, "enabled"))
 
-    let setAttribute = try #require(commands.first { $0.domain == "DOM" && $0.method == "setAttributeValue" })
-    #expect(setAttribute.payload.cast(as: DOM.SetAttributeValuePayload.self)?.id == parentID)
-    #expect(setAttribute.payload.cast(as: DOM.SetAttributeValuePayload.self)?.name == "class")
-    #expect(setAttribute.payload.cast(as: DOM.SetAttributeValuePayload.self)?.value == "updated")
+        let setAttribute = try #require(commands.first { $0.method == "DOM.setAttributeValue" })
+        #expect(try commandStringParameter(setAttribute, "nodeId") == parentID.rawValue)
+        #expect(try commandStringParameter(setAttribute, "name") == "class")
+        #expect(try commandStringParameter(setAttribute, "value") == "updated")
 
-    let setOuterHTML = try #require(commands.first { $0.domain == "DOM" && $0.method == "setOuterHTML" })
-    #expect(setOuterHTML.payload.cast(as: DOM.SetOuterHTMLPayload.self)?.id == childID)
-    #expect(setOuterHTML.payload.cast(as: DOM.SetOuterHTMLPayload.self)?.html == "<span id=\"title\"></span>")
+        let setOuterHTML = try #require(commands.first { $0.method == "DOM.setOuterHTML" })
+        #expect(try commandStringParameter(setOuterHTML, "nodeId") == childID.rawValue)
+        #expect(try commandStringParameter(setOuterHTML, "outerHTML") == "<span id=\"title\"></span>")
 
-    let removals = commands.filter { $0.domain == "DOM" && $0.method == "removeNode" }
-    #expect(removals.count == 2)
-    #expect(removals.first?.payload.cast(as: DOM.RemoveNodePayload.self)?.id == childID)
-    #expect(removals.last?.payload.cast(as: DOM.RemoveNodePayload.self)?.id == parentID)
-    let undoMarks = commands.filter { $0.domain == "DOM" && $0.method == "markUndoableState" }
-    #expect(undoMarks.count == 4)
+        let removals = commands.filter { $0.method == "DOM.removeNode" }
+        #expect(removals.count == 2)
+        let firstRemoval = try #require(removals.first)
+        let lastRemoval = try #require(removals.last)
+        #expect(try commandStringParameter(firstRemoval, "nodeId") == childID.rawValue)
+        #expect(try commandStringParameter(lastRemoval, "nodeId") == parentID.rawValue)
+        let undoMarks = commands.filter { $0.method == "DOM.markUndoableState" }
+        #expect(undoMarks.count == 4)
 
-    let reload = try #require(commands.first { $0.domain == "Page" && $0.method == "reload" })
-    #expect(reload.payload.cast(as: Page.ReloadPayload.self)?.ignoringCache == true)
+        let reload = try #require(commands.first { $0.method == "Page.reload" })
+        #expect(try commandBooleanParameter(reload, "ignoreCache"))
+    }
 }
 
 @MainActor
 @Test
 func domMutationsAndUndoRedoUseOwningFrameTarget() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let frameTarget = await runtime.proxy.installTargetForTesting(kind: .frame)
-    let document = try #require(context.rootNode)
-    let scopedNodeID = DOM.Node.ID(
-        "frame-owned-node",
-        scopedToTargetRawValue: frameTarget.id.rawValue
-    )
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let frameTarget = try await createFrameTarget(in: runtime)
+        let document = try #require(context.rootNode)
+        let scopedNodeID = DOM.Node.ID(
+            "frame-owned-node",
+            scopedToTargetRawValue: frameTarget.id.rawValue
+        )
 
-    await runtime.backend.emit(
-        .setChildNodes(parent: document.id.proxyID, nodes: [
-            DOM.Node(id: scopedNodeID, nodeType: 3, nodeName: "#text", nodeValue: "frame")
-        ]),
-        target: target
-    )
-    try await waitUntil { context.node(for: DOMNode.ID(scopedNodeID)) != nil }
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: document.id.proxyID, nodes: [
+                DOM.Node(id: scopedNodeID, nodeType: 3, nodeName: "#text", nodeValue: "frame")
+            ]),
+            target: target
+        )
+        try await waitUntil { context.node(for: DOMNode.ID(scopedNodeID)) != nil }
 
-    await runtime.backend.enqueue((), for: "DOM", method: "setAttributeValue")
-    await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
-    try await context.setDOMAttribute(
-        "data-edited",
-        value: "page",
-        on: document.id,
-        options: .automatic
-    )
+        await runtime.wire.respond(to: "DOM.setAttributeValue")
+        await runtime.wire.respond(to: "DOM.markUndoableState")
+        try await context.setDOMAttribute(
+            "data-edited",
+            value: "page",
+            on: document.id,
+            options: .automatic
+        )
 
-    await runtime.backend.enqueue((), for: "DOM", method: "removeNode")
-    await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
-    _ = try await context.removeDOMNodes(
-        [DOMNode.ID(scopedNodeID)],
-        options: .automatic
-    )
+        await runtime.wire.respond(to: "DOM.removeNode")
+        await runtime.wire.respond(to: "DOM.markUndoableState")
+        _ = try await context.removeDOMNodes(
+            [DOMNode.ID(scopedNodeID)],
+            options: .automatic
+        )
 
-    await runtime.backend.enqueue((), for: "DOM", method: "undo")
-    try await context.undoDOMChange()
+        await runtime.wire.respond(to: "DOM.undo")
+        try await context.undoDOMChange()
 
-    await runtime.backend.enqueue((), for: "DOM", method: "redo")
-    try await context.redoDOMChange()
+        await runtime.wire.respond(to: "DOM.redo")
+        try await context.redoDOMChange()
 
-    let domCommands = await runtime.backend.recordedCommands()
-        .filter { $0.domain == "DOM" && ["setAttributeValue", "removeNode", "markUndoableState", "undo", "redo"].contains($0.method) }
-    #expect(domCommands.map(\.method) == [
-        "setAttributeValue",
-        "markUndoableState",
-        "removeNode",
-        "markUndoableState",
-        "undo",
-        "redo",
-    ])
-    #expect(domCommands.prefix(2).allSatisfy { $0.targetID == target.id })
-    let frameCommands = domCommands.dropFirst(2)
-    #expect(frameCommands.allSatisfy { $0.targetID == frameTarget.id })
-    #expect(frameCommands.allSatisfy { $0.route == RoutingTargetID(frameTarget.id.rawValue) })
-    let removal = try #require(frameCommands.first { $0.method == "removeNode" })
-    #expect(removal.payload.cast(as: DOM.RemoveNodePayload.self)?.id == scopedNodeID)
+        let domCommands = runtime.wire.observations.commands
+            .filter {
+                [
+                    "DOM.setAttributeValue",
+                    "DOM.removeNode",
+                    "DOM.markUndoableState",
+                    "DOM.undo",
+                    "DOM.redo",
+                ].contains($0.method)
+            }
+        #expect(domCommands.map(\.method) == [
+            "DOM.setAttributeValue",
+            "DOM.markUndoableState",
+            "DOM.removeNode",
+            "DOM.markUndoableState",
+            "DOM.undo",
+            "DOM.redo",
+        ])
+        #expect(domCommands.prefix(2).allSatisfy { $0.destination == .target(wireTargetID(target)) })
+        let frameCommands = domCommands.dropFirst(2)
+        #expect(frameCommands.allSatisfy { $0.destination == .target(wireTargetID(frameTarget)) })
+        let removal = try #require(frameCommands.first { $0.method == "DOM.removeNode" })
+        #expect(try commandStringParameter(removal, "nodeId") == scopedNodeID.unscopedRawValue)
+    }
 }
 
 @MainActor
 @Test
 func domDeleteRejectsCrossTargetSelectionBeforeRemovingNodes() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let frameTarget = await runtime.proxy.installTargetForTesting(kind: .frame)
-    let document = try #require(context.rootNode)
-    let pageNodeID = DOM.Node.ID("page-node")
-    let scopedFrameNodeID = DOM.Node.ID(
-        "frame-node",
-        scopedToTargetRawValue: frameTarget.id.rawValue
-    )
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let frameTarget = try await createFrameTarget(in: runtime)
+        let document = try #require(context.rootNode)
+        let pageNodeID = DOM.Node.ID("page-node")
+        let scopedFrameNodeID = DOM.Node.ID(
+            "frame-node",
+            scopedToTargetRawValue: frameTarget.id.rawValue
+        )
 
-    await runtime.backend.emit(
-        .setChildNodes(parent: document.id.proxyID, nodes: [
-            DOM.Node(id: pageNodeID, nodeType: 1, nodeName: "DIV", localName: "div"),
-            DOM.Node(id: scopedFrameNodeID, nodeType: 1, nodeName: "SPAN", localName: "span"),
-        ]),
-        target: target
-    )
-    try await waitUntil {
-        context.node(for: DOMNode.ID(pageNodeID)) != nil
-            && context.node(for: DOMNode.ID(scopedFrameNodeID)) != nil
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: document.id.proxyID, nodes: [
+                DOM.Node(id: pageNodeID, nodeType: 1, nodeName: "DIV", localName: "div"),
+                DOM.Node(id: scopedFrameNodeID, nodeType: 1, nodeName: "SPAN", localName: "span"),
+            ]),
+            target: target
+        )
+        try await waitUntil {
+            context.node(for: DOMNode.ID(pageNodeID)) != nil
+                && context.node(for: DOMNode.ID(scopedFrameNodeID)) != nil
+        }
+
+        await #expect(throws: WebInspectorProxyError.commandFailed(
+            domain: "DOM",
+            method: "removeNode",
+            message: "Deleting nodes from multiple DOM targets in one mutation is not supported."
+        )) {
+            _ = try await context.removeDOMNodes([
+                DOMNode.ID(pageNodeID),
+                DOMNode.ID(scopedFrameNodeID),
+            ], options: .automatic)
+        }
+
+        let removeCommands = runtime.wire.observations.commands
+            .filter { $0.method == "DOM.removeNode" }
+        #expect(removeCommands.isEmpty)
     }
-
-    await #expect(throws: WebInspectorProxyError.commandFailed(
-        domain: "DOM",
-        method: "removeNode",
-        message: "Deleting nodes from multiple DOM targets in one mutation is not supported."
-    )) {
-        _ = try await context.removeDOMNodes([
-            DOMNode.ID(pageNodeID),
-            DOMNode.ID(scopedFrameNodeID),
-        ], options: .automatic)
-    }
-
-    let removeCommands = await runtime.backend.recordedCommands()
-        .filter { $0.domain == "DOM" && $0.method == "removeNode" }
-    #expect(removeCommands.isEmpty)
 }
 
 @MainActor
 @Test
 func domInspectSelectsKnownNodeAndLoadsStyles() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
-    let elementID = DOM.Node.ID("inspect-node")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let document = try #require(context.rootNode)
+        let elementID = DOM.Node.ID("inspect-node")
 
-    await runtime.backend.emit(
-        .setChildNodes(parent: document.id.proxyID, nodes: [
-            DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
-        ]),
-        target: target
-    )
-    let element = try await waitForChild(in: context)
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: document.id.proxyID, nodes: [
+                DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
+            ]),
+            target: target
+        )
+        let element = try await waitForChild(in: context)
 
-    await enqueueCSSStyleReplies(on: runtime.backend)
-    await runtime.backend.enqueue((), for: "DOM", method: "highlightNode")
-    await runtime.backend.emit(.inspect(elementID), target: target)
+        try await enqueueCSSStyleReplies(on: runtime.wire)
+        await runtime.wire.respond(to: "DOM.highlightNode")
+        try await runtime.wire.emitRaw(.inspect(elementID), target: target)
 
-    try await waitUntil { context.selectedNode === element }
-    try await waitUntil {
-        await runtime.backend.recordedCommands().contains { command in
-            command.domain == "DOM"
-                && command.method == "highlightNode"
-                && command.payload.cast(as: DOM.HighlightNodePayload.self)?.id == elementID
+        try await waitUntil { context.selectedNode === element }
+        try await waitUntil {
+            runtime.wire.observations.commands.contains { command in
+                command.method == "DOM.highlightNode"
+                    && (try? commandStringParameter(command, "nodeId")) == elementID.rawValue
+            }
         }
-    }
-    let styles = try #require(element.elementStyles)
-    try await waitUntil { styles.phase == .loaded }
-    #expect(styles.sections.map(\.title) == [".card"])
+        let styles = try #require(element.elementStyles)
+        try await waitUntil { styles.phase == .loaded }
+        #expect(styles.sections.map(\.title) == [".card"])
 
-    let commands = await runtime.backend.recordedCommands()
-    #expect(commands.contains(RecordedCommand(domain: "CSS", method: "getMatchedStylesForNode")))
-    #expect(commands.contains(RecordedCommand(domain: "CSS", method: "getComputedStyleForNode")))
+        let commands = runtime.wire.observations.commands
+        #expect(commands.contains { $0.method == "CSS.getMatchedStylesForNode" })
+        #expect(commands.contains { $0.method == "CSS.getComputedStyleForNode" })
+    }
 }
 
 @MainActor
 @Test
 func domInspectWaitsForRequestNodePathBeforeSelectingUnresolvedNode() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
-    let staleID = DOM.Node.ID("stale-node")
-    let elementID = DOM.Node.ID("resolved-inspect-node")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let document = try #require(context.rootNode)
+        let staleID = DOM.Node.ID("stale-node")
+        let elementID = DOM.Node.ID("resolved-inspect-node")
 
-    await runtime.backend.emit(
-        .setChildNodes(parent: document.id.proxyID, nodes: [
-            DOM.Node(id: staleID, nodeType: 1, nodeName: "SPAN", localName: "span")
-        ]),
-        target: target
-    )
-    try await waitUntil { context.node(for: DOMNode.ID(staleID)) != nil }
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: document.id.proxyID, nodes: [
+                DOM.Node(id: staleID, nodeType: 1, nodeName: "SPAN", localName: "span")
+            ]),
+            target: target
+        )
+        try await waitUntil { context.node(for: DOMNode.ID(staleID)) != nil }
 
-    await enqueueCSSStyleReplies(on: runtime.backend)
-    await runtime.backend.enqueue((), for: "DOM", method: "highlightNode")
-    await runtime.backend.emit(.inspect(elementID), target: target)
-    #expect(context.selectedNode == nil)
+        try await enqueueCSSStyleReplies(on: runtime.wire)
+        await runtime.wire.respond(to: "DOM.highlightNode")
+        try await runtime.wire.emitRaw(.inspect(elementID), target: target)
+        #expect(context.selectedNode == nil)
 
-    await runtime.backend.emit(
-        .setChildNodes(parent: document.id.proxyID, nodes: [
-            DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
-        ]),
-        target: target
-    )
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: document.id.proxyID, nodes: [
+                DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
+            ]),
+            target: target
+        )
 
-    try await waitUntil { context.selectedNode?.id == DOMNode.ID(elementID) }
-    try await waitUntil {
-        await runtime.backend.recordedCommands().contains { command in
-            command.domain == "DOM"
-                && command.method == "highlightNode"
-                && command.payload.cast(as: DOM.HighlightNodePayload.self)?.id == elementID
+        try await waitUntil { context.selectedNode?.id == DOMNode.ID(elementID) }
+        try await waitUntil {
+            runtime.wire.observations.commands.contains { command in
+                command.method == "DOM.highlightNode"
+                    && (try? commandStringParameter(command, "nodeId")) == elementID.rawValue
+            }
         }
+        #expect(context.state == .attached)
+        #expect(runtime.wire.observations.commandMethods.contains(
+            "DOM.requestChildNodes"
+        ) == false)
+        #expect(context.node(for: DOMNode.ID(staleID)) == nil)
+        let selected = try #require(context.selectedNode)
+        let styles = try #require(selected.elementStyles)
+        try await waitUntil { styles.phase == .loaded }
     }
-    #expect(context.state == .attached)
-    #expect(await runtime.backend.recordedCommands().contains(
-        RecordedCommand(domain: "DOM", method: "requestChildNodes")
-    ) == false)
-    #expect(context.node(for: DOMNode.ID(staleID)) == nil)
-    let selected = try #require(context.selectedNode)
-    let styles = try #require(selected.elementStyles)
-    try await waitUntil { styles.phase == .loaded }
 }
 
 @MainActor
 @Test
 func domInspectBeforeDocumentArrivesWaitsForRequestNodePathAfterRootApplies() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let target = try await runtime.proxy.waitForCurrentPage()
-    let gate = WebInspectorTestGate()
-    let documentID = DOM.Node.ID("document")
-    let elementID = DOM.Node.ID("deferred-inspect-node")
+    try await withDataKitTestRuntime { runtime in
+        let target = try await runtime.proxy.waitForCurrentPage()
+        let documentID = DOM.Node.ID("document")
+        let elementID = DOM.Node.ID("deferred-inspect-node")
 
-    await runtime.backend.hold(domain: "DOM", method: "getDocument", gate: gate)
-    await enqueueStartupReplies(
-        on: runtime.backend,
-        document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document")
-    )
+        let gate = await runtime.wire.deferReply(
+            to: "DOM.getDocument",
+            with: try domDocumentResult(
+                DOM.Node(id: documentID, nodeType: 9, nodeName: "#document")
+            )
+        )
+        await enqueueDomainEnableReplies(on: runtime.wire)
 
-    let container = WebInspectorContainer(proxy: runtime.proxy)
-    let context = container.mainContext
-    try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil {
-        await runtime.backend.recordedCommands()
-            .contains(RecordedCommand(domain: "DOM", method: "getDocument"))
-    }
-
-    await runtime.backend.emit(.inspect(elementID), target: target)
-    await runtime.backend.enqueue((), for: "DOM", method: "highlightNode")
-    await enqueueCSSStyleReplies(on: runtime.backend)
-    await gate.open()
-
-    try await waitUntil { context.rootNode?.id == DOMNode.ID(documentID) }
-    #expect(context.selectedNode == nil)
-
-    await runtime.backend.emit(
-        .setChildNodes(parent: documentID, nodes: [
-            DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
-        ]),
-        target: target
-    )
-
-    try await waitUntil { context.selectedNode?.id == DOMNode.ID(elementID) }
-    try await waitUntil {
-        await runtime.backend.recordedCommands().contains { command in
-            command.domain == "DOM"
-                && command.method == "highlightNode"
-                && command.payload.cast(as: DOM.HighlightNodePayload.self)?.id == elementID
+        let container = WebInspectorContainer(proxy: runtime.proxy)
+        let context = container.mainContext
+        try await waitForStartupSubscribers(runtime: runtime, target: target)
+        try await waitUntil {
+            runtime.wire.observations.commands
+                .contains { $0.method == "DOM.getDocument" }
         }
+
+        try await runtime.wire.emitRaw(.inspect(elementID), target: target)
+        await runtime.wire.respond(to: "DOM.highlightNode")
+        try await enqueueCSSStyleReplies(on: runtime.wire)
+        gate.open()
+
+        try await waitUntil { context.rootNode?.id == DOMNode.ID(documentID) }
+        #expect(context.selectedNode == nil)
+
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: documentID, nodes: [
+                DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
+            ]),
+            target: target
+        )
+
+        try await waitUntil { context.selectedNode?.id == DOMNode.ID(elementID) }
+        try await waitUntil {
+            runtime.wire.observations.commands.contains { command in
+                command.method == "DOM.highlightNode"
+                    && (try? commandStringParameter(command, "nodeId")) == elementID.rawValue
+            }
+        }
+        let selected = try #require(context.selectedNode)
+        let styles = try #require(selected.elementStyles)
+        try await waitUntil { styles.phase == .loaded }
+        #expect(runtime.wire.observations.commandMethods.contains(
+            "DOM.requestChildNodes"
+        ) == false)
     }
-    let selected = try #require(context.selectedNode)
-    let styles = try #require(selected.elementStyles)
-    try await waitUntil { styles.phase == .loaded }
-    #expect(await runtime.backend.recordedCommands().contains(
-        RecordedCommand(domain: "DOM", method: "requestChildNodes")
-    ) == false)
 }
 
 @MainActor
 @Test
 func explicitSelectionSupersedesPendingDOMInspectResolution() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
-    let selectedID = DOM.Node.ID("manual-selection")
-    let inspectedID = DOM.Node.ID("late-inspect-node")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let document = try #require(context.rootNode)
+        let selectedID = DOM.Node.ID("manual-selection")
+        let inspectedID = DOM.Node.ID("late-inspect-node")
 
-    await runtime.backend.emit(
-        .setChildNodes(parent: document.id.proxyID, nodes: [
-            DOM.Node(id: selectedID, nodeType: 1, nodeName: "BUTTON", localName: "button")
-        ]),
-        target: target
-    )
-    let manualSelection = try await waitForChild(in: context)
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: document.id.proxyID, nodes: [
+                DOM.Node(id: selectedID, nodeType: 1, nodeName: "BUTTON", localName: "button")
+            ]),
+            target: target
+        )
+        let manualSelection = try await waitForChild(in: context)
 
-    context.apply(.inspect(inspectedID))
+        context.apply(.inspect(inspectedID))
 
-    await enqueueCSSStyleReplies(on: runtime.backend)
-    context.select(manualSelection)
-    try await waitUntil { context.selectedNode === manualSelection }
+        try await enqueueCSSStyleReplies(on: runtime.wire)
+        context.select(manualSelection)
+        try await waitUntil { context.selectedNode === manualSelection }
 
-    await runtime.backend.emit(
-        .setChildNodes(parent: document.id.proxyID, nodes: [
-            DOM.Node(id: selectedID, nodeType: 1, nodeName: "BUTTON", localName: "button"),
-            DOM.Node(id: inspectedID, nodeType: 1, nodeName: "DIV", localName: "div"),
-        ]),
-        target: target
-    )
-    try await waitUntil { context.node(for: DOMNode.ID(inspectedID)) != nil }
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: document.id.proxyID, nodes: [
+                DOM.Node(id: selectedID, nodeType: 1, nodeName: "BUTTON", localName: "button"),
+                DOM.Node(id: inspectedID, nodeType: 1, nodeName: "DIV", localName: "div"),
+            ]),
+            target: target
+        )
+        try await waitUntil { context.node(for: DOMNode.ID(inspectedID)) != nil }
 
-    #expect(context.selectedNode === manualSelection)
-    #expect(await runtime.backend.recordedCommands().contains(
-        RecordedCommand(domain: "DOM", method: "requestChildNodes")
-    ) == false)
+        #expect(context.selectedNode === manualSelection)
+        #expect(runtime.wire.observations.commandMethods.contains(
+            "DOM.requestChildNodes"
+        ) == false)
+    }
 }
 
 @MainActor
@@ -625,496 +644,525 @@ func domMutationEventForUnmaterializedNodeIsSkipped() async throws {
     // Live pages emit mutation events for nodes WebKit has bound for this
     // frontend but this context has not materialized (attach mid-flight,
     // evicted subtrees). They must be skipped, not fail the context.
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let target = try await runtime.proxy.waitForCurrentPage()
-    let documentID = DOM.Node.ID("document")
-    let childID = DOM.Node.ID("child")
+    try await withDataKitTestRuntime { runtime in
+        let target = try await runtime.proxy.waitForCurrentPage()
+        let documentID = DOM.Node.ID("document")
+        let childID = DOM.Node.ID("child")
 
-    await enqueueStartupReplies(
-        on: runtime.backend,
-        document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document", childNodeCount: 1)
-    )
-    let container = WebInspectorContainer(proxy: runtime.proxy)
-    let context = container.mainContext
-    try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil { context.rootNode != nil }
+        try await enqueueStartupReplies(
+            on: runtime.wire,
+            document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document", childNodeCount: 1)
+        )
+        let container = WebInspectorContainer(proxy: runtime.proxy)
+        let context = container.mainContext
+        try await waitForStartupSubscribers(runtime: runtime, target: target)
+        try await waitUntil { context.rootNode != nil }
 
-    await runtime.backend.emit(
-        .attributeModified(DOM.Node.ID("unmaterialized"), name: "class", value: "x"),
-        target: target
-    )
-    await runtime.backend.emit(
-        .setChildNodes(parent: documentID, nodes: [
-            DOM.Node(id: childID, nodeType: 1, nodeName: "DIV", localName: "div", childNodeCount: 0)
-        ]),
-        target: target
-    )
+        try await runtime.wire.emitRaw(
+            .attributeModified(DOM.Node.ID("unmaterialized"), name: "class", value: "x"),
+            target: target
+        )
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: documentID, nodes: [
+                DOM.Node(id: childID, nodeType: 1, nodeName: "DIV", localName: "div", childNodeCount: 0)
+            ]),
+            target: target
+        )
 
-    let child = try await waitForChild(in: context)
-    #expect(child.id == DOMNode.ID(childID))
-    #expect(context.state == .attached)
+        let child = try await waitForChild(in: context)
+        #expect(child.id == DOMNode.ID(childID))
+        #expect(context.state == .attached)
+    }
 }
 
 @MainActor
 @Test
 func startupEnablesTrackedDomainsBeforeInitialDocumentSnapshot() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let target = try await runtime.proxy.waitForCurrentPage()
+    try await withDataKitTestRuntime { runtime in
+        let target = try await runtime.proxy.waitForCurrentPage()
 
-    await enqueueStartupReplies(on: runtime.backend)
+        try await enqueueStartupReplies(on: runtime.wire)
 
-    let container = WebInspectorContainer(proxy: runtime.proxy)
-    let context = container.mainContext
-    try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil { context.state == .attached }
+        let container = WebInspectorContainer(proxy: runtime.proxy)
+        let context = container.mainContext
+        try await waitForStartupSubscribers(runtime: runtime, target: target)
+        try await waitUntil { context.state == .attached }
 
-    let commands = await runtime.backend.recordedCommands()
-    #expect(commands.prefix(startupCommands.count) == startupCommands[...])
+        let commands = runtime.wire.observations.commands
+        #expect(commands.map(\.method).prefix(startupCommands.count) == startupCommands[...])
+    }
 }
 
 @MainActor
 @Test
 func networkEnableFailureFailsStartupBeforeDocumentFetch() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let target = try await runtime.proxy.waitForCurrentPage()
+    try await withDataKitTestRuntime { runtime in
+        let target = try await runtime.proxy.waitForCurrentPage()
 
-    await runtime.backend.enqueue((), for: "Inspector", method: "enable")
-    await runtime.backend.enqueue((), for: "Inspector", method: "initialized")
-    await runtime.backend.enqueue((), for: "Runtime", method: "enable")
-    await runtime.backend.enqueue((), for: "Runtime", method: "disable")
-    await runtime.backend.enqueue((), for: "Inspector", method: "disable")
+        await runtime.wire.respond(to: "Inspector.enable")
+        await runtime.wire.respond(to: "Inspector.initialized")
+        await runtime.wire.respond(to: "Runtime.enable")
+        await runtime.wire.fail("Network.enable", message: "Network enable failed.")
+        await runtime.wire.respond(to: "Runtime.disable")
+        await runtime.wire.respond(to: "Inspector.disable")
 
-    let container = WebInspectorContainer(proxy: runtime.proxy)
-    let context = container.mainContext
-    try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil {
-        guard case .failed = context.state else {
-            return false
+        let container = WebInspectorContainer(proxy: runtime.proxy)
+        let context = container.mainContext
+        try await waitForStartupSubscribers(runtime: runtime, target: target)
+        try await waitUntil {
+            guard case .failed = context.state else {
+                return false
+            }
+            return true
         }
-        return true
-    }
 
-    guard case let .failed(error) = context.state else {
-        Issue.record("Expected failed context state.")
-        return
-    }
-    guard case .commandFailed(domain: "Network", method: "enable", message: _) = error else {
-        Issue.record("Expected Network.enable command failure.")
-        return
-    }
+        guard case let .failed(error) = context.state else {
+            Issue.record("Expected failed context state.")
+            return
+        }
+        guard case .commandFailed(domain: "Network", method: "enable", message: _) = error else {
+            Issue.record("Expected Network.enable command failure.")
+            return
+        }
 
-    let commands = await runtime.backend.recordedCommands()
-    #expect(commands == [
-        RecordedCommand(domain: "Inspector", method: "enable"),
-        RecordedCommand(domain: "Inspector", method: "initialized"),
-        RecordedCommand(domain: "Runtime", method: "enable"),
-        RecordedCommand(domain: "Network", method: "enable"),
-        RecordedCommand(domain: "Runtime", method: "disable"),
-        RecordedCommand(domain: "Inspector", method: "disable"),
-    ])
-    #expect(context.rootNode == nil)
+        let commands = runtime.wire.observations.commands
+        #expect(commands.map(\.method) == [
+            "Inspector.enable",
+            "Inspector.initialized",
+            "Runtime.enable",
+            "Network.enable",
+            "Runtime.disable",
+            "Inspector.disable",
+        ])
+        #expect(context.rootNode == nil)
+    }
 }
 
 @MainActor
 @Test
 func consoleEnableFailureFailsStartupBeforeAttachingDocument() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let target = try await runtime.proxy.waitForCurrentPage()
+    try await withDataKitTestRuntime { runtime in
+        let target = try await runtime.proxy.waitForCurrentPage()
 
-    await runtime.backend.enqueue((), for: "Inspector", method: "enable")
-    await runtime.backend.enqueue((), for: "Inspector", method: "initialized")
-    await runtime.backend.enqueue((), for: "Runtime", method: "enable")
-    await runtime.backend.enqueue((), for: "Network", method: "enable")
-    await runtime.backend.enqueue(
-        DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document"),
-        for: "DOM",
-        method: "getDocument"
-    )
-    await runtime.backend.enqueue((), for: "Runtime", method: "disable")
-    await runtime.backend.enqueue((), for: "Network", method: "disable")
-    await runtime.backend.enqueue((), for: "Inspector", method: "disable")
+        await runtime.wire.respond(to: "Inspector.enable")
+        await runtime.wire.respond(to: "Inspector.initialized")
+        await runtime.wire.respond(to: "Runtime.enable")
+        await runtime.wire.respond(to: "Network.enable")
+        await runtime.wire.respond(
+            to: "DOM.getDocument",
+            with: try domDocumentResult(
+                DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document")
+            )
+        )
+        await runtime.wire.fail("Console.enable", message: "Console enable failed.")
+        await runtime.wire.respond(to: "Runtime.disable")
+        await runtime.wire.respond(to: "Network.disable")
+        await runtime.wire.respond(to: "Inspector.disable")
 
-    let container = WebInspectorContainer(proxy: runtime.proxy)
-    let context = container.mainContext
-    try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil {
-        guard case .failed = context.state else {
-            return false
+        let container = WebInspectorContainer(proxy: runtime.proxy)
+        let context = container.mainContext
+        try await waitForStartupSubscribers(runtime: runtime, target: target)
+        try await waitUntil {
+            guard case .failed = context.state else {
+                return false
+            }
+            return true
         }
-        return true
-    }
 
-    guard case let .failed(error) = context.state else {
-        Issue.record("Expected failed context state.")
-        return
-    }
-    guard case .commandFailed(domain: "Console", method: "enable", message: _) = error else {
-        Issue.record("Expected Console.enable command failure.")
-        return
-    }
+        guard case let .failed(error) = context.state else {
+            Issue.record("Expected failed context state.")
+            return
+        }
+        guard case .commandFailed(domain: "Console", method: "enable", message: _) = error else {
+            Issue.record("Expected Console.enable command failure.")
+            return
+        }
 
-    let commands = await runtime.backend.recordedCommands()
-    #expect(commands == [
-        RecordedCommand(domain: "Inspector", method: "enable"),
-        RecordedCommand(domain: "Inspector", method: "initialized"),
-        RecordedCommand(domain: "Runtime", method: "enable"),
-        RecordedCommand(domain: "Network", method: "enable"),
-        RecordedCommand(domain: "DOM", method: "getDocument"),
-        RecordedCommand(domain: "Console", method: "enable"),
-        RecordedCommand(domain: "Runtime", method: "disable"),
-        RecordedCommand(domain: "Network", method: "disable"),
-        RecordedCommand(domain: "Inspector", method: "disable"),
-    ])
-    #expect(context.rootNode == nil)
+        let commands = runtime.wire.observations.commands
+        #expect(commands.map(\.method) == [
+            "Inspector.enable",
+            "Inspector.initialized",
+            "Runtime.enable",
+            "Network.enable",
+            "DOM.getDocument",
+            "Console.enable",
+            "Runtime.disable",
+            "Network.disable",
+            "Inspector.disable",
+        ])
+        #expect(context.rootNode == nil)
+    }
 }
 
 @MainActor
 @Test
 func runtimeEnableFailureFailsStartupBeforeConsoleNetworkAndDocumentFetch() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let target = try await runtime.proxy.waitForCurrentPage()
+    try await withDataKitTestRuntime { runtime in
+        let target = try await runtime.proxy.waitForCurrentPage()
 
-    await runtime.backend.enqueue((), for: "Inspector", method: "enable")
-    await runtime.backend.enqueue((), for: "Inspector", method: "initialized")
-    await runtime.backend.enqueue((), for: "Inspector", method: "disable")
+        await runtime.wire.respond(to: "Inspector.enable")
+        await runtime.wire.respond(to: "Inspector.initialized")
+        await runtime.wire.fail("Runtime.enable", message: "Runtime enable failed.")
+        await runtime.wire.respond(to: "Inspector.disable")
 
-    let container = WebInspectorContainer(proxy: runtime.proxy)
-    let context = container.mainContext
-    try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil {
-        guard case .failed = context.state else {
-            return false
+        let container = WebInspectorContainer(proxy: runtime.proxy)
+        let context = container.mainContext
+        try await waitForStartupSubscribers(runtime: runtime, target: target)
+        try await waitUntil {
+            guard case .failed = context.state else {
+                return false
+            }
+            return true
         }
-        return true
-    }
 
-    guard case let .failed(error) = context.state else {
-        Issue.record("Expected failed context state.")
-        return
-    }
-    guard case .commandFailed(domain: "Runtime", method: "enable", message: _) = error else {
-        Issue.record("Expected Runtime.enable command failure.")
-        return
-    }
+        guard case let .failed(error) = context.state else {
+            Issue.record("Expected failed context state.")
+            return
+        }
+        guard case .commandFailed(domain: "Runtime", method: "enable", message: _) = error else {
+            Issue.record("Expected Runtime.enable command failure.")
+            return
+        }
 
-    let commands = await runtime.backend.recordedCommands()
-    #expect(commands == [
-        RecordedCommand(domain: "Inspector", method: "enable"),
-        RecordedCommand(domain: "Inspector", method: "initialized"),
-        RecordedCommand(domain: "Runtime", method: "enable"),
-        RecordedCommand(domain: "Inspector", method: "disable"),
-    ])
-    #expect(context.rootNode == nil)
+        let commands = runtime.wire.observations.commands
+        #expect(commands.map(\.method) == [
+            "Inspector.enable",
+            "Inspector.initialized",
+            "Runtime.enable",
+            "Inspector.disable",
+        ])
+        #expect(context.rootNode == nil)
+    }
 }
 
 @MainActor
 @Test
 func closeAfterAttachedDisablesEnabledDomains() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let target = try await runtime.proxy.waitForCurrentPage()
+    try await withDataKitTestRuntime { runtime in
+        let target = try await runtime.proxy.waitForCurrentPage()
 
-    await enqueueStartupReplies(on: runtime.backend)
-    await enqueueDomainDisableReplies(on: runtime.backend)
+        try await enqueueStartupReplies(on: runtime.wire)
+        await enqueueDomainDisableReplies(on: runtime.wire)
 
-    let container = WebInspectorContainer(proxy: runtime.proxy)
-    let context = container.mainContext
-    try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil { context.state == .attached }
+        let container = WebInspectorContainer(proxy: runtime.proxy)
+        let context = container.mainContext
+        try await waitForStartupSubscribers(runtime: runtime, target: target)
+        try await waitUntil { context.state == .attached }
 
-    await container.close()
+        await container.close()
 
-    let commands = await runtime.backend.recordedCommands()
-    #expect(commands == startupCommands + shutdownCommands)
-    #expect(context.state == .detached)
-    #expect(context.teardownError == nil)
+        let commands = runtime.wire.observations.commands
+        #expect(commands.map(\.method) == startupCommands + shutdownCommands)
+        #expect(context.state == .detached)
+        #expect(context.teardownError == nil)
+    }
 }
 
 @MainActor
 @Test
 func closeAfterAttachedClearsAttachmentBackedModels() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let target = try await runtime.proxy.waitForCurrentPage()
-    let documentID = DOM.Node.ID("document")
-    let requestID = Network.Request.ID("request-1")
-    let runtimeContextID = Runtime.ExecutionContext.ID("main")
-    let networkResults: WebInspectorFetchedResults<NetworkRequest>
-    let consoleResults: WebInspectorFetchedResults<ConsoleMessage>
+    try await withDataKitTestRuntime { runtime in
+        let target = try await runtime.proxy.waitForCurrentPage()
+        let documentID = DOM.Node.ID("document")
+        let requestID = Network.Request.ID("request-1")
+        let runtimeContextID = Runtime.ExecutionContext.ID("main")
+        let networkResults: WebInspectorFetchedResults<NetworkRequest>
+        let consoleResults: WebInspectorFetchedResults<ConsoleMessage>
 
-    await enqueueStartupReplies(
-        on: runtime.backend,
-        document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document")
-    )
+        try await enqueueStartupReplies(
+            on: runtime.wire,
+            document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document")
+        )
 
-    let container = WebInspectorContainer(proxy: runtime.proxy)
-    let context = container.mainContext
-    networkResults = context.fetchedResults()
-    consoleResults = context.fetchedResults()
-    try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil { context.state == .attached }
+        let container = WebInspectorContainer(proxy: runtime.proxy)
+        let context = container.mainContext
+        networkResults = context.fetchedResults()
+        consoleResults = context.fetchedResults()
+        try await waitForStartupSubscribers(runtime: runtime, target: target)
+        try await waitUntil { context.state == .attached }
 
-    await runtime.backend.emit(
-        .requestWillBeSent(
-            id: requestID,
-            request: Network.Request(id: requestID, url: "https://example.com/app.js", method: "GET"),
-            resourceType: .script,
-            redirectResponse: nil,
-            timestamp: 1
-        ),
-        target: target
-    )
-    await runtime.backend.emit(
-        .messageAdded(Console.Message(
-            source: Console.Source(rawValue: "console-api"),
-            level: Console.Level(rawValue: "warning"),
-            text: "hello",
-            timestamp: 2
-        )),
-        target: target
-    )
-    await runtime.backend.emit(
-        .executionContextCreated(Runtime.ExecutionContext(id: runtimeContextID, name: "Main", kind: .normal)),
-        target: target
-    )
-    try await waitUntil {
-        networkResults.items.count == 1
-            && consoleResults.items.count == 1
-            && context.executionContexts.count == 1
+        try await runtime.wire.emitRaw(
+            .requestWillBeSent(
+                id: requestID,
+                request: Network.Request(id: requestID, url: "https://example.com/app.js", method: "GET"),
+                resourceType: .script,
+                redirectResponse: nil,
+                timestamp: 1
+            ),
+            target: target
+        )
+        try await runtime.wire.emitRaw(
+            .messageAdded(Console.Message(
+                source: Console.Source(rawValue: "console-api"),
+                level: Console.Level(rawValue: "warning"),
+                text: "hello",
+                timestamp: 2
+            )),
+            target: target
+        )
+        try await runtime.wire.emitRaw(
+            .executionContextCreated(Runtime.ExecutionContext(id: runtimeContextID, name: "Main", kind: .normal)),
+            target: target
+        )
+        try await waitUntil {
+            networkResults.items.count == 1
+                && consoleResults.items.count == 1
+                && context.executionContexts.count == 1
+        }
+
+        let request = try #require(networkResults.items.first)
+        let message = try #require(consoleResults.items.first)
+        #expect(context.rootNode?.id == DOMNode.ID(documentID))
+        #expect(context.node(for: DOMNode.ID(documentID)) != nil)
+        #expect(context.registeredRequest(for: request.id) === request)
+        #expect(context.registeredMessage(for: message.id) === message)
+
+        await enqueueDomainDisableReplies(on: runtime.wire)
+        await container.close()
+
+        #expect(context.state == .detached)
+        #expect(context.rootNode == nil)
+        #expect(context.node(for: DOMNode.ID(documentID)) == nil)
+        #expect(context.registeredRequest(for: request.id) == nil)
+        #expect(networkResults.items.isEmpty)
+        #expect(context.registeredMessage(for: message.id) == nil)
+        #expect(consoleResults.items.isEmpty)
+        #expect(context.executionContexts.isEmpty)
+        #expect(context.selectedContext == nil)
     }
-
-    let request = try #require(networkResults.items.first)
-    let message = try #require(consoleResults.items.first)
-    #expect(context.rootNode?.id == DOMNode.ID(documentID))
-    #expect(context.node(for: DOMNode.ID(documentID)) != nil)
-    #expect(context.registeredRequest(for: request.id) === request)
-    #expect(context.registeredMessage(for: message.id) === message)
-
-    await enqueueDomainDisableReplies(on: runtime.backend)
-    await container.close()
-
-    #expect(context.state == .detached)
-    #expect(context.rootNode == nil)
-    #expect(context.node(for: DOMNode.ID(documentID)) == nil)
-    #expect(context.registeredRequest(for: request.id) == nil)
-    #expect(networkResults.items.isEmpty)
-    #expect(context.registeredMessage(for: message.id) == nil)
-    #expect(consoleResults.items.isEmpty)
-    #expect(context.executionContexts.isEmpty)
-    #expect(context.selectedContext == nil)
 }
 
 @MainActor
 @Test
 func closeRecordsNetworkDisableFailureAndDetachesContext() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let target = try await runtime.proxy.waitForCurrentPage()
+    try await withDataKitTestRuntime { runtime in
+        let target = try await runtime.proxy.waitForCurrentPage()
 
-    await enqueueStartupReplies(on: runtime.backend)
-    await runtime.backend.enqueue((), for: "Console", method: "disable")
-    await runtime.backend.enqueue((), for: "Runtime", method: "disable")
+        try await enqueueStartupReplies(on: runtime.wire)
+        await runtime.wire.respond(to: "Console.disable")
+        await runtime.wire.respond(to: "Runtime.disable")
+        await runtime.wire.fail("Network.disable", message: "Network disable failed.")
+        await runtime.wire.respond(to: "Inspector.disable")
 
-    let container = WebInspectorContainer(proxy: runtime.proxy)
-    let context = container.mainContext
-    try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil { context.state == .attached }
+        let container = WebInspectorContainer(proxy: runtime.proxy)
+        let context = container.mainContext
+        try await waitForStartupSubscribers(runtime: runtime, target: target)
+        try await waitUntil { context.state == .attached }
 
-    await container.close()
+        await container.close()
 
-    #expect(context.state == .detached)
-    guard case .commandFailed(domain: "Network", method: "disable", message: _) = context.teardownError else {
-        Issue.record("Expected Network.disable teardown error.")
-        return
+        #expect(context.state == .detached)
+        guard case .commandFailed(domain: "Network", method: "disable", message: _) = context.teardownError else {
+            Issue.record("Expected Network.disable teardown error.")
+            return
+        }
     }
 }
 
 @MainActor
 @Test
 func restartDisablesPreviousDomainTrackingBeforeReenable() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let target = try await runtime.proxy.waitForCurrentPage()
+    try await withDataKitTestRuntime { runtime in
+        let target = try await runtime.proxy.waitForCurrentPage()
 
-    await enqueueStartupReplies(
-        on: runtime.backend,
-        document: DOM.Node(id: DOM.Node.ID("document-1"), nodeType: 9, nodeName: "#document")
-    )
+        try await enqueueStartupReplies(
+            on: runtime.wire,
+            document: DOM.Node(id: DOM.Node.ID("document-1"), nodeType: 9, nodeName: "#document")
+        )
 
-    let container = WebInspectorContainer(proxy: runtime.proxy)
-    let context = container.mainContext
-    try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("document-1")) }
+        let container = WebInspectorContainer(proxy: runtime.proxy)
+        let context = container.mainContext
+        try await waitForStartupSubscribers(runtime: runtime, target: target)
+        try await waitUntil { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("document-1")) }
 
-    await enqueueDomainDisableReplies(on: runtime.backend)
-    await enqueueStartupReplies(
-        on: runtime.backend,
-        document: DOM.Node(id: DOM.Node.ID("document-2"), nodeType: 9, nodeName: "#document")
-    )
+        await enqueueDomainDisableReplies(on: runtime.wire)
+        try await enqueueStartupReplies(
+            on: runtime.wire,
+            document: DOM.Node(id: DOM.Node.ID("document-2"), nodeType: 9, nodeName: "#document")
+        )
 
-    context.start()
+        context.start()
 
-    try await waitUntil { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("document-2")) }
+        try await waitUntil { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("document-2")) }
 
-    let commands = await runtime.backend.recordedCommands()
-    #expect(commands == startupCommands + shutdownCommands + startupCommands)
+        let commands = runtime.wire.observations.commands
+        #expect(commands.map(\.method) == startupCommands + shutdownCommands + startupCommands)
+    }
 }
 
 @MainActor
 @Test
 func restartWaitsForPreviousStartupCleanupBeforeReenable() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let target = try await runtime.proxy.waitForCurrentPage()
-    let enableGate = WebInspectorTestGate()
+    try await withDataKitTestRuntime { runtime in
+        let target = try await runtime.proxy.waitForCurrentPage()
+        let enableGate = await runtime.wire.deferReply(to: "Network.enable")
+        await runtime.wire.respond(to: "Inspector.enable")
+        await runtime.wire.respond(to: "Inspector.initialized")
+        await runtime.wire.respond(to: "Runtime.enable")
 
-    await runtime.backend.hold(domain: "Network", method: "enable", gate: enableGate)
-    await enqueueDomainEnableReplies(on: runtime.backend)
+        let container = WebInspectorContainer(proxy: runtime.proxy)
+        let context = container.mainContext
+        try await waitForStartupSubscribers(runtime: runtime, target: target)
+        try await waitUntil {
+            runtime.wire.observations.commandMethods == [
+                "Inspector.enable",
+                "Inspector.initialized",
+                "Runtime.enable",
+                "Network.enable",
+            ]
+        }
 
-    let container = WebInspectorContainer(proxy: runtime.proxy)
-    let context = container.mainContext
-    try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil {
-        await runtime.backend.recordedCommands() == [
-            RecordedCommand(domain: "Inspector", method: "enable"),
-            RecordedCommand(domain: "Inspector", method: "initialized"),
-            RecordedCommand(domain: "Runtime", method: "enable"),
-            RecordedCommand(domain: "Network", method: "enable"),
-        ]
+        await enqueueDomainDisableReplies(on: runtime.wire)
+        try await enqueueStartupReplies(
+            on: runtime.wire,
+            document: DOM.Node(id: DOM.Node.ID("restarted-document"), nodeType: 9, nodeName: "#document")
+        )
+
+        context.start()
+
+        enableGate.open()
+        try await waitUntil { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("restarted-document")) }
+
+        let commands = runtime.wire.observations.commands
+        #expect(commands.map(\.method) == Array(startupCommands.prefix(4)) + [
+            "Runtime.disable",
+            "Network.disable",
+            "Inspector.disable",
+        ] + startupCommands)
     }
-
-    await enqueueDomainDisableReplies(on: runtime.backend)
-    await enqueueStartupReplies(
-        on: runtime.backend,
-        document: DOM.Node(id: DOM.Node.ID("restarted-document"), nodeType: 9, nodeName: "#document")
-    )
-
-    context.start()
-
-    await enableGate.open()
-    try await waitUntil { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("restarted-document")) }
-
-    let commands = await runtime.backend.recordedCommands()
-    #expect(commands == Array(startupCommands.prefix(4)) + [
-        RecordedCommand(domain: "Runtime", method: "disable"),
-        RecordedCommand(domain: "Network", method: "disable"),
-        RecordedCommand(domain: "Inspector", method: "disable"),
-    ] + startupCommands)
 }
 
 @MainActor
 @Test
 func runtimeEnableReplayIsCapturedBeforeCommandReturns() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let target = try await runtime.proxy.waitForCurrentPage()
-    let enableGate = WebInspectorTestGate()
-    let contextID = Runtime.ExecutionContext.ID("main")
+    try await withDataKitTestRuntime { runtime in
+        let target = try await runtime.proxy.waitForCurrentPage()
+        let contextID = Runtime.ExecutionContext.ID("main")
 
-    await runtime.backend.hold(domain: "Runtime", method: "enable", gate: enableGate)
-    await enqueueStartupReplies(on: runtime.backend)
+        let enableGate = await runtime.wire.deferReply(to: "Runtime.enable")
+        await runtime.wire.respond(to: "Inspector.enable")
+        await runtime.wire.respond(to: "Inspector.initialized")
+        await runtime.wire.respond(to: "Network.enable")
+        await runtime.wire.respond(
+            to: "DOM.getDocument",
+            with: try emptyDocumentResult()
+        )
+        await runtime.wire.respond(to: "Console.enable")
 
-    let container = WebInspectorContainer(proxy: runtime.proxy)
-    let context = container.mainContext
-    try await waitUntil {
-        await runtime.backend.recordedCommands() == [
-            RecordedCommand(domain: "Inspector", method: "enable"),
-            RecordedCommand(domain: "Inspector", method: "initialized"),
-            RecordedCommand(domain: "Runtime", method: "enable")
-        ]
+        let container = WebInspectorContainer(proxy: runtime.proxy)
+        let context = container.mainContext
+        try await waitUntil {
+            runtime.wire.observations.commandMethods == [
+                "Inspector.enable",
+                "Inspector.initialized",
+                "Runtime.enable"
+            ]
+        }
+
+        try await runtime.wire.emitRaw(
+            .executionContextCreated(Runtime.ExecutionContext(id: contextID, name: "Main", kind: .normal)),
+            target: target
+        )
+        try await waitUntil {
+            context.executionContexts.first?.id == RuntimeContext.ID(contextID)
+        }
+
+        enableGate.open()
+        try await waitUntil { context.state == .attached }
+        #expect(context.selectedContext?.id == RuntimeContext.ID(contextID))
     }
-
-    await runtime.backend.emit(
-        .executionContextCreated(Runtime.ExecutionContext(id: contextID, name: "Main", kind: .normal)),
-        target: target
-    )
-    try await waitUntil {
-        context.executionContexts.first?.id == RuntimeContext.ID(contextID)
-    }
-
-    await enableGate.open()
-    try await waitUntil { context.state == .attached }
-    #expect(context.selectedContext?.id == RuntimeContext.ID(contextID))
 }
 
 @MainActor
 @Test
 func consoleEnableReplayIsCapturedBeforeCommandReturns() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let target = try await runtime.proxy.waitForCurrentPage()
-    let enableGate = WebInspectorTestGate()
+    try await withDataKitTestRuntime { runtime in
+        let target = try await runtime.proxy.waitForCurrentPage()
+        let enableGate = await runtime.wire.deferReply(to: "Console.enable")
+        await runtime.wire.respond(to: "Inspector.enable")
+        await runtime.wire.respond(to: "Inspector.initialized")
+        await runtime.wire.respond(to: "Runtime.enable")
+        await runtime.wire.respond(to: "Network.enable")
+        await runtime.wire.respond(
+            to: "DOM.getDocument",
+            with: try emptyDocumentResult()
+        )
 
-    await runtime.backend.hold(domain: "Console", method: "enable", gate: enableGate)
-    await enqueueStartupReplies(on: runtime.backend)
+        let container = WebInspectorContainer(proxy: runtime.proxy)
+        let context = container.mainContext
+        let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
+        try await waitUntil {
+            runtime.wire.observations.commandMethods == startupCommands
+        }
 
-    let container = WebInspectorContainer(proxy: runtime.proxy)
-    let context = container.mainContext
-    let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
-    try await waitUntil {
-        await runtime.backend.recordedCommands() == startupCommands
+        try await runtime.wire.emitRaw(
+            .messageAdded(Console.Message(
+                source: Console.Source(rawValue: "console-api"),
+                level: Console.Level(rawValue: "warning"),
+                text: "replayed"
+            )),
+            target: target
+        )
+        try await waitUntil { results.items.map(\.text) == ["replayed"] }
+
+        enableGate.open()
+        try await waitUntil { context.state == .attached }
+        #expect(results.items.map(\.text) == ["replayed"])
     }
-
-    await runtime.backend.emit(
-        .messageAdded(Console.Message(
-            source: Console.Source(rawValue: "console-api"),
-            level: Console.Level(rawValue: "warning"),
-            text: "replayed"
-        )),
-        target: target
-    )
-    try await waitUntil { results.items.map(\.text) == ["replayed"] }
-
-    await enableGate.open()
-    try await waitUntil { context.state == .attached }
-    #expect(results.items.map(\.text) == ["replayed"])
 }
 
 @MainActor
 @Test
 func startupRefetchesDocumentWhenMainFrameNavigatesBeforeAttach() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let target = try await runtime.proxy.waitForCurrentPage()
-    let consoleGate = WebInspectorTestGate()
-    let staleDocumentID = DOM.Node.ID("stale-startup-document")
-    let freshDocumentID = DOM.Node.ID("fresh-startup-document")
+    try await withDataKitTestRuntime { runtime in
+        let target = try await runtime.proxy.waitForCurrentPage()
+        let staleDocumentID = DOM.Node.ID("stale-startup-document")
+        let freshDocumentID = DOM.Node.ID("fresh-startup-document")
 
-    await runtime.backend.hold(domain: "Console", method: "enable", gate: consoleGate)
-    await runtime.backend.enqueue((), for: "Inspector", method: "enable")
-    await runtime.backend.enqueue((), for: "Inspector", method: "initialized")
-    await runtime.backend.enqueue((), for: "Runtime", method: "enable")
-    await runtime.backend.enqueue((), for: "Network", method: "enable")
-    await runtime.backend.enqueue(
-        DOM.Node(id: staleDocumentID, nodeType: 9, nodeName: "#document"),
-        for: "DOM",
-        method: "getDocument"
-    )
-    await runtime.backend.enqueue(
-        DOM.Node(id: freshDocumentID, nodeType: 9, nodeName: "#document"),
-        for: "DOM",
-        method: "getDocument"
-    )
-    await runtime.backend.enqueue((), for: "Console", method: "enable")
+        let consoleGate = await runtime.wire.deferReply(to: "Console.enable")
+        await runtime.wire.respond(to: "Inspector.enable")
+        await runtime.wire.respond(to: "Inspector.initialized")
+        await runtime.wire.respond(to: "Runtime.enable")
+        await runtime.wire.respond(to: "Network.enable")
+        await runtime.wire.respond(
+            to: "DOM.getDocument",
+            with: try domDocumentResult(
+                DOM.Node(id: staleDocumentID, nodeType: 9, nodeName: "#document")
+            )
+        )
+        await runtime.wire.respond(
+            to: "DOM.getDocument",
+            with: try domDocumentResult(
+                DOM.Node(id: freshDocumentID, nodeType: 9, nodeName: "#document")
+            )
+        )
+        let container = WebInspectorContainer(proxy: runtime.proxy)
+        let context = container.mainContext
+        try await waitUntil {
+            runtime.wire.observations.commandMethods == startupCommands
+        }
 
-    let container = WebInspectorContainer(proxy: runtime.proxy)
-    let context = container.mainContext
-    try await waitUntil {
-        await runtime.backend.recordedCommands() == startupCommands
+        try await runtime.wire.emitRaw(
+            .frameNavigated(WebInspectorPageFrameLifecycle(
+                id: FrameID("main-frame"),
+                parentID: nil,
+                loaderID: "loader-2",
+                name: "Main",
+                url: "https://example.test/next",
+                securityOrigin: "https://example.test",
+                mimeType: "text/html"
+            )),
+            target: target
+        )
+        consoleGate.open()
+
+        try await waitUntil { context.rootNode?.id == DOMNode.ID(freshDocumentID) }
+        #expect(context.state == .attached)
+        #expect(context.node(for: DOMNode.ID(staleDocumentID)) == nil)
+        #expect(runtime.wire.observations.commandMethods == startupCommands + [
+            "DOM.getDocument"
+        ])
     }
-
-    await runtime.backend.emit(
-        .frameNavigated(WebInspectorPageFrameLifecycle(
-            id: FrameID("main-frame"),
-            parentID: nil,
-            loaderID: "loader-2",
-            name: "Main",
-            url: "https://example.test/next",
-            securityOrigin: "https://example.test",
-            mimeType: "text/html"
-        )),
-        target: target
-    )
-    await consoleGate.open()
-
-    try await waitUntil { context.rootNode?.id == DOMNode.ID(freshDocumentID) }
-    #expect(context.state == .attached)
-    #expect(context.node(for: DOMNode.ID(staleDocumentID)) == nil)
-    #expect(await runtime.backend.recordedCommands() == startupCommands + [
-        RecordedCommand(domain: "DOM", method: "getDocument")
-    ])
 }
 
 @MainActor
@@ -1473,24 +1521,35 @@ func transportBackedFrameRuntimeAndConsoleEventsKeepTargetScope() async throws {
 @MainActor
 @Test
 func consoleMessagesClearedForDistinctTargetsReleasesBothObjectGroups() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (_, context) = try await startContext(runtime: runtime)
-    await runtime.backend.enqueue((), for: "Runtime", method: "releaseObjectGroup")
-    await runtime.backend.enqueue((), for: "Runtime", method: "releaseObjectGroup")
+    try await withDataKitTestRuntime { runtime in
+        let (_, context) = try await startContext(runtime: runtime)
+        _ = try await createFrameTarget(
+            in: runtime,
+            id: "console-frame-a",
+            frameID: "console-frame-a"
+        )
+        _ = try await createFrameTarget(
+            in: runtime,
+            id: "console-frame-b",
+            frameID: "console-frame-b"
+        )
+        await runtime.wire.respond(to: "Runtime.releaseObjectGroup")
+        await runtime.wire.respond(to: "Runtime.releaseObjectGroup")
 
-    await context.apply(
-        Console.Event.messagesCleared(reason: Console.ClearReason(rawValue: "console-api")),
-        targetID: WebInspectorTarget.ID("console-frame-a")
-    )
-    await context.apply(
-        Console.Event.messagesCleared(reason: Console.ClearReason(rawValue: "console-api")),
-        targetID: WebInspectorTarget.ID("console-frame-b")
-    )
+        await context.apply(
+            Console.Event.messagesCleared(reason: Console.ClearReason(rawValue: "console-api")),
+            targetID: WebInspectorTarget.ID("console-frame-a")
+        )
+        await context.apply(
+            Console.Event.messagesCleared(reason: Console.ClearReason(rawValue: "console-api")),
+            targetID: WebInspectorTarget.ID("console-frame-b")
+        )
 
-    try await waitUntil {
-        await runtime.backend.recordedCommands().filter {
-            $0 == RecordedCommand(domain: "Runtime", method: "releaseObjectGroup")
-        }.count == 2
+        try await waitUntil {
+            runtime.wire.observations.commands.filter {
+                $0.method == "Runtime.releaseObjectGroup"
+            }.count == 2
+        }
     }
 }
 
@@ -1551,44 +1610,45 @@ func transportBackedStyleSheetTextEditRoutesToFrameTargetAndMarksUndo() async th
 @MainActor
 @Test
 func currentPageCommitClearsOldLifecycleStateBeforeAcceptingNewPageEvents() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (_, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
-    let concreteResults = try await context.consoleMessages()
-    await context.apply(
-        .messageAdded(Console.Message(
-            source: Console.Source(rawValue: "console-api"),
-            level: Console.Level(rawValue: "log"),
-            text: "old page"
-        )),
-        targetID: .currentPage
-    )
-    try await waitUntil { results.items.map(\.text) == ["old page"] }
-    #expect(concreteResults.items.map(\.text) == ["old page"])
-
-    context.apply(.didCommitProvisionalTarget(WebInspectorTargetCommitLifecycle(
-        oldTargetID: .currentPage,
-        newTarget: WebInspectorLifecycleTarget(
-            id: .currentPage,
-            kind: .page,
-            frameID: FrameID("committed-main-frame"),
-            isProvisional: false,
-            pageBindingID: "committed-page"
+    try await withDataKitTestRuntime { runtime in
+        let (_, context) = try await startContext(runtime: runtime)
+        let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
+        let concreteResults = try await context.consoleMessages()
+        await context.apply(
+            .messageAdded(Console.Message(
+                source: Console.Source(rawValue: "console-api"),
+                level: Console.Level(rawValue: "log"),
+                text: "old page"
+            )),
+            targetID: .currentPage
         )
-    )))
+        try await waitUntil { results.items.map(\.text) == ["old page"] }
+        #expect(concreteResults.items.map(\.text) == ["old page"])
 
-    #expect(results.items.isEmpty)
-    #expect(concreteResults.items.isEmpty)
-    await context.apply(
-        .messageAdded(Console.Message(
-            source: Console.Source(rawValue: "console-api"),
-            level: Console.Level(rawValue: "log"),
-            text: "new page"
-        )),
-        targetID: .currentPage
-    )
-    #expect(results.items.map(\.text) == ["new page"])
-    #expect(concreteResults.items.map(\.text) == ["new page"])
+        context.apply(.didCommitProvisionalTarget(WebInspectorTargetCommitLifecycle(
+            oldTargetID: .currentPage,
+            newTarget: WebInspectorLifecycleTarget(
+                id: .currentPage,
+                kind: .page,
+                frameID: FrameID("committed-main-frame"),
+                isProvisional: false,
+                pageBindingID: "committed-page"
+            )
+        )))
+
+        #expect(results.items.isEmpty)
+        #expect(concreteResults.items.isEmpty)
+        await context.apply(
+            .messageAdded(Console.Message(
+                source: Console.Source(rawValue: "console-api"),
+                level: Console.Level(rawValue: "log"),
+                text: "new page"
+            )),
+            targetID: .currentPage
+        )
+        #expect(results.items.map(\.text) == ["new page"])
+        #expect(concreteResults.items.map(\.text) == ["new page"])
+    }
 }
 
 @MainActor
@@ -1758,7 +1818,9 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
     let newTargetMethods = try newTargetMessages.map { try transportTargetMessageMethod($0.message) }
     let runtimeEnableIndex = try #require(newTargetMethods.firstIndex(of: "Runtime.enable"))
     let preRuntimeMethods = Array(newTargetMethods[..<runtimeEnableIndex])
-    #expect(preRuntimeMethods.allSatisfy { $0 == "DOM.getDocument" || $0 == "Inspector.enable" || $0 == "Inspector.initialized" })
+    #expect(preRuntimeMethods.allSatisfy {
+        $0 == "DOM.getDocument" || $0 == "Inspector.enable" || $0 == "Inspector.initialized"
+    })
     let trackingMethods = Array(newTargetMethods[runtimeEnableIndex...])
     #expect(Array(trackingMethods.prefix(3)) == [
         "Runtime.enable",
@@ -1804,27 +1866,28 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
 @MainActor
 @Test
 func currentPageTargetDestroyedClearsStreamStateBeforeWaitingForReplacement() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (_, context) = try await startContext(runtime: runtime)
-    let oldRoot = context.rootNode
-    let legacyResults: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
-    let concreteResults = try await context.consoleMessages()
-    await context.apply(
-        .messageAdded(Console.Message(
-            source: Console.Source(rawValue: "console-api"),
-            level: Console.Level(rawValue: "log"),
-            text: "destroyed page"
-        )),
-        targetID: .currentPage
-    )
-    #expect(legacyResults.items.map(\.text) == ["destroyed page"])
-    #expect(concreteResults.items.map(\.text) == ["destroyed page"])
+    try await withDataKitTestRuntime { runtime in
+        let (_, context) = try await startContext(runtime: runtime)
+        let oldRoot = context.rootNode
+        let legacyResults: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
+        let concreteResults = try await context.consoleMessages()
+        await context.apply(
+            .messageAdded(Console.Message(
+                source: Console.Source(rawValue: "console-api"),
+                level: Console.Level(rawValue: "log"),
+                text: "destroyed page"
+            )),
+            targetID: .currentPage
+        )
+        #expect(legacyResults.items.map(\.text) == ["destroyed page"])
+        #expect(concreteResults.items.map(\.text) == ["destroyed page"])
 
-    context.apply(.targetDestroyed(targetID: .currentPage))
+        context.apply(.targetDestroyed(targetID: .currentPage))
 
-    #expect(context.rootNode === oldRoot)
-    #expect(legacyResults.items.isEmpty)
-    #expect(concreteResults.items.isEmpty)
+        #expect(context.rootNode === oldRoot)
+        #expect(legacyResults.items.isEmpty)
+        #expect(concreteResults.items.isEmpty)
+    }
 }
 
 @MainActor
@@ -1954,35 +2017,36 @@ func currentPageTargetDestroyedDuringRetargetDoesNotDetachOrClearNetwork() async
 @MainActor
 @Test
 func startBeginsFreshNetworkAttachmentEpoch() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let networkResults: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
-    let staleRequestID = Network.Request.ID("stale-before-restart")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let networkResults: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+        let staleRequestID = Network.Request.ID("stale-before-restart")
 
-    await emitFinishedRequest(id: staleRequestID, target: target, backend: runtime.backend)
-    try await waitUntil {
-        networkResults.items.map(\.id) == [NetworkRequest.ID(staleRequestID)]
+        try await emitFinishedRequest(id: staleRequestID, target: target, backend: runtime.wire)
+        try await waitUntil {
+            networkResults.items.map(\.id) == [NetworkRequest.ID(staleRequestID)]
+        }
+        let concreteNetworkResults = try await context.networkRequests()
+        #expect(concreteNetworkResults.items.map(\.id) == [NetworkRequest.ID(staleRequestID)])
+
+        await enqueueDomainDisableReplies(on: runtime.wire)
+        try await enqueueStartupReplies(
+            on: runtime.wire,
+            document: DOM.Node(id: DOM.Node.ID("fresh-after-restart"), nodeType: 9, nodeName: "#document")
+        )
+
+        context.start()
+
+        #expect(networkResults.items.isEmpty)
+        #expect(concreteNetworkResults.items.isEmpty)
+        #expect(context.registeredRequest(for: NetworkRequest.ID(staleRequestID)) == nil)
+        try await waitUntil { networkResults.items.isEmpty }
+        try await waitUntil {
+            context.rootNode?.id == DOMNode.ID(DOM.Node.ID("fresh-after-restart"))
+                && context.state == .attached
+        }
+        #expect(networkResults.items.isEmpty)
     }
-    let concreteNetworkResults = try await context.networkRequests()
-    #expect(concreteNetworkResults.items.map(\.id) == [NetworkRequest.ID(staleRequestID)])
-
-    await enqueueDomainDisableReplies(on: runtime.backend)
-    await enqueueStartupReplies(
-        on: runtime.backend,
-        document: DOM.Node(id: DOM.Node.ID("fresh-after-restart"), nodeType: 9, nodeName: "#document")
-    )
-
-    context.start()
-
-    #expect(networkResults.items.isEmpty)
-    #expect(concreteNetworkResults.items.isEmpty)
-    #expect(context.registeredRequest(for: NetworkRequest.ID(staleRequestID)) == nil)
-    try await waitUntil { networkResults.items.isEmpty }
-    try await waitUntil {
-        context.rootNode?.id == DOMNode.ID(DOM.Node.ID("fresh-after-restart"))
-            && context.state == .attached
-    }
-    #expect(networkResults.items.isEmpty)
 }
 
 @MainActor
@@ -2260,593 +2324,328 @@ func mainFrameNavigatedReloadsDOMAndClearsRuntimeContexts() async throws {
 @MainActor
 @Test
 func restartClearsRuntimeContextsBeforeEnableReplay() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let staleID = Runtime.ExecutionContext.ID("stale")
-    let replayID = Runtime.ExecutionContext.ID("replayed")
-    let enableGate = WebInspectorTestGate()
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let staleID = Runtime.ExecutionContext.ID("stale")
+        let replayID = Runtime.ExecutionContext.ID("replayed")
+        let enableGate = await runtime.wire.deferReply(to: "Runtime.enable")
 
-    await runtime.backend.emit(
-        .executionContextCreated(Runtime.ExecutionContext(id: staleID, name: "Stale", kind: .normal)),
-        target: target
-    )
-    try await waitUntil {
-        context.executionContexts.first?.id == RuntimeContext.ID(staleID)
+        try await runtime.wire.emitRaw(
+            .executionContextCreated(Runtime.ExecutionContext(id: staleID, name: "Stale", kind: .normal)),
+            target: target
+        )
+        try await waitUntil {
+            context.executionContexts.first?.id == RuntimeContext.ID(staleID)
+        }
+
+        await enqueueDomainDisableReplies(on: runtime.wire)
+        try await enqueueStartupReplies(
+            on: runtime.wire,
+            document: DOM.Node(id: DOM.Node.ID("restarted-document"), nodeType: 9, nodeName: "#document")
+        )
+
+        context.start()
+        try await waitUntil {
+            runtime.wire.observations.commandMethods == startupCommands + shutdownCommands + [
+                "Inspector.enable",
+                "Inspector.initialized",
+                "Runtime.enable",
+            ]
+        }
+        #expect(context.executionContexts.isEmpty)
+        #expect(context.selectedContext == nil)
+
+        try await runtime.wire.emitRaw(
+            .executionContextCreated(Runtime.ExecutionContext(id: replayID, name: "Replayed", kind: .normal)),
+            target: target
+        )
+        try await waitUntil {
+            context.executionContexts.map(\.id) == [RuntimeContext.ID(replayID)]
+        }
+
+        enableGate.open()
+        try await waitUntil { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("restarted-document")) }
+        #expect(context.selectedContext?.id == RuntimeContext.ID(replayID))
     }
-
-    await runtime.backend.hold(domain: "Runtime", method: "enable", gate: enableGate)
-    await enqueueDomainDisableReplies(on: runtime.backend)
-    await enqueueStartupReplies(
-        on: runtime.backend,
-        document: DOM.Node(id: DOM.Node.ID("restarted-document"), nodeType: 9, nodeName: "#document")
-    )
-
-    context.start()
-    try await waitUntil {
-        await runtime.backend.recordedCommands() == startupCommands + shutdownCommands + [
-            RecordedCommand(domain: "Inspector", method: "enable"),
-            RecordedCommand(domain: "Inspector", method: "initialized"),
-            RecordedCommand(domain: "Runtime", method: "enable"),
-        ]
-    }
-    #expect(context.executionContexts.isEmpty)
-    #expect(context.selectedContext == nil)
-
-    await runtime.backend.emit(
-        .executionContextCreated(Runtime.ExecutionContext(id: replayID, name: "Replayed", kind: .normal)),
-        target: target
-    )
-    try await waitUntil {
-        context.executionContexts.map(\.id) == [RuntimeContext.ID(replayID)]
-    }
-
-    await enableGate.open()
-    try await waitUntil { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("restarted-document")) }
-    #expect(context.selectedContext?.id == RuntimeContext.ID(replayID))
 }
 
 @MainActor
 @Test
 func restartClearsConsoleMessagesBeforeConsoleReplay() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
-    let enableGate = WebInspectorTestGate()
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
+        let enableGate = await runtime.wire.deferReply(to: "Console.enable")
 
-    await runtime.backend.emit(
-        .messageAdded(Console.Message(
-            source: Console.Source(rawValue: "console-api"),
-            level: Console.Level(rawValue: "warning"),
-            text: "old"
-        )),
-        target: target
-    )
-    try await waitUntil { results.items.map(\.text) == ["old"] }
+        try await runtime.wire.emitRaw(
+            .messageAdded(Console.Message(
+                source: Console.Source(rawValue: "console-api"),
+                level: Console.Level(rawValue: "warning"),
+                text: "old"
+            )),
+            target: target
+        )
+        try await waitUntil { results.items.map(\.text) == ["old"] }
 
-    await runtime.backend.hold(domain: "Console", method: "enable", gate: enableGate)
-    await enqueueDomainDisableReplies(on: runtime.backend)
-    await enqueueStartupReplies(
-        on: runtime.backend,
-        document: DOM.Node(id: DOM.Node.ID("restarted-document"), nodeType: 9, nodeName: "#document")
-    )
+        await enqueueDomainDisableReplies(on: runtime.wire)
+        try await enqueueStartupReplies(
+            on: runtime.wire,
+            document: DOM.Node(id: DOM.Node.ID("restarted-document"), nodeType: 9, nodeName: "#document")
+        )
 
-    context.start()
-    try await waitUntil {
-        await runtime.backend.recordedCommands() == startupCommands + shutdownCommands + startupCommands
+        context.start()
+        try await waitUntil {
+            runtime.wire.observations.commandMethods == startupCommands + shutdownCommands + startupCommands
+        }
+        #expect(results.items.isEmpty)
+
+        try await runtime.wire.emitRaw(
+            .messageAdded(Console.Message(
+                source: Console.Source(rawValue: "console-api"),
+                level: Console.Level(rawValue: "warning"),
+                text: "old"
+            )),
+            target: target
+        )
+        try await waitUntil { results.items.map(\.text) == ["old"] }
+
+        enableGate.open()
+        try await waitUntil { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("restarted-document")) }
+        #expect(results.items.count == 1)
     }
-    #expect(results.items.isEmpty)
-
-    await runtime.backend.emit(
-        .messageAdded(Console.Message(
-            source: Console.Source(rawValue: "console-api"),
-            level: Console.Level(rawValue: "warning"),
-            text: "old"
-        )),
-        target: target
-    )
-    try await waitUntil { results.items.map(\.text) == ["old"] }
-
-    await enableGate.open()
-    try await waitUntil { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("restarted-document")) }
-    #expect(results.items.count == 1)
 }
 
 @MainActor
 @Test
 func documentUpdatedReloadsRootDocument() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
-    await runtime.backend.enqueue((), for: "DOM", method: "setAttributeValue")
-    await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
-    try await context.setDOMAttribute(
-        "data-before-reset",
-        value: "1",
-        on: document.id,
-        options: .automatic
-    )
-    let undoCommands = try context.domUndoRedoCommands()
-    let controller = try await context.treeController()
-    let recorder = DOMTreeUpdateRecorder(stream: controller.updates)
-    defer { recorder.cancel() }
-    try await recorder.waitUntilStarted()
-    try await recorder.waitForUpdateCount(1)
-    let replacementID = DOM.Node.ID("replacement-document")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let document = try #require(context.rootNode)
+        await runtime.wire.respond(to: "DOM.setAttributeValue")
+        await runtime.wire.respond(to: "DOM.markUndoableState")
+        try await context.setDOMAttribute(
+            "data-before-reset",
+            value: "1",
+            on: document.id,
+            options: .automatic
+        )
+        let undoCommands = try context.domUndoRedoCommands()
+        let controller = try await context.treeController()
+        let recorder = DOMTreeUpdateRecorder(stream: controller.updates)
+        defer { recorder.cancel() }
+        try await recorder.waitUntilStarted()
+        try await recorder.waitForUpdateCount(1)
+        let replacementID = DOM.Node.ID("replacement-document")
 
-    await runtime.backend.enqueue(
-        DOM.Node(id: replacementID, nodeType: 9, nodeName: "#document"),
-        for: "DOM",
-        method: "getDocument"
-    )
+        await runtime.wire.respond(
+            to: "DOM.getDocument",
+            with: try domDocumentResult(
+                DOM.Node(id: replacementID, nodeType: 9, nodeName: "#document")
+            )
+        )
 
-    await runtime.backend.emit(.documentUpdated, target: target)
+        try await runtime.wire.emitRaw(.documentUpdated, target: target)
 
-    try await waitUntil {
-        context.rootNode?.id == DOMNode.ID(replacementID)
-    }
-    try await waitUntil {
-        recorder.updates.contains { update in
+        try await waitUntil {
+            context.rootNode?.id == DOMNode.ID(replacementID)
+        }
+        try await waitUntil {
+            recorder.updates.contains { update in
+                guard case let .snapshot(snapshot, .documentUpdated) = update else {
+                    return false
+                }
+                return snapshot.rootNodeID == DOMNode.ID(replacementID)
+            }
+        }
+        let resetUpdateIndex = try #require(recorder.updates.firstIndex { update in
+            guard case let .snapshot(snapshot, .reset) = update else {
+                return false
+            }
+            return snapshot.rootNodeID == nil
+        })
+        let documentUpdatedIndex = try #require(recorder.updates.firstIndex { update in
             guard case let .snapshot(snapshot, .documentUpdated) = update else {
                 return false
             }
             return snapshot.rootNodeID == DOMNode.ID(replacementID)
+        })
+        #expect(resetUpdateIndex < documentUpdatedIndex)
+        await #expect(throws: WebInspectorProxyError.disconnected("DOM undo/redo target is no longer current.")) {
+            try await undoCommands.undo()
         }
-    }
-    let resetUpdateIndex = try #require(recorder.updates.firstIndex { update in
-        guard case let .snapshot(snapshot, .reset) = update else {
-            return false
+        await runtime.wire.respond(to: "DOM.undo")
+        await #expect(throws: WebInspectorProxyError.disconnected("DOM undo/redo target is no longer current.")) {
+            try await context.undoDOMChange()
         }
-        return snapshot.rootNodeID == nil
-    })
-    let documentUpdatedIndex = try #require(recorder.updates.firstIndex { update in
-        guard case let .snapshot(snapshot, .documentUpdated) = update else {
-            return false
-        }
-        return snapshot.rootNodeID == DOMNode.ID(replacementID)
-    })
-    #expect(resetUpdateIndex < documentUpdatedIndex)
-    await #expect(throws: WebInspectorProxyError.disconnected("DOM undo/redo target is no longer current.")) {
-        try await undoCommands.undo()
-    }
-    await runtime.backend.enqueue((), for: "DOM", method: "undo")
-    await #expect(throws: WebInspectorProxyError.disconnected("DOM undo/redo target is no longer current.")) {
-        try await context.undoDOMChange()
-    }
 
-    let commands = await runtime.backend.recordedCommands()
-    #expect(!commands.contains { $0.domain == "DOM" && $0.method == "undo" })
+        let commands = runtime.wire.observations.commands
+        #expect(!commands.contains { $0.method == "DOM.undo" })
+    }
 }
 
 @MainActor
 @Test
 func childInsertIntoUnrequestedParentDoesNotMarkChildrenLoaded() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
-    let insertedID = DOM.Node.ID("inserted-child")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let document = try #require(context.rootNode)
+        let insertedID = DOM.Node.ID("inserted-child")
 
-    await runtime.backend.emit(
-        .childNodeInserted(
-            parent: document.id.proxyID,
-            previous: nil,
-            node: DOM.Node(
-                id: insertedID,
-                nodeType: 1,
-                nodeName: "DIV",
-                localName: "div"
-            )
-        ),
-        target: target
-    )
+        try await runtime.wire.emitRaw(
+            .childNodeInserted(
+                parent: document.id.proxyID,
+                previous: nil,
+                node: DOM.Node(
+                    id: insertedID,
+                    nodeType: 1,
+                    nodeName: "DIV",
+                    localName: "div"
+                )
+            ),
+            target: target
+        )
 
-    try await waitUntil {
-        document.childNodeCount == 1
+        try await waitUntil {
+            document.childNodeCount == 1
+        }
+        guard case let .unrequested(count) = document.children else {
+            Issue.record("Expected parent children to stay unrequested.")
+            return
+        }
+        #expect(count == 1)
+        #expect(context.node(for: DOMNode.ID(insertedID)) == nil)
     }
-    guard case let .unrequested(count) = document.children else {
-        Issue.record("Expected parent children to stay unrequested.")
-        return
-    }
-    #expect(count == 1)
-    #expect(context.node(for: DOMNode.ID(insertedID)) == nil)
 }
 
 @MainActor
 @Test
 func domTreeControllerPublishesInitialSnapshotAndChildDeltas() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(
-        runtime: runtime,
-        document: DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document", childNodeCount: 1)
-    )
-    let document = try #require(context.rootNode)
-    let controller = try await context.treeController()
-    let recorder = DOMTreeUpdateRecorder(stream: controller.updates)
-    defer { recorder.cancel() }
-    try await recorder.waitUntilStarted()
-    try await recorder.waitForUpdateCount(1)
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(
+            runtime: runtime,
+            document: DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document", childNodeCount: 1)
+        )
+        let document = try #require(context.rootNode)
+        let controller = try await context.treeController()
+        let recorder = DOMTreeUpdateRecorder(stream: controller.updates)
+        defer { recorder.cancel() }
+        try await recorder.waitUntilStarted()
+        try await recorder.waitForUpdateCount(1)
 
-    #expect(controller.snapshot.rootNodeID == document.id)
-    #expect(Set(controller.snapshot.nodesByID.keys) == Set([document.id]))
-    #expect(controller.snapshot.node(for: document.id)?.children == .unrequested(count: 1))
-    guard case let .snapshot(initialSnapshot, .initialDocument) = recorder.updates.first else {
-        Issue.record("Expected initial DOM tree snapshot.")
-        return
+        #expect(controller.snapshot.rootNodeID == document.id)
+        #expect(Set(controller.snapshot.nodesByID.keys) == Set([document.id]))
+        #expect(controller.snapshot.node(for: document.id)?.children == .unrequested(count: 1))
+        guard case let .snapshot(initialSnapshot, .initialDocument) = recorder.updates.first else {
+            Issue.record("Expected initial DOM tree snapshot.")
+            return
+        }
+        #expect(initialSnapshot.node(for: document.id)?.children == .unrequested(count: 1))
+
+        let childID = DOM.Node.ID("child")
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: document.id.proxyID, nodes: [
+                DOM.Node(id: childID, nodeType: 1, nodeName: "DIV", localName: "div")
+            ]),
+            target: target
+        )
+
+        try await recorder.waitForUpdateCount(2)
+        guard case let .delta(childrenChanged) = recorder.updates.last else {
+            Issue.record("Expected DOM children replacement delta.")
+            return
+        }
+        #expect(childrenChanged == .childrenReplaced(parentID: document.id, childIDs: [DOMNode.ID(childID)]))
+        #expect(controller.snapshot.children(of: document.id) == [DOMNode.ID(childID)])
+        #expect(controller.snapshot.parent(of: DOMNode.ID(childID)) == document.id)
     }
-    #expect(initialSnapshot.node(for: document.id)?.children == .unrequested(count: 1))
-
-    let childID = DOM.Node.ID("child")
-    await runtime.backend.emit(
-        .setChildNodes(parent: document.id.proxyID, nodes: [
-            DOM.Node(id: childID, nodeType: 1, nodeName: "DIV", localName: "div")
-        ]),
-        target: target
-    )
-
-    try await recorder.waitForUpdateCount(2)
-    guard case let .delta(childrenChanged) = recorder.updates.last else {
-        Issue.record("Expected DOM children replacement delta.")
-        return
-    }
-    #expect(childrenChanged == .childrenReplaced(parentID: document.id, childIDs: [DOMNode.ID(childID)]))
-    #expect(controller.snapshot.children(of: document.id) == [DOMNode.ID(childID)])
-    #expect(controller.snapshot.parent(of: DOMNode.ID(childID)) == document.id)
 }
 
 @MainActor
 @Test
 func domTreeControllerPrunesRetainedChildDescendantsOnReplacement() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(
-        runtime: runtime,
-        document: DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document", childNodeCount: 1)
-    )
-    let document = try #require(context.rootNode)
-    let controller = try await context.treeController()
-    let recorder = DOMTreeUpdateRecorder(stream: controller.updates)
-    defer { recorder.cancel() }
-    try await recorder.waitUntilStarted()
-    try await recorder.waitForUpdateCount(1)
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(
+            runtime: runtime,
+            document: DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document", childNodeCount: 1)
+        )
+        let document = try #require(context.rootNode)
+        let controller = try await context.treeController()
+        let recorder = DOMTreeUpdateRecorder(stream: controller.updates)
+        defer { recorder.cancel() }
+        try await recorder.waitUntilStarted()
+        try await recorder.waitForUpdateCount(1)
 
-    let childID = DOM.Node.ID("child")
-    let removedSpanID = DOM.Node.ID("removed-span")
-    let removedEmID = DOM.Node.ID("removed-em")
-    await runtime.backend.emit(
-        .setChildNodes(parent: document.id.proxyID, nodes: [
-            DOM.Node(
-                id: childID,
-                nodeType: 1,
-                nodeName: "DIV",
-                localName: "div",
-                children: [
-                    DOM.Node(id: removedSpanID, nodeType: 1, nodeName: "SPAN", localName: "span"),
-                    DOM.Node(id: removedEmID, nodeType: 1, nodeName: "EM", localName: "em"),
-                ]
-            )
-        ]),
-        target: target
-    )
+        let childID = DOM.Node.ID("child")
+        let removedSpanID = DOM.Node.ID("removed-span")
+        let removedEmID = DOM.Node.ID("removed-em")
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: document.id.proxyID, nodes: [
+                DOM.Node(
+                    id: childID,
+                    nodeType: 1,
+                    nodeName: "DIV",
+                    localName: "div",
+                    children: [
+                        DOM.Node(id: removedSpanID, nodeType: 1, nodeName: "SPAN", localName: "span"),
+                        DOM.Node(id: removedEmID, nodeType: 1, nodeName: "EM", localName: "em"),
+                    ]
+                )
+            ]),
+            target: target
+        )
 
-    try await recorder.waitForUpdateCount(2)
-    #expect(controller.snapshot.node(for: DOMNode.ID(removedSpanID)) != nil)
-    #expect(controller.snapshot.node(for: DOMNode.ID(removedEmID)) != nil)
-    let child = try #require(context.node(for: DOMNode.ID(childID)))
+        try await recorder.waitForUpdateCount(2)
+        #expect(controller.snapshot.node(for: DOMNode.ID(removedSpanID)) != nil)
+        #expect(controller.snapshot.node(for: DOMNode.ID(removedEmID)) != nil)
+        let child = try #require(context.node(for: DOMNode.ID(childID)))
 
-    await runtime.backend.emit(
-        .setChildNodes(parent: document.id.proxyID, nodes: [
-            DOM.Node(id: childID, nodeType: 1, nodeName: "DIV", localName: "div", childNodeCount: 0)
-        ]),
-        target: target
-    )
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: document.id.proxyID, nodes: [
+                DOM.Node(id: childID, nodeType: 1, nodeName: "DIV", localName: "div", childNodeCount: 0)
+            ]),
+            target: target
+        )
 
-    try await recorder.waitForUpdateCount(3)
-    try await waitUntil {
-        context.node(for: DOMNode.ID(removedSpanID)) == nil
-            && context.node(for: DOMNode.ID(removedEmID)) == nil
+        try await recorder.waitForUpdateCount(3)
+        try await waitUntil {
+            context.node(for: DOMNode.ID(removedSpanID)) == nil
+                && context.node(for: DOMNode.ID(removedEmID)) == nil
+        }
+        #expect(context.node(for: DOMNode.ID(childID)) === child)
+        #expect(controller.snapshot.node(for: DOMNode.ID(childID)) != nil)
+        #expect(controller.snapshot.node(for: DOMNode.ID(removedSpanID)) == nil)
+        #expect(controller.snapshot.node(for: DOMNode.ID(removedEmID)) == nil)
+        #expect(controller.snapshot.parent(of: DOMNode.ID(removedEmID)) == nil)
     }
-    #expect(context.node(for: DOMNode.ID(childID)) === child)
-    #expect(controller.snapshot.node(for: DOMNode.ID(childID)) != nil)
-    #expect(controller.snapshot.node(for: DOMNode.ID(removedSpanID)) == nil)
-    #expect(controller.snapshot.node(for: DOMNode.ID(removedEmID)) == nil)
-    #expect(controller.snapshot.parent(of: DOMNode.ID(removedEmID)) == nil)
 }
 
 @MainActor
 @Test
 func domTreeControllerPublishesAssociatedSubtreeDeltas() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(
-        runtime: runtime,
-        document: DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document", childNodeCount: 1)
-    )
-    let document = try #require(context.rootNode)
-    let controller = try await context.treeController()
-    let recorder = DOMTreeUpdateRecorder(stream: controller.updates)
-    defer { recorder.cancel() }
-    try await recorder.waitUntilStarted()
-    try await recorder.waitForUpdateCount(1)
-
-    let iframeID = DOM.Node.ID("iframe")
-    let frameDocumentID = DOM.Node.ID("frame-document")
-    let frameBodyID = DOM.Node.ID("frame-body")
-    await runtime.backend.emit(
-        .setChildNodes(parent: document.id.proxyID, nodes: [
-            DOM.Node(
-                id: iframeID,
-                nodeType: 1,
-                nodeName: "IFRAME",
-                localName: "iframe",
-                frameID: FrameID("child-frame"),
-                childNodeCount: 0,
-                contentDocument: DOM.Node(
-                    id: frameDocumentID,
-                    nodeType: 9,
-                    nodeName: "#document",
-                    children: [
-                        DOM.Node(id: frameBodyID, nodeType: 1, nodeName: "BODY", localName: "body")
-                    ]
-                )
-            )
-        ]),
-        target: target
-    )
-
-    try await recorder.waitForUpdateCount(2)
-    guard case let .delta(childrenChanged) = recorder.updates.last else {
-        Issue.record("Expected associated subtree replacement delta.")
-        return
-    }
-    #expect(childrenChanged == .childrenReplaced(parentID: document.id, childIDs: [DOMNode.ID(iframeID)]))
-    #expect(controller.snapshot.visibleChildren(of: DOMNode.ID(iframeID)).nodeIDs == [DOMNode.ID(frameDocumentID)])
-    #expect(controller.snapshot.parent(of: DOMNode.ID(frameDocumentID)) == DOMNode.ID(iframeID))
-    #expect(controller.snapshot.parent(of: DOMNode.ID(frameBodyID)) == DOMNode.ID(frameDocumentID))
-}
-
-@MainActor
-@Test
-func domTreeControllerAppliesDynamicShadowAndPseudoElementDeltas() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(
-        runtime: runtime,
-        document: DOM.Node(
-            id: DOM.Node.ID("document"),
-            nodeType: 9,
-            nodeName: "#document",
-            childNodeCount: 1
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(
+            runtime: runtime,
+            document: DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document", childNodeCount: 1)
         )
-    )
-    let document = try #require(context.rootNode)
-    let controller = try await context.treeController()
-    let recorder = DOMTreeUpdateRecorder(stream: controller.updates)
-    defer { recorder.cancel() }
-    try await recorder.waitUntilStarted()
-    try await recorder.waitForUpdateCount(1)
+        let document = try #require(context.rootNode)
+        let controller = try await context.treeController()
+        let recorder = DOMTreeUpdateRecorder(stream: controller.updates)
+        defer { recorder.cancel() }
+        try await recorder.waitUntilStarted()
+        try await recorder.waitForUpdateCount(1)
 
-    let hostID = DOM.Node.ID("shadow-host")
-    let shadowRootID = DOM.Node.ID("dynamic-shadow-root")
-    let shadowChildID = DOM.Node.ID("dynamic-shadow-child")
-    let beforePseudoID = DOM.Node.ID("dynamic-before-pseudo")
-
-    await runtime.backend.emit(
-        .setChildNodes(parent: document.id.proxyID, nodes: [
-            DOM.Node(id: hostID, nodeType: 1, nodeName: "DIV", localName: "div")
-        ]),
-        target: target
-    )
-    try await recorder.waitForUpdateCount(2)
-    let host = try #require(context.node(for: DOMNode.ID(hostID)))
-
-    await runtime.backend.emit(
-        .shadowRootPushed(
-            host: hostID,
-            root: DOM.Node(
-                id: shadowRootID,
-                nodeType: 11,
-                nodeName: "#shadow-root",
-                children: [
-                    DOM.Node(
-                        id: shadowChildID,
-                        nodeType: 1,
-                        nodeName: "SPAN",
-                        localName: "span"
-                    )
-                ],
-                shadowRootType: .open
-            )
-        ),
-        target: target
-    )
-
-    try await recorder.waitForUpdateCount(3)
-    #expect(host.shadowRoots.map(\.id) == [DOMNode.ID(shadowRootID)])
-    #expect(
-        controller.snapshot.visibleChildren(of: DOMNode.ID(hostID)).nodeIDs == [DOMNode.ID(shadowRootID)]
-    )
-    #expect(controller.snapshot.parent(of: DOMNode.ID(shadowRootID)) == DOMNode.ID(hostID))
-    #expect(controller.snapshot.parent(of: DOMNode.ID(shadowChildID)) == DOMNode.ID(shadowRootID))
-    #expect(recorder.updates.last == .delta(.childrenReplaced(
-        parentID: DOMNode.ID(hostID),
-        childIDs: [DOMNode.ID(shadowRootID)]
-    )))
-
-    await runtime.backend.emit(
-        .pseudoElementAdded(
-            parent: hostID,
-            element: DOM.Node(
-                id: beforePseudoID,
-                nodeType: 1,
-                nodeName: "::before",
-                pseudoType: .before
-            )
-        ),
-        target: target
-    )
-
-    try await recorder.waitForUpdateCount(4)
-    #expect(host.beforePseudoElement?.id == DOMNode.ID(beforePseudoID))
-    #expect(controller.snapshot.visibleChildren(of: DOMNode.ID(hostID)).nodeIDs == [
-        DOMNode.ID(beforePseudoID),
-        DOMNode.ID(shadowRootID),
-    ])
-    #expect(controller.snapshot.parent(of: DOMNode.ID(beforePseudoID)) == DOMNode.ID(hostID))
-
-    await runtime.backend.emit(
-        .pseudoElementRemoved(parent: hostID, element: beforePseudoID),
-        target: target
-    )
-
-    try await recorder.waitForUpdateCount(5)
-    #expect(host.beforePseudoElement == nil)
-    #expect(context.node(for: DOMNode.ID(beforePseudoID)) == nil)
-    #expect(
-        controller.snapshot.visibleChildren(of: DOMNode.ID(hostID)).nodeIDs == [DOMNode.ID(shadowRootID)]
-    )
-
-    await runtime.backend.emit(
-        .shadowRootPopped(host: hostID, root: shadowRootID),
-        target: target
-    )
-
-    try await recorder.waitForUpdateCount(6)
-    #expect(host.shadowRoots.isEmpty)
-    #expect(context.node(for: DOMNode.ID(shadowRootID)) == nil)
-    #expect(context.node(for: DOMNode.ID(shadowChildID)) == nil)
-    #expect(controller.snapshot.visibleChildren(of: DOMNode.ID(hostID)).nodeIDs == [])
-}
-
-@MainActor
-@Test
-func domTreeControllerPublishesOnlyDeltasForSameDocumentMutations() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(
-        runtime: runtime,
-        document: DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document", childNodeCount: 1)
-    )
-    let document = try #require(context.rootNode)
-    let controller = try await context.treeController()
-    let recorder = DOMTreeUpdateRecorder(stream: controller.updates)
-    defer { recorder.cancel() }
-    try await recorder.waitUntilStarted()
-    try await recorder.waitForUpdateCount(1)
-
-    let elementID = DOM.Node.ID("element")
-    let textID = DOM.Node.ID("text")
-    let insertedID = DOM.Node.ID("inserted")
-
-    await runtime.backend.emit(
-        .setChildNodes(parent: document.id.proxyID, nodes: [
-            DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div", childNodeCount: 1)
-        ]),
-        target: target
-    )
-    try await recorder.waitForUpdateCount(2)
-
-    await runtime.backend.emit(
-        .attributeModified(elementID, name: "class", value: "selected"),
-        target: target
-    )
-    try await waitUntil { context.node(for: DOMNode.ID(elementID))?.attributes["class"] == "selected" }
-    try await recorder.waitForUpdateCount(3)
-
-    await runtime.backend.emit(
-        .childNodeCountUpdated(elementID, count: 1),
-        target: target
-    )
-    try await waitUntil { context.node(for: DOMNode.ID(elementID))?.childNodeCount == 1 }
-    try await recorder.waitForUpdateCount(4)
-
-    await runtime.backend.emit(
-        .setChildNodes(parent: elementID, nodes: [
-            DOM.Node(id: textID, nodeType: 3, nodeName: "#text", nodeValue: "old")
-        ]),
-        target: target
-    )
-    try await recorder.waitForUpdateCount(5)
-
-    await runtime.backend.emit(
-        .characterDataModified(textID, value: "new"),
-        target: target
-    )
-    try await waitUntil { context.node(for: DOMNode.ID(textID))?.nodeValue == "new" }
-    try await recorder.waitForUpdateCount(6)
-
-    await runtime.backend.emit(
-        .childNodeInserted(
-            parent: document.id.proxyID,
-            previous: elementID,
-            node: DOM.Node(id: insertedID, nodeType: 1, nodeName: "SPAN", localName: "span")
-        ),
-        target: target
-    )
-    try await recorder.waitForUpdateCount(7)
-
-    await runtime.backend.emit(
-        .childNodeRemoved(parent: document.id.proxyID, node: insertedID),
-        target: target
-    )
-    try await recorder.waitForUpdateCount(8)
-
-    let mutationUpdates = Array(recorder.updates.dropFirst())
-    #expect(mutationUpdates.allSatisfy { update in
-        guard case .delta = update else {
-            return false
-        }
-        return true
-    })
-    #expect(mutationUpdates == [
-        .delta(.childrenReplaced(parentID: document.id, childIDs: [DOMNode.ID(elementID)])),
-        .delta(.nodeChanged(nodeID: DOMNode.ID(elementID))),
-        .delta(.childCountChanged(nodeID: DOMNode.ID(elementID))),
-        .delta(.childrenReplaced(parentID: DOMNode.ID(elementID), childIDs: [DOMNode.ID(textID)])),
-        .delta(.nodeChanged(nodeID: DOMNode.ID(textID))),
-        .delta(.childInserted(
-            parentID: document.id,
-            nodeID: DOMNode.ID(insertedID),
-            previousSiblingID: DOMNode.ID(elementID)
-        )),
-        .delta(.childRemoved(parentID: document.id, nodeID: DOMNode.ID(insertedID))),
-    ])
-}
-
-@MainActor
-@Test
-func domTreeControllerSnapshotIncludesRecursiveDOMAssociations() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let documentID = DOM.Node.ID("document")
-    let iframeID = DOM.Node.ID("iframe")
-    let frameDocumentID = DOM.Node.ID("frame-document")
-    let frameBodyID = DOM.Node.ID("frame-body")
-    let templateHostID = DOM.Node.ID("template-host")
-    let templateContentID = DOM.Node.ID("template-content")
-    let shadowHostID = DOM.Node.ID("shadow-host")
-    let beforePseudoID = DOM.Node.ID("before-pseudo")
-    let shadowRootID = DOM.Node.ID("shadow-root")
-    let shadowSpanID = DOM.Node.ID("shadow-span")
-    let afterPseudoID = DOM.Node.ID("after-pseudo")
-    let ignoredIframeChildID = DOM.Node.ID("ignored-iframe-child")
-
-    let (_, context) = try await startContext(
-        runtime: runtime,
-        document: DOM.Node(
-            id: documentID,
-            nodeType: 9,
-            nodeName: "#document",
-            children: [
+        let iframeID = DOM.Node.ID("iframe")
+        let frameDocumentID = DOM.Node.ID("frame-document")
+        let frameBodyID = DOM.Node.ID("frame-body")
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: document.id.proxyID, nodes: [
                 DOM.Node(
                     id: iframeID,
                     nodeType: 1,
                     nodeName: "IFRAME",
                     localName: "iframe",
                     frameID: FrameID("child-frame"),
-                    documentURL: "https://example.test/frame",
-                    baseURL: "https://example.test/",
-                    attributes: ["data-second": "2", "src": "/frame"],
-                    attributeList: [
-                        DOM.Attribute(name: "src", value: "/frame"),
-                        DOM.Attribute(name: "data-second", value: "2"),
-                    ],
-                    children: [
-                        DOM.Node(id: ignoredIframeChildID, nodeType: 1, nodeName: "SPAN", localName: "span")
-                    ],
+                    childNodeCount: 0,
                     contentDocument: DOM.Node(
                         id: frameDocumentID,
                         nodeType: 9,
@@ -2855,216 +2654,492 @@ func domTreeControllerSnapshotIncludesRecursiveDOMAssociations() async throws {
                             DOM.Node(id: frameBodyID, nodeType: 1, nodeName: "BODY", localName: "body")
                         ]
                     )
-                ),
-                DOM.Node(
-                    id: templateHostID,
-                    nodeType: 1,
-                    nodeName: "TEMPLATE",
-                    localName: "template",
-                    templateContent: DOM.Node(
-                        id: templateContentID,
-                        nodeType: 11,
-                        nodeName: "#document-fragment"
-                    )
-                ),
-                DOM.Node(
-                    id: shadowHostID,
-                    nodeType: 1,
-                    nodeName: "DIV",
-                    localName: "div",
-                    shadowRoots: [
+                )
+            ]),
+            target: target
+        )
+
+        try await recorder.waitForUpdateCount(2)
+        guard case let .delta(childrenChanged) = recorder.updates.last else {
+            Issue.record("Expected associated subtree replacement delta.")
+            return
+        }
+        #expect(childrenChanged == .childrenReplaced(parentID: document.id, childIDs: [DOMNode.ID(iframeID)]))
+        #expect(controller.snapshot.visibleChildren(of: DOMNode.ID(iframeID)).nodeIDs == [DOMNode.ID(frameDocumentID)])
+        #expect(controller.snapshot.parent(of: DOMNode.ID(frameDocumentID)) == DOMNode.ID(iframeID))
+        #expect(controller.snapshot.parent(of: DOMNode.ID(frameBodyID)) == DOMNode.ID(frameDocumentID))
+    }
+}
+
+@MainActor
+@Test
+func domTreeControllerAppliesDynamicShadowAndPseudoElementDeltas() async throws {
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(
+            runtime: runtime,
+            document: DOM.Node(
+                id: DOM.Node.ID("document"),
+                nodeType: 9,
+                nodeName: "#document",
+                childNodeCount: 1
+            )
+        )
+        let document = try #require(context.rootNode)
+        let controller = try await context.treeController()
+        let recorder = DOMTreeUpdateRecorder(stream: controller.updates)
+        defer { recorder.cancel() }
+        try await recorder.waitUntilStarted()
+        try await recorder.waitForUpdateCount(1)
+
+        let hostID = DOM.Node.ID("shadow-host")
+        let shadowRootID = DOM.Node.ID("dynamic-shadow-root")
+        let shadowChildID = DOM.Node.ID("dynamic-shadow-child")
+        let beforePseudoID = DOM.Node.ID("dynamic-before-pseudo")
+
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: document.id.proxyID, nodes: [
+                DOM.Node(id: hostID, nodeType: 1, nodeName: "DIV", localName: "div")
+            ]),
+            target: target
+        )
+        try await recorder.waitForUpdateCount(2)
+        let host = try #require(context.node(for: DOMNode.ID(hostID)))
+
+        try await runtime.wire.emitRaw(
+            .shadowRootPushed(
+                host: hostID,
+                root: DOM.Node(
+                    id: shadowRootID,
+                    nodeType: 11,
+                    nodeName: "#shadow-root",
+                    children: [
                         DOM.Node(
-                            id: shadowRootID,
-                            nodeType: 11,
-                            nodeName: "#shadow-root",
-                            children: [
-                                DOM.Node(id: shadowSpanID, nodeType: 1, nodeName: "SPAN", localName: "span")
-                            ],
-                            shadowRootType: .open
+                            id: shadowChildID,
+                            nodeType: 1,
+                            nodeName: "SPAN",
+                            localName: "span"
                         )
                     ],
-                    beforePseudoElement: DOM.Node(
-                        id: beforePseudoID,
-                        nodeType: 1,
-                        nodeName: "::before",
-                        pseudoType: .before
-                    ),
-                    afterPseudoElement: DOM.Node(
-                        id: afterPseudoID,
-                        nodeType: 1,
-                        nodeName: "::after",
-                        pseudoType: .after
-                    )
-                ),
-            ]
+                    shadowRootType: .open
+                )
+            ),
+            target: target
         )
-    )
 
-    let controller = try await context.treeController()
-    let snapshot = controller.snapshot
-    let document = try #require(context.rootNode)
-    let iframe = try #require(snapshot.node(for: DOMNode.ID(iframeID)))
-    let templateContent = try #require(snapshot.node(for: DOMNode.ID(templateContentID)))
-    let shadowRoot = try #require(snapshot.node(for: DOMNode.ID(shadowRootID)))
+        try await recorder.waitForUpdateCount(3)
+        #expect(host.shadowRoots.map(\.id) == [DOMNode.ID(shadowRootID)])
+        #expect(
+            controller.snapshot.visibleChildren(of: DOMNode.ID(hostID)).nodeIDs == [DOMNode.ID(shadowRootID)]
+        )
+        #expect(controller.snapshot.parent(of: DOMNode.ID(shadowRootID)) == DOMNode.ID(hostID))
+        #expect(controller.snapshot.parent(of: DOMNode.ID(shadowChildID)) == DOMNode.ID(shadowRootID))
+        #expect(recorder.updates.last == .delta(.childrenReplaced(
+            parentID: DOMNode.ID(hostID),
+            childIDs: [DOMNode.ID(shadowRootID)]
+        )))
 
-    #expect(snapshot.displayRootIDs() == [DOMNode.ID(iframeID), DOMNode.ID(templateHostID), DOMNode.ID(shadowHostID)])
-    #expect(snapshot.visibleChildren(of: DOMNode.ID(iframeID)).nodeIDs == [DOMNode.ID(frameDocumentID)])
-    #expect(snapshot.visibleChildren(of: DOMNode.ID(templateHostID)).nodeIDs == [DOMNode.ID(templateContentID)])
-    #expect(snapshot.visibleChildren(of: DOMNode.ID(shadowHostID)).nodeIDs == [
-        DOMNode.ID(beforePseudoID),
-        DOMNode.ID(shadowRootID),
-        DOMNode.ID(afterPseudoID),
-    ])
-    #expect(snapshot.visibleChildren(of: DOMNode.ID(shadowRootID)).nodeIDs == [DOMNode.ID(shadowSpanID)])
-    #expect(snapshot.children(of: DOMNode.ID(iframeID)) == [DOMNode.ID(ignoredIframeChildID)])
-    #expect(snapshot.parent(of: DOMNode.ID(frameDocumentID)) == DOMNode.ID(iframeID))
-    #expect(snapshot.parent(of: DOMNode.ID(templateContentID)) == DOMNode.ID(templateHostID))
-    #expect(snapshot.parent(of: DOMNode.ID(beforePseudoID)) == DOMNode.ID(shadowHostID))
-    #expect(snapshot.isTemplateContent(DOMNode.ID(templateContentID)))
-    #expect(iframe.kind == DOMNode.Kind.element)
-    #expect(iframe.frameID == FrameID("child-frame"))
-    #expect(iframe.documentURL == "https://example.test/frame")
-    #expect(iframe.baseURL == "https://example.test/")
-    #expect(iframe.attributes["src"] == "/frame")
-    #expect(iframe.attributeList.map(\.name) == ["src", "data-second"])
-    #expect(iframe.contentDocumentID == DOMNode.ID(frameDocumentID))
-    #expect(templateContent.kind == DOMNode.Kind.documentFragment)
-    #expect(shadowRoot.shadowRootType == DOM.ShadowRootType.open)
-    #expect(document.contentDocument == nil)
+        try await runtime.wire.emitRaw(
+            .pseudoElementAdded(
+                parent: hostID,
+                element: DOM.Node(
+                    id: beforePseudoID,
+                    nodeType: 1,
+                    nodeName: "::before",
+                    pseudoType: .before
+                )
+            ),
+            target: target
+        )
+
+        try await recorder.waitForUpdateCount(4)
+        #expect(host.beforePseudoElement?.id == DOMNode.ID(beforePseudoID))
+        #expect(controller.snapshot.visibleChildren(of: DOMNode.ID(hostID)).nodeIDs == [
+            DOMNode.ID(beforePseudoID),
+            DOMNode.ID(shadowRootID),
+        ])
+        #expect(controller.snapshot.parent(of: DOMNode.ID(beforePseudoID)) == DOMNode.ID(hostID))
+
+        try await runtime.wire.emitRaw(
+            .pseudoElementRemoved(parent: hostID, element: beforePseudoID),
+            target: target
+        )
+
+        try await recorder.waitForUpdateCount(5)
+        #expect(host.beforePseudoElement == nil)
+        #expect(context.node(for: DOMNode.ID(beforePseudoID)) == nil)
+        #expect(
+            controller.snapshot.visibleChildren(of: DOMNode.ID(hostID)).nodeIDs == [DOMNode.ID(shadowRootID)]
+        )
+
+        try await runtime.wire.emitRaw(
+            .shadowRootPopped(host: hostID, root: shadowRootID),
+            target: target
+        )
+
+        try await recorder.waitForUpdateCount(6)
+        #expect(host.shadowRoots.isEmpty)
+        #expect(context.node(for: DOMNode.ID(shadowRootID)) == nil)
+        #expect(context.node(for: DOMNode.ID(shadowChildID)) == nil)
+        #expect(controller.snapshot.visibleChildren(of: DOMNode.ID(hostID)).nodeIDs == [])
+    }
+}
+
+@MainActor
+@Test
+func domTreeControllerPublishesOnlyDeltasForSameDocumentMutations() async throws {
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(
+            runtime: runtime,
+            document: DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document", childNodeCount: 1)
+        )
+        let document = try #require(context.rootNode)
+        let controller = try await context.treeController()
+        let recorder = DOMTreeUpdateRecorder(stream: controller.updates)
+        defer { recorder.cancel() }
+        try await recorder.waitUntilStarted()
+        try await recorder.waitForUpdateCount(1)
+
+        let elementID = DOM.Node.ID("element")
+        let textID = DOM.Node.ID("text")
+        let insertedID = DOM.Node.ID("inserted")
+
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: document.id.proxyID, nodes: [
+                DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div", childNodeCount: 1)
+            ]),
+            target: target
+        )
+        try await recorder.waitForUpdateCount(2)
+
+        try await runtime.wire.emitRaw(
+            .attributeModified(elementID, name: "class", value: "selected"),
+            target: target
+        )
+        try await waitUntil { context.node(for: DOMNode.ID(elementID))?.attributes["class"] == "selected" }
+        try await recorder.waitForUpdateCount(3)
+
+        try await runtime.wire.emitRaw(
+            .childNodeCountUpdated(elementID, count: 1),
+            target: target
+        )
+        try await waitUntil { context.node(for: DOMNode.ID(elementID))?.childNodeCount == 1 }
+        try await recorder.waitForUpdateCount(4)
+
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: elementID, nodes: [
+                DOM.Node(id: textID, nodeType: 3, nodeName: "#text", nodeValue: "old")
+            ]),
+            target: target
+        )
+        try await recorder.waitForUpdateCount(5)
+
+        try await runtime.wire.emitRaw(
+            .characterDataModified(textID, value: "new"),
+            target: target
+        )
+        try await waitUntil { context.node(for: DOMNode.ID(textID))?.nodeValue == "new" }
+        try await recorder.waitForUpdateCount(6)
+
+        try await runtime.wire.emitRaw(
+            .childNodeInserted(
+                parent: document.id.proxyID,
+                previous: elementID,
+                node: DOM.Node(id: insertedID, nodeType: 1, nodeName: "SPAN", localName: "span")
+            ),
+            target: target
+        )
+        try await recorder.waitForUpdateCount(7)
+
+        try await runtime.wire.emitRaw(
+            .childNodeRemoved(parent: document.id.proxyID, node: insertedID),
+            target: target
+        )
+        try await recorder.waitForUpdateCount(8)
+
+        let mutationUpdates = Array(recorder.updates.dropFirst())
+        #expect(mutationUpdates.allSatisfy { update in
+            guard case .delta = update else {
+                return false
+            }
+            return true
+        })
+        #expect(mutationUpdates == [
+            .delta(.childrenReplaced(parentID: document.id, childIDs: [DOMNode.ID(elementID)])),
+            .delta(.nodeChanged(nodeID: DOMNode.ID(elementID))),
+            .delta(.childCountChanged(nodeID: DOMNode.ID(elementID))),
+            .delta(.childrenReplaced(parentID: DOMNode.ID(elementID), childIDs: [DOMNode.ID(textID)])),
+            .delta(.nodeChanged(nodeID: DOMNode.ID(textID))),
+            .delta(.childInserted(
+                parentID: document.id,
+                nodeID: DOMNode.ID(insertedID),
+                previousSiblingID: DOMNode.ID(elementID)
+            )),
+            .delta(.childRemoved(parentID: document.id, nodeID: DOMNode.ID(insertedID))),
+        ])
+    }
+}
+
+@MainActor
+@Test
+func domTreeControllerSnapshotIncludesRecursiveDOMAssociations() async throws {
+    try await withDataKitTestRuntime { runtime in
+        let documentID = DOM.Node.ID("document")
+        let iframeID = DOM.Node.ID("iframe")
+        let frameDocumentID = DOM.Node.ID("frame-document")
+        let frameBodyID = DOM.Node.ID("frame-body")
+        let templateHostID = DOM.Node.ID("template-host")
+        let templateContentID = DOM.Node.ID("template-content")
+        let shadowHostID = DOM.Node.ID("shadow-host")
+        let beforePseudoID = DOM.Node.ID("before-pseudo")
+        let shadowRootID = DOM.Node.ID("shadow-root")
+        let shadowSpanID = DOM.Node.ID("shadow-span")
+        let afterPseudoID = DOM.Node.ID("after-pseudo")
+        let ignoredIframeChildID = DOM.Node.ID("ignored-iframe-child")
+
+        let (_, context) = try await startContext(
+            runtime: runtime,
+            document: DOM.Node(
+                id: documentID,
+                nodeType: 9,
+                nodeName: "#document",
+                children: [
+                    DOM.Node(
+                        id: iframeID,
+                        nodeType: 1,
+                        nodeName: "IFRAME",
+                        localName: "iframe",
+                        frameID: FrameID("child-frame"),
+                        documentURL: "https://example.test/frame",
+                        baseURL: "https://example.test/",
+                        attributes: ["data-second": "2", "src": "/frame"],
+                        attributeList: [
+                            DOM.Attribute(name: "src", value: "/frame"),
+                            DOM.Attribute(name: "data-second", value: "2"),
+                        ],
+                        children: [
+                            DOM.Node(id: ignoredIframeChildID, nodeType: 1, nodeName: "SPAN", localName: "span")
+                        ],
+                        contentDocument: DOM.Node(
+                            id: frameDocumentID,
+                            nodeType: 9,
+                            nodeName: "#document",
+                            children: [
+                                DOM.Node(id: frameBodyID, nodeType: 1, nodeName: "BODY", localName: "body")
+                            ]
+                        )
+                    ),
+                    DOM.Node(
+                        id: templateHostID,
+                        nodeType: 1,
+                        nodeName: "TEMPLATE",
+                        localName: "template",
+                        templateContent: DOM.Node(
+                            id: templateContentID,
+                            nodeType: 11,
+                            nodeName: "#document-fragment"
+                        )
+                    ),
+                    DOM.Node(
+                        id: shadowHostID,
+                        nodeType: 1,
+                        nodeName: "DIV",
+                        localName: "div",
+                        shadowRoots: [
+                            DOM.Node(
+                                id: shadowRootID,
+                                nodeType: 11,
+                                nodeName: "#shadow-root",
+                                children: [
+                                    DOM.Node(id: shadowSpanID, nodeType: 1, nodeName: "SPAN", localName: "span")
+                                ],
+                                shadowRootType: .open
+                            )
+                        ],
+                        beforePseudoElement: DOM.Node(
+                            id: beforePseudoID,
+                            nodeType: 1,
+                            nodeName: "::before",
+                            pseudoType: .before
+                        ),
+                        afterPseudoElement: DOM.Node(
+                            id: afterPseudoID,
+                            nodeType: 1,
+                            nodeName: "::after",
+                            pseudoType: .after
+                        )
+                    ),
+                ]
+            )
+        )
+
+        let controller = try await context.treeController()
+        let snapshot = controller.snapshot
+        let document = try #require(context.rootNode)
+        let iframe = try #require(snapshot.node(for: DOMNode.ID(iframeID)))
+        let templateContent = try #require(snapshot.node(for: DOMNode.ID(templateContentID)))
+        let shadowRoot = try #require(snapshot.node(for: DOMNode.ID(shadowRootID)))
+
+        #expect(snapshot.displayRootIDs() == [DOMNode.ID(iframeID), DOMNode.ID(templateHostID), DOMNode.ID(shadowHostID)])
+        #expect(snapshot.visibleChildren(of: DOMNode.ID(iframeID)).nodeIDs == [DOMNode.ID(frameDocumentID)])
+        #expect(snapshot.visibleChildren(of: DOMNode.ID(templateHostID)).nodeIDs == [DOMNode.ID(templateContentID)])
+        #expect(snapshot.visibleChildren(of: DOMNode.ID(shadowHostID)).nodeIDs == [
+            DOMNode.ID(beforePseudoID),
+            DOMNode.ID(shadowRootID),
+            DOMNode.ID(afterPseudoID),
+        ])
+        #expect(snapshot.visibleChildren(of: DOMNode.ID(shadowRootID)).nodeIDs == [DOMNode.ID(shadowSpanID)])
+        #expect(snapshot.children(of: DOMNode.ID(iframeID)) == [DOMNode.ID(ignoredIframeChildID)])
+        #expect(snapshot.parent(of: DOMNode.ID(frameDocumentID)) == DOMNode.ID(iframeID))
+        #expect(snapshot.parent(of: DOMNode.ID(templateContentID)) == DOMNode.ID(templateHostID))
+        #expect(snapshot.parent(of: DOMNode.ID(beforePseudoID)) == DOMNode.ID(shadowHostID))
+        #expect(snapshot.isTemplateContent(DOMNode.ID(templateContentID)))
+        #expect(iframe.kind == DOMNode.Kind.element)
+        #expect(iframe.frameID == FrameID("child-frame"))
+        #expect(iframe.documentURL == "https://example.test/frame")
+        #expect(iframe.baseURL == "https://example.test/")
+        #expect(iframe.attributes["src"] == "/frame")
+        #expect(iframe.attributeList.map(\.name) == ["src", "data-second"])
+        #expect(iframe.contentDocumentID == DOMNode.ID(frameDocumentID))
+        #expect(templateContent.kind == DOMNode.Kind.documentFragment)
+        #expect(shadowRoot.shadowRootType == DOM.ShadowRootType.open)
+        #expect(document.contentDocument == nil)
+    }
 }
 
 @MainActor
 @Test
 func domTreeControllerPublishesSelectionDeltasWithoutOwningExpansion() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(
-        runtime: runtime,
-        document: DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document")
-    )
-    let document = try #require(context.rootNode)
-    let parentID = DOM.Node.ID("parent")
-    let childID = DOM.Node.ID("child")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(
+            runtime: runtime,
+            document: DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document")
+        )
+        let document = try #require(context.rootNode)
+        let parentID = DOM.Node.ID("parent")
+        let childID = DOM.Node.ID("child")
 
-    await runtime.backend.emit(
-        .setChildNodes(parent: document.id.proxyID, nodes: [
-            DOM.Node(
-                id: parentID,
-                nodeType: 1,
-                nodeName: "SECTION",
-                localName: "section",
-                children: [
-                    DOM.Node(id: childID, nodeType: 1, nodeName: "SPAN", localName: "span")
-                ]
-            )
-        ]),
-        target: target
-    )
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: document.id.proxyID, nodes: [
+                DOM.Node(
+                    id: parentID,
+                    nodeType: 1,
+                    nodeName: "SECTION",
+                    localName: "section",
+                    children: [
+                        DOM.Node(id: childID, nodeType: 1, nodeName: "SPAN", localName: "span")
+                    ]
+                )
+            ]),
+            target: target
+        )
 
-    try await waitUntil { context.node(for: DOMNode.ID(childID)) != nil }
-    let parent = try #require(context.node(for: DOMNode.ID(parentID)))
-    let child = try #require(context.node(for: DOMNode.ID(childID)))
-    let controller = try await context.treeController()
-    let recorder = DOMTreeUpdateRecorder(stream: controller.updates)
-    let revealRecorder = DOMTreeRevealRequestRecorder(stream: controller.revealRequests)
-    defer { recorder.cancel() }
-    defer { revealRecorder.cancel() }
-    try await recorder.waitUntilStarted()
-    try await revealRecorder.waitUntilStarted()
-    try await recorder.waitForUpdateCount(1)
+        try await waitUntil { context.node(for: DOMNode.ID(childID)) != nil }
+        let parent = try #require(context.node(for: DOMNode.ID(parentID)))
+        let child = try #require(context.node(for: DOMNode.ID(childID)))
+        let controller = try await context.treeController()
+        let recorder = DOMTreeUpdateRecorder(stream: controller.updates)
+        let revealRecorder = DOMTreeRevealRequestRecorder(stream: controller.revealRequests)
+        defer { recorder.cancel() }
+        defer { revealRecorder.cancel() }
+        try await recorder.waitUntilStarted()
+        try await revealRecorder.waitUntilStarted()
+        try await recorder.waitForUpdateCount(1)
 
-    #expect(controller.snapshot.children(of: document.id) == [parent.id])
-    #expect(controller.snapshot.children(of: parent.id) == [child.id])
-    #expect(controller.snapshot.ancestorNodeIDs(of: child.id) == [parent.id, document.id])
+        #expect(controller.snapshot.children(of: document.id) == [parent.id])
+        #expect(controller.snapshot.children(of: parent.id) == [child.id])
+        #expect(controller.snapshot.ancestorNodeIDs(of: child.id) == [parent.id, document.id])
 
-    await enqueueCSSStyleReplies(on: runtime.backend)
-    try context.selectNode(child.id, reveal: .selectOnly)
+        try await enqueueCSSStyleReplies(on: runtime.wire)
+        try context.selectNode(child.id, reveal: .selectOnly)
 
-    try await recorder.waitForUpdateCount(2)
-    try await revealRecorder.waitForRequestCount(1)
-    guard case let .delta(selection) = recorder.updates.last else {
-        Issue.record("Expected DOM selection delta.")
-        return
+        try await recorder.waitForUpdateCount(2)
+        try await revealRecorder.waitForRequestCount(1)
+        guard case let .delta(selection) = recorder.updates.last else {
+            Issue.record("Expected DOM selection delta.")
+            return
+        }
+        #expect(selection == .selectionChanged(nodeID: child.id))
+        #expect(controller.snapshot.selectedNodeID == child.id)
+        #expect(revealRecorder.requests.last == DOMTreeRevealRequest(
+            nodeID: child.id,
+            ancestorNodeIDs: [parent.id, document.id],
+            shouldSelect: true,
+            shouldScroll: false
+        ))
+
+        context.select(nil)
+
+        try await recorder.waitForUpdateCount(3)
+        guard case let .delta(selectionCleared) = recorder.updates.last else {
+            Issue.record("Expected DOM selection clear delta.")
+            return
+        }
+        #expect(selectionCleared == .selectionChanged(nodeID: nil))
+        #expect(controller.snapshot.selectedNodeID == nil)
+
+        try context.selectNode(document.id, reveal: .none)
+        try await recorder.waitForUpdateCount(4)
+        #expect(revealRecorder.requests.count == 1)
     }
-    #expect(selection == .selectionChanged(nodeID: child.id))
-    #expect(controller.snapshot.selectedNodeID == child.id)
-    #expect(revealRecorder.requests.last == DOMTreeRevealRequest(
-        nodeID: child.id,
-        ancestorNodeIDs: [parent.id, document.id],
-        shouldSelect: true,
-        shouldScroll: false
-    ))
-
-    context.select(nil)
-
-    try await recorder.waitForUpdateCount(3)
-    guard case let .delta(selectionCleared) = recorder.updates.last else {
-        Issue.record("Expected DOM selection clear delta.")
-        return
-    }
-    #expect(selectionCleared == .selectionChanged(nodeID: nil))
-    #expect(controller.snapshot.selectedNodeID == nil)
-
-    try context.selectNode(document.id, reveal: .none)
-    try await recorder.waitForUpdateCount(4)
-    #expect(revealRecorder.requests.count == 1)
 }
 
 @MainActor
 @Test
 func setChildNodesReplacementPublishesSelectionClearingForRemovedDescendant() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(
-        runtime: runtime,
-        document: DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document")
-    )
-    let document = try #require(context.rootNode)
-    let parentID = DOM.Node.ID("parent")
-    let selectedID = DOM.Node.ID("selected-text")
-    let replacementID = DOM.Node.ID("replacement-text")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(
+            runtime: runtime,
+            document: DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document")
+        )
+        let document = try #require(context.rootNode)
+        let parentID = DOM.Node.ID("parent")
+        let selectedID = DOM.Node.ID("selected-text")
+        let replacementID = DOM.Node.ID("replacement-text")
 
-    await runtime.backend.emit(
-        .setChildNodes(parent: document.id.proxyID, nodes: [
-            DOM.Node(
-                id: parentID,
-                nodeType: 1,
-                nodeName: "DIV",
-                localName: "div",
-                children: [
-                    DOM.Node(id: selectedID, nodeType: 3, nodeName: "#text", nodeValue: "selected")
-                ]
-            )
-        ]),
-        target: target
-    )
-    try await waitUntil { context.node(for: DOMNode.ID(selectedID)) != nil }
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: document.id.proxyID, nodes: [
+                DOM.Node(
+                    id: parentID,
+                    nodeType: 1,
+                    nodeName: "DIV",
+                    localName: "div",
+                    children: [
+                        DOM.Node(id: selectedID, nodeType: 3, nodeName: "#text", nodeValue: "selected")
+                    ]
+                )
+            ]),
+            target: target
+        )
+        try await waitUntil { context.node(for: DOMNode.ID(selectedID)) != nil }
 
-    let selected = try #require(context.node(for: DOMNode.ID(selectedID)))
-    let controller = try await context.treeController()
-    let recorder = DOMTreeUpdateRecorder(stream: controller.updates)
-    defer { recorder.cancel() }
-    try await recorder.waitUntilStarted()
-    try await recorder.waitForUpdateCount(1)
+        let selected = try #require(context.node(for: DOMNode.ID(selectedID)))
+        let controller = try await context.treeController()
+        let recorder = DOMTreeUpdateRecorder(stream: controller.updates)
+        defer { recorder.cancel() }
+        try await recorder.waitUntilStarted()
+        try await recorder.waitForUpdateCount(1)
 
-    context.select(selected)
-    try await recorder.waitForUpdateCount(2)
-    #expect(controller.snapshot.selectedNodeID == selected.id)
+        context.select(selected)
+        try await recorder.waitForUpdateCount(2)
+        #expect(controller.snapshot.selectedNodeID == selected.id)
 
-    await runtime.backend.emit(
-        .setChildNodes(parent: parentID, nodes: [
-            DOM.Node(id: replacementID, nodeType: 3, nodeName: "#text", nodeValue: "replacement")
-        ]),
-        target: target
-    )
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: parentID, nodes: [
+                DOM.Node(id: replacementID, nodeType: 3, nodeName: "#text", nodeValue: "replacement")
+            ]),
+            target: target
+        )
 
-    try await waitUntil {
-        context.selectedNode == nil
-            && context.node(for: DOMNode.ID(selectedID)) == nil
-            && context.node(for: DOMNode.ID(replacementID)) != nil
+        try await waitUntil {
+            context.selectedNode == nil
+                && context.node(for: DOMNode.ID(selectedID)) == nil
+                && context.node(for: DOMNode.ID(replacementID)) != nil
+        }
+        try await waitUntil {
+            recorder.updates.contains(.delta(.selectionChanged(nodeID: nil)))
+        }
+        #expect(controller.snapshot.selectedNodeID == nil)
     }
-    try await waitUntil {
-        recorder.updates.contains(.delta(.selectionChanged(nodeID: nil)))
-    }
-    #expect(controller.snapshot.selectedNodeID == nil)
 }
 
 
@@ -3423,279 +3498,281 @@ func stalledFetchedResultsSubscriberDoesNotReconfigureRemovedItems() async throw
 @MainActor
 @Test
 func fetchedResultsPublishNetworkTopologyAndPropertyUpdates() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
-    let recorder = FetchedResultsTransactionRecorder(stream: results.updates())
-    defer { recorder.cancel() }
-    try await recorder.waitUntilStarted()
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+        let recorder = FetchedResultsTransactionRecorder(stream: results.updates())
+        defer { recorder.cancel() }
+        try await recorder.waitUntilStarted()
 
-    let requestID = Network.Request.ID("controller-request")
-    await runtime.backend.emit(
-        .requestWillBeSent(
-            id: requestID,
-            request: Network.Request(id: requestID, url: "https://example.com/first", method: "GET"),
-            resourceType: .fetch,
-            redirectResponse: nil,
-            timestamp: 1
-        ),
-        target: target
-    )
-
-    try await recorder.waitForTransactionCount(1)
-    let inserted = try #require(recorder.transactions.last)
-    let modelID = NetworkRequest.ID(requestID)
-    let firstIndexPath = WebInspectorFetchedResultsIndexPath(section: 0, item: 0)
-    #expect(inserted.itemChanges == [.insert(itemID: modelID, indexPath: firstIndexPath)])
-    #expect(inserted.oldSnapshot.itemIDs == [])
-    #expect(inserted.newSnapshot.itemIDs == [modelID])
-    #expect(recorder.reconfigureItemIDSets.last == [])
-    #expect(results.snapshot.itemIDs == [modelID])
-    let request = try #require(results.items.first)
-
-    await runtime.backend.emit(
-        .responseReceived(
-            id: requestID,
-            response: Network.Response(status: 200, statusText: "OK", mimeType: "text/plain"),
-            resourceType: .fetch,
-            timestamp: 2
-        ),
-        target: target
-    )
-
-    try await waitUntil { request.status == 200 }
-    try await recorder.waitForTransactionCount(2)
-    #expect(results.items.first === request)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: modelID, indexPath: firstIndexPath)])
-    #expect(recorder.reconfigureItemIDSets.last == [modelID])
-
-    await runtime.backend.emit(
-        .dataReceived(id: requestID, dataLength: 7, encodedDataLength: 3, timestamp: 3),
-        target: target
-    )
-
-    try await waitUntil { request.decodedDataLength == 7 && request.encodedDataLength == 3 }
-    try await recorder.waitForTransactionCount(3)
-    #expect(results.items.first === request)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: modelID, indexPath: firstIndexPath)])
-    #expect(recorder.reconfigureItemIDSets.last == [modelID])
-
-    await runtime.backend.emit(
-        .loadingFinished(id: requestID, timestamp: 4, sourceMapURL: nil, metrics: nil),
-        target: target
-    )
-
-    try await waitUntil { request.state == .finished }
-    try await recorder.waitForTransactionCount(4)
-    #expect(results.items.first === request)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: modelID, indexPath: firstIndexPath)])
-    #expect(recorder.reconfigureItemIDSets.last == [modelID])
-
-    await runtime.backend.emit(
-        .requestServedFromMemoryCache(
-            id: requestID,
-            response: Network.Response(url: "https://example.com/first", status: 200),
-            resourceType: nil,
-            timestamp: 5
-        ),
-        target: target
-    )
-
-    try await waitUntil { request.finishedOrFailedTimestamp == 5 }
-    try await recorder.waitForTransactionCount(5)
-    #expect(results.items.first === request)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: modelID, indexPath: firstIndexPath)])
-    #expect(recorder.reconfigureItemIDSets.last == [modelID])
-
-    let failedRequestID = Network.Request.ID("controller-failed-request")
-    let failedModelID = NetworkRequest.ID(failedRequestID)
-    let failedIndexPath = WebInspectorFetchedResultsIndexPath(section: 0, item: 1)
-    await runtime.backend.emit(
-        .requestWillBeSent(
-            id: failedRequestID,
-            request: Network.Request(id: failedRequestID, url: "https://example.com/failed", method: "GET"),
-            resourceType: .fetch,
-            redirectResponse: nil,
-            timestamp: 6
-        ),
-        target: target
-    )
-
-    try await recorder.waitForTransactionCount(6)
-    #expect(recorder.transactions.last?.itemChanges == [.insert(itemID: failedModelID, indexPath: failedIndexPath)])
-    #expect(recorder.reconfigureItemIDSets.last == [])
-    let failedRequest = try #require(results.items.last)
-
-    await runtime.backend.emit(
-        .loadingFailed(id: failedRequestID, errorText: "cancelled", canceled: true, timestamp: 7),
-        target: target
-    )
-
-    try await waitUntil {
-        if case .failed(errorText: "cancelled", canceled: true) = failedRequest.state {
-            return true
-        }
-        return false
-    }
-    try await recorder.waitForTransactionCount(7)
-    #expect(results.items.last === failedRequest)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: failedModelID, indexPath: failedIndexPath)])
-    #expect(recorder.reconfigureItemIDSets.last == [failedModelID])
-
-    let socketRequestID = Network.Request.ID("controller-socket-request")
-    let socketModelID = NetworkRequest.ID(socketRequestID)
-    let socketIndexPath = WebInspectorFetchedResultsIndexPath(section: 0, item: 2)
-    await runtime.backend.emit(
-        .webSocket(.created(id: socketRequestID, url: "wss://example.com/socket")),
-        target: target
-    )
-
-    try await recorder.waitForTransactionCount(8)
-    #expect(recorder.transactions.last?.itemChanges == [.insert(itemID: socketModelID, indexPath: socketIndexPath)])
-    #expect(recorder.reconfigureItemIDSets.last == [])
-    let socketRequest = try #require(results.items.last)
-
-    await runtime.backend.emit(
-        .webSocket(.handshakeRequest(
-            id: socketRequestID,
-            request: Network.Request(
-                id: socketRequestID,
-                url: "wss://example.com/socket",
-                method: "GET",
-                headers: ["Upgrade": "websocket"]
+        let requestID = Network.Request.ID("controller-request")
+        try await runtime.wire.emitRaw(
+            .requestWillBeSent(
+                id: requestID,
+                request: Network.Request(id: requestID, url: "https://example.com/first", method: "GET"),
+                resourceType: .fetch,
+                redirectResponse: nil,
+                timestamp: 1
             ),
-            timestamp: 8
-        )),
-        target: target
-    )
+            target: target
+        )
 
-    try await waitUntil { socketRequest.webSocket?.handshakeRequest?.headers["Upgrade"] == "websocket" }
-    try await recorder.waitForTransactionCount(9)
-    #expect(results.items.last === socketRequest)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: socketModelID, indexPath: socketIndexPath)])
-    #expect(recorder.reconfigureItemIDSets.last == [socketModelID])
+        try await recorder.waitForTransactionCount(1)
+        let inserted = try #require(recorder.transactions.last)
+        let modelID = NetworkRequest.ID(requestID)
+        let firstIndexPath = WebInspectorFetchedResultsIndexPath(section: 0, item: 0)
+        #expect(inserted.itemChanges == [.insert(itemID: modelID, indexPath: firstIndexPath)])
+        #expect(inserted.oldSnapshot.itemIDs == [])
+        #expect(inserted.newSnapshot.itemIDs == [modelID])
+        #expect(recorder.reconfigureItemIDSets.last == [])
+        #expect(results.snapshot.itemIDs == [modelID])
+        let request = try #require(results.items.first)
 
-    await runtime.backend.emit(
-        .webSocket(.handshakeResponse(
-            id: socketRequestID,
-            response: Network.Response(status: 101, statusText: "Switching Protocols"),
-            timestamp: 9
-        )),
-        target: target
-    )
+        try await runtime.wire.emitRaw(
+            .responseReceived(
+                id: requestID,
+                response: Network.Response(status: 200, statusText: "OK", mimeType: "text/plain"),
+                resourceType: .fetch,
+                timestamp: 2
+            ),
+            target: target
+        )
 
-    try await waitUntil { socketRequest.status == 101 }
-    try await recorder.waitForTransactionCount(10)
-    #expect(results.items.last === socketRequest)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: socketModelID, indexPath: socketIndexPath)])
-    #expect(recorder.reconfigureItemIDSets.last == [socketModelID])
+        try await waitUntil { request.status == 200 }
+        try await recorder.waitForTransactionCount(2)
+        #expect(results.items.first === request)
+        #expect(recorder.transactions.last?.itemChanges == [.update(itemID: modelID, indexPath: firstIndexPath)])
+        #expect(recorder.reconfigureItemIDSets.last == [modelID])
 
-    await runtime.backend.emit(
-        .webSocket(.frameSent(
-            id: socketRequestID,
-            frame: Network.WebSocketFrame(opcode: 1, mask: true, payloadData: "hello", payloadLength: 5),
-            timestamp: 10
-        )),
-        target: target
-    )
+        try await runtime.wire.emitRaw(
+            .dataReceived(id: requestID, dataLength: 7, encodedDataLength: 3, timestamp: 3),
+            target: target
+        )
 
-    try await waitUntil { socketRequest.webSocket?.frames.count == 1 }
-    try await recorder.waitForTransactionCount(11)
-    #expect(results.items.last === socketRequest)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: socketModelID, indexPath: socketIndexPath)])
-    #expect(recorder.reconfigureItemIDSets.last == [socketModelID])
+        try await waitUntil { request.decodedDataLength == 7 && request.encodedDataLength == 3 }
+        try await recorder.waitForTransactionCount(3)
+        #expect(results.items.first === request)
+        #expect(recorder.transactions.last?.itemChanges == [.update(itemID: modelID, indexPath: firstIndexPath)])
+        #expect(recorder.reconfigureItemIDSets.last == [modelID])
 
-    await runtime.backend.emit(
-        .webSocket(.frameReceived(
-            id: socketRequestID,
-            frame: Network.WebSocketFrame(opcode: 1, mask: false, payloadData: "world", payloadLength: 5),
-            timestamp: 11
-        )),
-        target: target
-    )
+        try await runtime.wire.emitRaw(
+            .loadingFinished(id: requestID, timestamp: 4, sourceMapURL: nil, metrics: nil),
+            target: target
+        )
 
-    try await waitUntil { socketRequest.webSocket?.frames.count == 2 }
-    try await recorder.waitForTransactionCount(12)
-    #expect(results.items.last === socketRequest)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: socketModelID, indexPath: socketIndexPath)])
-    #expect(recorder.reconfigureItemIDSets.last == [socketModelID])
+        try await waitUntil { request.state == .finished }
+        try await recorder.waitForTransactionCount(4)
+        #expect(results.items.first === request)
+        #expect(recorder.transactions.last?.itemChanges == [.update(itemID: modelID, indexPath: firstIndexPath)])
+        #expect(recorder.reconfigureItemIDSets.last == [modelID])
 
-    await runtime.backend.emit(
-        .webSocket(.error(id: socketRequestID, message: "decode failed", timestamp: 12)),
-        target: target
-    )
+        try await runtime.wire.emitRaw(
+            .requestServedFromMemoryCache(
+                id: requestID,
+                response: Network.Response(url: "https://example.com/first", status: 200),
+                resourceType: nil,
+                timestamp: 5
+            ),
+            target: target
+        )
 
-    try await waitUntil { socketRequest.webSocket?.frames.count == 3 }
-    try await recorder.waitForTransactionCount(13)
-    #expect(results.items.last === socketRequest)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: socketModelID, indexPath: socketIndexPath)])
-    #expect(recorder.reconfigureItemIDSets.last == [socketModelID])
+        try await waitUntil { request.finishedOrFailedTimestamp == 5 }
+        try await recorder.waitForTransactionCount(5)
+        #expect(results.items.first === request)
+        #expect(recorder.transactions.last?.itemChanges == [.update(itemID: modelID, indexPath: firstIndexPath)])
+        #expect(recorder.reconfigureItemIDSets.last == [modelID])
 
-    await runtime.backend.emit(
-        .webSocket(.closed(id: socketRequestID, timestamp: 13)),
-        target: target
-    )
+        let failedRequestID = Network.Request.ID("controller-failed-request")
+        let failedModelID = NetworkRequest.ID(failedRequestID)
+        let failedIndexPath = WebInspectorFetchedResultsIndexPath(section: 0, item: 1)
+        try await runtime.wire.emitRaw(
+            .requestWillBeSent(
+                id: failedRequestID,
+                request: Network.Request(id: failedRequestID, url: "https://example.com/failed", method: "GET"),
+                resourceType: .fetch,
+                redirectResponse: nil,
+                timestamp: 6
+            ),
+            target: target
+        )
 
-    try await waitUntil { socketRequest.state == .finished && socketRequest.webSocket?.readyState == .closed }
-    try await recorder.waitForTransactionCount(14)
-    #expect(results.items.last === socketRequest)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: socketModelID, indexPath: socketIndexPath)])
-    #expect(recorder.reconfigureItemIDSets.last == [socketModelID])
+        try await recorder.waitForTransactionCount(6)
+        #expect(recorder.transactions.last?.itemChanges == [.insert(itemID: failedModelID, indexPath: failedIndexPath)])
+        #expect(recorder.reconfigureItemIDSets.last == [])
+        let failedRequest = try #require(results.items.last)
+
+        try await runtime.wire.emitRaw(
+            .loadingFailed(id: failedRequestID, errorText: "cancelled", canceled: true, timestamp: 7),
+            target: target
+        )
+
+        try await waitUntil {
+            if case .failed(errorText: "cancelled", canceled: true) = failedRequest.state {
+                return true
+            }
+            return false
+        }
+        try await recorder.waitForTransactionCount(7)
+        #expect(results.items.last === failedRequest)
+        #expect(recorder.transactions.last?.itemChanges == [.update(itemID: failedModelID, indexPath: failedIndexPath)])
+        #expect(recorder.reconfigureItemIDSets.last == [failedModelID])
+
+        let socketRequestID = Network.Request.ID("controller-socket-request")
+        let socketModelID = NetworkRequest.ID(socketRequestID)
+        let socketIndexPath = WebInspectorFetchedResultsIndexPath(section: 0, item: 2)
+        try await runtime.wire.emitRaw(
+            .webSocket(.created(id: socketRequestID, url: "wss://example.com/socket")),
+            target: target
+        )
+
+        try await recorder.waitForTransactionCount(8)
+        #expect(recorder.transactions.last?.itemChanges == [.insert(itemID: socketModelID, indexPath: socketIndexPath)])
+        #expect(recorder.reconfigureItemIDSets.last == [])
+        let socketRequest = try #require(results.items.last)
+
+        try await runtime.wire.emitRaw(
+            .webSocket(.handshakeRequest(
+                id: socketRequestID,
+                request: Network.Request(
+                    id: socketRequestID,
+                    url: "wss://example.com/socket",
+                    method: "GET",
+                    headers: ["Upgrade": "websocket"]
+                ),
+                timestamp: 8
+            )),
+            target: target
+        )
+
+        try await waitUntil { socketRequest.webSocket?.handshakeRequest?.headers["Upgrade"] == "websocket" }
+        try await recorder.waitForTransactionCount(9)
+        #expect(results.items.last === socketRequest)
+        #expect(recorder.transactions.last?.itemChanges == [.update(itemID: socketModelID, indexPath: socketIndexPath)])
+        #expect(recorder.reconfigureItemIDSets.last == [socketModelID])
+
+        try await runtime.wire.emitRaw(
+            .webSocket(.handshakeResponse(
+                id: socketRequestID,
+                response: Network.Response(status: 101, statusText: "Switching Protocols"),
+                timestamp: 9
+            )),
+            target: target
+        )
+
+        try await waitUntil { socketRequest.status == 101 }
+        try await recorder.waitForTransactionCount(10)
+        #expect(results.items.last === socketRequest)
+        #expect(recorder.transactions.last?.itemChanges == [.update(itemID: socketModelID, indexPath: socketIndexPath)])
+        #expect(recorder.reconfigureItemIDSets.last == [socketModelID])
+
+        try await runtime.wire.emitRaw(
+            .webSocket(.frameSent(
+                id: socketRequestID,
+                frame: Network.WebSocketFrame(opcode: 1, mask: true, payloadData: "hello", payloadLength: 5),
+                timestamp: 10
+            )),
+            target: target
+        )
+
+        try await waitUntil { socketRequest.webSocket?.frames.count == 1 }
+        try await recorder.waitForTransactionCount(11)
+        #expect(results.items.last === socketRequest)
+        #expect(recorder.transactions.last?.itemChanges == [.update(itemID: socketModelID, indexPath: socketIndexPath)])
+        #expect(recorder.reconfigureItemIDSets.last == [socketModelID])
+
+        try await runtime.wire.emitRaw(
+            .webSocket(.frameReceived(
+                id: socketRequestID,
+                frame: Network.WebSocketFrame(opcode: 1, mask: false, payloadData: "world", payloadLength: 5),
+                timestamp: 11
+            )),
+            target: target
+        )
+
+        try await waitUntil { socketRequest.webSocket?.frames.count == 2 }
+        try await recorder.waitForTransactionCount(12)
+        #expect(results.items.last === socketRequest)
+        #expect(recorder.transactions.last?.itemChanges == [.update(itemID: socketModelID, indexPath: socketIndexPath)])
+        #expect(recorder.reconfigureItemIDSets.last == [socketModelID])
+
+        try await runtime.wire.emitRaw(
+            .webSocket(.error(id: socketRequestID, message: "decode failed", timestamp: 12)),
+            target: target
+        )
+
+        try await waitUntil { socketRequest.webSocket?.frames.count == 3 }
+        try await recorder.waitForTransactionCount(13)
+        #expect(results.items.last === socketRequest)
+        #expect(recorder.transactions.last?.itemChanges == [.update(itemID: socketModelID, indexPath: socketIndexPath)])
+        #expect(recorder.reconfigureItemIDSets.last == [socketModelID])
+
+        try await runtime.wire.emitRaw(
+            .webSocket(.closed(id: socketRequestID, timestamp: 13)),
+            target: target
+        )
+
+        try await waitUntil { socketRequest.state == .finished && socketRequest.webSocket?.readyState == .closed }
+        try await recorder.waitForTransactionCount(14)
+        #expect(results.items.last === socketRequest)
+        #expect(recorder.transactions.last?.itemChanges == [.update(itemID: socketModelID, indexPath: socketIndexPath)])
+        #expect(recorder.reconfigureItemIDSets.last == [socketModelID])
+    }
 }
 
 @MainActor
 @Test
 func sectionedNetworkResultsPublishTopologyWhenSectionKeyChanges() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(sectionBy: \.mimeType)
-    let recorder = FetchedResultsTransactionRecorder(stream: results.updates())
-    defer { recorder.cancel() }
-    try await recorder.waitUntilStarted()
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(sectionBy: \.mimeType)
+        let recorder = FetchedResultsTransactionRecorder(stream: results.updates())
+        defer { recorder.cancel() }
+        try await recorder.waitUntilStarted()
 
-    let requestID = Network.Request.ID("sectioned-controller-request")
-    let modelID = NetworkRequest.ID(requestID)
-    await runtime.backend.emit(
-        .requestWillBeSent(
-            id: requestID,
-            request: Network.Request(id: requestID, url: "https://media.example.com/clip.mp4", method: "GET"),
-            resourceType: .fetch,
-            redirectResponse: nil,
-            timestamp: 1
-        ),
-        target: target
-    )
-
-    try await recorder.waitForTransactionCount(1)
-    #expect(results.snapshot.sectionIDs == [WebInspectorFetchSectionID(rawValue: "")])
-    #expect(results.snapshot.itemIDs == [modelID])
-
-    await runtime.backend.emit(
-        .responseReceived(
-            id: requestID,
-            response: Network.Response(
-                url: "https://media.example.com/clip.mp4",
-                status: 200,
-                mimeType: "video/mp4"
+        let requestID = Network.Request.ID("sectioned-controller-request")
+        let modelID = NetworkRequest.ID(requestID)
+        try await runtime.wire.emitRaw(
+            .requestWillBeSent(
+                id: requestID,
+                request: Network.Request(id: requestID, url: "https://media.example.com/clip.mp4", method: "GET"),
+                resourceType: .fetch,
+                redirectResponse: nil,
+                timestamp: 1
             ),
-            resourceType: .fetch,
-            timestamp: 2
-        ),
-        target: target
-    )
+            target: target
+        )
 
-    try await recorder.waitForTransactionCount(2)
-    let sectionChange = try #require(recorder.transactions.last)
-    #expect(sectionChange.isReset == false)
-    #expect(sectionChange.oldSnapshot.sectionIDs == [WebInspectorFetchSectionID(rawValue: "")])
-    #expect(sectionChange.newSnapshot.sectionIDs == [WebInspectorFetchSectionID(rawValue: "video/mp4")])
-    #expect(sectionChange.oldSnapshot.itemIDs == [modelID])
-    #expect(sectionChange.newSnapshot.itemIDs == [modelID])
-    #expect(sectionChange.sectionChanges == [
-        .delete(sectionID: WebInspectorFetchSectionID(rawValue: ""), index: 0),
-        .insert(sectionID: WebInspectorFetchSectionID(rawValue: "video/mp4"), index: 0),
-    ])
-    #expect(sectionChange.itemChanges == [])
+        try await recorder.waitForTransactionCount(1)
+        #expect(results.snapshot.sectionIDs == [WebInspectorFetchSectionID(rawValue: "")])
+        #expect(results.snapshot.itemIDs == [modelID])
+
+        try await runtime.wire.emitRaw(
+            .responseReceived(
+                id: requestID,
+                response: Network.Response(
+                    url: "https://media.example.com/clip.mp4",
+                    status: 200,
+                    mimeType: "video/mp4"
+                ),
+                resourceType: .fetch,
+                timestamp: 2
+            ),
+            target: target
+        )
+
+        try await recorder.waitForTransactionCount(2)
+        let sectionChange = try #require(recorder.transactions.last)
+        #expect(sectionChange.isReset == false)
+        #expect(sectionChange.oldSnapshot.sectionIDs == [WebInspectorFetchSectionID(rawValue: "")])
+        #expect(sectionChange.newSnapshot.sectionIDs == [WebInspectorFetchSectionID(rawValue: "video/mp4")])
+        #expect(sectionChange.oldSnapshot.itemIDs == [modelID])
+        #expect(sectionChange.newSnapshot.itemIDs == [modelID])
+        #expect(sectionChange.sectionChanges == [
+            .delete(sectionID: WebInspectorFetchSectionID(rawValue: ""), index: 0),
+            .insert(sectionID: WebInspectorFetchSectionID(rawValue: "video/mp4"), index: 0),
+        ])
+        #expect(sectionChange.itemChanges == [])
+    }
 }
 
 @MainActor
@@ -3898,36 +3975,37 @@ func clearNetworkRequestsResetsDescriptorBackedQueryState() async throws {
 @MainActor
 @Test
 func startResetsDescriptorBackedNetworkQueryState() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let descriptor = WebInspectorFetchDescriptor<NetworkRequest>(
-        sortBy: [SortDescriptor(\.requestSentTimestamp, order: .forward)],
-        fetchLimit: 1
-    )
-    let networkResults: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: descriptor)
-    let staleRequestID = Network.Request.ID("stale-query-before-restart")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let descriptor = WebInspectorFetchDescriptor<NetworkRequest>(
+            sortBy: [SortDescriptor(\.requestSentTimestamp, order: .forward)],
+            fetchLimit: 1
+        )
+        let networkResults: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: descriptor)
+        let staleRequestID = Network.Request.ID("stale-query-before-restart")
 
-    await emitFinishedRequest(id: staleRequestID, target: target, backend: runtime.backend)
-    try await waitUntil {
-        networkResults.items.map(\.id) == [NetworkRequest.ID(staleRequestID)]
-    }
+        try await emitFinishedRequest(id: staleRequestID, target: target, backend: runtime.wire)
+        try await waitUntil {
+            networkResults.items.map(\.id) == [NetworkRequest.ID(staleRequestID)]
+        }
 
-    await enqueueDomainDisableReplies(on: runtime.backend)
-    await enqueueStartupReplies(
-        on: runtime.backend,
-        document: DOM.Node(id: DOM.Node.ID("fresh-query-root"), nodeType: 9, nodeName: "#document")
-    )
+        await enqueueDomainDisableReplies(on: runtime.wire)
+        try await enqueueStartupReplies(
+            on: runtime.wire,
+            document: DOM.Node(id: DOM.Node.ID("fresh-query-root"), nodeType: 9, nodeName: "#document")
+        )
 
-    context.start()
+        context.start()
 
-    try await waitUntil {
-        networkResults.items.isEmpty && context.state == .attached
-    }
+        try await waitUntil {
+            networkResults.items.isEmpty && context.state == .attached
+        }
 
-    let freshRequestID = Network.Request.ID("fresh-query-after-restart")
-    await emitFinishedRequest(id: freshRequestID, target: target, backend: runtime.backend)
-    try await waitUntil {
-        networkResults.items.map(\.id) == [NetworkRequest.ID(freshRequestID)]
+        let freshRequestID = Network.Request.ID("fresh-query-after-restart")
+        try await emitFinishedRequest(id: freshRequestID, target: target, backend: runtime.wire)
+        try await waitUntil {
+            networkResults.items.map(\.id) == [NetworkRequest.ID(freshRequestID)]
+        }
     }
 }
 
@@ -4161,358 +4239,368 @@ func networkRequestResourceCategoryUsesResponseHeadersWithoutPendingURLInference
 @MainActor
 @Test
 func clearNetworkRequestsPublishesResetAndIgnoresClearedEvents() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
-    let recorder = FetchedResultsTransactionRecorder(stream: results.updates())
-    defer { recorder.cancel() }
-    try await recorder.waitUntilStarted()
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+        let recorder = FetchedResultsTransactionRecorder(stream: results.updates())
+        defer { recorder.cancel() }
+        try await recorder.waitUntilStarted()
 
-    let firstRequestID = Network.Request.ID("clear-first-request")
-    let firstModelID = NetworkRequest.ID(firstRequestID)
-    await runtime.backend.emit(
-        .requestWillBeSent(
-            id: firstRequestID,
-            request: Network.Request(id: firstRequestID, url: "https://example.com/first", method: "GET"),
-            resourceType: .fetch,
-            redirectResponse: nil,
-            timestamp: 1
-        ),
-        target: target
-    )
-    try await recorder.waitForTransactionCount(1)
-
-    let secondRequestID = Network.Request.ID("clear-second-request")
-    let secondModelID = NetworkRequest.ID(secondRequestID)
-    await runtime.backend.emit(
-        .requestWillBeSent(
-            id: secondRequestID,
-            request: Network.Request(id: secondRequestID, url: "https://example.com/second", method: "GET"),
-            resourceType: .fetch,
-            redirectResponse: nil,
-            timestamp: 2
-        ),
-        target: target
-    )
-    try await recorder.waitForTransactionCount(2)
-    #expect(results.snapshot.itemIDs == [firstModelID, secondModelID])
-
-    await context.clearNetworkRequests()
-
-    try await recorder.waitForTransactionCount(3)
-    let reset = try #require(recorder.transactions.last)
-    #expect(reset.isReset)
-    #expect(reset.oldSnapshot.itemIDs == [firstModelID, secondModelID])
-    #expect(reset.newSnapshot.itemIDs == [])
-    #expect(reset.sectionChanges == [])
-    #expect(reset.itemChanges == [])
-    #expect(results.snapshot.itemIDs == [])
-    #expect(results.items.isEmpty)
-    #expect(context.registeredRequest(for: firstModelID) == nil)
-    #expect(context.registeredRequest(for: secondModelID) == nil)
-
-    let clearedEventBaseline = context.eventPumpAppliedSequenceForTesting
-    await runtime.backend.emit(
-        .responseReceived(
-            id: firstRequestID,
-            response: Network.Response(status: 200),
-            resourceType: .fetch,
-            timestamp: 3
-        ),
-        target: target
-    )
-    await runtime.backend.emit(
-        .dataReceived(id: firstRequestID, dataLength: 7, encodedDataLength: 4, timestamp: 4),
-        target: target
-    )
-    await runtime.backend.emit(
-        .loadingFinished(id: secondRequestID, timestamp: 5, sourceMapURL: nil, metrics: nil),
-        target: target
-    )
-    await runtime.backend.emit(
-        .webSocket(.closed(id: secondRequestID, timestamp: 6)),
-        target: target
-    )
-    let didProcessClearedEvents = await context.waitForEventPumpAppliedSequenceForTesting(
-        after: clearedEventBaseline,
-        count: 4
-    )
-    #expect(didProcessClearedEvents)
-    #expect(context.state == .attached)
-    #expect(results.items.isEmpty)
-    #expect(recorder.transactions.count == 3)
-
-    let redirectedEventBaseline = context.eventPumpAppliedSequenceForTesting
-    await runtime.backend.emit(
-        .requestWillBeSent(
-            id: firstRequestID,
-            request: Network.Request(
+        let firstRequestID = Network.Request.ID("clear-first-request")
+        let firstModelID = NetworkRequest.ID(firstRequestID)
+        try await runtime.wire.emitRaw(
+            .requestWillBeSent(
                 id: firstRequestID,
-                url: "https://example.com/redirected",
-                method: "GET"
+                request: Network.Request(id: firstRequestID, url: "https://example.com/first", method: "GET"),
+                resourceType: .fetch,
+                redirectResponse: nil,
+                timestamp: 1
             ),
-            resourceType: .fetch,
-            redirectResponse: Network.Response(url: "https://example.com/first", status: 302),
-            timestamp: 7
-        ),
-        target: target
-    )
-    let didProcessRedirectedEvent = await context.waitForEventPumpAppliedSequenceForTesting(
-        after: redirectedEventBaseline
-    )
-    #expect(didProcessRedirectedEvent)
-    #expect(results.items.isEmpty)
-    #expect(recorder.transactions.count == 3)
-    #expect(context.registeredRequest(for: firstModelID) == nil)
+            target: target
+        )
+        try await recorder.waitForTransactionCount(1)
 
-    await runtime.backend.emit(
-        .requestWillBeSent(
-            id: firstRequestID,
-            request: Network.Request(
+        let secondRequestID = Network.Request.ID("clear-second-request")
+        let secondModelID = NetworkRequest.ID(secondRequestID)
+        try await runtime.wire.emitRaw(
+            .requestWillBeSent(
+                id: secondRequestID,
+                request: Network.Request(id: secondRequestID, url: "https://example.com/second", method: "GET"),
+                resourceType: .fetch,
+                redirectResponse: nil,
+                timestamp: 2
+            ),
+            target: target
+        )
+        try await recorder.waitForTransactionCount(2)
+        #expect(results.snapshot.itemIDs == [firstModelID, secondModelID])
+
+        await context.clearNetworkRequests()
+
+        try await recorder.waitForTransactionCount(3)
+        let reset = try #require(recorder.transactions.last)
+        #expect(reset.isReset)
+        #expect(reset.oldSnapshot.itemIDs == [firstModelID, secondModelID])
+        #expect(reset.newSnapshot.itemIDs == [])
+        #expect(reset.sectionChanges == [])
+        #expect(reset.itemChanges == [])
+        #expect(results.snapshot.itemIDs == [])
+        #expect(results.items.isEmpty)
+        #expect(context.registeredRequest(for: firstModelID) == nil)
+        #expect(context.registeredRequest(for: secondModelID) == nil)
+
+        let clearedEventBaseline = context.eventPumpAppliedSequenceForTesting
+        try await runtime.wire.emitRaw(
+            .responseReceived(
                 id: firstRequestID,
-                url: "https://example.com/reused",
-                method: "GET"
+                response: Network.Response(status: 200),
+                resourceType: .fetch,
+                timestamp: 3
             ),
-            resourceType: .fetch,
-            redirectResponse: nil,
-            timestamp: 8
-        ),
-        target: target
-    )
+            target: target
+        )
+        try await runtime.wire.emitRaw(
+            .dataReceived(id: firstRequestID, dataLength: 7, encodedDataLength: 4, timestamp: 4),
+            target: target
+        )
+        try await runtime.wire.emitRaw(
+            .loadingFinished(id: secondRequestID, timestamp: 5, sourceMapURL: nil, metrics: nil),
+            target: target
+        )
+        try await runtime.wire.emitRaw(
+            .webSocket(.closed(id: secondRequestID, timestamp: 6)),
+            target: target
+        )
+        let didProcessClearedEvents = await context.waitForEventPumpAppliedSequenceForTesting(
+            after: clearedEventBaseline,
+            count: 4
+        )
+        #expect(didProcessClearedEvents)
+        #expect(context.state == .attached)
+        #expect(results.items.isEmpty)
+        #expect(recorder.transactions.count == 3)
 
-    try await recorder.waitForTransactionCount(4)
-    let reusedRequest = try #require(results.items.first)
-    #expect(reusedRequest.id == firstModelID)
-    #expect(reusedRequest.url == "https://example.com/reused")
-    #expect(context.registeredRequest(for: firstModelID) === reusedRequest)
+        let redirectedEventBaseline = context.eventPumpAppliedSequenceForTesting
+        try await runtime.wire.emitRaw(
+            .requestWillBeSent(
+                id: firstRequestID,
+                request: Network.Request(
+                    id: firstRequestID,
+                    url: "https://example.com/redirected",
+                    method: "GET"
+                ),
+                resourceType: .fetch,
+                redirectResponse: Network.Response(url: "https://example.com/first", status: 302),
+                timestamp: 7
+            ),
+            target: target
+        )
+        let didProcessRedirectedEvent = await context.waitForEventPumpAppliedSequenceForTesting(
+            after: redirectedEventBaseline
+        )
+        #expect(didProcessRedirectedEvent)
+        #expect(results.items.isEmpty)
+        #expect(recorder.transactions.count == 3)
+        #expect(context.registeredRequest(for: firstModelID) == nil)
+
+        try await runtime.wire.emitRaw(
+            .requestWillBeSent(
+                id: firstRequestID,
+                request: Network.Request(
+                    id: firstRequestID,
+                    url: "https://example.com/reused",
+                    method: "GET"
+                ),
+                resourceType: .fetch,
+                redirectResponse: nil,
+                timestamp: 8
+            ),
+            target: target
+        )
+
+        try await recorder.waitForTransactionCount(4)
+        let reusedRequest = try #require(results.items.first)
+        #expect(reusedRequest.id == firstModelID)
+        #expect(reusedRequest.url == "https://example.com/reused")
+        #expect(context.registeredRequest(for: firstModelID) === reusedRequest)
+    }
 }
 
 @MainActor
 @Test
 func networkRequestExposesDataKitQueryableProperties() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
 
-    let apiRequestID = Network.Request.ID("queryable-api-request")
-    await runtime.backend.emit(
-        .requestWillBeSent(
-            id: apiRequestID,
-            request: Network.Request(
+        let apiRequestID = Network.Request.ID("queryable-api-request")
+        try await runtime.wire.emitRaw(
+            .requestWillBeSent(
                 id: apiRequestID,
-                url: "https://api.example.test/graphql?operation=Feed",
-                method: "POST"
+                request: Network.Request(
+                    id: apiRequestID,
+                    url: "https://api.example.test/graphql?operation=Feed",
+                    method: "POST"
+                ),
+                resourceType: .fetch,
+                redirectResponse: nil,
+                timestamp: 1
             ),
-            resourceType: .fetch,
-            redirectResponse: nil,
-            timestamp: 1
-        ),
-        target: target
-    )
-    await runtime.backend.emit(
-        .responseReceived(
-            id: apiRequestID,
-            response: Network.Response(
-                url: "https://api.example.test/graphql?operation=Feed",
-                status: 201,
-                statusText: "Created",
-                mimeType: "application/json"
+            target: target
+        )
+        try await runtime.wire.emitRaw(
+            .responseReceived(
+                id: apiRequestID,
+                response: Network.Response(
+                    url: "https://api.example.test/graphql?operation=Feed",
+                    status: 201,
+                    statusText: "Created",
+                    mimeType: "application/json"
+                ),
+                resourceType: .fetch,
+                timestamp: 2
             ),
-            resourceType: .fetch,
-            timestamp: 2
-        ),
-        target: target
-    )
+            target: target
+        )
 
-    try await waitUntil { results.items.first?.statusCode == 201 }
-    let apiRequest = try #require(results.items.first)
-    #expect(apiRequest.resourceCategory == .xhrFetch)
-    #expect(apiRequest.statusCode == 201)
-    #expect(apiRequest.searchableText.localizedStandardContains("graphql"))
-    #expect(apiRequest.searchableText.localizedStandardContains("POST"))
-    #expect(apiRequest.searchableText.localizedStandardContains("201"))
-    #expect(apiRequest.searchableText.localizedStandardContains("Created"))
+        try await waitUntil { results.items.first?.statusCode == 201 }
+        let apiRequest = try #require(results.items.first)
+        #expect(apiRequest.resourceCategory == .xhrFetch)
+        #expect(apiRequest.statusCode == 201)
+        #expect(apiRequest.searchableText.localizedStandardContains("graphql"))
+        #expect(apiRequest.searchableText.localizedStandardContains("POST"))
+        #expect(apiRequest.searchableText.localizedStandardContains("201"))
+        #expect(apiRequest.searchableText.localizedStandardContains("Created"))
 
-    let cssRequestID = Network.Request.ID("queryable-css-request")
-    await runtime.backend.emit(
-        .responseReceived(
-            id: cssRequestID,
-            response: Network.Response(
-                url: "https://example.test/app.css",
-                status: 200,
-                mimeType: "text/css; charset=utf-8"
+        let cssRequestID = Network.Request.ID("queryable-css-request")
+        try await runtime.wire.emitRaw(
+            .responseReceived(
+                id: cssRequestID,
+                response: Network.Response(
+                    url: "https://example.test/app.css",
+                    status: 200,
+                    mimeType: "text/css; charset=utf-8"
+                ),
+                resourceType: .other,
+                timestamp: 3
             ),
-            resourceType: .other,
-            timestamp: 3
-        ),
-        target: target
-    )
+            target: target
+        )
 
-    try await waitUntil { results.items.count == 2 }
-    let cssRequest = try #require(results.items.last)
-    #expect(cssRequest.resourceCategory == .stylesheet)
-    #expect(cssRequest.searchableText.localizedStandardContains("app.css"))
-    #expect(cssRequest.statusCode == 200)
+        try await waitUntil { results.items.count == 2 }
+        let cssRequest = try #require(results.items.last)
+        #expect(cssRequest.resourceCategory == .stylesheet)
+        #expect(cssRequest.searchableText.localizedStandardContains("app.css"))
+        #expect(cssRequest.statusCode == 200)
+    }
 }
 
 @MainActor
 @Test
 func fetchedResultsPublishConsoleInsertUpdateAndDeleteTransactions() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
-    let recorder = FetchedResultsTransactionRecorder(stream: results.updates())
-    defer { recorder.cancel() }
-    try await recorder.waitUntilStarted()
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
+        let recorder = FetchedResultsTransactionRecorder(stream: results.updates())
+        defer { recorder.cancel() }
+        try await recorder.waitUntilStarted()
 
-    await runtime.backend.emit(
-        .messageAdded(Console.Message(
-            source: Console.Source(rawValue: "console-api"),
-            level: Console.Level(rawValue: "log"),
-            text: "first"
-        )),
-        target: target
-    )
+        try await runtime.wire.emitRaw(
+            .messageAdded(Console.Message(
+                source: Console.Source(rawValue: "console-api"),
+                level: Console.Level(rawValue: "log"),
+                text: "first"
+            )),
+            target: target
+        )
 
-    try await recorder.waitForTransactionCount(1)
-    let firstID = try #require(results.snapshot.itemIDs.first)
-    #expect(recorder.transactions.last?.itemChanges == [.insert(itemID: firstID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0))])
+        try await recorder.waitForTransactionCount(1)
+        let firstID = try #require(results.snapshot.itemIDs.first)
+        #expect(recorder.transactions.last?.itemChanges == [.insert(itemID: firstID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0))])
 
-    await runtime.backend.emit(
-        .messageRepeatCountUpdated(count: 3, timestamp: 2),
-        target: target
-    )
+        try await runtime.wire.emitRaw(
+            .messageRepeatCountUpdated(count: 3, timestamp: 2),
+            target: target
+        )
 
-    try await recorder.waitForTransactionCount(2)
-    #expect(recorder.transactions.last?.itemChanges == [.update(itemID: firstID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0))])
+        try await recorder.waitForTransactionCount(2)
+        #expect(recorder.transactions.last?.itemChanges == [.update(itemID: firstID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0))])
 
-    await runtime.backend.emit(
-        .messageAdded(Console.Message(
-            source: Console.Source(rawValue: "console-api"),
-            level: Console.Level(rawValue: "log"),
-            text: "second"
-        )),
-        target: target
-    )
+        try await runtime.wire.emitRaw(
+            .messageAdded(Console.Message(
+                source: Console.Source(rawValue: "console-api"),
+                level: Console.Level(rawValue: "log"),
+                text: "second"
+            )),
+            target: target
+        )
 
-    try await recorder.waitForTransactionCount(3)
-    let secondID = try #require(results.snapshot.itemIDs.last)
-    #expect(recorder.transactions.last?.itemChanges == [.insert(itemID: secondID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 1))])
+        try await recorder.waitForTransactionCount(3)
+        let secondID = try #require(results.snapshot.itemIDs.last)
+        #expect(recorder.transactions.last?.itemChanges == [.insert(itemID: secondID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 1))])
 
-    await runtime.backend.emit(
-        .messagesCleared(reason: Console.ClearReason(rawValue: "console-api")),
-        target: target
-    )
+        await runtime.wire.respond(to: "Runtime.releaseObjectGroup")
+        try await runtime.wire.emitRaw(
+            .messagesCleared(reason: Console.ClearReason(rawValue: "console-api")),
+            target: target
+        )
 
-    try await recorder.waitForTransactionCount(4)
-    #expect(recorder.transactions.last?.itemChanges == [
-        .delete(itemID: secondID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 1)),
-        .delete(itemID: firstID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)),
-    ])
-    #expect(results.snapshot.itemIDs == [])
+        try await recorder.waitForTransactionCount(4)
+        #expect(recorder.transactions.last?.itemChanges == [
+            .delete(itemID: secondID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 1)),
+            .delete(itemID: firstID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)),
+        ])
+        #expect(results.snapshot.itemIDs == [])
+        _ = await runtime.wire.observations.waitForCompletedCommands(
+            method: "Runtime.releaseObjectGroup",
+            count: 1
+        )
+    }
 }
 
 @MainActor
 @Test
 func fetchedResultsCanBeSectionedByStringKeyPath() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(sectionBy: \.method)
-    let recorder = FetchedResultsTransactionRecorder(stream: results.updates())
-    defer { recorder.cancel() }
-    try await recorder.waitUntilStarted()
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(sectionBy: \.method)
+        let recorder = FetchedResultsTransactionRecorder(stream: results.updates())
+        defer { recorder.cancel() }
+        try await recorder.waitUntilStarted()
 
-    let getID = Network.Request.ID("sectioned-get")
-    await runtime.backend.emit(
-        .requestWillBeSent(
-            id: getID,
-            request: Network.Request(id: getID, url: "https://example.com/get", method: "GET"),
-            resourceType: .fetch,
-            redirectResponse: nil,
-            timestamp: 1
-        ),
-        target: target
-    )
-
-    try await recorder.waitForTransactionCount(1)
-    #expect(results.sections.map(\.title) == ["GET"])
-    #expect(results.snapshot.sectionIDs == [WebInspectorFetchSectionID(rawValue: "GET")])
-    #expect(recorder.transactions.last?.sectionChanges == [
-        .insert(sectionID: WebInspectorFetchSectionID(rawValue: "GET"), index: 0)
-    ])
-    #expect(recorder.transactions.last?.itemChanges == [
-        .insert(
-            itemID: NetworkRequest.ID(getID),
-            indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)
+        let getID = Network.Request.ID("sectioned-get")
+        try await runtime.wire.emitRaw(
+            .requestWillBeSent(
+                id: getID,
+                request: Network.Request(id: getID, url: "https://example.com/get", method: "GET"),
+                resourceType: .fetch,
+                redirectResponse: nil,
+                timestamp: 1
+            ),
+            target: target
         )
-    ])
 
-    let postID = Network.Request.ID("sectioned-post")
-    await runtime.backend.emit(
-        .requestWillBeSent(
-            id: postID,
-            request: Network.Request(id: postID, url: "https://example.com/post", method: "POST"),
-            resourceType: .fetch,
-            redirectResponse: nil,
-            timestamp: 2
-        ),
-        target: target
-    )
+        try await recorder.waitForTransactionCount(1)
+        #expect(results.sections.map(\.title) == ["GET"])
+        #expect(results.snapshot.sectionIDs == [WebInspectorFetchSectionID(rawValue: "GET")])
+        #expect(recorder.transactions.last?.sectionChanges == [
+            .insert(sectionID: WebInspectorFetchSectionID(rawValue: "GET"), index: 0)
+        ])
+        #expect(recorder.transactions.last?.itemChanges == [
+            .insert(
+                itemID: NetworkRequest.ID(getID),
+                indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)
+            )
+        ])
 
-    try await recorder.waitForTransactionCount(2)
-    #expect(results.sections.map(\.title) == ["GET", "POST"])
-    #expect(recorder.transactions.last?.sectionChanges == [
-        .insert(sectionID: WebInspectorFetchSectionID(rawValue: "POST"), index: 1)
-    ])
-    #expect(recorder.transactions.last?.itemChanges == [
-        .insert(
-            itemID: NetworkRequest.ID(postID),
-            indexPath: WebInspectorFetchedResultsIndexPath(section: 1, item: 0)
+        let postID = Network.Request.ID("sectioned-post")
+        try await runtime.wire.emitRaw(
+            .requestWillBeSent(
+                id: postID,
+                request: Network.Request(id: postID, url: "https://example.com/post", method: "POST"),
+                resourceType: .fetch,
+                redirectResponse: nil,
+                timestamp: 2
+            ),
+            target: target
         )
-    ])
 
-    let secondGetID = Network.Request.ID("sectioned-second-get")
-    await runtime.backend.emit(
-        .requestWillBeSent(
-            id: secondGetID,
-            request: Network.Request(id: secondGetID, url: "https://example.com/get-2", method: "GET"),
-            resourceType: .fetch,
-            redirectResponse: nil,
-            timestamp: 3
-        ),
-        target: target
-    )
+        try await recorder.waitForTransactionCount(2)
+        #expect(results.sections.map(\.title) == ["GET", "POST"])
+        #expect(recorder.transactions.last?.sectionChanges == [
+            .insert(sectionID: WebInspectorFetchSectionID(rawValue: "POST"), index: 1)
+        ])
+        #expect(recorder.transactions.last?.itemChanges == [
+            .insert(
+                itemID: NetworkRequest.ID(postID),
+                indexPath: WebInspectorFetchedResultsIndexPath(section: 1, item: 0)
+            )
+        ])
 
-    try await recorder.waitForTransactionCount(3)
-    #expect(results.sections.map(\.items.count) == [2, 1])
-    #expect(recorder.transactions.last?.sectionChanges == [])
-    #expect(recorder.transactions.last?.itemChanges == [
-        .insert(
-            itemID: NetworkRequest.ID(secondGetID),
-            indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 1)
+        let secondGetID = Network.Request.ID("sectioned-second-get")
+        try await runtime.wire.emitRaw(
+            .requestWillBeSent(
+                id: secondGetID,
+                request: Network.Request(id: secondGetID, url: "https://example.com/get-2", method: "GET"),
+                resourceType: .fetch,
+                redirectResponse: nil,
+                timestamp: 3
+            ),
+            target: target
         )
-    ])
+
+        try await recorder.waitForTransactionCount(3)
+        #expect(results.sections.map(\.items.count) == [2, 1])
+        #expect(recorder.transactions.last?.sectionChanges == [])
+        #expect(recorder.transactions.last?.itemChanges == [
+            .insert(
+                itemID: NetworkRequest.ID(secondGetID),
+                indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 1)
+            )
+        ])
+    }
 }
 
 @MainActor
 @Test
 func fetchedResultsCanBeSectionedByRawRepresentableKeyPath() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults(sectionBy: \.level)
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults(sectionBy: \.level)
 
-    await runtime.backend.emit(
-        .messageAdded(Console.Message(
-            source: Console.Source(rawValue: "console-api"),
-            level: Console.Level(rawValue: "warning"),
-            text: "warning"
-        )),
-        target: target
-    )
+        try await runtime.wire.emitRaw(
+            .messageAdded(Console.Message(
+                source: Console.Source(rawValue: "console-api"),
+                level: Console.Level(rawValue: "warning"),
+                text: "warning"
+            )),
+            target: target
+        )
 
-    try await waitUntil { results.sections.first?.title == "warning" }
-    #expect(results.sections.map(\.id) == [WebInspectorFetchSectionID(rawValue: "warning")])
-    #expect(results.sections.first?.items.first?.text == "warning")
+        try await waitUntil { results.sections.first?.title == "warning" }
+        #expect(results.sections.map(\.id) == [WebInspectorFetchSectionID(rawValue: "warning")])
+        #expect(results.sections.first?.items.first?.text == "warning")
+    }
 }
 
 @MainActor
@@ -4537,1338 +4625,1381 @@ func fetchedResultsTransactionDiffsMovesByItemID() {
 @MainActor
 @Test
 func selectingDOMNodeLoadsCSSStylesAndComputedProperties() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
-    let elementID = DOM.Node.ID("styled-node")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let document = try #require(context.rootNode)
+        let elementID = DOM.Node.ID("styled-node")
 
-    await runtime.backend.emit(
-        .setChildNodes(parent: document.id.proxyID, nodes: [
-            DOM.Node(
-                id: elementID,
-                nodeType: 1,
-                nodeName: "DIV",
-                localName: "div",
-                childNodeCount: 0
-            )
-        ]),
-        target: target
-    )
-    let element = try await waitForChild(in: context)
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: document.id.proxyID, nodes: [
+                DOM.Node(
+                    id: elementID,
+                    nodeType: 1,
+                    nodeName: "DIV",
+                    localName: "div",
+                    childNodeCount: 0
+                )
+            ]),
+            target: target
+        )
+        let element = try await waitForChild(in: context)
 
-    await enqueueCSSStyleReplies(on: runtime.backend)
+        try await enqueueCSSStyleReplies(on: runtime.wire)
 
-    context.select(element)
+        context.select(element)
 
-    let styles = try #require(element.elementStyles)
-    #expect(styles.phase == .loading)
-    try await waitUntil { styles.phase == .loaded }
-    #expect(styles.sections.map(\.title) == [".card"])
-    #expect(styles.sections.map(\.kind) == [.rule])
-    #expect(styles.computedProperties.map(\.name) == ["display"])
+        let styles = try #require(element.elementStyles)
+        #expect(styles.phase == .loading)
+        try await waitUntil { styles.phase == .loaded }
+        #expect(styles.sections.map(\.title) == [".card"])
+        #expect(styles.sections.map(\.kind) == [.rule])
+        #expect(styles.computedProperties.map(\.name) == ["display"])
 
-    let commands = await runtime.backend.recordedCommands()
-    #expect(commands.contains(RecordedCommand(domain: "CSS", method: "enable")) == false)
-    #expect(commands.contains(RecordedCommand(domain: "CSS", method: "getMatchedStylesForNode")))
-    #expect(commands.contains(RecordedCommand(domain: "CSS", method: "getInlineStylesForNode")))
-    #expect(commands.contains(RecordedCommand(domain: "CSS", method: "getComputedStyleForNode")))
+        let commands = runtime.wire.observations.commands
+        #expect(commands.contains { $0.method == "CSS.enable" } == false)
+        #expect(commands.contains { $0.method == "CSS.getMatchedStylesForNode" })
+        #expect(commands.contains { $0.method == "CSS.getInlineStylesForNode" })
+        #expect(commands.contains { $0.method == "CSS.getComputedStyleForNode" })
+    }
 }
 
 @MainActor
 @Test
 func selectingDOMNodeRetriesCSSStyleLoadAfterEnablingAgent() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
-    let elementID = DOM.Node.ID("styled-node")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let document = try #require(context.rootNode)
+        let elementID = DOM.Node.ID("styled-node")
 
-    await runtime.backend.emit(
-        .setChildNodes(parent: document.id.proxyID, nodes: [
-            DOM.Node(
-                id: elementID,
-                nodeType: 1,
-                nodeName: "DIV",
-                localName: "div",
-                childNodeCount: 0
-            )
-        ]),
-        target: target
-    )
-    let element = try await waitForChild(in: context)
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: document.id.proxyID, nodes: [
+                DOM.Node(
+                    id: elementID,
+                    nodeType: 1,
+                    nodeName: "DIV",
+                    localName: "div",
+                    childNodeCount: 0
+                )
+            ]),
+            target: target
+        )
+        let element = try await waitForChild(in: context)
 
-    await runtime.backend.enqueueFailure(
-        WebInspectorProxyError.commandFailed(
-            domain: "CSS",
-            method: "getMatchedStylesForNode",
+        await runtime.wire.fail(
+            "CSS.getMatchedStylesForNode",
             message: "CSS agent is not enabled."
-        ),
-        for: "CSS",
-        method: "getMatchedStylesForNode"
-    )
-    await runtime.backend.enqueue((), for: "CSS", method: "enable")
-    await enqueueCSSStyleReplies(on: runtime.backend)
+        )
+        await runtime.wire.respond(to: "CSS.enable")
+        try await enqueueCSSStyleReplies(on: runtime.wire)
 
-    context.select(element)
+        context.select(element)
 
-    let styles = try #require(element.elementStyles)
-    try await waitUntil { styles.phase == .loaded }
-    #expect(styles.sections.map(\.title) == [".card"])
-    #expect(styles.computedProperties.map(\.name) == ["display"])
+        let styles = try #require(element.elementStyles)
+        try await waitUntil { styles.phase == .loaded }
+        #expect(styles.sections.map(\.title) == [".card"])
+        #expect(styles.computedProperties.map(\.name) == ["display"])
 
-    let cssCommands = await runtime.backend.recordedCommands()
-        .filter { $0.domain == "CSS" }
-    #expect(cssCommands == [
-        RecordedCommand(domain: "CSS", method: "getMatchedStylesForNode"),
-        RecordedCommand(domain: "CSS", method: "enable"),
-        RecordedCommand(domain: "CSS", method: "getMatchedStylesForNode"),
-        RecordedCommand(domain: "CSS", method: "getInlineStylesForNode"),
-        RecordedCommand(domain: "CSS", method: "getComputedStyleForNode"),
-    ])
+        let cssCommands = runtime.wire.observations.commands
+            .filter { $0.method.hasPrefix("CSS.") }
+        #expect(cssCommands.map(\.method) == [
+            "CSS.getMatchedStylesForNode",
+            "CSS.enable",
+            "CSS.getMatchedStylesForNode",
+            "CSS.getInlineStylesForNode",
+            "CSS.getComputedStyleForNode",
+        ])
+    }
 }
 
 @MainActor
 @Test
 func selectingFrameScopedDOMNodeRetriesCSSStyleLoadByEnablingFrameAgent() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
-    let frameTargetRawValue = "frame-css-agent"
-    let elementID = DOM.Node.ID("frame-styled-node", scopedToTargetRawValue: frameTargetRawValue)
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let document = try #require(context.rootNode)
+        let frameTargetRawValue = "frame-css-agent"
+        _ = try await createFrameTarget(
+            in: runtime,
+            id: frameTargetRawValue,
+            frameID: "frame-css-agent"
+        )
+        let elementID = DOM.Node.ID("frame-styled-node", scopedToTargetRawValue: frameTargetRawValue)
 
-    await runtime.backend.emit(
-        .setChildNodes(parent: document.id.proxyID, nodes: [
-            DOM.Node(
-                id: elementID,
-                nodeType: 1,
-                nodeName: "DIV",
-                localName: "div",
-                childNodeCount: 0
-            )
-        ]),
-        target: target
-    )
-    let element = try await waitForChild(in: context)
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: document.id.proxyID, nodes: [
+                DOM.Node(
+                    id: elementID,
+                    nodeType: 1,
+                    nodeName: "DIV",
+                    localName: "div",
+                    childNodeCount: 0
+                )
+            ]),
+            target: target
+        )
+        let element = try await waitForChild(in: context)
 
-    await runtime.backend.enqueueFailure(
-        WebInspectorProxyError.commandFailed(
-            domain: "CSS",
-            method: "getMatchedStylesForNode",
+        await runtime.wire.fail(
+            "CSS.getMatchedStylesForNode",
             message: "CSS agent is not enabled."
-        ),
-        for: "CSS",
-        method: "getMatchedStylesForNode"
-    )
-    await runtime.backend.enqueue((), for: "CSS", method: "enable")
-    await enqueueCSSStyleReplies(on: runtime.backend)
+        )
+        await runtime.wire.respond(to: "CSS.enable")
+        try await enqueueCSSStyleReplies(on: runtime.wire)
 
-    context.select(element)
+        context.select(element)
 
-    let styles = try #require(element.elementStyles)
-    try await waitUntil { styles.phase == .loaded }
+        let styles = try #require(element.elementStyles)
+        try await waitUntil { styles.phase == .loaded }
 
-    let enableCommand = await runtime.backend.recordedCommands().first {
-        $0.domain == "CSS" && $0.method == "enable"
+        let enableCommand = runtime.wire.observations.commands.first {
+            $0.method == "CSS.enable"
+        }
+        #expect(enableCommand?.destination == .target(frameTargetRawValue))
     }
-    #expect(enableCommand?.targetID == WebInspectorTarget.ID(frameTargetRawValue))
 }
 
 @MainActor
 @Test
 func selectingNonElementDOMNodeDoesNotRequestCSSStyles() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (_, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
+    try await withDataKitTestRuntime { runtime in
+        let (_, context) = try await startContext(runtime: runtime)
+        let document = try #require(context.rootNode)
 
-    context.select(document)
+        context.select(document)
 
-    #expect(document.elementStyles == nil)
-    let commands = await runtime.backend.recordedCommands()
-    #expect(commands.contains(RecordedCommand(domain: "CSS", method: "getMatchedStylesForNode")) == false)
-    #expect(commands.contains(RecordedCommand(domain: "CSS", method: "getComputedStyleForNode")) == false)
+        #expect(document.elementStyles == nil)
+        let commands = runtime.wire.observations.commands
+        #expect(commands.contains { $0.method == "CSS.getMatchedStylesForNode" } == false)
+        #expect(commands.contains { $0.method == "CSS.getComputedStyleForNode" } == false)
+    }
 }
 
 @MainActor
 @Test
 func cssEventsAndSelectedDOMMutationsMarkSelectedStylesStale() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
-    let selectedID = DOM.Node.ID("selected")
-    let otherID = DOM.Node.ID("other")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let document = try #require(context.rootNode)
+        let selectedID = DOM.Node.ID("selected")
+        let otherID = DOM.Node.ID("other")
 
-    await runtime.backend.emit(
-        .setChildNodes(parent: document.id.proxyID, nodes: [
-            DOM.Node(id: selectedID, nodeType: 1, nodeName: "DIV", localName: "div"),
-            DOM.Node(id: otherID, nodeType: 1, nodeName: "SPAN", localName: "span"),
-        ]),
-        target: target
-    )
-    try await waitUntil {
-        guard case let .loaded(children) = document.children else {
-            return false
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: document.id.proxyID, nodes: [
+                DOM.Node(id: selectedID, nodeType: 1, nodeName: "DIV", localName: "div"),
+                DOM.Node(id: otherID, nodeType: 1, nodeName: "SPAN", localName: "span"),
+            ]),
+            target: target
+        )
+        try await waitUntil {
+            guard case let .loaded(children) = document.children else {
+                return false
+            }
+            return children.count == 2
         }
-        return children.count == 2
-    }
-    guard case let .loaded(children) = document.children else {
-        Issue.record("Expected loaded document children.")
-        return
-    }
-    let selected = try #require(children.first { $0.id == DOMNode.ID(selectedID) })
+        guard case let .loaded(children) = document.children else {
+            Issue.record("Expected loaded document children.")
+            return
+        }
+        let selected = try #require(children.first { $0.id == DOMNode.ID(selectedID) })
 
-    await enqueueCSSStyleReplies(on: runtime.backend)
-    context.select(selected)
-    let styles = try #require(selected.elementStyles)
-    try await waitUntil { styles.phase == .loaded }
-
-    func reloadSelectedStyles() async throws {
-        await enqueueCSSStyleReplies(on: runtime.backend)
+        try await enqueueCSSStyleReplies(on: runtime.wire)
         context.select(selected)
+        let styles = try #require(selected.elementStyles)
         try await waitUntil { styles.phase == .loaded }
+
+        @MainActor
+        func reloadSelectedStyles() async throws {
+            try await enqueueCSSStyleReplies(on: runtime.wire)
+            context.select(selected)
+            try await waitUntil { styles.phase == .loaded }
+        }
+
+        try await runtime.wire.emitRaw(.styleSheetChanged(CSS.StyleSheet.ID("sheet-1")), target: target)
+        try await waitUntil { styles.phase == .needsRefresh }
+
+        try await reloadSelectedStyles()
+
+        try await runtime.wire.emitRaw(
+            .styleSheetAdded(CSS.StyleSheetHeader(
+                styleSheetID: CSS.StyleSheet.ID("sheet-1"),
+                origin: CSS.Origin(rawValue: "author")
+            )),
+            target: target
+        )
+        try await waitUntil { styles.phase == .needsRefresh }
+
+        try await reloadSelectedStyles()
+
+        try await runtime.wire.emitRaw(.styleSheetRemoved(CSS.StyleSheet.ID("sheet-1")), target: target)
+        try await waitUntil { styles.phase == .needsRefresh }
+
+        try await reloadSelectedStyles()
+
+        try await runtime.wire.emitRaw(.mediaQueryResultChanged, target: target)
+        try await waitUntil { styles.phase == .needsRefresh }
+
+        try await reloadSelectedStyles()
+
+        let otherAttributeBaseline = context.eventPumpAppliedSequenceForTesting
+        try await runtime.wire.emitRaw(.attributeModified(otherID, name: "class", value: "ignored"), target: target)
+        let didProcessOtherAttribute = await context.waitForEventPumpAppliedSequenceForTesting(
+            after: otherAttributeBaseline
+        )
+        #expect(didProcessOtherAttribute)
+        #expect(styles.phase == .loaded)
+
+        let otherLayoutBaseline = context.eventPumpAppliedSequenceForTesting
+        try await runtime.wire.emitRaw(.nodeLayoutFlagsChanged(otherID), target: target)
+        let didProcessOtherLayout = await context.waitForEventPumpAppliedSequenceForTesting(
+            after: otherLayoutBaseline
+        )
+        #expect(didProcessOtherLayout)
+        #expect(styles.phase == .loaded)
+
+        try await runtime.wire.emitRaw(.nodeLayoutFlagsChanged(selectedID), target: target)
+        try await waitUntil { styles.phase == .needsRefresh }
+
+        try await reloadSelectedStyles()
+
+        try await runtime.wire.emitRaw(.attributeModified(selectedID, name: "class", value: "changed"), target: target)
+        try await waitUntil { styles.phase == .needsRefresh }
     }
-
-    await runtime.backend.emit(.styleSheetChanged(CSS.StyleSheet.ID("sheet-1")), target: target)
-    try await waitUntil { styles.phase == .needsRefresh }
-
-    try await reloadSelectedStyles()
-
-    await runtime.backend.emit(
-        .styleSheetAdded(CSS.StyleSheetHeader(
-            styleSheetID: CSS.StyleSheet.ID("sheet-1"),
-            origin: CSS.Origin(rawValue: "author")
-        )),
-        target: target
-    )
-    try await waitUntil { styles.phase == .needsRefresh }
-
-    try await reloadSelectedStyles()
-
-    await runtime.backend.emit(.styleSheetRemoved(CSS.StyleSheet.ID("sheet-1")), target: target)
-    try await waitUntil { styles.phase == .needsRefresh }
-
-    try await reloadSelectedStyles()
-
-    await runtime.backend.emit(.mediaQueryResultChanged, target: target)
-    try await waitUntil { styles.phase == .needsRefresh }
-
-    try await reloadSelectedStyles()
-
-    let otherAttributeBaseline = context.eventPumpAppliedSequenceForTesting
-    await runtime.backend.emit(.attributeModified(otherID, name: "class", value: "ignored"), target: target)
-    let didProcessOtherAttribute = await context.waitForEventPumpAppliedSequenceForTesting(
-        after: otherAttributeBaseline
-    )
-    #expect(didProcessOtherAttribute)
-    #expect(styles.phase == .loaded)
-
-    let otherLayoutBaseline = context.eventPumpAppliedSequenceForTesting
-    await runtime.backend.emit(.nodeLayoutFlagsChanged(otherID), target: target)
-    let didProcessOtherLayout = await context.waitForEventPumpAppliedSequenceForTesting(
-        after: otherLayoutBaseline
-    )
-    #expect(didProcessOtherLayout)
-    #expect(styles.phase == .loaded)
-
-    await runtime.backend.emit(.nodeLayoutFlagsChanged(selectedID), target: target)
-    try await waitUntil { styles.phase == .needsRefresh }
-
-    try await reloadSelectedStyles()
-
-    await runtime.backend.emit(.attributeModified(selectedID, name: "class", value: "changed"), target: target)
-    try await waitUntil { styles.phase == .needsRefresh }
 }
 
 @MainActor
 @Test
 func cssInvalidationDuringStyleFetchIsNotOverwrittenByStaleResult() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
-    let elementID = DOM.Node.ID("styled-node")
-    let computedGate = WebInspectorTestGate()
-
-    await runtime.backend.emit(
-        .setChildNodes(parent: document.id.proxyID, nodes: [
-            DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
-        ]),
-        target: target
-    )
-    let element = try await waitForChild(in: context)
-
-    await runtime.backend.enqueue(
-        CSS.MatchedStyles(matchedRules: [
-            CSS.Rule(
-                selectorList: CSS.Rule.SelectorList(selectors: [".card"], text: ".card"),
-                origin: CSS.Origin(rawValue: "regular"),
-                style: CSS.Style(id: CSS.Style.ID("style-1"))
-            )
-        ]),
-        for: "CSS",
-        method: "getMatchedStylesForNode"
-    )
-    await runtime.backend.enqueue(CSS.InlineStyles(), for: "CSS", method: "getInlineStylesForNode")
-    await runtime.backend.hold(domain: "CSS", method: "getComputedStyleForNode", gate: computedGate)
-    await runtime.backend.enqueue(
-        [CSS.ComputedProperty(name: "display", value: "grid")],
-        for: "CSS",
-        method: "getComputedStyleForNode"
-    )
-
-    context.select(element)
-    let styles = try #require(element.elementStyles)
-    try await waitUntil {
-        await runtime.backend.recordedCommands().contains(
-            RecordedCommand(domain: "CSS", method: "getComputedStyleForNode")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let document = try #require(context.rootNode)
+        let elementID = DOM.Node.ID("styled-node")
+        let computedGate = await runtime.wire.deferReply(
+            to: "CSS.getComputedStyleForNode",
+            with: try rawCSSComputedStyleResult([
+                CSS.ComputedProperty(name: "display", value: "grid"),
+            ])
         )
+
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: document.id.proxyID, nodes: [
+                DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
+            ]),
+            target: target
+        )
+        let element = try await waitForChild(in: context)
+
+        await runtime.wire.respond(
+            to: "CSS.getMatchedStylesForNode",
+            with: try rawCSSMatchedStylesResult(CSS.MatchedStyles(matchedRules: [
+                CSS.Rule(
+                    selectorList: CSS.Rule.SelectorList(selectors: [".card"], text: ".card"),
+                    origin: CSS.Origin(rawValue: "regular"),
+                    style: CSS.Style(id: CSS.Style.ID("style-1"))
+                )
+            ]))
+        )
+        await runtime.wire.respond(
+            to: "CSS.getInlineStylesForNode",
+            with: try rawCSSInlineStylesResult(CSS.InlineStyles())
+        )
+
+        context.select(element)
+        let styles = try #require(element.elementStyles)
+        try await waitUntil {
+            runtime.wire.observations.commandMethods.contains(
+                "CSS.getComputedStyleForNode"
+            )
+        }
+
+        try await runtime.wire.emitRaw(.styleSheetChanged(CSS.StyleSheet.ID("sheet-1")), target: target)
+        try await waitUntil { styles.phase == .needsRefresh }
+
+        computedGate.open()
+        _ = await runtime.wire.observations.waitForCompletedCommands(
+            method: "CSS.getComputedStyleForNode",
+            count: 1
+        )
+        #expect(styles.phase == .needsRefresh)
+        #expect(styles.computedProperties.isEmpty)
     }
-
-    await runtime.backend.emit(.styleSheetChanged(CSS.StyleSheet.ID("sheet-1")), target: target)
-    try await waitUntil { styles.phase == .needsRefresh }
-
-    await computedGate.open()
-    _ = await runtime.backend.waitForCompletedCommands(domain: "CSS", method: "getComputedStyleForNode", count: 1)
-    #expect(styles.phase == .needsRefresh)
-    #expect(styles.computedProperties.isEmpty)
 }
 
 @MainActor
 @Test
 func selectingDOMNodeLoadsInlineAndAttributesStyleSections() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
-    let elementID = DOM.Node.ID("styled-node")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let document = try #require(context.rootNode)
+        let elementID = DOM.Node.ID("styled-node")
 
-    await runtime.backend.emit(
-        .setChildNodes(parent: document.id.proxyID, nodes: [
-            DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
-        ]),
-        target: target
-    )
-    let element = try await waitForChild(in: context)
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: document.id.proxyID, nodes: [
+                DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
+            ]),
+            target: target
+        )
+        let element = try await waitForChild(in: context)
 
-    await runtime.backend.enqueue(
-        CSS.MatchedStyles(matchedRules: [
-            CSS.Rule(
-                selectorList: CSS.Rule.SelectorList(selectors: [".card"], text: ".card"),
-                origin: CSS.Origin(rawValue: "regular"),
-                style: CSS.Style(id: CSS.Style.ID("style-rule"), cssText: "display: grid;")
-            )
-        ]),
-        for: "CSS",
-        method: "getMatchedStylesForNode"
-    )
-    await runtime.backend.enqueue(
-        CSS.InlineStyles(
-            inlineStyle: CSS.Style(
-                id: CSS.Style.ID("style-inline"),
-                properties: [
-                    CSS.Property(
-                        id: CSS.Property.ID("inline-color"),
-                        name: "color",
-                        value: "red",
-                        text: "color: red;",
-                        isEditable: true
-                    )
-                ],
-                cssText: "color: red;",
-                isEditable: true
-            ),
-            attributesStyle: CSS.Style(
-                id: CSS.Style.ID("style-attributes"),
-                properties: [
-                    CSS.Property(id: CSS.Property.ID("attribute-width"), name: "width", value: "100px")
-                ]
-            )
-        ),
-        for: "CSS",
-        method: "getInlineStylesForNode"
-    )
-    await runtime.backend.enqueue(
-        [CSS.ComputedProperty(name: "display", value: "grid")],
-        for: "CSS",
-        method: "getComputedStyleForNode"
-    )
+        await runtime.wire.respond(
+            to: "CSS.getMatchedStylesForNode",
+            with: try rawCSSMatchedStylesResult(CSS.MatchedStyles(matchedRules: [
+                CSS.Rule(
+                    selectorList: CSS.Rule.SelectorList(selectors: [".card"], text: ".card"),
+                    origin: CSS.Origin(rawValue: "regular"),
+                    style: CSS.Style(id: CSS.Style.ID("style-rule"), cssText: "display: grid;")
+                )
+            ]))
+        )
+        await runtime.wire.respond(
+            to: "CSS.getInlineStylesForNode",
+            with: try rawCSSInlineStylesResult(CSS.InlineStyles(
+                inlineStyle: CSS.Style(
+                    id: CSS.Style.ID("style-inline"),
+                    properties: [
+                        CSS.Property(
+                            id: CSS.Property.ID("inline-color"),
+                            name: "color",
+                            value: "red",
+                            text: "color: red;",
+                            isEditable: true
+                        )
+                    ],
+                    cssText: "color: red;",
+                    isEditable: true
+                ),
+                attributesStyle: CSS.Style(
+                    id: CSS.Style.ID("style-attributes"),
+                    properties: [
+                        CSS.Property(id: CSS.Property.ID("attribute-width"), name: "width", value: "100px")
+                    ]
+                )
+            ))
+        )
+        await runtime.wire.respond(
+            to: "CSS.getComputedStyleForNode",
+            with: try rawCSSComputedStyleResult([
+                CSS.ComputedProperty(name: "display", value: "grid"),
+            ])
+        )
 
-    context.select(element)
+        context.select(element)
 
-    let styles = try #require(element.elementStyles)
-    try await waitUntil { styles.phase == .loaded }
-    #expect(styles.sections.map(\.kind) == [.inlineStyle, .rule, .attributesStyle])
-    #expect(styles.sections.map(\.title) == ["element.style", ".card", "Attributes"])
-    #expect(styles.sections.map(\.isEditable) == [true, false, false])
+        let styles = try #require(element.elementStyles)
+        try await waitUntil { styles.phase == .loaded }
+        #expect(styles.sections.map(\.kind) == [.inlineStyle, .rule, .attributesStyle])
+        #expect(styles.sections.map(\.title) == ["element.style", ".card", "Attributes"])
+        #expect(styles.sections.map(\.isEditable) == [true, false, false])
+    }
 }
 
 @MainActor
 @Test
 func styleSheetChangedWhileHydrationActiveTriggersImmediateRefetch() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
-    let elementID = DOM.Node.ID("styled-node")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let document = try #require(context.rootNode)
+        let elementID = DOM.Node.ID("styled-node")
 
-    await runtime.backend.emit(
-        .setChildNodes(parent: document.id.proxyID, nodes: [
-            DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
-        ]),
-        target: target
-    )
-    let element = try await waitForChild(in: context)
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: document.id.proxyID, nodes: [
+                DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
+            ]),
+            target: target
+        )
+        let element = try await waitForChild(in: context)
 
-    context.setStyleHydrationActive(true)
-    await enqueueCSSStyleReplies(on: runtime.backend)
-    context.select(element)
-    let styles = try #require(element.elementStyles)
-    try await waitUntil { styles.phase == .loaded }
+        context.setStyleHydrationActive(true)
+        try await enqueueCSSStyleReplies(on: runtime.wire)
+        context.select(element)
+        let styles = try #require(element.elementStyles)
+        try await waitUntil { styles.phase == .loaded }
 
-    await enqueueCSSStyleReplies(on: runtime.backend)
-    await runtime.backend.emit(.styleSheetChanged(CSS.StyleSheet.ID("sheet-1")), target: target)
+        try await enqueueCSSStyleReplies(on: runtime.wire)
+        try await runtime.wire.emitRaw(.styleSheetChanged(CSS.StyleSheet.ID("sheet-1")), target: target)
 
-    try await waitUntil {
-        await matchedStylesCommandCount(on: runtime.backend) == 2
+        try await waitUntil {
+            matchedStylesCommandCount(on: runtime.wire) == 2
+        }
+        try await waitUntil { styles.phase == .loaded }
     }
-    try await waitUntil { styles.phase == .loaded }
 }
 
 @MainActor
 @Test
 func styleSheetChangedWhileHydrationInactiveDefersRefetchUntilActivation() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
-    let elementID = DOM.Node.ID("styled-node")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let document = try #require(context.rootNode)
+        let elementID = DOM.Node.ID("styled-node")
 
-    await runtime.backend.emit(
-        .setChildNodes(parent: document.id.proxyID, nodes: [
-            DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
-        ]),
-        target: target
-    )
-    let element = try await waitForChild(in: context)
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: document.id.proxyID, nodes: [
+                DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
+            ]),
+            target: target
+        )
+        let element = try await waitForChild(in: context)
 
-    await enqueueCSSStyleReplies(on: runtime.backend)
-    context.select(element)
-    let styles = try #require(element.elementStyles)
-    try await waitUntil { styles.phase == .loaded }
+        try await enqueueCSSStyleReplies(on: runtime.wire)
+        context.select(element)
+        let styles = try #require(element.elementStyles)
+        try await waitUntil { styles.phase == .loaded }
 
-    await runtime.backend.emit(.styleSheetChanged(CSS.StyleSheet.ID("sheet-1")), target: target)
-    try await waitUntil { styles.phase == .needsRefresh }
-    #expect(styles.phase == .needsRefresh)
-    #expect(await matchedStylesCommandCount(on: runtime.backend) == 1)
+        try await runtime.wire.emitRaw(.styleSheetChanged(CSS.StyleSheet.ID("sheet-1")), target: target)
+        try await waitUntil { styles.phase == .needsRefresh }
+        #expect(styles.phase == .needsRefresh)
+        #expect(matchedStylesCommandCount(on: runtime.wire) == 1)
 
-    await enqueueCSSStyleReplies(on: runtime.backend)
-    context.setStyleHydrationActive(true)
+        try await enqueueCSSStyleReplies(on: runtime.wire)
+        context.setStyleHydrationActive(true)
 
-    try await waitUntil { styles.phase == .loaded }
-    #expect(await matchedStylesCommandCount(on: runtime.backend) == 2)
+        try await waitUntil { styles.phase == .loaded }
+        #expect(matchedStylesCommandCount(on: runtime.wire) == 2)
+    }
 }
 
 @MainActor
 @Test
 func requestSetCSSPropertyTogglesDeclarationAndRefreshesStyles() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
-    let elementID = DOM.Node.ID("styled-node")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let document = try #require(context.rootNode)
+        let elementID = DOM.Node.ID("styled-node")
 
-    await runtime.backend.emit(
-        .setChildNodes(parent: document.id.proxyID, nodes: [
-            DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
-        ]),
-        target: target
-    )
-    let element = try await waitForChild(in: context)
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: document.id.proxyID, nodes: [
+                DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
+            ]),
+            target: target
+        )
+        let element = try await waitForChild(in: context)
 
-    context.setStyleHydrationActive(true)
-    await enqueueCSSStyleReplies(on: runtime.backend)
-    context.select(element)
-    let styles = try #require(element.elementStyles)
-    try await waitUntil { styles.phase == .loaded }
+        context.setStyleHydrationActive(true)
+        try await enqueueCSSStyleReplies(on: runtime.wire)
+        context.select(element)
+        let styles = try #require(element.elementStyles)
+        try await waitUntil { styles.phase == .loaded }
 
-    let disabledStyle = CSS.Style(
-        id: CSS.Style.ID("style-1"),
-        properties: [
-            CSS.Property(
-                id: CSS.Property.ID("property-1"),
-                name: "display",
-                value: "grid",
-                text: "/* display: grid; */",
-                status: .disabled,
-                isEditable: true
-            )
-        ],
-        cssText: "/* display: grid; */",
-        isEditable: true
-    )
-    await runtime.backend.enqueue(disabledStyle, for: "CSS", method: "setStyleText")
-    await runtime.backend.enqueue(
-        CSS.MatchedStyles(matchedRules: [
-            CSS.Rule(
-                selectorList: CSS.Rule.SelectorList(selectors: [".card"], text: ".card"),
-                origin: CSS.Origin(rawValue: "regular"),
-                style: disabledStyle
-            )
-        ]),
-        for: "CSS",
-        method: "getMatchedStylesForNode"
-    )
-    await runtime.backend.enqueue(CSS.InlineStyles(), for: "CSS", method: "getInlineStylesForNode")
-    await runtime.backend.enqueue(
-        [CSS.ComputedProperty(name: "display", value: "grid")],
-        for: "CSS",
-        method: "getComputedStyleForNode"
-    )
+        let disabledStyle = CSS.Style(
+            id: CSS.Style.ID("style-1"),
+            properties: [
+                CSS.Property(
+                    id: CSS.Property.ID("property-1"),
+                    name: "display",
+                    value: "grid",
+                    text: "/* display: grid; */",
+                    status: .disabled,
+                    isEditable: true
+                )
+            ],
+            cssText: "/* display: grid; */",
+            isEditable: true
+        )
+        await runtime.wire.respond(
+            to: "CSS.setStyleText",
+            with: try rawCSSStyleResult(disabledStyle)
+        )
+        await runtime.wire.respond(
+            to: "CSS.getMatchedStylesForNode",
+            with: try rawCSSMatchedStylesResult(CSS.MatchedStyles(matchedRules: [
+                CSS.Rule(
+                    selectorList: CSS.Rule.SelectorList(selectors: [".card"], text: ".card"),
+                    origin: CSS.Origin(rawValue: "regular"),
+                    style: disabledStyle
+                )
+            ]))
+        )
+        await runtime.wire.respond(
+            to: "CSS.getInlineStylesForNode",
+            with: try rawCSSInlineStylesResult(CSS.InlineStyles())
+        )
+        await runtime.wire.respond(
+            to: "CSS.getComputedStyleForNode",
+            with: try rawCSSComputedStyleResult([
+                CSS.ComputedProperty(name: "display", value: "grid"),
+            ])
+        )
 
-    let propertyID = try #require(styles.sections.first?.style.properties.first?.id)
-    await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
-    #expect(context.requestSetCSSProperty(
-        propertyID,
-        enabled: false,
-        options: .automatic
-    ))
+        let propertyID = try #require(styles.sections.first?.style.properties.first?.id)
+        await runtime.wire.respond(to: "DOM.markUndoableState")
+        #expect(context.requestSetCSSProperty(
+            propertyID,
+            enabled: false,
+            options: .automatic
+        ))
 
-    try await waitUntil {
-        await matchedStylesCommandCount(on: runtime.backend) == 2
+        try await waitUntil {
+            matchedStylesCommandCount(on: runtime.wire) == 2
+        }
+        try await waitUntil { styles.phase == .loaded }
+
+        let commands = runtime.wire.observations.commands
+        let setStyleText = try #require(commands.last { $0.method == "CSS.setStyleText" })
+        #expect(try commandNestedStringParameter(
+            setStyleText,
+            object: "styleId",
+            key: "styleSheetId"
+        ) == "style-1")
+        #expect(try commandStringParameter(setStyleText, "text") == "/* display: grid; */")
+        let undoMarks = commands.filter { $0.method == "DOM.markUndoableState" }
+        #expect(undoMarks.count == 1)
+        #expect(undoMarks.first?.destination == .target(wireTargetID(target)))
+
+        let property = try #require(styles.sections.first?.style.properties.first)
+        #expect(property.status == .disabled)
+        #expect(property.isModifiedByInspector)
     }
-    try await waitUntil { styles.phase == .loaded }
-
-    let commands = await runtime.backend.recordedCommands()
-    let setStyleText = try #require(commands.last { $0 == RecordedCommand(domain: "CSS", method: "setStyleText") })
-    let payload = try #require(setStyleText.payload.cast(as: CSS.SetStyleTextPayload.self))
-    #expect(payload.id == CSS.Style.ID("style-1"))
-    #expect(payload.text == "/* display: grid; */")
-    let undoMarks = commands.filter { $0.domain == "DOM" && $0.method == "markUndoableState" }
-    #expect(undoMarks.count == 1)
-    #expect(undoMarks.first?.targetID == target.id)
-
-    let property = try #require(styles.sections.first?.style.properties.first)
-    #expect(property.status == .disabled)
-    #expect(property.isModifiedByInspector)
 }
 
 @MainActor
 @Test
 func setCSSDeclarationTextRewritesStyleTextAndMarksUndoableState() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
-    let elementID = DOM.Node.ID("styled-node")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let document = try #require(context.rootNode)
+        let elementID = DOM.Node.ID("styled-node")
 
-    await runtime.backend.emit(
-        .setChildNodes(parent: document.id.proxyID, nodes: [
-            DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
-        ]),
-        target: target
-    )
-    let element = try await waitForChild(in: context)
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: document.id.proxyID, nodes: [
+                DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
+            ]),
+            target: target
+        )
+        let element = try await waitForChild(in: context)
 
-    await enqueueCSSStyleReplies(on: runtime.backend)
-    context.select(element)
-    let styles = try #require(element.elementStyles)
-    try await waitUntil { styles.phase == .loaded }
+        try await enqueueCSSStyleReplies(on: runtime.wire)
+        context.select(element)
+        let styles = try #require(element.elementStyles)
+        try await waitUntil { styles.phase == .loaded }
 
-    let updatedStyle = CSS.Style(
-        id: CSS.Style.ID("style-1"),
-        properties: [
-            CSS.Property(
-                id: CSS.Property.ID("property-1"),
-                name: "display",
-                value: "flex",
-                text: "display: flex;",
-                isEditable: true,
-                isModifiedByInspector: true
-            )
-        ],
-        cssText: "display: flex;",
-        isEditable: true
-    )
-    await runtime.backend.enqueue(updatedStyle, for: "CSS", method: "setStyleText")
-    await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
+        let updatedStyle = CSS.Style(
+            id: CSS.Style.ID("style-1"),
+            properties: [
+                CSS.Property(
+                    id: CSS.Property.ID("property-1"),
+                    name: "display",
+                    value: "flex",
+                    text: "display: flex;",
+                    isEditable: true,
+                    isModifiedByInspector: true
+                )
+            ],
+            cssText: "display: flex;",
+            isEditable: true
+        )
+        await runtime.wire.respond(
+            to: "CSS.setStyleText",
+            with: try rawCSSStyleResult(updatedStyle)
+        )
+        await runtime.wire.respond(to: "DOM.markUndoableState")
 
-    let propertyID = try #require(styles.sections.first?.style.properties.first?.id)
-    try await context.setCSSDeclarationText(
-        "display: flex;",
-        for: propertyID,
-        options: .automatic
-    )
+        let propertyID = try #require(styles.sections.first?.style.properties.first?.id)
+        try await context.setCSSDeclarationText(
+            "display: flex;",
+            for: propertyID,
+            options: .automatic
+        )
 
-    let commands = await runtime.backend.recordedCommands()
-    let setStyleText = try #require(commands.last { $0 == RecordedCommand(domain: "CSS", method: "setStyleText") })
-    let payload = try #require(setStyleText.payload.cast(as: CSS.SetStyleTextPayload.self))
-    #expect(payload.id == CSS.Style.ID("style-1"))
-    #expect(payload.text == "display: flex;")
-    let undoMarks = commands.filter { $0.domain == "DOM" && $0.method == "markUndoableState" }
-    #expect(undoMarks.count == 1)
-    #expect(undoMarks.first?.targetID == target.id)
+        let commands = runtime.wire.observations.commands
+        let setStyleText = try #require(commands.last { $0.method == "CSS.setStyleText" })
+        #expect(try commandNestedStringParameter(
+            setStyleText,
+            object: "styleId",
+            key: "styleSheetId"
+        ) == "style-1")
+        #expect(try commandStringParameter(setStyleText, "text") == "display: flex;")
+        let undoMarks = commands.filter { $0.method == "DOM.markUndoableState" }
+        #expect(undoMarks.count == 1)
+        #expect(undoMarks.first?.destination == .target(wireTargetID(target)))
 
-    let property = try #require(styles.sections.first?.style.properties.first)
-    #expect(property.value == "flex")
-    #expect(property.text == "display: flex;")
-    #expect(property.isModifiedByInspector)
-    #expect(styles.phase == .needsRefresh)
+        let property = try #require(styles.sections.first?.style.properties.first)
+        #expect(property.value == "flex")
+        #expect(property.text == "display: flex;")
+        #expect(property.isModifiedByInspector)
+        #expect(styles.phase == .needsRefresh)
+    }
 }
 
 @MainActor
 @Test
 func cssRuleSelectorEditsMarkUndoableStateOnOwningTarget() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (_, context) = try await startContext(runtime: runtime)
-    let frameTarget = await runtime.proxy.installTargetForTesting(kind: .frame)
-    let proxyRuleID = CSS.Rule.ID("frame-rule", scopedToTargetRawValue: frameTarget.id.rawValue)
-    let ruleID = CSSStyleRule.ID(proxyRuleID)
+    try await withDataKitTestRuntime { runtime in
+        let (_, context) = try await startContext(runtime: runtime)
+        let frameTarget = try await createFrameTarget(in: runtime)
+        let proxyRuleID = CSS.Rule.ID(
+            "frame-sheet\u{1F}3",
+            scopedToTargetRawValue: frameTarget.id.rawValue
+        )
+        let ruleID = CSSStyleRule.ID(proxyRuleID)
 
-    await runtime.backend.enqueue(
-        CSS.Rule(
-            id: proxyRuleID,
-            selectorList: CSS.Rule.SelectorList(selectors: [".updated"], text: ".updated"),
-            origin: CSS.Origin(rawValue: "regular"),
-            style: CSS.Style(id: CSS.Style.ID("frame-style", scopedToTargetRawValue: frameTarget.id.rawValue))
-        ),
-        for: "CSS",
-        method: "setRuleSelector"
-    )
-    await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
+        await runtime.wire.respond(
+            to: "CSS.setRuleSelector",
+            with: try rawCSSRuleResult(CSS.Rule(
+                id: proxyRuleID,
+                selectorList: CSS.Rule.SelectorList(selectors: [".updated"], text: ".updated"),
+                origin: CSS.Origin(rawValue: "regular"),
+                style: CSS.Style(
+                    id: CSS.Style.ID(
+                        "frame-sheet\u{1F}4",
+                        scopedToTargetRawValue: frameTarget.id.rawValue
+                    ),
+                    isEditable: true
+                )
+            ))
+        )
+        await runtime.wire.respond(to: "DOM.markUndoableState")
 
-    try await context.setCSSRuleSelector(
-        ".updated",
-        for: ruleID,
-        options: .automatic
-    )
+        try await context.setCSSRuleSelector(
+            ".updated",
+            for: ruleID,
+            options: .automatic
+        )
 
-    let commands = await runtime.backend.recordedCommands()
-    let setRuleSelector = try #require(commands.first { $0.domain == "CSS" && $0.method == "setRuleSelector" })
-    #expect(setRuleSelector.targetID == frameTarget.id)
-    #expect(setRuleSelector.route == RoutingTargetID(frameTarget.id.rawValue))
-    #expect(setRuleSelector.payload.cast(as: CSS.SetRuleSelectorPayload.self)?.id == proxyRuleID)
+        let commands = runtime.wire.observations.commands
+        let setRuleSelector = try #require(commands.first { $0.method == "CSS.setRuleSelector" })
+        #expect(setRuleSelector.destination == .target(wireTargetID(frameTarget)))
+        #expect(try commandNestedStringParameter(
+            setRuleSelector,
+            object: "ruleId",
+            key: "styleSheetId"
+        ) == "frame-sheet")
 
-    let markUndoableState = try #require(commands.first { $0.domain == "DOM" && $0.method == "markUndoableState" })
-    #expect(markUndoableState.targetID == frameTarget.id)
-    #expect(markUndoableState.route == RoutingTargetID(frameTarget.id.rawValue))
+        let markUndoableState = try #require(commands.first { $0.method == "DOM.markUndoableState" })
+        #expect(markUndoableState.destination == .target(wireTargetID(frameTarget)))
+    }
 }
 
 @MainActor
 @Test
 func requestSetCSSPropertyRefusesStaleAndNonEditableProperties() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
-    let elementID = DOM.Node.ID("styled-node")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let document = try #require(context.rootNode)
+        let elementID = DOM.Node.ID("styled-node")
 
-    await runtime.backend.emit(
-        .setChildNodes(parent: document.id.proxyID, nodes: [
-            DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
-        ]),
-        target: target
-    )
-    let element = try await waitForChild(in: context)
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: document.id.proxyID, nodes: [
+                DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
+            ]),
+            target: target
+        )
+        let element = try await waitForChild(in: context)
 
-    await runtime.backend.enqueue(
-        CSS.MatchedStyles(matchedRules: [
-            CSS.Rule(
-                selectorList: CSS.Rule.SelectorList(selectors: ["div"], text: "div"),
-                origin: CSS.Origin(rawValue: "user-agent"),
-                style: CSS.Style(
-                    id: CSS.Style.ID("style-ua"),
-                    properties: [
-                        CSS.Property(
-                            id: CSS.Property.ID("property-ua"),
-                            name: "display",
-                            value: "block",
-                            text: "display: block;",
-                            isEditable: true
-                        )
-                    ],
-                    cssText: "display: block;",
-                    isEditable: true
-                )
-            ),
-            CSS.Rule(
-                selectorList: CSS.Rule.SelectorList(selectors: [".card"], text: ".card"),
-                origin: CSS.Origin(rawValue: "regular"),
-                style: CSS.Style(
-                    id: CSS.Style.ID("style-1"),
-                    properties: [
-                        CSS.Property(
-                            id: CSS.Property.ID("property-1"),
-                            name: "display",
-                            value: "grid",
-                            text: "display: grid;",
-                            isEditable: true
-                        )
-                    ],
-                    cssText: "display: grid;",
-                    isEditable: true
-                )
-            ),
-        ]),
-        for: "CSS",
-        method: "getMatchedStylesForNode"
-    )
-    await runtime.backend.enqueue(CSS.InlineStyles(), for: "CSS", method: "getInlineStylesForNode")
-    await runtime.backend.enqueue(
-        [CSS.ComputedProperty(name: "display", value: "grid")],
-        for: "CSS",
-        method: "getComputedStyleForNode"
-    )
-    context.select(element)
-    let styles = try #require(element.elementStyles)
-    try await waitUntil { styles.phase == .loaded }
+        await runtime.wire.respond(
+            to: "CSS.getMatchedStylesForNode",
+            with: try rawCSSMatchedStylesResult(CSS.MatchedStyles(matchedRules: [
+                CSS.Rule(
+                    selectorList: CSS.Rule.SelectorList(selectors: ["div"], text: "div"),
+                    origin: CSS.Origin(rawValue: "user-agent"),
+                    style: CSS.Style(
+                        id: CSS.Style.ID("style-ua"),
+                        properties: [
+                            CSS.Property(
+                                id: CSS.Property.ID("property-ua"),
+                                name: "display",
+                                value: "block",
+                                text: "display: block;",
+                                isEditable: true
+                            )
+                        ],
+                        cssText: "display: block;",
+                        isEditable: true
+                    )
+                ),
+                CSS.Rule(
+                    selectorList: CSS.Rule.SelectorList(selectors: [".card"], text: ".card"),
+                    origin: CSS.Origin(rawValue: "regular"),
+                    style: CSS.Style(
+                        id: CSS.Style.ID("style-1"),
+                        properties: [
+                            CSS.Property(
+                                id: CSS.Property.ID("property-1"),
+                                name: "display",
+                                value: "grid",
+                                text: "display: grid;",
+                                isEditable: true
+                            )
+                        ],
+                        cssText: "display: grid;",
+                        isEditable: true
+                    )
+                ),
+            ]))
+        )
+        await runtime.wire.respond(
+            to: "CSS.getInlineStylesForNode",
+            with: try rawCSSInlineStylesResult(CSS.InlineStyles())
+        )
+        await runtime.wire.respond(
+            to: "CSS.getComputedStyleForNode",
+            with: try rawCSSComputedStyleResult([
+                CSS.ComputedProperty(name: "display", value: "grid"),
+            ])
+        )
+        context.select(element)
+        let styles = try #require(element.elementStyles)
+        try await waitUntil { styles.phase == .loaded }
 
-    let userAgentSection = try #require(styles.sections.first { $0.title == "div" })
-    #expect(userAgentSection.isEditable == false)
-    let userAgentPropertyID = try #require(userAgentSection.style.properties.first?.id)
-    #expect(context.requestSetCSSProperty(
-        userAgentPropertyID,
-        enabled: false,
-        options: .automatic
-    ) == false)
+        let userAgentSection = try #require(styles.sections.first { $0.title == "div" })
+        #expect(userAgentSection.isEditable == false)
+        let userAgentPropertyID = try #require(userAgentSection.style.properties.first?.id)
+        #expect(context.requestSetCSSProperty(
+            userAgentPropertyID,
+            enabled: false,
+            options: .automatic
+        ) == false)
 
-    let editableSection = try #require(styles.sections.first { $0.title == ".card" })
-    let editablePropertyID = try #require(editableSection.style.properties.first?.id)
+        let editableSection = try #require(styles.sections.first { $0.title == ".card" })
+        let editablePropertyID = try #require(editableSection.style.properties.first?.id)
 
-    await runtime.backend.emit(.styleSheetChanged(CSS.StyleSheet.ID("sheet-1")), target: target)
-    try await waitUntil { styles.phase == .needsRefresh }
-    #expect(context.requestSetCSSProperty(
-        editablePropertyID,
-        enabled: false,
-        options: .automatic
-    ) == false)
+        try await runtime.wire.emitRaw(.styleSheetChanged(CSS.StyleSheet.ID("sheet-1")), target: target)
+        try await waitUntil { styles.phase == .needsRefresh }
+        #expect(context.requestSetCSSProperty(
+            editablePropertyID,
+            enabled: false,
+            options: .automatic
+        ) == false)
 
-    let commands = await runtime.backend.recordedCommands()
-    #expect(commands.contains(RecordedCommand(domain: "CSS", method: "setStyleText")) == false)
+        let commands = runtime.wire.observations.commands
+        #expect(commands.contains { $0.method == "CSS.setStyleText" } == false)
+    }
 }
 
 @MainActor
 @Test
 func removingLoadedChildPurgesDescendantsFromIdentityMap() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let target = try await runtime.proxy.waitForCurrentPage()
-    let documentID = DOM.Node.ID("document")
-    let childID = DOM.Node.ID("child")
-    let grandchildID = DOM.Node.ID("grandchild")
+    try await withDataKitTestRuntime { runtime in
+        let target = try await runtime.proxy.waitForCurrentPage()
+        let documentID = DOM.Node.ID("document")
+        let childID = DOM.Node.ID("child")
+        let grandchildID = DOM.Node.ID("grandchild")
 
-    await enqueueStartupReplies(
-        on: runtime.backend,
-        document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document")
-    )
+        try await enqueueStartupReplies(
+            on: runtime.wire,
+            document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document")
+        )
 
-    let container = WebInspectorContainer(proxy: runtime.proxy)
-    let context = container.mainContext
-    try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil { context.rootNode != nil }
+        let container = WebInspectorContainer(proxy: runtime.proxy)
+        let context = container.mainContext
+        try await waitForStartupSubscribers(runtime: runtime, target: target)
+        try await waitUntil { context.rootNode != nil }
 
-    await runtime.backend.emit(
-        .setChildNodes(parent: documentID, nodes: [
-            DOM.Node(
-                id: childID,
-                nodeType: 1,
-                nodeName: "SECTION",
-                localName: "section",
-                childNodeCount: 1,
-                children: [
-                    DOM.Node(
-                        id: grandchildID,
-                        nodeType: 1,
-                        nodeName: "SPAN",
-                        localName: "span"
-                    )
-                ]
-            )
-        ]),
-        target: target
-    )
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: documentID, nodes: [
+                DOM.Node(
+                    id: childID,
+                    nodeType: 1,
+                    nodeName: "SECTION",
+                    localName: "section",
+                    childNodeCount: 1,
+                    children: [
+                        DOM.Node(
+                            id: grandchildID,
+                            nodeType: 1,
+                            nodeName: "SPAN",
+                            localName: "span"
+                        )
+                    ]
+                )
+            ]),
+            target: target
+        )
 
-    try await waitUntil {
-        context.node(for: DOMNode.ID(grandchildID)) != nil
-    }
+        try await waitUntil {
+            context.node(for: DOMNode.ID(grandchildID)) != nil
+        }
 
-    await runtime.backend.emit(
-        .childNodeRemoved(parent: documentID, node: childID),
-        target: target
-    )
+        try await runtime.wire.emitRaw(
+            .childNodeRemoved(parent: documentID, node: childID),
+            target: target
+        )
 
-    try await waitUntil {
-        context.node(for: DOMNode.ID(childID)) == nil
-            && context.node(for: DOMNode.ID(grandchildID)) == nil
+        try await waitUntil {
+            context.node(for: DOMNode.ID(childID)) == nil
+                && context.node(for: DOMNode.ID(grandchildID)) == nil
+        }
     }
 }
 
 @MainActor
 @Test
 func setChildNodesPreservesReparentedDescendantIdentity() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let target = try await runtime.proxy.waitForCurrentPage()
-    let documentID = DOM.Node.ID("document")
-    let oldParentID = DOM.Node.ID("old-parent")
-    let newParentID = DOM.Node.ID("new-parent")
-    let movedChildID = DOM.Node.ID("moved-child")
+    try await withDataKitTestRuntime { runtime in
+        let target = try await runtime.proxy.waitForCurrentPage()
+        let documentID = DOM.Node.ID("document")
+        let oldParentID = DOM.Node.ID("old-parent")
+        let newParentID = DOM.Node.ID("new-parent")
+        let movedChildID = DOM.Node.ID("moved-child")
 
-    await enqueueStartupReplies(
-        on: runtime.backend,
-        document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document")
-    )
+        try await enqueueStartupReplies(
+            on: runtime.wire,
+            document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document")
+        )
 
-    let container = WebInspectorContainer(proxy: runtime.proxy)
-    let context = container.mainContext
-    try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil { context.rootNode != nil }
+        let container = WebInspectorContainer(proxy: runtime.proxy)
+        let context = container.mainContext
+        try await waitForStartupSubscribers(runtime: runtime, target: target)
+        try await waitUntil { context.rootNode != nil }
 
-    await runtime.backend.emit(
-        .setChildNodes(parent: documentID, nodes: [
-            DOM.Node(
-                id: oldParentID,
-                nodeType: 1,
-                nodeName: "SECTION",
-                localName: "section",
-                children: [
-                    DOM.Node(id: movedChildID, nodeType: 1, nodeName: "SPAN", localName: "span")
-                ]
-            )
-        ]),
-        target: target
-    )
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: documentID, nodes: [
+                DOM.Node(
+                    id: oldParentID,
+                    nodeType: 1,
+                    nodeName: "SECTION",
+                    localName: "section",
+                    children: [
+                        DOM.Node(id: movedChildID, nodeType: 1, nodeName: "SPAN", localName: "span")
+                    ]
+                )
+            ]),
+            target: target
+        )
 
-    try await waitUntil { context.node(for: DOMNode.ID(movedChildID)) != nil }
-    let movedChild = try #require(context.node(for: DOMNode.ID(movedChildID)))
+        try await waitUntil { context.node(for: DOMNode.ID(movedChildID)) != nil }
+        let movedChild = try #require(context.node(for: DOMNode.ID(movedChildID)))
 
-    await runtime.backend.emit(
-        .setChildNodes(parent: documentID, nodes: [
-            DOM.Node(
-                id: newParentID,
-                nodeType: 1,
-                nodeName: "ARTICLE",
-                localName: "article",
-                children: [
-                    DOM.Node(id: movedChildID, nodeType: 1, nodeName: "SPAN", localName: "span")
-                ]
-            )
-        ]),
-        target: target
-    )
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: documentID, nodes: [
+                DOM.Node(
+                    id: newParentID,
+                    nodeType: 1,
+                    nodeName: "ARTICLE",
+                    localName: "article",
+                    children: [
+                        DOM.Node(id: movedChildID, nodeType: 1, nodeName: "SPAN", localName: "span")
+                    ]
+                )
+            ]),
+            target: target
+        )
 
-    try await waitUntil {
-        context.node(for: DOMNode.ID(oldParentID)) == nil
-            && context.node(for: DOMNode.ID(newParentID)) != nil
+        try await waitUntil {
+            context.node(for: DOMNode.ID(oldParentID)) == nil
+                && context.node(for: DOMNode.ID(newParentID)) != nil
+        }
+        #expect(context.node(for: DOMNode.ID(movedChildID)) === movedChild)
     }
-    #expect(context.node(for: DOMNode.ID(movedChildID)) === movedChild)
 }
 
 @MainActor
 @Test
 func setChildNodesPrunesOmittedDescendantsWhenReusingChildNode() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let target = try await runtime.proxy.waitForCurrentPage()
-    let documentID = DOM.Node.ID("document")
-    let childID = DOM.Node.ID("child")
-    let removedSpanID = DOM.Node.ID("removed-span")
-    let removedEmID = DOM.Node.ID("removed-em")
+    try await withDataKitTestRuntime { runtime in
+        let target = try await runtime.proxy.waitForCurrentPage()
+        let documentID = DOM.Node.ID("document")
+        let childID = DOM.Node.ID("child")
+        let removedSpanID = DOM.Node.ID("removed-span")
+        let removedEmID = DOM.Node.ID("removed-em")
 
-    await enqueueStartupReplies(
-        on: runtime.backend,
-        document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document")
-    )
+        try await enqueueStartupReplies(
+            on: runtime.wire,
+            document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document")
+        )
 
-    let container = WebInspectorContainer(proxy: runtime.proxy)
-    let context = container.mainContext
-    try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil { context.rootNode != nil }
+        let container = WebInspectorContainer(proxy: runtime.proxy)
+        let context = container.mainContext
+        try await waitForStartupSubscribers(runtime: runtime, target: target)
+        try await waitUntil { context.rootNode != nil }
 
-    await runtime.backend.emit(
-        .setChildNodes(parent: documentID, nodes: [
-            DOM.Node(
-                id: childID,
-                nodeType: 1,
-                nodeName: "DIV",
-                localName: "div",
-                children: [
-                    DOM.Node(id: removedSpanID, nodeType: 1, nodeName: "SPAN", localName: "span"),
-                    DOM.Node(id: removedEmID, nodeType: 1, nodeName: "EM", localName: "em"),
-                ]
-            )
-        ]),
-        target: target
-    )
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: documentID, nodes: [
+                DOM.Node(
+                    id: childID,
+                    nodeType: 1,
+                    nodeName: "DIV",
+                    localName: "div",
+                    children: [
+                        DOM.Node(id: removedSpanID, nodeType: 1, nodeName: "SPAN", localName: "span"),
+                        DOM.Node(id: removedEmID, nodeType: 1, nodeName: "EM", localName: "em"),
+                    ]
+                )
+            ]),
+            target: target
+        )
 
-    try await waitUntil { context.node(for: DOMNode.ID(removedEmID)) != nil }
-    let child = try #require(context.node(for: DOMNode.ID(childID)))
+        try await waitUntil { context.node(for: DOMNode.ID(removedEmID)) != nil }
+        let child = try #require(context.node(for: DOMNode.ID(childID)))
 
-    await runtime.backend.emit(
-        .setChildNodes(parent: documentID, nodes: [
-            DOM.Node(id: childID, nodeType: 1, nodeName: "DIV", localName: "div", childNodeCount: 0)
-        ]),
-        target: target
-    )
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: documentID, nodes: [
+                DOM.Node(id: childID, nodeType: 1, nodeName: "DIV", localName: "div", childNodeCount: 0)
+            ]),
+            target: target
+        )
 
-    try await waitUntil {
-        context.node(for: DOMNode.ID(removedSpanID)) == nil
-            && context.node(for: DOMNode.ID(removedEmID)) == nil
+        try await waitUntil {
+            context.node(for: DOMNode.ID(removedSpanID)) == nil
+                && context.node(for: DOMNode.ID(removedEmID)) == nil
+        }
+        #expect(context.node(for: DOMNode.ID(childID)) === child)
     }
-    #expect(context.node(for: DOMNode.ID(childID)) === child)
 }
 
 @MainActor
 @Test
 func setChildNodesPreservesLoadedDescendantsForShallowRefresh() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let target = try await runtime.proxy.waitForCurrentPage()
-    let documentID = DOM.Node.ID("document")
-    let childID = DOM.Node.ID("child")
-    let grandchildID = DOM.Node.ID("grandchild")
+    try await withDataKitTestRuntime { runtime in
+        let target = try await runtime.proxy.waitForCurrentPage()
+        let documentID = DOM.Node.ID("document")
+        let childID = DOM.Node.ID("child")
+        let grandchildID = DOM.Node.ID("grandchild")
 
-    await enqueueStartupReplies(
-        on: runtime.backend,
-        document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document")
-    )
+        try await enqueueStartupReplies(
+            on: runtime.wire,
+            document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document")
+        )
 
-    let container = WebInspectorContainer(proxy: runtime.proxy)
-    let context = container.mainContext
-    try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil { context.rootNode != nil }
+        let container = WebInspectorContainer(proxy: runtime.proxy)
+        let context = container.mainContext
+        try await waitForStartupSubscribers(runtime: runtime, target: target)
+        try await waitUntil { context.rootNode != nil }
 
-    await runtime.backend.emit(
-        .setChildNodes(parent: documentID, nodes: [
-            DOM.Node(
-                id: childID,
-                nodeType: 1,
-                nodeName: "DIV",
-                localName: "div",
-                children: [
-                    DOM.Node(id: grandchildID, nodeType: 1, nodeName: "SPAN", localName: "span")
-                ]
-            )
-        ]),
-        target: target
-    )
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: documentID, nodes: [
+                DOM.Node(
+                    id: childID,
+                    nodeType: 1,
+                    nodeName: "DIV",
+                    localName: "div",
+                    children: [
+                        DOM.Node(id: grandchildID, nodeType: 1, nodeName: "SPAN", localName: "span")
+                    ]
+                )
+            ]),
+            target: target
+        )
 
-    try await waitUntil { context.node(for: DOMNode.ID(grandchildID)) != nil }
-    let grandchild = try #require(context.node(for: DOMNode.ID(grandchildID)))
+        try await waitUntil { context.node(for: DOMNode.ID(grandchildID)) != nil }
+        let grandchild = try #require(context.node(for: DOMNode.ID(grandchildID)))
 
-    await runtime.backend.emit(
-        .setChildNodes(parent: documentID, nodes: [
-            DOM.Node(id: childID, nodeType: 1, nodeName: "DIV", localName: "div", childNodeCount: 1)
-        ]),
-        target: target
-    )
+        try await runtime.wire.emitRaw(
+            .setChildNodes(parent: documentID, nodes: [
+                DOM.Node(id: childID, nodeType: 1, nodeName: "DIV", localName: "div", childNodeCount: 1)
+            ]),
+            target: target
+        )
 
-    try await waitUntil {
-        guard let child = context.node(for: DOMNode.ID(childID)),
-              case let .loaded(children) = child.children else {
-            return false
+        try await waitUntil {
+            guard let child = context.node(for: DOMNode.ID(childID)),
+                  case let .loaded(children) = child.children else {
+                return false
+            }
+            return children.first === grandchild
         }
-        return children.first === grandchild
+        #expect(context.node(for: DOMNode.ID(grandchildID)) === grandchild)
     }
-    #expect(context.node(for: DOMNode.ID(grandchildID)) === grandchild)
 }
 
 @MainActor
 @Test
 func closeDuringStartupKeepsContextDetached() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let gate = WebInspectorTestGate()
-    let documentID = DOM.Node.ID("document")
+    try await withDataKitTestRuntime { runtime in
+        let documentID = DOM.Node.ID("document")
 
-    await runtime.backend.hold(domain: "DOM", method: "getDocument", gate: gate)
-    await enqueueStartupReplies(
-        on: runtime.backend,
-        document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document")
-    )
-    await enqueueDomainDisableReplies(on: runtime.backend)
+        let gate = await runtime.wire.deferReply(
+            to: "DOM.getDocument",
+            with: try domDocumentResult(
+                DOM.Node(id: documentID, nodeType: 9, nodeName: "#document")
+            )
+        )
+        await enqueueDomainEnableReplies(on: runtime.wire)
+        await enqueueDomainDisableReplies(on: runtime.wire)
 
-    let container = WebInspectorContainer(proxy: runtime.proxy)
-    let context = container.mainContext
-    let startupTask = try #require(context.startupTaskForTesting())
-    try await waitUntil {
-        await runtime.backend.recordedCommands()
-            .contains(RecordedCommand(domain: "DOM", method: "getDocument"))
+        let container = WebInspectorContainer(proxy: runtime.proxy)
+        let context = container.mainContext
+        let startupTask = try #require(context.startupTaskForTesting())
+        try await waitUntil {
+            runtime.wire.observations.commands
+                .contains { $0.method == "DOM.getDocument" }
+        }
+
+        await container.close()
+        #expect(context.state == .detached)
+
+        gate.open()
+        await startupTask.value
+        _ = await runtime.wire.observations.waitForCommands(method: "Inspector.disable", count: 1)
+
+        #expect(context.state == .detached)
+        #expect(context.rootNode == nil)
+
+        let commands = runtime.wire.observations.commands
+        #expect(commands.map(\.method) == Array(startupCommands.prefix(5)) + [
+            "Runtime.disable",
+            "Network.disable",
+            "Inspector.disable",
+        ])
     }
-
-    await container.close()
-    #expect(context.state == .detached)
-
-    await gate.open()
-    await startupTask.value
-
-    #expect(context.state == .detached)
-    #expect(context.rootNode == nil)
-
-    let commands = await runtime.backend.recordedCommands()
-    #expect(commands == Array(startupCommands.prefix(5)) + [
-        RecordedCommand(domain: "Runtime", method: "disable"),
-        RecordedCommand(domain: "Network", method: "disable"),
-        RecordedCommand(domain: "Inspector", method: "disable"),
-    ])
 }
 
 @MainActor
 @Test
 func stopDuringStartupReleasesLateRuntimeAcquire() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let target = try await runtime.proxy.waitForCurrentPage()
-    let gate = WebInspectorTestGate()
+    try await withDataKitTestRuntime { runtime in
+        let target = try await runtime.proxy.waitForCurrentPage()
+        let gate = await runtime.wire.deferReply(to: "Runtime.enable")
 
-    await runtime.backend.hold(domain: "Runtime", method: "enable", gate: gate)
-    await runtime.backend.enqueue((), for: "Inspector", method: "enable")
-    await runtime.backend.enqueue((), for: "Inspector", method: "initialized")
-    await runtime.backend.enqueue((), for: "Runtime", method: "enable")
+        await runtime.wire.respond(to: "Inspector.enable")
+        await runtime.wire.respond(to: "Inspector.initialized")
 
-    let container = WebInspectorContainer(proxy: runtime.proxy)
-    let context = container.mainContext
-    try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil {
-        await runtime.backend.recordedCommands() == [
-            RecordedCommand(domain: "Inspector", method: "enable"),
-            RecordedCommand(domain: "Inspector", method: "initialized"),
-            RecordedCommand(domain: "Runtime", method: "enable"),
-        ]
+        let container = WebInspectorContainer(proxy: runtime.proxy)
+        let context = container.mainContext
+        try await waitForStartupSubscribers(runtime: runtime, target: target)
+        try await waitUntil {
+            runtime.wire.observations.commandMethods == [
+                "Inspector.enable",
+                "Inspector.initialized",
+                "Runtime.enable",
+            ]
+        }
+
+        await runtime.wire.respond(to: "Inspector.disable")
+        await context.stop()
+        #expect(context.state == .detached)
+
+        await runtime.wire.respond(to: "Runtime.disable")
+        gate.open()
+        try await waitUntil {
+            runtime.wire.observations.commandMethods == [
+                "Inspector.enable",
+                "Inspector.initialized",
+                "Runtime.enable",
+                "Inspector.disable",
+                "Runtime.disable",
+            ]
+        }
+        #expect(context.state == .detached)
     }
-
-    await runtime.backend.enqueue((), for: "Inspector", method: "disable")
-    await context.stop()
-    #expect(context.state == .detached)
-
-    await runtime.backend.enqueue((), for: "Runtime", method: "disable")
-    await gate.open()
-    try await waitUntil {
-        await runtime.backend.recordedCommands() == [
-            RecordedCommand(domain: "Inspector", method: "enable"),
-            RecordedCommand(domain: "Inspector", method: "initialized"),
-            RecordedCommand(domain: "Runtime", method: "enable"),
-            RecordedCommand(domain: "Inspector", method: "disable"),
-            RecordedCommand(domain: "Runtime", method: "disable"),
-        ]
-    }
-    #expect(context.state == .detached)
 }
 
 @MainActor
 @Test
 func domainEnablementReleaseDuringPendingEnableDisablesAfterEnableCompletes() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let target = try await runtime.proxy.waitForCurrentPage()
-    let registry = WebInspectorDomainEnablementRegistry()
-    let gate = WebInspectorTestGate()
+    try await withDataKitTestRuntime { runtime in
+        let target = try await runtime.proxy.waitForCurrentPage()
+        let registry = WebInspectorDomainEnablementRegistry()
+        let gate = await runtime.wire.deferReply(to: "Runtime.enable")
 
-    await runtime.backend.hold(domain: "Runtime", method: "enable", gate: gate)
+        let acquireTask = Task {
+            try await registry.acquire(.runtime, on: target)
+        }
 
-    let acquireTask = Task {
-        try await registry.acquire(.runtime, on: target)
+        try await waitUntil {
+            runtime.wire.observations.commandMethods == [
+                "Runtime.enable"
+            ]
+        }
+
+        let releaseTask = Task {
+            await registry.release(.runtime, on: target)
+        }
+
+        await runtime.wire.respond(to: "Runtime.disable")
+        gate.open()
+
+        try await acquireTask.value
+        #expect(await releaseTask.value == nil)
+
+        let commands = runtime.wire.observations.commands
+        #expect(commands.map(\.method) == [
+            "Runtime.enable",
+            "Runtime.disable",
+        ])
     }
-
-    try await waitUntil {
-        await runtime.backend.recordedCommands() == [
-            RecordedCommand(domain: "Runtime", method: "enable")
-        ]
-    }
-
-    let releaseTask = Task {
-        await registry.release(.runtime, on: target)
-    }
-
-    await runtime.backend.enqueue((), for: "Runtime", method: "enable")
-    await runtime.backend.enqueue((), for: "Runtime", method: "disable")
-    await gate.open()
-
-    try await acquireTask.value
-    #expect(await releaseTask.value == nil)
-
-    let commands = await runtime.backend.recordedCommands()
-    #expect(commands == [
-        RecordedCommand(domain: "Runtime", method: "enable"),
-        RecordedCommand(domain: "Runtime", method: "disable"),
-    ])
 }
 
 @MainActor
 @Test
 func domainEnablementAcquireWaitsForFinalReleaseDisable() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let target = try await runtime.proxy.waitForCurrentPage()
-    let registry = WebInspectorDomainEnablementRegistry()
-    let disableGate = WebInspectorTestGate()
+    try await withDataKitTestRuntime { runtime in
+        let target = try await runtime.proxy.waitForCurrentPage()
+        let registry = WebInspectorDomainEnablementRegistry()
+        let disableGate = await runtime.wire.deferReply(to: "Runtime.disable")
 
-    await runtime.backend.enqueue((), for: "Runtime", method: "enable")
-    try await registry.acquire(.runtime, on: target)
-    await runtime.backend.hold(domain: "Runtime", method: "disable", gate: disableGate)
-    await runtime.backend.enqueue((), for: "Runtime", method: "disable")
-
-    let releaseTask = Task {
-        await registry.release(.runtime, on: target)
-    }
-    try await waitUntil {
-        await runtime.backend.recordedCommands() == [
-            RecordedCommand(domain: "Runtime", method: "enable"),
-            RecordedCommand(domain: "Runtime", method: "disable"),
-        ]
-    }
-
-    let acquireWaitBaseline = await registry.acquireWaitingForDisableSequenceForTesting
-    let acquireTask = Task {
+        await runtime.wire.respond(to: "Runtime.enable")
         try await registry.acquire(.runtime, on: target)
+
+        let releaseTask = Task {
+            await registry.release(.runtime, on: target)
+        }
+        try await waitUntil {
+            runtime.wire.observations.commandMethods == [
+                "Runtime.enable",
+                "Runtime.disable",
+            ]
+        }
+
+        let acquireWaitBaseline = await registry.acquireWaitingForDisableSequenceForTesting
+        let acquireTask = Task {
+            try await registry.acquire(.runtime, on: target)
+        }
+        await registry.waitForAcquireWaitingForDisableForTesting(after: acquireWaitBaseline)
+        #expect(runtime.wire.observations.commandMethods == [
+            "Runtime.enable",
+            "Runtime.disable",
+        ])
+
+        await runtime.wire.respond(to: "Runtime.enable")
+        disableGate.open()
+
+        #expect(await releaseTask.value == nil)
+        try await acquireTask.value
+        #expect(runtime.wire.observations.commandMethods == [
+            "Runtime.enable",
+            "Runtime.disable",
+            "Runtime.enable",
+        ])
     }
-    await registry.waitForAcquireWaitingForDisableForTesting(after: acquireWaitBaseline)
-    #expect(await runtime.backend.recordedCommands() == [
-        RecordedCommand(domain: "Runtime", method: "enable"),
-        RecordedCommand(domain: "Runtime", method: "disable"),
-    ])
-
-    await runtime.backend.enqueue((), for: "Runtime", method: "enable")
-    await disableGate.open()
-
-    #expect(await releaseTask.value == nil)
-    try await acquireTask.value
-    #expect(await runtime.backend.recordedCommands() == [
-        RecordedCommand(domain: "Runtime", method: "enable"),
-        RecordedCommand(domain: "Runtime", method: "disable"),
-        RecordedCommand(domain: "Runtime", method: "enable"),
-    ])
 }
 
 @MainActor
 @Test
 func domainEnablementAcquireWaitsForPendingReleaseDisable() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let target = try await runtime.proxy.waitForCurrentPage()
-    let registry = WebInspectorDomainEnablementRegistry()
-    let enableGate = WebInspectorTestGate()
-    let disableGate = WebInspectorTestGate()
+    try await withDataKitTestRuntime { runtime in
+        let target = try await runtime.proxy.waitForCurrentPage()
+        let registry = WebInspectorDomainEnablementRegistry()
+        let enableGate = await runtime.wire.deferReply(to: "Runtime.enable")
+        let disableGate = await runtime.wire.deferReply(to: "Runtime.disable")
 
-    await runtime.backend.hold(domain: "Runtime", method: "enable", gate: enableGate)
-    await runtime.backend.hold(domain: "Runtime", method: "disable", gate: disableGate)
+        let firstAcquireTask = Task {
+            try await registry.acquire(.runtime, on: target)
+        }
+        try await waitUntil {
+            runtime.wire.observations.commandMethods == [
+                "Runtime.enable"
+            ]
+        }
 
-    let firstAcquireTask = Task {
-        try await registry.acquire(.runtime, on: target)
+        let releaseTask = Task {
+            await registry.release(.runtime, on: target)
+        }
+        let acquireWaitBaseline = await registry.acquireWaitingForDisableSequenceForTesting
+        let secondAcquireTask = Task {
+            try await registry.acquire(.runtime, on: target)
+        }
+        await registry.waitForAcquireWaitingForDisableForTesting(after: acquireWaitBaseline)
+
+        enableGate.open()
+        try await waitUntil {
+            runtime.wire.observations.commandMethods == [
+                "Runtime.enable",
+                "Runtime.disable",
+            ]
+        }
+        #expect(runtime.wire.observations.commandMethods == [
+            "Runtime.enable",
+            "Runtime.disable",
+        ])
+
+        await runtime.wire.respond(to: "Runtime.enable")
+        disableGate.open()
+
+        try await firstAcquireTask.value
+        #expect(await releaseTask.value == nil)
+        try await secondAcquireTask.value
+        #expect(runtime.wire.observations.commandMethods == [
+            "Runtime.enable",
+            "Runtime.disable",
+            "Runtime.enable",
+        ])
     }
-    try await waitUntil {
-        await runtime.backend.recordedCommands() == [
-            RecordedCommand(domain: "Runtime", method: "enable")
-        ]
-    }
-
-    let releaseTask = Task {
-        await registry.release(.runtime, on: target)
-    }
-    let acquireWaitBaseline = await registry.acquireWaitingForDisableSequenceForTesting
-    let secondAcquireTask = Task {
-        try await registry.acquire(.runtime, on: target)
-    }
-    await registry.waitForAcquireWaitingForDisableForTesting(after: acquireWaitBaseline)
-
-    await runtime.backend.enqueue((), for: "Runtime", method: "enable")
-    await runtime.backend.enqueue((), for: "Runtime", method: "disable")
-    await enableGate.open()
-    try await waitUntil {
-        await runtime.backend.recordedCommands() == [
-            RecordedCommand(domain: "Runtime", method: "enable"),
-            RecordedCommand(domain: "Runtime", method: "disable"),
-        ]
-    }
-    #expect(await runtime.backend.recordedCommands() == [
-        RecordedCommand(domain: "Runtime", method: "enable"),
-        RecordedCommand(domain: "Runtime", method: "disable"),
-    ])
-
-    await runtime.backend.enqueue((), for: "Runtime", method: "enable")
-    await disableGate.open()
-
-    try await firstAcquireTask.value
-    #expect(await releaseTask.value == nil)
-    try await secondAcquireTask.value
-    #expect(await runtime.backend.recordedCommands() == [
-        RecordedCommand(domain: "Runtime", method: "enable"),
-        RecordedCommand(domain: "Runtime", method: "disable"),
-        RecordedCommand(domain: "Runtime", method: "enable"),
-    ])
 }
 
 @MainActor
 @Test
 func domainEnablementDiscardLeasePreservesSharedEnabledLease() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let target = try await runtime.proxy.waitForCurrentPage()
-    let registry = WebInspectorDomainEnablementRegistry()
+    try await withDataKitTestRuntime { runtime in
+        let target = try await runtime.proxy.waitForCurrentPage()
+        let registry = WebInspectorDomainEnablementRegistry()
 
-    await runtime.backend.enqueue((), for: "Runtime", method: "enable")
-    try await registry.acquire(.runtime, on: target)
-    try await registry.acquire(.runtime, on: target)
+        await runtime.wire.respond(to: "Runtime.enable")
+        try await registry.acquire(.runtime, on: target)
+        try await registry.acquire(.runtime, on: target)
 
-    await registry.discardLease(.runtime, on: target)
+        await registry.discardLease(.runtime, on: target)
 
-    await runtime.backend.enqueue((), for: "Runtime", method: "disable")
-    #expect(await registry.release(.runtime, on: target) == nil)
+        await runtime.wire.respond(to: "Runtime.disable")
+        #expect(await registry.release(.runtime, on: target) == nil)
 
-    let commands = await runtime.backend.recordedCommands()
-    #expect(commands == [
-        RecordedCommand(domain: "Runtime", method: "enable"),
-        RecordedCommand(domain: "Runtime", method: "disable"),
-    ])
+        let commands = runtime.wire.observations.commands
+        #expect(commands.map(\.method) == [
+            "Runtime.enable",
+            "Runtime.disable",
+        ])
+    }
 }
 
 @MainActor
 @Test
 func domainLeaseRetargetInterleavingReenablesCommittedPageBinding() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let registry = WebInspectorDomainEnablementRegistry()
-    let oldPage = WebInspectorTarget(
-        id: .currentPage,
-        kind: .page,
-        frameID: nil,
-        isProvisional: false,
-        proxy: runtime.proxy,
-        route: .currentPage,
-        pageBindingID: "page-old"
-    )
-    let newPage = WebInspectorTarget(
-        id: .currentPage,
-        kind: .page,
-        frameID: nil,
-        isProvisional: false,
-        proxy: runtime.proxy,
-        route: .currentPage,
-        pageBindingID: "page-new"
-    )
+    try await withDataKitTestRuntime { runtime in
+        let registry = WebInspectorDomainEnablementRegistry()
+        let oldPage = WebInspectorTarget(
+            id: .currentPage,
+            kind: .page,
+            frameID: nil,
+            isProvisional: false,
+            proxy: runtime.proxy,
+            route: .currentPage,
+            pageBindingID: "page-old"
+        )
+        let newPage = WebInspectorTarget(
+            id: .currentPage,
+            kind: .page,
+            frameID: nil,
+            isProvisional: false,
+            proxy: runtime.proxy,
+            route: .currentPage,
+            pageBindingID: "page-new"
+        )
 
-    await runtime.backend.enqueue((), for: "Runtime", method: "enable")
-    try await registry.acquire(.runtime, on: oldPage)
-    try await registry.acquire(.runtime, on: oldPage)
+        await runtime.wire.respond(to: "Runtime.enable")
+        try await registry.acquire(.runtime, on: oldPage)
+        try await registry.acquire(.runtime, on: oldPage)
 
-    await registry.discardLease(.runtime, on: oldPage)
-    await runtime.backend.enqueue((), for: "Runtime", method: "enable")
-    try await registry.acquire(.runtime, on: newPage)
+        await registry.discardLease(.runtime, on: oldPage)
+        await runtime.wire.respond(to: "Runtime.enable")
+        try await registry.acquire(.runtime, on: newPage)
 
-    await registry.discardLease(.runtime, on: oldPage)
-    try await registry.acquire(.runtime, on: newPage)
+        await registry.discardLease(.runtime, on: oldPage)
+        try await registry.acquire(.runtime, on: newPage)
 
-    let commands = await runtime.backend.recordedCommands()
-    #expect(commands == [
-        RecordedCommand(domain: "Runtime", method: "enable"),
-        RecordedCommand(domain: "Runtime", method: "enable"),
-    ])
+        let commands = runtime.wire.observations.commands
+        #expect(commands.map(\.method) == [
+            "Runtime.enable",
+            "Runtime.enable",
+        ])
+    }
 }
 
 @MainActor
 @Test
 func networkEventsPopulateAllRequestsInOrder() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let requestID = Network.Request.ID("request-1")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let requestID = Network.Request.ID("request-1")
 
-    await runtime.backend.emit(
-        .requestWillBeSent(
-            id: requestID,
-            request: Network.Request(
+        try await runtime.wire.emitRaw(
+            .requestWillBeSent(
                 id: requestID,
-                url: "https://example.com/data.json",
-                method: "GET",
-                headers: ["Accept": "application/json"]
+                request: Network.Request(
+                    id: requestID,
+                    url: "https://example.com/data.json",
+                    method: "GET",
+                    headers: ["Accept": "application/json"]
+                ),
+                resourceType: .fetch,
+                redirectResponse: nil,
+                timestamp: 1
             ),
-            resourceType: .fetch,
-            redirectResponse: nil,
-            timestamp: 1
-        ),
-        target: target
-    )
-    await runtime.backend.emit(
-        .responseReceived(
-            id: requestID,
-            response: Network.Response(
-                url: "https://cdn.example.com/data.json",
-                status: 200,
-                statusText: "OK",
-                mimeType: "application/json",
-                headers: ["Content-Type": "application/json"],
-                source: Network.Source(rawValue: "network")
+            target: target
+        )
+        try await runtime.wire.emitRaw(
+            .responseReceived(
+                id: requestID,
+                response: Network.Response(
+                    url: "https://cdn.example.com/data.json",
+                    status: 200,
+                    statusText: "OK",
+                    mimeType: "application/json",
+                    headers: ["Content-Type": "application/json"],
+                    source: Network.Source(rawValue: "network")
+                ),
+                resourceType: .fetch,
+                timestamp: 2
             ),
-            resourceType: .fetch,
-            timestamp: 2
-        ),
-        target: target
-    )
-    await runtime.backend.emit(
-        .dataReceived(id: requestID, dataLength: 12, encodedDataLength: 5, timestamp: 3),
-        target: target
-    )
-    await runtime.backend.emit(
-        .loadingFinished(id: requestID, timestamp: 4, sourceMapURL: nil, metrics: nil),
-        target: target
-    )
+            target: target
+        )
+        try await runtime.wire.emitRaw(
+            .dataReceived(id: requestID, dataLength: 12, encodedDataLength: 5, timestamp: 3),
+            target: target
+        )
+        try await runtime.wire.emitRaw(
+            .loadingFinished(id: requestID, timestamp: 4, sourceMapURL: nil, metrics: nil),
+            target: target
+        )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
-    try await waitUntil {
-        results.items.count == 1 && results.items.first?.state == .finished
+        let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+        try await waitUntil {
+            results.items.count == 1 && results.items.first?.state == .finished
+        }
+        let request = try #require(results.items.first)
+        #expect(request.url == "https://example.com/data.json")
+        #expect(request.method == "GET")
+        #expect(request.resourceType == .fetch)
+        #expect(request.status == 200)
+        #expect(request.statusText == "OK")
+        #expect(request.responseURL == "https://cdn.example.com/data.json")
+        #expect(request.mimeType == "application/json")
+        #expect(request.responseSource == "network")
+        #expect(request.hasResponse)
+        #expect(request.hasResponseBody)
+        #expect(request.requestHeaders["Accept"] == "application/json")
+        #expect(request.responseHeaders["Content-Type"] == "application/json")
+        #expect(request.requestSentTimestamp == 1)
+        #expect(request.responseReceivedTimestamp == 2)
+        #expect(request.lastDataReceivedTimestamp == 3)
+        #expect(request.finishedOrFailedTimestamp == 4)
+        #expect(request.decodedDataLength == 12)
+        #expect(request.encodedDataLength == 5)
+        #expect(context.registeredRequest(for: request.id) === request)
     }
-    let request = try #require(results.items.first)
-    #expect(request.url == "https://example.com/data.json")
-    #expect(request.method == "GET")
-    #expect(request.resourceType == .fetch)
-    #expect(request.status == 200)
-    #expect(request.statusText == "OK")
-    #expect(request.responseURL == "https://cdn.example.com/data.json")
-    #expect(request.mimeType == "application/json")
-    #expect(request.responseSource == "network")
-    #expect(request.hasResponse)
-    #expect(request.hasResponseBody)
-    #expect(request.requestHeaders["Accept"] == "application/json")
-    #expect(request.responseHeaders["Content-Type"] == "application/json")
-    #expect(request.requestSentTimestamp == 1)
-    #expect(request.responseReceivedTimestamp == 2)
-    #expect(request.lastDataReceivedTimestamp == 3)
-    #expect(request.finishedOrFailedTimestamp == 4)
-    #expect(request.decodedDataLength == 12)
-    #expect(request.encodedDataLength == 5)
-    #expect(context.registeredRequest(for: request.id) === request)
 }
 
 @MainActor
 @Test
 func responseReceivedWithoutRequestWillBeSentCreatesRequest() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let requestID = Network.Request.ID("response-first-request")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let requestID = Network.Request.ID("response-first-request")
 
-    await runtime.backend.emit(
-        .responseReceived(
-            id: requestID,
-            response: Network.Response(
-                url: "https://example.com/late.css",
-                status: 200,
-                statusText: "OK",
-                mimeType: "text/css",
-                headers: ["Content-Type": "text/css"],
-                source: Network.Source(rawValue: "network"),
-                requestHeaders: ["Accept": "text/css"]
+        try await runtime.wire.emitRaw(
+            .responseReceived(
+                id: requestID,
+                response: Network.Response(
+                    url: "https://example.com/late.css",
+                    status: 200,
+                    statusText: "OK",
+                    mimeType: "text/css",
+                    headers: ["Content-Type": "text/css"],
+                    source: Network.Source(rawValue: "network"),
+                    requestHeaders: ["Accept": "text/css"]
+                ),
+                resourceType: .stylesheet,
+                timestamp: 2
             ),
-            resourceType: .stylesheet,
-            timestamp: 2
-        ),
-        target: target
-    )
-    await runtime.backend.emit(
-        .dataReceived(id: requestID, dataLength: 9, encodedDataLength: 4, timestamp: 3),
-        target: target
-    )
-    await runtime.backend.emit(
-        .loadingFinished(id: requestID, timestamp: 4, sourceMapURL: nil, metrics: nil),
-        target: target
-    )
+            target: target
+        )
+        try await runtime.wire.emitRaw(
+            .dataReceived(id: requestID, dataLength: 9, encodedDataLength: 4, timestamp: 3),
+            target: target
+        )
+        try await runtime.wire.emitRaw(
+            .loadingFinished(id: requestID, timestamp: 4, sourceMapURL: nil, metrics: nil),
+            target: target
+        )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
-    try await waitUntil {
-        results.items.first?.state == .finished
+        let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+        try await waitUntil {
+            results.items.first?.state == .finished
+        }
+        let request = try #require(results.items.first)
+        #expect(request.id == NetworkRequest.ID(requestID))
+        #expect(request.url == "https://example.com/late.css")
+        #expect(request.method == "GET")
+        #expect(request.resourceType == .stylesheet)
+        #expect(request.status == 200)
+        #expect(request.mimeType == "text/css")
+        #expect(request.requestSentTimestamp == 2)
+        #expect(request.responseReceivedTimestamp == 2)
+        #expect(request.lastDataReceivedTimestamp == 3)
+        #expect(request.finishedOrFailedTimestamp == 4)
+        #expect(request.requestHeaders["Accept"] == "text/css")
+        #expect(request.responseHeaders["Content-Type"] == "text/css")
+        #expect(request.decodedDataLength == 9)
+        #expect(request.encodedDataLength == 4)
     }
-    let request = try #require(results.items.first)
-    #expect(request.id == NetworkRequest.ID(requestID))
-    #expect(request.url == "https://example.com/late.css")
-    #expect(request.method == "GET")
-    #expect(request.resourceType == .stylesheet)
-    #expect(request.status == 200)
-    #expect(request.mimeType == "text/css")
-    #expect(request.requestSentTimestamp == 2)
-    #expect(request.responseReceivedTimestamp == 2)
-    #expect(request.lastDataReceivedTimestamp == 3)
-    #expect(request.finishedOrFailedTimestamp == 4)
-    #expect(request.requestHeaders["Accept"] == "text/css")
-    #expect(request.responseHeaders["Content-Type"] == "text/css")
-    #expect(request.decodedDataLength == 9)
-    #expect(request.encodedDataLength == 4)
 }
 
 @MainActor
@@ -5905,1485 +6036,1550 @@ func responseReceivedWithoutResourceTypePreservesRequestResourceType() async thr
 @MainActor
 @Test
 func loadingFinishedStoresTerminalMetadataAndOverridesDataTotals() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let requestID = Network.Request.ID("request-with-terminal-metadata")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let requestID = Network.Request.ID("request-with-terminal-metadata")
 
-    await runtime.backend.emit(
-        .requestWillBeSent(
-            id: requestID,
-            request: Network.Request(id: requestID, url: "https://example.com/app.js", method: "GET"),
-            resourceType: .script,
-            redirectResponse: nil,
-            timestamp: 1
-        ),
-        target: target
-    )
-    await runtime.backend.emit(
-        .dataReceived(id: requestID, dataLength: 5, encodedDataLength: 2, timestamp: 2),
-        target: target
-    )
-    await runtime.backend.emit(
-        .loadingFinished(
-            id: requestID,
-            timestamp: 3,
-            sourceMapURL: "app.js.map",
-            metrics: Network.Metrics(
-                networkProtocol: "h3",
-                remoteAddress: "203.0.113.20:443",
-                encodedDataLength: 9,
-                decodedBodyLength: 12
-            )
-        ),
-        target: target
-    )
+        try await runtime.wire.emitRaw(
+            .requestWillBeSent(
+                id: requestID,
+                request: Network.Request(id: requestID, url: "https://example.com/app.js", method: "GET"),
+                resourceType: .script,
+                redirectResponse: nil,
+                timestamp: 1
+            ),
+            target: target
+        )
+        try await runtime.wire.emitRaw(
+            .dataReceived(id: requestID, dataLength: 5, encodedDataLength: 2, timestamp: 2),
+            target: target
+        )
+        try await runtime.wire.emitRaw(
+            .loadingFinished(
+                id: requestID,
+                timestamp: 3,
+                sourceMapURL: "app.js.map",
+                metrics: Network.Metrics(
+                    networkProtocol: "h3",
+                    remoteAddress: "203.0.113.20:443",
+                    encodedDataLength: 9,
+                    decodedBodyLength: 12
+                )
+            ),
+            target: target
+        )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
-    try await waitUntil {
-        results.items.first?.state == .finished
+        let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+        try await waitUntil {
+            results.items.first?.state == .finished
+        }
+        let request = try #require(results.items.first)
+        #expect(request.sourceMapURL == "app.js.map")
+        #expect(request.metrics?.networkProtocol == "h3")
+        #expect(request.metrics?.remoteAddress == "203.0.113.20:443")
+        #expect(request.metrics?.encodedDataLength == 9)
+        #expect(request.metrics?.decodedBodyLength == 12)
+        #expect(request.lastDataReceivedTimestamp == 2)
+        #expect(request.finishedOrFailedTimestamp == 3)
+        #expect(request.decodedDataLength == 12)
+        #expect(request.encodedDataLength == 9)
     }
-    let request = try #require(results.items.first)
-    #expect(request.sourceMapURL == "app.js.map")
-    #expect(request.metrics?.networkProtocol == "h3")
-    #expect(request.metrics?.remoteAddress == "203.0.113.20:443")
-    #expect(request.metrics?.encodedDataLength == 9)
-    #expect(request.metrics?.decodedBodyLength == 12)
-    #expect(request.lastDataReceivedTimestamp == 2)
-    #expect(request.finishedOrFailedTimestamp == 3)
-    #expect(request.decodedDataLength == 12)
-    #expect(request.encodedDataLength == 9)
 }
 
 @MainActor
 @Test
 func loadingFinishedClampsNegativeMetricTotals() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let requestID = Network.Request.ID("request-with-negative-terminal-metrics")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let requestID = Network.Request.ID("request-with-negative-terminal-metrics")
 
-    await runtime.backend.emit(
-        .requestWillBeSent(
-            id: requestID,
-            request: Network.Request(id: requestID, url: "https://example.com/negative", method: "GET"),
-            resourceType: .fetch,
-            redirectResponse: nil,
-            timestamp: 1
-        ),
-        target: target
-    )
-    await runtime.backend.emit(
-        .dataReceived(id: requestID, dataLength: 5, encodedDataLength: 4, timestamp: 2),
-        target: target
-    )
-    await runtime.backend.emit(
-        .loadingFinished(
-            id: requestID,
-            timestamp: 3,
-            sourceMapURL: nil,
-            metrics: Network.Metrics(encodedDataLength: -8, decodedBodyLength: -13)
-        ),
-        target: target
-    )
+        try await runtime.wire.emitRaw(
+            .requestWillBeSent(
+                id: requestID,
+                request: Network.Request(id: requestID, url: "https://example.com/negative", method: "GET"),
+                resourceType: .fetch,
+                redirectResponse: nil,
+                timestamp: 1
+            ),
+            target: target
+        )
+        try await runtime.wire.emitRaw(
+            .dataReceived(id: requestID, dataLength: 5, encodedDataLength: 4, timestamp: 2),
+            target: target
+        )
+        try await runtime.wire.emitRaw(
+            .loadingFinished(
+                id: requestID,
+                timestamp: 3,
+                sourceMapURL: nil,
+                metrics: Network.Metrics(encodedDataLength: -8, decodedBodyLength: -13)
+            ),
+            target: target
+        )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
-    try await waitUntil {
-        results.items.first?.state == .finished
+        let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+        try await waitUntil {
+            results.items.first?.state == .finished
+        }
+        let request = try #require(results.items.first)
+        #expect(request.metrics?.encodedDataLength == -8)
+        #expect(request.metrics?.decodedBodyLength == -13)
+        #expect(request.decodedDataLength == 0)
+        #expect(request.encodedDataLength == 0)
     }
-    let request = try #require(results.items.first)
-    #expect(request.metrics?.encodedDataLength == -8)
-    #expect(request.metrics?.decodedBodyLength == -13)
-    #expect(request.decodedDataLength == 0)
-    #expect(request.encodedDataLength == 0)
 }
 
 @MainActor
 @Test
 func repeatedRequestWillBeSentClearsStaleResponseFields() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let requestID = Network.Request.ID("redirected-request")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let requestID = Network.Request.ID("redirected-request")
 
-    await runtime.backend.emit(
-        .requestWillBeSent(
-            id: requestID,
-            request: Network.Request(id: requestID, url: "https://example.com/redirect", method: "GET"),
-            resourceType: .document,
-            redirectResponse: nil,
-            timestamp: 1
-        ),
-        target: target
-    )
-    await runtime.backend.emit(
-        .responseReceived(
-            id: requestID,
-            response: Network.Response(
-                url: "https://example.com/redirect",
-                status: 302,
-                statusText: "Found",
-                mimeType: "text/html",
-                headers: ["Location": "https://example.com/final"],
-                source: Network.Source(rawValue: "network")
+        try await runtime.wire.emitRaw(
+            .requestWillBeSent(
+                id: requestID,
+                request: Network.Request(id: requestID, url: "https://example.com/redirect", method: "GET"),
+                resourceType: .document,
+                redirectResponse: nil,
+                timestamp: 1
             ),
-            resourceType: .document,
-            timestamp: 2
-        ),
-        target: target
-    )
+            target: target
+        )
+        try await runtime.wire.emitRaw(
+            .responseReceived(
+                id: requestID,
+                response: Network.Response(
+                    url: "https://example.com/redirect",
+                    status: 302,
+                    statusText: "Found",
+                    mimeType: "text/html",
+                    headers: ["Location": "https://example.com/final"],
+                    source: Network.Source(rawValue: "network")
+                ),
+                resourceType: .document,
+                timestamp: 2
+            ),
+            target: target
+        )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
-    try await waitUntil {
-        results.items.first?.status == 302
+        let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+        try await waitUntil {
+            results.items.first?.status == 302
+        }
+
+        try await runtime.wire.emitRaw(
+            .requestWillBeSent(
+                id: requestID,
+                request: Network.Request(id: requestID, url: "https://example.com/final", method: "GET"),
+                resourceType: .document,
+                redirectResponse: Network.Response(status: 302),
+                timestamp: 3
+            ),
+            target: target
+        )
+
+        let request = try #require(results.items.first)
+        try await waitUntil {
+            request.url == "https://example.com/final" && request.state == .pending
+        }
+        #expect(request.status == nil)
+        #expect(request.statusText == nil)
+        #expect(request.responseURL == nil)
+        #expect(request.mimeType == nil)
+        #expect(request.responseSource == nil)
+        #expect(request.responseHeaders.isEmpty)
+        #expect(request.requestSentTimestamp == 3)
+        #expect(request.responseReceivedTimestamp == nil)
+        #expect(request.lastDataReceivedTimestamp == nil)
+        #expect(request.finishedOrFailedTimestamp == nil)
+        #expect(request.decodedDataLength == 0)
+        #expect(request.encodedDataLength == 0)
+        #expect(request.responseBody.phase == .available)
+        #expect(request.responseBody.text == nil)
+        #expect(request.redirects.count == 1)
+        #expect(request.redirects.first?.request.url == "https://example.com/redirect")
+        #expect(request.redirects.first?.response.status == 302)
+        #expect(request.redirects.first?.timestamp == 3)
     }
-
-    await runtime.backend.emit(
-        .requestWillBeSent(
-            id: requestID,
-            request: Network.Request(id: requestID, url: "https://example.com/final", method: "GET"),
-            resourceType: .document,
-            redirectResponse: Network.Response(status: 302),
-            timestamp: 3
-        ),
-        target: target
-    )
-
-    let request = try #require(results.items.first)
-    try await waitUntil {
-        request.url == "https://example.com/final" && request.state == .pending
-    }
-    #expect(request.status == nil)
-    #expect(request.statusText == nil)
-    #expect(request.responseURL == nil)
-    #expect(request.mimeType == nil)
-    #expect(request.responseSource == nil)
-    #expect(request.responseHeaders.isEmpty)
-    #expect(request.requestSentTimestamp == 3)
-    #expect(request.responseReceivedTimestamp == nil)
-    #expect(request.lastDataReceivedTimestamp == nil)
-    #expect(request.finishedOrFailedTimestamp == nil)
-    #expect(request.decodedDataLength == 0)
-    #expect(request.encodedDataLength == 0)
-    #expect(request.responseBody.phase == .available)
-    #expect(request.responseBody.text == nil)
-    #expect(request.redirects.count == 1)
-    #expect(request.redirects.first?.request.url == "https://example.com/redirect")
-    #expect(request.redirects.first?.response.status == 302)
-    #expect(request.redirects.first?.timestamp == 3)
 }
 
 @MainActor
 @Test
 func completedRequestDoesNotTreatLaterRequestWillBeSentAsRedirect() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let requestID = Network.Request.ID("reused-request")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let requestID = Network.Request.ID("reused-request")
 
-    await runtime.backend.emit(
-        .requestWillBeSent(
-            id: requestID,
-            request: Network.Request(id: requestID, url: "https://example.com/first", method: "GET"),
-            resourceType: .document,
-            redirectResponse: nil,
-            timestamp: 1
-        ),
-        target: target
-    )
-    await runtime.backend.emit(
-        .loadingFinished(
-            id: requestID,
-            timestamp: 2,
-            sourceMapURL: "first.map",
-            metrics: Network.Metrics(encodedDataLength: 20, decodedBodyLength: 40)
-        ),
-        target: target
-    )
+        try await runtime.wire.emitRaw(
+            .requestWillBeSent(
+                id: requestID,
+                request: Network.Request(id: requestID, url: "https://example.com/first", method: "GET"),
+                resourceType: .document,
+                redirectResponse: nil,
+                timestamp: 1
+            ),
+            target: target
+        )
+        try await runtime.wire.emitRaw(
+            .loadingFinished(
+                id: requestID,
+                timestamp: 2,
+                sourceMapURL: "first.map",
+                metrics: Network.Metrics(encodedDataLength: 20, decodedBodyLength: 40)
+            ),
+            target: target
+        )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
-    try await waitUntil { results.items.first?.state == .finished }
-    let request = try #require(results.items.first)
+        let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+        try await waitUntil { results.items.first?.state == .finished }
+        let request = try #require(results.items.first)
 
-    await runtime.backend.emit(
-        .requestWillBeSent(
-            id: requestID,
-            request: Network.Request(id: requestID, url: "https://example.com/second", method: "GET"),
-            resourceType: .document,
-            redirectResponse: Network.Response(status: 302),
-            timestamp: 3
-        ),
-        target: target
-    )
+        try await runtime.wire.emitRaw(
+            .requestWillBeSent(
+                id: requestID,
+                request: Network.Request(id: requestID, url: "https://example.com/second", method: "GET"),
+                resourceType: .document,
+                redirectResponse: Network.Response(status: 302),
+                timestamp: 3
+            ),
+            target: target
+        )
 
-    try await waitUntil {
-        request.url == "https://example.com/second" && request.state == .pending
+        try await waitUntil {
+            request.url == "https://example.com/second" && request.state == .pending
+        }
+        #expect(results.items.first === request)
+        #expect(request.redirects.isEmpty)
+        #expect(request.requestSentTimestamp == 3)
+        #expect(request.finishedOrFailedTimestamp == nil)
+        #expect(request.sourceMapURL == nil)
+        #expect(request.metrics == nil)
     }
-    #expect(results.items.first === request)
-    #expect(request.redirects.isEmpty)
-    #expect(request.requestSentTimestamp == 3)
-    #expect(request.finishedOrFailedTimestamp == nil)
-    #expect(request.sourceMapURL == nil)
-    #expect(request.metrics == nil)
 }
 
 @MainActor
 @Test
 func loadingFailedStoresFailureTimestampAndClampsDataLength() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let requestID = Network.Request.ID("failed-request")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let requestID = Network.Request.ID("failed-request")
 
-    await runtime.backend.emit(
-        .requestWillBeSent(
-            id: requestID,
-            request: Network.Request(id: requestID, url: "https://example.com/fail", method: "GET"),
-            resourceType: .fetch,
-            redirectResponse: nil,
-            timestamp: 1
-        ),
-        target: target
-    )
-    await runtime.backend.emit(
-        .dataReceived(id: requestID, dataLength: -10, encodedDataLength: -20, timestamp: 2),
-        target: target
-    )
-    await runtime.backend.emit(
-        .loadingFailed(id: requestID, errorText: "cancelled", canceled: true, timestamp: 3),
-        target: target
-    )
+        try await runtime.wire.emitRaw(
+            .requestWillBeSent(
+                id: requestID,
+                request: Network.Request(id: requestID, url: "https://example.com/fail", method: "GET"),
+                resourceType: .fetch,
+                redirectResponse: nil,
+                timestamp: 1
+            ),
+            target: target
+        )
+        try await runtime.wire.emitRaw(
+            .dataReceived(id: requestID, dataLength: -10, encodedDataLength: -20, timestamp: 2),
+            target: target
+        )
+        try await runtime.wire.emitRaw(
+            .loadingFailed(id: requestID, errorText: "cancelled", canceled: true, timestamp: 3),
+            target: target
+        )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
-    try await waitUntil { results.items.first?.state == .failed(errorText: "cancelled", canceled: true) }
-    let request = try #require(results.items.first)
-    #expect(request.requestSentTimestamp == 1)
-    #expect(request.lastDataReceivedTimestamp == 2)
-    #expect(request.finishedOrFailedTimestamp == 3)
-    #expect(request.decodedDataLength == 0)
-    #expect(request.encodedDataLength == 0)
+        let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+        try await waitUntil { results.items.first?.state == .failed(errorText: "cancelled", canceled: true) }
+        let request = try #require(results.items.first)
+        #expect(request.requestSentTimestamp == 1)
+        #expect(request.lastDataReceivedTimestamp == 2)
+        #expect(request.finishedOrFailedTimestamp == 3)
+        #expect(request.decodedDataLength == 0)
+        #expect(request.encodedDataLength == 0)
+    }
 }
 
 @MainActor
 @Test
 func memoryCacheEventCreatesFinishedCachedRequestFromResponse() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let requestID = Network.Request.ID("cached-request")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let requestID = Network.Request.ID("cached-request")
 
-    await runtime.backend.emit(
-        .requestServedFromMemoryCache(
-            id: requestID,
-            response: Network.Response(
-                url: "https://example.com/cached.css",
-                status: 200,
-                statusText: "OK",
-                mimeType: "text/css",
-                headers: ["Content-Type": "text/css"],
-                source: Network.Source(rawValue: "memory-cache"),
-                requestHeaders: ["Accept": "text/css"],
-                bodySize: 2048
+        try await runtime.wire.emitRaw(
+            .requestServedFromMemoryCache(
+                id: requestID,
+                response: Network.Response(
+                    url: "https://example.com/cached.css",
+                    status: 200,
+                    statusText: "OK",
+                    mimeType: "text/css",
+                    headers: ["Content-Type": "text/css"],
+                    source: Network.Source(rawValue: "memory-cache"),
+                    requestHeaders: ["Accept": "text/css"],
+                    bodySize: 2048
+                ),
+                resourceType: .stylesheet,
+                timestamp: 5
             ),
-            resourceType: .stylesheet,
-            timestamp: 5
-        ),
-        target: target
-    )
+            target: target
+        )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
-    try await waitUntil {
-        results.items.count == 1 && results.items.first?.state == .finished
+        let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+        try await waitUntil {
+            results.items.count == 1 && results.items.first?.state == .finished
+        }
+        let request = try #require(results.items.first)
+        #expect(request.url == "https://example.com/cached.css")
+        #expect(request.method == "GET")
+        #expect(request.resourceType == .stylesheet)
+        #expect(request.status == 200)
+        #expect(request.statusText == "OK")
+        #expect(request.responseURL == "https://example.com/cached.css")
+        #expect(request.mimeType == "text/css")
+        #expect(request.responseSource == "memory-cache")
+        #expect(request.requestHeaders["Accept"] == "text/css")
+        #expect(request.responseHeaders["Content-Type"] == "text/css")
+        #expect(request.requestSentTimestamp == 5)
+        #expect(request.responseReceivedTimestamp == 5)
+        #expect(request.lastDataReceivedTimestamp == nil)
+        #expect(request.finishedOrFailedTimestamp == 5)
+        #expect(request.decodedDataLength == 2048)
+        #expect(request.encodedDataLength == 2048)
+        #expect(request.responseBody.phase == .available)
+        #expect(context.registeredRequest(for: request.id) === request)
     }
-    let request = try #require(results.items.first)
-    #expect(request.url == "https://example.com/cached.css")
-    #expect(request.method == "GET")
-    #expect(request.resourceType == .stylesheet)
-    #expect(request.status == 200)
-    #expect(request.statusText == "OK")
-    #expect(request.responseURL == "https://example.com/cached.css")
-    #expect(request.mimeType == "text/css")
-    #expect(request.responseSource == "memory-cache")
-    #expect(request.requestHeaders["Accept"] == "text/css")
-    #expect(request.responseHeaders["Content-Type"] == "text/css")
-    #expect(request.requestSentTimestamp == 5)
-    #expect(request.responseReceivedTimestamp == 5)
-    #expect(request.lastDataReceivedTimestamp == nil)
-    #expect(request.finishedOrFailedTimestamp == 5)
-    #expect(request.decodedDataLength == 2048)
-    #expect(request.encodedDataLength == 2048)
-    #expect(request.responseBody.phase == .available)
-    #expect(context.registeredRequest(for: request.id) === request)
 }
 
 @MainActor
 @Test
 func memoryCacheEventWithoutURLForNewRequestIsSkipped() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
 
-    await runtime.backend.emit(
-        .requestServedFromMemoryCache(
-            id: Network.Request.ID("cached-request-without-url"),
-            response: Network.Response(status: 200),
-            resourceType: nil,
-            timestamp: 5
-        ),
-        target: target
-    )
-    await runtime.backend.emit(
-        .requestServedFromMemoryCache(
-            id: Network.Request.ID("cached-request-with-url"),
-            response: Network.Response(url: "https://example.com/cached.css", status: 200),
-            resourceType: nil,
-            timestamp: 6
-        ),
-        target: target
-    )
+        await #expect(throws: RawWireFixtureError.missingRequiredField(
+            method: "Network.requestServedFromMemoryCache",
+            field: "resource.url"
+        )) {
+            try await runtime.wire.emitRaw(
+                .requestServedFromMemoryCache(
+                    id: Network.Request.ID("cached-request-without-url"),
+                    response: Network.Response(status: 200),
+                    resourceType: nil,
+                    timestamp: 5
+                ),
+                target: target
+            )
+        }
+        try await runtime.wire.emitRaw(
+            .requestServedFromMemoryCache(
+                id: Network.Request.ID("cached-request-with-url"),
+                response: Network.Response(url: "https://example.com/cached.css", status: 200),
+                resourceType: nil,
+                timestamp: 6
+            ),
+            target: target
+        )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
-    try await waitUntil { results.items.count == 1 }
-    #expect(results.items.first?.url == "https://example.com/cached.css")
-    #expect(context.state == .attached)
+        let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+        try await waitUntil { results.items.count == 1 }
+        #expect(results.items.first?.url == "https://example.com/cached.css")
+        #expect(context.state == .attached)
+    }
 }
 
 @MainActor
 @Test
 func webSocketCreatedCreatesRequestWithConnectingState() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let requestID = Network.Request.ID("websocket-created")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let requestID = Network.Request.ID("websocket-created")
 
-    await runtime.backend.emit(
-        .webSocket(.created(id: requestID, url: "wss://example.com/socket")),
-        target: target
-    )
+        try await runtime.wire.emitRaw(
+            .webSocket(.created(id: requestID, url: "wss://example.com/socket")),
+            target: target
+        )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
-    try await waitUntil { results.items.count == 1 }
-    let request = try #require(results.items.first)
-    #expect(request.url == "wss://example.com/socket")
-    #expect(request.method == "GET")
-    #expect(request.resourceType == .webSocket)
-    #expect(request.state == .pending)
-    #expect(request.requestSentTimestamp == nil)
-    #expect(request.webSocket?.readyState == .connecting)
-    #expect(request.hasResponse == false)
-    #expect(request.hasResponseBody == false)
-    #expect(context.registeredRequest(for: request.id) === request)
+        let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+        try await waitUntil { results.items.count == 1 }
+        let request = try #require(results.items.first)
+        #expect(request.url == "wss://example.com/socket")
+        #expect(request.method == "GET")
+        #expect(request.resourceType == .webSocket)
+        #expect(request.state == .pending)
+        #expect(request.requestSentTimestamp == nil)
+        #expect(request.webSocket?.readyState == .connecting)
+        #expect(request.hasResponse == false)
+        #expect(request.hasResponseBody == false)
+        #expect(context.registeredRequest(for: request.id) === request)
+    }
 }
 
 @MainActor
 @Test
 func webSocketCreatedPreservesExistingNetworkLifecycleMetadata() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let requestID = Network.Request.ID("websocket-created-after-request")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let requestID = Network.Request.ID("websocket-created-after-request")
 
-    await runtime.backend.emit(
-        .requestWillBeSent(
-            id: requestID,
-            request: Network.Request(
+        try await runtime.wire.emitRaw(
+            .requestWillBeSent(
                 id: requestID,
-                url: "wss://example.com/socket",
-                method: "GET",
-                headers: ["Upgrade": "websocket"]
+                request: Network.Request(
+                    id: requestID,
+                    url: "wss://example.com/socket",
+                    method: "GET",
+                    headers: ["Upgrade": "websocket"]
+                ),
+                resourceType: .webSocket,
+                redirectResponse: nil,
+                timestamp: 1
             ),
-            resourceType: .webSocket,
-            redirectResponse: nil,
-            timestamp: 1
-        ),
-        target: target
-    )
-    await runtime.backend.emit(
-        .responseReceived(
-            id: requestID,
-            response: Network.Response(
-                status: 101,
-                statusText: "Switching Protocols",
-                headers: ["Upgrade": "websocket"],
-                requestHeaders: ["Upgrade": "websocket"]
-            ),
-            resourceType: .webSocket,
-            timestamp: 2
-        ),
-        target: target
-    )
-    await runtime.backend.emit(
-        .dataReceived(id: requestID, dataLength: 7, encodedDataLength: 3, timestamp: 3),
-        target: target
-    )
-
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
-    try await waitUntil { results.items.first?.decodedDataLength == 7 }
-    let request = try #require(results.items.first)
-    let webSocket = try #require(request.webSocket)
-
-    await runtime.backend.emit(
-        .webSocket(.created(id: requestID, url: "wss://example.com/socket?created")),
-        target: target
-    )
-    try await waitUntil { request.url == "wss://example.com/socket?created" }
-    await runtime.backend.emit(
-        .webSocket(.handshakeRequest(
-            id: requestID,
-            request: Network.Request(
+            target: target
+        )
+        try await runtime.wire.emitRaw(
+            .responseReceived(
                 id: requestID,
-                url: "",
-                method: "GET",
-                headers: ["Upgrade": "websocket"]
+                response: Network.Response(
+                    status: 101,
+                    statusText: "Switching Protocols",
+                    headers: ["Upgrade": "websocket"],
+                    requestHeaders: ["Upgrade": "websocket"]
+                ),
+                resourceType: .webSocket,
+                timestamp: 2
             ),
-            timestamp: nil
-        )),
-        target: target
-    )
-    await runtime.backend.emit(
-        .webSocket(.handshakeResponse(
-            id: requestID,
-            response: Network.Response(
-                status: 101,
-                statusText: "Switching Protocols",
-                headers: ["Upgrade": "websocket"],
-                requestHeaders: ["Upgrade": "websocket"]
-            ),
-            timestamp: nil
-        )),
-        target: target
-    )
-    try await waitUntil { request.webSocket?.readyState == .open }
+            target: target
+        )
+        try await runtime.wire.emitRaw(
+            .dataReceived(id: requestID, dataLength: 7, encodedDataLength: 3, timestamp: 3),
+            target: target
+        )
 
-    let currentWebSocket = try #require(request.webSocket)
-    #expect(currentWebSocket === webSocket)
-    #expect(request.url == "wss://example.com/socket?created")
-    #expect(request.method == "GET")
-    #expect(request.requestHeaders["Upgrade"] == "websocket")
-    #expect(currentWebSocket.handshakeRequest?.url == "wss://example.com/socket?created")
-    #expect(request.status == 101)
-    #expect(request.responseHeaders["Upgrade"] == "websocket")
-    #expect(request.requestSentTimestamp == 1)
-    #expect(request.responseReceivedTimestamp == 2)
-    #expect(request.lastDataReceivedTimestamp == 3)
-    #expect(request.finishedOrFailedTimestamp == nil)
-    #expect(request.decodedDataLength == 7)
-    #expect(request.encodedDataLength == 3)
-    #expect(request.state == .responded)
+        let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+        try await waitUntil { results.items.first?.decodedDataLength == 7 }
+        let request = try #require(results.items.first)
+        let webSocket = try #require(request.webSocket)
+
+        try await runtime.wire.emitRaw(
+            .webSocket(.created(id: requestID, url: "wss://example.com/socket?created")),
+            target: target
+        )
+        try await waitUntil { request.url == "wss://example.com/socket?created" }
+        try await runtime.wire.emitRaw(
+            .webSocket(.handshakeRequest(
+                id: requestID,
+                request: Network.Request(
+                    id: requestID,
+                    url: "",
+                    method: "GET",
+                    headers: ["Upgrade": "websocket"]
+                ),
+                timestamp: nil
+            )),
+            target: target
+        )
+        try await runtime.wire.emitRaw(
+            .webSocket(.handshakeResponse(
+                id: requestID,
+                response: Network.Response(
+                    status: 101,
+                    statusText: "Switching Protocols",
+                    headers: ["Upgrade": "websocket"],
+                    requestHeaders: ["Upgrade": "websocket"]
+                ),
+                timestamp: nil
+            )),
+            target: target
+        )
+        try await waitUntil { request.webSocket?.readyState == .open }
+
+        let currentWebSocket = try #require(request.webSocket)
+        #expect(currentWebSocket === webSocket)
+        #expect(request.url == "wss://example.com/socket?created")
+        #expect(request.method == "GET")
+        #expect(request.requestHeaders["Upgrade"] == "websocket")
+        #expect(currentWebSocket.handshakeRequest?.url == "wss://example.com/socket?created")
+        #expect(request.status == 101)
+        #expect(request.responseHeaders["Upgrade"] == "websocket")
+        #expect(request.requestSentTimestamp == 1)
+        #expect(request.responseReceivedTimestamp == 2)
+        #expect(request.lastDataReceivedTimestamp == 3)
+        #expect(request.finishedOrFailedTimestamp == nil)
+        #expect(request.decodedDataLength == 7)
+        #expect(request.encodedDataLength == 3)
+        #expect(request.state == .responded)
+    }
 }
 
 @MainActor
 @Test
 func webSocketLifecycleStoresHandshakeFramesErrorAndClosedState() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let requestID = Network.Request.ID("websocket-lifecycle")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let requestID = Network.Request.ID("websocket-lifecycle")
 
-    await runtime.backend.emit(
-        .webSocket(.created(id: requestID, url: "wss://example.com/socket")),
-        target: target
-    )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
-    try await waitUntil { results.items.count == 1 }
-    let request = try #require(results.items.first)
+        try await runtime.wire.emitRaw(
+            .webSocket(.created(id: requestID, url: "wss://example.com/socket")),
+            target: target
+        )
+        let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+        try await waitUntil { results.items.count == 1 }
+        let request = try #require(results.items.first)
 
-    await runtime.backend.emit(
-        .webSocket(.handshakeRequest(
-            id: requestID,
-            request: Network.Request(
+        try await runtime.wire.emitRaw(
+            .webSocket(.handshakeRequest(
                 id: requestID,
-                url: "wss://example.com/socket",
-                method: "GET",
-                headers: ["Upgrade": "websocket"]
-            ),
-            timestamp: 1
-        )),
-        target: target
-    )
-    try await waitUntil {
-        request.webSocket?.handshakeRequest?.headers["Upgrade"] == "websocket"
-    }
-    #expect(request.requestHeaders["Upgrade"] == "websocket")
-    #expect(request.requestSentTimestamp == 1)
-    #expect(request.webSocket?.readyState == .connecting)
-    #expect(request.state == .pending)
+                request: Network.Request(
+                    id: requestID,
+                    url: "wss://example.com/socket",
+                    method: "GET",
+                    headers: ["Upgrade": "websocket"]
+                ),
+                timestamp: 1
+            )),
+            target: target
+        )
+        try await waitUntil {
+            request.webSocket?.handshakeRequest?.headers["Upgrade"] == "websocket"
+        }
+        #expect(request.requestHeaders["Upgrade"] == "websocket")
+        #expect(request.requestSentTimestamp == 1)
+        #expect(request.webSocket?.readyState == .connecting)
+        #expect(request.state == .pending)
 
-    await runtime.backend.emit(
-        .webSocket(.handshakeResponse(
-            id: requestID,
-            response: Network.Response(
-                status: 101,
-                statusText: "Switching Protocols",
-                headers: ["Upgrade": "websocket"],
-                requestHeaders: ["Upgrade": "websocket"]
-            ),
-            timestamp: 2
-        )),
-        target: target
-    )
-    try await waitUntil {
-        request.webSocket?.readyState == .open && request.state == .responded
-    }
-    #expect(request.webSocket?.handshakeResponse?.status == 101)
-    #expect(request.status == 101)
-    #expect(request.responseHeaders["Upgrade"] == "websocket")
-    #expect(request.requestHeaders["Upgrade"] == "websocket")
-    #expect(request.responseReceivedTimestamp == 2)
-    #expect(request.hasResponse)
-    #expect(request.hasResponseBody == false)
+        try await runtime.wire.emitRaw(
+            .webSocket(.handshakeResponse(
+                id: requestID,
+                response: Network.Response(
+                    status: 101,
+                    statusText: "Switching Protocols",
+                    headers: ["Upgrade": "websocket"],
+                    requestHeaders: ["Upgrade": "websocket"]
+                ),
+                timestamp: 2
+            )),
+            target: target
+        )
+        try await waitUntil {
+            request.webSocket?.readyState == .open && request.state == .responded
+        }
+        #expect(request.webSocket?.handshakeResponse?.status == 101)
+        #expect(request.status == 101)
+        #expect(request.responseHeaders["Upgrade"] == "websocket")
+        #expect(request.requestHeaders["Upgrade"] == "websocket")
+        #expect(request.responseReceivedTimestamp == 2)
+        #expect(request.hasResponse)
+        #expect(request.hasResponseBody == false)
 
-    await runtime.backend.emit(
-        .webSocket(.frameSent(
-            id: requestID,
-            frame: Network.WebSocketFrame(opcode: 1, mask: true, payloadData: "hello", payloadLength: 5),
-            timestamp: 3
-        )),
-        target: target
-    )
-    await runtime.backend.emit(
-        .webSocket(.frameReceived(
-            id: requestID,
-            frame: Network.WebSocketFrame(opcode: 1, mask: false, payloadData: "world", payloadLength: 5),
-            timestamp: 4
-        )),
-        target: target
-    )
-    await runtime.backend.emit(
-        .webSocket(.error(id: requestID, message: "boom", timestamp: 5)),
-        target: target
-    )
-    try await waitUntil { request.webSocket?.frames.count == 3 }
-    let webSocket = try #require(request.webSocket)
-    #expect(webSocket.frames.map(\.direction) == [.sent, .received, .error("boom")])
-    #expect(webSocket.frames[0].opcode == 1)
-    #expect(webSocket.frames[0].mask == true)
-    #expect(webSocket.frames[0].payloadData == "hello")
-    #expect(webSocket.frames[0].payloadLength == 5)
-    #expect(webSocket.frames[1].payloadData == "world")
-    #expect(webSocket.frames[2].errorMessage == "boom")
-    #expect(webSocket.frames.map(\.timestamp) == [3, 4, 5])
-    #expect(request.decodedDataLength == 10)
-    #expect(request.lastDataReceivedTimestamp == 5)
+        try await runtime.wire.emitRaw(
+            .webSocket(.frameSent(
+                id: requestID,
+                frame: Network.WebSocketFrame(opcode: 1, mask: true, payloadData: "hello", payloadLength: 5),
+                timestamp: 3
+            )),
+            target: target
+        )
+        try await runtime.wire.emitRaw(
+            .webSocket(.frameReceived(
+                id: requestID,
+                frame: Network.WebSocketFrame(opcode: 1, mask: false, payloadData: "world", payloadLength: 5),
+                timestamp: 4
+            )),
+            target: target
+        )
+        try await runtime.wire.emitRaw(
+            .webSocket(.error(id: requestID, message: "boom", timestamp: 5)),
+            target: target
+        )
+        try await waitUntil { request.webSocket?.frames.count == 3 }
+        let webSocket = try #require(request.webSocket)
+        #expect(webSocket.frames.map(\.direction) == [.sent, .received, .error("boom")])
+        #expect(webSocket.frames[0].opcode == 1)
+        #expect(webSocket.frames[0].mask == true)
+        #expect(webSocket.frames[0].payloadData == "hello")
+        #expect(webSocket.frames[0].payloadLength == 5)
+        #expect(webSocket.frames[1].payloadData == "world")
+        #expect(webSocket.frames[2].errorMessage == "boom")
+        #expect(webSocket.frames.map(\.timestamp) == [3, 4, 5])
+        #expect(request.decodedDataLength == 10)
+        #expect(request.lastDataReceivedTimestamp == 5)
 
-    await runtime.backend.emit(
-        .webSocket(.closed(id: requestID, timestamp: 6)),
-        target: target
-    )
-    try await waitUntil {
-        request.webSocket?.readyState == .closed && request.state == .finished
+        try await runtime.wire.emitRaw(
+            .webSocket(.closed(id: requestID, timestamp: 6)),
+            target: target
+        )
+        try await waitUntil {
+            request.webSocket?.readyState == .closed && request.state == .finished
+        }
+        #expect(request.finishedOrFailedTimestamp == 6)
     }
-    #expect(request.finishedOrFailedTimestamp == 6)
 }
 
 @MainActor
 @Test
 func webSocketEventForUnknownRequestIsSkipped() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let requestID = Network.Request.ID("missing-websocket")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let requestID = Network.Request.ID("missing-websocket")
 
-    await runtime.backend.emit(
-        .webSocket(.handshakeResponse(
-            id: requestID,
-            response: Network.Response(status: 101),
-            timestamp: 1
-        )),
-        target: target
-    )
-    await runtime.backend.emit(
-        .webSocket(.created(id: requestID, url: "wss://example.com/socket")),
-        target: target
-    )
+        try await runtime.wire.emitRaw(
+            .webSocket(.handshakeResponse(
+                id: requestID,
+                response: Network.Response(status: 101),
+                timestamp: 1
+            )),
+            target: target
+        )
+        try await runtime.wire.emitRaw(
+            .webSocket(.created(id: requestID, url: "wss://example.com/socket")),
+            target: target
+        )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
-    try await waitUntil { results.items.count == 1 }
-    #expect(results.items.first?.webSocket?.readyState == .connecting)
-    #expect(results.items.first?.webSocket?.handshakeResponse == nil)
-    #expect(context.state == .attached)
+        let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+        try await waitUntil { results.items.count == 1 }
+        #expect(results.items.first?.webSocket?.readyState == .connecting)
+        #expect(results.items.first?.webSocket?.handshakeResponse == nil)
+        #expect(context.state == .attached)
+    }
 }
 
 @MainActor
 @Test
 func webSocketOtherEventDoesNotMutateRequests() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
 
-    let baseline = context.eventPumpAppliedSequenceForTesting
-    await runtime.backend.emit(
-        .webSocket(.other(RawEvent(domain: "Network", method: "webSocketFutureEvent"))),
-        target: target
-    )
-    let didProcessOtherEvent = await context.waitForEventPumpAppliedSequenceForTesting(after: baseline)
-    #expect(didProcessOtherEvent)
+        let baseline = context.eventPumpAppliedSequenceForTesting
+        try await runtime.wire.emitRaw(
+            .webSocket(.other(RawEvent(domain: "Network", method: "webSocketFutureEvent"))),
+            target: target
+        )
+        let didProcessOtherEvent = await context.waitForEventPumpAppliedSequenceForTesting(after: baseline)
+        #expect(didProcessOtherEvent)
 
-    #expect(results.items.isEmpty)
-    #expect(context.state == .attached)
+        #expect(results.items.isEmpty)
+        #expect(context.state == .attached)
+    }
 }
 
 @MainActor
 @Test
 func requestPostDataCreatesNetworkBodyWithFormRepresentation() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let requestID = Network.Request.ID("form-request")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let requestID = Network.Request.ID("form-request")
 
-    await runtime.backend.emit(
-        .requestWillBeSent(
-            id: requestID,
-            request: Network.Request(
+        try await runtime.wire.emitRaw(
+            .requestWillBeSent(
                 id: requestID,
-                url: "https://example.com/form",
-                method: "POST",
-                headers: ["Content-Type": " application/x-www-form-urlencoded; charset=utf-8"],
-                postData: "name=Jane+Doe&city=Tokyo%20East"
+                request: Network.Request(
+                    id: requestID,
+                    url: "https://example.com/form",
+                    method: "POST",
+                    headers: ["Content-Type": " application/x-www-form-urlencoded; charset=utf-8"],
+                    postData: "name=Jane+Doe&city=Tokyo%20East"
+                ),
+                resourceType: .fetch,
+                redirectResponse: nil,
+                timestamp: 1
             ),
-            resourceType: .fetch,
-            redirectResponse: nil,
-            timestamp: 1
-        ),
-        target: target
-    )
+            target: target
+        )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
-    try await waitUntil { results.items.count == 1 }
-    let request = try #require(results.items.first)
-    let body = try #require(request.requestBody)
-    #expect(body.role == .request)
-    #expect(body.kind == .form)
-    #expect(body.phase == .loaded)
-    #expect(body.full == "name=Jane+Doe&city=Tokyo%20East")
-    #expect(body.text == "name=Jane+Doe&city=Tokyo%20East")
-    #expect(body.size == "name=Jane+Doe&city=Tokyo%20East".utf8.count)
-    #expect(body.isBase64Encoded == false)
-    #expect(body.isTruncated == false)
-    #expect(body.sourceSyntaxKind == .plainText)
-    #expect(body.textRepresentation == "name=Jane Doe\ncity=Tokyo East")
-    #expect(body.textRepresentationSyntaxKind == .plainText)
-    #expect(request.canFetchResponseBody == false)
+        let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+        try await waitUntil { results.items.count == 1 }
+        let request = try #require(results.items.first)
+        let body = try #require(request.requestBody)
+        #expect(body.role == .request)
+        #expect(body.kind == .form)
+        #expect(body.phase == .loaded)
+        #expect(body.full == "name=Jane+Doe&city=Tokyo%20East")
+        #expect(body.text == "name=Jane+Doe&city=Tokyo%20East")
+        #expect(body.size == "name=Jane+Doe&city=Tokyo%20East".utf8.count)
+        #expect(body.isBase64Encoded == false)
+        #expect(body.isTruncated == false)
+        #expect(body.sourceSyntaxKind == .plainText)
+        #expect(body.textRepresentation == "name=Jane Doe\ncity=Tokyo East")
+        #expect(body.textRepresentationSyntaxKind == .plainText)
+        #expect(request.canFetchResponseBody == false)
+    }
 }
 
 @MainActor
 @Test
 func responseRequestHeadersRefreshRequestBodyHints() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let requestID = Network.Request.ID("form-request-hints")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let requestID = Network.Request.ID("form-request-hints")
 
-    await runtime.backend.emit(
-        .requestWillBeSent(
-            id: requestID,
-            request: Network.Request(
+        try await runtime.wire.emitRaw(
+            .requestWillBeSent(
                 id: requestID,
-                url: "https://example.com/form",
-                method: "POST",
-                postData: "name=Jane+Doe&city=Tokyo%20East"
+                request: Network.Request(
+                    id: requestID,
+                    url: "https://example.com/form",
+                    method: "POST",
+                    postData: "name=Jane+Doe&city=Tokyo%20East"
+                ),
+                resourceType: .fetch,
+                redirectResponse: nil,
+                timestamp: 1
             ),
-            resourceType: .fetch,
-            redirectResponse: nil,
-            timestamp: 1
-        ),
-        target: target
-    )
+            target: target
+        )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
-    try await waitUntil { results.items.count == 1 }
-    let request = try #require(results.items.first)
-    let body = try #require(request.requestBody)
-    #expect(body.kind == .text)
-    #expect(body.textRepresentation == "name=Jane+Doe&city=Tokyo%20East")
+        let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+        try await waitUntil { results.items.count == 1 }
+        let request = try #require(results.items.first)
+        let body = try #require(request.requestBody)
+        #expect(body.kind == .text)
+        #expect(body.textRepresentation == "name=Jane+Doe&city=Tokyo%20East")
 
-    await runtime.backend.emit(
-        .responseReceived(
-            id: requestID,
-            response: Network.Response(
-                status: 200,
-                headers: ["Content-Type": "text/plain"],
-                requestHeaders: ["Content-Type": "application/x-www-form-urlencoded"]
+        try await runtime.wire.emitRaw(
+            .responseReceived(
+                id: requestID,
+                response: Network.Response(
+                    status: 200,
+                    headers: ["Content-Type": "text/plain"],
+                    requestHeaders: ["Content-Type": "application/x-www-form-urlencoded"]
+                ),
+                resourceType: .fetch,
+                timestamp: 2
             ),
-            resourceType: .fetch,
-            timestamp: 2
-        ),
-        target: target
-    )
+            target: target
+        )
 
-    try await waitUntil { body.kind == .form }
-    #expect(request.requestHeaders["Content-Type"] == "application/x-www-form-urlencoded")
-    #expect(body.textRepresentation == "name=Jane Doe\ncity=Tokyo East")
-    #expect(body.textRepresentationSyntaxKind == .plainText)
+        try await waitUntil { body.kind == .form }
+        #expect(request.requestHeaders["Content-Type"] == "application/x-www-form-urlencoded")
+        #expect(body.textRepresentation == "name=Jane Doe\ncity=Tokyo East")
+        #expect(body.textRepresentationSyntaxKind == .plainText)
+    }
 }
 
 @MainActor
 @Test
 func responseBodyPublishesHintsAndFetchLifecycle() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let requestID = Network.Request.ID("json-response-body")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let requestID = Network.Request.ID("json-response-body")
 
-    await runtime.backend.emit(
-        .requestWillBeSent(
-            id: requestID,
-            request: Network.Request(
+        try await runtime.wire.emitRaw(
+            .requestWillBeSent(
                 id: requestID,
-                url: "https://example.com/api/data.json",
-                method: "GET"
+                request: Network.Request(
+                    id: requestID,
+                    url: "https://example.com/api/data.json",
+                    method: "GET"
+                ),
+                resourceType: .fetch,
+                redirectResponse: nil,
+                timestamp: 1
             ),
-            resourceType: .fetch,
-            redirectResponse: nil,
-            timestamp: 1
-        ),
-        target: target
-    )
-    await runtime.backend.emit(
-        .responseReceived(
-            id: requestID,
-            response: Network.Response(status: 200),
-            resourceType: .fetch,
-            timestamp: 2
-        ),
-        target: target
-    )
+            target: target
+        )
+        try await runtime.wire.emitRaw(
+            .responseReceived(
+                id: requestID,
+                response: Network.Response(status: 200),
+                resourceType: .fetch,
+                timestamp: 2
+            ),
+            target: target
+        )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
-    try await waitUntil { results.items.first?.state == .responded }
-    let request = try #require(results.items.first)
-    let body = request.responseBody
-    #expect(body.role == .response)
-    #expect(body.kind == .text)
-    #expect(body.phase == .available)
-    #expect(body.full == nil)
-    #expect(body.sourceSyntaxKind == .json)
-    #expect(body.textRepresentation == nil)
-    #expect(body.textRepresentationSyntaxKind == .json)
-    #expect(request.canFetchResponseBody == false)
+        let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+        try await waitUntil { results.items.first?.state == .responded }
+        let request = try #require(results.items.first)
+        let body = request.responseBody
+        #expect(body.role == .response)
+        #expect(body.kind == .text)
+        #expect(body.phase == .available)
+        #expect(body.full == nil)
+        #expect(body.sourceSyntaxKind == .json)
+        #expect(body.textRepresentation == nil)
+        #expect(body.textRepresentationSyntaxKind == .json)
+        #expect(request.canFetchResponseBody == false)
 
-    await runtime.backend.emit(
-        .loadingFinished(id: requestID, timestamp: 3, sourceMapURL: nil, metrics: nil),
-        target: target
-    )
-    try await waitUntil { request.canFetchResponseBody }
+        try await runtime.wire.emitRaw(
+            .loadingFinished(id: requestID, timestamp: 3, sourceMapURL: nil, metrics: nil),
+            target: target
+        )
+        try await waitUntil { request.canFetchResponseBody }
 
-    await runtime.backend.enqueue(
-        Network.Body(data: #"{"ok":true}"#, base64Encoded: false),
-        for: "Network",
-        method: "getResponseBody"
-    )
+        await runtime.wire.respond(
+            to: "Network.getResponseBody",
+            with: try rawNetworkBodyResult(
+                Network.Body(data: #"{"ok":true}"#, base64Encoded: false)
+            )
+        )
 
-    await request.fetchResponseBody()
-    #expect(body.phase == .loaded)
-    #expect(body.full == #"{"ok":true}"#)
-    #expect(body.text == #"{"ok":true}"#)
-    #expect(body.size == #"{"ok":true}"#.utf8.count)
-    #expect(body.isBase64Encoded == false)
-    #expect(body.isTruncated == false)
-    #expect(body.textRepresentation == #"{"ok":true}"#)
-    #expect(body.textRepresentationSyntaxKind == .json)
-    #expect(request.canFetchResponseBody == false)
+        await request.fetchResponseBody()
+        #expect(body.phase == .loaded)
+        #expect(body.full == #"{"ok":true}"#)
+        #expect(body.text == #"{"ok":true}"#)
+        #expect(body.size == #"{"ok":true}"#.utf8.count)
+        #expect(body.isBase64Encoded == false)
+        #expect(body.isTruncated == false)
+        #expect(body.textRepresentation == #"{"ok":true}"#)
+        #expect(body.textRepresentationSyntaxKind == .json)
+        #expect(request.canFetchResponseBody == false)
 
-    let commandsBeforeSecondFetch = await runtime.backend.recordedCommands()
-    await request.fetchResponseBody()
-    let commandsAfterSecondFetch = await runtime.backend.recordedCommands()
-    #expect(commandsAfterSecondFetch == commandsBeforeSecondFetch)
+        let commandsBeforeSecondFetch = runtime.wire.observations.commands
+        await request.fetchResponseBody()
+        let commandsAfterSecondFetch = runtime.wire.observations.commands
+        #expect(commandsAfterSecondFetch == commandsBeforeSecondFetch)
+    }
 }
 
 @MainActor
 @Test
 func fetchResponseBodyStoresLoadedAndFailedPhases() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let loadedID = Network.Request.ID("loaded-request")
-    let failedID = Network.Request.ID("failed-request")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let loadedID = Network.Request.ID("loaded-request")
+        let failedID = Network.Request.ID("failed-request")
 
-    await emitFinishedRequest(id: loadedID, target: target, backend: runtime.backend)
-    await emitFinishedRequest(id: failedID, target: target, backend: runtime.backend)
+        try await emitFinishedRequest(id: loadedID, target: target, backend: runtime.wire)
+        try await emitFinishedRequest(id: failedID, target: target, backend: runtime.wire)
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
-    try await waitUntil {
-        results.items.count == 2 && results.items.allSatisfy { $0.state == .finished }
+        let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+        try await waitUntil {
+            results.items.count == 2 && results.items.allSatisfy { $0.state == .finished }
+        }
+        let loadedRequest = try #require(results.items.first { $0.id == NetworkRequest.ID(loadedID) })
+        let failedRequest = try #require(results.items.first { $0.id == NetworkRequest.ID(failedID) })
+
+        await runtime.wire.respond(
+            to: "Network.getResponseBody",
+            with: try rawNetworkBodyResult(
+                Network.Body(data: "hello", base64Encoded: false)
+            )
+        )
+        await runtime.wire.fail(
+            "Network.getResponseBody",
+            message: "Response body is unavailable."
+        )
+
+        await loadedRequest.fetchResponseBody()
+        #expect(loadedRequest.responseBody.phase == .loaded)
+        #expect(loadedRequest.responseBody.text == "hello")
+        #expect(loadedRequest.responseBody.isBase64Encoded == false)
+
+        await failedRequest.fetchResponseBody()
+        guard case let .failed(error) = failedRequest.responseBody.phase else {
+            Issue.record("Expected failed response body phase.")
+            return
+        }
+        guard case .commandFailed(domain: "Network", method: "getResponseBody", message: _) = error else {
+            Issue.record("Expected Network.getResponseBody command failure, got \(error).")
+            return
+        }
+
+        let commands = runtime.wire.observations.commands
+        #expect(commands.contains { $0.method == "Network.getResponseBody" })
     }
-    let loadedRequest = try #require(results.items.first { $0.id == NetworkRequest.ID(loadedID) })
-    let failedRequest = try #require(results.items.first { $0.id == NetworkRequest.ID(failedID) })
-
-    await runtime.backend.enqueue(
-        Network.Body(data: "hello", base64Encoded: false),
-        for: "Network",
-        method: "getResponseBody"
-    )
-
-    await loadedRequest.fetchResponseBody()
-    #expect(loadedRequest.responseBody.phase == .loaded)
-    #expect(loadedRequest.responseBody.text == "hello")
-    #expect(loadedRequest.responseBody.isBase64Encoded == false)
-
-    await failedRequest.fetchResponseBody()
-    guard case let .failed(error) = failedRequest.responseBody.phase else {
-        Issue.record("Expected failed response body phase.")
-        return
-    }
-    guard case .commandFailed(domain: "Network", method: "getResponseBody", message: _) = error else {
-        Issue.record("Expected Network.getResponseBody command failure.")
-        return
-    }
-
-    let commands = await runtime.backend.recordedCommands()
-    #expect(commands.contains(RecordedCommand(domain: "Network", method: "getResponseBody")))
 }
 
 @MainActor
 @Test
 func fetchResponseBodyDropsCompletionAfterNetworkClear() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let requestID = Network.Request.ID("cleared-body-request")
-    let gate = WebInspectorTestGate()
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let requestID = Network.Request.ID("cleared-body-request")
+        let gate = await runtime.wire.deferReply(
+            to: "Network.getResponseBody",
+            with: try rawNetworkBodyResult(
+                Network.Body(data: "stale-body", base64Encoded: false)
+            )
+        )
 
-    await emitFinishedRequest(id: requestID, target: target, backend: runtime.backend)
-    try await waitUntil {
-        context.registeredRequest(for: NetworkRequest.ID(requestID))?.state == .finished
+        try await emitFinishedRequest(id: requestID, target: target, backend: runtime.wire)
+        try await waitUntil {
+            context.registeredRequest(for: NetworkRequest.ID(requestID))?.state == .finished
+        }
+        let request = try #require(context.registeredRequest(for: NetworkRequest.ID(requestID)))
+        let body = request.responseBody
+        let fetchTask = Task {
+            await request.fetchResponseBody()
+        }
+        try await waitUntil {
+            runtime.wire.observations.commands.contains { $0.method == "Network.getResponseBody" }
+        }
+
+        await context.clearNetworkRequests()
+        #expect(context.registeredRequest(for: NetworkRequest.ID(requestID)) == nil)
+        gate.open()
+        await fetchTask.value
+
+        #expect(body.phase == NetworkBody.Phase.fetching)
+        #expect(body.text == nil)
+        #expect(request.responseBody === body)
     }
-    let request = try #require(context.registeredRequest(for: NetworkRequest.ID(requestID)))
-    let body = request.responseBody
-    await runtime.backend.hold(domain: "Network", method: "getResponseBody", gate: gate)
-
-    let fetchTask = Task {
-        await request.fetchResponseBody()
-    }
-    try await waitUntil {
-        await runtime.backend.recordedCommands().contains(RecordedCommand(domain: "Network", method: "getResponseBody"))
-    }
-
-    await context.clearNetworkRequests()
-    #expect(context.registeredRequest(for: NetworkRequest.ID(requestID)) == nil)
-    await runtime.backend.enqueue(
-        Network.Body(data: "stale-body", base64Encoded: false),
-        for: "Network",
-        method: "getResponseBody"
-    )
-    await gate.open()
-    await fetchTask.value
-
-    #expect(body.phase == NetworkBody.Phase.fetching)
-    #expect(body.text == nil)
-    #expect(request.responseBody === body)
 }
 
 @MainActor
 @Test
 func consoleEventsPopulateRepeatAndClearFetchedMessages() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let requestID = Network.Request.ID("request-1")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let requestID = Network.Request.ID("request-1")
 
-    let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
-    await runtime.backend.emit(
-        .messageAdded(Console.Message(
-            source: Console.Source(rawValue: "console-api"),
-            level: Console.Level(rawValue: "warning"),
-            type: Console.Kind(rawValue: "log"),
-            text: "hello",
-            url: "https://example.com/app.js",
-            line: 12,
-            column: 4,
-            repeatCount: 1,
-            networkRequestID: requestID,
-            timestamp: 1
-        )),
-        target: target
-    )
+        let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
+        try await runtime.wire.emitRaw(
+            .messageAdded(Console.Message(
+                source: Console.Source(rawValue: "console-api"),
+                level: Console.Level(rawValue: "warning"),
+                type: Console.Kind(rawValue: "log"),
+                text: "hello",
+                url: "https://example.com/app.js",
+                line: 12,
+                column: 4,
+                repeatCount: 1,
+                networkRequestID: requestID,
+                timestamp: 1
+            )),
+            target: target
+        )
 
-    try await waitUntil { results.items.count == 1 }
-    let message = try #require(results.items.first)
-    #expect(message.source == Console.Source(rawValue: "console-api"))
-    #expect(message.level == Console.Level(rawValue: "warning"))
-    #expect(message.kind == Console.Kind(rawValue: "log"))
-    #expect(message.text == "hello")
-    #expect(message.url == "https://example.com/app.js")
-    #expect(message.line == 12)
-    #expect(message.column == 4)
-    #expect(message.repeatCount == 1)
-    #expect(message.networkRequestID == NetworkRequest.ID(requestID))
-    #expect(message.timestamp == 1)
-    #expect(context.registeredMessage(for: message.id) === message)
+        try await waitUntil { results.items.count == 1 }
+        let message = try #require(results.items.first)
+        #expect(message.source == Console.Source(rawValue: "console-api"))
+        #expect(message.level == Console.Level(rawValue: "warning"))
+        #expect(message.kind == Console.Kind(rawValue: "log"))
+        #expect(message.text == "hello")
+        #expect(message.url == "https://example.com/app.js")
+        #expect(message.line == 12)
+        #expect(message.column == 4)
+        #expect(message.repeatCount == 1)
+        #expect(message.networkRequestID == NetworkRequest.ID(requestID))
+        #expect(message.timestamp == 1)
+        #expect(context.registeredMessage(for: message.id) === message)
 
-    await runtime.backend.emit(
-        .messageRepeatCountUpdated(count: 3, timestamp: 2),
-        target: target
-    )
-    try await waitUntil { message.repeatCount == 3 }
-    #expect(results.items.first === message)
-    #expect(message.timestamp == 2)
+        try await runtime.wire.emitRaw(
+            .messageRepeatCountUpdated(count: 3, timestamp: 2),
+            target: target
+        )
+        try await waitUntil { message.repeatCount == 3 }
+        #expect(results.items.first === message)
+        #expect(message.timestamp == 2)
 
-    await runtime.backend.emit(
-        .messageAdded(Console.Message(
-            source: Console.Source(rawValue: "javascript"),
-            level: Console.Level(rawValue: "error"),
-            text: "second"
-        )),
-        target: target
-    )
-    try await waitUntil { results.items.count == 2 }
-    #expect(results.items.map(\.text) == ["hello", "second"])
+        try await runtime.wire.emitRaw(
+            .messageAdded(Console.Message(
+                source: Console.Source(rawValue: "javascript"),
+                level: Console.Level(rawValue: "error"),
+                text: "second"
+            )),
+            target: target
+        )
+        try await waitUntil { results.items.count == 2 }
+        #expect(results.items.map(\.text) == ["hello", "second"])
 
-    await runtime.backend.enqueue((), for: "Runtime", method: "releaseObjectGroup")
-    await runtime.backend.emit(
-        .messagesCleared(reason: Console.ClearReason(rawValue: "console-api")),
-        target: target
-    )
-    try await waitUntil { results.items.isEmpty }
-    #expect(context.registeredMessage(for: message.id) == nil)
-    try await waitUntil {
-        await runtime.backend.recordedCommands()
-            .contains(RecordedCommand(domain: "Runtime", method: "releaseObjectGroup"))
+        await runtime.wire.respond(to: "Runtime.releaseObjectGroup")
+        try await runtime.wire.emitRaw(
+            .messagesCleared(reason: Console.ClearReason(rawValue: "console-api")),
+            target: target
+        )
+        try await waitUntil { results.items.isEmpty }
+        #expect(context.registeredMessage(for: message.id) == nil)
+        try await waitUntil {
+            runtime.wire.observations.commands
+                .contains { $0.method == "Runtime.releaseObjectGroup" }
+        }
     }
 }
 
 @MainActor
 @Test
 func consoleFetchedResultsHonorDescriptorsForInitialUpdatesAndDescriptorChanges() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let allResults: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let allResults: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
 
-    await runtime.backend.emit(
-        .messageAdded(Console.Message(
-            source: Console.Source(rawValue: "console-api"),
-            level: Console.Level(rawValue: "warning"),
-            text: "middle"
-        )),
-        target: target
-    )
-    await runtime.backend.emit(
-        .messageAdded(Console.Message(
-            source: Console.Source(rawValue: "javascript"),
-            level: Console.Level(rawValue: "error"),
-            text: "zeta"
-        )),
-        target: target
-    )
-    await runtime.backend.emit(
-        .messageAdded(Console.Message(
-            source: Console.Source(rawValue: "console-api"),
-            level: Console.Level(rawValue: "warning"),
-            text: "omega"
-        )),
-        target: target
-    )
-    try await waitUntil { allResults.items.count == 3 }
+        try await runtime.wire.emitRaw(
+            .messageAdded(Console.Message(
+                source: Console.Source(rawValue: "console-api"),
+                level: Console.Level(rawValue: "warning"),
+                text: "middle"
+            )),
+            target: target
+        )
+        try await runtime.wire.emitRaw(
+            .messageAdded(Console.Message(
+                source: Console.Source(rawValue: "javascript"),
+                level: Console.Level(rawValue: "error"),
+                text: "zeta"
+            )),
+            target: target
+        )
+        try await runtime.wire.emitRaw(
+            .messageAdded(Console.Message(
+                source: Console.Source(rawValue: "console-api"),
+                level: Console.Level(rawValue: "warning"),
+                text: "omega"
+            )),
+            target: target
+        )
+        try await waitUntil { allResults.items.count == 3 }
 
-    let warningDescriptor = WebInspectorFetchDescriptor<ConsoleMessage>(
-        predicate: #Predicate { message in
-            message.level.rawValue == "warning"
-        },
-        sortBy: [SortDescriptor(\.text, order: .reverse)],
-        fetchLimit: 2
-    )
-    let warningResults: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults(for: warningDescriptor)
+        let warningDescriptor = WebInspectorFetchDescriptor<ConsoleMessage>(
+            predicate: #Predicate { message in
+                message.level.rawValue == "warning"
+            },
+            sortBy: [SortDescriptor(\.text, order: .reverse)],
+            fetchLimit: 2
+        )
+        let warningResults: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults(for: warningDescriptor)
 
-    #expect(warningResults.items.map(\.text) == ["omega", "middle"])
+        #expect(warningResults.items.map(\.text) == ["omega", "middle"])
 
-    await runtime.backend.emit(
-        .messageAdded(Console.Message(
-            source: Console.Source(rawValue: "console-api"),
-            level: Console.Level(rawValue: "warning"),
-            text: "zebra"
-        )),
-        target: target
-    )
-    try await waitUntil {
-        warningResults.items.map(\.text) == ["zebra", "omega"]
-    }
+        try await runtime.wire.emitRaw(
+            .messageAdded(Console.Message(
+                source: Console.Source(rawValue: "console-api"),
+                level: Console.Level(rawValue: "warning"),
+                text: "zebra"
+            )),
+            target: target
+        )
+        try await waitUntil {
+            warningResults.items.map(\.text) == ["zebra", "omega"]
+        }
 
-    warningResults.updateFetchDescriptor(WebInspectorFetchDescriptor<ConsoleMessage>(
-        sortBy: [SortDescriptor(\.text)],
-        fetchLimit: 2,
-        fetchOffset: 1
-    ))
+        warningResults.updateFetchDescriptor(WebInspectorFetchDescriptor<ConsoleMessage>(
+            sortBy: [SortDescriptor(\.text)],
+            fetchLimit: 2,
+            fetchOffset: 1
+        ))
 
-    try await waitUntil {
-        warningResults.items.map(\.text) == ["omega", "zebra"]
+        try await waitUntil {
+            warningResults.items.map(\.text) == ["omega", "zebra"]
+        }
     }
 }
 
 @MainActor
 @Test
 func consoleMessageParametersRegisterRuntimeObjects() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let objectID = Runtime.RemoteObject.ID("console-object")
-    let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let objectID = Runtime.RemoteObject.ID("console-object")
+        let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
 
-    await runtime.backend.emit(
-        .messageAdded(Console.Message(
-            source: Console.Source(rawValue: "console-api"),
-            level: Console.Level(rawValue: "log"),
-            text: "first",
-            parameters: [
-                Runtime.RemoteObject(id: objectID, kind: .object, description: "before")
-            ]
-        )),
-        target: target
-    )
-    try await waitUntil { results.items.count == 1 }
-    let firstMessage = try #require(results.items.first)
-    let firstParameter = try #require(firstMessage.parameters.first)
-    #expect(firstParameter.description == "before")
+        try await runtime.wire.emitRaw(
+            .messageAdded(Console.Message(
+                source: Console.Source(rawValue: "console-api"),
+                level: Console.Level(rawValue: "log"),
+                text: "first",
+                parameters: [
+                    Runtime.RemoteObject(id: objectID, kind: .object, description: "before")
+                ]
+            )),
+            target: target
+        )
+        try await waitUntil { results.items.count == 1 }
+        let firstMessage = try #require(results.items.first)
+        let firstParameter = try #require(firstMessage.parameters.first)
+        #expect(firstParameter.description == "before")
 
-    await runtime.backend.emit(
-        .messageAdded(Console.Message(
-            source: Console.Source(rawValue: "console-api"),
-            level: Console.Level(rawValue: "log"),
-            text: "second",
-            parameters: [
-                Runtime.RemoteObject(id: objectID, kind: .object, description: "after")
-            ]
-        )),
-        target: target
-    )
-    try await waitUntil { results.items.count == 2 }
-    let secondMessage = try #require(results.items.last)
-    let secondParameter = try #require(secondMessage.parameters.first)
+        try await runtime.wire.emitRaw(
+            .messageAdded(Console.Message(
+                source: Console.Source(rawValue: "console-api"),
+                level: Console.Level(rawValue: "log"),
+                text: "second",
+                parameters: [
+                    Runtime.RemoteObject(id: objectID, kind: .object, description: "after")
+                ]
+            )),
+            target: target
+        )
+        try await waitUntil { results.items.count == 2 }
+        let secondMessage = try #require(results.items.last)
+        let secondParameter = try #require(secondMessage.parameters.first)
 
-    #expect(firstParameter === secondParameter)
-    #expect(firstParameter.description == "after")
+        #expect(firstParameter === secondParameter)
+        #expect(firstParameter.description == "after")
+    }
 }
 
 @MainActor
 @Test
 func consoleMessagesClearedReleasesConsoleRuntimeObjects() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let objectID = Runtime.RemoteObject.ID("console-stale-object")
-    let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let objectID = Runtime.RemoteObject.ID("console-stale-object")
+        let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
 
-    await runtime.backend.emit(
-        .messageAdded(Console.Message(
-            source: Console.Source(rawValue: "console-api"),
-            level: Console.Level(rawValue: "log"),
-            text: "clear me",
-            parameters: [
-                Runtime.RemoteObject(id: objectID, kind: .object, description: "console object")
-            ]
-        )),
-        target: target
-    )
-    try await waitUntil { results.items.count == 1 }
-    let message = try #require(results.items.first)
-    let parameter = try #require(message.parameters.first)
+        try await runtime.wire.emitRaw(
+            .messageAdded(Console.Message(
+                source: Console.Source(rawValue: "console-api"),
+                level: Console.Level(rawValue: "log"),
+                text: "clear me",
+                parameters: [
+                    Runtime.RemoteObject(id: objectID, kind: .object, description: "console object")
+                ]
+            )),
+            target: target
+        )
+        try await waitUntil { results.items.count == 1 }
+        let message = try #require(results.items.first)
+        let parameter = try #require(message.parameters.first)
 
-    await runtime.backend.enqueue((), for: "Runtime", method: "releaseObjectGroup")
-    await runtime.backend.emit(
-        .messagesCleared(reason: Console.ClearReason(rawValue: "console-api")),
-        target: target
-    )
+        await runtime.wire.respond(to: "Runtime.releaseObjectGroup")
+        try await runtime.wire.emitRaw(
+            .messagesCleared(reason: Console.ClearReason(rawValue: "console-api")),
+            target: target
+        )
 
-    try await waitUntil {
-        await runtime.backend.recordedCommands()
-            .contains(RecordedCommand(domain: "Runtime", method: "releaseObjectGroup"))
+        try await waitUntil {
+            runtime.wire.observations.commands
+                .contains { $0.method == "Runtime.releaseObjectGroup" }
+        }
+        let releaseObjectGroupCommands = runtime.wire.observations.commands.filter {
+            $0.method == "Runtime.releaseObjectGroup"
+        }
+        #expect(releaseObjectGroupCommands.count == 1)
+        try await waitUntil { results.items.isEmpty }
+        do {
+            _ = try await parameter.properties()
+            Issue.record("Expected cleared console RuntimeObject to be stale.")
+        } catch let error as WebInspectorProxyError {
+            #expect(error == .disconnected("RuntimeObject is not registered in this WebInspectorContext."))
+        }
+        #expect(context.state == .attached)
     }
-    let releaseObjectGroupCommands = await runtime.backend.recordedCommands().filter {
-        $0 == RecordedCommand(domain: "Runtime", method: "releaseObjectGroup")
-    }
-    #expect(releaseObjectGroupCommands.count == 1)
-    try await waitUntil { results.items.isEmpty }
-    do {
-        _ = try await parameter.properties()
-        Issue.record("Expected cleared console RuntimeObject to be stale.")
-    } catch let error as WebInspectorProxyError {
-        #expect(error == .disconnected("RuntimeObject is not registered in this WebInspectorContext."))
-    }
-    #expect(context.state == .attached)
 }
 
 @MainActor
 @Test
 func evaluateRegistersRuntimeObjectInSelectedContext() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let contextID = Runtime.ExecutionContext.ID("main")
-    let objectID = Runtime.RemoteObject.ID("evaluation-result")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let contextID = Runtime.ExecutionContext.ID("main")
+        let objectID = Runtime.RemoteObject.ID("evaluation-result")
 
-    await runtime.backend.emit(
-        .executionContextCreated(Runtime.ExecutionContext(
-            id: contextID,
-            name: "Main",
-            kind: .normal
-        )),
-        target: target
-    )
-    try await waitUntil { context.executionContexts.count == 1 }
-    let runtimeContext = try #require(context.executionContexts.first)
-    context.selectContext(runtimeContext)
+        try await runtime.wire.emitRaw(
+            .executionContextCreated(Runtime.ExecutionContext(
+                id: contextID,
+                name: "Main",
+                kind: .normal
+            )),
+            target: target
+        )
+        try await waitUntil { context.executionContexts.count == 1 }
+        let runtimeContext = try #require(context.executionContexts.first)
+        context.selectContext(runtimeContext)
 
-    await runtime.backend.enqueue(
-        Runtime.EvaluationResult(
-            object: Runtime.RemoteObject(
-                id: objectID,
-                kind: .string,
-                description: "hello",
-                value: .string("hello")
-            ),
-            wasThrown: true,
-            savedResultIndex: 7
-        ),
-        for: "Runtime",
-        method: "evaluate"
-    )
+        await runtime.wire.respond(
+            to: "Runtime.evaluate",
+            with: try rawRuntimeEvaluationResult(Runtime.EvaluationResult(
+                object: Runtime.RemoteObject(
+                    id: objectID,
+                    kind: .string,
+                    description: "hello",
+                    value: .string("hello")
+                ),
+                wasThrown: true,
+                savedResultIndex: 7
+            ))
+        )
 
-    let result = try await context.evaluate("throw 'hello'", in: runtimeContext)
-    #expect(result.isException)
-    #expect(result.object.kind == .string)
-    #expect(result.object.value == .string("hello"))
-    #expect(result.object.description == "hello")
+        let result = try await context.evaluate("throw 'hello'", in: runtimeContext)
+        #expect(result.isException)
+        #expect(result.object.kind == .string)
+        #expect(result.object.value == .string("hello"))
+        #expect(result.object.description == "hello")
 
-    let commands = await runtime.backend.recordedCommands()
-    let command = try #require(commands.last { $0.domain == "Runtime" && $0.method == "evaluate" })
-    let payload = try #require(command.payload.cast(as: Runtime.EvaluatePayload.self))
-    #expect(payload.expression == "throw 'hello'")
-    #expect(payload.context == contextID)
+        let commands = runtime.wire.observations.commands
+        let command = try #require(commands.last { $0.method == "Runtime.evaluate" })
+        #expect(try commandStringParameter(command, "expression") == "throw 'hello'")
+        #expect(try commandStringParameter(command, "contextId") == contextID.unscopedRawValue)
+    }
 }
 
 @MainActor
 @Test
 func runtimeObjectPropertiesAndCollectionEntriesUseRuntimeCommands() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (_, context) = try await startContext(runtime: runtime)
-    let objectID = Runtime.RemoteObject.ID("root-object")
-    let childID = Runtime.RemoteObject.ID("child-object")
-    let entryValueID = Runtime.RemoteObject.ID("entry-value")
+    try await withDataKitTestRuntime { runtime in
+        let (_, context) = try await startContext(runtime: runtime)
+        let objectID = Runtime.RemoteObject.ID("root-object")
+        let childID = Runtime.RemoteObject.ID("child-object")
+        let entryValueID = Runtime.RemoteObject.ID("entry-value")
 
-    await runtime.backend.enqueue(
-        Runtime.EvaluationResult(
-            object: Runtime.RemoteObject(id: objectID, kind: .object, description: "root")
-        ),
-        for: "Runtime",
-        method: "evaluate"
-    )
-    let evaluation = try await context.evaluate("window")
+        await runtime.wire.respond(
+            to: "Runtime.evaluate",
+            with: try rawRuntimeEvaluationResult(Runtime.EvaluationResult(
+                object: Runtime.RemoteObject(id: objectID, kind: .object, description: "root")
+            ))
+        )
+        let evaluation = try await context.evaluate("window")
 
-    await runtime.backend.enqueue(
-        [
-            Runtime.PropertyDescriptor(
-                name: "answer",
-                value: Runtime.RemoteObject(id: nil, kind: .number, description: "42", value: .number(42))
-            ),
-            Runtime.PropertyDescriptor(
-                name: "child",
-                value: Runtime.RemoteObject(id: childID, kind: .object, description: "child")
-            ),
-        ],
-        for: "Runtime",
-        method: "getProperties"
-    )
+        await runtime.wire.respond(
+            to: "Runtime.getProperties",
+            with: try rawRuntimePropertiesResult([
+                Runtime.PropertyDescriptor(
+                    name: "answer",
+                    value: Runtime.RemoteObject(id: nil, kind: .number, description: "42", value: .number(42))
+                ),
+                Runtime.PropertyDescriptor(
+                    name: "child",
+                    value: Runtime.RemoteObject(id: childID, kind: .object, description: "child")
+                ),
+            ])
+        )
 
-    let properties = try await evaluation.object.properties()
-    #expect(properties.count == 2)
-    #expect(properties[0].name == "answer")
-    #expect(properties[0].value == "42")
-    #expect(properties[0].object == nil)
-    let child = try #require(properties[1].object)
-    #expect(child.description == "child")
+        let properties = try await evaluation.object.properties()
+        #expect(properties.count == 2)
+        #expect(properties[0].name == "answer")
+        #expect(properties[0].value == "42")
+        #expect(properties[0].object == nil)
+        let child = try #require(properties[1].object)
+        #expect(child.description == "child")
 
-    await runtime.backend.enqueue(
-        [
-            Runtime.CollectionEntry(
-                key: Runtime.RemoteObject(id: nil, kind: .string, description: "key", value: .string("key")),
-                value: Runtime.RemoteObject(id: entryValueID, kind: .object, description: "entry value")
-            )
-        ],
-        for: "Runtime",
-        method: "getCollectionEntries"
-    )
+        await runtime.wire.respond(
+            to: "Runtime.getCollectionEntries",
+            with: try rawRuntimeCollectionEntriesResult([
+                Runtime.CollectionEntry(
+                    key: Runtime.RemoteObject(id: nil, kind: .string, description: "key", value: .string("key")),
+                    value: Runtime.RemoteObject(id: entryValueID, kind: .object, description: "entry value")
+                )
+            ])
+        )
 
-    let entries = try await evaluation.object.collectionEntries()
-    #expect(entries.count == 1)
-    #expect(entries[0].key?.value == .string("key"))
-    #expect(entries[0].value?.description == "entry value")
+        let entries = try await evaluation.object.collectionEntries()
+        #expect(entries.count == 1)
+        #expect(entries[0].key?.value == .string("key"))
+        #expect(entries[0].value?.description == "entry value")
 
-    let commands = await runtime.backend.recordedCommands()
-    #expect(commands.contains(RecordedCommand(domain: "Runtime", method: "getProperties")))
-    #expect(commands.contains(RecordedCommand(domain: "Runtime", method: "getCollectionEntries")))
+        let commands = runtime.wire.observations.commands
+        #expect(commands.contains { $0.method == "Runtime.getProperties" })
+        #expect(commands.contains { $0.method == "Runtime.getCollectionEntries" })
+    }
 }
 
 @MainActor
 @Test
 func staleRuntimeObjectThrowsWithoutFailingContext() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let contextID = Runtime.ExecutionContext.ID("main")
-    let objectID = Runtime.RemoteObject.ID("stale-object")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let contextID = Runtime.ExecutionContext.ID("main")
+        let objectID = Runtime.RemoteObject.ID("stale-object")
 
-    await runtime.backend.emit(
-        .executionContextCreated(Runtime.ExecutionContext(
-            id: contextID,
-            name: "Main",
-            kind: .normal
-        )),
-        target: target
-    )
-    try await waitUntil { context.executionContexts.count == 1 }
+        try await runtime.wire.emitRaw(
+            .executionContextCreated(Runtime.ExecutionContext(
+                id: contextID,
+                name: "Main",
+                kind: .normal
+            )),
+            target: target
+        )
+        try await waitUntil { context.executionContexts.count == 1 }
 
-    await runtime.backend.enqueue(
-        Runtime.EvaluationResult(
-            object: Runtime.RemoteObject(id: objectID, kind: .object, description: "stale")
-        ),
-        for: "Runtime",
-        method: "evaluate"
-    )
-    let evaluation = try await context.evaluate("window")
+        await runtime.wire.respond(
+            to: "Runtime.evaluate",
+            with: try rawRuntimeEvaluationResult(Runtime.EvaluationResult(
+                object: Runtime.RemoteObject(id: objectID, kind: .object, description: "stale")
+            ))
+        )
+        let evaluation = try await context.evaluate("window")
 
-    await runtime.backend.emit(.executionContextsCleared(target: target.id), target: target)
-    try await waitUntil {
-        context.executionContexts.isEmpty && context.selectedContext == nil
+        try await runtime.wire.emitRaw(.executionContextsCleared(target: target.id), target: target)
+        try await waitUntil {
+            context.executionContexts.isEmpty && context.selectedContext == nil
+        }
+
+        do {
+            _ = try await evaluation.object.properties()
+            Issue.record("Expected stale runtime object to throw.")
+        } catch let error as WebInspectorProxyError {
+            #expect(error == .disconnected("RuntimeObject is not registered in this WebInspectorContext."))
+        }
+        #expect(context.state == .attached)
     }
-
-    do {
-        _ = try await evaluation.object.properties()
-        Issue.record("Expected stale runtime object to throw.")
-    } catch let error as WebInspectorProxyError {
-        #expect(error == .disconnected("RuntimeObject is not registered in this WebInspectorContext."))
-    }
-    #expect(context.state == .attached)
 }
 
 @MainActor
 @Test
 func runtimeEvaluationRejectsReplyAfterRuntimeClearWithoutKnownContexts() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    #expect(context.executionContexts.isEmpty)
-    let gate = WebInspectorTestGate()
-    await runtime.backend.hold(domain: "Runtime", method: "evaluate", gate: gate)
-    await runtime.backend.enqueue(
-        Runtime.EvaluationResult(
-            object: Runtime.RemoteObject(
-                id: Runtime.RemoteObject.ID("stale-evaluation-reply"),
-                kind: .object
-            )
-        ),
-        for: "Runtime",
-        method: "evaluate"
-    )
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        #expect(context.executionContexts.isEmpty)
+        let gate = await runtime.wire.deferReply(
+            to: "Runtime.evaluate",
+            with: try rawRuntimeEvaluationResult(Runtime.EvaluationResult(
+                object: Runtime.RemoteObject(
+                    id: Runtime.RemoteObject.ID("stale-evaluation-reply"),
+                    kind: .object
+                )
+            ))
+        )
 
-    let evaluationTask = Task { @MainActor () -> WebInspectorProxyError? in
-        do {
-            _ = try await context.evaluate("window")
-            return nil
-        } catch let error as WebInspectorProxyError {
-            return error
-        } catch {
-            Issue.record("Unexpected evaluation error: \(error)")
-            return nil
+        let evaluationTask = Task { @MainActor () -> WebInspectorProxyError? in
+            do {
+                _ = try await context.evaluate("window")
+                return nil
+            } catch let error as WebInspectorProxyError {
+                return error
+            } catch {
+                Issue.record("Unexpected evaluation error: \(error)")
+                return nil
+            }
         }
-    }
-    _ = await runtime.backend.waitForRecordedCommands(domain: "Runtime", method: "evaluate", count: 1)
-    let eventBaseline = context.eventPumpAppliedSequenceForTesting
-    await runtime.backend.emit(.executionContextsCleared(target: target.id), target: target)
-    #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: eventBaseline))
-    await gate.open()
+        _ = await runtime.wire.observations.waitForCommands(method: "Runtime.evaluate", count: 1)
+        let eventBaseline = context.eventPumpAppliedSequenceForTesting
+        try await runtime.wire.emitRaw(.executionContextsCleared(target: target.id), target: target)
+        #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: eventBaseline))
+        gate.open()
 
-    #expect(await evaluationTask.value == .disconnected(
-        "Runtime evaluation target is no longer current in this WebInspectorContext."
-    ))
-    #expect(context.state == .attached)
+        #expect(await evaluationTask.value == .disconnected(
+            "Runtime evaluation target is no longer current in this WebInspectorContext."
+        ))
+        #expect(context.state == .attached)
+    }
 }
 
 @MainActor
 @Test
 func runtimePropertiesRejectReplyAfterObjectClear() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let contextID = Runtime.ExecutionContext.ID("properties-race")
-    await runtime.backend.emit(
-        .executionContextCreated(Runtime.ExecutionContext(
-            id: contextID,
-            name: "Properties race",
-            kind: .normal
-        )),
-        target: target
-    )
-    try await waitUntil { context.executionContexts.count == 1 }
-    await runtime.backend.enqueue(
-        Runtime.EvaluationResult(
-            object: Runtime.RemoteObject(
-                id: Runtime.RemoteObject.ID("properties-root"),
-                kind: .object
-            )
-        ),
-        for: "Runtime",
-        method: "evaluate"
-    )
-    let root = try await context.evaluate("window").object
-    let gate = WebInspectorTestGate()
-    await runtime.backend.hold(domain: "Runtime", method: "getProperties", gate: gate)
-    await runtime.backend.enqueue(
-        [
-            Runtime.PropertyDescriptor(
-                name: "child",
-                value: Runtime.RemoteObject(
-                    id: Runtime.RemoteObject.ID("stale-property-child"),
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let contextID = Runtime.ExecutionContext.ID("properties-race")
+        try await runtime.wire.emitRaw(
+            .executionContextCreated(Runtime.ExecutionContext(
+                id: contextID,
+                name: "Properties race",
+                kind: .normal
+            )),
+            target: target
+        )
+        try await waitUntil { context.executionContexts.count == 1 }
+        await runtime.wire.respond(
+            to: "Runtime.evaluate",
+            with: try rawRuntimeEvaluationResult(Runtime.EvaluationResult(
+                object: Runtime.RemoteObject(
+                    id: Runtime.RemoteObject.ID("properties-root"),
                     kind: .object
                 )
-            )
-        ],
-        for: "Runtime",
-        method: "getProperties"
-    )
+            ))
+        )
+        let root = try await context.evaluate("window").object
+        let gate = await runtime.wire.deferReply(
+            to: "Runtime.getProperties",
+            with: try rawRuntimePropertiesResult([
+                Runtime.PropertyDescriptor(
+                    name: "child",
+                    value: Runtime.RemoteObject(
+                        id: Runtime.RemoteObject.ID("stale-property-child"),
+                        kind: .object
+                    )
+                )
+            ])
+        )
 
-    let propertiesTask = Task { @MainActor () -> WebInspectorProxyError? in
-        do {
-            _ = try await root.properties()
-            return nil
-        } catch let error as WebInspectorProxyError {
-            return error
-        } catch {
-            Issue.record("Unexpected Runtime.getProperties error: \(error)")
-            return nil
+        let propertiesTask = Task { @MainActor () -> WebInspectorProxyError? in
+            do {
+                _ = try await root.properties()
+                return nil
+            } catch let error as WebInspectorProxyError {
+                return error
+            } catch {
+                Issue.record("Unexpected Runtime.getProperties error: \(error)")
+                return nil
+            }
         }
-    }
-    _ = await runtime.backend.waitForRecordedCommands(domain: "Runtime", method: "getProperties", count: 1)
-    let eventBaseline = context.eventPumpAppliedSequenceForTesting
-    await runtime.backend.emit(.executionContextsCleared(target: target.id), target: target)
-    #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: eventBaseline))
-    await gate.open()
+        _ = await runtime.wire.observations.waitForCommands(method: "Runtime.getProperties", count: 1)
+        let eventBaseline = context.eventPumpAppliedSequenceForTesting
+        try await runtime.wire.emitRaw(.executionContextsCleared(target: target.id), target: target)
+        #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: eventBaseline))
+        gate.open()
 
-    #expect(await propertiesTask.value == .disconnected(
-        "RuntimeObject is not registered in this WebInspectorContext."
-    ))
-    #expect(context.state == .attached)
+        #expect(await propertiesTask.value == .disconnected(
+            "RuntimeObject is not registered in this WebInspectorContext."
+        ))
+        #expect(context.state == .attached)
+    }
 }
 
 @MainActor
 @Test
 func runtimeCollectionEntriesRejectReplyAfterObjectClear() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let contextID = Runtime.ExecutionContext.ID("entries-race")
-    await runtime.backend.emit(
-        .executionContextCreated(Runtime.ExecutionContext(
-            id: contextID,
-            name: "Entries race",
-            kind: .normal
-        )),
-        target: target
-    )
-    try await waitUntil { context.executionContexts.count == 1 }
-    await runtime.backend.enqueue(
-        Runtime.EvaluationResult(
-            object: Runtime.RemoteObject(
-                id: Runtime.RemoteObject.ID("entries-root"),
-                kind: .object
-            )
-        ),
-        for: "Runtime",
-        method: "evaluate"
-    )
-    let root = try await context.evaluate("new Map()").object
-    let gate = WebInspectorTestGate()
-    await runtime.backend.hold(domain: "Runtime", method: "getCollectionEntries", gate: gate)
-    await runtime.backend.enqueue(
-        [
-            Runtime.CollectionEntry(
-                value: Runtime.RemoteObject(
-                    id: Runtime.RemoteObject.ID("stale-entry-value"),
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let contextID = Runtime.ExecutionContext.ID("entries-race")
+        try await runtime.wire.emitRaw(
+            .executionContextCreated(Runtime.ExecutionContext(
+                id: contextID,
+                name: "Entries race",
+                kind: .normal
+            )),
+            target: target
+        )
+        try await waitUntil { context.executionContexts.count == 1 }
+        await runtime.wire.respond(
+            to: "Runtime.evaluate",
+            with: try rawRuntimeEvaluationResult(Runtime.EvaluationResult(
+                object: Runtime.RemoteObject(
+                    id: Runtime.RemoteObject.ID("entries-root"),
                     kind: .object
                 )
-            )
-        ],
-        for: "Runtime",
-        method: "getCollectionEntries"
-    )
+            ))
+        )
+        let root = try await context.evaluate("new Map()").object
+        let gate = await runtime.wire.deferReply(
+            to: "Runtime.getCollectionEntries",
+            with: try rawRuntimeCollectionEntriesResult([
+                Runtime.CollectionEntry(
+                    value: Runtime.RemoteObject(
+                        id: Runtime.RemoteObject.ID("stale-entry-value"),
+                        kind: .object
+                    )
+                )
+            ])
+        )
 
-    let entriesTask = Task { @MainActor () -> WebInspectorProxyError? in
-        do {
-            _ = try await root.collectionEntries()
-            return nil
-        } catch let error as WebInspectorProxyError {
-            return error
-        } catch {
-            Issue.record("Unexpected Runtime.getCollectionEntries error: \(error)")
-            return nil
+        let entriesTask = Task { @MainActor () -> WebInspectorProxyError? in
+            do {
+                _ = try await root.collectionEntries()
+                return nil
+            } catch let error as WebInspectorProxyError {
+                return error
+            } catch {
+                Issue.record("Unexpected Runtime.getCollectionEntries error: \(error)")
+                return nil
+            }
         }
-    }
-    _ = await runtime.backend.waitForRecordedCommands(
-        domain: "Runtime",
-        method: "getCollectionEntries",
-        count: 1
-    )
-    let eventBaseline = context.eventPumpAppliedSequenceForTesting
-    await runtime.backend.emit(.executionContextsCleared(target: target.id), target: target)
-    #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: eventBaseline))
-    await gate.open()
+        _ = await runtime.wire.observations.waitForCommands(method: "Runtime.getCollectionEntries", count: 1)
+        let eventBaseline = context.eventPumpAppliedSequenceForTesting
+        try await runtime.wire.emitRaw(.executionContextsCleared(target: target.id), target: target)
+        #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: eventBaseline))
+        gate.open()
 
-    #expect(await entriesTask.value == .disconnected(
-        "RuntimeObject is not registered in this WebInspectorContext."
-    ))
-    #expect(context.state == .attached)
+        #expect(await entriesTask.value == .disconnected(
+            "RuntimeObject is not registered in this WebInspectorContext."
+        ))
+        #expect(context.state == .attached)
+    }
 }
 
 @MainActor
 @Test
 func runtimeEventsPopulateContextsAndFallbackSelection() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (target, context) = try await startContext(runtime: runtime)
-    let mainID = Runtime.ExecutionContext.ID("main")
-    let utilityID = Runtime.ExecutionContext.ID("utility")
+    try await withDataKitTestRuntime { runtime in
+        let (target, context) = try await startContext(runtime: runtime)
+        let mainID = Runtime.ExecutionContext.ID("main")
+        let utilityID = Runtime.ExecutionContext.ID("utility")
 
-    await runtime.backend.emit(
-        .executionContextCreated(Runtime.ExecutionContext(
-            id: mainID,
-            name: "Main",
-            kind: .normal
-        )),
-        target: target
-    )
-    try await waitUntil { context.executionContexts.count == 1 }
-    let mainContext = try #require(context.executionContexts.first)
-    #expect(context.selectedContext === mainContext)
-    #expect(mainContext.name == "Main")
-    #expect(mainContext.kind == .normal)
+        try await runtime.wire.emitRaw(
+            .executionContextCreated(Runtime.ExecutionContext(
+                id: mainID,
+                name: "Main",
+                kind: .normal
+            )),
+            target: target
+        )
+        try await waitUntil { context.executionContexts.count == 1 }
+        let mainContext = try #require(context.executionContexts.first)
+        #expect(context.selectedContext === mainContext)
+        #expect(mainContext.name == "Main")
+        #expect(mainContext.kind == .normal)
 
-    await runtime.backend.emit(
-        .executionContextCreated(Runtime.ExecutionContext(
-            id: mainID,
-            name: "Main Updated",
-            kind: .normal
-        )),
-        target: target
-    )
-    try await waitUntil { mainContext.name == "Main Updated" }
-    #expect(context.executionContexts.first === mainContext)
+        try await runtime.wire.emitRaw(
+            .executionContextCreated(Runtime.ExecutionContext(
+                id: mainID,
+                name: "Main Updated",
+                kind: .normal
+            )),
+            target: target
+        )
+        try await waitUntil { mainContext.name == "Main Updated" }
+        #expect(context.executionContexts.first === mainContext)
 
-    await runtime.backend.emit(
-        .executionContextCreated(Runtime.ExecutionContext(
-            id: utilityID,
-            name: "Utility",
-            kind: .user
-        )),
-        target: target
-    )
-    try await waitUntil { context.executionContexts.count == 2 }
-    let utilityContext = try #require(context.executionContexts.first { $0.id == RuntimeContext.ID(utilityID) })
-    #expect(context.selectedContext === mainContext)
+        try await runtime.wire.emitRaw(
+            .executionContextCreated(Runtime.ExecutionContext(
+                id: utilityID,
+                name: "Utility",
+                kind: .user
+            )),
+            target: target
+        )
+        try await waitUntil { context.executionContexts.count == 2 }
+        let utilityContext = try #require(context.executionContexts.first { $0.id == RuntimeContext.ID(utilityID) })
+        #expect(context.selectedContext === mainContext)
 
-    context.selectContext(utilityContext)
-    #expect(context.selectedContext === utilityContext)
+        context.selectContext(utilityContext)
+        #expect(context.selectedContext === utilityContext)
 
-    await runtime.backend.emit(
-        .executionContextDestroyed(utilityID),
-        target: target
-    )
-    try await waitUntil {
-        context.executionContexts.count == 1 && context.selectedContext === mainContext
-    }
-    #expect(context.executionContexts.first === mainContext)
+        try await runtime.wire.emitRaw(
+            .executionContextDestroyed(utilityID),
+            target: target
+        )
+        try await waitUntil {
+            context.executionContexts.count == 1 && context.selectedContext === mainContext
+        }
+        #expect(context.executionContexts.first === mainContext)
 
-    await runtime.backend.emit(
-        .executionContextsCleared(target: target.id),
-        target: target
-    )
-    try await waitUntil {
-        context.executionContexts.isEmpty && context.selectedContext == nil
+        try await runtime.wire.emitRaw(
+            .executionContextsCleared(target: target.id),
+            target: target
+        )
+        try await waitUntil {
+            context.executionContexts.isEmpty && context.selectedContext == nil
+        }
     }
 }
 
 @MainActor
+@Test
+func dataKitTestRuntimeScopeQuiescesPendingWorkAndReleasesOwners() async throws {
+    weak var weakWire: DataKitRawWireDriver?
+    weak var weakPeer: WebInspectorTestPeer?
+    weak var weakProxy: WebInspectorProxy?
+    var observations: DataKitRawWireDriver.Observations?
+    var observationWaiter: Task<[WebInspectorTestPeer.Command], Never>?
+    var pendingReply: Task<Void, any Error>?
+
+    try await withDataKitTestRuntime { runtime in
+        weakWire = runtime.wire
+        weakPeer = runtime.peer
+        weakProxy = runtime.proxy
+
+        let runtimeObservations = runtime.wire.observations
+        observations = runtimeObservations
+        observationWaiter = Task {
+            await runtimeObservations.waitForCommands(
+                method: "Test.neverReceived",
+                count: 1
+            )
+        }
+        try await waitUntil {
+            runtimeObservations.pendingWaiterCountForTesting == 1
+        }
+
+        _ = await runtime.wire.deferReply(to: "Page.reload")
+        let page = runtime.page
+        pendingReply = Task {
+            try await page.page.reload()
+        }
+        _ = await runtimeObservations.waitForCommands(method: "Page.reload", count: 1)
+    }
+
+    let finishedObservationWaiter = try #require(observationWaiter)
+    #expect(await finishedObservationWaiter.value.isEmpty)
+    #expect(observations?.pendingWaiterCountForTesting == 0)
+
+    let finishedReply = try #require(pendingReply)
+    await #expect(throws: WebInspectorProxyError.closed) {
+        try await finishedReply.value
+    }
+
+    #expect(weakWire == nil)
+    #expect(weakPeer == nil)
+    #expect(weakProxy == nil)
+}
+
+@MainActor
 private func startContext(
-    runtime: WebInspectorProxyTestRuntime,
+    runtime: DataKitTestRuntime,
     document: DOM.Node = DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document")
 ) async throws -> (WebInspectorTarget, WebInspectorContext) {
     let target = try await runtime.proxy.waitForCurrentPage()
-    await enqueueStartupReplies(on: runtime.backend, document: document)
+    try await enqueueStartupReplies(on: runtime.wire, document: document)
 
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
@@ -7392,132 +7588,119 @@ private func startContext(
     return (target, context)
 }
 
-private var startupCommands: [RecordedCommand] {
+private var startupCommands: [String] {
     [
-        RecordedCommand(domain: "Inspector", method: "enable"),
-        RecordedCommand(domain: "Inspector", method: "initialized"),
-        RecordedCommand(domain: "Runtime", method: "enable"),
-        RecordedCommand(domain: "Network", method: "enable"),
-        RecordedCommand(domain: "DOM", method: "getDocument"),
-        RecordedCommand(domain: "Console", method: "enable"),
+        "Inspector.enable",
+        "Inspector.initialized",
+        "Runtime.enable",
+        "Network.enable",
+        "DOM.getDocument",
+        "Console.enable",
     ]
 }
 
-private var shutdownCommands: [RecordedCommand] {
+private var shutdownCommands: [String] {
     [
-        RecordedCommand(domain: "Console", method: "disable"),
-        RecordedCommand(domain: "Runtime", method: "disable"),
-        RecordedCommand(domain: "Network", method: "disable"),
-        RecordedCommand(domain: "Inspector", method: "disable"),
+        "Console.disable",
+        "Runtime.disable",
+        "Network.disable",
+        "Inspector.disable",
     ]
 }
 
 private func enqueueStartupReplies(
-    on backend: WebInspectorTestBackend,
+    on backend: DataKitRawWireDriver,
     document: DOM.Node = DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document")
-) async {
+) async throws {
     await enqueueDomainEnableReplies(on: backend)
-    await backend.enqueue(document, for: "DOM", method: "getDocument")
-}
-
-private func enqueueDomainEnableReplies(on backend: WebInspectorTestBackend) async {
-    await backend.enqueue((), for: "Inspector", method: "enable")
-    await backend.enqueue((), for: "Inspector", method: "initialized")
-    await backend.enqueue((), for: "Runtime", method: "enable")
-    await backend.enqueue((), for: "Network", method: "enable")
-    await backend.enqueue((), for: "Console", method: "enable")
-}
-
-private func enqueueDomainDisableReplies(on backend: WebInspectorTestBackend) async {
-    await backend.enqueue((), for: "Console", method: "disable")
-    await backend.enqueue((), for: "Runtime", method: "disable")
-    await backend.enqueue((), for: "Network", method: "disable")
-    await backend.enqueue((), for: "Inspector", method: "disable")
-}
-
-private func enqueueCSSStyleReplies(on backend: WebInspectorTestBackend) async {
-    await backend.enqueue(
-        CSS.MatchedStyles(matchedRules: [
-            CSS.Rule(
-                selectorList: CSS.Rule.SelectorList(selectors: [".card"], text: ".card"),
-                origin: CSS.Origin(rawValue: "regular"),
-                style: CSS.Style(
-                    id: CSS.Style.ID("style-1"),
-                    properties: [
-                        CSS.Property(
-                            id: CSS.Property.ID("property-1"),
-                            name: "display",
-                            value: "grid",
-                            text: "display: grid;",
-                            isEditable: true
-                        )
-                    ],
-                    cssText: "display: grid;",
-                    isEditable: true
-                )
-            )
-        ]),
-        for: "CSS",
-        method: "getMatchedStylesForNode"
-    )
-    await backend.enqueue(
-        CSS.InlineStyles(),
-        for: "CSS",
-        method: "getInlineStylesForNode"
-    )
-    await backend.enqueue(
-        [
-            CSS.ComputedProperty(name: "display", value: "grid")
-        ],
-        for: "CSS",
-        method: "getComputedStyleForNode"
+    await backend.respond(
+        to: "DOM.getDocument",
+        with: try domDocumentResult(document)
     )
 }
 
-private func matchedStylesCommandCount(on backend: WebInspectorTestBackend) async -> Int {
-    await backend.recordedCommands()
-        .filter { $0 == RecordedCommand(domain: "CSS", method: "getMatchedStylesForNode") }
+private func enqueueDomainEnableReplies(on backend: DataKitRawWireDriver) async {
+    await backend.respond(to: "Inspector.enable")
+    await backend.respond(to: "Inspector.initialized")
+    await backend.respond(to: "Runtime.enable")
+    await backend.respond(to: "Network.enable")
+    await backend.respond(to: "Console.enable")
+}
+
+private func enqueueDomainDisableReplies(on backend: DataKitRawWireDriver) async {
+    await backend.respond(to: "Console.disable")
+    await backend.respond(to: "Runtime.disable")
+    await backend.respond(to: "Network.disable")
+    await backend.respond(to: "Inspector.disable")
+}
+
+private func enqueueCSSStyleReplies(on backend: DataKitRawWireDriver) async throws {
+    await backend.respond(
+        to: "CSS.getMatchedStylesForNode",
+        with: try testJSONObject(
+            #"{"matchedCSSRules":[{"rule":{"selectorList":{"selectors":[{"text":".card"}],"text":".card"},"origin":"regular","style":{"styleId":{"styleSheetId":"style-1","ordinal":0},"cssProperties":[{"name":"display","value":"grid","text":"display: grid;"}],"cssText":"display: grid;"}}}]}"#
+        )
+    )
+    await backend.respond(
+        to: "CSS.getInlineStylesForNode",
+        with: try testJSONObject("{}")
+    )
+    await backend.respond(
+        to: "CSS.getComputedStyleForNode",
+        with: try testJSONObject(
+            #"{"computedStyle":[{"name":"display","value":"grid"}]}"#
+        )
+    )
+}
+
+private func matchedStylesCommandCount(on backend: DataKitRawWireDriver) -> Int {
+    backend.observations.commands
+        .filter { $0.method == "CSS.getMatchedStylesForNode" }
         .count
 }
 
 @MainActor
 private func waitForStartupSubscribers(
-    runtime: WebInspectorProxyTestRuntime,
+    runtime: DataKitTestRuntime,
     target: WebInspectorTarget
 ) async throws {
-    try await runtime.backend.waitForSubscribers(domain: "DOM", target: target, count: 1)
-    try await runtime.backend.waitForSubscribers(domain: "Inspector", target: target, count: 1)
-    try await runtime.backend.waitForSubscribers(domain: "CSS", target: target, count: 1)
-    try await runtime.backend.waitForSubscribers(domain: "Network", target: target, count: 1)
-    try await runtime.backend.waitForSubscribers(domain: "Console", target: target, count: 1)
-    try await runtime.backend.waitForSubscribers(domain: "Runtime", target: target, count: 1)
+    _ = runtime
+    await target.waitForModelEventSubscriptions()
 }
 
 private func emitFinishedRequest(
     id: Network.Request.ID,
     target: WebInspectorTarget,
-    backend: WebInspectorTestBackend
-) async {
-    await backend.emit(
-        .requestWillBeSent(
-            id: id,
-            request: Network.Request(id: id, url: "https://example.com/\(id)", method: "GET"),
-            resourceType: .fetch,
-            redirectResponse: nil,
-            timestamp: 1
-        ),
-        target: target
+    backend: DataKitRawWireDriver
+) async throws {
+    let targetID = target.pageBindingID ?? "page-main"
+    try await backend.emitTargetEvent(
+        targetID: targetID,
+        method: "Network.requestWillBeSent",
+        parameters: try testJSONObject(
+            """
+            {"requestId":"\(id.rawValue)","request":{"url":"https://example.com/\(id.rawValue)","method":"GET","headers":{}},"type":"Fetch","timestamp":1}
+            """
+        )
     )
-    await backend.emit(
-        .responseReceived(
-            id: id,
-            response: Network.Response(status: 200, mimeType: "text/plain"),
-            resourceType: .fetch,
-            timestamp: 2
-        ),
-        target: target
+    try await backend.emitTargetEvent(
+        targetID: targetID,
+        method: "Network.responseReceived",
+        parameters: try testJSONObject(
+            """
+            {"requestId":"\(id.rawValue)","response":{"status":200,"mimeType":"text/plain"},"type":"Fetch","timestamp":2}
+            """
+        )
     )
-    await backend.emit(.loadingFinished(id: id, timestamp: 3, sourceMapURL: nil, metrics: nil), target: target)
+    try await backend.emitTargetEvent(
+        targetID: targetID,
+        method: "Network.loadingFinished",
+        parameters: try testJSONObject(
+            """
+            {"requestId":"\(id.rawValue)","timestamp":3}
+            """
+        )
+    )
 }
 
 @MainActor

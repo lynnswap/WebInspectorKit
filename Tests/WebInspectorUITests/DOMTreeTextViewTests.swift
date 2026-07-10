@@ -1311,21 +1311,23 @@ private final class ControlledNodeActionRecorder {
         case cancellationAware(WebInspectorTestGate)
         case cancellationIgnoring(CancellationIgnoringGate)
 
+        @MainActor
         func wait() async {
             switch self {
             case let .cancellationAware(gate):
-                await gate.wait()
+                await gate.waiter.wait()
             case let .cancellationIgnoring(gate):
                 await gate.wait()
             }
         }
 
-        func open() async {
+        @MainActor
+        func open() {
             switch self {
             case let .cancellationAware(gate):
-                await gate.open()
+                gate.open()
             case let .cancellationIgnoring(gate):
-                await gate.open()
+                gate.open()
             }
         }
     }
@@ -1383,7 +1385,7 @@ private final class ControlledNodeActionRecorder {
         if case .failure = resolution {
             failedInvocationIndexes.insert(index)
         }
-        await gates[index].open()
+        gates[index].open()
     }
 
     var invocationCount: Int {

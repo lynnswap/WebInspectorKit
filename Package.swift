@@ -163,7 +163,8 @@ let package = Package(
         .target(
             name: "WebInspectorTestSupport",
             dependencies: [
-                "WebInspectorProxyKit"
+                "WebInspectorProxyKit",
+                "WebInspectorProxyKitTesting",
             ],
             path: "Tests/WebInspectorTestSupport",
             swiftSettings: strictSwiftSettings

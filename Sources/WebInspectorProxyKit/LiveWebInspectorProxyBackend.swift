@@ -125,9 +125,9 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
             return WebInspectorProxyError.closed
         case let .transportFailure(message):
             return WebInspectorProxyError.disconnected(message)
-        case let .replyTimeout(method, _):
+        case .replyTimeout:
             return WebInspectorProxyError.timeout(domain: domain, method: method)
-        case let .remoteError(method, _, message):
+        case let .remoteError(_, _, message):
             return WebInspectorProxyError.commandFailed(domain: domain, method: method, message: message)
         case .malformedMessage, .missingMainPageTarget, .missingTarget:
             return WebInspectorProxyError.commandFailed(

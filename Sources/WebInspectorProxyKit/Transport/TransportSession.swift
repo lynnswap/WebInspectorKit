@@ -354,7 +354,6 @@ package actor ConnectionCore {
     private var closeWaiters: [UInt64: CheckedContinuation<Void, any Swift.Error>]
     private var closeWaiterRegistrationWaiters: [CheckedContinuation<Void, Never>]
     private var cancelledCloseWaiterIDs: Set<UInt64>
-    private var nextTestTargetOrdinal: UInt64
     private var modelTargetMutationActionForTesting: (@Sendable () -> Void)?
 
     package init(
@@ -410,7 +409,6 @@ package actor ConnectionCore {
         closeWaiters = [:]
         closeWaiterRegistrationWaiters = []
         cancelledCloseWaiterIDs = []
-        nextTestTargetOrdinal = 0
         modelTargetMutationActionForTesting = nil
     }
 
@@ -1718,28 +1716,6 @@ package actor ConnectionCore {
             return nil
         }
         return targetRegistry.target(for: targetID)
-    }
-
-    package func installTargetForTesting(
-        kind: ProtocolTarget.Kind,
-        frameID: ProtocolFrame.ID?,
-        isProvisional: Bool
-    ) -> ProtocolTarget.Record {
-        precondition(isOpen, "Cannot install a target after ConnectionCore starts closing.")
-        let ordinal = nextTestTargetOrdinal
-        nextTestTargetOrdinal &+= 1
-        let id = ProtocolTarget.ID("test-target-\(ordinal)")
-        let record = ProtocolTarget.Record(
-            id: id,
-            kind: kind,
-            frameID: frameID,
-            parentFrameID: nil,
-            capabilities: .resolved(for: kind, domainNames: nil),
-            isProvisional: isProvisional,
-            isPaused: false
-        )
-        _ = targetRegistry.recordTargetCreated(record)
-        return record
     }
 
     private func requireAvailableTarget(for route: RoutingTargetID) throws {
