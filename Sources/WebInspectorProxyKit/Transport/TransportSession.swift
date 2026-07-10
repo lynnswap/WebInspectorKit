@@ -46,10 +46,23 @@ private struct PhysicalTargetDisappearanceWaiters: Sendable {
     var release: [ReplyPromise<Void>] = []
 }
 
+private struct ConnectionModelFeedCapabilityLease: Sendable {
+    let owner: ConnectionCapabilityLeaseOwner
+    let key: ConnectionCapabilityKey
+}
+
+private enum ConnectionModelFeedLifecycle: Sendable {
+    case acquiring
+    case active
+    case closing(ReplyPromise<Void>)
+}
+
 private struct ConnectionModelFeedRegistration: Sendable {
     let id: ConnectionModelFeedID
     let configuredDomains: Set<ModelDomain>
     let mailbox: ConnectionModelFeedMailbox
+    var lifecycle: ConnectionModelFeedLifecycle
+    var capabilityLeases: [ConnectionModelFeedCapabilityLease]
     var targetSnapshotThrough: UInt64?
     var resetGeneration: WebInspectorPage.Generation
 }
@@ -315,7 +328,7 @@ package actor ConnectionCore {
     package func openModelFeed(
         configuredDomains: Set<ModelDomain>,
         capacity: Int
-    ) throws -> ConnectionModelFeed {
+    ) async throws -> ConnectionModelFeed {
         precondition(capacity > 0, "A bounded model feed must have a positive capacity.")
         guard isOpen else {
             throw terminalScopeError
@@ -342,6 +355,8 @@ package actor ConnectionCore {
             id: id,
             configuredDomains: configuredDomains,
             mailbox: mailbox,
+            lifecycle: .acquiring,
+            capabilityLeases: [],
             targetSnapshotThrough: nil,
             resetGeneration: resetGeneration
         )
@@ -353,19 +368,198 @@ package actor ConnectionCore {
            !publishModelTargetSnapshot() {
             throw ConnectionModelFeedError.bufferOverflow(capacity: capacity)
         }
-        return feed
+
+        do {
+            for domain in ModelDomain.ordered(configuredDomains) {
+                let leaseOwner = ConnectionCapabilityLeaseOwner.modelFeed(id, domain)
+                for capabilityDomain in domain.capabilityDependencies {
+                    try Task.checkCancellation()
+                    guard isOpen else {
+                        throw terminalScopeError
+                    }
+                    let key = ConnectionCapabilityKey(
+                        route: .currentPage,
+                        targetID: .currentPage,
+                        domain: capabilityDomain
+                    )
+                    let lease = ConnectionModelFeedCapabilityLease(
+                        owner: leaseOwner,
+                        key: key
+                    )
+                    let activation = beginCapabilityLease(
+                        leaseOwner,
+                        for: key,
+                        generation: currentPageGeneration
+                    )
+                    appendModelFeedCapabilityLease(lease, feedID: id)
+                    try await activateCapabilityLease(
+                        leaseOwner,
+                        for: key,
+                        activation: activation
+                    )
+                }
+            }
+            try Task.checkCancellation()
+            guard isOpen else {
+                throw terminalScopeError
+            }
+            guard var registration = modelFeed,
+                  registration.id == id else {
+                preconditionFailure("A model feed lost its exclusive registration during acquisition.")
+            }
+            guard case .acquiring = registration.lifecycle else {
+                preconditionFailure("A model feed changed lifecycle before acquisition completed.")
+            }
+            registration.lifecycle = .active
+            modelFeed = registration
+            return feed
+        } catch {
+            let cleanupError = await rollbackModelFeedAcquisition(id)
+            let resultError: any Swift.Error
+            if let cleanupError {
+                resultError = WebInspectorScopeError(
+                    operationError: error,
+                    cleanupError: cleanupError
+                )
+            } else {
+                resultError = error
+            }
+            mailbox.poison(throwing: resultError)
+            throw resultError
+        }
     }
 
     package func closeModelFeed(_ id: ConnectionModelFeedID) async throws {
-        guard let registration = modelFeed,
+        guard var registration = modelFeed,
               registration.id == id else {
             return
         }
-        guard case .open = state else {
-            return
+        switch registration.lifecycle {
+        case .acquiring:
+            preconditionFailure("A model feed cannot close before openModelFeed returns.")
+        case .closing(let completion):
+            return try await completion.value()
+        case .active:
+            break
+        }
+
+        let completion = ReplyPromise<Void>()
+        registration.lifecycle = .closing(completion)
+        modelFeed = registration
+
+        var cleanupError: (any Swift.Error)?
+        for lease in registration.capabilityLeases.reversed() {
+            do {
+                try await releaseCapabilityLease(lease.owner, for: lease.key)
+            } catch {
+                if cleanupError == nil {
+                    cleanupError = error
+                    registration.mailbox.poison(throwing: error)
+                }
+            }
+        }
+
+        if let cleanupError {
+            await terminateForModelFeedCapabilityCleanupFailure(cleanupError)
+            await completion.fulfill(.failure(cleanupError))
+            throw cleanupError
+        }
+
+        guard isOpen else {
+            do {
+                try await waitUntilClosed()
+                await completion.fulfill(.success(()))
+                return
+            } catch {
+                await completion.fulfill(.failure(error))
+                throw error
+            }
+        }
+        guard let currentRegistration = modelFeed,
+              currentRegistration.id == id else {
+            preconditionFailure("A closing model feed lost its exclusive registration.")
         }
         modelFeed = nil
-        registration.mailbox.finish()
+        currentRegistration.mailbox.finish()
+        await completion.fulfill(.success(()))
+    }
+
+    private func appendModelFeedCapabilityLease(
+        _ lease: ConnectionModelFeedCapabilityLease,
+        feedID: ConnectionModelFeedID
+    ) {
+        guard var registration = modelFeed,
+              registration.id == feedID else {
+            preconditionFailure("A model feed lost its registration while acquiring a capability.")
+        }
+        guard case .acquiring = registration.lifecycle else {
+            preconditionFailure("Only an acquiring model feed can add capability leases.")
+        }
+        precondition(
+            !registration.capabilityLeases.contains {
+                $0.owner == lease.owner && $0.key == lease.key
+            },
+            "A model feed attempted to acquire the same capability lease twice."
+        )
+        registration.capabilityLeases.append(lease)
+        modelFeed = registration
+    }
+
+    private func rollbackModelFeedAcquisition(
+        _ id: ConnectionModelFeedID
+    ) async -> (any Swift.Error)? {
+        guard let registration = modelFeed,
+              registration.id == id else {
+            return await modelFeedTerminalErrorIfNeeded()
+        }
+        var cleanupError: (any Swift.Error)?
+        for lease in registration.capabilityLeases.reversed() {
+            do {
+                try await releaseCapabilityLease(lease.owner, for: lease.key)
+            } catch {
+                if cleanupError == nil {
+                    cleanupError = error
+                    registration.mailbox.poison(throwing: error)
+                }
+            }
+        }
+        if let cleanupError {
+            await terminateForModelFeedCapabilityCleanupFailure(cleanupError)
+            return cleanupError
+        }
+        if let terminalError = await modelFeedTerminalErrorIfNeeded() {
+            return terminalError
+        }
+        guard let currentRegistration = modelFeed,
+              currentRegistration.id == id else {
+            preconditionFailure("A model feed lost its registration before rollback completed.")
+        }
+        modelFeed = nil
+        return nil
+    }
+
+    private func modelFeedTerminalErrorIfNeeded() async -> (any Swift.Error)? {
+        guard !isOpen else {
+            return nil
+        }
+        do {
+            try await waitUntilClosed()
+            return nil
+        } catch {
+            return error
+        }
+    }
+
+    private func terminateForModelFeedCapabilityCleanupFailure(
+        _ error: any Swift.Error
+    ) async {
+        if isOpen {
+            await terminate(.fatal(
+                "Failed to release model feed capabilities: \(error)"
+            ))
+        } else {
+            _ = await modelFeedTerminalErrorIfNeeded()
+        }
     }
 
     package func pageGeneration() throws -> WebInspectorPage.Generation {
@@ -417,34 +611,19 @@ package actor ConnectionCore {
         )
         resumeEventScopeRegistrationWaitersIfNeeded()
 
-        var capability = capabilities.states[key]
-            ?? ConnectionCapabilityRegistry.State(physical: .inactive(generation: generation))
-        precondition(capability.leaseIDs.insert(scopeID).inserted, "Duplicate capability lease identifier.")
-
-        let activation: ReplyPromise<Void>?
-        if case let .enabled(activeGeneration) = capability.physical,
-           activeGeneration == generation {
-            activation = nil
-            precondition(
-                capability.activatedLeaseIDs.insert(scopeID).inserted,
-                "A newly registered capability lease was already activated."
-            )
-        } else {
-            let promise = ReplyPromise<Void>()
-            capability.activationWaiters[scopeID] = promise
-            activation = promise
-        }
-        capabilities.states[key] = capability
-        await reconcileCapability(for: key)
+        let leaseOwner = ConnectionCapabilityLeaseOwner.eventScope(scopeID)
+        let activation = beginCapabilityLease(
+            leaseOwner,
+            for: key,
+            generation: generation
+        )
 
         do {
-            try await withTaskCancellationHandler {
-                try await activation?.value()
-            } onCancel: {
-                Task { [weak self] in
-                    await self?.cancelEventScopeActivation(scopeID, key: key)
-                }
-            }
+            try await activateCapabilityLease(
+                leaseOwner,
+                for: key,
+                activation: activation
+            )
         } catch is CancellationError {
             let cancellation = CancellationError()
             do {
@@ -457,7 +636,9 @@ package actor ConnectionCore {
             }
             throw cancellation
         } catch {
-            await abandonEventScopeAfterFailedAcquisition(scopeID, key: key)
+            eventScopes.remove(scopeID)?.sink?.finish(nil)
+            resumeEventScopeRegistrationWaitersIfNeeded()
+            await abandonCapabilityLease(leaseOwner, for: key)
             throw error
         }
 
@@ -472,51 +653,7 @@ package actor ConnectionCore {
         entry.sink?.finish(nil)
 
         let key = entry.capability
-        guard var capability = capabilities.states[key],
-              capability.leaseIDs.remove(id) != nil else {
-            return
-        }
-        capability.failedLeaseIDs.remove(id)
-        capability.activatedLeaseIDs.remove(id)
-        capability.activationWaiters.removeValue(forKey: id)
-
-        guard case .open = state else {
-            capabilities.states[key] = capability
-            capabilities.removeEmptyState(for: key)
-            return
-        }
-
-        guard capability.desiredCount == 0 else {
-            capabilities.states[key] = capability
-            return
-        }
-
-        let cleanup: ReplyPromise<Void>?
-        switch capability.physical {
-        case .inactive:
-            cleanup = nil
-        case .enabled:
-            let promise = ReplyPromise<Void>()
-            capability.releaseWaiters[id] = promise
-            cleanup = promise
-        case let .enabling(generation, operationID, _):
-            let promise = ReplyPromise<Void>()
-            capability.releaseWaiters[id] = promise
-            capability.physical = .enabling(
-                generation: generation,
-                operationID: operationID,
-                mustDisableAfterEnable: true
-            )
-            cleanup = promise
-        case .disabling:
-            let promise = ReplyPromise<Void>()
-            capability.releaseWaiters[id] = promise
-            cleanup = promise
-        }
-        capabilities.states[key] = capability
-        await reconcileCapability(for: key)
-        try await cleanup?.value()
-        capabilities.removeEmptyState(for: key)
+        try await releaseCapabilityLease(.eventScope(id), for: key)
     }
 
     package func send(_ command: ProtocolCommand) async throws -> ProtocolCommand.Result {
@@ -711,6 +848,12 @@ package actor ConnectionCore {
         replyStore.pendingReplyPurposes
     }
 
+    func capabilityLeaseOwnersForTesting() -> [
+        ConnectionCapabilityKey: Set<ConnectionCapabilityLeaseOwner>
+    ] {
+        capabilities.states.mapValues(\.leaseOwners)
+    }
+
     package func targetID(forExecutionContext key: RuntimeContext.Key) -> ProtocolTarget.ID? {
         runtimeContextRegistry.targetID(for: key)
     }
@@ -883,36 +1026,134 @@ package actor ConnectionCore {
         )
     }
 
-    private func cancelEventScopeActivation(
-        _ id: WebInspectorProxyEventScopeID,
-        key: ConnectionCapabilityKey
+    private func beginCapabilityLease(
+        _ leaseOwner: ConnectionCapabilityLeaseOwner,
+        for key: ConnectionCapabilityKey,
+        generation: WebInspectorPage.Generation
+    ) -> ReplyPromise<Void>? {
+        var capability = capabilities.states[key]
+            ?? ConnectionCapabilityRegistry.State(physical: .inactive(generation: generation))
+        precondition(
+            capability.leaseOwners.insert(leaseOwner).inserted,
+            "Duplicate capability lease owner."
+        )
+
+        let activation: ReplyPromise<Void>?
+        if case let .enabled(activeGeneration) = capability.physical,
+           activeGeneration == generation {
+            activation = nil
+            precondition(
+                capability.activatedLeaseOwners.insert(leaseOwner).inserted,
+                "A newly registered capability lease was already activated."
+            )
+        } else {
+            let promise = ReplyPromise<Void>()
+            capability.activationWaiters[leaseOwner] = promise
+            activation = promise
+        }
+        capabilities.states[key] = capability
+        return activation
+    }
+
+    private func activateCapabilityLease(
+        _ leaseOwner: ConnectionCapabilityLeaseOwner,
+        for key: ConnectionCapabilityKey,
+        activation: ReplyPromise<Void>?
+    ) async throws {
+        try await withTaskCancellationHandler {
+            await reconcileCapability(for: key)
+            try Task.checkCancellation()
+            try await activation?.value()
+        } onCancel: { [weak self] in
+            Task {
+                await self?.cancelCapabilityActivation(leaseOwner, for: key)
+            }
+        }
+    }
+
+    private func cancelCapabilityActivation(
+        _ leaseOwner: ConnectionCapabilityLeaseOwner,
+        for key: ConnectionCapabilityKey
     ) async {
         guard var capability = capabilities.states[key],
-              let waiter = capability.activationWaiters.removeValue(forKey: id) else {
+              let waiter = capability.activationWaiters.removeValue(forKey: leaseOwner) else {
             return
         }
-        capability.failedLeaseIDs.insert(id)
+        capability.failedLeaseOwners.insert(leaseOwner)
         capabilities.states[key] = capability
-        let cancellationAction = eventScopeActivationCancellationAction
-        eventScopeActivationCancellationAction = nil
-        await cancellationAction?()
+        if case .eventScope = leaseOwner {
+            let cancellationAction = eventScopeActivationCancellationAction
+            eventScopeActivationCancellationAction = nil
+            await cancellationAction?()
+        }
         await waiter.fulfill(.failure(CancellationError()))
     }
 
-    private func abandonEventScopeAfterFailedAcquisition(
-        _ id: WebInspectorProxyEventScopeID,
-        key: ConnectionCapabilityKey
-    ) async {
-        eventScopes.remove(id)?.sink?.finish(nil)
-        resumeEventScopeRegistrationWaitersIfNeeded()
+    private func releaseCapabilityLease(
+        _ leaseOwner: ConnectionCapabilityLeaseOwner,
+        for key: ConnectionCapabilityKey
+    ) async throws {
         guard var capability = capabilities.states[key] else {
             return
         }
-        capability.leaseIDs.remove(id)
-        capability.failedLeaseIDs.remove(id)
-        capability.activatedLeaseIDs.remove(id)
-        capability.activationWaiters.removeValue(forKey: id)
-        capability.releaseWaiters.removeValue(forKey: id)
+        guard capability.leaseOwners.remove(leaseOwner) != nil else {
+            return
+        }
+        capability.failedLeaseOwners.remove(leaseOwner)
+        capability.activatedLeaseOwners.remove(leaseOwner)
+        capability.activationWaiters.removeValue(forKey: leaseOwner)
+
+        guard case .open = state else {
+            capabilities.states[key] = capability
+            capabilities.removeEmptyState(for: key)
+            return
+        }
+
+        guard capability.desiredCount == 0 else {
+            capabilities.states[key] = capability
+            return
+        }
+
+        let cleanup: ReplyPromise<Void>?
+        switch capability.physical {
+        case .inactive:
+            cleanup = nil
+        case .enabled:
+            let promise = ReplyPromise<Void>()
+            capability.releaseWaiters[leaseOwner] = promise
+            cleanup = promise
+        case let .enabling(generation, operationID, _):
+            let promise = ReplyPromise<Void>()
+            capability.releaseWaiters[leaseOwner] = promise
+            capability.physical = .enabling(
+                generation: generation,
+                operationID: operationID,
+                mustDisableAfterEnable: true
+            )
+            cleanup = promise
+        case .disabling:
+            let promise = ReplyPromise<Void>()
+            capability.releaseWaiters[leaseOwner] = promise
+            cleanup = promise
+        }
+        capabilities.states[key] = capability
+        await reconcileCapability(for: key)
+        try await cleanup?.value()
+        capabilities.removeEmptyState(for: key)
+    }
+
+    private func abandonCapabilityLease(
+        _ leaseOwner: ConnectionCapabilityLeaseOwner,
+        for key: ConnectionCapabilityKey
+    ) async {
+        guard var capability = capabilities.states[key] else {
+            return
+        }
+        capability.leaseOwners.remove(leaseOwner)
+        capability.failedLeaseOwners.remove(leaseOwner)
+        capability.activatedLeaseOwners.remove(leaseOwner)
+        capability.activationWaiters.removeValue(forKey: leaseOwner)
+        capability.releaseWaiters.removeValue(forKey: leaseOwner)
         capabilities.states[key] = capability
         await reconcileCapability(for: key)
         capabilities.removeEmptyState(for: key)
@@ -933,7 +1174,7 @@ package actor ConnectionCore {
         if key.domain == .dom {
             if capability.desiredCount > 0 {
                 capability.physical = .enabled(generation: expectedGeneration)
-                capability.activatedLeaseIDs.formUnion(capability.activationWaiters.keys)
+                capability.activatedLeaseOwners.formUnion(capability.activationWaiters.keys)
                 let waiters = Array(capability.activationWaiters.values)
                 capability.activationWaiters.removeAll()
                 capabilities.states[key] = capability
@@ -1193,7 +1434,7 @@ package actor ConnectionCore {
                     startCapabilityDisable(for: key, generation: generation)
                     return
                 }
-                capability.activatedLeaseIDs.formUnion(capability.activationWaiters.keys)
+                capability.activatedLeaseOwners.formUnion(capability.activationWaiters.keys)
                 let waiters = Array(capability.activationWaiters.values)
                 capability.activationWaiters.removeAll()
                 let releaseWaiters = Array(capability.releaseWaiters.values)
@@ -1209,7 +1450,7 @@ package actor ConnectionCore {
                 let activeLeaseFailed = capability.hasActivatedDesiredLease
                 let wireStateIsKnownInactive = Self.enableFailureProvesInactive(error)
                 let failedIDs = Set(capability.activationWaiters.keys)
-                capability.failedLeaseIDs.formUnion(failedIDs)
+                capability.failedLeaseOwners.formUnion(failedIDs)
                 let activationWaiters = Array(capability.activationWaiters.values)
                 capability.activationWaiters.removeAll()
                 capability.physical = .inactive(generation: generation)
@@ -1272,7 +1513,7 @@ package actor ConnectionCore {
                     // so a late lease can use it and a future final release can
                     // retry cleanup without sending a duplicate enable.
                     capability.physical = .enabled(generation: generation)
-                    capability.activatedLeaseIDs.formUnion(capability.activationWaiters.keys)
+                    capability.activatedLeaseOwners.formUnion(capability.activationWaiters.keys)
                     let activationWaiters = Array(capability.activationWaiters.values)
                     capability.activationWaiters.removeAll()
                     let releaseWaiters = Array(capability.releaseWaiters.values)
@@ -1293,7 +1534,7 @@ package actor ConnectionCore {
                     // target lookup wins that race, the vanished target makes
                     // cleanup complete without establishing reusable wire state.
                     let failedIDs = Set(capability.activationWaiters.keys)
-                    capability.failedLeaseIDs.formUnion(failedIDs)
+                    capability.failedLeaseOwners.formUnion(failedIDs)
                     capability.physical = .inactive(generation: generation)
                     let activationWaiters = Array(capability.activationWaiters.values)
                     capability.activationWaiters.removeAll()
@@ -2230,7 +2471,7 @@ package actor ConnectionCore {
             guard var capability = capabilities.states[key] else {
                 continue
             }
-            capability.failedLeaseIDs.formUnion(capability.activationWaiters.keys)
+            capability.failedLeaseOwners.formUnion(capability.activationWaiters.keys)
             waiters.activation.append(contentsOf: capability.activationWaiters.values)
             waiters.release.append(contentsOf: capability.releaseWaiters.values)
             capability.activationWaiters.removeAll()

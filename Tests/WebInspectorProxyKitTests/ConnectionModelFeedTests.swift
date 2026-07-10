@@ -139,13 +139,23 @@ func modelFeedUnavailableBindingUsesOneGenerationForResetSnapshotAndSynchronizat
 
 @Test
 func modelFeedPublishesFutureTargetAndConfiguredDomainEventsAfterSnapshotWatermark() async throws {
-    let core = ConnectionCore(backend: FakeTransportBackend(), responseTimeout: nil)
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
     _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
         id: "page-main",
         type: "page",
         frameID: "main-frame"
     ))
-    let feed = try await core.openModelFeed(configuredDomains: [.network], capacity: 8)
+    let openTask = Task {
+        try await core.openModelFeed(configuredDomains: [.network], capacity: 8)
+    }
+    let enable = try await backend.waitForTargetMessage(method: "Network.enable")
+    let enableID = try modelFeedMessageID(enable.message)
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "page-main",
+        message: #"{"id":\#(enableID),"result":{}}"#
+    ))
+    let feed = try await openTask.value
     var iterator = feed.records.makeAsyncIterator()
     _ = try await modelFeedRequireReset(iterator.next())
     let initialSnapshot = try await modelFeedRequireTargetSnapshot(iterator.next())
@@ -184,7 +194,16 @@ func modelFeedPublishesFutureTargetAndConfiguredDomainEventsAfterSnapshotWaterma
     }
     #expect(id == Network.Request.ID("request-1"))
 
-    try await feed.close()
+    let closeTask = Task {
+        try await feed.close()
+    }
+    let disable = try await backend.waitForTargetMessage(method: "Network.disable")
+    let disableID = try modelFeedMessageID(disable.message)
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "page-main",
+        message: #"{"id":\#(disableID),"result":{}}"#
+    ))
+    try await closeTask.value
     await core.close()
 }
 
@@ -608,6 +627,620 @@ func replacementMainPageWaiterResumesAfterCapabilityOwnershipIsReconciled() asyn
 
     await core.close()
     _ = scope
+}
+
+@Test
+func modelFeedAcquiresAndReleasesConfiguredCapabilitiesInDeterministicOrder() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let configuredDomains = Set(ModelDomain.acquisitionOrder)
+    let enableMethods = modelFeedExpectedEnableMethods(configuredDomains)
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: configuredDomains,
+        targetID: "page-main"
+    )
+
+    #expect(enableMethods == [
+        "CSS.enable",
+        "Network.enable",
+        "Console.enable",
+        "Runtime.enable",
+    ])
+    #expect(try await modelFeedSentTargetMethods(backend) == enableMethods)
+
+    let owners = await core.capabilityLeaseOwnersForTesting()
+    let domKey = ConnectionCapabilityKey(
+        route: .currentPage,
+        targetID: .currentPage,
+        domain: .dom
+    )
+    #expect(owners[domKey] == Set([
+        .modelFeed(feed.id, .dom),
+        .modelFeed(feed.id, .css),
+    ]))
+    for domain in [
+        WebInspectorProxyEventDomain.css,
+        .network,
+        .console,
+        .runtime,
+    ] {
+        let key = ConnectionCapabilityKey(
+            route: .currentPage,
+            targetID: .currentPage,
+            domain: domain
+        )
+        #expect(owners[key]?.count == 1)
+    }
+
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: enableMethods
+    )
+    #expect(try await modelFeedSentTargetMethods(backend) == enableMethods + [
+        "Runtime.disable",
+        "Console.disable",
+        "Network.disable",
+        "CSS.disable",
+    ])
+    #expect(await modelFeedAllCapabilityLeaseOwners(core).isEmpty)
+    await core.close()
+}
+
+@Test(arguments: [0, 1, 2, 3])
+func modelFeedCapabilityFailureRollsBackSuccessfulPrefixInReverseOrder(
+    failureIndex: Int
+) async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let configuredDomains = Set(ModelDomain.acquisitionOrder)
+    let enableMethods = modelFeedExpectedEnableMethods(configuredDomains)
+    let openTask = Task {
+        try await core.openModelFeed(
+            configuredDomains: configuredDomains,
+            capacity: 32
+        )
+    }
+
+    for index in 0...failureIndex {
+        let message = try await backend.waitForTargetMessage(
+            ordinal: 0,
+            after: index
+        )
+        #expect(try modelFeedMessageMethod(message.message) == enableMethods[index])
+        if index == failureIndex {
+            await modelFeedRespond(
+                to: message,
+                core: core,
+                errorMessage: "rejected-\(failureIndex)"
+            )
+        } else {
+            await modelFeedRespond(to: message, core: core)
+        }
+    }
+
+    let rollbackMethods = Array(enableMethods[..<failureIndex].reversed()).map {
+        $0.replacingOccurrences(of: ".enable", with: ".disable")
+    }
+    for (offset, expectedMethod) in rollbackMethods.enumerated() {
+        let message = try await backend.waitForTargetMessage(
+            ordinal: 0,
+            after: failureIndex + 1 + offset
+        )
+        #expect(try modelFeedMessageMethod(message.message) == expectedMethod)
+        await modelFeedRespond(to: message, core: core)
+    }
+
+    do {
+        _ = try await openTask.value
+        Issue.record("Expected configured capability acquisition to fail.")
+    } catch {
+        #expect(error as? WebInspectorProxyError == .commandRejected(
+            method: enableMethods[failureIndex],
+            message: "rejected-\(failureIndex)"
+        ))
+    }
+    #expect(try await modelFeedSentTargetMethods(backend) == Array(
+        enableMethods[...failureIndex]
+    ) + rollbackMethods)
+    #expect(await modelFeedAllCapabilityLeaseOwners(core).isEmpty)
+
+    let replacementFeed = try await core.openModelFeed(
+        configuredDomains: [],
+        capacity: 8
+    )
+    try await replacementFeed.close()
+    await core.close()
+}
+
+@Test
+func modelFeedActivationCancellationRollsBackAfterEnableAndDisableQuiesce() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let openTask = Task {
+        try await core.openModelFeed(
+            configuredDomains: [.network],
+            capacity: 8
+        )
+    }
+    let enable = try await backend.waitForTargetMessage(method: "Network.enable")
+
+    openTask.cancel()
+    await modelFeedRespond(to: enable, core: core)
+    let disable = try await backend.waitForTargetMessage(method: "Network.disable")
+    await modelFeedRespond(to: disable, core: core)
+
+    await #expect(throws: CancellationError.self) {
+        try await openTask.value
+    }
+    #expect(try await modelFeedSentTargetMethods(backend) == [
+        "Network.enable",
+        "Network.disable",
+    ])
+    #expect(await modelFeedAllCapabilityLeaseOwners(core).isEmpty)
+    let replacementFeed = try await core.openModelFeed(
+        configuredDomains: [],
+        capacity: 8
+    )
+    try await replacementFeed.close()
+    await core.close()
+}
+
+@Test
+func modelFeedCloseKeepsClaimUntilDisableAndSharesDuplicateCloseCompletion() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [.network],
+        targetID: "page-main"
+    )
+    let firstClose = Task {
+        try await feed.close()
+    }
+    let disable = try await backend.waitForTargetMessage(method: "Network.disable")
+    let duplicateFinished = ModelFeedProbe()
+    let duplicateClose = Task {
+        try await feed.close()
+        await duplicateFinished.finish()
+    }
+
+    await #expect(throws: ConnectionModelFeedError.alreadyOpen) {
+        try await core.openModelFeed(configuredDomains: [], capacity: 8)
+    }
+    await #expect(throws: WebInspectorProxyError.connectionInUse) {
+        try await core.send(ProtocolCommand(
+            domain: .target,
+            method: "Target.getTargets",
+            routing: .root
+        ))
+    }
+    #expect(await duplicateFinished.isFinished == false)
+
+    await modelFeedRespond(to: disable, core: core)
+    try await firstClose.value
+    try await duplicateClose.value
+    try await feed.close()
+
+    let replacementFeed = try await core.openModelFeed(
+        configuredDomains: [],
+        capacity: 8
+    )
+    try await replacementFeed.close()
+
+    let sentCount = await backend.sentMessages().count
+    let directCommand = Task {
+        try await core.send(ProtocolCommand(
+            domain: .target,
+            method: "Target.getTargets",
+            routing: .root
+        ))
+    }
+    let directMessage = try await backend.waitForMessage(after: sentCount)
+    let directID = try modelFeedMessageID(directMessage)
+    _ = await core.receiveRootMessage(#"{"id":\#(directID),"result":{}}"#)
+    _ = try await directCommand.value
+    await core.close()
+}
+
+@Test
+func modelFeedRetargetDuringAcquisitionMovesPendingCapabilityToReplacement() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-old",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let openTask = Task {
+        try await core.openModelFeed(
+            configuredDomains: [.network],
+            capacity: 16
+        )
+    }
+    let oldEnable = try await backend.waitForTargetMessage(method: "Network.enable")
+    #expect(oldEnable.targetIdentifier == ProtocolTarget.ID("page-old"))
+
+    _ = await core.receiveRootMessage(
+        #"{"method":"Target.targetDestroyed","params":{"targetId":"page-old"}}"#
+    )
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-new",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let newEnable = try await backend.waitForTargetMessage(
+        method: "Network.enable",
+        ordinal: 0,
+        after: 1
+    )
+    #expect(newEnable.targetIdentifier == ProtocolTarget.ID("page-new"))
+    let pendingPurposes = await core.pendingReplyPurposes()
+    #expect(pendingPurposes.keys.allSatisfy { key in
+        guard case let .target(replyKey) = key else {
+            return false
+        }
+        return replyKey.targetID == ProtocolTarget.ID("page-new")
+    })
+
+    await modelFeedRespond(to: newEnable, core: core)
+    let feed = try await openTask.value
+    #expect(await modelFeedAllCapabilityLeaseOwners(core) == Set([
+        .modelFeed(feed.id, .network),
+    ]))
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-new",
+        enableMethods: ["Network.enable"]
+    )
+    await core.close()
+}
+
+@Test
+func activeModelFeedLeaseReconcilesOntoReplacementTarget() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-old",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [.network],
+        targetID: "page-old"
+    )
+
+    _ = await core.receiveRootMessage(
+        #"{"method":"Target.targetDestroyed","params":{"targetId":"page-old"}}"#
+    )
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-new",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let replacementEnable = try await backend.waitForTargetMessage(
+        method: "Network.enable",
+        ordinal: 0,
+        after: 1
+    )
+    #expect(replacementEnable.targetIdentifier == ProtocolTarget.ID("page-new"))
+    let pendingPurposes = await core.pendingReplyPurposes()
+    #expect(pendingPurposes.keys.allSatisfy { key in
+        guard case let .target(replyKey) = key else {
+            return false
+        }
+        return replyKey.targetID == ProtocolTarget.ID("page-new")
+    })
+    #expect(await modelFeedAllCapabilityLeaseOwners(core) == Set([
+        .modelFeed(feed.id, .network),
+    ]))
+    await modelFeedRespond(to: replacementEnable, core: core)
+
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-new",
+        enableMethods: ["Network.enable"]
+    )
+    await core.close()
+}
+
+@Test
+func domModelFeedCapabilityIsLocalButParticipatesInLeaseTransaction() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let feed = try await core.openModelFeed(
+        configuredDomains: [.dom],
+        capacity: 8
+    )
+    #expect(await backend.sentTargetMessages().isEmpty)
+    #expect(await modelFeedAllCapabilityLeaseOwners(core) == Set([
+        .modelFeed(feed.id, .dom),
+    ]))
+
+    try await feed.close()
+    #expect(await backend.sentTargetMessages().isEmpty)
+    #expect(await modelFeedAllCapabilityLeaseOwners(core).isEmpty)
+    await core.close()
+}
+
+@Test
+func terminalDuringModelFeedRollbackCompletesWithoutLeakingClaim() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let openTask = Task {
+        try await core.openModelFeed(
+            configuredDomains: [.network, .console],
+            capacity: 16
+        )
+    }
+    let networkEnable = try await backend.waitForTargetMessage(method: "Network.enable")
+    await modelFeedRespond(to: networkEnable, core: core)
+    let consoleEnable = try await backend.waitForTargetMessage(method: "Console.enable")
+    await modelFeedRespond(
+        to: consoleEnable,
+        core: core,
+        errorMessage: "console rejected"
+    )
+    _ = try await backend.waitForTargetMessage(method: "Network.disable")
+
+    let fatalHandoff = try #require(core.failFromNativeCallback("fatal during rollback"))
+    await fatalHandoff.value
+    await #expect(throws: WebInspectorScopeError.self) {
+        try await openTask.value
+    }
+    #expect(await core.terminalCause == .fatal("fatal during rollback"))
+    #expect(await modelFeedAllCapabilityLeaseOwners(core).isEmpty)
+    #expect(await backend.isDetached())
+}
+
+@Test
+func modelFeedRollbackDisableRejectionTerminatesInsteadOfReusingEnabledState() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let openTask = Task {
+        try await core.openModelFeed(
+            configuredDomains: [.network, .console],
+            capacity: 16
+        )
+    }
+    let networkEnable = try await backend.waitForTargetMessage(method: "Network.enable")
+    await modelFeedRespond(to: networkEnable, core: core)
+    let consoleEnable = try await backend.waitForTargetMessage(method: "Console.enable")
+    await modelFeedRespond(
+        to: consoleEnable,
+        core: core,
+        errorMessage: "console rejected"
+    )
+    let networkDisable = try await backend.waitForTargetMessage(method: "Network.disable")
+    await modelFeedRespond(
+        to: networkDisable,
+        core: core,
+        errorMessage: "disable rejected"
+    )
+
+    await #expect(throws: WebInspectorScopeError.self) {
+        try await openTask.value
+    }
+    guard case let .fatal(message) = await core.terminalCause else {
+        Issue.record("Expected rollback cleanup failure to terminate the connection.")
+        return
+    }
+    #expect(message.contains("Failed to release model feed capabilities"))
+    #expect(await modelFeedAllCapabilityLeaseOwners(core).isEmpty)
+    #expect(await backend.isDetached())
+    await #expect(throws: WebInspectorProxyError.self) {
+        try await core.openModelFeed(configuredDomains: [], capacity: 8)
+    }
+}
+
+@Test
+func modelFeedCloseDisableRejectionPoisonsMailboxAndTerminatesConnection() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [.network],
+        targetID: "page-main"
+    )
+    var iterator = feed.records.makeAsyncIterator()
+    _ = try await iterator.next()
+    _ = try await iterator.next()
+
+    let closeTask = Task {
+        try await feed.close()
+    }
+    let disable = try await backend.waitForTargetMessage(method: "Network.disable")
+    await modelFeedRespond(
+        to: disable,
+        core: core,
+        errorMessage: "disable rejected"
+    )
+    let expectedError = WebInspectorProxyError.commandRejected(
+        method: "Network.disable",
+        message: "disable rejected"
+    )
+    await #expect(throws: expectedError) {
+        try await closeTask.value
+    }
+    await #expect(throws: expectedError) {
+        try await iterator.next()
+    }
+
+    guard case let .fatal(message) = await core.terminalCause else {
+        Issue.record("Expected model feed close cleanup failure to terminate the connection.")
+        return
+    }
+    #expect(message.contains("Failed to release model feed capabilities"))
+    #expect(await modelFeedAllCapabilityLeaseOwners(core).isEmpty)
+    #expect(await backend.isDetached())
+    try await feed.close()
+}
+
+private func modelFeedExpectedEnableMethods(
+    _ configuredDomains: Set<ModelDomain>
+) -> [String] {
+    var seenDomains: Set<WebInspectorProxyEventDomain> = []
+    var methods: [String] = []
+    for domain in ModelDomain.ordered(configuredDomains) {
+        for dependency in domain.capabilityDependencies where dependency != .dom {
+            guard seenDomains.insert(dependency).inserted else {
+                continue
+            }
+            methods.append("\(dependency.rawValue).enable")
+        }
+    }
+    return methods
+}
+
+private func modelFeedOpenSuccessfully(
+    core: ConnectionCore,
+    backend: FakeTransportBackend,
+    configuredDomains: Set<ModelDomain>,
+    targetID: String
+) async throws -> ConnectionModelFeed {
+    let enableMethods = modelFeedExpectedEnableMethods(configuredDomains)
+    let targetMessageCount = await backend.sentTargetMessages().count
+    let openTask = Task {
+        try await core.openModelFeed(
+            configuredDomains: configuredDomains,
+            capacity: 32
+        )
+    }
+    for (offset, expectedMethod) in enableMethods.enumerated() {
+        let message = try await backend.waitForTargetMessage(
+            ordinal: 0,
+            after: targetMessageCount + offset
+        )
+        #expect(try modelFeedMessageMethod(message.message) == expectedMethod)
+        #expect(message.targetIdentifier == ProtocolTarget.ID(targetID))
+        await modelFeedRespond(to: message, core: core)
+    }
+    return try await openTask.value
+}
+
+private func modelFeedCloseSuccessfully(
+    _ feed: ConnectionModelFeed,
+    core: ConnectionCore,
+    backend: FakeTransportBackend,
+    targetID: String,
+    enableMethods: [String]
+) async throws {
+    let disableMethods = enableMethods.reversed().map {
+        $0.replacingOccurrences(of: ".enable", with: ".disable")
+    }
+    let targetMessageCount = await backend.sentTargetMessages().count
+    let closeTask = Task {
+        try await feed.close()
+    }
+    for (offset, expectedMethod) in disableMethods.enumerated() {
+        let message = try await backend.waitForTargetMessage(
+            ordinal: 0,
+            after: targetMessageCount + offset
+        )
+        #expect(try modelFeedMessageMethod(message.message) == expectedMethod)
+        #expect(message.targetIdentifier == ProtocolTarget.ID(targetID))
+        await modelFeedRespond(to: message, core: core)
+    }
+    try await closeTask.value
+}
+
+private func modelFeedSentTargetMethods(
+    _ backend: FakeTransportBackend
+) async throws -> [String] {
+    try await backend.sentTargetMessages().map {
+        try modelFeedMessageMethod($0.message)
+    }
+}
+
+private func modelFeedAllCapabilityLeaseOwners(
+    _ core: ConnectionCore
+) async -> Set<ConnectionCapabilityLeaseOwner> {
+    await core.capabilityLeaseOwnersForTesting().values.reduce(into: []) {
+        $0.formUnion($1)
+    }
+}
+
+private func modelFeedMessageMethod(_ message: String) throws -> String {
+    let object = try JSONSerialization.jsonObject(with: Data(message.utf8))
+    let dictionary = try #require(object as? [String: Any])
+    return try #require(dictionary["method"] as? String)
+}
+
+private func modelFeedRespond(
+    to message: SentTargetMessage,
+    core: ConnectionCore,
+    errorMessage: String? = nil
+) async {
+    let messageID = try! modelFeedMessageID(message.message)
+    let reply: [String: Any]
+    if let errorMessage {
+        reply = [
+            "id": messageID,
+            "error": ["message": errorMessage],
+        ]
+    } else {
+        reply = [
+            "id": messageID,
+            "result": [:] as [String: Any],
+        ]
+    }
+    let data = try! JSONSerialization.data(withJSONObject: reply, options: [.sortedKeys])
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: message.targetIdentifier.rawValue,
+        message: String(decoding: data, as: UTF8.self)
+    ))
 }
 
 private struct ModelFeedEventRecord {

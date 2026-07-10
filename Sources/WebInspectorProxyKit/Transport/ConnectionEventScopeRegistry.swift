@@ -6,6 +6,11 @@ struct ConnectionCapabilityKey: Hashable, Sendable {
     var domain: WebInspectorProxyEventDomain
 }
 
+enum ConnectionCapabilityLeaseOwner: Hashable, Sendable {
+    case eventScope(WebInspectorProxyEventScopeID)
+    case modelFeed(ConnectionModelFeedID, ModelDomain)
+}
+
 struct ConnectionEventScopeRegistry {
     struct Entry: Sendable {
         var sink: WebInspectorEventSink?
@@ -146,22 +151,22 @@ struct ConnectionCapabilityRegistry {
 
     struct State: Sendable {
         var physical: PhysicalState
-        var leaseIDs: Set<WebInspectorProxyEventScopeID> = []
-        var failedLeaseIDs: Set<WebInspectorProxyEventScopeID> = []
-        var activatedLeaseIDs: Set<WebInspectorProxyEventScopeID> = []
-        var activationWaiters: [WebInspectorProxyEventScopeID: ReplyPromise<Void>] = [:]
-        var releaseWaiters: [WebInspectorProxyEventScopeID: ReplyPromise<Void>] = [:]
+        var leaseOwners: Set<ConnectionCapabilityLeaseOwner> = []
+        var failedLeaseOwners: Set<ConnectionCapabilityLeaseOwner> = []
+        var activatedLeaseOwners: Set<ConnectionCapabilityLeaseOwner> = []
+        var activationWaiters: [ConnectionCapabilityLeaseOwner: ReplyPromise<Void>] = [:]
+        var releaseWaiters: [ConnectionCapabilityLeaseOwner: ReplyPromise<Void>] = [:]
 
-        var desiredLeaseIDs: Set<WebInspectorProxyEventScopeID> {
-            leaseIDs.subtracting(failedLeaseIDs)
+        var desiredLeaseOwners: Set<ConnectionCapabilityLeaseOwner> {
+            leaseOwners.subtracting(failedLeaseOwners)
         }
 
         var desiredCount: Int {
-            desiredLeaseIDs.count
+            desiredLeaseOwners.count
         }
 
         var hasActivatedDesiredLease: Bool {
-            !activatedLeaseIDs.intersection(desiredLeaseIDs).isEmpty
+            !activatedLeaseOwners.intersection(desiredLeaseOwners).isEmpty
         }
     }
 
@@ -175,7 +180,7 @@ struct ConnectionCapabilityRegistry {
 
     mutating func removeEmptyState(for key: ConnectionCapabilityKey) {
         guard let state = states[key],
-              state.leaseIDs.isEmpty,
+              state.leaseOwners.isEmpty,
               state.activationWaiters.isEmpty,
               state.releaseWaiters.isEmpty else {
             return

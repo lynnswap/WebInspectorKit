@@ -603,15 +603,21 @@ package enum ModelBootstrapSnapshot: Sendable { /* target + epoch + typed snapsh
 package enum ModelDomain: Hashable, Sendable { /* configured domains */ }
 ```
 
-The initial transport slice implements the bounded exclusive feed, initial
-`reset`/`targetSnapshot`, future target lifecycle deltas, and future events for
-configured domains. For an empty configured-domain set it also emits
-`synchronizationComplete`. Capability leases, replay-complete boundaries, DOM
-bootstrap, configured-domain synchronization, and the full retarget sequence
-described below remain later slices; their record cases define the package
-contract but are not yet emitted. This distinction prevents schema availability
-from being mistaken for readiness behavior that the transport does not yet
-provide.
+The current transport slice implements the bounded exclusive feed, initial
+`reset`/`targetSnapshot`, future target lifecycle deltas, future events for
+configured domains, and transactional capability leases. Acquisition follows
+the deterministic domain order DOM, CSS, Network, Console, Runtime; CSS shares
+the DOM prerequisite, while DOM's capability is local and sends no wire command.
+The feed is registered and its initial records are published before the first
+capability await, and `openModelFeed` returns only after every configured
+capability is active. An acquisition failure or cancellation releases the
+successful prefix in reverse order before returning. For an empty
+configured-domain set the feed also emits `synchronizationComplete`.
+Replay-complete boundaries, DOM bootstrap, configured-domain synchronization,
+and the complete ordered retarget readiness sequence described below remain
+later slices; their record cases define the package contract but are not yet
+emitted. This distinction prevents active capabilities from being mistaken for
+model readiness behavior that the transport does not yet provide.
 
 The target snapshot contains the physical current page first, followed by its
 relevant committed frame targets in deterministic parent-before-child order.
@@ -629,8 +635,12 @@ handle abandonment terminates that mailbox synchronously while retaining the
 exclusive connection claim. If the producer later attempts another enqueue to
 that terminated mailbox, that enqueue poisons the connection; an explicit
 `close()` before another enqueue remains a clean shutdown.
-Explicit `ConnectionModelFeed.close()` is the sole feed-close surface and
-releases the claim only after a clean close, allowing a replacement feed.
+Explicit `ConnectionModelFeed.close()` is the sole feed-close surface. It
+releases configured capabilities in reverse acquisition order and releases the
+claim only after clean quiescence, allowing a replacement feed. Concurrent and
+repeated close calls share that completion. A capability cleanup failure poisons
+the mailbox and terminates the connection, because the physical enabled state
+cannot safely be reused without a logical owner.
 Dropping the handle synchronously finishes its mailbox but intentionally keeps
 the connection claimed until connection close. Explicit connection close
 finishes the feed normally only after transport close work reaches quiescence;
@@ -653,13 +663,14 @@ domain configuration and for unavailable-to-ready rebinding, where no
 domain-specific marker can carry readiness. The feed is package-only because
 its mixed-domain payload and acknowledgement boundaries are model-adapter
 mechanics, not a direct ProxyKit consumer concept.
-The completed design opens the feed and registers its initial reset record
-before acquiring any configured capability. Capability acquisition will be
-transactional: if one enable fails, the core releases every capability acquired
-for that attempt, terminates the feed with the cause, and lets DataKit fail
-attachment. A DataKit model context takes exclusive ownership of its Proxy
-connection, so it is always the first model-feed subscriber and does not depend
-on a late subscriber receiving historical replay.
+The feed registers its initial reset and target snapshot before acquiring any
+configured capability. Capability acquisition is transactional: if one enable
+fails or the task is cancelled, the core releases every capability acquired for
+that attempt in reverse order and fails the feed open. If rollback itself cannot
+prove quiescence, the core terminates the connection. A DataKit model context
+takes exclusive ownership of its Proxy connection, so it is always the first
+model-feed subscriber and does not depend on a late subscriber receiving
+historical replay.
 
 The completed DOM readiness slice will use the same ordered feed even though DOM
 has no enable-time replay. After the feed is registered, the core will issue
@@ -714,10 +725,11 @@ old scoped ID to a current-generation command fails locally with
 `staleIdentifier`; it is never sent to the replacement target.
 
 When no physical page is temporarily committed, a command fails with
-`pageUnavailable`; it does not guess a stale target. During commit the core
-will eventually perform the following full ordered transition. The current
-slice establishes only its synchronous reset, physical target snapshot, and
-future-delta prefix:
+`pageUnavailable`; it does not guess a stale target. During commit the core will
+eventually perform the following full ordered transition. The current slice
+establishes its synchronous reset, physical target snapshot, future-delta
+prefix, and capability-owner reconciliation onto the new physical target;
+replay/bootstrap watermarks and binding readiness remain later slices:
 
 1. stop admission of new target-scoped commands and increment page generation;
 2. publish `.reset(newGeneration)` to public scopes and the package model feed;

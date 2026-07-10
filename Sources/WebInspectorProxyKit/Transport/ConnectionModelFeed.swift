@@ -7,6 +7,35 @@ package enum ModelDomain: Hashable, Sendable {
     case network
     case console
     case runtime
+
+    static let acquisitionOrder: [ModelDomain] = [
+        .dom,
+        .css,
+        .network,
+        .console,
+        .runtime,
+    ]
+
+    static func ordered(
+        _ domains: Set<ModelDomain>
+    ) -> [ModelDomain] {
+        acquisitionOrder.filter(domains.contains)
+    }
+
+    var capabilityDependencies: [WebInspectorProxyEventDomain] {
+        switch self {
+        case .dom:
+            [.dom]
+        case .css:
+            [.dom, .css]
+        case .network:
+            [.network]
+        case .console:
+            [.console]
+        case .runtime:
+            [.runtime]
+        }
+    }
 }
 
 package struct ModelTarget: Equatable, Sendable {
