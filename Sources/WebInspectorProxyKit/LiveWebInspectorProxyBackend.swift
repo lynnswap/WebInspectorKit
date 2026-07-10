@@ -324,7 +324,8 @@ private enum LiveProxyCommandEncoder {
             domain: domain,
             method: "\(command.domain.rawValue).\(command.method)",
             routing: routing(for: command.route),
-            parametersData: try parametersData(for: command)
+            parametersData: try parametersData(for: command),
+            authority: command.authority
         )
     }
 

@@ -82,9 +82,16 @@ public struct WebInspectorTarget: Identifiable, Sendable {
     /// navigation.
     public let isProvisional: Bool
 
-    package let proxy: WebInspectorProxy
+    package let proxyReference: WebInspectorProxyReference
     package let route: RoutingTargetID
     package let pageBindingID: String?
+
+    package var proxy: WebInspectorProxy {
+        guard let proxy = proxyReference.resolve() else {
+            preconditionFailure("A package-only binding check outlived its WebInspectorProxy owner.")
+        }
+        return proxy
+    }
 
     package init(
         id: ID,
@@ -99,7 +106,25 @@ public struct WebInspectorTarget: Identifiable, Sendable {
         self.kind = kind
         self.frameID = frameID
         self.isProvisional = isProvisional
-        self.proxy = proxy
+        proxyReference = WebInspectorProxyReference(proxy)
+        self.route = route
+        self.pageBindingID = pageBindingID
+    }
+
+    private init(
+        id: ID,
+        kind: Kind,
+        frameID: FrameID?,
+        isProvisional: Bool,
+        proxyReference: WebInspectorProxyReference,
+        route: RoutingTargetID,
+        pageBindingID: String?
+    ) {
+        self.id = id
+        self.kind = kind
+        self.frameID = frameID
+        self.isProvisional = isProvisional
+        self.proxyReference = proxyReference
         self.route = route
         self.pageBindingID = pageBindingID
     }
@@ -110,7 +135,7 @@ public struct WebInspectorTarget: Identifiable, Sendable {
             kind: lifecycleTarget.kind,
             frameID: lifecycleTarget.frameID,
             isProvisional: lifecycleTarget.isProvisional,
-            proxy: proxy,
+            proxyReference: proxyReference,
             route: route,
             pageBindingID: lifecycleTarget.pageBindingID
         )
@@ -151,21 +176,39 @@ public struct WebInspectorTarget: Identifiable, Sendable {
     }
 
     package var lifecycleEvents: AsyncStream<WebInspectorTargetLifecycleEvent> {
-        proxy.targetLifecycleEvents(targetID: id, route: route)
+        guard let proxy = proxyReference.resolve() else {
+            return AsyncStream { continuation in
+                continuation.finish()
+            }
+        }
+        return proxy.targetLifecycleEvents(targetID: id, route: route)
     }
 
     package var targetedConsoleEvents: AsyncStream<Console.TargetedEvent> {
-        proxy.targetedConsoleEvents(targetID: id, route: route)
+        guard let proxy = proxyReference.resolve() else {
+            return AsyncStream { continuation in
+                continuation.finish()
+            }
+        }
+        return proxy.targetedConsoleEvents(targetID: id, route: route)
     }
 
     package func waitForModelEventSubscriptions() async {
+        guard let proxy = proxyReference.resolve() else {
+            return
+        }
         for domain in [WebInspectorProxyEventDomain.dom, .inspector, .css, .network, .console, .runtime] {
             await proxy.waitForEventSubscription(targetID: id, route: route, domain: domain)
         }
     }
 
     private var endpoint: DomainEndpoint {
-        DomainEndpoint(proxy: proxy, targetID: id, route: route)
+        DomainEndpoint(
+            proxyReference: proxyReference,
+            targetID: id,
+            route: route,
+            authority: .direct
+        )
     }
 }
 

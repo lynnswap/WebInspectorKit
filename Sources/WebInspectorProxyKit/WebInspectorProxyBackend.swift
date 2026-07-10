@@ -27,19 +27,22 @@ package struct WebInspectorProxyCommand<Payload: Sendable, Result: Sendable>: Se
     package let domain: WebInspectorProxyDomain
     package let method: String
     package let payload: Payload
+    package let authority: WebInspectorCommandAuthority
 
     package init(
         targetID: WebInspectorTarget.ID,
         route: RoutingTargetID,
         domain: WebInspectorProxyDomain,
         method: String,
-        payload: Payload
+        payload: Payload,
+        authority: WebInspectorCommandAuthority = .direct
     ) {
         self.targetID = targetID
         self.route = route
         self.domain = domain
         self.method = method
         self.payload = payload
+        self.authority = authority
     }
 }
 

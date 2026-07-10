@@ -13,7 +13,7 @@ private struct ConnectionOwnedCommandOperation: Sendable {
     let pendingReplyOwnership: ConnectionPendingReplyOwnership
     let timeoutAction: (@Sendable () async -> Void)?
 
-    func value() async throws {
+    func result() async throws -> ProtocolCommand.Result {
         try await withTaskCancellationHandler {
             try Task.checkCancellation()
             try await backend.sendJSONString(message)
@@ -27,13 +27,97 @@ private struct ConnectionOwnedCommandOperation: Sendable {
             defer {
                 timeoutTask?.cancel()
             }
-            _ = try await promise.value()
+            return try await promise.value()
         } onCancel: {
             Task {
                 await promise.fulfill(.failure(CancellationError()))
             }
         }
     }
+
+    func value() async throws {
+        _ = try await result()
+    }
+}
+
+private struct ConnectionDirectCommandAdmission: Sendable {
+    let bindingGeneration: WebInspectorPage.Generation?
+    let documentEpoch: ModelDocumentEpoch?
+}
+
+private struct ConnectionModelCommandOperation: Sendable {
+    let id: UInt64
+    let task: Task<ProtocolCommand.Result, any Swift.Error>
+}
+
+private enum ConnectionModelCommandFailureOverride: Sendable {
+    case staleIdentifier
+    case notActive
+    case cancelled
+    case terminal(TransportSession.Error)
+
+    var error: any Swift.Error {
+        switch self {
+        case .staleIdentifier:
+            WebInspectorProxyError.staleIdentifier
+        case .notActive:
+            ConnectionModelCommandError.notActive
+        case .cancelled:
+            CancellationError()
+        case let .terminal(error):
+            error
+        }
+    }
+}
+
+private struct ConnectionModelCommandTask: Sendable {
+    let task: Task<ProtocolCommand.Result, any Swift.Error>
+    let authorization: ConnectionModelCommandAuthorization
+    let domain: ProtocolDomain
+    var pendingReplyOwnership: ConnectionPendingReplyOwnership?
+    var failureOverride: ConnectionModelCommandFailureOverride?
+}
+
+private struct ConnectionModelCommandReadinessWaiter: Sendable {
+    let id: UInt64
+    let operationID: UInt64
+    let authorization: ConnectionModelCommandAuthorization
+    let domain: ProtocolDomain
+    let method: String
+    let routing: ProtocolCommand.Routing
+    let continuation: CheckedContinuation<Void, any Swift.Error>
+}
+
+private enum ConnectionModelCommandReadiness: Sendable {
+    case ready(targetID: ProtocolTarget.ID?)
+    case waiting
+}
+
+private enum ConnectionPendingReplyFailureReason: Sendable {
+    case staleIdentifier
+    case missingTarget(ProtocolTarget.ID)
+    case modelFeedNotActive
+
+    var error: any Swift.Error {
+        switch self {
+        case .staleIdentifier:
+            WebInspectorProxyError.staleIdentifier
+        case let .missingTarget(targetID):
+            TransportSession.Error.missingTarget(targetID)
+        case .modelFeedNotActive:
+            ConnectionModelCommandError.notActive
+        }
+    }
+}
+
+private struct ConnectionPendingReplyFailure: Sendable {
+    let pending: TransportSession.PendingReply
+    let reason: ConnectionPendingReplyFailureReason
+}
+
+private struct ConnectionCommandInvalidationEffects: Sendable {
+    var pendingFailures: [ConnectionPendingReplyFailure] = []
+    var modelCommandTasksToAwait: [Task<ProtocolCommand.Result, any Swift.Error>] = []
 }
 
 private struct ConnectionCapabilityTask: Sendable {
@@ -113,19 +197,24 @@ private struct CurrentPageBindingChangeEffects: Sendable {
     var capabilityKeysToReconcile: [ConnectionCapabilityKey] = []
     var releaseWaiters: [ReplyPromise<Void>] = []
     var modelBootstrapTasksToAwait: [Task<Void, Never>] = []
+    var commandInvalidation = ConnectionCommandInvalidationEffects()
 }
 
 private struct RootEventMutation: Sendable {
     var pendingStyleSheetEvents: [ResolvedStyleSheetAddedEvent] = []
     var bindingEffects = CurrentPageBindingChangeEffects()
     var physicalTargetWaiters = PhysicalTargetDisappearanceWaiters()
-    var pendingRepliesToFail: [TransportSession.PendingReply] = []
-    var missingTargetID: ProtocolTarget.ID?
+    var commandInvalidation = ConnectionCommandInvalidationEffects()
 }
 
 private struct MainPageTargetNotification: Sendable {
     let waiters: [ReplyPromise<TransportSession.MainPageTarget>]
     let result: TransportSession.MainPageTarget
+}
+
+private struct EventEmissionEffects: Sendable {
+    var mainPageTargetNotification: MainPageTargetNotification?
+    var commandInvalidation = ConnectionCommandInvalidationEffects()
 }
 
 /// Owns one physical inspector connection.
@@ -184,6 +273,7 @@ package actor ConnectionCore {
         let releaseWaiters: [ReplyPromise<Void>]
         let capabilityTasks: [Task<Void, Never>]
         let modelBootstrapTasks: [Task<Void, Never>]
+        let modelCommandTasks: [Task<ProtocolCommand.Result, any Swift.Error>]
         let closeAction: CloseAction
 
         func run() async {
@@ -208,6 +298,9 @@ package actor ConnectionCore {
             }
             for task in modelBootstrapTasks {
                 await task.value
+            }
+            for task in modelCommandTasks {
+                _ = await task.result
             }
             await closeAction()
         }
@@ -235,6 +328,18 @@ package actor ConnectionCore {
     private var capabilityTasks: [UInt64: ConnectionCapabilityTask]
     private var nextModelBootstrapOperationID: UInt64
     private var modelBootstrapTasks: [UInt64: ConnectionModelBootstrapTask]
+    private var nextModelCommandOperationID: UInt64
+    private var modelCommandTasks: [UInt64: ConnectionModelCommandTask]
+    private var nextModelCommandReadinessWaiterID: UInt64
+    private var modelCommandReadinessWaiters: [UInt64: ConnectionModelCommandReadinessWaiter]
+    private var modelCommandOwnerCountWaiters: [(
+        expectedCount: Int,
+        continuation: CheckedContinuation<Void, Never>
+    )]
+    private var modelCommandReadinessCountWaiters: [(
+        expectedCount: Int,
+        continuation: CheckedContinuation<Void, Never>
+    )]
     private var modelDocumentEpochs: [ProtocolTarget.ID: ModelDocumentEpoch]
     private var currentPageGeneration: WebInspectorPage.Generation
     private var currentPageBindingGapIsOpen: Bool
@@ -286,6 +391,12 @@ package actor ConnectionCore {
         capabilityTasks = [:]
         nextModelBootstrapOperationID = 0
         modelBootstrapTasks = [:]
+        nextModelCommandOperationID = 0
+        modelCommandTasks = [:]
+        nextModelCommandReadinessWaiterID = 0
+        modelCommandReadinessWaiters = [:]
+        modelCommandOwnerCountWaiters = []
+        modelCommandReadinessCountWaiters = []
         modelDocumentEpochs = [:]
         currentPageGeneration = WebInspectorPage.Generation(rawValue: 0)
         currentPageBindingGapIsOpen = false
@@ -313,6 +424,19 @@ package actor ConnectionCore {
         eventScopes.finishAndRemoveAll(with: WebInspectorProxyError.closed)
         modelFeed?.mailbox.finish(throwing: WebInspectorProxyError.closed)
         modelFeed = nil
+        let readinessWaiters = modelCommandReadinessWaiters.values
+        modelCommandReadinessWaiters.removeAll()
+        for waiter in readinessWaiters {
+            waiter.continuation.resume(throwing: WebInspectorProxyError.closed)
+        }
+        let modelTasks = Array(modelCommandTasks.values)
+        modelCommandTasks.removeAll()
+        for modelTask in modelTasks {
+            modelTask.task.cancel()
+            if let ownership = modelTask.pendingReplyOwnership {
+                _ = replyStore.removePendingReply(ownership.key)
+            }
+        }
         terminalTask?.cancel()
         terminalTask = nil
         let tasks = Array(capabilityTasks.values)
@@ -343,6 +467,14 @@ package actor ConnectionCore {
         precondition(closeWaiters.isEmpty, "ConnectionCore deinitialized with pending close waiters.")
         precondition(capabilities.states.values.allSatisfy { $0.activationWaiters.isEmpty && $0.releaseWaiters.isEmpty }, "ConnectionCore deinitialized with pending capability waiters.")
         precondition(eventScopeRegistrationWaiters.isEmpty, "ConnectionCore deinitialized with event-scope test waiters.")
+        for waiter in modelCommandOwnerCountWaiters {
+            waiter.continuation.resume()
+        }
+        modelCommandOwnerCountWaiters.removeAll()
+        for waiter in modelCommandReadinessCountWaiters {
+            waiter.continuation.resume()
+        }
+        modelCommandReadinessCountWaiters.removeAll()
     }
 
     private var isOpen: Bool {
@@ -515,6 +647,12 @@ package actor ConnectionCore {
         let completion = ReplyPromise<Void>()
         registration.lifecycle = .closing(completion)
         modelFeed = registration
+        let commandInvalidation = invalidateModelCommands(
+            where: { $0.authorization.feedID == id },
+            failureOverride: .notActive,
+            pendingFailureReason: .modelFeedNotActive
+        )
+        await completeCommandInvalidationEffects(commandInvalidation)
         await cancelAndAwaitModelBootstrapTasks(feedID: id)
 
         var cleanupError: (any Swift.Error)?
@@ -587,6 +725,12 @@ package actor ConnectionCore {
         }
         registration.lifecycle = .rollingBack
         modelFeed = registration
+        let commandInvalidation = invalidateModelCommands(
+            where: { $0.authorization.feedID == id },
+            failureOverride: .notActive,
+            pendingFailureReason: .modelFeedNotActive
+        )
+        await completeCommandInvalidationEffects(commandInvalidation)
         await cancelAndAwaitModelBootstrapTasks(feedID: id)
         var cleanupError: (any Swift.Error)?
         for lease in registration.capabilityLeases.reversed() {
@@ -759,26 +903,577 @@ package actor ConnectionCore {
             throw terminalTransportError
         }
 
-        switch command.routing {
+        switch command.authority {
+        case .direct:
+            // Admission owns both transport-local and wire-backed commands.
+            // A model feed must never be bypassed by DOM.enable's local result.
+            switch command.routing {
+            case .root:
+                try claimDirectConsumer()
+                return try await sendRoot(
+                    command,
+                    admission: ConnectionDirectCommandAdmission(
+                        bindingGeneration: nil,
+                        documentEpoch: nil
+                    )
+                )
+            case let .target(targetID):
+                return try await sendDirectTarget(command, targetID: targetID)
+            case let .octopus(pageTarget):
+                let resolvedTarget = try pageTarget ?? currentMainPageTarget()
+                return try await sendDirectTarget(command, targetID: resolvedTarget)
+            }
+        case let .modelFeed(authorization):
+            let operation = try beginModelCommand(command, authorization: authorization)
+            return try await withTaskCancellationHandler {
+                try Task.checkCancellation()
+                return try await operation.task.value
+            } onCancel: {
+                Task { [weak self] in
+                    await self?.cancelModelCommand(operation.id)
+                }
+            }
+        }
+    }
+
+    private func sendDirectTarget(
+        _ command: ProtocolCommand,
+        targetID: ProtocolTarget.ID
+    ) async throws -> ProtocolCommand.Result {
+        guard let target = targetRegistry.target(for: targetID) else {
+            throw TransportSession.Error.missingTarget(targetID)
+        }
+        try claimDirectConsumer()
+        let isCurrentPageTarget = targetRegistry.isCurrentPageModelTarget(target)
+        let admission = ConnectionDirectCommandAdmission(
+            bindingGeneration: isCurrentPageTarget ? currentPageGeneration : nil,
+            documentEpoch: isCurrentPageTarget && isDocumentSensitive(command.domain)
+                ? modelDocumentEpoch(for: targetID)
+                : nil
+        )
+        if let result = transportLocalResult(for: command, targetID: targetID) {
+            return result
+        }
+        return try await sendTarget(command, targetID: targetID, admission: admission)
+    }
+
+    private func beginModelCommand(
+        _ command: ProtocolCommand,
+        authorization: ConnectionModelCommandAuthorization
+    ) throws -> ConnectionModelCommandOperation {
+        try validateModelCommandAuthority(
+            authorization,
+            domain: command.domain,
+            method: command.method
+        )
+        precondition(
+            nextModelCommandOperationID < UInt64.max,
+            "A model command operation identifier exhausted UInt64."
+        )
+        nextModelCommandOperationID += 1
+        let operationID = nextModelCommandOperationID
+        let task = Task { [weak self, command, authorization] () throws -> ProtocolCommand.Result in
+            guard let self else {
+                throw WebInspectorProxyError.closed
+            }
+            do {
+                let result = try await self.executeModelCommand(
+                    command,
+                    authorization: authorization,
+                    operationID: operationID
+                )
+                await self.finishModelCommand(operationID)
+                return result
+            } catch {
+                let resolvedError = await self.modelCommandFailure(
+                    operationID,
+                    fallback: error
+                )
+                await self.finishModelCommand(operationID)
+                throw resolvedError
+            }
+        }
+        precondition(
+            modelCommandTasks[operationID] == nil,
+            "A model command operation identifier already has an owner."
+        )
+        modelCommandTasks[operationID] = ConnectionModelCommandTask(
+            task: task,
+            authorization: authorization,
+            domain: command.domain,
+            pendingReplyOwnership: nil,
+            failureOverride: nil
+        )
+        resumeModelCommandOwnerCountWaitersIfNeeded()
+        return ConnectionModelCommandOperation(id: operationID, task: task)
+    }
+
+    private func executeModelCommand(
+        _ command: ProtocolCommand,
+        authorization: ConnectionModelCommandAuthorization,
+        operationID: UInt64
+    ) async throws -> ProtocolCommand.Result {
+        while true {
+            try Task.checkCancellation()
+            switch try modelCommandReadiness(
+                authorization: authorization,
+                domain: command.domain,
+                method: command.method,
+                routing: command.routing
+            ) {
+            case let .ready(targetID):
+                try Task.checkCancellation()
+                // There is intentionally no suspension between this final
+                // readiness check and pending-reply insertion.
+                let operation = try makeModelCommandOperation(
+                    command,
+                    targetID: targetID,
+                    authorization: authorization,
+                    operationID: operationID
+                )
+                return try await operation.result()
+            case .waiting:
+                try await suspendModelCommandUntilReadinessChanges(
+                    operationID: operationID,
+                    authorization: authorization,
+                    domain: command.domain,
+                    method: command.method,
+                    routing: command.routing
+                )
+            }
+        }
+    }
+
+    private func validateModelCommandAuthority(
+        _ authorization: ConnectionModelCommandAuthorization,
+        domain: ProtocolDomain,
+        method: String
+    ) throws {
+        guard isOpen else {
+            throw terminalTransportError
+        }
+        guard let registration = modelFeed,
+              registration.id == authorization.feedID else {
+            throw ConnectionModelCommandError.notActive
+        }
+        guard case .active = registration.lifecycle else {
+            throw ConnectionModelCommandError.notActive
+        }
+        guard authorization.generation == registration.resetGeneration else {
+            throw WebInspectorProxyError.staleIdentifier
+        }
+        guard let proxyDomain = proxyDomain(for: domain) else {
+            throw ConnectionModelCommandError.notActive
+        }
+        if isConnectionOwnedCommand(method) {
+            throw ConnectionModelCommandError.internalCommand(
+                domain: proxyDomain,
+                method: method
+            )
+        }
+        if let requiredDomain = requiredModelDomain(for: domain),
+           !registration.configuredDomains.contains(requiredDomain) {
+            throw ConnectionModelCommandError.domainNotConfigured(proxyDomain)
+        }
+        if isDocumentSensitive(domain), authorization.document == nil {
+            throw ConnectionModelCommandError.documentAuthorizationRequired(proxyDomain)
+        }
+    }
+
+    private func modelCommandReadiness(
+        authorization: ConnectionModelCommandAuthorization,
+        domain: ProtocolDomain,
+        method: String,
+        routing: ProtocolCommand.Routing
+    ) throws -> ConnectionModelCommandReadiness {
+        try validateModelCommandAuthority(
+            authorization,
+            domain: domain,
+            method: method
+        )
+        if currentPageGeneration.rawValue > authorization.generation.rawValue {
+            throw WebInspectorProxyError.staleIdentifier
+        }
+        guard currentPageGeneration == authorization.generation else {
+            return .waiting
+        }
+
+        let targetID: ProtocolTarget.ID?
+        switch routing {
         case .root:
-            return try await sendRoot(command)
-        case let .target(targetID):
+            targetID = nil
+        case let .target(candidate):
+            guard let record = targetRegistry.target(for: candidate),
+                  targetRegistry.isCurrentPageModelTarget(record) else {
+                throw WebInspectorProxyError.staleIdentifier
+            }
+            targetID = candidate
+        case let .octopus(explicitTarget):
+            guard let candidate = explicitTarget ?? targetRegistry.currentMainPageTargetID else {
+                return .waiting
+            }
+            guard let record = targetRegistry.target(for: candidate),
+                  targetRegistry.isCurrentPageModelTarget(record) else {
+                throw WebInspectorProxyError.staleIdentifier
+            }
+            targetID = candidate
+        }
+
+        if isDocumentSensitive(domain) {
+            guard let targetID,
+                  let document = authorization.document,
+                  ProtocolTarget.ID(document.targetID.rawValue) == targetID,
+                  modelDocumentEpoch(for: targetID) == document.epoch else {
+                throw WebInspectorProxyError.staleIdentifier
+            }
+        }
+
+        guard let registration = modelFeed,
+              let synchronization = registration.synchronization,
+              synchronization.generation == authorization.generation,
+              synchronization.didPublish else {
+            return .waiting
+        }
+
+        if isDocumentSensitive(domain) {
+            guard let targetID,
+                  let document = authorization.document,
+                  let bootstrap = registration.domBootstrap,
+                  bootstrap.generation == authorization.generation,
+                  bootstrap.targetsByID[targetID]?.completedEpoch == document.epoch else {
+                return .waiting
+            }
+        }
+        return .ready(targetID: targetID)
+    }
+
+    private func suspendModelCommandUntilReadinessChanges(
+        operationID: UInt64,
+        authorization: ConnectionModelCommandAuthorization,
+        domain: ProtocolDomain,
+        method: String,
+        routing: ProtocolCommand.Routing
+    ) async throws {
+        precondition(
+            nextModelCommandReadinessWaiterID < UInt64.max,
+            "A model command readiness waiter identifier exhausted UInt64."
+        )
+        nextModelCommandReadinessWaiterID += 1
+        let waiterID = nextModelCommandReadinessWaiterID
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (
+                continuation: CheckedContinuation<Void, any Swift.Error>
+            ) in
+                if Task.isCancelled {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+                do {
+                    switch try modelCommandReadiness(
+                        authorization: authorization,
+                        domain: domain,
+                        method: method,
+                        routing: routing
+                    ) {
+                    case .ready:
+                        continuation.resume()
+                    case .waiting:
+                        modelCommandReadinessWaiters[waiterID] = ConnectionModelCommandReadinessWaiter(
+                            id: waiterID,
+                            operationID: operationID,
+                            authorization: authorization,
+                            domain: domain,
+                            method: method,
+                            routing: routing,
+                            continuation: continuation
+                        )
+                        resumeModelCommandOwnerCountWaitersIfNeeded()
+                    }
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        } onCancel: {
+            Task { [weak self] in
+                await self?.cancelModelCommandReadinessWaiter(waiterID)
+            }
+        }
+    }
+
+    private func reevaluateModelCommandReadinessWaiters() {
+        for waiterID in modelCommandReadinessWaiters.keys.sorted() {
+            guard let waiter = modelCommandReadinessWaiters[waiterID] else {
+                continue
+            }
+            do {
+                guard case .ready = try modelCommandReadiness(
+                    authorization: waiter.authorization,
+                    domain: waiter.domain,
+                    method: waiter.method,
+                    routing: waiter.routing
+                ) else {
+                    continue
+                }
+                modelCommandReadinessWaiters.removeValue(forKey: waiterID)
+                waiter.continuation.resume()
+            } catch {
+                modelCommandReadinessWaiters.removeValue(forKey: waiterID)
+                waiter.continuation.resume(throwing: error)
+            }
+        }
+        resumeModelCommandOwnerCountWaitersIfNeeded()
+    }
+
+    private func cancelModelCommandReadinessWaiter(_ waiterID: UInt64) {
+        guard let waiter = modelCommandReadinessWaiters.removeValue(forKey: waiterID) else {
+            return
+        }
+        waiter.continuation.resume(throwing: CancellationError())
+        resumeModelCommandOwnerCountWaitersIfNeeded()
+    }
+
+    private func makeModelCommandOperation(
+        _ command: ProtocolCommand,
+        targetID: ProtocolTarget.ID?,
+        authorization: ConnectionModelCommandAuthorization,
+        operationID: UInt64
+    ) throws -> ConnectionOwnedCommandOperation {
+        let commandID = allocateCommandID()
+        let promise = ReplyPromise<ProtocolCommand.Result>()
+        let message = try TransportMessageParser.makeCommandString(
+            id: commandID,
+            method: command.method,
+            parametersData: command.parametersData
+        )
+        let pending = TransportSession.PendingReply.modelCommand(
+            domain: command.domain,
+            method: command.method,
+            targetID: targetID,
+            promise: promise,
+            authorization: authorization,
+            operationID: operationID
+        )
+
+        let pendingKey: TransportSession.PendingKey
+        let wireMessage: String
+        if let targetID {
             guard targetRegistry.containsTarget(targetID) else {
-                throw TransportSession.Error.missingTarget(targetID)
+                throw WebInspectorProxyError.staleIdentifier
             }
-            if let result = transportLocalResult(for: command, targetID: targetID) {
-                return result
+            let wrapperID = allocateCommandID()
+            let replyKey = TransportSession.ReplyKey(
+                targetID: targetID,
+                commandID: commandID
+            )
+            pendingKey = .target(replyKey)
+            wireMessage = try TransportMessageParser.makeTargetWrapperCommandString(
+                id: wrapperID,
+                targetIdentifier: targetID.rawValue,
+                message: message
+            )
+            replyStore.insertTargetReply(
+                pending,
+                key: replyKey,
+                rootWrapperID: wrapperID
+            )
+        } else {
+            pendingKey = .root(commandID)
+            wireMessage = message
+            replyStore.insertRootReply(pending, commandID: commandID)
+        }
+
+        let ownership = ConnectionPendingReplyOwnership(
+            key: pendingKey,
+            purpose: pending.purpose
+        )
+        guard var task = modelCommandTasks[operationID] else {
+            preconditionFailure("A model command pending reply has no task owner.")
+        }
+        task.pendingReplyOwnership = ownership
+        modelCommandTasks[operationID] = task
+
+        let timeoutAction: (@Sendable () async -> Void)?
+        if let responseTimeout {
+            let timeoutSleep = self.timeoutSleep
+            let responseTimeoutDidFire = self.responseTimeoutDidFire
+            timeoutAction = { [weak self] in
+                do {
+                    try await timeoutSleep(responseTimeout)
+                } catch {
+                    return
+                }
+                await self?.failPendingReplyFromTimeout(
+                    pendingKey,
+                    error: TransportSession.Error.replyTimeout(
+                        method: command.method,
+                        targetID: targetID
+                    )
+                )
+                await responseTimeoutDidFire()
             }
-            return try await sendTarget(command, targetID: targetID)
-        case let .octopus(pageTarget):
-            let resolvedTarget = try pageTarget ?? currentMainPageTarget()
-            guard targetRegistry.containsTarget(resolvedTarget) else {
-                throw TransportSession.Error.missingTarget(resolvedTarget)
+        } else {
+            timeoutAction = nil
+        }
+        return ConnectionOwnedCommandOperation(
+            backend: backend,
+            message: wireMessage,
+            promise: promise,
+            pendingReplyOwnership: ownership,
+            timeoutAction: timeoutAction
+        )
+    }
+
+    private func modelCommandFailure(
+        _ operationID: UInt64,
+        fallback: any Swift.Error
+    ) -> any Swift.Error {
+        modelCommandTasks[operationID]?.failureOverride?.error ?? fallback
+    }
+
+    private func finishModelCommand(_ operationID: UInt64) {
+        guard let task = modelCommandTasks.removeValue(forKey: operationID) else {
+            return
+        }
+        if let ownership = task.pendingReplyOwnership,
+           let pending = replyStore.removePendingReply(ownership.key) {
+            precondition(
+                pending.purpose == ownership.purpose,
+                "A model command task attempted to remove a reply owned by another purpose."
+            )
+        }
+        if let waiterID = modelCommandReadinessWaiters.first(where: {
+            $0.value.operationID == operationID
+        })?.key,
+           let waiter = modelCommandReadinessWaiters.removeValue(forKey: waiterID) {
+            waiter.continuation.resume(throwing: CancellationError())
+        }
+        resumeModelCommandOwnerCountWaitersIfNeeded()
+    }
+
+    private func cancelModelCommand(_ operationID: UInt64) async {
+        guard var commandTask = modelCommandTasks[operationID] else {
+            return
+        }
+        commandTask.failureOverride = .cancelled
+        modelCommandTasks[operationID] = commandTask
+        if let waiterID = modelCommandReadinessWaiters.first(where: {
+            $0.value.operationID == operationID
+        })?.key,
+           let waiter = modelCommandReadinessWaiters.removeValue(forKey: waiterID) {
+            waiter.continuation.resume(throwing: CancellationError())
+        }
+        if let ownership = commandTask.pendingReplyOwnership,
+           let pending = replyStore.removePendingReply(ownership.key) {
+            precondition(pending.purpose == ownership.purpose)
+            await pending.promise.fulfill(.failure(CancellationError()))
+        }
+        commandTask.task.cancel()
+        resumeModelCommandOwnerCountWaitersIfNeeded()
+    }
+
+    private func requiredModelDomain(for domain: ProtocolDomain) -> ModelDomain? {
+        switch domain {
+        case .dom, .inspector:
+            .dom
+        case .css:
+            .css
+        case .network:
+            .network
+        case .console:
+            .console
+        case .runtime:
+            .runtime
+        case .page:
+            nil
+        case .target, .storage, .other:
+            nil
+        }
+    }
+
+    private func proxyDomain(for domain: ProtocolDomain) -> WebInspectorProxyDomain? {
+        switch domain {
+        case .dom:
+            .dom
+        case .css:
+            .css
+        case .network:
+            .network
+        case .console:
+            .console
+        case .runtime:
+            .runtime
+        case .page:
+            .page
+        case .inspector:
+            .inspector
+        case .target, .storage, .other:
+            nil
+        }
+    }
+
+    private func isDocumentSensitive(_ domain: ProtocolDomain) -> Bool {
+        domain == .dom || domain == .css || domain == .inspector
+    }
+
+    private func isConnectionOwnedCommand(_ method: String) -> Bool {
+        method.hasSuffix(".enable")
+            || method.hasSuffix(".disable")
+            || method == "DOM.getDocument"
+            || method == "Inspector.initialized"
+    }
+
+    private func invalidateModelCommands(
+        where shouldInvalidate: (ConnectionModelCommandTask) -> Bool,
+        failureOverride: ConnectionModelCommandFailureOverride,
+        pendingFailureReason: ConnectionPendingReplyFailureReason
+    ) -> ConnectionCommandInvalidationEffects {
+        var effects = ConnectionCommandInvalidationEffects()
+        for operationID in modelCommandTasks.keys.sorted() {
+            guard var commandTask = modelCommandTasks[operationID],
+                  shouldInvalidate(commandTask) else {
+                continue
             }
-            if let result = transportLocalResult(for: command, targetID: resolvedTarget) {
-                return result
+            commandTask.failureOverride = failureOverride
+            modelCommandTasks[operationID] = commandTask
+
+            let waiterIDs = modelCommandReadinessWaiters.compactMap { waiterID, waiter in
+                waiter.operationID == operationID ? waiterID : nil
             }
-            return try await sendTarget(command, targetID: resolvedTarget)
+            for waiterID in waiterIDs {
+                guard let waiter = modelCommandReadinessWaiters.removeValue(forKey: waiterID) else {
+                    continue
+                }
+                waiter.continuation.resume(throwing: failureOverride.error)
+            }
+
+            if let ownership = commandTask.pendingReplyOwnership,
+               let pending = replyStore.removePendingReply(ownership.key) {
+                precondition(
+                    pending.purpose == ownership.purpose,
+                    "A model command invalidation removed another operation's reply."
+                )
+                effects.pendingFailures.append(
+                    ConnectionPendingReplyFailure(
+                        pending: pending,
+                        reason: pendingFailureReason
+                    )
+                )
+            }
+            commandTask.task.cancel()
+            effects.modelCommandTasksToAwait.append(commandTask.task)
+        }
+        resumeModelCommandOwnerCountWaitersIfNeeded()
+        return effects
+    }
+
+    private func completeCommandInvalidationEffects(
+        _ effects: ConnectionCommandInvalidationEffects
+    ) async {
+        for failure in effects.pendingFailures {
+            await failure.pending.promise.fulfill(.failure(failure.reason.error))
+        }
+        for task in effects.modelCommandTasksToAwait {
+            _ = await task.result
         }
     }
 
@@ -857,6 +1552,66 @@ package actor ConnectionCore {
 
     package func activeEventScopeSubscriberCountForTesting() -> Int {
         eventScopes.entries.values.count { $0.sink != nil }
+    }
+
+    package func waitForModelCommandOwnerCountForTesting(_ expectedCount: Int) async {
+        precondition(expectedCount >= 0)
+        guard modelCommandTasks.count != expectedCount else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            modelCommandOwnerCountWaiters.append((expectedCount, continuation))
+        }
+    }
+
+    package func modelCommandOwnerCountForTesting() -> Int {
+        modelCommandTasks.count
+    }
+
+    package func modelCommandReadinessWaiterCountForTesting() -> Int {
+        modelCommandReadinessWaiters.count
+    }
+
+    package func waitForModelCommandReadinessWaiterCountForTesting(
+        _ expectedCount: Int
+    ) async {
+        precondition(expectedCount >= 0)
+        guard modelCommandReadinessWaiters.count != expectedCount else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            modelCommandReadinessCountWaiters.append((expectedCount, continuation))
+        }
+    }
+
+    private func resumeModelCommandOwnerCountWaitersIfNeeded() {
+        let count = modelCommandTasks.count
+        var pending: [(
+            expectedCount: Int,
+            continuation: CheckedContinuation<Void, Never>
+        )] = []
+        for waiter in modelCommandOwnerCountWaiters {
+            if count == waiter.expectedCount {
+                waiter.continuation.resume()
+            } else {
+                pending.append(waiter)
+            }
+        }
+        modelCommandOwnerCountWaiters = pending
+
+        let readinessCount = modelCommandReadinessWaiters.count
+        var pendingReadiness: [(
+            expectedCount: Int,
+            continuation: CheckedContinuation<Void, Never>
+        )] = []
+        for waiter in modelCommandReadinessCountWaiters {
+            if readinessCount == waiter.expectedCount {
+                waiter.continuation.resume()
+            } else {
+                pendingReadiness.append(waiter)
+            }
+        }
+        modelCommandReadinessCountWaiters = pendingReadiness
     }
 
     package func replaceEventScopeActivationCancellationActionForTesting(
@@ -1163,6 +1918,7 @@ package actor ConnectionCore {
         synchronization.didPublish = true
         registration.synchronization = synchronization
         modelFeed = registration
+        reevaluateModelCommandReadinessWaiters()
         return true
     }
 
@@ -1260,6 +2016,7 @@ package actor ConnectionCore {
             if !domWasAlreadyComplete {
                 _ = completeModelDomain(.dom, generation: generation)
             }
+            reevaluateModelCommandReadinessWaiters()
             return
         }
 
@@ -1523,24 +2280,56 @@ package actor ConnectionCore {
 
     private func prepareDOMDocumentUpdateForModelFeed(
         _ event: ProtocolEvent
-    ) {
-        guard event.method == "DOM.documentUpdated",
-              var registration = modelFeed,
-              var bootstrap = registration.domBootstrap,
-              bootstrap.generation == currentPageGeneration else {
-            return
+    ) -> ConnectionCommandInvalidationEffects {
+        guard event.method == "DOM.documentUpdated" else {
+            return ConnectionCommandInvalidationEffects()
         }
-        let targetID = event.sourceTargetID
-            ?? event.targetID
+        let targetID = event.targetID
+            ?? event.sourceTargetID
             ?? targetRegistry.currentMainPageTargetID
         guard let targetID,
-              bootstrap.targetsByID[targetID] != nil else {
-            return
+              let target = targetRegistry.target(for: targetID),
+              targetRegistry.isCurrentPageModelTarget(target) else {
+            return ConnectionCommandInvalidationEffects()
         }
+        let oldEpoch = modelDocumentEpoch(for: targetID)
         _ = advanceModelDocumentEpoch(for: targetID)
-        bootstrap.needsCompletionMarker = true
-        registration.domBootstrap = bootstrap
-        modelFeed = registration
+
+        if var registration = modelFeed,
+           var bootstrap = registration.domBootstrap,
+           bootstrap.generation == currentPageGeneration,
+           bootstrap.targetsByID[targetID] != nil {
+            bootstrap.needsCompletionMarker = true
+            registration.domBootstrap = bootstrap
+            modelFeed = registration
+        }
+
+        var effects = invalidateModelCommands(
+            where: { task in
+                guard task.authorization.generation == currentPageGeneration,
+                      isDocumentSensitive(task.domain),
+                      let document = task.authorization.document else {
+                    return false
+                }
+                return ProtocolTarget.ID(document.targetID.rawValue) == targetID
+                    && document.epoch == oldEpoch
+            },
+            failureOverride: .staleIdentifier,
+            pendingFailureReason: .staleIdentifier
+        )
+        let directReplies = replyStore.removePendingReplies { pending in
+            guard pending.targetID == targetID,
+                  isDocumentSensitive(pending.domain),
+                  case let .direct(bindingGeneration, documentEpoch) = pending.purpose else {
+                return false
+            }
+            return bindingGeneration == currentPageGeneration
+                && documentEpoch == oldEpoch
+        }
+        effects.pendingFailures.append(contentsOf: directReplies.map {
+            ConnectionPendingReplyFailure(pending: $0, reason: .staleIdentifier)
+        })
+        return effects
     }
 
     private func publishModelTargetLifecycleEvent(
@@ -2229,7 +3018,10 @@ package actor ConnectionCore {
         }
     }
 
-    private func sendRoot(_ command: ProtocolCommand) async throws -> ProtocolCommand.Result {
+    private func sendRoot(
+        _ command: ProtocolCommand,
+        admission: ConnectionDirectCommandAdmission
+    ) async throws -> ProtocolCommand.Result {
         let commandID = allocateCommandID()
         let promise = ReplyPromise<ProtocolCommand.Result>()
         try Task.checkCancellation()
@@ -2238,11 +3030,12 @@ package actor ConnectionCore {
             method: command.method,
             parametersData: command.parametersData
         )
-        let pending = try makeClientPendingReply(
+        let pending = makeDirectPendingReply(
             domain: command.domain,
             method: command.method,
             targetID: nil,
-            promise: promise
+            promise: promise,
+            admission: admission
         )
         replyStore.insertRootReply(pending, commandID: commandID)
         do {
@@ -2262,7 +3055,8 @@ package actor ConnectionCore {
 
     private func sendTarget(
         _ command: ProtocolCommand,
-        targetID: ProtocolTarget.ID
+        targetID: ProtocolTarget.ID,
+        admission: ConnectionDirectCommandAdmission
     ) async throws -> ProtocolCommand.Result {
         let innerCommandID = allocateCommandID()
         let outerCommandID = allocateCommandID()
@@ -2279,11 +3073,12 @@ package actor ConnectionCore {
             targetIdentifier: targetID.rawValue,
             message: message
         )
-        let pending = try makeClientPendingReply(
+        let pending = makeDirectPendingReply(
             domain: command.domain,
             method: command.method,
             targetID: targetID,
-            promise: promise
+            promise: promise,
+            admission: admission
         )
         replyStore.insertTargetReply(pending, key: key, rootWrapperID: outerCommandID)
         do {
@@ -2301,21 +3096,20 @@ package actor ConnectionCore {
         )
     }
 
-    private func makeClientPendingReply(
+    private func makeDirectPendingReply(
         domain: ProtocolDomain,
         method: String,
         targetID: ProtocolTarget.ID?,
-        promise: ReplyPromise<ProtocolCommand.Result>
-    ) throws -> TransportSession.PendingReply {
-        // This is the single ownership boundary for every wire command whose
-        // reply belongs to a direct client. Capability and future feed-owned
-        // commands use distinct purposes and do not pass through this factory.
-        try claimDirectConsumer()
-        return TransportSession.PendingReply.client(
+        promise: ReplyPromise<ProtocolCommand.Result>,
+        admission: ConnectionDirectCommandAdmission
+    ) -> TransportSession.PendingReply {
+        TransportSession.PendingReply.direct(
             domain: domain,
             method: method,
             targetID: targetID,
-            promise: promise
+            promise: promise,
+            bindingGeneration: admission.bindingGeneration,
+            documentEpoch: admission.documentEpoch
         )
     }
 
@@ -2491,7 +3285,7 @@ package actor ConnectionCore {
         guard isOpen else {
             return
         }
-        let mainPageTargetNotification = emit(
+        let emission = emit(
             domain: domain,
             method: method,
             targetID: targetID,
@@ -2500,10 +3294,7 @@ package actor ConnectionCore {
             destroyedCurrentMainPageTarget: destroyedCurrentMainPageTarget,
             reservedEventSequence: eventSequence
         )
-        guard isOpen else {
-            return
-        }
-        await completeMainPageTargetNotification(mainPageTargetNotification)
+        await completeEventEmissionEffects(emission)
         guard isOpen else {
             return
         }
@@ -2569,14 +3360,14 @@ package actor ConnectionCore {
             sourceTargetID: targetID,
             paramsData: parsed.paramsData
         )
-        let mainPageTargetNotification = emit(
+        let emission = emit(
             domain: ProtocolDomain(method: method),
             method: method,
             targetID: emittedTargetID,
             sourceTargetID: targetID,
             paramsData: parsed.paramsData
         )
-        await completeMainPageTargetNotification(mainPageTargetNotification)
+        await completeEventEmissionEffects(emission)
     }
 
     private func resolve(
@@ -2626,8 +3417,20 @@ package actor ConnectionCore {
         key: TransportSession.PendingKey
     ) {
         switch pending.purpose {
-        case .client:
+        case .direct:
             break
+        case let .modelCommand(_, operationID):
+            guard let ownership = modelCommandTasks[operationID]?.pendingReplyOwnership else {
+                preconditionFailure("A model command reply has no model command task owner.")
+            }
+            precondition(
+                ownership.key == key,
+                "A model command reply key does not match its operation owner."
+            )
+            precondition(
+                ownership.purpose == pending.purpose,
+                "A model command reply purpose does not match its operation owner."
+            )
         case let .capability(_, _, operationID):
             guard let ownership = capabilityTasks[operationID]?.pendingReplyOwnership else {
                 preconditionFailure("A capability reply has no capability operation owner.")
@@ -2664,8 +3467,8 @@ package actor ConnectionCore {
         for pending: TransportSession.PendingReply
     ) throws {
         switch pending.purpose {
-        case .client:
-            // Client replies have no internal publication side effect.
+        case .direct, .modelCommand:
+            // Consumer replies have no internal publication side effect.
             break
         case let .capability(key, generation, operationID):
             publishModelReplayCompletionIfNeeded(
@@ -2949,11 +3752,8 @@ package actor ConnectionCore {
             )
         }
         reconcileDOMBootstrapTargets()
-        guard isOpen else {
-            return RootEventMutation()
-        }
         return RootEventMutation(
-            pendingStyleSheetEvents: resolvePendingStyleSheets(for: resolution),
+            pendingStyleSheetEvents: isOpen ? resolvePendingStyleSheets(for: resolution) : [],
             bindingEffects: bindingEffects
         )
     }
@@ -2993,7 +3793,6 @@ package actor ConnectionCore {
         modelDocumentEpochs.removeValue(forKey: targetID)
         modelTargetMutationActionForTesting?()
         let capabilityWaiters = physicalTargetDidDisappear(targetID)
-        let pendingReplies = replyStore.removeTargetReplies(for: targetID)
         provisionalTargetMessageStore.removeTarget(targetID)
         styleSheetRouting.removeTarget(targetID)
         runtimeContextRegistry.removeTarget(targetID)
@@ -3001,6 +3800,7 @@ package actor ConnectionCore {
             from: previousMainPageTargetID,
             to: targetRegistry.currentMainPageTargetID
         )
+        let pendingReplies = replyStore.removeTargetReplies(for: targetID)
         if destroyedTargetWasCurrent,
            let destroyedRecord,
            let target = ModelTarget(record: destroyedRecord) {
@@ -3013,8 +3813,14 @@ package actor ConnectionCore {
         return RootEventMutation(
             bindingEffects: bindingEffects,
             physicalTargetWaiters: capabilityWaiters,
-            pendingRepliesToFail: pendingReplies,
-            missingTargetID: targetID
+            commandInvalidation: ConnectionCommandInvalidationEffects(
+                pendingFailures: pendingReplies.map {
+                    ConnectionPendingReplyFailure(
+                        pending: $0,
+                        reason: .missingTarget(targetID)
+                    )
+                }
+            )
         )
     }
 
@@ -3027,12 +3833,12 @@ package actor ConnectionCore {
         let mutation = targetRegistry.commitTarget(oldTargetID: oldTargetID, newTargetID: newTargetID)
         modelTargetMutationActionForTesting?()
         var capabilityWaiters = PhysicalTargetDisappearanceWaiters()
-        var stalePendingReplies: [TransportSession.PendingReply] = []
+        var disappearedTargetID: ProtocolTarget.ID?
 
         if mutation.shouldRetargetExternalState {
             let oldTargetID = mutation.committedOldTargetID
             capabilityWaiters = physicalTargetDidDisappear(oldTargetID)
-            stalePendingReplies = replyStore.removeTargetReplies(for: oldTargetID)
+            disappearedTargetID = oldTargetID
             provisionalTargetMessageStore.removeTarget(oldTargetID)
             styleSheetRouting.retarget(from: oldTargetID, to: newTargetID)
             runtimeContextRegistry.retarget(oldTargetID: oldTargetID, newTargetID: newTargetID)
@@ -3042,6 +3848,9 @@ package actor ConnectionCore {
             from: previousMainPageTargetID,
             to: targetRegistry.currentMainPageTargetID
         )
+        let remainingPendingReplies = disappearedTargetID.map {
+            replyStore.removeTargetReplies(for: $0)
+        } ?? []
         if let newRecord = targetRegistry.target(for: newTargetID),
            targetRegistry.isCurrentPageModelTarget(newRecord),
            let newTarget = ModelTarget(record: newRecord) {
@@ -3055,15 +3864,20 @@ package actor ConnectionCore {
         }
         modelDocumentEpochs.removeValue(forKey: oldTargetID)
         reconcileDOMBootstrapTargets()
-        guard isOpen else {
-            return RootEventMutation()
-        }
         return RootEventMutation(
-            pendingStyleSheetEvents: resolvePendingStyleSheets(for: mutation.resolvedFrameTarget),
+            pendingStyleSheetEvents: isOpen
+                ? resolvePendingStyleSheets(for: mutation.resolvedFrameTarget)
+                : [],
             bindingEffects: bindingEffects,
             physicalTargetWaiters: capabilityWaiters,
-            pendingRepliesToFail: stalePendingReplies,
-            missingTargetID: mutation.committedOldTargetID
+            commandInvalidation: ConnectionCommandInvalidationEffects(
+                pendingFailures: remainingPendingReplies.map {
+                    ConnectionPendingReplyFailure(
+                        pending: $0,
+                        reason: .missingTarget(mutation.committedOldTargetID)
+                    )
+                }
+            )
         )
     }
 
@@ -3100,6 +3914,22 @@ package actor ConnectionCore {
             )
         }
 
+        let oldGeneration = currentPageGeneration
+        var commandInvalidation = invalidateModelCommands(
+            where: { $0.authorization.generation == oldGeneration },
+            failureOverride: .staleIdentifier,
+            pendingFailureReason: .staleIdentifier
+        )
+        let directReplies = replyStore.removePendingReplies { pending in
+            guard case let .direct(bindingGeneration, _) = pending.purpose else {
+                return false
+            }
+            return bindingGeneration == oldGeneration
+        }
+        commandInvalidation.pendingFailures.append(contentsOf: directReplies.map {
+            ConnectionPendingReplyFailure(pending: $0, reason: .staleIdentifier)
+        })
+
         currentPageBindingGapIsOpen = oldTargetID != nil && newTargetID == nil
         currentPageGeneration = WebInspectorPage.Generation(
             rawValue: currentPageGeneration.rawValue &+ 1
@@ -3109,7 +3939,10 @@ package actor ConnectionCore {
         }
         publishModelBindingChange(hasCurrentBinding: newTargetID != nil)
         guard isOpen else {
-            return CurrentPageBindingChangeEffects()
+            return CurrentPageBindingChangeEffects(
+                modelBootstrapTasksToAwait: obsoleteBootstrapTasks,
+                commandInvalidation: commandInvalidation
+            )
         }
 
         let keys = capabilities.states.keys.filter { $0.route == .currentPage }
@@ -3127,13 +3960,15 @@ package actor ConnectionCore {
         return CurrentPageBindingChangeEffects(
             capabilityKeysToReconcile: newTargetID == nil ? [] : keys,
             releaseWaiters: releaseWaiters,
-            modelBootstrapTasksToAwait: obsoleteBootstrapTasks
+            modelBootstrapTasksToAwait: obsoleteBootstrapTasks,
+            commandInvalidation: commandInvalidation
         )
     }
 
     private func completeCurrentPageBindingChange(
         _ effects: CurrentPageBindingChangeEffects
     ) async {
+        await completeCommandInvalidationEffects(effects.commandInvalidation)
         for task in effects.modelBootstrapTasksToAwait {
             await task.value
         }
@@ -3170,17 +4005,7 @@ package actor ConnectionCore {
         await resumePhysicalTargetDisappearanceWaiters(
             mutation.physicalTargetWaiters
         )
-        guard !mutation.pendingRepliesToFail.isEmpty else {
-            return
-        }
-        guard let missingTargetID = mutation.missingTargetID else {
-            preconditionFailure("Pending target replies lost their missing-target owner.")
-        }
-        for pending in mutation.pendingRepliesToFail {
-            await pending.promise.fulfill(
-                .failure(TransportSession.Error.missingTarget(missingTargetID))
-            )
-        }
+        await completeCommandInvalidationEffects(mutation.commandInvalidation)
     }
 
     private func publishModelBindingChange(hasCurrentBinding: Bool) {
@@ -3407,13 +4232,13 @@ package actor ConnectionCore {
             guard isOpen else {
                 return
             }
-            let mainPageTargetNotification = emit(
+            let emission = emit(
                 domain: .css,
                 method: "CSS.styleSheetAdded",
                 targetID: event.targetID,
                 paramsData: event.paramsData
             )
-            await completeMainPageTargetNotification(mainPageTargetNotification)
+            await completeEventEmissionEffects(emission)
             guard isOpen else {
                 return
             }
@@ -3440,9 +4265,9 @@ package actor ConnectionCore {
         paramsData: Data,
         destroyedCurrentMainPageTarget: Bool = false,
         reservedEventSequence: TransportEventSequenceSnapshot? = nil
-    ) -> MainPageTargetNotification? {
+    ) -> EventEmissionEffects {
         guard isOpen else {
-            return nil
+            return EventEmissionEffects()
         }
         let eventSequence: TransportEventSequenceSnapshot
         if let reservedEventSequence {
@@ -3472,7 +4297,7 @@ package actor ConnectionCore {
         // WebKit invalidates every bound node identifier before emitting
         // documentUpdated. Advance the target epoch before this event can be
         // projected into the ordered model feed.
-        prepareDOMDocumentUpdateForModelFeed(envelope)
+        let commandInvalidation = prepareDOMDocumentUpdateForModelFeed(envelope)
         if let eventDomain = webInspectorEventDomain(for: domain) {
             var terminalViolation: String?
             let targetSnapshot = snapshot()
@@ -3548,7 +4373,7 @@ package actor ConnectionCore {
             }
             if let terminalViolation {
                 handoffTermination(.protocolViolation(terminalViolation))
-                return nil
+                return EventEmissionEffects(commandInvalidation: commandInvalidation)
             }
         }
         do {
@@ -3560,11 +4385,11 @@ package actor ConnectionCore {
             handoffTermination(
                 .protocolViolation("Failed to decode \(method): \(error)")
             )
-            return nil
+            return EventEmissionEffects(commandInvalidation: commandInvalidation)
         }
         startNextDOMBootstrapIfNeeded()
         guard isOpen else {
-            return nil
+            return EventEmissionEffects(commandInvalidation: commandInvalidation)
         }
         for continuation in eventSubscribers.continuations(for: domain) {
             continuation.yield(envelope)
@@ -3572,9 +4397,19 @@ package actor ConnectionCore {
         for continuation in eventSubscribers.orderedContinuations {
             continuation.yield(envelope)
         }
-        return prepareMainPageTargetNotificationIfNeeded(
-            receivedSequence: eventSequence.sequence
+        return EventEmissionEffects(
+            mainPageTargetNotification: prepareMainPageTargetNotificationIfNeeded(
+                receivedSequence: eventSequence.sequence
+            ),
+            commandInvalidation: commandInvalidation
         )
+    }
+
+    private func completeEventEmissionEffects(
+        _ effects: EventEmissionEffects
+    ) async {
+        await completeCommandInvalidationEffects(effects.commandInvalidation)
+        await completeMainPageTargetNotification(effects.mainPageTargetNotification)
     }
 
     private func publishConfiguredModelEvent(
@@ -3900,6 +4735,22 @@ package actor ConnectionCore {
             validateReplyOwnership(pending, key: key)
         }
         let pendingReplies = Array(pendingReplyRecords.values)
+        let readinessWaiters = modelCommandReadinessWaiters.values
+        modelCommandReadinessWaiters.removeAll()
+        for waiter in readinessWaiters {
+            waiter.continuation.resume(throwing: transportError)
+        }
+        resumeModelCommandOwnerCountWaitersIfNeeded()
+        var runningModelCommandTasks: [Task<ProtocolCommand.Result, any Swift.Error>] = []
+        for operationID in modelCommandTasks.keys.sorted() {
+            guard var commandTask = modelCommandTasks[operationID] else {
+                continue
+            }
+            commandTask.failureOverride = .terminal(transportError)
+            modelCommandTasks[operationID] = commandTask
+            commandTask.task.cancel()
+            runningModelCommandTasks.append(commandTask.task)
+        }
         let runningCapabilityTasks = capabilityTasks.values.map(\.task)
         capabilityTasks.removeAll()
         for task in runningCapabilityTasks {
@@ -3932,6 +4783,7 @@ package actor ConnectionCore {
             releaseWaiters: releaseWaiters,
             capabilityTasks: runningCapabilityTasks,
             modelBootstrapTasks: runningModelBootstrapTasks,
+            modelCommandTasks: runningModelCommandTasks,
             closeAction: closeAction
         )
     }

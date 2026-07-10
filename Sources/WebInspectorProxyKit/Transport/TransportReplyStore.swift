@@ -3,7 +3,14 @@ import Foundation
 extension TransportSession {
     struct PendingReply: Sendable {
         enum Purpose: Equatable, Sendable {
-            case client
+            case direct(
+                bindingGeneration: WebInspectorPage.Generation?,
+                documentEpoch: ModelDocumentEpoch?
+            )
+            case modelCommand(
+                authorization: ConnectionModelCommandAuthorization,
+                operationID: UInt64
+            )
             case capability(
                 key: ConnectionCapabilityKey,
                 generation: WebInspectorPage.Generation,
@@ -40,14 +47,39 @@ extension TransportSession {
             hasBufferedProvisionalResponse = false
         }
 
-        static func client(
+        static func direct(
             domain: ProtocolDomain,
             method: String,
             targetID: ProtocolTarget.ID?,
-            promise: ReplyPromise<ProtocolCommand.Result>
+            promise: ReplyPromise<ProtocolCommand.Result>,
+            bindingGeneration: WebInspectorPage.Generation?,
+            documentEpoch: ModelDocumentEpoch?
         ) -> PendingReply {
             PendingReply(
-                purpose: .client,
+                purpose: .direct(
+                    bindingGeneration: bindingGeneration,
+                    documentEpoch: documentEpoch
+                ),
+                domain: domain,
+                method: method,
+                targetID: targetID,
+                promise: promise
+            )
+        }
+
+        static func modelCommand(
+            domain: ProtocolDomain,
+            method: String,
+            targetID: ProtocolTarget.ID?,
+            promise: ReplyPromise<ProtocolCommand.Result>,
+            authorization: ConnectionModelCommandAuthorization,
+            operationID: UInt64
+        ) -> PendingReply {
+            PendingReply(
+                purpose: .modelCommand(
+                    authorization: authorization,
+                    operationID: operationID
+                ),
                 domain: domain,
                 method: method,
                 targetID: targetID,
@@ -211,6 +243,17 @@ struct TransportReplyStore: Sendable {
         targetReplies.keys
             .filter { $0.targetID == targetID }
             .compactMap { removeTargetReply(for: $0) }
+    }
+
+    mutating func removePendingReplies(
+        where shouldRemove: (TransportSession.PendingReply) -> Bool
+    ) -> [TransportSession.PendingReply] {
+        pendingReplyRecords.compactMap { key, pending in
+            guard shouldRemove(pending) else {
+                return nil
+            }
+            return removePendingReply(key)
+        }
     }
 
     mutating func removeTargetReplyForTimeout(_ key: TransportSession.ReplyKey) -> TransportSession.PendingReply? {

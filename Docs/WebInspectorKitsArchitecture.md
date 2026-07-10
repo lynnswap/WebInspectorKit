@@ -398,10 +398,15 @@ promise.
 | content-controller cache and retirement | root `WebInspectorViewController` | tab selection and root presentation lifecycle |
 | tab layout/scroll/render caches | UIKit controllers | presentation events only |
 
-`ConnectionCore` is an implementation actor. `WebInspectorProxy` and
-`WebInspectorPage` are Sendable handles that strongly retain it; the core never
-retains either handle. Keeping any handle keeps the connection usable without a
-cycle.
+`ConnectionCore` is an implementation actor. The root `WebInspectorProxy` is the
+sole direct close owner and strongly retains the core. `WebInspectorPage`,
+`WebInspectorTarget`, and every domain endpoint are Sendable weak lifecycle
+handles: retaining a child handle does not keep the root connection alive. A
+command, generation query, or structured event scope resolves the root for that
+operation and fails with `closed` if it has gone away; a cold stream finishes
+immediately. Active model use is instead kept alive by its context/session owner.
+Dropping the root is only a synchronous local-resource backstop; explicit
+`close()` remains the deterministic asynchronous detach contract.
 
 ### Native attachment ownership
 
@@ -676,13 +681,38 @@ the connection claimed until connection close. Explicit connection close
 finishes the feed normally only after transport close work reaches quiescence;
 fatal and protocol termination fail it.
 
-The model feed and direct consumption are mutually exclusive. Once a client
-command owns a pending reply or a structured scope is admitted, a feed cannot
-later reconstruct the missed prefix. Conversely, while a feed owns the
-connection, public commands and structured scopes fail with
+The model feed and direct consumption are mutually exclusive. Direct command
+admission, including transport-local `DOM.enable`, claims the connection before
+the local/wire split; once a direct command or structured scope is admitted, a
+feed cannot reconstruct the missed prefix. While a feed owns the connection,
+ordinary direct commands and structured scopes fail with
 `WebInspectorProxyError.connectionInUse`. Legacy cold passive streams are
 migration-only: starting one while the feed is open is a programmer error, and
 they must be deleted rather than adapted around this ownership boundary.
+
+Model code receives a package-only `ConnectionModelCommandAuthorization` from
+the ordered feed application boundary. It contains the exact feed identity and
+binding generation, plus a physical target/document epoch for document-scoped
+work. The authority is propagated as a value through page/domain handles,
+command encoding, and the core; the core registration remains the only source
+of configured domains and readiness. `Page`, Network, Console, and Runtime
+commands wait for binding `synchronizationComplete`. DOM, CSS, and Inspector
+picker work additionally waits for that target's latest accepted DOM bootstrap.
+An old generation or document epoch fails locally as `staleIdentifier`; a
+foreign/closing feed, unconfigured domain, or missing document authorization
+fails with a typed package error and never reaches the wire. Binding-only work
+deliberately ignores an otherwise stale document field.
+
+Enable/disable, `DOM.getDocument`, and `Inspector.initialized` remain
+connection-owned operations and cannot be forged through model authority.
+Capability leases and DOM bootstrap tasks are their only owners. Model commands
+have Core-owned readiness waiters, tasks, and pending-reply purposes. Retarget
+invalidates all old-generation main/frame work without touching a provisional
+new-target direct reply; `DOM.documentUpdated` invalidates only DOM/CSS/Inspector
+work for the old target epoch while binding-level work continues. Feed close
+first rejects admission, drains those waiters/tasks/replies, then releases
+capabilities and the exclusive claim. Terminal and overflow teardown perform the
+same drain before transport detach.
 
 The later DataKit feed consumer will apply records serially. Reaching
 `replayComplete` therefore proves that every earlier event through that

@@ -1,14 +1,35 @@
 import Foundation
 
 package struct DomainEndpoint: Sendable {
-    package let proxy: WebInspectorProxy
+    package let proxyReference: WebInspectorProxyReference
     package let targetID: WebInspectorTarget.ID
     package let route: RoutingTargetID
+    package let authority: WebInspectorCommandAuthority
 
-    package init(proxy: WebInspectorProxy, targetID: WebInspectorTarget.ID, route: RoutingTargetID) {
-        self.proxy = proxy
+    package init(
+        proxy: WebInspectorProxy,
+        targetID: WebInspectorTarget.ID,
+        route: RoutingTargetID,
+        authority: WebInspectorCommandAuthority = .direct
+    ) {
+        self.init(
+            proxyReference: WebInspectorProxyReference(proxy),
+            targetID: targetID,
+            route: route,
+            authority: authority
+        )
+    }
+
+    package init(
+        proxyReference: WebInspectorProxyReference,
+        targetID: WebInspectorTarget.ID,
+        route: RoutingTargetID,
+        authority: WebInspectorCommandAuthority
+    ) {
+        self.proxyReference = proxyReference
         self.targetID = targetID
         self.route = route
+        self.authority = authority
     }
 
     package func dispatch<Payload: Sendable, Result: Sendable>(
@@ -18,12 +39,16 @@ package struct DomainEndpoint: Sendable {
         returning resultType: Result.Type = Result.self
     ) async throws -> Result {
         _ = resultType
+        guard let proxy = proxyReference.resolve() else {
+            throw WebInspectorProxyError.closed
+        }
         return try await proxy.dispatchCommand(
             targetID: targetID,
             route: route,
             domain: domain,
             method: method,
-            payload: payload
+            payload: payload,
+            authority: authority
         )
     }
 
@@ -36,9 +61,15 @@ package struct DomainEndpoint: Sendable {
             AsyncThrowingStream<WebInspectorPageEvent<Element>, any Error>
         ) async throws -> Output
     ) async throws -> Output {
-        guard let backend = proxy.structuredEventBackend else {
-            throw unimplementedCommand(domain: domain.rawValue, method: "withEvents")
-        }
+        let backend: any WebInspectorProxyBackend = try {
+            guard let proxy = proxyReference.resolve() else {
+                throw WebInspectorProxyError.closed
+            }
+            guard let backend = proxy.structuredEventBackend else {
+                throw unimplementedCommand(domain: domain.rawValue, method: "withEvents")
+            }
+            return backend
+        }()
         return try await withWebInspectorEventScope(
             backend: backend,
             targetID: targetID,
@@ -52,23 +83,44 @@ package struct DomainEndpoint: Sendable {
     }
 
     package func domEvents() -> AsyncStream<DOM.Event> {
-        proxy.domEvents(targetID: targetID, route: route)
+        guard let proxy = proxyReference.resolve() else {
+            return finishedStream()
+        }
+        return proxy.domEvents(targetID: targetID, route: route)
     }
 
     package func cssEvents() -> AsyncStream<CSS.Event> {
-        proxy.cssEvents(targetID: targetID, route: route)
+        guard let proxy = proxyReference.resolve() else {
+            return finishedStream()
+        }
+        return proxy.cssEvents(targetID: targetID, route: route)
     }
 
     package func networkEvents() -> AsyncStream<Network.Event> {
-        proxy.networkEvents(targetID: targetID, route: route)
+        guard let proxy = proxyReference.resolve() else {
+            return finishedStream()
+        }
+        return proxy.networkEvents(targetID: targetID, route: route)
     }
 
     package func consoleEvents() -> AsyncStream<Console.Event> {
-        proxy.consoleEvents(targetID: targetID, route: route)
+        guard let proxy = proxyReference.resolve() else {
+            return finishedStream()
+        }
+        return proxy.consoleEvents(targetID: targetID, route: route)
     }
 
     package func runtimeEvents() -> AsyncStream<Runtime.Event> {
-        proxy.runtimeEvents(targetID: targetID, route: route)
+        guard let proxy = proxyReference.resolve() else {
+            return finishedStream()
+        }
+        return proxy.runtimeEvents(targetID: targetID, route: route)
+    }
+}
+
+private func finishedStream<Element: Sendable>() -> AsyncStream<Element> {
+    AsyncStream { continuation in
+        continuation.finish()
     }
 }
 

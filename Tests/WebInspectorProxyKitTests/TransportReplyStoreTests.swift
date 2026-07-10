@@ -67,45 +67,47 @@ func replyStoreRemovingThenReusingCommandCleansStaleIndexes() {
     let newKey = TransportSession.ReplyKey(targetID: .init("frame-new"), commandID: 7)
 
     store.insertTargetReply(
-        clientPendingReply(targetID: .init("frame-old")),
+        directPendingReply(targetID: .init("frame-old")),
         key: oldKey,
         rootWrapperID: 100
     )
     let removed = store.removeTargetReply(for: oldKey)
     store.insertTargetReply(
-        clientPendingReply(targetID: .init("frame-new")),
+        directPendingReply(targetID: .init("frame-new")),
         key: newKey,
         rootWrapperID: 200
     )
 
-    #expect(removed?.purpose == .client)
+    #expect(removed?.purpose == .direct(bindingGeneration: nil, documentEpoch: nil))
     #expect(store.pendingTargetReplyKeys == [newKey])
     #expect(store.takeTargetReplyKey(forRootWrapperID: 100) == nil)
     #expect(store.takeTargetReplyKey(forRootWrapperID: 200) == newKey)
 }
 
 @Test
-func replyStoreRootRemovalPreservesClientPurpose() {
+func replyStoreRootRemovalPreservesDirectPurpose() {
     var store = TransportReplyStore()
     store.insertRootReply(
-        clientPendingReply(targetID: nil),
+        directPendingReply(targetID: nil),
         commandID: 42
     )
 
     let removed = store.removePendingReply(.root(42))
 
-    #expect(removed?.purpose == .client)
+    #expect(removed?.purpose == .direct(bindingGeneration: nil, documentEpoch: nil))
     #expect(store.pendingRootReplyIDs.isEmpty)
 }
 
-private func clientPendingReply(
+private func directPendingReply(
     targetID: ProtocolTarget.ID?
 ) -> TransportSession.PendingReply {
-    TransportSession.PendingReply.client(
+    TransportSession.PendingReply.direct(
         domain: .dom,
         method: "DOM.getDocument",
         targetID: targetID,
-        promise: ReplyPromise<ProtocolCommand.Result>()
+        promise: ReplyPromise<ProtocolCommand.Result>(),
+        bindingGeneration: nil,
+        documentEpoch: nil
     )
 }
 

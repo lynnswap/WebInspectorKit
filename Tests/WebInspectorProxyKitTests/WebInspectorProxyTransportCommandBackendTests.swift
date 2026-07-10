@@ -10,7 +10,8 @@ func transportCommandBackendDispatchesPageReloadThroughTargetRoute() async throw
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let target = pageTarget(proxy: proxy)
 
     let reloadTask = Task {
         try await target.page.reload()
@@ -35,7 +36,8 @@ func transportCommandBackendDecodesDOMRequestNodeResult() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let target = pageTarget(proxy: proxy)
 
     let requestNodeTask = Task {
         try await target.dom.requestNode(forRemoteObject: Runtime.RemoteObject.ID("remote-node"))
@@ -61,7 +63,8 @@ func transportCommandBackendPreservesDOMRequestChildNodesRecursiveDepth() async 
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let target = pageTarget(proxy: proxy)
 
     let requestChildrenTask = Task {
         try await target.dom.requestChildNodes(DOM.Node.ID("document"), depth: -1)
@@ -88,7 +91,8 @@ func transportCommandBackendEncodesDOMEditingCommandsAndDecodesAttributes() asyn
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let target = pageTarget(proxy: proxy)
 
     let attributesTask = Task {
         try await target.dom.attributes(of: DOM.Node.ID("42"))
@@ -175,7 +179,8 @@ func transportCommandBackendEncodesDOMHighlightAndInspectModeCommands() async th
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let target = pageTarget(proxy: proxy)
 
     let highlightTask = Task {
         try await target.dom.highlightNode(DOM.Node.ID("42"))
@@ -249,7 +254,8 @@ func transportCommandBackendDecodesDOMDocumentResult() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let target = pageTarget(proxy: proxy)
 
     let documentTask = Task {
         try await target.dom.getDocument()
@@ -284,7 +290,8 @@ func transportCommandBackendEncodesAndDecodesCSSStyleCommands() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let target = pageTarget(proxy: proxy)
 
     let matchedStylesTask = Task {
         try await target.css.matchedStyles(for: DOM.Node.ID("42"))
@@ -645,6 +652,44 @@ func droppingOpenProxyHandleReachesConnectionCoreDeinit() {
 }
 
 @Test
+func pageTargetAndDomainHandlesDoNotOwnTheProxyLifecycle() async {
+    weak var weakProxy: WebInspectorProxy?
+    var page: WebInspectorPage?
+    var target: WebInspectorTarget?
+    var dom: DOM?
+
+    do {
+        let proxy = WebInspectorProxy()
+        weakProxy = proxy
+        page = proxy.page
+        target = WebInspectorTarget(
+            id: WebInspectorTarget.ID("page-main"),
+            kind: .page,
+            frameID: FrameID("main-frame"),
+            isProvisional: false,
+            proxy: proxy,
+            route: .currentPage
+        )
+        dom = target?.dom
+    }
+
+    #expect(weakProxy == nil)
+    await #expect(throws: WebInspectorProxyError.closed) {
+        _ = try await page?.generation
+    }
+    await #expect(throws: WebInspectorProxyError.closed) {
+        _ = try await dom?.getDocument()
+    }
+    await #expect(throws: WebInspectorProxyError.closed) {
+        try await dom?.withEvents { _ in }
+    }
+    var iterator = dom?.events.makeAsyncIterator()
+    #expect(await iterator?.next() == nil)
+    var lifecycleIterator = target?.lifecycleEvents.makeAsyncIterator()
+    #expect(await lifecycleIterator?.next() == nil)
+}
+
+@Test
 func pendingCapabilitySendDoesNotRetainDroppedConnectionCore() async throws {
     let backend = SuspendedSendTransportBackend()
     weak var weakTransport: TransportSession?
@@ -975,7 +1020,8 @@ func transportBackendDecodesRootScopedDOMDocumentUpdatedForCurrentPage() async t
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let target = pageTarget(proxy: proxy)
 
     let eventTask = Task {
         var iterator = target.dom.events.makeAsyncIterator()
@@ -997,7 +1043,8 @@ func transportBackendDecodesDOMShadowAndPseudoEventsForTargetRoute() async throw
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let target = pageTarget(proxy: proxy)
 
     let eventTask = Task {
         var iterator = target.dom.events.makeAsyncIterator()
@@ -1069,7 +1116,8 @@ func transportBackendNormalizesInspectorInspectToDOMInspectEvent() async throws 
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let target = pageTarget(proxy: proxy)
 
     let eventTask = Task {
         var iterator = target.dom.events.makeAsyncIterator()
@@ -1429,7 +1477,8 @@ func transportBackendDecodesNetworkResponseEventForTargetRoute() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let target = pageTarget(proxy: proxy)
 
     let eventTask = Task {
         var iterator = target.network.events.makeAsyncIterator()
@@ -1463,7 +1512,8 @@ func transportBackendDecodesNetworkResponseEventWithoutType() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let target = pageTarget(proxy: proxy)
 
     let eventTask = Task {
         var iterator = target.network.events.makeAsyncIterator()
@@ -1618,7 +1668,7 @@ func transportBackendEventSubscriptionWaitCompletesOnCancellation() async throws
     let target = try await proxy.waitForCurrentPage()
 
     let waitTask = Task {
-        await target.proxy.waitForEventSubscription(
+        await proxy.waitForEventSubscription(
             targetID: target.id,
             route: target.route,
             domain: .network
@@ -1899,7 +1949,8 @@ func transportBackendDecodesWebSocketHandshakeEventsForTargetRoute() async throw
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let target = pageTarget(proxy: proxy)
 
     let requestEventTask = Task {
         var iterator = target.network.events.makeAsyncIterator()
@@ -2010,7 +2061,8 @@ func transportBackendKeepsPeerSubscriberActiveWhenOneStreamTerminates() async th
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
     let proxyBackend = LiveWebInspectorProxyBackend(transport: transport)
-    let page = pageTarget(proxy: WebInspectorProxy(backend: proxyBackend))
+    let proxy = WebInspectorProxy(backend: proxyBackend)
+    let page = pageTarget(proxy: proxy)
     let probe = EventDeliveryProbe()
 
     let firstSubscriber = Task {
@@ -2108,7 +2160,8 @@ func transportCommandBackendDecodesRuntimeEvaluationResult() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let target = pageTarget(proxy: proxy)
 
     let evaluateTask = Task {
         try await target.runtime.evaluate("document.title", in: Runtime.ExecutionContext.ID("7"))
@@ -2141,7 +2194,8 @@ func transportCommandBackendDecodesRuntimePropertiesPreviewAndCollectionEntries(
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
+    let target = pageTarget(proxy: proxy)
     let objectID = Runtime.RemoteObject.ID("object-1")
 
     let propertiesTask = Task {
@@ -2218,13 +2272,13 @@ func transportCommandBackendDecodesRuntimePropertiesPreviewAndCollectionEntries(
 }
 
 @Test
-func pendingRepliesClassifyClientAndCapabilityOwners() async throws {
+func pendingRepliesClassifyDirectAndCapabilityOwners() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
     let proxy = try await WebInspectorProxy(transport: transport)
 
-    let clientTask = Task {
+    let directTask = Task {
         try await proxy.page.page.reload()
     }
     let reload = try await waitForTargetMessage(backend, method: "Page.reload")
@@ -2234,14 +2288,22 @@ func pendingRepliesClassifyClientAndCapabilityOwners() async throws {
             commandID: try messageID(reload.message)
         )
     )
-    #expect(await transport.pendingReplyPurposes() == [reloadPendingKey: .client])
+    let reloadPurposes = await transport.pendingReplyPurposes()
+    guard case let .direct(bindingGeneration, documentEpoch) = try #require(
+        reloadPurposes[reloadPendingKey]
+    ) else {
+        Issue.record("Expected a direct reply purpose.")
+        return
+    }
+    #expect(bindingGeneration == (try await transport.pageGeneration()))
+    #expect(documentEpoch == nil)
     await receiveTargetReply(
         transport,
         targetID: reload.targetIdentifier,
         messageID: try messageID(reload.message),
         result: "{}"
     )
-    try await clientTask.value
+    try await directTask.value
 
     let bodyGate = CloseConnectionGate()
     let scopeTask = Task {
@@ -4152,7 +4214,7 @@ private func requireCapabilityReplyPurpose(
     #expect(purposes.count == 1)
     let purpose = try #require(purposes[pendingKey])
     switch purpose {
-    case .client:
+    case .direct, .modelCommand:
         Issue.record("Expected a capability reply purpose.")
         return 0
     case .modelBootstrap:
@@ -4186,7 +4248,11 @@ private func waitForEventSubscription(
     _ target: WebInspectorTarget,
     domain: WebInspectorProxyEventDomain
 ) async {
-    await target.proxy.waitForEventSubscription(targetID: target.id, route: target.route, domain: domain)
+    guard let proxy = target.proxyReference.resolve() else {
+        Issue.record("The test target lost its root proxy before subscription registration.")
+        return
+    }
+    await proxy.waitForEventSubscription(targetID: target.id, route: target.route, domain: domain)
 }
 
 private func receiveTargetEvent(

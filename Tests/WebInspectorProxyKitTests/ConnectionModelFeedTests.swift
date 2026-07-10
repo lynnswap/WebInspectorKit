@@ -1762,6 +1762,17 @@ func domBootstrapCompletionOverflowTerminatesAtTheBoundary() async throws {
     let getDocument = try await backend.waitForTargetMessage(method: "DOM.getDocument")
     var iterator = feed.records.makeAsyncIterator()
     _ = try await modelFeedRequireReset(iterator.next())
+    let waitingCommand = Task {
+        try await core.send(modelFeedCommand(
+            domain: .page,
+            method: "Page.reload",
+            authority: ConnectionModelCommandAuthorization(
+                feedID: feed.id,
+                generation: try await core.pageGeneration()
+            )
+        ))
+    }
+    await core.waitForModelCommandReadinessWaiterCountForTesting(1)
 
     // targetSnapshot remains queued. bootstrapSnapshot fills the second slot,
     // so bootstrapComplete is the exact overflowing publication.
@@ -1769,6 +1780,11 @@ func domBootstrapCompletionOverflowTerminatesAtTheBoundary() async throws {
     await #expect(throws: WebInspectorProxyError.self) {
         try await core.waitUntilClosed()
     }
+    await #expect(throws: TransportSession.Error.self) {
+        try await waitingCommand.value
+    }
+    #expect(await core.modelCommandOwnerCountForTesting() == 0)
+    #expect(await core.modelCommandReadinessWaiterCountForTesting() == 0)
     #expect(await core.terminalCause == .modelFeedFailure(.bufferOverflow(capacity: 2)))
     await #expect(throws: ConnectionModelFeedError.bufferOverflow(capacity: 2)) {
         try await iterator.next()
@@ -2156,6 +2172,593 @@ func modelFeedCloseDisableRejectionPoisonsMailboxAndTerminatesConnection() async
     #expect(await modelFeedAllCapabilityLeaseOwners(core).isEmpty)
     #expect(await backend.isDetached())
     try await feed.close()
+}
+
+@Test
+func modelBindingCommandWaitsForInitialSynchronizationBeforeWire() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+
+    let openTask = Task {
+        try await core.openModelFeed(
+            configuredDomains: [.dom, .network],
+            capacity: 16
+        )
+    }
+    let bootstrap = try await backend.waitForTargetMessage(method: "DOM.getDocument")
+    let networkEnable = try await backend.waitForTargetMessage(method: "Network.enable")
+    await modelFeedRespond(to: networkEnable, core: core)
+    let feed = try await openTask.value
+    let generation = try await core.pageGeneration()
+    let authorization = ConnectionModelCommandAuthorization(
+        feedID: feed.id,
+        generation: generation
+    )
+
+    let commandTask = Task {
+        try await core.send(modelFeedCommand(
+            domain: .page,
+            method: "Page.reload",
+            authority: authorization
+        ))
+    }
+    await core.waitForModelCommandReadinessWaiterCountForTesting(1)
+    #expect(await backend.sentTargetMessages().allSatisfy {
+        (try? modelFeedMessageMethod($0.message)) != "Page.reload"
+    })
+
+    await modelFeedRespondWithDocument(to: bootstrap, core: core)
+    let reload = try await backend.waitForTargetMessage(method: "Page.reload")
+    await modelFeedRespond(to: reload, core: core)
+    _ = try await commandTask.value
+    await core.waitForModelCommandOwnerCountForTesting(0)
+
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Network.enable"]
+    )
+    await core.close()
+}
+
+@Test
+func documentRefreshInvalidatesDocumentCommandsButPreservesBindingCommands() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [.css, .network],
+        targetID: "page-main"
+    )
+    let generation = try await core.pageGeneration()
+    let oldDocument = ConnectionModelCommandAuthorization.Document(
+        targetID: WebInspectorTarget.ID("page-main"),
+        epoch: ModelDocumentEpoch(rawValue: 0)
+    )
+    let documentAuthorization = ConnectionModelCommandAuthorization(
+        feedID: feed.id,
+        generation: generation,
+        document: oldDocument
+    )
+    let bindingAuthorization = ConnectionModelCommandAuthorization(
+        feedID: feed.id,
+        generation: generation,
+        document: oldDocument
+    )
+    let baseline = await backend.sentTargetMessages().count
+
+    let domTask = Task {
+        try await core.send(modelFeedCommand(
+            domain: .dom,
+            method: "DOM.querySelector",
+            authority: documentAuthorization
+        ))
+    }
+    let cssTask = Task {
+        try await core.send(modelFeedCommand(
+            domain: .css,
+            method: "CSS.getMatchedStylesForNode",
+            authority: documentAuthorization
+        ))
+    }
+    let networkTask = Task {
+        try await core.send(modelFeedCommand(
+            domain: .network,
+            method: "Network.getResponseBody",
+            authority: bindingAuthorization
+        ))
+    }
+    let domMessage = try await backend.waitForTargetMessage(
+        method: "DOM.querySelector",
+        after: baseline
+    )
+    let cssMessage = try await backend.waitForTargetMessage(
+        method: "CSS.getMatchedStylesForNode",
+        after: baseline
+    )
+    let networkMessage = try await backend.waitForTargetMessage(
+        method: "Network.getResponseBody",
+        after: baseline
+    )
+
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "page-main",
+        message: #"{"method":"DOM.documentUpdated","params":{}}"#
+    ))
+    await #expect(throws: WebInspectorProxyError.staleIdentifier) {
+        try await domTask.value
+    }
+    await #expect(throws: WebInspectorProxyError.staleIdentifier) {
+        try await cssTask.value
+    }
+    await modelFeedRespond(to: domMessage, core: core)
+    await modelFeedRespond(to: cssMessage, core: core)
+    await modelFeedRespond(to: networkMessage, core: core)
+    _ = try await networkTask.value
+
+    let countBeforeOldAuthority = await backend.sentTargetMessages().count
+    await #expect(throws: WebInspectorProxyError.staleIdentifier) {
+        _ = try await core.send(modelFeedCommand(
+            domain: .dom,
+            method: "DOM.querySelector",
+            authority: documentAuthorization
+        ))
+    }
+    #expect(await backend.sentTargetMessages().count == countBeforeOldAuthority)
+
+    let pageTask = Task {
+        try await core.send(modelFeedCommand(
+            domain: .page,
+            method: "Page.reload",
+            authority: bindingAuthorization
+        ))
+    }
+    let pageMessage = try await backend.waitForTargetMessage(
+        method: "Page.reload",
+        after: countBeforeOldAuthority
+    )
+    await modelFeedRespond(to: pageMessage, core: core)
+    _ = try await pageTask.value
+
+    let freshAuthorization = ConnectionModelCommandAuthorization(
+        feedID: feed.id,
+        generation: generation,
+        document: ConnectionModelCommandAuthorization.Document(
+            targetID: WebInspectorTarget.ID("page-main"),
+            epoch: ModelDocumentEpoch(rawValue: 1)
+        )
+    )
+    let freshDOMTask = Task {
+        try await core.send(modelFeedCommand(
+            domain: .dom,
+            method: "DOM.querySelector",
+            authority: freshAuthorization
+        ))
+    }
+    let freshCSSTask = Task {
+        try await core.send(modelFeedCommand(
+            domain: .css,
+            method: "CSS.getMatchedStylesForNode",
+            authority: freshAuthorization
+        ))
+    }
+    let freshPickerTask = Task {
+        try await core.send(modelFeedCommand(
+            domain: .inspector,
+            method: "Inspector.setInspectModeEnabled",
+            authority: freshAuthorization
+        ))
+    }
+    await core.waitForModelCommandReadinessWaiterCountForTesting(3)
+    let beforeFreshBootstrap = await backend.sentTargetMessages().count
+    let refreshBootstrap = try await backend.waitForTargetMessage(
+        method: "DOM.getDocument",
+        after: baseline
+    )
+    #expect(await backend.sentTargetMessages().count == beforeFreshBootstrap)
+    await modelFeedRespondWithDocument(to: refreshBootstrap, core: core, nodeID: "fresh")
+    let freshDOMMessage = try await backend.waitForTargetMessage(
+        method: "DOM.querySelector",
+        after: beforeFreshBootstrap
+    )
+    let freshCSSMessage = try await backend.waitForTargetMessage(
+        method: "CSS.getMatchedStylesForNode",
+        after: beforeFreshBootstrap
+    )
+    let freshPickerMessage = try await backend.waitForTargetMessage(
+        method: "Inspector.setInspectModeEnabled",
+        after: beforeFreshBootstrap
+    )
+    await modelFeedRespond(to: freshDOMMessage, core: core)
+    await modelFeedRespond(to: freshCSSMessage, core: core)
+    await modelFeedRespond(to: freshPickerMessage, core: core)
+    _ = try await freshDOMTask.value
+    _ = try await freshCSSTask.value
+    _ = try await freshPickerTask.value
+    await core.waitForModelCommandOwnerCountForTesting(0)
+
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["CSS.enable", "Network.enable"]
+    )
+    await core.close()
+}
+
+@Test
+func modelAuthorityRejectsForeignUnconfiguredAndConnectionOwnedCommandsWithoutWire() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let feed = try await core.openModelFeed(configuredDomains: [], capacity: 8)
+    let authorization = ConnectionModelCommandAuthorization(
+        feedID: feed.id,
+        generation: try await core.pageGeneration(),
+        document: ConnectionModelCommandAuthorization.Document(
+            targetID: WebInspectorTarget.ID("page-main"),
+            epoch: ModelDocumentEpoch(rawValue: 0)
+        )
+    )
+    let baseline = await backend.sentTargetMessages().count
+
+    await #expect(throws: WebInspectorProxyError.connectionInUse) {
+        _ = try await core.send(ProtocolCommand(
+            domain: .dom,
+            method: "DOM.enable",
+            routing: .octopus(pageTarget: nil)
+        ))
+    }
+    await #expect(throws: ConnectionModelCommandError.domainNotConfigured(.dom)) {
+        _ = try await core.send(modelFeedCommand(
+            domain: .dom,
+            method: "DOM.querySelector",
+            authority: authorization
+        ))
+    }
+    await #expect(throws: ConnectionModelCommandError.internalCommand(
+        domain: .network,
+        method: "Network.enable"
+    )) {
+        _ = try await core.send(modelFeedCommand(
+            domain: .network,
+            method: "Network.enable",
+            authority: authorization
+        ))
+    }
+
+    let foreignCore = ConnectionCore(backend: FakeTransportBackend(), responseTimeout: nil)
+    await #expect(throws: ConnectionModelCommandError.notActive) {
+        _ = try await foreignCore.send(modelFeedCommand(
+            domain: .page,
+            method: "Page.reload",
+            authority: authorization
+        ))
+    }
+    #expect(await backend.sentTargetMessages().count == baseline)
+
+    try await feed.close()
+    await #expect(throws: ConnectionModelCommandError.notActive) {
+        _ = try await core.send(modelFeedCommand(
+            domain: .page,
+            method: "Page.reload",
+            authority: authorization
+        ))
+    }
+    await foreignCore.close()
+    await core.close()
+}
+
+@Test
+func modelPageHandlePropagatesAuthorizationThroughTypedDomainDispatch() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let feed = try await core.openModelFeed(configuredDomains: [], capacity: 8)
+    let proxy = try await WebInspectorProxy(transport: core)
+    let modelPage = WebInspectorPage(
+        proxy: proxy,
+        commandAuthorization: ConnectionModelCommandAuthorization(
+            feedID: feed.id,
+            generation: try await core.pageGeneration()
+        )
+    )
+
+    let commandTask = Task {
+        try await modelPage.page.reload()
+    }
+    let reload = try await backend.waitForTargetMessage(method: "Page.reload")
+    await modelFeedRespond(to: reload, core: core)
+    try await commandTask.value
+
+    try await feed.close()
+    await proxy.close()
+}
+
+@Test
+func modelCommandCancellationAndFeedCloseDrainAllCommandOwnersBeforeDisable() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [.dom, .network],
+        targetID: "page-main"
+    )
+    let generation = try await core.pageGeneration()
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "page-main",
+        message: #"{"method":"DOM.documentUpdated","params":{}}"#
+    ))
+    let documentAuthorization = ConnectionModelCommandAuthorization(
+        feedID: feed.id,
+        generation: generation,
+        document: ConnectionModelCommandAuthorization.Document(
+            targetID: WebInspectorTarget.ID("page-main"),
+            epoch: ModelDocumentEpoch(rawValue: 1)
+        )
+    )
+    let bindingAuthorization = ConnectionModelCommandAuthorization(
+        feedID: feed.id,
+        generation: generation
+    )
+
+    let cancelledTask = Task {
+        try await core.send(modelFeedCommand(
+            domain: .dom,
+            method: "DOM.querySelector",
+            authority: documentAuthorization
+        ))
+    }
+    await core.waitForModelCommandReadinessWaiterCountForTesting(1)
+    cancelledTask.cancel()
+    await #expect(throws: CancellationError.self) {
+        try await cancelledTask.value
+    }
+    await core.waitForModelCommandOwnerCountForTesting(0)
+    #expect(await core.modelCommandReadinessWaiterCountForTesting() == 0)
+
+    let waitingTask = Task {
+        try await core.send(modelFeedCommand(
+            domain: .dom,
+            method: "DOM.querySelector",
+            authority: documentAuthorization
+        ))
+    }
+    let pendingTask = Task {
+        try await core.send(modelFeedCommand(
+            domain: .page,
+            method: "Page.reload",
+            authority: bindingAuthorization
+        ))
+    }
+    await core.waitForModelCommandReadinessWaiterCountForTesting(1)
+    _ = try await backend.waitForTargetMessage(method: "Page.reload")
+    let closeTask = Task {
+        try await feed.close()
+    }
+    let disable = try await backend.waitForTargetMessage(method: "Network.disable")
+    await #expect(throws: ConnectionModelCommandError.notActive) {
+        try await waitingTask.value
+    }
+    await #expect(throws: ConnectionModelCommandError.notActive) {
+        try await pendingTask.value
+    }
+    #expect(await core.modelCommandOwnerCountForTesting() == 0)
+    #expect(await core.modelCommandReadinessWaiterCountForTesting() == 0)
+    await modelFeedRespond(to: disable, core: core)
+    try await closeTask.value
+    await core.close()
+}
+
+@Test
+func retargetFailsModelCommandsForOldMainAndFrameBinding() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "frame-child",
+        type: "frame",
+        frameID: "child-frame",
+        parentFrameID: "main-frame"
+    ))
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-next",
+        type: "page",
+        frameID: "main-frame",
+        isProvisional: true
+    ))
+    let feed = try await core.openModelFeed(configuredDomains: [], capacity: 16)
+    let authorization = ConnectionModelCommandAuthorization(
+        feedID: feed.id,
+        generation: try await core.pageGeneration()
+    )
+    let baseline = await backend.sentTargetMessages().count
+    let mainTask = Task {
+        try await core.send(modelFeedCommand(
+            domain: .page,
+            method: "Page.reload",
+            authority: authorization,
+            routing: .target(ProtocolTarget.ID("page-main"))
+        ))
+    }
+    let frameTask = Task {
+        try await core.send(modelFeedCommand(
+            domain: .page,
+            method: "Page.reload",
+            authority: authorization,
+            routing: .target(ProtocolTarget.ID("frame-child"))
+        ))
+    }
+    _ = try await backend.waitForTargetMessage(
+        method: "Page.reload",
+        ordinal: 0,
+        after: baseline
+    )
+    _ = try await backend.waitForTargetMessage(
+        method: "Page.reload",
+        ordinal: 1,
+        after: baseline
+    )
+
+    _ = await core.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-main","newTargetId":"page-next"}}"#
+    )
+    await #expect(throws: WebInspectorProxyError.staleIdentifier) {
+        try await mainTask.value
+    }
+    await #expect(throws: WebInspectorProxyError.staleIdentifier) {
+        try await frameTask.value
+    }
+    #expect(await core.modelCommandOwnerCountForTesting() == 0)
+    #expect(await core.snapshot().pendingTargetReplyKeys.isEmpty)
+
+    try await feed.close()
+    await core.close()
+}
+
+@Test
+func generationReadinessWaiterDoesNotChaseReplacementSynchronization() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let feed = try await core.openModelFeed(configuredDomains: [.dom], capacity: 24)
+    let oldBootstrap = try await backend.waitForTargetMessage(method: "DOM.getDocument")
+    let oldAuthorization = ConnectionModelCommandAuthorization(
+        feedID: feed.id,
+        generation: try await core.pageGeneration()
+    )
+    let oldTask = Task {
+        try await core.send(modelFeedCommand(
+            domain: .page,
+            method: "Page.reload",
+            authority: oldAuthorization
+        ))
+    }
+    await core.waitForModelCommandReadinessWaiterCountForTesting(1)
+
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-next",
+        type: "page",
+        frameID: "main-frame",
+        isProvisional: true
+    ))
+    _ = await core.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-main","newTargetId":"page-next"}}"#
+    )
+    await #expect(throws: WebInspectorProxyError.staleIdentifier) {
+        try await oldTask.value
+    }
+    await modelFeedRespondWithDocument(to: oldBootstrap, core: core, nodeID: "late")
+
+    let newBootstrap = try await backend.waitForTargetMessage(
+        method: "DOM.getDocument",
+        ordinal: 1
+    )
+    await modelFeedRespondWithDocument(to: newBootstrap, core: core, nodeID: "new")
+    #expect(await backend.sentTargetMessages().allSatisfy {
+        (try? modelFeedMessageMethod($0.message)) != "Page.reload"
+    })
+
+    let newAuthorization = ConnectionModelCommandAuthorization(
+        feedID: feed.id,
+        generation: try await core.pageGeneration()
+    )
+    let newTask = Task {
+        try await core.send(modelFeedCommand(
+            domain: .page,
+            method: "Page.reload",
+            authority: newAuthorization
+        ))
+    }
+    let reload = try await backend.waitForTargetMessage(method: "Page.reload")
+    await modelFeedRespond(to: reload, core: core)
+    _ = try await newTask.value
+
+    try await feed.close()
+    await core.close()
+}
+
+@Test
+func terminalCloseDrainsPendingModelCommandTasks() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let feed = try await core.openModelFeed(configuredDomains: [], capacity: 8)
+    let authorization = ConnectionModelCommandAuthorization(
+        feedID: feed.id,
+        generation: try await core.pageGeneration()
+    )
+    let commandTask = Task {
+        try await core.send(modelFeedCommand(
+            domain: .page,
+            method: "Page.reload",
+            authority: authorization
+        ))
+    }
+    _ = try await backend.waitForTargetMessage(method: "Page.reload")
+
+    await core.close()
+
+    await #expect(throws: TransportSession.Error.transportClosed) {
+        try await commandTask.value
+    }
+    #expect(await core.modelCommandOwnerCountForTesting() == 0)
+    #expect(await core.modelCommandReadinessWaiterCountForTesting() == 0)
+    #expect(await backend.isDetached())
+}
+
+private func modelFeedCommand(
+    domain: ProtocolDomain,
+    method: String,
+    authority: ConnectionModelCommandAuthorization,
+    routing: ProtocolCommand.Routing = .octopus(pageTarget: nil)
+) -> ProtocolCommand {
+    ProtocolCommand(
+        domain: domain,
+        method: method,
+        routing: routing,
+        authority: .modelFeed(authority)
+    )
 }
 
 private func modelFeedExpectedEnableMethods(

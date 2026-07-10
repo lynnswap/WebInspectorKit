@@ -246,16 +246,34 @@ public struct WebInspectorPage: Sendable {
         }
     }
 
-    package let proxy: WebInspectorProxy
+    package let proxyReference: WebInspectorProxyReference
+    package let authority: WebInspectorCommandAuthority
 
     package init(proxy: WebInspectorProxy) {
-        self.proxy = proxy
+        proxyReference = WebInspectorProxyReference(proxy)
+        authority = .direct
+    }
+
+    package init(
+        proxy: WebInspectorProxy,
+        commandAuthorization: ConnectionModelCommandAuthorization
+    ) {
+        proxyReference = WebInspectorProxyReference(proxy)
+        authority = .modelFeed(commandAuthorization)
     }
 
     /// The current physical page generation.
     public var generation: Generation {
         get async throws {
-            try await proxy.pageGeneration()
+            guard let proxy = proxyReference.resolve() else {
+                throw WebInspectorProxyError.closed
+            }
+            switch authority {
+            case .direct:
+                return try await proxy.pageGeneration()
+            case let .modelFeed(authorization):
+                return authorization.generation
+            }
         }
     }
 
@@ -290,7 +308,12 @@ public struct WebInspectorPage: Sendable {
     }
 
     private var endpoint: DomainEndpoint {
-        DomainEndpoint(proxy: proxy, targetID: .currentPage, route: .currentPage)
+        DomainEndpoint(
+            proxyReference: proxyReference,
+            targetID: .currentPage,
+            route: .currentPage,
+            authority: authority
+        )
     }
 }
 

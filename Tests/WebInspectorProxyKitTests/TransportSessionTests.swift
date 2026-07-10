@@ -609,7 +609,7 @@ func subframeCommitDoesNotConsumeCurrentMainPageTarget() async throws {
 }
 
 @Test
-func targetCommitFailsPendingRepliesForRemovedOldTarget() async throws {
+func targetCommitFailsPendingRepliesForOldBindingAsStale() async throws {
     let backend = FakeTransportBackend()
     let session = TransportSession(backend: backend, responseTimeout: testResponseTimeout)
     await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
@@ -624,10 +624,109 @@ func targetCommitFailsPendingRepliesForRemovedOldTarget() async throws {
 
     await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-main","newTargetId":"page-next"}}"#)
 
-    await #expect(throws: TransportSession.Error.missingTarget(.init("page-main"))) {
+    await #expect(throws: WebInspectorProxyError.staleIdentifier) {
         try await sendTask.value
     }
     #expect(await session.snapshot().pendingTargetReplyKeys.isEmpty)
+}
+
+@Test
+func targetCommitFailsDirectCommandsForOldMainAndFrameBinding() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend, responseTimeout: testResponseTimeout)
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-child","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#)
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-next","type":"page","frameId":"main-frame","isProvisional":true}}}"#)
+
+    let mainTask = Task {
+        try await session.send(ProtocolCommand(
+            domain: .page,
+            method: "Page.reload",
+            routing: .target(.init("page-main"))
+        ))
+    }
+    let frameTask = Task {
+        try await session.send(ProtocolCommand(
+            domain: .page,
+            method: "Page.reload",
+            routing: .target(.init("frame-child"))
+        ))
+    }
+    _ = try await backend.waitForTargetMessage(method: "Page.reload", ordinal: 0)
+    _ = try await backend.waitForTargetMessage(method: "Page.reload", ordinal: 1)
+
+    await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-main","newTargetId":"page-next"}}"#)
+
+    await #expect(throws: WebInspectorProxyError.staleIdentifier) {
+        try await mainTask.value
+    }
+    await #expect(throws: WebInspectorProxyError.staleIdentifier) {
+        try await frameTask.value
+    }
+    #expect(await session.snapshot().pendingTargetReplyKeys.isEmpty)
+    await session.close()
+}
+
+@Test
+func documentUpdatedFailsDirectDOMAndCSSButPreservesNetworkCommand() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend, responseTimeout: testResponseTimeout)
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
+
+    let domTask = Task {
+        try await session.send(ProtocolCommand(
+            domain: .dom,
+            method: "DOM.querySelector",
+            routing: .target(.init("page-main"))
+        ))
+    }
+    let cssTask = Task {
+        try await session.send(ProtocolCommand(
+            domain: .css,
+            method: "CSS.getMatchedStylesForNode",
+            routing: .target(.init("page-main"))
+        ))
+    }
+    let networkTask = Task {
+        try await session.send(ProtocolCommand(
+            domain: .network,
+            method: "Network.getResponseBody",
+            routing: .target(.init("page-main"))
+        ))
+    }
+    let dom = try await backend.waitForTargetMessage(method: "DOM.querySelector")
+    let css = try await backend.waitForTargetMessage(method: "CSS.getMatchedStylesForNode")
+    let network = try await backend.waitForTargetMessage(method: "Network.getResponseBody")
+
+    await receiveTargetDispatch(
+        session,
+        targetID: .init("page-main"),
+        message: #"{"method":"DOM.documentUpdated","params":{}}"#
+    )
+    await #expect(throws: WebInspectorProxyError.staleIdentifier) {
+        try await domTask.value
+    }
+    await #expect(throws: WebInspectorProxyError.staleIdentifier) {
+        try await cssTask.value
+    }
+    await receiveTargetDispatch(
+        session,
+        targetID: dom.targetIdentifier,
+        message: #"{"id":\#(try messageID(dom.message)),"result":{}}"#
+    )
+    await receiveTargetDispatch(
+        session,
+        targetID: css.targetIdentifier,
+        message: #"{"id":\#(try messageID(css.message)),"result":{}}"#
+    )
+    await receiveTargetDispatch(
+        session,
+        targetID: network.targetIdentifier,
+        message: #"{"id":\#(try messageID(network.message)),"result":{}}"#
+    )
+    _ = try await networkTask.value
+    #expect(await session.snapshot().pendingTargetReplyKeys.isEmpty)
+    await session.close()
 }
 
 @Test
@@ -737,7 +836,7 @@ func provisionalTargetMessagesAreDispatchedAfterCommitTargetEvent() async throws
 }
 
 @Test
-func removedTargetPendingReplyFailsAtCommitBeforeTimeout() async throws {
+func oldBindingPendingReplyFailsAsStaleAtCommitBeforeTimeout() async throws {
     let backend = FakeTransportBackend()
     let responseTimeout = ManualResponseTimeout()
     let session = TransportSession(
@@ -760,7 +859,7 @@ func removedTargetPendingReplyFailsAtCommitBeforeTimeout() async throws {
 
     await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-main","newTargetId":"page-next"}}"#)
 
-    await #expect(throws: TransportSession.Error.missingTarget(.init("page-main"))) {
+    await #expect(throws: WebInspectorProxyError.staleIdentifier) {
         try await sendTask.value
     }
     #expect(await session.snapshot().pendingTargetReplyKeys.isEmpty)

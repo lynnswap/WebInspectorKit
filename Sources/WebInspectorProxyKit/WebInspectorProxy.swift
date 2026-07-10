@@ -273,7 +273,8 @@ public actor WebInspectorProxy {
         route: RoutingTargetID,
         domain: WebInspectorProxyDomain,
         method: String,
-        payload: Payload
+        payload: Payload,
+        authority: WebInspectorCommandAuthority = .direct
     ) async throws -> Result {
         do {
             try await core.requireOpen()
@@ -296,7 +297,8 @@ public actor WebInspectorProxy {
             route: commandTarget.route,
             domain: domain,
             method: method,
-            payload: payload
+            payload: payload,
+            authority: authority
         )
         return try await backend.dispatchCommand(command)
     }
