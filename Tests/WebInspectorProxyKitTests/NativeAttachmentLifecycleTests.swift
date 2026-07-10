@@ -58,6 +58,46 @@ func nativeAttachmentExplicitCloseOrdersReceiverDetachRestoreAndWaiters() async 
 
 @MainActor
 @Test
+func nativeAttachmentWaitsForActiveReceiverDrainBeforeDetachAndRestore() async {
+    let webView = WKWebView(frame: .zero)
+    webView.isInspectable = false
+    let recorder = NativeDetachRecorder()
+    let parser = NativeAttachmentMessageParserGate()
+    let graph = NativeAttachmentTestGraph(
+        webView: webView,
+        recorder: recorder,
+        gate: NativeDetachGate(blocks: false),
+        parser: parser.parse
+    )
+
+    graph.backend.emitMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"late-page","type":"page","isProvisional":false}}}"#
+    )
+    await parser.waitUntilBlocked()
+
+    let closeTask = Task {
+        await graph.core.close()
+    }
+    while graph.receiver.closeWaiterCountForTesting() == 0 {
+        await Task.yield()
+    }
+
+    #expect(recorder.asyncDetachStartedCount == 0)
+    #expect(recorder.asyncDetachCompletedCount == 0)
+    #expect(webView.isInspectable)
+    #expect(await graph.core.snapshot().targetsByID.isEmpty)
+
+    await parser.release()
+    await closeTask.value
+
+    #expect(recorder.asyncDetachStartedCount == 1)
+    #expect(recorder.asyncDetachCompletedCount == 1)
+    #expect(webView.isInspectable == false)
+    #expect(await graph.core.snapshot().targetsByID.isEmpty)
+}
+
+@MainActor
+@Test
 func droppingNativeAttachmentGraphUsesSynchronousBackstop() async throws {
     let webView = WKWebView(frame: .zero)
     webView.isInspectable = false
@@ -223,7 +263,10 @@ private struct NativeAttachmentTestGraph {
     init(
         webView: WKWebView,
         recorder: NativeDetachRecorder,
-        gate: NativeDetachGate
+        gate: NativeDetachGate,
+        parser: @escaping ConnectionCore.MessageParser = {
+            try await TransportMessageParser.parse($0)
+        }
     ) {
         let receiver = TransportReceiver()
         let backend = FakeNativeAttachmentBackend(
@@ -239,6 +282,7 @@ private struct NativeAttachmentTestGraph {
         )
         let core = ConnectionCore(
             backend: backend,
+            messageParser: parser,
             closeAction: {
                 await attachment.close()
             }
@@ -397,6 +441,54 @@ private actor NativeCloseCompletionProbe {
 
     func finish() {
         isFinished = true
+    }
+}
+
+private actor NativeAttachmentMessageParserGate {
+    private var isBlocked = false
+    private var isReleased = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func parse(_ message: String) async throws -> ParsedProtocolMessage {
+        isBlocked = true
+        let startWaiters = self.startWaiters
+        self.startWaiters.removeAll()
+        for waiter in startWaiters {
+            waiter.resume()
+        }
+        if !isReleased {
+            await withCheckedContinuation { continuation in
+                if isReleased {
+                    continuation.resume()
+                } else {
+                    releaseWaiters.append(continuation)
+                }
+            }
+        }
+        return try await TransportMessageParser.parse(message)
+    }
+
+    func waitUntilBlocked() async {
+        guard !isBlocked else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            if isBlocked {
+                continuation.resume()
+            } else {
+                startWaiters.append(continuation)
+            }
+        }
+    }
+
+    func release() {
+        isReleased = true
+        let releaseWaiters = self.releaseWaiters
+        self.releaseWaiters.removeAll()
+        for waiter in releaseWaiters {
+            waiter.resume()
+        }
     }
 }
 

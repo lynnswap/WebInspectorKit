@@ -3095,7 +3095,8 @@ func structuredNetworkScopeThrowsTransportFailureOnNativeFatal() async throws {
     await bodyGate.waitUntilStarted()
     await bodyGate.release()
 
-    await transport.failFromNativeCallback("native fatal")
+    let fatalHandoff = try #require(transport.failFromNativeCallback("native fatal"))
+    await fatalHandoff.value
 
     #expect(await scopeTask.value == .transportFailure)
 }

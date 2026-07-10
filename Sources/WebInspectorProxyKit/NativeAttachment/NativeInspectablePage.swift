@@ -66,7 +66,7 @@ package enum NativeConnectionCoreFactory {
             } else if let attachment {
                 await attachment.close()
             } else {
-                receiver.close()
+                await receiver.close()
                 page.restoreInspectabilityIfNeeded()
             }
             throw error
@@ -96,7 +96,7 @@ package final class NativeAttachment {
             return
         }
         isClosed = true
-        receiver.close()
+        await receiver.close()
         await backend.detach()
         page.restoreInspectabilityIfNeeded()
     }
@@ -105,7 +105,7 @@ package final class NativeAttachment {
         guard !isClosed else {
             return
         }
-        receiver.close()
+        receiver.closeSynchronously()
         backend.detachSynchronously()
         page.restoreInspectabilityIfNeeded()
     }

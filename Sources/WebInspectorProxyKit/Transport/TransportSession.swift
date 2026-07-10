@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 private struct ConnectionCapabilityCommandOperation: Sendable {
     let backend: any TransportBackend
@@ -49,6 +50,7 @@ package actor ConnectionCore {
     package typealias TimeoutSleep = @Sendable (Duration) async throws -> Void
     package typealias ResponseTimeoutDidFire = @Sendable () async -> Void
     package typealias CloseAction = @Sendable () async -> Void
+    package typealias MessageParser = @Sendable (String) async throws -> ParsedProtocolMessage
 
     package enum TerminalCause: Equatable, Sendable {
         case explicitClose
@@ -58,14 +60,73 @@ package actor ConnectionCore {
 
     private enum State {
         case open
-        case closing(TerminalCause)
-        case closed(TerminalCause)
+        case closing
+        case closed
+    }
+
+    private final class TerminalClaim: Sendable {
+        struct Result: Sendable {
+            let cause: TerminalCause
+            let claimedProposedCause: Bool
+        }
+
+        private let cause = Mutex<TerminalCause?>(nil)
+
+        func claim(_ proposedCause: TerminalCause) -> Result {
+            cause.withLock { cause in
+                if let cause {
+                    return Result(cause: cause, claimedProposedCause: false)
+                }
+                cause = proposedCause
+                return Result(cause: proposedCause, claimedProposedCause: true)
+            }
+        }
+
+        var current: TerminalCause? {
+            cause.withLock { $0 }
+        }
+    }
+
+    private struct TerminalOperation: Sendable {
+        let transportError: TransportSession.Error
+        let scopeError: WebInspectorProxyError?
+        let pendingReplies: [ReplyPromise<ProtocolCommand.Result>]
+        let mainPageTargetWaiters: [ReplyPromise<TransportSession.MainPageTarget>]
+        let activationWaiters: [ReplyPromise<Void>]
+        let releaseWaiters: [ReplyPromise<Void>]
+        let capabilityTasks: [Task<Void, Never>]
+        let closeAction: CloseAction
+
+        func run() async {
+            for pending in pendingReplies {
+                await pending.fulfill(.failure(transportError))
+            }
+            for waiter in mainPageTargetWaiters {
+                await waiter.fulfill(.failure(transportError))
+            }
+            for waiter in activationWaiters {
+                await waiter.fulfill(.failure(scopeError ?? WebInspectorProxyError.closed))
+            }
+            for waiter in releaseWaiters {
+                if let scopeError {
+                    await waiter.fulfill(.failure(scopeError))
+                } else {
+                    await waiter.fulfill(.success(()))
+                }
+            }
+            for task in capabilityTasks {
+                await task.value
+            }
+            await closeAction()
+        }
     }
 
     private let backend: any TransportBackend
     private let responseTimeout: Duration?
     private let timeoutSleep: TimeoutSleep
     private let responseTimeoutDidFire: ResponseTimeoutDidFire
+    private let messageParser: MessageParser
+    private nonisolated let terminalClaim: TerminalClaim
     private var nextCommandID: UInt64
     private var eventSequences: TransportEventSequenceTracker
     private var replyStore: TransportReplyStore
@@ -87,6 +148,7 @@ package actor ConnectionCore {
     private var eventScopeActivationCancellationAction: (@Sendable () async -> Void)?
     private var inboundMessageQueue: TransportInboundMessageQueue
     private var closeAction: CloseAction
+    private var terminalTask: Task<Void, Never>?
     private var state: State
     private var nextCloseWaiterID: UInt64
     private var closeWaiters: [UInt64: CheckedContinuation<Void, any Swift.Error>]
@@ -99,12 +161,17 @@ package actor ConnectionCore {
         responseTimeout: Duration? = .seconds(5),
         timeoutSleep: TimeoutSleep? = nil,
         responseTimeoutDidFire: ResponseTimeoutDidFire? = nil,
+        messageParser: @escaping MessageParser = {
+            try await TransportMessageParser.parse($0)
+        },
         closeAction: CloseAction? = nil
     ) {
         self.backend = backend
         self.responseTimeout = responseTimeout
         self.timeoutSleep = timeoutSleep ?? { try await Task.sleep(for: $0) }
         self.responseTimeoutDidFire = responseTimeoutDidFire ?? {}
+        self.messageParser = messageParser
+        terminalClaim = TerminalClaim()
         nextCommandID = 0
         eventSequences = TransportEventSequenceTracker()
         replyStore = TransportReplyStore()
@@ -125,6 +192,7 @@ package actor ConnectionCore {
         self.closeAction = closeAction ?? {
             await backend.detach()
         }
+        terminalTask = nil
         state = .open
         nextCloseWaiterID = 0
         closeWaiters = [:]
@@ -139,6 +207,8 @@ package actor ConnectionCore {
         // resources; native resources have their own isolated backstop.
         eventSubscribers.finishAndRemoveAll()
         eventScopes.finishAndRemoveAll(with: WebInspectorProxyError.closed)
+        terminalTask?.cancel()
+        terminalTask = nil
         let tasks = Array(capabilityTasks.values)
         capabilityTasks.removeAll()
         for task in tasks {
@@ -155,10 +225,17 @@ package actor ConnectionCore {
     }
 
     private var isOpen: Bool {
-        if case .open = state {
-            return true
+        guard case .open = state else {
+            return false
         }
-        return false
+        return terminalClaim.current == nil
+    }
+
+    private var claimedTerminalCause: TerminalCause {
+        guard let cause = terminalClaim.current else {
+            preconditionFailure("ConnectionCore entered terminal state without a claim.")
+        }
+        return cause
     }
 
     package func events(for domain: ProtocolDomain) -> AsyncStream<ProtocolEvent> {
@@ -386,16 +463,24 @@ package actor ConnectionCore {
         await terminate(.explicitClose)
     }
 
-    package func failFromNativeCallback(_ message: String) async {
-        await terminate(.fatal(message))
+    @discardableResult
+    package nonisolated func failFromNativeCallback(_ message: String) -> Task<Void, Never>? {
+        let cause = TerminalCause.fatal(message)
+        let claim = terminalClaim.claim(cause)
+        guard claim.claimedProposedCause else {
+            return nil
+        }
+        return Task { [weak self] in
+            await self?.beginClaimedTerminationHandoff(cause)
+        }
     }
 
     package func waitUntilClosed() async throws {
         switch state {
         case .open, .closing:
             break
-        case let .closed(cause):
-            return try terminalResult(for: cause).get()
+        case .closed:
+            return try terminalResult(for: claimedTerminalCause).get()
         }
 
         nextCloseWaiterID &+= 1
@@ -455,12 +540,7 @@ package actor ConnectionCore {
     }
 
     package var terminalCause: TerminalCause? {
-        switch state {
-        case .open:
-            nil
-        case let .closing(cause), let .closed(cause):
-            cause
-        }
+        terminalClaim.current
     }
 
     package func waitForCurrentMainPageTarget(timeout: Duration? = nil) async throws -> TransportSession.MainPageTarget {
@@ -906,7 +986,7 @@ package actor ConnectionCore {
                 } else {
                     releaseWaiters = []
                 }
-                let terminalCause: TerminalCause? = if wireStateIsKnownInactive == false
+                let proposedTerminalCause: TerminalCause? = if wireStateIsKnownInactive == false
                     || (activeLeaseFailed && Self.isCommandRejection(error)) {
                     Self.terminalCauseForUncertainEnableFailure(
                         error,
@@ -916,11 +996,16 @@ package actor ConnectionCore {
                 } else {
                     nil
                 }
-                if let terminalCause {
+                let claimedTerminalCause: TerminalCause?
+                if let proposedTerminalCause {
                     // Claim terminal ownership before resuming any waiter so
                     // actor reentrancy cannot admit a duplicate enable while
                     // the failed wire state is unknown.
-                    state = .closing(terminalCause)
+                    let cause = terminalClaim.claim(proposedTerminalCause).cause
+                    claimedTerminalCause = cause
+                    state = .closing
+                } else {
+                    claimedTerminalCause = nil
                 }
                 capabilities.states[key] = capability
                 for waiter in activationWaiters {
@@ -929,8 +1014,8 @@ package actor ConnectionCore {
                 for waiter in releaseWaiters {
                     await waiter.fulfill(.success(()))
                 }
-                if let terminalCause {
-                    await finishClaimedTermination(terminalCause)
+                if let claimedTerminalCause {
+                    await finishClaimedTermination(claimedTerminalCause)
                 }
             }
 
@@ -990,13 +1075,14 @@ package actor ConnectionCore {
                     return
                 }
 
-                let terminalCause = Self.terminalCauseForUncertainDisableFailure(
+                let proposedTerminalCause = Self.terminalCauseForUncertainDisableFailure(
                     error,
                     domain: key.domain
                 )
                 // Claim terminal ownership before resuming any waiter so actor
                 // reentrancy cannot admit a lease against uncertain wire state.
-                state = .closing(terminalCause)
+                let claimedTerminalCause = terminalClaim.claim(proposedTerminalCause).cause
+                state = .closing
                 let activationWaiters = Array(capability.activationWaiters.values)
                 capability.activationWaiters.removeAll()
                 let releaseWaiters = Array(capability.releaseWaiters.values)
@@ -1008,7 +1094,7 @@ package actor ConnectionCore {
                 for waiter in releaseWaiters {
                     await waiter.fulfill(.failure(error))
                 }
-                await finishClaimedTermination(terminalCause)
+                await finishClaimedTermination(claimedTerminalCause)
             }
 
         default:
@@ -1233,12 +1319,21 @@ package actor ConnectionCore {
         while isOpen, let rawMessage = inboundMessageQueue.popNext() {
             let parsed: ParsedProtocolMessage
             do {
-                parsed = try await TransportMessageParser.parse(rawMessage)
+                parsed = try await messageParser(rawMessage)
             } catch {
-                await terminate(.protocolViolation("Malformed root protocol message."))
+                guard isOpen else {
+                    return
+                }
+                handoffTermination(.protocolViolation("Malformed root protocol message."))
+                return
+            }
+            guard isOpen else {
                 return
             }
             await handleRootMessage(parsed)
+            guard isOpen else {
+                return
+            }
         }
     }
 
@@ -1285,6 +1380,9 @@ package actor ConnectionCore {
     }
 
     private func handleRootMessage(_ parsed: ParsedProtocolMessage) async {
+        guard isOpen else {
+            return
+        }
         if let id = parsed.id,
            let key = replyStore.takeTargetReplyKey(forRootWrapperID: id) {
             if parsed.errorMessage != nil,
@@ -1306,11 +1404,20 @@ package actor ConnectionCore {
 
         if method == "Target.dispatchMessageFromTarget" {
             guard let dispatch = try? TransportMessageParser.decode(TargetDispatchParams.self, from: parsed.paramsData) else {
-                await terminate(.protocolViolation("Malformed Target.dispatchMessageFromTarget payload."))
+                handoffTermination(.protocolViolation("Malformed Target.dispatchMessageFromTarget payload."))
                 return
             }
-            guard let targetMessage = try? await TransportMessageParser.parse(dispatch.message) else {
-                await terminate(.protocolViolation("Malformed target protocol message."))
+            let targetMessage: ParsedProtocolMessage
+            do {
+                targetMessage = try await messageParser(dispatch.message)
+            } catch {
+                guard isOpen else {
+                    return
+                }
+                handoffTermination(.protocolViolation("Malformed target protocol message."))
+                return
+            }
+            guard isOpen else {
                 return
             }
             await handleTargetMessage(targetMessage, targetID: dispatch.targetId)
@@ -1331,7 +1438,13 @@ package actor ConnectionCore {
                 paramsData: parsed.paramsData
             )
         } catch {
-            await terminate(.protocolViolation("Failed to decode \(method): \(error)"))
+            guard isOpen else {
+                return
+            }
+            handoffTermination(.protocolViolation("Failed to decode \(method): \(error)"))
+            return
+        }
+        guard isOpen else {
             return
         }
         await emit(
@@ -1342,11 +1455,20 @@ package actor ConnectionCore {
             paramsData: parsed.paramsData,
             destroyedCurrentMainPageTarget: destroyedCurrentMainPageTarget
         )
+        guard isOpen else {
+            return
+        }
         await emitResolvedStyleSheetAddedEvents(pendingStyleSheetAddedEvents)
+        guard isOpen else {
+            return
+        }
         await dispatchCommittedProvisionalTargetMessagesIfNeeded(method: method, paramsData: parsed.paramsData)
     }
 
     private func handleTargetMessage(_ parsed: ParsedProtocolMessage, targetID: ProtocolTarget.ID) async {
+        guard isOpen else {
+            return
+        }
         if targetRegistry.target(for: targetID)?.isProvisional == true {
             markTargetReplyAsBufferedIfNeeded(parsed, targetID: targetID)
             provisionalTargetMessageStore.append(parsed, for: targetID)
@@ -1366,9 +1488,21 @@ package actor ConnectionCore {
         }
 
         if method == "Target.dispatchMessageFromTarget" {
-            guard let dispatch = try? TransportMessageParser.decode(TargetDispatchParams.self, from: parsed.paramsData),
-                  let targetMessage = try? await TransportMessageParser.parse(dispatch.message) else {
-                await terminate(.protocolViolation("Malformed nested Target.dispatchMessageFromTarget payload."))
+            guard let dispatch = try? TransportMessageParser.decode(TargetDispatchParams.self, from: parsed.paramsData) else {
+                handoffTermination(.protocolViolation("Malformed nested Target.dispatchMessageFromTarget payload."))
+                return
+            }
+            let targetMessage: ParsedProtocolMessage
+            do {
+                targetMessage = try await messageParser(dispatch.message)
+            } catch {
+                guard isOpen else {
+                    return
+                }
+                handoffTermination(.protocolViolation("Malformed nested Target.dispatchMessageFromTarget payload."))
+                return
+            }
+            guard isOpen else {
                 return
             }
             await handleTargetMessage(targetMessage, targetID: dispatch.targetId)
@@ -1514,6 +1648,9 @@ package actor ConnectionCore {
             from: previousMainPageTargetID,
             to: targetRegistry.currentMainPageTargetID
         )
+        guard isOpen else {
+            return []
+        }
         return resolvePendingStyleSheets(for: resolution)
     }
 
@@ -1586,6 +1723,9 @@ package actor ConnectionCore {
             )
         }
 
+        guard isOpen else {
+            return []
+        }
         return resolvePendingStyleSheets(for: mutation.resolvedFrameTarget)
     }
 
@@ -1609,6 +1749,9 @@ package actor ConnectionCore {
             let keys = capabilities.states.keys.filter { $0.route == .currentPage }
             for key in keys {
                 await reconcileCapability(for: key)
+                guard isOpen else {
+                    return
+                }
             }
             return
         }
@@ -1636,6 +1779,9 @@ package actor ConnectionCore {
         if newTargetID != nil {
             for key in keys {
                 await reconcileCapability(for: key)
+                if !isOpen {
+                    break
+                }
             }
         }
         for waiter in releaseWaiters {
@@ -1699,6 +1845,9 @@ package actor ConnectionCore {
         let messages = provisionalTargetMessageStore.takeMessages(for: params.newTargetId)
         for message in messages {
             await handleTargetMessage(message, targetID: params.newTargetId)
+            guard isOpen else {
+                return
+            }
         }
     }
 
@@ -1838,12 +1987,18 @@ package actor ConnectionCore {
             return
         }
         for event in events {
+            guard isOpen else {
+                return
+            }
             await emit(
                 domain: .css,
                 method: "CSS.styleSheetAdded",
                 targetID: event.targetID,
                 paramsData: event.paramsData
             )
+            guard isOpen else {
+                return
+            }
         }
     }
 
@@ -1867,6 +2022,9 @@ package actor ConnectionCore {
         paramsData: Data,
         destroyedCurrentMainPageTarget: Bool = false
     ) async {
+        guard isOpen else {
+            return
+        }
         let eventSequence = eventSequences.recordEvent(domain: domain)
         let envelope = ProtocolEvent(
             sequence: eventSequence.sequence,
@@ -1952,7 +2110,7 @@ package actor ConnectionCore {
                 terminalViolation = "Failed to decode \(method): \(error)"
             }
             if let terminalViolation {
-                await terminate(.protocolViolation(terminalViolation))
+                handoffTermination(.protocolViolation(terminalViolation))
                 return
             }
         }
@@ -2054,44 +2212,77 @@ package actor ConnectionCore {
     }
 
     private var terminalTransportError: TransportSession.Error {
-        switch state {
-        case .open, .closing(.explicitClose), .closed(.explicitClose):
+        switch claimedTerminalCause {
+        case .explicitClose:
             .transportClosed
-        case let .closing(.fatal(message)), let .closed(.fatal(message)):
+        case let .fatal(message):
             .transportFailure(message)
-        case let .closing(.protocolViolation(message)), let .closed(.protocolViolation(message)):
+        case let .protocolViolation(message):
             .transportFailure(message)
         }
     }
 
-    private var terminalScopeError: any Swift.Error {
-        switch state {
-        case .open, .closing(.explicitClose), .closed(.explicitClose):
+    private var terminalScopeError: WebInspectorProxyError {
+        switch claimedTerminalCause {
+        case .explicitClose:
             WebInspectorProxyError.closed
-        case let .closing(.fatal(message)), let .closed(.fatal(message)):
+        case let .fatal(message):
             WebInspectorProxyError.transportFailure(message)
-        case let .closing(.protocolViolation(message)), let .closed(.protocolViolation(message)):
+        case let .protocolViolation(message):
             WebInspectorProxyError.protocolViolation(message)
         }
     }
 
-    private func terminate(_ cause: TerminalCause) async {
+    private func terminate(_ proposedCause: TerminalCause) async {
+        let cause = terminalClaim.claim(proposedCause).cause
         switch state {
         case .open:
-            state = .closing(cause)
+            state = .closing
         case .closing:
+            precondition(claimedTerminalCause == cause, "ConnectionCore terminal claims diverged.")
             try? await waitUntilClosed()
             return
         case .closed:
+            precondition(claimedTerminalCause == cause, "ConnectionCore terminal claims diverged.")
             return
         }
 
         await finishClaimedTermination(cause)
     }
 
+    private func handoffTermination(_ proposedCause: TerminalCause) {
+        let cause = terminalClaim.claim(proposedCause).cause
+        beginClaimedTerminationHandoff(cause)
+    }
+
+    private func beginClaimedTerminationHandoff(_ cause: TerminalCause) {
+        precondition(terminalClaim.current == cause, "ConnectionCore terminal claims diverged.")
+        switch state {
+        case .open:
+            break
+        case .closing, .closed:
+            precondition(claimedTerminalCause == cause, "ConnectionCore terminal claims diverged.")
+            return
+        }
+        state = .closing
+        let operation = prepareClaimedTermination(cause)
+        precondition(terminalTask == nil, "ConnectionCore already owns a terminal task.")
+        terminalTask = Task { [weak self, operation] in
+            await operation.run()
+            await self?.finishClaimedTerminalState(cause)
+        }
+    }
+
     private func finishClaimedTermination(_ cause: TerminalCause) async {
+        let operation = prepareClaimedTermination(cause)
+        await operation.run()
+        finishClaimedTerminalState(cause)
+    }
+
+    private func prepareClaimedTermination(_ cause: TerminalCause) -> TerminalOperation {
+        precondition(terminalClaim.current == cause, "ConnectionCore terminal claims diverged.")
         let transportError = terminalTransportError
-        let scopeError: (any Swift.Error)? = cause == .explicitClose ? nil : terminalScopeError
+        let scopeError: WebInspectorProxyError? = cause == .explicitClose ? nil : terminalScopeError
         if let scopeError {
             eventScopes.finishSubscribers(with: scopeError)
         }
@@ -2120,12 +2311,8 @@ package actor ConnectionCore {
         for waiter in eventScopeWaiters {
             waiter.continuation.resume()
         }
-        for pending in replyStore.pendingReplies {
-            await pending.promise.fulfill(.failure(transportError))
-        }
-        for waiter in mainPageTargetWaiterStore.removeAll() {
-            await waiter.fulfill(.failure(transportError))
-        }
+        let pendingReplies = replyStore.pendingReplies.map(\.promise)
+        let mainPageTargetWaiters = mainPageTargetWaiterStore.removeAll()
         replyStore.removeAll()
         provisionalTargetMessageStore.removeAll()
         inboundMessageQueue = TransportInboundMessageQueue()
@@ -2133,35 +2320,34 @@ package actor ConnectionCore {
             eventSubscribers.finishAndRemoveAll()
         }
 
-        for waiter in activationWaiters {
-            await waiter.fulfill(.failure(scopeError ?? WebInspectorProxyError.closed))
-        }
-        for waiter in releaseWaiters {
-            if let scopeError {
-                await waiter.fulfill(.failure(scopeError))
-            } else {
-                await waiter.fulfill(.success(()))
-            }
-        }
-        for task in runningCapabilityTasks {
-            await task.value
-        }
+        return TerminalOperation(
+            transportError: transportError,
+            scopeError: scopeError,
+            pendingReplies: pendingReplies,
+            mainPageTargetWaiters: mainPageTargetWaiters,
+            activationWaiters: activationWaiters,
+            releaseWaiters: releaseWaiters,
+            capabilityTasks: runningCapabilityTasks,
+            closeAction: closeAction
+        )
+    }
 
-        let closeAction = self.closeAction
-        await closeAction()
-
+    private func finishClaimedTerminalState(_ cause: TerminalCause) {
+        precondition(terminalClaim.current == cause, "ConnectionCore terminal claims diverged.")
         // A close action is allowed to suspend. The first terminal cause owns
         // the transition even if another close/fatal request arrives while it
         // is running.
-        guard case .closing = state else {
+        guard case .closing = state,
+              claimedTerminalCause == cause else {
             preconditionFailure("ConnectionCore terminal state changed outside terminate(_:).")
         }
-        state = .closed(cause)
+        state = .closed
         if cause == .explicitClose {
             eventScopes.finishSubscribers(with: nil)
             eventSubscribers.finishAndRemoveAll()
         }
         resumeCloseWaiters(with: terminalResult(for: cause))
+        terminalTask = nil
     }
 
     private func terminalResult(for cause: TerminalCause) -> Result<Void, any Swift.Error> {
@@ -2179,8 +2365,8 @@ package actor ConnectionCore {
         id: UInt64,
         continuation: CheckedContinuation<Void, any Swift.Error>
     ) {
-        if case let .closed(cause) = state {
-            continuation.resume(with: terminalResult(for: cause))
+        if case .closed = state {
+            continuation.resume(with: terminalResult(for: claimedTerminalCause))
             return
         }
         guard cancelledCloseWaiterIDs.remove(id) == nil else {
