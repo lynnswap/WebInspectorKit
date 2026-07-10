@@ -1,18 +1,6 @@
 import Foundation
 import WebInspectorProxyKit
 
-package struct AnyRecordedValue: @unchecked Sendable {
-    package let value: Any
-
-    package init(_ value: some Sendable) {
-        self.value = value
-    }
-
-    package func cast<T>(as type: T.Type = T.self) -> T? {
-        value as? T
-    }
-}
-
 /// A command recorded by ``WebInspectorTestBackend``.
 public struct RecordedCommand: Equatable, Sendable {
     /// The target that received the command.
@@ -24,7 +12,7 @@ public struct RecordedCommand: Equatable, Sendable {
     /// The protocol method for the command.
     public let method: String
     package let route: RoutingTargetID
-    package let payload: AnyRecordedValue
+    package let payload: AnySendableValue
 
     /// Creates an unscoped recorded command used for equality assertions.
     public init(domain: String, method: String) {
@@ -32,7 +20,7 @@ public struct RecordedCommand: Equatable, Sendable {
         route = RoutingTargetID("unscoped-recorded-command")
         self.domain = domain
         self.method = method
-        payload = AnyRecordedValue(())
+        payload = AnySendableValue(())
     }
 
     package init<Payload: Sendable, Result: Sendable>(
@@ -42,7 +30,7 @@ public struct RecordedCommand: Equatable, Sendable {
         route = command.route
         domain = command.domain.rawValue
         method = command.method
-        payload = AnyRecordedValue(command.payload)
+        payload = AnySendableValue(command.payload)
     }
 
     /// Compares recorded commands by domain and method.
@@ -62,16 +50,16 @@ private struct CommandKey: Hashable, Sendable {
     var method: String
 }
 
-private struct QueuedReply: @unchecked Sendable {
-    enum Storage {
-        case result(Any)
-        case failure(any Error)
+private struct QueuedReply: Sendable {
+    enum Storage: Sendable {
+        case result(AnySendableValue)
+        case failure(any Error & Sendable)
     }
 
     var storage: Storage
 
     init(_ value: some Sendable) {
-        storage = .result(value)
+        storage = .result(AnySendableValue(value))
     }
 
     init(failure error: any Error & Sendable) {
@@ -533,23 +521,20 @@ extension WebInspectorTestBackend: WebInspectorProxyBackend {
         let queued = results.removeFirst()
         enqueuedReplies[key] = results.isEmpty ? nil : results
 
-        let value: Any
         switch queued.storage {
-        case let .result(result):
-            value = result
+        case let .result(erasedResult):
+            guard let result = erasedResult.cast(as: Result.self) else {
+                throw WebInspectorProxyError.commandFailed(
+                    domain: command.domain.rawValue,
+                    method: command.method,
+                    message: "Enqueued result for \(command.domain.rawValue).\(command.method) has type "
+                        + "\(type(of: erasedResult.value)); expected \(Result.self)."
+                )
+            }
+            return result
         case let .failure(error):
             throw error
         }
-
-        guard let result = value as? Result else {
-            throw WebInspectorProxyError.commandFailed(
-                domain: command.domain.rawValue,
-                method: command.method,
-                message: "Enqueued result for \(command.domain.rawValue).\(command.method) has type "
-                    + "\(type(of: value)); expected \(Result.self)."
-            )
-        }
-        return result
     }
 
     package func waitForEventSubscription(
