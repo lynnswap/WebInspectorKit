@@ -29,9 +29,7 @@ private struct ConnectionOwnedCommandOperation: Sendable {
             }
             return try await promise.value()
         } onCancel: {
-            Task {
-                await promise.fulfill(.failure(CancellationError()))
-            }
+            promise.fulfill(.failure(CancellationError()))
         }
     }
 
@@ -278,19 +276,19 @@ package actor ConnectionCore {
 
         func run() async {
             for pending in pendingReplies {
-                await pending.promise.fulfill(.failure(transportError))
+                pending.promise.fulfill(.failure(transportError))
             }
             for waiter in mainPageTargetWaiters {
-                await waiter.fulfill(.failure(transportError))
+                waiter.fulfill(.failure(transportError))
             }
             for waiter in activationWaiters {
-                await waiter.fulfill(.failure(scopeError ?? WebInspectorProxyError.closed))
+                waiter.fulfill(.failure(scopeError ?? WebInspectorProxyError.closed))
             }
             for waiter in releaseWaiters {
                 if let scopeError {
-                    await waiter.fulfill(.failure(scopeError))
+                    waiter.fulfill(.failure(scopeError))
                 } else {
-                    await waiter.fulfill(.success(()))
+                    waiter.fulfill(.success(()))
                 }
             }
             for task in capabilityTasks {
@@ -639,7 +637,7 @@ package actor ConnectionCore {
         case .rollingBack:
             preconditionFailure("A model feed cannot close while its failed open is rolling back.")
         case .closing(let completion):
-            return try await completion.value()
+            return try await completion.valueIgnoringCancellation()
         case .active:
             break
         }
@@ -669,17 +667,17 @@ package actor ConnectionCore {
 
         if let cleanupError {
             await terminateForModelFeedCapabilityCleanupFailure(cleanupError)
-            await completion.fulfill(.failure(cleanupError))
+            completion.fulfill(.failure(cleanupError))
             throw cleanupError
         }
 
         guard isOpen else {
             do {
                 try await waitUntilClosed()
-                await completion.fulfill(.success(()))
+                completion.fulfill(.success(()))
                 return
             } catch {
-                await completion.fulfill(.failure(error))
+                completion.fulfill(.failure(error))
                 throw error
             }
         }
@@ -689,7 +687,7 @@ package actor ConnectionCore {
         }
         modelFeed = nil
         currentRegistration.mailbox.finish()
-        await completion.fulfill(.success(()))
+        completion.fulfill(.success(()))
     }
 
     private func appendModelFeedCapabilityLease(
@@ -1365,7 +1363,7 @@ package actor ConnectionCore {
         if let ownership = commandTask.pendingReplyOwnership,
            let pending = replyStore.removePendingReply(ownership.key) {
             precondition(pending.purpose == ownership.purpose)
-            await pending.promise.fulfill(.failure(CancellationError()))
+            pending.promise.fulfill(.failure(CancellationError()))
         }
         commandTask.task.cancel()
         resumeModelCommandOwnerCountWaitersIfNeeded()
@@ -1470,7 +1468,7 @@ package actor ConnectionCore {
         _ effects: ConnectionCommandInvalidationEffects
     ) async {
         for failure in effects.pendingFailures {
-            await failure.pending.promise.fulfill(.failure(failure.reason.error))
+            failure.pending.promise.fulfill(.failure(failure.reason.error))
         }
         for task in effects.modelCommandTasksToAwait {
             _ = await task.result
@@ -1662,7 +1660,7 @@ package actor ConnectionCore {
                 } catch {
                     return
                 }
-                await self.failMainPageTargetWaiter(waiter.id, error: TransportSession.Error.missingMainPageTarget)
+                self.failMainPageTargetWaiter(waiter.id, error: TransportSession.Error.missingMainPageTarget)
             }
         }
         defer {
@@ -1670,13 +1668,7 @@ package actor ConnectionCore {
         }
 
         do {
-            return try await withTaskCancellationHandler {
-                try await waiter.promise.value()
-            } onCancel: {
-                Task {
-                    await self.failMainPageTargetWaiter(waiter.id, error: CancellationError())
-                }
-            }
+            return try await waiter.promise.value()
         } catch {
             mainPageTargetWaiterStore.remove(id: waiter.id)
             throw error
@@ -2385,14 +2377,15 @@ package actor ConnectionCore {
         for key: ConnectionCapabilityKey,
         activation: ReplyPromise<Void>?
     ) async throws {
-        try await withTaskCancellationHandler {
+        do {
             await reconcileCapability(for: key)
             try Task.checkCancellation()
             try await activation?.value()
-        } onCancel: { [weak self] in
-            Task {
-                await self?.cancelCapabilityActivation(leaseOwner, for: key)
+        } catch {
+            if error is CancellationError {
+                await cancelCapabilityActivation(leaseOwner, for: key)
             }
+            throw error
         }
     }
 
@@ -2411,7 +2404,7 @@ package actor ConnectionCore {
             eventScopeActivationCancellationAction = nil
             await cancellationAction?()
         }
-        await waiter.fulfill(.failure(CancellationError()))
+        waiter.fulfill(.failure(CancellationError()))
     }
 
     private func releaseCapabilityLease(
@@ -2463,7 +2456,7 @@ package actor ConnectionCore {
         }
         capabilities.states[key] = capability
         await reconcileCapability(for: key)
-        try await cleanup?.value()
+        try await cleanup?.valueIgnoringCancellation()
         capabilities.removeEmptyState(for: key)
     }
 
@@ -2504,7 +2497,7 @@ package actor ConnectionCore {
                 capability.activationWaiters.removeAll()
                 capabilities.states[key] = capability
                 for waiter in waiters {
-                    await waiter.fulfill(.success(()))
+                    waiter.fulfill(.success(()))
                 }
             } else {
                 capability.physical = .inactive(generation: expectedGeneration)
@@ -2512,7 +2505,7 @@ package actor ConnectionCore {
                 capability.releaseWaiters.removeAll()
                 capabilities.states[key] = capability
                 for waiter in waiters {
-                    await waiter.fulfill(.success(()))
+                    waiter.fulfill(.success(()))
                 }
             }
             capabilities.removeEmptyState(for: key)
@@ -2766,10 +2759,10 @@ package actor ConnectionCore {
                 capability.releaseWaiters.removeAll()
                 capabilities.states[key] = capability
                 for waiter in waiters {
-                    await waiter.fulfill(.success(()))
+                    waiter.fulfill(.success(()))
                 }
                 for waiter in releaseWaiters {
-                    await waiter.fulfill(.success(()))
+                    waiter.fulfill(.success(()))
                 }
             case let .failure(error):
                 let activeLeaseFailed = capability.hasActivatedDesiredLease
@@ -2809,10 +2802,10 @@ package actor ConnectionCore {
                 }
                 capabilities.states[key] = capability
                 for waiter in activationWaiters {
-                    await waiter.fulfill(.failure(error))
+                    waiter.fulfill(.failure(error))
                 }
                 for waiter in releaseWaiters {
-                    await waiter.fulfill(.success(()))
+                    waiter.fulfill(.success(()))
                 }
                 if let claimedTerminalCause {
                     await finishClaimedTermination(claimedTerminalCause)
@@ -2829,7 +2822,7 @@ package actor ConnectionCore {
                 capabilities.states[key] = capability
                 await reconcileCapability(for: key)
                 for waiter in releaseWaiters {
-                    await waiter.fulfill(.success(()))
+                    waiter.fulfill(.success(()))
                 }
             case let .failure(error):
                 if Self.isCommandRejection(error) {
@@ -2845,10 +2838,10 @@ package actor ConnectionCore {
                     capability.releaseWaiters.removeAll()
                     capabilities.states[key] = capability
                     for waiter in activationWaiters {
-                        await waiter.fulfill(.success(()))
+                        waiter.fulfill(.success(()))
                     }
                     for waiter in releaseWaiters {
-                        await waiter.fulfill(.failure(error))
+                        waiter.fulfill(.failure(error))
                     }
                     return
                 }
@@ -2867,10 +2860,10 @@ package actor ConnectionCore {
                     capability.releaseWaiters.removeAll()
                     capabilities.states[key] = capability
                     for waiter in activationWaiters {
-                        await waiter.fulfill(.failure(error))
+                        waiter.fulfill(.failure(error))
                     }
                     for waiter in releaseWaiters {
-                        await waiter.fulfill(.success(()))
+                        waiter.fulfill(.success(()))
                     }
                     return
                 }
@@ -2889,10 +2882,10 @@ package actor ConnectionCore {
                 capability.releaseWaiters.removeAll()
                 capabilities.states[key] = capability
                 for waiter in activationWaiters {
-                    await waiter.fulfill(.failure(error))
+                    waiter.fulfill(.failure(error))
                 }
                 for waiter in releaseWaiters {
-                    await waiter.fulfill(.failure(error))
+                    waiter.fulfill(.failure(error))
                 }
                 await finishClaimedTermination(claimedTerminalCause)
             }
@@ -3042,7 +3035,7 @@ package actor ConnectionCore {
             try await backend.sendJSONString(message)
             try Task.checkCancellation()
         } catch {
-            await failPendingReply(.root(commandID), error: error)
+            failPendingReply(.root(commandID), error: error)
             throw error
         }
         return try await awaitReply(
@@ -3085,7 +3078,7 @@ package actor ConnectionCore {
             try await backend.sendJSONString(wrapperMessage)
             try Task.checkCancellation()
         } catch {
-            await failPendingReply(.target(key), error: error)
+            failPendingReply(.target(key), error: error)
             throw error
         }
         return try await awaitReply(
@@ -3168,7 +3161,7 @@ package actor ConnectionCore {
         targetID: ProtocolTarget.ID?
     ) async throws -> ProtocolCommand.Result {
         if Task.isCancelled {
-            await failPendingReply(key, error: CancellationError())
+            failPendingReply(key, error: CancellationError())
         }
         let timeoutTask: Task<Void, Never>? = responseTimeout.map { responseTimeout in
             let timeoutSleep = self.timeoutSleep
@@ -3190,13 +3183,7 @@ package actor ConnectionCore {
             timeoutTask?.cancel()
         }
         do {
-            return try await withTaskCancellationHandler {
-                try await promise.value()
-            } onCancel: {
-                Task {
-                    await self.failPendingReply(key, error: CancellationError())
-                }
-            }
+            return try await promise.value()
         } catch {
             removePendingReply(key)
             throw error
@@ -3211,14 +3198,14 @@ package actor ConnectionCore {
            let key = replyStore.takeTargetReplyKey(forRootWrapperID: id) {
             if parsed.errorMessage != nil,
                let pending = replyStore.removeTargetReply(for: key) {
-                await resolve(pending, key: .target(key), parsed: parsed)
+                resolve(pending, key: .target(key), parsed: parsed)
             }
             return
         }
 
         if let id = parsed.id,
            let pending = replyStore.removeRootReply(commandID: id) {
-            await resolve(pending, key: .root(id), parsed: parsed)
+            resolve(pending, key: .root(id), parsed: parsed)
             return
         }
 
@@ -3318,7 +3305,7 @@ package actor ConnectionCore {
         if let id = parsed.id {
             let key = TransportSession.ReplyKey(targetID: targetID, commandID: id)
             if let pending = replyStore.removeTargetReply(for: key) {
-                await resolve(pending, key: .target(key), parsed: parsed)
+                resolve(pending, key: .target(key), parsed: parsed)
                 return
             }
         }
@@ -3374,10 +3361,10 @@ package actor ConnectionCore {
         _ pending: TransportSession.PendingReply,
         key: TransportSession.PendingKey,
         parsed: ParsedProtocolMessage
-    ) async {
+    ) {
         validateReplyOwnership(pending, key: key)
         if let errorMessage = parsed.errorMessage {
-            await pending.promise.fulfill(
+            pending.promise.fulfill(
                 .failure(
                     TransportSession.Error.remoteError(
                         method: pending.method,
@@ -3402,12 +3389,12 @@ package actor ConnectionCore {
         } catch {
             let message = "Failed to decode \(pending.method) reply: \(error)"
             handoffTermination(.protocolViolation(message))
-            await pending.promise.fulfill(
+            pending.promise.fulfill(
                 .failure(WebInspectorProxyError.protocolViolation(message))
             )
             return
         }
-        await pending.promise.fulfill(
+        pending.promise.fulfill(
             .success(result)
         )
     }
@@ -3979,7 +3966,7 @@ package actor ConnectionCore {
             }
         }
         for waiter in effects.releaseWaiters {
-            await waiter.fulfill(.success(()))
+            waiter.fulfill(.success(()))
         }
     }
 
@@ -4002,7 +3989,7 @@ package actor ConnectionCore {
         _ mutation: RootEventMutation
     ) async {
         await completeCurrentPageBindingChange(mutation.bindingEffects)
-        await resumePhysicalTargetDisappearanceWaiters(
+        resumePhysicalTargetDisappearanceWaiters(
             mutation.physicalTargetWaiters
         )
         await completeCommandInvalidationEffects(mutation.commandInvalidation)
@@ -4060,12 +4047,12 @@ package actor ConnectionCore {
 
     private func resumePhysicalTargetDisappearanceWaiters(
         _ waiters: PhysicalTargetDisappearanceWaiters
-    ) async {
+    ) {
         for waiter in waiters.activation {
-            await waiter.fulfill(.failure(WebInspectorProxyError.pageUnavailable))
+            waiter.fulfill(.failure(WebInspectorProxyError.pageUnavailable))
         }
         for waiter in waiters.release {
-            await waiter.fulfill(.success(()))
+            waiter.fulfill(.success(()))
         }
     }
 
@@ -4409,7 +4396,7 @@ package actor ConnectionCore {
         _ effects: EventEmissionEffects
     ) async {
         await completeCommandInvalidationEffects(effects.commandInvalidation)
-        await completeMainPageTargetNotification(effects.mainPageTargetNotification)
+        completeMainPageTargetNotification(effects.mainPageTargetNotification)
     }
 
     private func publishConfiguredModelEvent(
@@ -4576,18 +4563,18 @@ package actor ConnectionCore {
 
     private func completeMainPageTargetNotification(
         _ notification: MainPageTargetNotification?
-    ) async {
+    ) {
         guard let notification else {
             return
         }
         for waiter in notification.waiters {
-            await waiter.fulfill(.success(notification.result))
+            waiter.fulfill(.success(notification.result))
         }
     }
 
-    private func failMainPageTargetWaiter(_ waiterID: UInt64, error: any Swift.Error) async {
+    private func failMainPageTargetWaiter(_ waiterID: UInt64, error: any Swift.Error) {
         let waiter = mainPageTargetWaiterStore.remove(id: waiterID)
-        await waiter?.fulfill(.failure(error))
+        waiter?.fulfill(.failure(error))
     }
 
     private func removeSubscriber(_ subscriberID: UInt64, domain: ProtocolDomain) {
@@ -4602,7 +4589,7 @@ package actor ConnectionCore {
         replyStore.removePendingReply(key)
     }
 
-    private func failPendingReply(_ key: TransportSession.PendingKey, error: any Swift.Error) async {
+    private func failPendingReply(_ key: TransportSession.PendingKey, error: any Swift.Error) {
         let pending: TransportSession.PendingReply?
         switch key {
         case let .root(commandID):
@@ -4611,10 +4598,10 @@ package actor ConnectionCore {
             pending = replyStore.removeTargetReply(for: targetReplyKey)
                 ?? replyStore.removeRetargetedReply(commandID: targetReplyKey.commandID)
         }
-        await pending?.promise.fulfill(.failure(error))
+        pending?.promise.fulfill(.failure(error))
     }
 
-    private func failPendingReplyFromTimeout(_ key: TransportSession.PendingKey, error: any Swift.Error) async {
+    private func failPendingReplyFromTimeout(_ key: TransportSession.PendingKey, error: any Swift.Error) {
         let pending: TransportSession.PendingReply?
         switch key {
         case let .root(commandID):
@@ -4622,7 +4609,7 @@ package actor ConnectionCore {
         case let .target(targetReplyKey):
             pending = replyStore.removeTargetReplyForTimeout(targetReplyKey)
         }
-        await pending?.promise.fulfill(.failure(error))
+        pending?.promise.fulfill(.failure(error))
     }
 
     private func markTargetReplyAsBufferedIfNeeded(

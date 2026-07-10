@@ -1163,6 +1163,7 @@ func modelFeedCloseKeepsClaimUntilDisableAndSharesDuplicateCloseCompletion() asy
         try await feed.close()
         await duplicateFinished.finish()
     }
+    duplicateClose.cancel()
 
     await #expect(throws: ConnectionModelFeedError.alreadyOpen) {
         try await core.openModelFeed(configuredDomains: [], capacity: 8)
