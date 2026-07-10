@@ -9,6 +9,9 @@ import UIKit
 package final class DOMElementViewController: UICollectionViewController {
     private let context: WebInspectorModelContext
     private var statusTask: Task<Void, Never>?
+    private var styleHydrationTask: Task<Void, Never>?
+    private var styleHydrationGeneration: UInt64 = 0
+    private var isStyleHydrationActive = false
     private var selectedStylesObservation: PortableObservationTracking.Token?
     private var observedSelectedNodeObjectID: ObjectIdentifier?
     private var hasBoundSelectedNode = false
@@ -45,7 +48,7 @@ package final class DOMElementViewController: UICollectionViewController {
 #if DEBUG
         resolveStyleRenderWaitersForTesting(result: false)
 #endif
-        context.setStyleHydrationActive(false)
+        styleHydrationTask?.cancel()
         statusTask?.cancel()
         selectedStylesObservation?.cancel()
     }
@@ -67,11 +70,15 @@ package final class DOMElementViewController: UICollectionViewController {
 
     override package func viewIsAppearing(_ animated: Bool) {
         super.viewIsAppearing(animated)
-        context.setStyleHydrationActive(true)
+        isStyleHydrationActive = true
+        if let selectedNode = try? context.selectedDOMNode {
+            hydrateStylesIfNeeded(for: selectedNode, retryFailure: true)
+        }
     }
 
     override package func viewDidDisappear(_ animated: Bool) {
-        context.setStyleHydrationActive(false)
+        isStyleHydrationActive = false
+        cancelStyleHydration()
         super.viewDidDisappear(animated)
     }
 
@@ -181,13 +188,13 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
     private func startObservingState() {
-        bindSelectedNode(context.selectedNode)
+        bindSelectedNode(try? context.selectedDOMNode)
         statusTask = Task { @MainActor [weak self, context] in
             for await status in context.statusUpdates {
                 guard let self else {
                     return
                 }
-                bindSelectedNode(status.selectedNodeID.flatMap { context.node(for: $0) })
+                bindSelectedNode(status.selectedNodeID.flatMap { try? context.domNode(id: $0) })
             }
         }
     }
@@ -199,6 +206,7 @@ package final class DOMElementViewController: UICollectionViewController {
         }
         hasBoundSelectedNode = true
         observedSelectedNodeObjectID = nodeObjectID
+        cancelStyleHydration()
         selectedStylesObservation?.cancel()
         guard let node else {
             selectedStylesObservation = nil
@@ -215,8 +223,69 @@ package final class DOMElementViewController: UICollectionViewController {
                 return
             }
             self.renderSelectedStyles(node.elementStyles)
+            if node.elementStyles?.phase == .needsRefresh {
+                self.hydrateStylesIfNeeded(for: node, retryFailure: false)
+            }
         }
         selectedStylesObservation = token
+        hydrateStylesIfNeeded(for: node, retryFailure: true)
+    }
+
+    private func hydrateStylesIfNeeded(
+        for node: DOMNode,
+        retryFailure: Bool
+    ) {
+        guard isStyleHydrationActive,
+              styleHydrationTask == nil else {
+            return
+        }
+
+        let operation: @MainActor () async throws -> Void
+        switch node.elementStyles?.phase {
+        case nil, .unavailable:
+            operation = { [context] in
+                _ = try await context.cssStyles(for: node)
+            }
+        case .failed where retryFailure:
+            operation = { [context] in
+                _ = try await context.cssStyles(for: node)
+            }
+        case .needsRefresh:
+            operation = { [context] in
+                try await context.refreshCSSStyles(for: node)
+            }
+        case .loading, .loaded, .failed:
+            return
+        }
+
+        precondition(
+            styleHydrationGeneration < UInt64.max,
+            "DOM style hydration generation overflowed."
+        )
+        styleHydrationGeneration += 1
+        let generation = styleHydrationGeneration
+        styleHydrationTask = Task { @MainActor [weak self] in
+            do {
+                try await operation()
+            } catch {
+                // CSSStyles owns and publishes the failed phase.
+            }
+            guard let self,
+                  styleHydrationGeneration == generation else {
+                return
+            }
+            styleHydrationTask = nil
+        }
+    }
+
+    private func cancelStyleHydration() {
+        styleHydrationTask?.cancel()
+        styleHydrationTask = nil
+        precondition(
+            styleHydrationGeneration < UInt64.max,
+            "DOM style hydration generation overflowed."
+        )
+        styleHydrationGeneration += 1
     }
 
     /// Renders the selected node's styles. Runs inside the observation
@@ -347,12 +416,20 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
     private func toggleAction() -> DOMElementStylePropertyView.ToggleAction? {
-        return { [weak context] propertyID, enabled in
-            context?.requestSetCSSProperty(
-                propertyID,
-                enabled: enabled,
-                options: .automatic
-            ) ?? false
+        return { [weak context] property, enabled in
+            guard let context else {
+                return false
+            }
+            do {
+                _ = try await context.setCSSProperty(
+                    property,
+                    enabled: enabled,
+                    undo: .automatic
+                )
+                return true
+            } catch {
+                return false
+            }
         }
     }
 
@@ -392,7 +469,7 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
     package func renderCurrentStylesForTesting() {
-        renderSelectedStyles(context.selectedNode?.elementStyles)
+        renderSelectedStyles((try? context.selectedDOMNode)?.elementStyles)
     }
 
     private func finishStyleRenderForTesting() {

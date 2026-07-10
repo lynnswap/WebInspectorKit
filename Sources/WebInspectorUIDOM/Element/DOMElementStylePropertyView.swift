@@ -5,12 +5,13 @@ import UIKit
 
 @MainActor
 package final class DOMElementStylePropertyView: UIView {
-    package typealias ToggleAction = @MainActor (CSSStyleProperty.ID, Bool) -> Bool
+    package typealias ToggleAction = @MainActor (CSSStyleProperty, Bool) async -> Bool
 
     private let declarationTextView = UITextView()
     private let toggleSwitch = UISwitch()
     private var property: CSSStyleProperty?
     private var toggleAction: ToggleAction?
+    private var toggleTask: Task<Void, Never>?
 
     override package init(frame: CGRect) {
         super.init(frame: frame)
@@ -26,6 +27,11 @@ package final class DOMElementStylePropertyView: UIView {
         property: CSSStyleProperty,
         onToggle: ToggleAction? = nil
     ) {
+        if self.property?.id != property.id {
+            // A submitted mutation is committed user work and outlives cell
+            // reuse. Drop only this view's completion handle.
+            toggleTask = nil
+        }
         render(property: property, onToggle: onToggle)
     }
 
@@ -39,6 +45,9 @@ package final class DOMElementStylePropertyView: UIView {
     }
 
     package func clear() {
+        // Do not cancel an accepted mutation when the collection view reuses
+        // its presentation cell.
+        toggleTask = nil
         property = nil
         toggleAction = nil
         declarationTextView.attributedText = nil
@@ -131,13 +140,26 @@ package final class DOMElementStylePropertyView: UIView {
             return
         }
 
-        if toggleAction?(property.id, requestedEnabledState) != true {
+        guard let toggleAction else {
             toggleSwitch.setOn(property.isEnabled, animated: false)
+            return
+        }
+        toggleSwitch.isEnabled = false
+        toggleTask = Task { @MainActor [weak self] in
+            _ = await toggleAction(property, requestedEnabledState)
+            guard let self,
+                  self.property?.id == property.id else {
+                return
+            }
+            toggleTask = nil
+            if let currentProperty = self.property {
+                renderToggleState(from: currentProperty)
+            }
         }
     }
 
     private func canToggle(_ property: CSSStyleProperty) -> Bool {
-        property.isEditable && toggleAction != nil
+        property.isEditable && toggleAction != nil && toggleTask == nil
     }
 
     private func declarationText(for property: CSSStyleProperty) -> NSAttributedString {
