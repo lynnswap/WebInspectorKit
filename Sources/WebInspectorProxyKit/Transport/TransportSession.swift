@@ -566,32 +566,36 @@ package actor ConnectionCore {
 
         do {
             for domain in ModelDomain.ordered(configuredDomains) {
-                let leaseOwner = ConnectionCapabilityLeaseOwner.modelFeed(id, domain)
-                for capabilityDomain in domain.capabilityDependencies {
-                    try Task.checkCancellation()
-                    guard isOpen else {
-                        throw terminalScopeError
+                do {
+                    let leaseOwner = ConnectionCapabilityLeaseOwner.modelFeed(id, domain)
+                    for capabilityDomain in domain.capabilityDependencies {
+                        try Task.checkCancellation()
+                        guard isOpen else {
+                            throw terminalScopeError
+                        }
+                        let key = ConnectionCapabilityKey(
+                            route: .currentPage,
+                            targetID: .currentPage,
+                            domain: capabilityDomain
+                        )
+                        let lease = ConnectionModelFeedCapabilityLease(
+                            owner: leaseOwner,
+                            key: key
+                        )
+                        let activation = beginCapabilityLease(
+                            leaseOwner,
+                            for: key,
+                            generation: currentPageGeneration
+                        )
+                        appendModelFeedCapabilityLease(lease, feedID: id)
+                        try await activateCapabilityLease(
+                            leaseOwner,
+                            for: key,
+                            activation: activation
+                        )
                     }
-                    let key = ConnectionCapabilityKey(
-                        route: .currentPage,
-                        targetID: .currentPage,
-                        domain: capabilityDomain
-                    )
-                    let lease = ConnectionModelFeedCapabilityLease(
-                        owner: leaseOwner,
-                        key: key
-                    )
-                    let activation = beginCapabilityLease(
-                        leaseOwner,
-                        for: key,
-                        generation: currentPageGeneration
-                    )
-                    appendModelFeedCapabilityLease(lease, feedID: id)
-                    try await activateCapabilityLease(
-                        leaseOwner,
-                        for: key,
-                        activation: activation
-                    )
+                } catch {
+                    throw Self.modelFeedActivationError(error, domain: domain)
                 }
             }
             try Task.checkCancellation()
@@ -2195,6 +2199,15 @@ package actor ConnectionCore {
                 startNextDOMBootstrapIfNeeded()
                 return
             }
+            if let transportError = error as? TransportSession.Error,
+               case let .remoteError(_, _, message) = transportError {
+                handoffTermination(
+                    .modelFeedFailure(
+                        .bootstrapFailed(domain: .dom, message: message)
+                    )
+                )
+                return
+            }
             handoffTermination(.fatal(
                 "DOM.getDocument failed for required target \(targetID.rawValue): \(error)"
             ))
@@ -2256,12 +2269,12 @@ package actor ConnectionCore {
             ?? event.sourceTargetID
             ?? targetRegistry.currentMainPageTargetID
         guard let targetID,
-              let target = targetRegistry.target(for: targetID),
-              targetRegistry.isCurrentPageModelTarget(target) else {
+              let targetRecord = targetRegistry.target(for: targetID),
+              targetRegistry.isCurrentPageModelTarget(targetRecord) else {
             return ConnectionCommandInvalidationEffects()
         }
         let oldEpoch = modelDocumentEpoch(for: targetID)
-        _ = advanceModelDocumentEpoch(for: targetID)
+        let documentEpoch = advanceModelDocumentEpoch(for: targetID)
 
         if var registration = modelFeed,
            var bootstrap = registration.domBootstrap,
@@ -2297,6 +2310,24 @@ package actor ConnectionCore {
         effects.pendingFailures.append(contentsOf: directReplies.map {
             ConnectionPendingReplyFailure(pending: $0, reason: .staleIdentifier)
         })
+
+        if let registration = modelFeed,
+           registration.configuredDomains.contains(.dom),
+           registration.targetSnapshotThrough != nil {
+            guard let target = ModelTarget(record: targetRecord) else {
+                preconditionFailure(
+                    "A current-page DOM target cannot be represented in the model feed."
+                )
+            }
+            _ = enqueueModelFeedRecord(
+                .domDocumentInvalidated(
+                    generation: currentPageGeneration,
+                    sequence: event.sequence,
+                    target: target,
+                    documentEpoch: documentEpoch
+                )
+            )
+        }
         return effects
     }
 
@@ -2899,6 +2930,24 @@ package actor ConnectionCore {
         case .replyTimeout:
             return WebInspectorProxyError.timeout(domain: domain.rawValue, method: action == .enable ? "enable" : "disable")
         }
+    }
+
+    /// Maps a known model-domain activation rejection without deriving the
+    /// domain from a wire method string. Transport, protocol, page-lifecycle,
+    /// and cancellation failures retain their existing categories because
+    /// their recovery is connection- rather than model-domain-specific.
+    private nonisolated static func modelFeedActivationError(
+        _ error: any Swift.Error,
+        domain: ModelDomain
+    ) -> any Swift.Error {
+        guard let proxyError = error as? WebInspectorProxyError,
+              case let .commandRejected(_, message) = proxyError else {
+            return error
+        }
+        return ConnectionModelFeedError.bootstrapFailed(
+            domain: domain,
+            message: message
+        )
     }
 
     private nonisolated static func enableFailureProvesInactive(
@@ -4258,9 +4307,12 @@ package actor ConnectionCore {
             destroyedCurrentMainPageTarget: destroyedCurrentMainPageTarget
         )
         // WebKit invalidates every bound node identifier before emitting
-        // documentUpdated. Advance the target epoch before this event can be
-        // projected into the ordered model feed.
+        // documentUpdated. Advance the target epoch and publish its dedicated
+        // model boundary before this event can reach any later model delta.
         let commandInvalidation = prepareDOMDocumentUpdateForModelFeed(envelope)
+        guard isOpen else {
+            return EventEmissionEffects(commandInvalidation: commandInvalidation)
+        }
         if let eventDomain = webInspectorEventDomain(for: domain) {
             var terminalViolation: String?
             let targetSnapshot = snapshot()
@@ -4388,6 +4440,12 @@ package actor ConnectionCore {
         guard event.domain != .target else {
             // Target lifecycle records are projected synchronously with their
             // registry mutation, before that path can suspend.
+            return
+        }
+        guard event.domain != .dom || event.method != "DOM.documentUpdated" else {
+            // The target + epoch record is the model feed's sole document
+            // invalidation boundary. Public structured scopes still receive
+            // their independently projected DOM event where applicable.
             return
         }
 
@@ -4676,7 +4734,15 @@ package actor ConnectionCore {
         let scopeError: WebInspectorProxyError? = cause == .explicitClose ? nil : terminalScopeError
         if let scopeError {
             eventScopes.finishSubscribers(with: scopeError)
-            modelFeed?.mailbox.poison(throwing: scopeError)
+            switch cause {
+            case let .modelFeedFailure(error):
+                // The package model consumer needs the exact terminal feed
+                // category. Direct/public consumers still observe the mapped
+                // connection-level scope error above.
+                modelFeed?.mailbox.poison(throwing: error)
+            case .explicitClose, .fatal, .protocolViolation:
+                modelFeed?.mailbox.poison(throwing: scopeError)
+            }
         }
 
         var activationWaiters: [ReplyPromise<Void>] = []

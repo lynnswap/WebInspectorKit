@@ -639,6 +639,10 @@ package struct ModelDocumentEpoch: Hashable, Sendable { /* opaque */ }
 package enum ModelProtocolEvent: Sendable { /* typed payload except document invalidation */ }
 package enum ModelBootstrapSnapshot: Sendable { /* target + epoch + typed snapshot */ }
 package enum ModelDomain: Hashable, Sendable { /* configured domains */ }
+package enum ConnectionModelFeedError: Error, Sendable {
+    case bootstrapFailed(domain: ModelDomain, message: String)
+    // exclusive-use, overflow, and consumer-lifecycle cases omitted
+}
 ```
 
 The current transport slice implements the bounded exclusive feed, initial
@@ -657,6 +661,13 @@ capability await, and `openModelFeed` returns only after every configured
 capability is active. An acquisition failure or cancellation releases the
 successful prefix in reverse order before returning. For an empty
 configured-domain set the feed also emits `synchronizationComplete`.
+An inspected target's rejection of a configured domain activation is reported
+as `bootstrapFailed` with the `ModelDomain` already owned by the acquisition
+loop; Core never recovers that domain by parsing the rejected method string.
+Cancellation, page disappearance, protocol violation, and connection/transport
+termination keep their existing categories. If rollback cleanup also fails,
+`WebInspectorScopeError` retains the typed bootstrap rejection as its operation
+error and the independent cleanup error as its cleanup error.
 
 For a successful wire `enable` reply, the connection core publishes one
 `replayComplete` for each configured model-domain owner of that physical
@@ -783,7 +794,10 @@ later `DOM.documentUpdated` advances that physical target's DOM epoch and starts
 the same ordered snapshot bootstrap again rather than exposing an empty tree as
 ready state. A frame added before initial synchronization joins the outstanding
 bootstrap set; a destroyed, superseded, or old-epoch reply is stale and cannot
-publish. Required-target command failure is terminal. Bootstrap commands are
+publish. An inspected target's rejection of a required initial or refresh
+`DOM.getDocument` is terminal and poisons the package mailbox with
+`bootstrapFailed(domain: .dom, message:)`; malformed data and transport or
+connection failure remain protocol/connection failures. Bootstrap commands are
 Core-owned tasks: close, rollback, retarget, and terminal teardown cancel and
 await them, and a failed feed enqueue is an operation-terminal result that
 cannot advance to the next target.

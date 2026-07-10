@@ -157,6 +157,17 @@ package enum ConnectionModelFeedRecord: Sendable {
         through: UInt64,
         snapshot: ModelTargetSnapshot
     )
+    /// The authoritative document-identity boundary for one physical target.
+    ///
+    /// Core publishes this after advancing `documentEpoch`, and before the
+    /// replacement DOM bootstrap or any later DOM/CSS delta for that target.
+    /// `DOM.documentUpdated` is not also projected as a model protocol event.
+    case domDocumentInvalidated(
+        generation: WebInspectorPage.Generation,
+        sequence: UInt64,
+        target: ModelTarget,
+        documentEpoch: ModelDocumentEpoch
+    )
     case event(
         generation: WebInspectorPage.Generation,
         sequence: UInt64,
@@ -201,6 +212,9 @@ package enum ConnectionModelFeedDeliveryResult: Sendable {
 package enum ConnectionModelFeedError: Error, Equatable, Sendable {
     case connectionAlreadyUsedByDirectConsumer
     case alreadyOpen
+    /// A configured domain rejected the capability or document bootstrap that
+    /// is required to construct or refresh its authoritative model state.
+    case bootstrapFailed(domain: ModelDomain, message: String)
     case bufferOverflow(capacity: Int)
     case consumerTerminated
 }
