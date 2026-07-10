@@ -155,7 +155,6 @@ public final class WebInspectorContext {
     private let statusRelay: WebInspectorAsyncStreamRelay<Status>
     private let networkRequests: NetworkRequestStore
     private let consoleMessages: ConsoleMessageStore
-    private var consoleObjectGroupReleaseTasks: [WebInspectorTarget.ID: Task<Void, Never>]
 
     /// Creates a context owned by the supplied actor.
     public init(_ container: WebInspectorContainer, isolation: isolated (any Actor)) {
@@ -192,7 +191,6 @@ public final class WebInspectorContext {
         statusRelay = WebInspectorAsyncStreamRelay()
         networkRequests = NetworkRequestStore()
         consoleMessages = ConsoleMessageStore()
-        consoleObjectGroupReleaseTasks = [:]
         WebInspectorDataKitLog.debug("context state=\(state.logDescription)")
     }
 
@@ -222,9 +220,6 @@ public final class WebInspectorContext {
             task.cancel()
         }
         stopEventPumps()
-        for task in consoleObjectGroupReleaseTasks.values {
-            task.cancel()
-        }
         resolveEventPumpAppliedWaitersForTesting(result: false)
     }
 
@@ -1079,7 +1074,6 @@ public final class WebInspectorContext {
         }
         styleToggleTasks = [:]
         stopEventPumps()
-        cancelConsoleObjectGroupReleaseTasks()
         currentPage = nil
         advanceCurrentPageGeneration(isolation: isolation)
         domState.advanceDocumentEpoch(isolation: isolation)
@@ -1800,7 +1794,6 @@ extension WebInspectorContext {
         documentReloadTask = nil
         let generation = advanceCurrentPageGeneration(isolation: isolation)
         domState.advanceDocumentEpoch(isolation: isolation)
-        cancelConsoleObjectGroupReleaseTasks()
         for task in styleToggleTasks.values {
             task.cancel()
         }
@@ -1941,7 +1934,6 @@ extension WebInspectorContext {
             task.cancel()
         }
         styleToggleTasks = [:]
-        cancelConsoleObjectGroupReleaseTasks()
         let generation = advanceCurrentPageGeneration(isolation: isolation)
         domState.advanceDocumentEpoch(isolation: isolation)
         let streamReset = prepareCurrentPageStreamReset(isolation: isolation)
@@ -2683,15 +2675,10 @@ extension WebInspectorContext {
             },
             isolation: isolation
         )
+        // WebKit's Console agent releases its "console" Runtime object group
+        // before emitting Console.messagesCleared. DataKit owns only the local
+        // RuntimeObject registrations invalidated by that event.
         applyConsoleMessageEffects(effects, isolation: isolation)
-        switch effects.runtimeObjectGroupRelease {
-        case .currentPage:
-            releaseConsoleRuntimeObjectGroup(isolation: isolation)
-        case let .target(targetID):
-            releaseConsoleRuntimeObjectGroup(targetID: targetID, isolation: isolation)
-        case nil:
-            break
-        }
     }
 
     private func applyConsoleMessageEffects(
@@ -2708,41 +2695,6 @@ extension WebInspectorContext {
         )
     }
 
-    private func releaseConsoleRuntimeObjectGroup(
-        targetID: WebInspectorTarget.ID? = nil,
-        isolation: isolated (any Actor) = #isolation
-    ) {
-        let target: WebInspectorTarget
-        if let targetID {
-            target = proxy.frameTarget(id: targetID)
-        } else if let currentPage {
-            target = currentPage
-        } else {
-            skipEvent("Console.messagesCleared arrived without a current page target")
-            return
-        }
-        // Release tasks are tracked per target: a clear for one frame target
-        // must not cancel another target's still-pending release.
-        let key = targetID ?? .currentPage
-        consoleObjectGroupReleaseTasks[key]?.cancel()
-        consoleObjectGroupReleaseTasks[key] = Task { [weak self, target] in
-            _ = isolation
-            do {
-                try await target.runtime.releaseObjectGroup(.console)
-            } catch is CancellationError {
-                return
-            } catch {
-                self?.failIfTerminal(error, operation: "Runtime.releaseObjectGroup")
-            }
-        }
-    }
-
-    private func cancelConsoleObjectGroupReleaseTasks() {
-        for task in consoleObjectGroupReleaseTasks.values {
-            task.cancel()
-        }
-        consoleObjectGroupReleaseTasks = [:]
-    }
 }
 
 extension WebInspectorContext {

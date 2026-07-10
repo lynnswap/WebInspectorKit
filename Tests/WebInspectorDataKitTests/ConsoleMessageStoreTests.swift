@@ -258,7 +258,6 @@ func consoleMessageStoreOwnsTargetOrderAndClearEffects() async throws {
     )
 
     #expect(effects.clearedAllMessages == false)
-    #expect(effects.runtimeObjectGroupRelease == .target(firstTargetID))
     #expect(results.items.map(\.text) == ["second", "page"])
     let clearedMessage = store.message(for: firstMessageID, isolation: MainActor.shared)
     #expect(clearedMessage == nil)

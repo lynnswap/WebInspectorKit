@@ -1520,41 +1520,6 @@ func transportBackedFrameRuntimeAndConsoleEventsKeepTargetScope() async throws {
 
 @MainActor
 @Test
-func consoleMessagesClearedForDistinctTargetsReleasesBothObjectGroups() async throws {
-    try await withDataKitTestRuntime { runtime in
-        let (_, context) = try await startContext(runtime: runtime)
-        _ = try await createFrameTarget(
-            in: runtime,
-            id: "console-frame-a",
-            frameID: "console-frame-a"
-        )
-        _ = try await createFrameTarget(
-            in: runtime,
-            id: "console-frame-b",
-            frameID: "console-frame-b"
-        )
-        await runtime.wire.respond(to: "Runtime.releaseObjectGroup")
-        await runtime.wire.respond(to: "Runtime.releaseObjectGroup")
-
-        await context.apply(
-            Console.Event.messagesCleared(reason: Console.ClearReason(rawValue: "console-api")),
-            targetID: WebInspectorTarget.ID("console-frame-a")
-        )
-        await context.apply(
-            Console.Event.messagesCleared(reason: Console.ClearReason(rawValue: "console-api")),
-            targetID: WebInspectorTarget.ID("console-frame-b")
-        )
-
-        try await waitUntil {
-            runtime.wire.observations.commands.filter {
-                $0.method == "Runtime.releaseObjectGroup"
-            }.count == 2
-        }
-    }
-}
-
-@MainActor
-@Test
 func transportBackedStyleSheetTextEditRoutesToFrameTargetAndMarksUndo() async throws {
     let pageTargetID = ProtocolTarget.ID("page-main")
     let frameTargetID = ProtocolTarget.ID("frame-css")
@@ -4479,7 +4444,6 @@ func fetchedResultsPublishConsoleInsertUpdateAndDeleteTransactions() async throw
         let secondID = try #require(results.snapshot.itemIDs.last)
         #expect(recorder.transactions.last?.itemChanges == [.insert(itemID: secondID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 1))])
 
-        await runtime.wire.respond(to: "Runtime.releaseObjectGroup")
         try await runtime.wire.emitRaw(
             .messagesCleared(reason: Console.ClearReason(rawValue: "console-api")),
             target: target
@@ -4491,10 +4455,6 @@ func fetchedResultsPublishConsoleInsertUpdateAndDeleteTransactions() async throw
             .delete(itemID: firstID, indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)),
         ])
         #expect(results.snapshot.itemIDs == [])
-        _ = await runtime.wire.observations.waitForCompletedCommands(
-            method: "Runtime.releaseObjectGroup",
-            count: 1
-        )
     }
 }
 
@@ -6972,17 +6932,12 @@ func consoleEventsPopulateRepeatAndClearFetchedMessages() async throws {
         try await waitUntil { results.items.count == 2 }
         #expect(results.items.map(\.text) == ["hello", "second"])
 
-        await runtime.wire.respond(to: "Runtime.releaseObjectGroup")
         try await runtime.wire.emitRaw(
             .messagesCleared(reason: Console.ClearReason(rawValue: "console-api")),
             target: target
         )
         try await waitUntil { results.items.isEmpty }
         #expect(context.registeredMessage(for: message.id) == nil)
-        try await waitUntil {
-            runtime.wire.observations.commands
-                .contains { $0.method == "Runtime.releaseObjectGroup" }
-        }
     }
 }
 
@@ -7100,12 +7055,13 @@ func consoleMessageParametersRegisterRuntimeObjects() async throws {
 
 @MainActor
 @Test
-func consoleMessagesClearedReleasesConsoleRuntimeObjects() async throws {
+func consoleMessagesClearedInvalidatesRuntimeObjectsWithoutRuntimeCommand() async throws {
     try await withDataKitTestRuntime { runtime in
         let (target, context) = try await startContext(runtime: runtime)
         let objectID = Runtime.RemoteObject.ID("console-stale-object")
         let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
 
+        let messageEventBaseline = context.eventPumpAppliedSequenceForTesting
         try await runtime.wire.emitRaw(
             .messageAdded(Console.Message(
                 source: Console.Source(rawValue: "console-api"),
@@ -7117,24 +7073,19 @@ func consoleMessagesClearedReleasesConsoleRuntimeObjects() async throws {
             )),
             target: target
         )
+        #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: messageEventBaseline))
         try await waitUntil { results.items.count == 1 }
         let message = try #require(results.items.first)
         let parameter = try #require(message.parameters.first)
 
-        await runtime.wire.respond(to: "Runtime.releaseObjectGroup")
+        let commandCountBeforeClear = runtime.wire.observations.commands.count
+        let eventBaseline = context.eventPumpAppliedSequenceForTesting
         try await runtime.wire.emitRaw(
             .messagesCleared(reason: Console.ClearReason(rawValue: "console-api")),
             target: target
         )
 
-        try await waitUntil {
-            runtime.wire.observations.commands
-                .contains { $0.method == "Runtime.releaseObjectGroup" }
-        }
-        let releaseObjectGroupCommands = runtime.wire.observations.commands.filter {
-            $0.method == "Runtime.releaseObjectGroup"
-        }
-        #expect(releaseObjectGroupCommands.count == 1)
+        #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: eventBaseline))
         try await waitUntil { results.items.isEmpty }
         do {
             _ = try await parameter.properties()
@@ -7142,6 +7093,8 @@ func consoleMessagesClearedReleasesConsoleRuntimeObjects() async throws {
         } catch let error as WebInspectorProxyError {
             #expect(error == .disconnected("RuntimeObject is not registered in this WebInspectorContext."))
         }
+        let clearCommands = runtime.wire.observations.commands.dropFirst(commandCountBeforeClear)
+        #expect(!clearCommands.contains { $0.method == "Runtime.releaseObjectGroup" })
         #expect(context.state == .attached)
     }
 }

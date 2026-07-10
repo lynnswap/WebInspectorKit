@@ -2,9 +2,9 @@ import WebInspectorProxyKit
 
 /// Owns Console message identity, order, query projection, and publication.
 ///
-/// Runtime-object membership and protocol commands remain in
-/// `WebInspectorContext`; clear operations return explicit effects for that
-/// owner to apply. The store never retains an actor token or starts a task.
+/// Runtime-object membership remains in `WebInspectorContext`; clear
+/// operations return explicit ownership effects for that owner to apply. The
+/// store never retains an actor token or starts a task.
 package final class ConsoleMessageStore {
     private enum ConcreteQueryBufferDestination {
         case candidate
@@ -25,15 +25,9 @@ package final class ConsoleMessageStore {
         var committing: [UInt64: PendingConcreteQuery]
     }
 
-    package enum RuntimeObjectGroupRelease: Equatable {
-        case currentPage
-        case target(WebInspectorTarget.ID)
-    }
-
     package struct Effects {
         package var runtimeObjectsToUnregister: [RuntimeObject] = []
         package var clearedAllMessages = false
-        package var runtimeObjectGroupRelease: RuntimeObjectGroupRelease?
     }
 
     package struct QueryIndexReset: Sendable {
@@ -446,8 +440,7 @@ package final class ConsoleMessageStore {
         await finishQueryIndexReset(reset, isolation: isolation)
         return Effects(
             runtimeObjectsToUnregister: runtimeObjectsToUnregister,
-            clearedAllMessages: targetID == nil,
-            runtimeObjectGroupRelease: targetID.map(RuntimeObjectGroupRelease.target) ?? .currentPage
+            clearedAllMessages: targetID == nil
         )
     }
 
