@@ -9,8 +9,9 @@ models instead of sending protocol commands directly. DataKit owns DOM, Network,
 Console, Runtime, and CSS model state for one inspected page and keeps those
 models updated as WebKit emits protocol events.
 
-Attach a ``WebInspectorContainer`` to a `WKWebView`, then read the
-``WebInspectorContext`` for UI-bound model state:
+Create one ``WebInspectorModelContext`` for an inspector lifetime. The UIKit
+convenience initializer attaches it to a `WKWebView` on the main actor and
+returns only after the initial model synchronization boundary:
 
 ```swift
 import WebKit
@@ -18,14 +19,12 @@ import WebInspectorDataKit
 
 @MainActor
 final class InspectorModel {
-    private var container: WebInspectorContainer?
-    private(set) var context: WebInspectorContext?
+    private(set) var context: WebInspectorModelContext?
     private var treeTask: Task<Void, Never>?
 
     func attach(to webView: WKWebView) async throws {
-        let container = try await WebInspectorContainer(attachingTo: webView)
-        let context = container.mainContext
-        let tree = try await context.treeController()
+        let context = try await WebInspectorModelContext(attachingTo: webView)
+        let tree = try context.domTree
 
         treeTask = Task { @MainActor in
             for await update in tree.updates {
@@ -33,30 +32,32 @@ final class InspectorModel {
             }
         }
 
-        self.container = container
         self.context = context
     }
 
     func close() async {
         treeTask?.cancel()
-        await container?.close()
-        container = nil
+        await context?.close()
         context = nil
     }
 }
 ```
 
-Contexts are actor-owned. Read and mutate context state from the same actor you
-used to create or obtain the context. For UIKit clients, ``WebInspectorContainer``
-provides ``WebInspectorContainer/mainContext`` as a main-actor context.
+Contexts are actor-owned rather than main-actor-only. ``WebInspectorModelContext/attach(to:isolation:)``
+confines a context permanently to the caller's current actor by default. Read
+observable state and invoke commands from that actor. The `WKWebView`
+convenience initializer above deliberately binds the context to `MainActor`.
 
-Use ``WebInspectorContext`` directly for high-level operations:
+Use the context directly for high-level operations. Runtime objects belong to
+an explicit binding-scoped group whose cleanup is awaited:
 
 ```swift
 try await context.setElementPickerEnabled(true)
-try await context.reloadPage()
+try await context.reload()
 
-let result = try await context.evaluate("document.title")
+let result = try await context.withRuntimeObjectGroup { group in
+    try await group.evaluate("document.title")
+}
 print(result.object.description ?? "")
 ```
 
@@ -93,8 +94,11 @@ for await update in requests.updates() {
 
 ### Creating a Model Context
 
-- ``WebInspectorContainer``
-- ``WebInspectorContext``
+- ``WebInspectorModelContext``
+- ``WebInspectorModelContext/Configuration``
+- ``WebInspectorModelContext/Domain``
+- ``WebInspectorModelContext/State``
+- ``WebInspectorModelContext/Failure``
 
 ### Reading DOM State
 
@@ -113,8 +117,9 @@ for await update in requests.updates() {
 - ``ConsoleQuery``
 - ``ConsoleSort``
 - ``ConsoleSection``
-- ``WebInspectorFetchRequest``
 - ``WebInspectorFetchedResults``
+- ``WebInspectorFetchedResultsSnapshot``
+- ``WebInspectorFetchedResultsTransaction``
 - ``WebInspectorFetchedResultsUpdate``
 
 ### Runtime and CSS Models
@@ -128,8 +133,8 @@ for await update in requests.updates() {
 
 ### Mutations
 
-- ``WebInspectorMutationOptions``
 - ``WebInspectorUndoPolicy``
-- ``WebInspectorStaleModelPolicy``
 - ``DOMRevealPolicy``
-- ``DOMMutationResult``
+- ``DOMMutationOutcome``
+- ``DOMMutationFailure``
+- ``DOMUndoCapability``

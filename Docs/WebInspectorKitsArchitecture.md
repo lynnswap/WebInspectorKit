@@ -1978,8 +1978,8 @@ The migration removes rather than deprecates the following surfaces:
 - Duplicate direct Context/model convenience operations after their
   `WebInspectorModelContext` facade operation or scoped-resource equivalent
   exists.
-- `WebInspectorFetchableModel`, `WebInspectorPersistentModel`, generic
-  `WebInspectorFetchDescriptor`, arbitrary key-path sort/section descriptors,
+- `WebInspectorFetchableModel`, generic `WebInspectorFetchDescriptor`,
+  arbitrary key-path sort/section descriptors,
   `WebInspectorFetchRequest`, `WebInspectorMutationOptions`,
   `WebInspectorStaleModelPolicy`, and
   `WebInspectorFetchedResultsController`.
