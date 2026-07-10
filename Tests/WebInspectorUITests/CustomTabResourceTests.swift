@@ -118,7 +118,7 @@ struct CustomTabResourceTests {
         let finished = WebInspectorTestGate()
         let session = WebInspectorSession(tabs: [])
         var store: PresentationContentStore? = PresentationContentStore()
-        weak var weakStore = store
+        weak let weakStore = store
         let host = try #require(store).customViewController(
             for: key,
             session: session
