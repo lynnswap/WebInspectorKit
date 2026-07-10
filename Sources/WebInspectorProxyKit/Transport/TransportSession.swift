@@ -3088,7 +3088,8 @@ package actor ConnectionCore {
         method: String,
         for key: ConnectionCapabilityKey,
         generation: WebInspectorPage.Generation,
-        operationID: UInt64
+        operationID: UInt64,
+        publishesReplay: Bool = true
     ) throws -> ConnectionOwnedCommandOperation {
         let targetID: ProtocolTarget.ID
         switch key.route.storage {
@@ -3120,15 +3121,27 @@ package actor ConnectionCore {
             message: message
         )
         let promise = ReplyPromise<ProtocolCommand.Result>()
-        let pendingReply = TransportSession.PendingReply.capability(
-            domain: domain,
-            method: method,
-            targetID: targetID,
-            promise: promise,
-            key: key,
-            generation: generation,
-            operationID: operationID
-        )
+        let pendingReply = if publishesReplay {
+            TransportSession.PendingReply.capability(
+                domain: domain,
+                method: method,
+                targetID: targetID,
+                promise: promise,
+                key: key,
+                generation: generation,
+                operationID: operationID
+            )
+        } else {
+            TransportSession.PendingReply.capabilityAuxiliary(
+                domain: domain,
+                method: method,
+                targetID: targetID,
+                promise: promise,
+                key: key,
+                generation: generation,
+                operationID: operationID
+            )
+        }
         replyStore.insertTargetReply(
             pendingReply,
             key: replyKey,
@@ -3205,7 +3218,8 @@ package actor ConnectionCore {
                 method: "Inspector.initialized",
                 for: key,
                 generation: generation,
-                operationID: id
+                operationID: id,
+                publishesReplay: false
             )
         } catch {
             return .failure(
@@ -3989,7 +4003,8 @@ package actor ConnectionCore {
                 ownership.purpose == pending.purpose,
                 "A model command reply purpose does not match its operation owner."
             )
-        case let .capability(_, _, operationID):
+        case let .capability(_, _, operationID),
+             let .capabilityAuxiliary(_, _, operationID):
             guard let ownership = capabilityTasks[operationID]?.pendingReplyOwnership else {
                 preconditionFailure("A capability reply has no capability operation owner.")
             }
@@ -4025,7 +4040,7 @@ package actor ConnectionCore {
         for pending: TransportSession.PendingReply
     ) throws {
         switch pending.purpose {
-        case .direct, .modelCommand:
+        case .direct, .modelCommand, .capabilityAuxiliary:
             // Consumer replies have no internal publication side effect.
             break
         case let .capability(key, generation, operationID):

@@ -16,6 +16,11 @@ extension TransportSession {
                 generation: WebInspectorPage.Generation,
                 operationID: UInt64
             )
+            case capabilityAuxiliary(
+                key: ConnectionCapabilityKey,
+                generation: WebInspectorPage.Generation,
+                operationID: UInt64
+            )
             case modelBootstrap(
                 feedID: ConnectionModelFeedID,
                 generation: WebInspectorPage.Generation,
@@ -98,6 +103,28 @@ extension TransportSession {
         ) -> PendingReply {
             PendingReply(
                 purpose: .capability(
+                    key: key,
+                    generation: generation,
+                    operationID: operationID
+                ),
+                domain: domain,
+                method: method,
+                targetID: targetID,
+                promise: promise
+            )
+        }
+
+        static func capabilityAuxiliary(
+            domain: ProtocolDomain,
+            method: String,
+            targetID: ProtocolTarget.ID,
+            promise: ReplyPromise<ProtocolCommand.Result>,
+            key: ConnectionCapabilityKey,
+            generation: WebInspectorPage.Generation,
+            operationID: UInt64
+        ) -> PendingReply {
+            PendingReply(
+                purpose: .capabilityAuxiliary(
                     key: key,
                     generation: generation,
                     operationID: operationID
