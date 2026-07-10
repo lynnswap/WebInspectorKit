@@ -77,7 +77,8 @@ second production consumer of either core product.
 ### Non-goals
 
 - Expanding the supported Web Inspector protocol surface or exposing a raw
-  command escape hatch.
+  command escape hatch from production ProxyKit. ProxyKitTesting's inverse
+  raw-wire peer is a test transport, not a production command API.
 - Building a new AppKit inspector UI. ProxyKit and DataKit continue to support
   macOS; the app-facing UI remains UIKit-only.
 - Redesigning the visual presentation of the built-in inspector.
@@ -145,7 +146,11 @@ External source evidence was read at fixed local revisions:
   `documentUpdated` once a previously requested document is ready. This is the
   source evidence for treating every `documentUpdated` as a node-identity epoch
   change and retrying an in-flight bootstrap rather than merging its stale
-  reply.
+  reply. In `Source/JavaScriptCore/inspector/agents/InspectorConsoleAgent.cpp`,
+  `InspectorConsoleAgent::clearMessages` releases WebKit's internal `"console"`
+  object group before dispatching `messagesCleared`. This is the ownership
+  evidence for invalidating Console-originated remote objects locally without a
+  second `Runtime.releaseObjectGroup` command from DataKit.
 - Swift Evolution [SE-0371: Isolated synchronous deinit](https://github.com/swiftlang/swift-evolution/blob/main/proposals/0371-isolated-synchronous-deinit.md)
   for the language-level lifecycle contract.
 
@@ -317,15 +322,21 @@ release.
 ### P1: custom tabs and testing claims are incomplete
 
 Custom tabs receive a UI session whose DataKit context is package-only, so the
-documented custom Console story cannot read Console data. ProxyKitTesting is
-documented for DataKit consumers but requires those consumers to script six raw
-startup replies and busy-poll private readiness.
+documented custom Console story cannot read Console data. The existing
+ProxyKitTesting backend is a second semantic implementation: it accepts decoded
+typed events, synthetic targets, and preselected routes instead of exercising
+the production connection core's raw JSON decoding, sequencing, target
+membership, and generation boundaries. DataKit consumers then have to script
+unrelated startup behavior and busy-poll private readiness.
 
 Owner correction: UIKit keeps its presentation-only `WebInspectorSession`,
 which publicly exposes one DataKit `WebInspectorModelContext` as `model` and is
 passed to custom tabs. The root controller, not the session, owns custom content
-instances so a tab may retain the session without a cycle. A separate
-DataKitTesting product provides model-level scenarios.
+instances so a tab may retain the session without a cycle. ProxyKitTesting
+exposes one raw-wire `WebInspectorTestPeer` below the production connection core
+and an explicit `WebInspectorProxyTestRuntime` resource owner. A separate
+DataKitTesting product composes that peer into model-level scenarios so its
+consumers do not script unrelated startup replies.
 
 ## Package and Ownership Design
 
@@ -363,19 +374,19 @@ semantic model state in DataKit and UI-specific state in WebInspectorUI.
 
 | Variation | Absorbed by | Must not leak into |
 | --- | --- | --- |
-| live native bridge versus scripted backend | internal connection-core backend boundary | domain handles and DataKit models |
+| live native bridge versus raw-wire test peer | transport boundary below the same connection core | domain handles and DataKit models |
 | physical target replacement | core target/capability registries and ordered generation boundary | public page handle and UIKit controllers |
 | selected DataKit domains | context configuration and capability dependency table | unrelated store startup branches |
 | Network/Console filtering and ordering | concrete query value and result owner | generic model protocols or arbitrary key paths |
 | attached/detached/closed lifecycle | one context transition state machine | per-domain ad hoc flags |
 | document versus binding lifetime | domain-specific epochs driven by the ordered feed | one coarse global stale flag |
 | iOS UIKit presentation versus no AppKit UI | existing UI target/file boundary | ProxyKit and DataKit semantic code |
-| timeouts and deterministic test scheduling | connection configuration and injected test clock/gates | public protocol DTOs |
+| timeouts and deterministic test scheduling | connection configuration plus package test-support clocks/gates | public protocol DTOs or testing product surface |
 
-The production connection initializer creates the native backend. Internal
-initializers inject a backend and clock for tests. They are concrete package
-boundaries, not public protocols with an unsupported external-conformance
-promise.
+The production connection initializer creates the native backend. The public
+testing runtime installs a raw-wire peer below the same connection core; package
+tests may additionally inject a clock. These are concrete boundaries, not public
+backend protocols with an unsupported external-conformance promise.
 
 ### Owner map after migration
 
@@ -391,7 +402,7 @@ promise.
 | model attachment and physical binding generations | caller-confined `WebInspectorModelContext` | owning actor via attach, detach, close, and ordered feed application |
 | DOM identity, tree, selection, edits, and node-bound CSS resources | package-internal `DOMStateStore` | DOM/CSS events and awaited DOM/CSS command results |
 | Network identity registry and query membership | package-internal `NetworkRequestStore` plus its off-main-actor index | Network events and clear/load operations |
-| Console identity registry and query membership | package-internal `ConsoleMessageStore` plus its off-main-actor index | Console events and clear operations |
+| Console identity registry, query membership, and Console-originated remote-object validity | package-internal `ConsoleMessageStore` plus its off-main-actor index | Console events and clear operations |
 | one query projection's snapshot and delta sequence | public `WebInspectorFetchedResults` | its owning internal store only |
 | Runtime contexts and remote groups | package-internal `RuntimeStateStore` | Runtime events and scoped evaluation |
 | UI tabs and page style | UIKit `WebInspectorSession` and its package interface model | presentation and page-style events only |
@@ -526,6 +537,11 @@ extension point the connection core cannot honor. Each concrete event handle
 keeps only the thin public `withEvents` forwarder required by Swift access
 control.
 
+This is closed-set implementation reuse, not public extensibility. Consumer
+code receives concrete struct handles and calls their typed operations directly;
+the package protocols and witnesses exist only to keep dispatch and
+`withEvents` mechanics identical across the known domains.
+
 Only the outer domain handles change from namespace enums to structs; nested
 sum types such as `DOM.Event` and `Network.Event` remain enums. `DOM`, `CSS`,
 `Network`, `Console`, and `Runtime` expose the same structured event scope,
@@ -579,6 +595,12 @@ package enum ConnectionModelFeedRecord: Sendable {
         sequence: UInt64,
         payload: ModelProtocolEvent
     )
+    case domDocumentInvalidated(
+        generation: WebInspectorPage.Generation,
+        sequence: UInt64,
+        target: ModelTarget,
+        documentEpoch: ModelDocumentEpoch
+    )
     case replayComplete(
         generation: WebInspectorPage.Generation,
         domain: ModelDomain,
@@ -613,7 +635,8 @@ package struct ModelTargetSnapshot: Sendable {
     let targets: [ModelTarget]
 }
 
-package enum ModelProtocolEvent: Sendable { /* physical target + typed payload */ }
+package struct ModelDocumentEpoch: Hashable, Sendable { /* opaque */ }
+package enum ModelProtocolEvent: Sendable { /* typed payload except document invalidation */ }
 package enum ModelBootstrapSnapshot: Sendable { /* target + epoch + typed snapshot */ }
 package enum ModelDomain: Hashable, Sendable { /* configured domains */ }
 ```
@@ -714,6 +737,18 @@ first rejects admission, drains those waiters/tasks/replies, then releases
 capabilities and the exclusive claim. Terminal and overflow teardown perform the
 same drain before transport detach.
 
+Core ownership of a task handle does not permit the task's async frame to retain
+`ConnectionCore` across readiness or wire suspension. A model-command runner
+keeps only a weak Core reference between bounded, non-suspending actor hops.
+Each hop validates and commits one Core-owned state transition, then returns a
+Sendable decision or effect before the runner awaits an externally owned,
+synchronized operation signal or reply promise. It must not bind Core strongly
+once and call an actor method that remains suspended until readiness or a wire
+reply. Explicit close rejects admission, synchronously signals every operation,
+cancels the task handles, and awaits their completion before releasing the feed
+claim. Core's isolated deinitializer can only repeat the synchronous
+cancellation/signalling backstop; it cannot await those tasks.
+
 The later DataKit feed consumer will apply records serially. Reaching
 `replayComplete` therefore proves that every earlier event through that
 watermark has been applied to the model, not merely placed in a stream buffer.
@@ -753,6 +788,25 @@ Core-owned tasks: close, rollback, retarget, and terminal teardown cancel and
 await them, and a failed feed enqueue is an operation-terminal result that
 cannot advance to the next target.
 
+For a feed whose normalized configuration includes DOM, every relevant
+main-page or frame-target `DOM.documentUpdated` is projected as
+`domDocumentInvalidated` after Core advances that target's
+`ModelDocumentEpoch`. The record uses the inbound event sequence and is enqueued
+before bootstrap starts or any later DOM/CSS delta for that target. It is the
+model feed's only document-invalidation projection; an ordinary
+`ModelProtocolEvent.dom(.documentUpdated)` is not also published. Public
+structured event scopes keep their existing projection, including the
+intentional filtering of frame-target `documentUpdated` from the semantic
+current-page scope.
+
+The DataKit reducer treats this record as the authoritative per-target boundary.
+It immediately invalidates that target's DOM/CSS command authority and identity
+state, then ignores target DOM/CSS deltas until a `bootstrapSnapshot` with the
+same generation, target, and document epoch is applied. That snapshot atomically
+replaces the target document and reauthorizes it; only later-sequence deltas may
+mutate the replacement. A stale or skipped invalidation epoch is a protocol
+failure rather than a guessed merge.
+
 One-off commands internally acquire their declared prerequisites for the
 duration of the command. Long-lived event/model state holds a structured event
 scope. Dependency declarations are centralized, for example:
@@ -764,6 +818,13 @@ Runtime events        -> Runtime
 CSS events/queries    -> DOM + CSS
 Element picker        -> DOM + Inspector + inspect-mode lease
 ```
+
+Console is deliberately independent of the Runtime capability. Console message
+remote objects belong to WebKit's internal `"console"` object group, not to a
+DataKit-created `RuntimeObjectGroup`. `Console.messagesCleared` is emitted only
+after WebKit has released that group. The reducer therefore resets Console
+messages and makes their local `RuntimeObject` values stale without acquiring
+Runtime or sending `Runtime.releaseObjectGroup`.
 
 Element picking becomes a dedicated scoped operation rather than a Boolean
 `DOM.setInspectMode` that cannot represent multiple users:
@@ -874,13 +935,29 @@ public enum WebInspectorProxyError: Error, Sendable {
   terminates only that subscriber with `eventBufferOverflow`; peer subscribers
   continue.
 - The package model feed is also bounded. Overflow currently terminates the feed
-  and connection. The later DataKit driver will map that terminal failure to a
-  failed model attachment; neither layer may fabricate a full domain
-  resynchronization.
+  and connection. The later DataKit driver maps that terminal failure to
+  `WebInspectorModelContext.Failure.feedBufferOverflow(capacity:)`; a mixed-feed
+  drop cannot truthfully attribute the failure to one domain. Neither layer may
+  fabricate a full domain resynchronization.
 - Coalescible state notifications use newest-one buffering.
 - Unexpected disconnect throws from event scopes. Explicit close ends scopes
   normally after all close work completes.
 - Unbounded buffering remains explicit opt-in, never the default.
+
+The context reducer owns the overflow transition in every lifecycle phase, and
+every overflow puts the context in
+`.failed(.feedBufferOverflow(capacity:))`. During attach/synchronization, shared
+transition waiters also throw that `Failure`. After attach has returned, state
+observation reports the failure; attachment is not retroactively failed. Before
+publishing `.failed`, the same reducer invalidates all model command authority,
+makes connection-scoped identities/resources stale or terminal, and resets
+every store. Existing DOM tree and fetched-results owners publish a full empty
+reset through their current identity and remain registered for recovery. New
+queries and all subsequent domain operations reject with the recorded `Failure`
+while the context is failed; state observation and explicit attach/detach/close
+remain available. An explicit attach from `.failed` tears down the poisoned
+connection, starts a new attachment generation, and delivers the new
+reset/snapshots through those existing result owners.
 
 The implementation uses standard `AsyncThrowingStream<Element, any Error>` and
 throws concrete `WebInspectorProxyError` values. A custom typed-failure sequence
@@ -934,11 +1011,17 @@ public final class WebInspectorModelContext {
 
     public struct Configuration: Sendable {
         public let domains: Set<Domain>
-        public init(domains: Set<Domain> = Set(Domain.allCases))
+        public init(
+            domains: Set<Domain> = [.dom, .network, .console, .runtime, .css]
+        )
     }
 
-    public enum Domain: Hashable, Sendable, CaseIterable {
-        case dom, network, console, runtime, css
+    public struct Domain: Hashable, Sendable {
+        public static let dom: Domain
+        public static let network: Domain
+        public static let console: Domain
+        public static let runtime: Domain
+        public static let css: Domain
     }
 
     public enum ConnectionFailure: Equatable, Sendable {
@@ -951,7 +1034,7 @@ public final class WebInspectorModelContext {
     public enum Failure: Error, Equatable, Sendable {
         case connection(ConnectionFailure)
         case bootstrap(domain: Domain, message: String)
-        case eventBufferOverflow(domain: Domain)
+        case feedBufferOverflow(capacity: Int)
     }
 
     public enum TransitionError: Error, Equatable, Sendable {
@@ -1090,6 +1173,15 @@ public final class WebInspectorModelContext {
 }
 ```
 
+`Domain` is a closed-construction public value: consumers can combine and store
+the five known static members but cannot manufacture a domain the model feed
+cannot support or enumerate cases through a public conformance. `Page` remains
+a ProxyKit command/lifecycle concern and is not a configured DataKit model
+domain. The package-only exhaustive `ModelDomain` enum owns normalization,
+dependency expansion, ordering, and every switch. A
+package-only protocol or witness may share mechanics among those cases, but
+DataKit promises neither consumer-defined domains nor public conformances.
+
 `attach(to:)` returns only after every configured domain has acquired its event
 scope and the single ordered feed has applied every configured domain's initial
 replay or bootstrap completion boundary followed by the binding-level
@@ -1148,7 +1240,8 @@ throwing getters follow the same rule; `nil` from a configured DOM getter means
 Semantic dependencies are explicit: CSS includes the DOM model because its
 public API consumes `DOMNode`; protocol-only dependencies such as Inspector for
 the picker remain private capabilities. In particular, Network-only startup
-does not enable DOM, CSS, Console, Runtime, or Inspector.
+does not enable DOM, CSS, Console, Runtime, or Inspector, and a Console-only
+configuration does not enable Runtime.
 
 One context-wide generation would be too coarse. Each model owns the epoch that
 defines its identities:
@@ -1161,7 +1254,7 @@ defines its identities:
 | Runtime execution-context clear | Runtime context/remote-object epoch only |
 | explicit Network clear | Network collection revision; retained request handles become stale for body lookup |
 | ordinary same-binding navigation | Network history remains unless WebKit emits its own clear; new requests append |
-| Console clear event or command | Console collection revision |
+| Console clear event or command | Console collection revision and local validity of Console-originated remote objects; WebKit already owns wire release |
 
 The ordered model feed applies each boundary and its affected store resets before
 the next event. Public result/resource types may expose read-only revisions for
@@ -1532,6 +1625,13 @@ After target replacement, operations throw `staleModel`, while local close
 invalidates the group without sending release to the new target (the old target
 has already destroyed its objects).
 
+This explicit lifetime applies only to groups DataKit creates. DataKit never
+adopts or releases WebKit's internal `"console"` group. When
+`Console.messagesCleared` arrives, `ConsoleMessageStore` invalidates the local
+Console-originated `RuntimeObject` ownership and clears its results; it sends no
+`Runtime.releaseObjectGroup` because WebKit performed that release before the
+event. Releasing again would give two layers authority over one remote resource.
+
 Cleanup errors are never hidden. If the body succeeds and release fails, the
 release error is thrown. If the body fails and release succeeds, the original
 error is rethrown. If both fail, `WebInspectorRuntimeScopeError` carries both,
@@ -1598,6 +1698,14 @@ only stale semantic resources, and reset only the presentation state whose
 lifetime is domain-bound; process replacement does not gratuitously discard
 scroll/layout state or recreate a custom tab controller.
 
+Root/custom controller cache identity is independent of semantic resource
+generation. An attachment or page epoch is never a reason to evict every cached
+controller. Root teardown (and, if tabs later become mutable, explicit
+descriptor removal) owns controller eviction. Public DataKit results publish an
+epoch reset through their existing identity. Separately, a model/context epoch
+may advance an affected root-owned presentation-resource generation; existing
+built-in resource hosts render that owner's replacement state in place.
+
 The root `WebInspectorViewController`, not `WebInspectorSession`, owns the
 content-controller cache and retirement. A custom controller may strongly retain
 the session it receives without forming
@@ -1621,9 +1729,11 @@ in place, so no placeholder model or empty result flashes first.
 Resource state and the ready model are shared across compact/regular requests,
 but every `UITab` provider receives a fresh container view controller because
 UIKit owns that controller identity. A host/layout switch neither closes nor
-recreates the resource. Only a root `clear()` or context-epoch transition
-cancels and awaits the old load/model; a next generation waits for that
-retirement, and a late factory completion is retired before it can publish.
+recreates the resource. A Network semantic-resource generation transition
+cancels and awaits the old load/model without clearing the root/custom
+controller cache; root `clear()` retires both resources and controllers. A next
+resource generation waits for retirement, and a late factory completion is
+retired before it can publish.
 `InterfaceModel.tabs` is immutable, so there is no runtime tab-removal owner in
 this design. If tabs become mutable, ContentKey eviction and awaited resource
 retirement must be introduced together instead of treating view disappearance
@@ -1653,8 +1763,13 @@ let tab = WebInspectorTab(
 
 The tab receives the UIKit session and reaches canonical DataKit results
 through `model`; it does not navigate through a new Console model wrapper.
-Reattachment preserves both sessions, controllers, and fetched-results owner
-identities while resetting only models/resources whose owning epoch changed.
+Reattachment preserves session, root/custom controller, and public
+fetched-results owner identities. The result receives its new epoch and reset
+snapshot through the existing update contract, so a custom controller needs no
+separate replacement signal. The built-in Network presentation owner remains a
+distinct case: when its semantic-resource generation changes, it retires the
+old panel model and loads the replacement into its existing resource hosts
+without evicting the controller cache.
 
 ### DataKit consumer migration
 
@@ -1708,11 +1823,15 @@ deinitialization.
 
 `isolated deinit` is used where static isolation owns synchronous state:
 
-- `ConnectionCore` (a non-MainActor actor): cancel stored tasks, finish local
-  continuations/streams, and assert or complete synchronous terminal state.
-- Other non-MainActor actor resources introduced by the final implementation,
-  including Network/Console query indexes and test runtime cores: synchronously
-  terminate their local waiters and bounded brokers.
+- `ConnectionCore` (a non-MainActor actor): cancel stored task handles, finish
+  external synchronized mailboxes/promises and bounded brokers, and assert
+  synchronous terminal state.
+- Other non-MainActor actor resources introduced by the final implementation:
+  cancel actor-owned task handles and synchronously finish only external
+  synchronized primitives whose completion does not require another actor hop.
+- `WebInspectorTestPeer`: finish its external command mailbox and receiver
+  synchronously; `WebInspectorProxyTestRuntime.close()` remains the primary
+  awaited connection teardown.
 - `@MainActor NativeAttachment`: synchronously detach the bridge if supported
   by the native primitive and release its inspectability token.
 - The per-web-view `@MainActor InspectabilityCoordinator`: keep the original
@@ -1722,10 +1841,25 @@ The caller-confined `WebInspectorModelContext` and its identity/resource classes
 are ordinary non-Sendable classes, not actors or global-actor classes. Swift
 6.3 therefore does not permit `isolated deinit` on them, regardless of the
 deployment target. Their correctness path is explicit `detach()`/`close()`;
-ordinary `deinit` may only cancel a Sendable task handle and finish local
-continuations synchronously. The higher platform floor enables isolated
-deinitialization for the actual non-MainActor lifecycle actors instead of
-forcing the entire observable graph onto MainActor.
+ordinary `deinit` may only cancel a Sendable task handle and finish an external
+synchronized primitive that does not retain the context. It cannot drain a
+continuation owned by a suspended instance method whose frame retains the
+context. The higher platform floor enables isolated deinitialization for the
+actual non-MainActor lifecycle actors instead of forcing the entire observable
+graph onto MainActor.
+
+An async actor method frame may retain its actor for the entire suspension. A
+continuation stored in that actor therefore cannot be made safe by claiming the
+actor's isolated deinitializer will eventually drain it: the suspended frame is
+itself allowed to keep deinitialization unreachable. Network/Console query-index
+waiters must be cancellation-aware and are drained by explicit close or their
+normal terminal owner. The same rule applies to reply waiting. The final
+migration replaces the current actor-based `ReplyPromise`—whose suspended
+`value()` frame can retain that actor—with an external synchronized terminal
+primitive. Its wait does not suspend an actor-isolated method on actor-owned
+continuation state; pending-reply close, failure, cancellation, or reply
+fulfills it exactly once. `ConnectionCore`'s isolated deinitializer may
+synchronously finish that external primitive only as a backstop.
 
 It does not perform:
 
@@ -1744,26 +1878,37 @@ delivery hop applies feed records on that actor.
 
 Every stored long-running task follows the same acyclic rule: owner -> task is
 allowed only when the task captures the owner weakly and does not retain it
-across the next suspension. Backend callbacks also capture their receiver
-weakly. Explicit close cancels and awaits tasks; dropping all public handles can
-therefore reach the isolated deinitializer even when close was omitted. No
-deinitializer is expected to break a cycle.
+across the next suspension. A weak capture followed by one long-lived
+`guard let self` is not sufficient. Backend callbacks also capture their
+receiver weakly. Explicit close cancels and awaits tasks and drains
+cancellation-aware waiters; dropping all public handles can therefore reach the
+isolated deinitializer even when close was omitted. No deinitializer is expected
+to break a cycle or terminate an async frame that retains its actor.
 
 ## Access Control
 
 | Surface | Access | Reason |
 | --- | --- | --- |
-| Proxy, logical page, typed domain handles/DTOs, structured event scopes | `public` | direct ProxyKit consumer story |
+| Proxy, logical page, concrete struct domain handles/DTOs, structured event scopes | `public` | direct ProxyKit consumer story; package-only protocols share known-domain mechanics |
 | Physical target records, target registry, routing keys, capability registry | `package` or `internal` | one core owns routing; no external producer story |
 | DataKit model context, identity models, existing tree/query/resource types, concrete queries | `public` | caller-confined custom UI/headless story without facade proliferation |
 | Domain stores, mutation/event application, generation replacement, protocol adapters | `package` or `internal` | preserve one writer per model; stores are not public navigation API |
 | UIKit composition controllers | `package` | built-in implementation detail |
 | Inspector root controller and tab descriptor | `public` | app integration story |
-| Scriptable Proxy test backend | `public` in ProxyKitTesting | direct consumer contract |
+| Raw-wire `WebInspectorTestPeer`, `WebInspectorTestJSONObject`, and explicit `WebInspectorProxyTestRuntime` | `public` in ProxyKitTesting | direct test consumer drives the production core and owns close completion |
 | Ready model scenarios | `public` in DataKitTesting | DataKit consumer contract |
 
 Public setters are limited to value-type configuration and query values. Model
 state uses `public private(set)`. No `open` declarations are introduced.
+
+`WebInspectorTestPeer` exposes raw outbound command correlation and exact-once
+reply/failure, raw root/target events, target lifecycle wire helpers, and
+connection close/failure. It never accepts decoded semantic events, transport
+sequence numbers, model generations, document epochs, or replay markers; the
+production core derives all of those. `WebInspectorProxyTestRuntime` owns the
+proxy/peer/page tuple and provides explicit async close. Queueing replies,
+deferred gates, typed fixture encoding, and command assertions belong to the
+package test-support driver and are not product API.
 
 ## Deletions and Consolidations
 
@@ -1798,6 +1943,8 @@ The migration removes rather than deprecates the following surfaces:
   attachment generation; it retains one MainActor-owned DataKit model context
   plus genuine presentation state.
 - Fire-and-forget CSS mutations and hidden partial-delete errors.
+- DataKit's Console-clear `Runtime.releaseObjectGroup` dispatch and any
+  Console-to-Runtime capability dependency; WebKit owns its `"console"` group.
 - Unbounded intermediate Transport -> LiveBackend -> Proxy stream layers where
   the core broker can route the decoded value directly.
 
@@ -1889,9 +2036,18 @@ Tests are added before each owner is replaced. Required cases:
     `synchronizationComplete` are applied.
 11. DOM attachment and retarget return with a root snapshot ready; a
     `DOM.documentUpdated` racing `getDocument` discards the stale reply, retries,
-    and orders the accepted snapshot before later DOM deltas.
+    and orders the accepted snapshot before later DOM deltas. A frame-target
+    `documentUpdated` that is filtered from the public current-page scope still
+    emits `domDocumentInvalidated`; DataKit invalidates only that target's
+    DOM/CSS authority, ignores pre-bootstrap deltas, and reauthorizes it only
+    from the matching snapshot.
 12. A capacity-N stream receiving N+1 pending events throws overflow for that
-   subscriber while a peer continues.
+   subscriber while a peer continues. Separately, mixed model-feed overflow
+   fails DataKit with `feedBufferOverflow(capacity:)` and does not fabricate a
+   domain attribution. Before attach completion the context enters `.failed`
+   and the waiter throws; after attach, the same state transition resets existing
+   results and rejects operations. Only an explicit re-attach starts a
+   recoverable new generation.
 13. A malformed known event and malformed root envelope terminate with protocol
    violation; an unknown method remains a raw event.
 14. Native fatal callbacks reach the connection terminal cause.
@@ -1905,8 +2061,10 @@ Tests are added before each owner is replaced. Required cases:
    dropping a caller-confined model context reaches ordinary deinit and cancels
    its driver. Weak references prove neither driver retains its context or
    owner actor.
-19. The isolated-deinit fallback synchronously detaches/restores/finishes exactly
-   once without launching async work.
+19. Isolated-deinit fallbacks synchronously cancel actor-owned task handles and
+    finish only external synchronized primitives. Native attachment fallback
+    detaches/restores exactly once. No fallback launches async work or claims to
+    drain an actor-local continuation whose suspended frame retains the actor.
 20. DataKit `attach()` exposes startup failure and does not return before the
    configured models and binding-level synchronization record are ready.
 21. Same-proxy concurrent attach joins, different-proxy attach supersedes, caller
@@ -1917,9 +2075,12 @@ Tests are added before each owner is replaced. Required cases:
     desired lease count without leaving a stale enable or disabling a live
     lease.
 23. A Network-only configuration sends no DOM, CSS, Console, Runtime, or
-   Inspector enable command.
+   Inspector enable command. A Console-only configuration sends no Runtime
+   enable command.
 24. Same-binding navigation resets DOM/CSS and Runtime as their events require
    while retaining Network history; physical replacement resets all domains.
+   `Console.messagesCleared` empties Console results and makes its local remote
+   objects stale without sending `Runtime.releaseObjectGroup`.
 25. DOM request failures propagate, partial removal exposes applied and failed
     nodes plus epoch-bound undo capability, stale operations consistently throw,
     and tree consumers retain initial-snapshot-plus-delta behavior. A stalled
@@ -1937,6 +2098,8 @@ Tests are added before each owner is replaced. Required cases:
 29. Network and Console 10,000-record tests cover initial query, live
     insert/update, query replacement, and stalled consumption; live inserts do
     not perform whole-model query evaluation on the context's owner actor.
+    Cancellation plus explicit index close drains sequence/query waiters; actor
+    deinitialization is not used as waiter completion proof.
 30. Discarding Network/Console result objects unregisters their weak live-query
     sinks and does not retain the model context.
 31. A custom public-only Console tab declares its required domain, obtains
@@ -1944,8 +2107,8 @@ Tests are added before each owner is replaced. Required cases:
     controller while result epochs reset. The controller may strongly retain
     its UI session; releasing the root cache still deallocates the entire graph.
 32. Concurrent requests join one async custom-tab factory; loading, failure,
-    retry, descriptor removal, and root-close cancellation follow the root-owned
-    content state machine without a root/task cycle.
+    retry, and root-close cancellation follow the root-owned content state
+    machine without a root/task cycle.
 33. UI presentation retirement awaits picker/highlight cleanup, preserves the
    model connection when configured not to detach, and reports cleanup failure.
 34. DataKitTesting creates a ready model context, seeds replay, emits picker and
@@ -1981,15 +2144,23 @@ Validation gates:
 - Model adaptation consumes one mixed-domain ordered feed with reset,
   enable-replay, DOM bootstrap, and binding synchronization boundaries; DataKit
   has no independent per-domain event pumps.
+- Every relevant target document-epoch advance has one ordered
+  `domDocumentInvalidated` feed boundary before later DOM/CSS deltas; public
+  event projection does not own model invalidation.
 - Every target-scoped public DTO ID carries and validates its opaque generation.
 - Known decode failures and root-envelope failures have no `try?`/silent-drop or
   `preconditionFailure` path.
 - Default ProxyKit protocol event buffers are all bounded and overflow-tested.
+- DataKit mixed-feed overflow reports the configured capacity without inventing
+  a responsible domain. It puts both an in-flight and an attached context in
+  `.failed`, atomically invalidates authority/resets results, and rejects
+  operations until explicit re-attachment.
 - DataKit contains no `@unchecked Sendable` lifecycle or semantic owner. Its
   sole unchecked type is a private weak delivery bridge with no owned model
   state; strict-concurrency and deallocation tests cover that boundary.
 - Stored connection/model tasks weakly reference both contexts and owner actors;
-  deallocation tests prove no owner-task cycle.
+  model-command runners use bounded actor hops plus external synchronized
+  signals, and deallocation tests prove no owner-task/async-frame cycle.
 - Every public DataKit operation has one semantic owner path; the direct/context,
   controller, and model convenience triplication is gone.
 - Public `WebInspectorDOMModel`, `WebInspectorNetworkModel`,
@@ -2008,10 +2179,16 @@ Validation gates:
   evaluation on live insert.
 - DOM/CSS, Runtime, Network, and Console stale validation uses their documented
   domain epochs rather than one context-wide generation.
+- Console capability acquisition has no Runtime dependency. A Console clear
+  invalidates Console-originated remote objects locally and never duplicates
+  WebKit's `"console"` group release on the wire.
 - One per-web-view inspectability coordinator, not individual attachments, owns
   original-value restoration.
 - `WebInspectorSession` owns no controller cache; root-owned custom content may
   strongly retain the session and still deallocates when the root is released.
+- Attachment/page epochs never evict the root/custom controller cache. Public
+  results reset in place, while affected root-owned presentation-resource
+  generations retire and replace their internal content independently.
 - The two documented external stories compile and execute using only public
   imports.
 - No core source file combines connection routing with model state, or more than
