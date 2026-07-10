@@ -12,15 +12,14 @@ private actor RuntimeStateStoreIsolationProbe {
                 name: "Custom actor",
                 kind: .normal
             )),
-            sourceTargetID: WebInspectorTarget.ID("page"),
-            isolation: self
+            sourceTargetID: WebInspectorTarget.ID("page")
         )
         return (store.executionContexts.count, store.selectedContext?.name)
     }
 }
 
 @Test
-func runtimeStateStoreFollowsCustomActorWithoutRetainingIt() async {
+func runtimeStateStoreFollowsItsCallerActorWithoutRetainingIt() async {
     var probe: RuntimeStateStoreIsolationProbe? = RuntimeStateStoreIsolationProbe()
     weak let releasedProbe = probe
 
@@ -48,8 +47,7 @@ func runtimeStateStoreOwnsContextIdentityOrderAndSelection() throws {
             name: "First",
             kind: .normal
         )),
-        sourceTargetID: WebInspectorTarget.ID("page"),
-        isolation: MainActor.shared
+        sourceTargetID: WebInspectorTarget.ID("page")
     )
     let first = try #require(store.executionContexts.first)
     #expect(store.selectedContext === first)
@@ -60,8 +58,7 @@ func runtimeStateStoreOwnsContextIdentityOrderAndSelection() throws {
             name: "First updated",
             kind: .user
         )),
-        sourceTargetID: WebInspectorTarget.ID("page"),
-        isolation: MainActor.shared
+        sourceTargetID: WebInspectorTarget.ID("page")
     )
     #expect(store.executionContexts == [first])
     #expect(first.name == "First updated")
@@ -73,17 +70,15 @@ func runtimeStateStoreOwnsContextIdentityOrderAndSelection() throws {
             name: "Second",
             kind: .normal
         )),
-        sourceTargetID: WebInspectorTarget.ID("page"),
-        isolation: MainActor.shared
+        sourceTargetID: WebInspectorTarget.ID("page")
     )
     let second = try #require(store.executionContexts.last)
-    store.select(second, isolation: MainActor.shared)
+    store.select(second)
     #expect(store.selectedContext === second)
 
     store.apply(
         .executionContextDestroyed(secondID),
-        sourceTargetID: WebInspectorTarget.ID("page"),
-        isolation: MainActor.shared
+        sourceTargetID: WebInspectorTarget.ID("page")
     )
     #expect(store.executionContexts == [first])
     #expect(store.selectedContext === first)
@@ -91,106 +86,106 @@ func runtimeStateStoreOwnsContextIdentityOrderAndSelection() throws {
 
 @MainActor
 @Test
-func runtimeStateStoreRemovesOwnershipOnlyForTheRegisteredObjectIdentity() throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+func runtimeStateStoreKeepsGroupOwnershipAfterConsoleOwnershipEnds() throws {
     let store = RuntimeStateStore()
-    let remoteObject = Runtime.RemoteObject(
-        id: Runtime.RemoteObject.ID("shared-id"),
-        kind: .object,
-        description: "registered"
-    )
-    let registered = store.registerConsoleParameter(
-        remoteObject,
-        modelContext: context,
-        isolation: MainActor.shared
-    )
-    let impostor = RuntimeObject(
-        id: registered.id,
-        remoteObject: remoteObject,
-        modelContext: context
-    )
-
-    store.removeConsoleOwnership(from: [impostor], isolation: MainActor.shared)
-    #expect(try store.objectBinding(for: registered, isolation: MainActor.shared)?.remoteID == remoteObject.id)
-
-    store.removeConsoleOwnership(from: [registered], isolation: MainActor.shared)
-    #expect(throws: WebInspectorProxyError.disconnected(
-        "RuntimeObject is not registered in this WebInspectorContext."
-    )) {
-        try store.objectBinding(for: registered, isolation: MainActor.shared)
-    }
-}
-
-@MainActor
-@Test
-func runtimeStateStorePreservesClientOwnershipAfterConsoleOwnershipEnds() throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
-    let store = RuntimeStateStore()
-    let objectID = Runtime.RemoteObject.ID("client-and-console")
+    let groupID = store.createGroupID()
+    let remoteID = Runtime.RemoteObject.ID("shared")
     let consoleObject = store.registerConsoleParameter(
-        Runtime.RemoteObject(id: objectID, kind: .object, description: "console"),
-        modelContext: context,
-        isolation: MainActor.shared
+        Runtime.RemoteObject(id: remoteID, kind: .object, description: "console")
     )
-    let binding = try store.evaluationBinding(for: nil, isolation: MainActor.shared)
+    let binding = try store.evaluationBinding(for: nil)
     let evaluation = try store.finishEvaluation(
         Runtime.EvaluationResult(
-            object: Runtime.RemoteObject(id: objectID, kind: .object, description: "client")
+            object: Runtime.RemoteObject(id: remoteID, kind: .object, description: "group")
         ),
         binding: binding,
-        modelContext: context,
-        isolation: MainActor.shared
+        groupID: groupID
     )
 
     #expect(evaluation.object === consoleObject)
-    #expect(consoleObject.description == "client")
+    #expect(consoleObject.description == "group")
+    store.removeConsoleOwnership(from: [consoleObject])
+    #expect(try store.objectBinding(for: consoleObject, groupID: groupID)?.remoteID == remoteID)
 
-    store.removeConsoleOwnership(from: [consoleObject], isolation: MainActor.shared)
-    #expect(try store.objectBinding(for: consoleObject, isolation: MainActor.shared)?.remoteID == objectID)
-}
-
-@MainActor
-@Test
-func runtimeStateStoreTargetClearRemovesObjectsWithoutExecutionContexts() throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
-    let store = RuntimeStateStore()
-    let pageTargetID = WebInspectorTarget.ID("page")
-    let frameTargetID = WebInspectorTarget.ID("frame")
-    let pageObject = store.registerConsoleParameter(
-        Runtime.RemoteObject(
-            id: Runtime.RemoteObject.ID("page-object", scopedToTargetRawValue: pageTargetID.rawValue),
-            kind: .object
-        ),
-        modelContext: context,
-        isolation: MainActor.shared
-    )
-    let frameObject = store.registerConsoleParameter(
-        Runtime.RemoteObject(
-            id: Runtime.RemoteObject.ID("frame-object", scopedToTargetRawValue: frameTargetID.rawValue),
-            kind: .object
-        ),
-        modelContext: context,
-        isolation: MainActor.shared
-    )
-    #expect(store.executionContexts.isEmpty)
-
-    store.apply(
-        .executionContextsCleared(target: frameTargetID),
-        sourceTargetID: pageTargetID,
-        isolation: MainActor.shared
-    )
-
-    #expect(try store.objectBinding(for: pageObject, isolation: MainActor.shared) != nil)
-    #expect(throws: WebInspectorProxyError.disconnected(
-        "RuntimeObject is not registered in this WebInspectorContext."
-    )) {
-        try store.objectBinding(for: frameObject, isolation: MainActor.shared)
+    store.invalidateGroup(groupID)
+    #expect(throws: WebInspectorModelError.staleModel) {
+        try store.objectBinding(for: consoleObject, groupID: groupID)
     }
 }
 
 @MainActor
 @Test
-func runtimeStateStoreTargetClearPreservesOtherTargetContexts() throws {
+func runtimeStateStoreOldPointerCannotRemoveSameRemoteIDReplacement() throws {
+    let store = RuntimeStateStore()
+    let remoteID = Runtime.RemoteObject.ID("reused-remote-id")
+    let oldObject = store.registerConsoleParameter(
+        Runtime.RemoteObject(id: remoteID, kind: .object, description: "old")
+    )
+
+    store.reset()
+    let groupID = store.createGroupID()
+    let replacement = store.registerConsoleParameter(
+        Runtime.RemoteObject(id: remoteID, kind: .object, description: "replacement")
+    )
+    let binding = try store.evaluationBinding(for: nil)
+    _ = try store.finishEvaluation(
+        Runtime.EvaluationResult(
+            object: Runtime.RemoteObject(id: remoteID, kind: .object, description: "group-owned")
+        ),
+        binding: binding,
+        groupID: groupID
+    )
+
+    #expect(replacement !== oldObject)
+    store.removeConsoleOwnership(from: [oldObject])
+    #expect(try store.objectBinding(for: replacement, groupID: groupID)?.remoteID == remoteID)
+}
+
+@MainActor
+@Test
+func runtimeStateStoreNeverReusesSyntheticOrGroupIdentityAfterReset() {
+    let store = RuntimeStateStore()
+    let firstGroup = store.createGroupID()
+    let first = store.registerConsoleParameter(
+        Runtime.RemoteObject(id: nil, kind: .number, value: .number(1))
+    )
+
+    store.reset()
+
+    let secondGroup = store.createGroupID()
+    let second = store.registerConsoleParameter(
+        Runtime.RemoteObject(id: nil, kind: .number, value: .number(2))
+    )
+    #expect(first.id != second.id)
+    #expect(firstGroup != secondGroup)
+}
+
+@MainActor
+@Test
+func runtimeStateStoreRejectsDefaultEvaluationReplyAfterFullReset() throws {
+    let store = RuntimeStateStore()
+    let oldBinding = try store.evaluationBinding(for: nil)
+    _ = store.createGroupID()
+
+    store.reset()
+    let replacementGroup = store.createGroupID()
+
+    #expect(throws: WebInspectorProxyError.disconnected(
+        "Runtime evaluation target is no longer current in this WebInspectorModelContext."
+    )) {
+        try store.finishEvaluation(
+            Runtime.EvaluationResult(
+                object: Runtime.RemoteObject(id: nil, kind: .undefined)
+            ),
+            binding: oldBinding,
+            groupID: replacementGroup
+        )
+    }
+}
+
+@MainActor
+@Test
+func runtimeStateStoreTargetClearPreservesOtherTargetState() throws {
     let store = RuntimeStateStore()
     let pageTargetID = WebInspectorTarget.ID("page")
     let frameTargetID = WebInspectorTarget.ID("frame")
@@ -208,8 +203,7 @@ func runtimeStateStoreTargetClearPreservesOtherTargetContexts() throws {
             name: "Page",
             kind: .normal
         )),
-        sourceTargetID: pageTargetID,
-        isolation: MainActor.shared
+        sourceTargetID: pageTargetID
     )
     store.apply(
         .executionContextCreated(Runtime.ExecutionContext(
@@ -217,126 +211,56 @@ func runtimeStateStoreTargetClearPreservesOtherTargetContexts() throws {
             name: "Frame",
             kind: .normal
         )),
-        sourceTargetID: frameTargetID,
-        isolation: MainActor.shared
+        sourceTargetID: frameTargetID
     )
     let pageContext = try #require(store.executionContexts.first)
     let frameContext = try #require(store.executionContexts.last)
-    store.select(frameContext, isolation: MainActor.shared)
+    store.select(frameContext)
+
+    let groupID = store.createGroupID()
+    let binding = try store.evaluationBinding(for: nil)
+    let pageObject = try store.finishEvaluation(
+        Runtime.EvaluationResult(object: Runtime.RemoteObject(
+            id: Runtime.RemoteObject.ID(
+                "page-object",
+                scopedToTargetRawValue: pageTargetID.rawValue
+            ),
+            kind: .object
+        )),
+        binding: binding,
+        groupID: groupID
+    ).object
+    let frameObject = try store.finishEvaluation(
+        Runtime.EvaluationResult(object: Runtime.RemoteObject(
+            id: Runtime.RemoteObject.ID(
+                "frame-object",
+                scopedToTargetRawValue: frameTargetID.rawValue
+            ),
+            kind: .object
+        )),
+        binding: binding,
+        groupID: groupID
+    ).object
 
     store.apply(
         .executionContextsCleared(target: frameTargetID),
-        sourceTargetID: pageTargetID,
-        isolation: MainActor.shared
+        sourceTargetID: pageTargetID
     )
 
     #expect(store.executionContexts.count == 1)
     #expect(store.executionContexts.first === pageContext)
     #expect(store.selectedContext === pageContext)
-}
-
-@MainActor
-@Test
-func runtimeStateStoreOldPointerCannotRemoveSameRemoteIDReplacement() throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
-    let store = RuntimeStateStore()
-    let remoteID = Runtime.RemoteObject.ID("reused-remote-id")
-    let oldObject = store.registerConsoleParameter(
-        Runtime.RemoteObject(id: remoteID, kind: .object, description: "old"),
-        modelContext: context,
-        isolation: MainActor.shared
-    )
-
-    store.reset(isolation: MainActor.shared)
-
-    let replacement = store.registerConsoleParameter(
-        Runtime.RemoteObject(id: remoteID, kind: .object, description: "replacement"),
-        modelContext: context,
-        isolation: MainActor.shared
-    )
-    #expect(replacement !== oldObject)
-    store.removeConsoleOwnership(from: [oldObject], isolation: MainActor.shared)
-
-    #expect(try store.objectBinding(for: replacement, isolation: MainActor.shared)?.remoteID == remoteID)
+    #expect(try store.objectBinding(for: pageObject, groupID: groupID) != nil)
     #expect(throws: WebInspectorProxyError.disconnected(
-        "RuntimeObject is not registered in this WebInspectorContext."
+        "RuntimeObject is not registered in this WebInspectorModelContext."
     )) {
-        try store.objectBinding(for: oldObject, isolation: MainActor.shared)
+        try store.objectBinding(for: frameObject, groupID: groupID)
     }
-}
-
-@MainActor
-@Test
-func runtimeStateStoreNeverReusesSyntheticIdentityAfterReset() {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
-    let store = RuntimeStateStore()
-    let first = store.registerConsoleParameter(
-        Runtime.RemoteObject(id: nil, kind: .number, value: .number(1)),
-        modelContext: context,
-        isolation: MainActor.shared
-    )
-
-    store.reset(isolation: MainActor.shared)
-
-    let second = store.registerConsoleParameter(
-        Runtime.RemoteObject(id: nil, kind: .number, value: .number(2)),
-        modelContext: context,
-        isolation: MainActor.shared
-    )
-    #expect(first.id != second.id)
-    #expect(first !== second)
-}
-
-@MainActor
-@Test
-func runtimeStateStoreRejectsDefaultEvaluationReplyAfterFullReset() throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
-    let store = RuntimeStateStore()
-    let binding = try store.evaluationBinding(for: nil, isolation: MainActor.shared)
-
-    store.reset(isolation: MainActor.shared)
-
-    #expect(throws: WebInspectorProxyError.disconnected(
-        "Runtime evaluation target is no longer current in this WebInspectorContext."
-    )) {
-        try store.finishEvaluation(
-            Runtime.EvaluationResult(object: Runtime.RemoteObject(id: nil, kind: .undefined)),
-            binding: binding,
-            modelContext: context,
-            isolation: MainActor.shared
-        )
-    }
-}
-
-@MainActor
-@Test
-func runtimeStateStoreDoesNotRetainRuntimeObjectModelContext() {
-    let store = RuntimeStateStore()
-    weak var releasedContext: WebInspectorContext?
-    let object: RuntimeObject
-
-    do {
-        let context = WebInspectorContext.preview(isolation: MainActor.shared)
-        releasedContext = context
-        object = store.registerConsoleParameter(
-            Runtime.RemoteObject(
-                id: Runtime.RemoteObject.ID("weak-model-context"),
-                kind: .object
-            ),
-            modelContext: context,
-            isolation: MainActor.shared
-        )
-        #expect(object.modelContext === context)
-    }
-
-    #expect(releasedContext == nil)
-    #expect(object.modelContext == nil)
 }
 
 @MainActor
 @Test
 func runtimeStateStoreRejectsEvaluationReplyAfterContextIdentityReplacement() throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
     let store = RuntimeStateStore()
     let contextID = Runtime.ExecutionContext.ID("reused-context")
     store.apply(
@@ -345,16 +269,14 @@ func runtimeStateStoreRejectsEvaluationReplyAfterContextIdentityReplacement() th
             name: "Before",
             kind: .normal
         )),
-        sourceTargetID: WebInspectorTarget.ID("page"),
-        isolation: MainActor.shared
+        sourceTargetID: WebInspectorTarget.ID("page")
     )
     let original = try #require(store.executionContexts.first)
-    let binding = try store.evaluationBinding(for: original, isolation: MainActor.shared)
+    let binding = try store.evaluationBinding(for: original)
 
     store.apply(
         .executionContextDestroyed(contextID),
-        sourceTargetID: WebInspectorTarget.ID("page"),
-        isolation: MainActor.shared
+        sourceTargetID: WebInspectorTarget.ID("page")
     )
     store.apply(
         .executionContextCreated(Runtime.ExecutionContext(
@@ -362,19 +284,20 @@ func runtimeStateStoreRejectsEvaluationReplyAfterContextIdentityReplacement() th
             name: "After",
             kind: .normal
         )),
-        sourceTargetID: WebInspectorTarget.ID("page"),
-        isolation: MainActor.shared
+        sourceTargetID: WebInspectorTarget.ID("page")
     )
+    let groupID = store.createGroupID()
 
     #expect(store.executionContexts.first !== original)
     #expect(throws: WebInspectorProxyError.disconnected(
-        "RuntimeContext is not registered in this WebInspectorContext."
+        "RuntimeContext is not registered in this WebInspectorModelContext."
     )) {
         try store.finishEvaluation(
-            Runtime.EvaluationResult(object: Runtime.RemoteObject(id: nil, kind: .undefined)),
+            Runtime.EvaluationResult(
+                object: Runtime.RemoteObject(id: nil, kind: .undefined)
+            ),
             binding: binding,
-            modelContext: context,
-            isolation: MainActor.shared
+            groupID: groupID
         )
     }
 }

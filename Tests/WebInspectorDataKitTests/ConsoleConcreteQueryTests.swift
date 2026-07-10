@@ -13,7 +13,6 @@ func consoleQueryProvidesClosedDefaults() {
     #expect(query.offset == 0)
     #expect(query.limit == nil)
 }
-
 @Test
 func consoleConcreteQueryRegistrationIncludesTheRequiredMutationSequence() async throws {
     let index = ConsoleMessageIndex()
@@ -129,7 +128,7 @@ func cancelledConsoleConcreteQueryReplacementStopsWaitingWithoutTheMissingMutati
 @MainActor
 @Test
 func consoleConcreteQueryFiltersSortsSectionsAndWindowsCompactRecords() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorModelContext.preview()
     let warning = makeIndexedConsoleMessage(
         id: 0,
         level: "warning",
@@ -191,7 +190,7 @@ func consoleConcreteQueryFiltersSortsSectionsAndWindowsCompactRecords() async th
 @MainActor
 @Test
 func consoleConcreteQueryPublishesUpdatesPartialDeletionAndReplacementAtomically() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorModelContext.preview()
     let store = ConsoleMessageStore()
     let warningTarget = WebInspectorTarget.ID("concrete-warning-target")
     let logTarget = WebInspectorTarget.ID("concrete-log-target")
@@ -221,7 +220,7 @@ func consoleConcreteQueryPublishesUpdatesPartialDeletionAndReplacementAtomically
     let warningID = ConsoleMessage.ID(0)
     let logID = ConsoleMessage.ID(1)
     let errorID = ConsoleMessage.ID(2)
-    let registeredWarning = store.message(for: warningID, isolation: MainActor.shared)
+    let registeredWarning = store.message(for: warningID)
     let warningIdentity = try #require(registeredWarning)
     let results = try await store.results(
         matching: ConsoleQuery(
@@ -234,7 +233,6 @@ func consoleConcreteQueryPublishesUpdatesPartialDeletionAndReplacementAtomically
             limit: 2
         ),
         modelContext: context,
-        isolation: MainActor.shared
     )
     #expect(results.items.map(\.id) == [errorID, warningID])
     #expect(results.sections.map(\.id.rawValue) == ["error", "warning"])
@@ -250,7 +248,6 @@ func consoleConcreteQueryPublishesUpdatesPartialDeletionAndReplacementAtomically
         targetID: warningTarget,
         modelContext: context,
         registerRuntimeObject: { _ in fatalError("Repeat updates have no Runtime parameters.") },
-        isolation: MainActor.shared
     )
     #expect(results.items.last === warningIdentity)
     #expect(results.items.last?.repeatCount == 4)
@@ -266,7 +263,6 @@ func consoleConcreteQueryPublishesUpdatesPartialDeletionAndReplacementAtomically
         targetID: warningTarget,
         modelContext: context,
         registerRuntimeObject: { _ in fatalError("Clear events have no Runtime parameters.") },
-        isolation: MainActor.shared
     )
     #expect(results.items.map(\.id) == [errorID])
     guard case let .transaction(_, clear, _)? = await updates.next() else {
@@ -283,7 +279,6 @@ func consoleConcreteQueryPublishesUpdatesPartialDeletionAndReplacementAtomically
             limit: 1
         ),
         for: results,
-        isolation: MainActor.shared
     )
     #expect(results.items.map(\.id) == [logID])
     #expect(results.sections.map(\.id) == [.defaultSection])
@@ -292,7 +287,7 @@ func consoleConcreteQueryPublishesUpdatesPartialDeletionAndReplacementAtomically
 @MainActor
 @Test
 func consoleConcreteQueryProjectsTenThousandRecordsOffTheOwnerActor() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorModelContext.preview()
     let store = ConsoleMessageStore()
     let recordCount = 10_000
     for ordinal in 0..<recordCount {
@@ -304,7 +299,7 @@ func consoleConcreteQueryProjectsTenThousandRecordsOffTheOwnerActor() async thro
             context: context
         )
     }
-    store.resetPerformanceCountersForTesting(isolation: MainActor.shared)
+    store.resetPerformanceCountersForTesting()
 
     let results = try await store.results(
         matching: ConsoleQuery(
@@ -313,7 +308,6 @@ func consoleConcreteQueryProjectsTenThousandRecordsOffTheOwnerActor() async thro
             limit: 20
         ),
         modelContext: context,
-        isolation: MainActor.shared
     )
     #expect(results.items.count == 20)
     var counters = store.performanceCountersForTesting
@@ -343,7 +337,6 @@ func consoleConcreteQueryProjectsTenThousandRecordsOffTheOwnerActor() async thro
             limit: 10
         ),
         for: results,
-        isolation: MainActor.shared
     )
     counters = store.performanceCountersForTesting
     #expect(results.items.count == 10)
@@ -354,23 +347,20 @@ func consoleConcreteQueryProjectsTenThousandRecordsOffTheOwnerActor() async thro
 @MainActor
 @Test
 func droppingConsoleConcreteResultsReleasesItsIndexRegistration() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorModelContext.preview()
     let store = ConsoleMessageStore()
     var results: WebInspectorFetchedResults<ConsoleMessage>? = try await store.results(
         matching: ConsoleQuery(),
         modelContext: context,
-        isolation: MainActor.shared
     )
     weak let weakResults = results
 
     let registrationCount = await store.concreteQueryRegistrationCountForTesting(
-        isolation: MainActor.shared
     )
     #expect(registrationCount == 1)
     results = nil
     #expect(weakResults == nil)
     let prunedRegistrationCount = await store.concreteQueryRegistrationCountForTesting(
-        isolation: MainActor.shared
     )
     #expect(prunedRegistrationCount == 0)
 }
@@ -380,7 +370,7 @@ private func makeIndexedConsoleMessage(
     id: Int,
     level: String,
     text: String,
-    context: WebInspectorContext
+    context: WebInspectorModelContext
 ) -> (id: ConsoleMessage.ID, input: ConsoleMessageRecordInput) {
     let modelID = ConsoleMessage.ID(id)
     let message = ConsoleMessage(
@@ -403,7 +393,7 @@ private func addConsoleMessage(
     text: String,
     targetID: WebInspectorTarget.ID?,
     store: ConsoleMessageStore,
-    context: WebInspectorContext
+    context: WebInspectorModelContext
 ) async {
     _ = await store.apply(
         .messageAdded(Console.Message(
@@ -414,6 +404,5 @@ private func addConsoleMessage(
         targetID: targetID,
         modelContext: context,
         registerRuntimeObject: { _ in fatalError("The fixture has no Runtime parameters.") },
-        isolation: MainActor.shared
     )
 }

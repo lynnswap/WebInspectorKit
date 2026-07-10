@@ -57,6 +57,59 @@ func rawPeerRoutesFrameRequestNodeThroughCurrentPageDOMAgent() async throws {
 }
 
 @Test
+func rawElementPickerResolvesInspectorEventThroughProductionCommandPath() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let eventTask = Task {
+        try await runtime.page.dom.withElementPicker { events in
+            for try await event in events {
+                guard case let .event(_, nodeID) = event else {
+                    continue
+                }
+                return nodeID
+            }
+            throw WebInspectorProxyError.closed
+        }
+    }
+
+    var command = try await runtime.peer.commands.next()
+    #expect(command.method == "Inspector.enable")
+    try await runtime.peer.reply(to: command)
+    command = try await runtime.peer.commands.next()
+    #expect(command.method == "Inspector.initialized")
+    try await runtime.peer.reply(to: command)
+    command = try await runtime.peer.commands.next()
+    #expect(command.method == "DOM.setInspectModeEnabled")
+    try await runtime.peer.reply(to: command)
+
+    try await runtime.peer.emitTargetEvent(
+        targetID: "page-main",
+        method: "Inspector.inspect",
+        parameters: try jsonObject(
+            #"{"object":{"type":"object","subtype":"node","objectId":"remote-node"},"hints":{}}"#
+        )
+    )
+
+    command = try await runtime.peer.commands.next()
+    #expect(command.destination == .target("page-main"))
+    #expect(command.method == "DOM.requestNode")
+    #expect(try command.parameters.decode(RequestNodeParameters.self).objectId == "remote-node")
+    try await runtime.peer.reply(
+        to: command,
+        with: try jsonObject(#"{"nodeId":"selected-node"}"#)
+    )
+
+    command = try await runtime.peer.commands.next()
+    #expect(command.method == "DOM.setInspectModeEnabled")
+    try await runtime.peer.reply(to: command)
+    command = try await runtime.peer.commands.next()
+    #expect(command.method == "Inspector.disable")
+    try await runtime.peer.reply(to: command)
+
+    #expect(try await eventTask.value == DOM.Node.ID("selected-node"))
+    await runtime.close()
+}
+
+@Test
 func rawPeerPreservesScopedCSSRoutingAndStripsWireIdentifierScope() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let page = try await runtime.proxy.waitForCurrentPage()

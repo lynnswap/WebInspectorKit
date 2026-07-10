@@ -22,7 +22,7 @@ func networkQueryNormalizesSearchAndProvidesClosedDefaults() {
 @MainActor
 @Test
 func networkConcreteQueryUsesInsertionOrderToBreakEqualRequestTimes() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorModelContext.preview()
     var first = makeIndexedNetworkRecord(
         id: "tie-first",
         url: "https://example.com/first",
@@ -70,7 +70,7 @@ func networkConcreteQueryUsesInsertionOrderToBreakEqualRequestTimes() async thro
 @MainActor
 @Test
 func networkConcreteQueryRegistrationIncludesMutationAppliedWhileWaitingForInitialState() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorModelContext.preview()
     let first = makeIndexedNetworkRecord(
         id: "initial-first",
         url: "https://example.com/first",
@@ -159,7 +159,7 @@ func cancelledNetworkConcreteQueryRegistrationStopsWaitingWithoutTheMissingMutat
 @MainActor
 @Test
 func networkConcreteQueryReplacementAbsorbsMutationBetweenPrepareAndCommit() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorModelContext.preview()
     let first = makeIndexedNetworkRecord(
         id: "replacement-first",
         url: "https://example.com/first",
@@ -218,7 +218,7 @@ func networkConcreteQueryReplacementAbsorbsMutationBetweenPrepareAndCommit() asy
 @MainActor
 @Test
 func cancelledNetworkConcreteQueryReplacementLeavesTheActiveGenerationWhole() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorModelContext.preview()
     let first = makeIndexedNetworkRecord(
         id: "cancel-first",
         url: "https://example.com/first",
@@ -277,7 +277,7 @@ func cancelledNetworkConcreteQueryReplacementLeavesTheActiveGenerationWhole() as
 @MainActor
 @Test
 func overlappingNetworkConcreteQueryReplacementsCommitOnlyTheNewestGeneration() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorModelContext.preview()
     let first = makeIndexedNetworkRecord(
         id: "overlap-first",
         url: "https://example.com/first",
@@ -337,8 +337,8 @@ func overlappingNetworkConcreteQueryReplacementsCommitOnlyTheNewestGeneration() 
 
 @MainActor
 @Test
-func concreteFetchedResultsNeverRegressTheirSourceEpoch() {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+func concreteFetchedResultsNeverRegressTheirSourceEpoch() throws {
+    let context = WebInspectorModelContext.preview()
     let first = makeIndexedNetworkRecord(
         id: "epoch-first",
         url: "https://example.com/first",
@@ -353,16 +353,13 @@ func concreteFetchedResultsNeverRegressTheirSourceEpoch() {
         timestamp: 2,
         context: context
     )
-    guard let firstModel = context.registeredRequest(for: first.id),
-          let secondModel = context.registeredRequest(for: second.id) else {
+    guard let firstModel = try context.networkRequest(id: first.id),
+          let secondModel = try context.networkRequest(id: second.id) else {
         Issue.record("Expected source-epoch fixtures to remain registered.")
         return
     }
     let models = [first.id: firstModel, second.id: secondModel]
-    let results = WebInspectorFetchedResults<NetworkRequest>(
-        fetchDescriptor: WebInspectorFetchDescriptor(),
-        modelContext: context
-    )
+    let results = WebInspectorFetchedResults<NetworkRequest>(modelContext: context)
     results.installInitialNetworkQuery(
         NetworkQuery(),
         generation: 1,
@@ -409,7 +406,7 @@ func concreteFetchedResultsNeverRegressTheirSourceEpoch() {
 @MainActor
 @Test
 func networkConcreteQueryPublishesSameIdentityMoveSectionsWindowAndClear() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorModelContext.preview()
     let store = NetworkRequestStore()
     let firstProxyID = Network.Request.ID("store-first")
     let secondProxyID = Network.Request.ID("store-second")
@@ -439,13 +436,11 @@ func networkConcreteQueryPublishesSameIdentityMoveSectionsWindowAndClear() async
             limit: 2
         ),
         modelContext: context,
-        isolation: MainActor.shared
     )
     let firstID = NetworkRequest.ID(firstProxyID)
     let secondID = NetworkRequest.ID(secondProxyID)
     let registeredFirst = store.request(
         forProxyID: firstProxyID,
-        isolation: MainActor.shared
     )
     let firstIdentity = try #require(registeredFirst)
     #expect(results.items.map(\.id) == [firstID, secondID])
@@ -482,12 +477,11 @@ func networkConcreteQueryPublishesSameIdentityMoveSectionsWindowAndClear() async
             limit: 1
         ),
         for: results,
-        isolation: MainActor.shared
     )
     #expect(results.items.map(\.id) == [firstID])
     #expect(results.sections.map(\.id.rawValue) == ["PUT"])
 
-    await store.clear(isolation: MainActor.shared)
+    await store.clear()
     #expect(results.items.isEmpty)
     #expect(results.sections.isEmpty)
     #expect(results.snapshot.itemIDs.isEmpty)
@@ -496,7 +490,7 @@ func networkConcreteQueryPublishesSameIdentityMoveSectionsWindowAndClear() async
 @MainActor
 @Test
 func networkConcreteQueryProjectsTenThousandRecordsOffTheOwnerActor() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorModelContext.preview()
     let store = NetworkRequestStore()
     let recordCount = 10_000
     for ordinal in 0..<recordCount {
@@ -509,7 +503,7 @@ func networkConcreteQueryProjectsTenThousandRecordsOffTheOwnerActor() async thro
             context: context
         )
     }
-    store.resetPerformanceCountersForTesting(isolation: MainActor.shared)
+    store.resetPerformanceCountersForTesting()
 
     let results = try await store.results(
         matching: NetworkQuery(
@@ -518,7 +512,6 @@ func networkConcreteQueryProjectsTenThousandRecordsOffTheOwnerActor() async thro
             limit: 25
         ),
         modelContext: context,
-        isolation: MainActor.shared
     )
     #expect(results.items.count == 25)
     var counters = store.performanceCountersForTesting
@@ -550,7 +543,6 @@ func networkConcreteQueryProjectsTenThousandRecordsOffTheOwnerActor() async thro
             limit: 10
         ),
         for: results,
-        isolation: MainActor.shared
     )
     counters = store.performanceCountersForTesting
     #expect(results.items.count == 10)
@@ -561,23 +553,20 @@ func networkConcreteQueryProjectsTenThousandRecordsOffTheOwnerActor() async thro
 @MainActor
 @Test
 func droppingNetworkConcreteResultsReleasesItsIndexRegistration() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorModelContext.preview()
     let store = NetworkRequestStore()
     var results: WebInspectorFetchedResults<NetworkRequest>? = try await store.results(
         matching: NetworkQuery(),
         modelContext: context,
-        isolation: MainActor.shared
     )
     weak let weakResults = results
 
     let registrationCount = await store.concreteQueryRegistrationCountForTesting(
-        isolation: MainActor.shared
     )
     #expect(registrationCount == 1)
     results = nil
     #expect(weakResults == nil)
     let prunedRegistrationCount = await store.concreteQueryRegistrationCountForTesting(
-        isolation: MainActor.shared
     )
     #expect(prunedRegistrationCount == 0)
 }
@@ -588,7 +577,7 @@ private func makeIndexedNetworkRecord(
     url: String,
     method: String,
     timestamp: Double,
-    context: WebInspectorContext
+    context: WebInspectorModelContext
 ) -> (id: NetworkRequest.ID, input: NetworkRequestRecordInput) {
     let modelID = context.seedNetworkRequest(
         requestID: id,
@@ -599,9 +588,8 @@ private func makeIndexedNetworkRecord(
         responseStatus: 200,
         responseStatusText: "OK",
         timestamp: timestamp,
-        isolation: MainActor.shared
     )
-    guard let request = context.registeredRequest(for: modelID, isolation: MainActor.shared) else {
+    guard let request = try! context.networkRequest(id: modelID) else {
         preconditionFailure("The indexed Network fixture was not registered.")
     }
     return (modelID, NetworkRequestRecordInput(request: request, orderIndex: Int(timestamp)))
@@ -614,7 +602,7 @@ private func addNetworkRequest(
     method: String,
     timestamp: Double,
     store: NetworkRequestStore,
-    context: WebInspectorContext
+    context: WebInspectorModelContext
 ) async {
     await store.apply(
         .requestWillBeSent(
@@ -625,7 +613,6 @@ private func addNetworkRequest(
             timestamp: timestamp
         ),
         modelContext: context,
-        isolation: MainActor.shared
     )
 }
 
@@ -634,7 +621,7 @@ private func finishNetworkRequest(
     _ id: Network.Request.ID,
     timestamp: Double,
     store: NetworkRequestStore,
-    context: WebInspectorContext
+    context: WebInspectorModelContext
 ) async {
     await store.apply(
         .loadingFinished(
@@ -644,7 +631,6 @@ private func finishNetworkRequest(
             metrics: nil
         ),
         modelContext: context,
-        isolation: MainActor.shared
     )
 }
 

@@ -5,7 +5,7 @@ import WebInspectorProxyKit
 @MainActor
 @Test
 func domStateStorePreservesNodeIdentityAcrossPayloadUpdates() throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorModelContext.preview()
     let store = DOMStateStore()
     let documentID = DOM.Node.ID("document")
     let elementID = DOM.Node.ID("element")
@@ -28,7 +28,6 @@ func domStateStorePreservesNodeIdentityAcrossPayloadUpdates() throws {
         expectedEpoch: store.documentEpoch,
         reason: .initialDocument,
         modelContext: context,
-        isolation: MainActor.shared
     )
     #expect(applied != nil)
     let original = try #require(store.node(for: DOMNode.ID(elementID)))
@@ -36,17 +35,15 @@ func domStateStorePreservesNodeIdentityAcrossPayloadUpdates() throws {
     _ = store.apply(
         .attributeModified(elementID, name: "class", value: "after"),
         modelContext: context,
-        isolation: MainActor.shared
     )
 
     #expect(store.node(for: DOMNode.ID(elementID)) === original)
     #expect(original.attributes["class"] == "after")
 }
-
 @MainActor
 @Test
 func domStateStoreDocumentResetAdvancesEpochAndClearsSemanticState() throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorModelContext.preview()
     let store = DOMStateStore()
     let childID = DOM.Node.ID("selected")
     _ = store.applyDocument(
@@ -59,17 +56,15 @@ func domStateStoreDocumentResetAdvancesEpochAndClearsSemanticState() throws {
         expectedEpoch: store.documentEpoch,
         reason: .initialDocument,
         modelContext: context,
-        isolation: MainActor.shared
     )
     let child = try #require(store.node(for: DOMNode.ID(childID)))
-    _ = store.select(child, reveal: .none, isolation: MainActor.shared)
-    _ = store.setElementPickerEnabled(true, isolation: MainActor.shared)
+    _ = store.select(child, reveal: .none)
+    _ = store.setElementPickerEnabled(true)
     let previousEpoch = store.documentEpoch
 
     let effects = store.apply(
         .documentUpdated,
         modelContext: context,
-        isolation: MainActor.shared
     )
 
     #expect(store.documentEpoch == previousEpoch + 1)
@@ -84,7 +79,7 @@ func domStateStoreDocumentResetAdvancesEpochAndClearsSemanticState() throws {
 @MainActor
 @Test
 func domStateStoreProjectsFrameDocumentUnderItsFrameOwner() throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorModelContext.preview()
     let store = DOMStateStore()
     let frameTargetID = WebInspectorTarget.ID("frame-target")
     let frameID = FrameID("child-frame")
@@ -109,7 +104,6 @@ func domStateStoreProjectsFrameDocumentUnderItsFrameOwner() throws {
         expectedEpoch: store.documentEpoch,
         reason: .initialDocument,
         modelContext: context,
-        isolation: MainActor.shared
     )
 
     let applied = store.applyFrameDocument(
@@ -122,7 +116,6 @@ func domStateStoreProjectsFrameDocumentUnderItsFrameOwner() throws {
         frameTargetID: frameTargetID,
         expectedEpoch: store.documentEpoch,
         modelContext: context,
-        isolation: MainActor.shared
     )
     #expect(applied != nil)
 
@@ -130,7 +123,7 @@ func domStateStoreProjectsFrameDocumentUnderItsFrameOwner() throws {
         frameDocumentID.rawValue,
         scopedToTargetRawValue: frameTargetID.rawValue
     ))
-    let snapshot = store.currentTreeSnapshot(isolation: MainActor.shared)
+    let snapshot = store.currentTreeSnapshot()
     #expect(snapshot.parent(of: scopedDocumentID) == DOMNode.ID(iframeID))
     #expect(snapshot.visibleChildren(of: DOMNode.ID(iframeID)).nodeIDs == [scopedDocumentID])
 }
@@ -138,7 +131,7 @@ func domStateStoreProjectsFrameDocumentUnderItsFrameOwner() throws {
 @MainActor
 @Test
 func domStateStorePublishesSelectionDeltaAndRevealFromOneMutation() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorModelContext.preview()
     let store = DOMStateStore()
     let parentID = DOM.Node.ID("parent")
     let childID = DOM.Node.ID("child")
@@ -160,9 +153,8 @@ func domStateStorePublishesSelectionDeltaAndRevealFromOneMutation() async throws
         expectedEpoch: store.documentEpoch,
         reason: .initialDocument,
         modelContext: context,
-        isolation: MainActor.shared
     )
-    let controller = store.rootTreeController(isolation: MainActor.shared)
+    let controller = store.rootTreeController()
     var updateIterator = controller.updates.makeAsyncIterator()
     var revealIterator = controller.revealRequests.makeAsyncIterator()
     guard case .snapshot? = await updateIterator.next() else {
@@ -171,7 +163,7 @@ func domStateStorePublishesSelectionDeltaAndRevealFromOneMutation() async throws
     }
     let child = try #require(store.node(for: DOMNode.ID(childID)))
 
-    _ = store.select(child, reveal: .selectOnly, isolation: MainActor.shared)
+    _ = store.select(child, reveal: .selectOnly)
 
     #expect(await updateIterator.next() == .delta(.selectionChanged(nodeID: child.id)))
     #expect(await revealIterator.next() == DOMTreeRevealRequest(
@@ -185,7 +177,7 @@ func domStateStorePublishesSelectionDeltaAndRevealFromOneMutation() async throws
 @MainActor
 @Test
 func domStateStoreTreeSubscriptionBridgesInitialSnapshotAndNextDeltaAtomically() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorModelContext.preview()
     let store = DOMStateStore()
     let elementID = DOM.Node.ID("element")
     _ = store.applyDocument(
@@ -198,16 +190,14 @@ func domStateStoreTreeSubscriptionBridgesInitialSnapshotAndNextDeltaAtomically()
         expectedEpoch: store.documentEpoch,
         reason: .initialDocument,
         modelContext: context,
-        isolation: MainActor.shared
     )
-    let controller = store.rootTreeController(isolation: MainActor.shared)
+    let controller = store.rootTreeController()
     let initialRevision = controller.revision
     var iterator = controller.updates.makeAsyncIterator()
 
     _ = store.apply(
         .attributeModified(elementID, name: "class", value: "updated"),
         modelContext: context,
-        isolation: MainActor.shared
     )
 
     guard case let .snapshot(snapshot, reason)? = await iterator.next() else {
@@ -223,18 +213,17 @@ func domStateStoreTreeSubscriptionBridgesInitialSnapshotAndNextDeltaAtomically()
 @MainActor
 @Test
 func domStateStoreRejectsDocumentFromStaleEpoch() {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorModelContext.preview()
     let store = DOMStateStore()
     let staleEpoch = store.documentEpoch
-    store.advanceDocumentEpoch(isolation: MainActor.shared)
-    _ = store.resetDocument(isolation: MainActor.shared)
+    store.advanceDocumentEpoch()
+    _ = store.resetDocument()
 
     let applied = store.applyDocument(
         DOM.Node(id: DOM.Node.ID("stale-document"), nodeType: 9, nodeName: "#document"),
         expectedEpoch: staleEpoch,
         reason: .documentUpdated,
         modelContext: context,
-        isolation: MainActor.shared
     )
 
     #expect(applied == nil)
@@ -248,11 +237,11 @@ func domStateStoreKeepsOnlyWeakTreeRegistrations() {
     weak var releasedController: DOMTreeController?
 
     do {
-        let controller = store.rootTreeController(isolation: MainActor.shared)
+        let controller = store.rootTreeController()
         releasedController = controller
         #expect(releasedController != nil)
     }
 
     #expect(releasedController == nil)
-    _ = store.resetDocument(isolation: MainActor.shared)
+    _ = store.resetDocument()
 }

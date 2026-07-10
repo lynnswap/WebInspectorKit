@@ -64,6 +64,289 @@ func modelDomainNormalizationAddsDOMOnlyWhenCSSRequiresIt() {
 }
 
 @Test
+func directElementPickerScopesShareOnePhysicalModeAndInitializeOncePerGeneration() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+
+    let firstScopeTask = Task {
+        try await modelFeedAcquireDirectElementPickerScope(core: core)
+    }
+    try await modelFeedCompleteElementPickerAcquisition(
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        expectsInitialization: true
+    )
+    let firstScope = try await firstScopeTask.value
+
+    let acquiredMessageCount = await backend.sentTargetMessages().count
+    let secondScope = try await modelFeedAcquireDirectElementPickerScope(core: core)
+    #expect(await backend.sentTargetMessages().count == acquiredMessageCount)
+
+    try await core.releaseEventScope(firstScope.id)
+    #expect(await backend.sentTargetMessages().count == acquiredMessageCount)
+
+    let secondRelease = Task {
+        try await core.releaseEventScope(secondScope.id)
+    }
+    try await modelFeedCompleteElementPickerRelease(
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        after: acquiredMessageCount
+    )
+    try await secondRelease.value
+
+    let reacquireBaseline = await backend.sentTargetMessages().count
+    let reacquireTask = Task {
+        try await modelFeedAcquireDirectElementPickerScope(core: core)
+    }
+    try await modelFeedCompleteElementPickerAcquisition(
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        after: reacquireBaseline,
+        expectsInitialization: false
+    )
+    let reacquiredScope = try await reacquireTask.value
+    let reacquireMethods = try await backend.sentTargetMessages()
+        .dropFirst(reacquireBaseline)
+        .map { try modelFeedMessageMethod($0.message) }
+    #expect(reacquireMethods == [
+        "Inspector.enable",
+        "DOM.setInspectModeEnabled",
+    ])
+
+    let finalRelease = Task {
+        try await core.releaseEventScope(reacquiredScope.id)
+    }
+    try await modelFeedCompleteElementPickerRelease(
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        after: await backend.sentTargetMessages().count
+    )
+    try await finalRelease.value
+    await core.close()
+}
+
+@Test
+func directElementPickerDiscardsInspectReceivedBeforeModeActivationReply() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+
+    let scopeTask = Task {
+        try await modelFeedAcquireDirectElementPickerScope(core: core)
+    }
+    let enable = try await backend.waitForTargetMessage(method: "Inspector.enable")
+    await modelFeedRespond(to: enable, core: core)
+    let initialized = try await backend.waitForTargetMessage(method: "Inspector.initialized")
+    await modelFeedRespond(to: initialized, core: core)
+    let activate = try await backend.waitForTargetMessage(method: "DOM.setInspectModeEnabled")
+    #expect(try modelFeedElementPickerEnabled(activate.message) == true)
+
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "page-main",
+        message: modelFeedInspectorInspectMessage(objectID: "before-activation")
+    ))
+    await modelFeedRespond(to: activate, core: core)
+    let scope = try await scopeTask.value
+    var iterator = scope.events.makeAsyncIterator()
+    guard case .reset = try #require(try await iterator.next()) else {
+        Issue.record("Expected the element-picker scope's initial reset.")
+        return
+    }
+
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "page-main",
+        message: modelFeedInspectorInspectMessage(objectID: "after-activation")
+    ))
+    guard case let .event(_, event) = try #require(try await iterator.next()),
+          case let .inspect(object, _) = event else {
+        Issue.record("Expected the post-activation Inspector.inspect event.")
+        return
+    }
+    #expect(object.id == Runtime.RemoteObject.ID("after-activation"))
+
+    let releaseBaseline = await backend.sentTargetMessages().count
+    let release = Task {
+        try await core.releaseEventScope(scope.id)
+    }
+    try await modelFeedCompleteElementPickerRelease(
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        after: releaseBaseline
+    )
+    try await release.value
+    await core.close()
+}
+
+@Test
+func directElementPickerReinitializesAndReactivatesOnReplacementPage() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-old",
+        type: "page",
+        frameID: "main-frame"
+    ))
+
+    let scopeTask = Task {
+        try await modelFeedAcquireDirectElementPickerScope(core: core)
+    }
+    try await modelFeedCompleteElementPickerAcquisition(
+        core: core,
+        backend: backend,
+        targetID: "page-old",
+        expectsInitialization: true
+    )
+    let scope = try await scopeTask.value
+    var iterator = scope.events.makeAsyncIterator()
+    guard case .reset = try #require(try await iterator.next()) else {
+        Issue.record("Expected the old page generation reset.")
+        return
+    }
+
+    let replacementBaseline = await backend.sentTargetMessages().count
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-new",
+        type: "page",
+        frameID: "main-frame",
+        isProvisional: true
+    ))
+    _ = await core.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-old","newTargetId":"page-new"}}"#
+    )
+
+    let enable = try await backend.waitForTargetMessage(
+        method: "Inspector.enable",
+        after: replacementBaseline
+    )
+    #expect(enable.targetIdentifier == ProtocolTarget.ID("page-new"))
+    await modelFeedRespond(to: enable, core: core)
+    let initialized = try await backend.waitForTargetMessage(
+        method: "Inspector.initialized",
+        after: replacementBaseline
+    )
+    #expect(initialized.targetIdentifier == ProtocolTarget.ID("page-new"))
+    await modelFeedRespond(to: initialized, core: core)
+    let activate = try await backend.waitForTargetMessage(
+        method: "DOM.setInspectModeEnabled",
+        after: replacementBaseline
+    )
+    #expect(activate.targetIdentifier == ProtocolTarget.ID("page-new"))
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "page-new",
+        message: modelFeedInspectorInspectMessage(objectID: "before-new-activation")
+    ))
+    await modelFeedRespond(to: activate, core: core)
+
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "page-new",
+        message: modelFeedInspectorInspectMessage(objectID: "after-new-activation")
+    ))
+    guard case .reset = try #require(try await iterator.next()) else {
+        Issue.record("Expected the replacement page generation reset.")
+        return
+    }
+    guard case let .event(_, event) = try #require(try await iterator.next()),
+          case let .inspect(object, _) = event else {
+        Issue.record("Expected only the post-reactivation inspect event.")
+        return
+    }
+    #expect(object.id == Runtime.RemoteObject.ID("after-new-activation"))
+
+    let releaseBaseline = await backend.sentTargetMessages().count
+    let releaseTask = Task {
+        try await core.releaseEventScope(scope.id)
+    }
+    try await modelFeedCompleteElementPickerRelease(
+        core: core,
+        backend: backend,
+        targetID: "page-new",
+        after: releaseBaseline
+    )
+    try await releaseTask.value
+    await core.close()
+}
+
+@Test
+func modelFeedElementPickerPublishesOnlyActivatedInspectAndClosesInWireOrder() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [.dom],
+        targetID: "page-main"
+    )
+    var iterator = feed.records.makeAsyncIterator()
+    _ = try await modelFeedRequireReset(iterator.next())
+    _ = try await modelFeedRequireTargetSnapshot(iterator.next())
+    _ = try await modelFeedRequireDOMBootstrapSnapshot(iterator.next())
+    _ = try modelFeedRequireBootstrapCompletion(try await iterator.next())
+    _ = try await modelFeedRequireSynchronization(iterator.next())
+
+    let acquireTask = Task {
+        try await feed.acquireElementPicker()
+    }
+    let enable = try await backend.waitForTargetMessage(method: "Inspector.enable")
+    await modelFeedRespond(to: enable, core: core)
+    let initialized = try await backend.waitForTargetMessage(method: "Inspector.initialized")
+    await modelFeedRespond(to: initialized, core: core)
+    let activate = try await backend.waitForTargetMessage(method: "DOM.setInspectModeEnabled")
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "page-main",
+        message: modelFeedInspectorInspectMessage(objectID: "before-activation")
+    ))
+    await modelFeedRespond(to: activate, core: core)
+    try await acquireTask.value
+
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "page-main",
+        message: modelFeedInspectorInspectMessage(objectID: "after-activation")
+    ))
+    let record = try modelFeedRequireEvent(try await iterator.next())
+    guard case let .inspector(target, event) = record.payload,
+          case let .inspect(object, _) = event else {
+        Issue.record("Expected the activated Inspector.inspect model record.")
+        return
+    }
+    #expect(target.id == WebInspectorTarget.ID("page-main"))
+    #expect(object.id == Runtime.RemoteObject.ID("after-activation"))
+
+    let closeBaseline = await backend.sentTargetMessages().count
+    let closeTask = Task {
+        try await feed.close()
+    }
+    try await modelFeedCompleteElementPickerRelease(
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        after: closeBaseline
+    )
+    try await closeTask.value
+    #expect(try await iterator.next() == nil)
+    await core.close()
+}
+
+@Test
 func cssModelFeedUsesNormalizedDOMBootstrapAndOneSynchronization() async throws {
     let backend = FakeTransportBackend()
     let core = ConnectionCore(backend: backend, responseTimeout: nil)
@@ -3170,6 +3453,99 @@ private func modelFeedExpectedEnableMethods(
         }
     }
     return methods
+}
+
+private func modelFeedAcquireDirectElementPickerScope(
+    core: ConnectionCore
+) async throws -> WebInspectorProxyEventScope<Inspector.Event> {
+    try await core.acquireEventScope(
+        route: .currentPage,
+        targetID: .currentPage,
+        domain: .inspector,
+        buffering: .bounded(8),
+        extract: { event in
+            guard case let .inspector(value) = event else {
+                return nil
+            }
+            return value
+        }
+    )
+}
+
+private func modelFeedCompleteElementPickerAcquisition(
+    core: ConnectionCore,
+    backend: FakeTransportBackend,
+    targetID: String,
+    after baseline: Int = 0,
+    expectsInitialization: Bool
+) async throws {
+    let enable = try await backend.waitForTargetMessage(
+        method: "Inspector.enable",
+        after: baseline
+    )
+    #expect(enable.targetIdentifier == ProtocolTarget.ID(targetID))
+    await modelFeedRespond(to: enable, core: core)
+    if expectsInitialization {
+        let initialized = try await backend.waitForTargetMessage(
+            method: "Inspector.initialized",
+            after: baseline
+        )
+        #expect(initialized.targetIdentifier == ProtocolTarget.ID(targetID))
+        await modelFeedRespond(to: initialized, core: core)
+    }
+    let activate = try await backend.waitForTargetMessage(
+        method: "DOM.setInspectModeEnabled",
+        after: baseline
+    )
+    #expect(activate.targetIdentifier == ProtocolTarget.ID(targetID))
+    #expect(try modelFeedElementPickerEnabled(activate.message) == true)
+    await modelFeedRespond(to: activate, core: core)
+}
+
+private func modelFeedCompleteElementPickerRelease(
+    core: ConnectionCore,
+    backend: FakeTransportBackend,
+    targetID: String,
+    after baseline: Int
+) async throws {
+    let deactivate = try await backend.waitForTargetMessage(
+        method: "DOM.setInspectModeEnabled",
+        after: baseline
+    )
+    #expect(deactivate.targetIdentifier == ProtocolTarget.ID(targetID))
+    #expect(try modelFeedElementPickerEnabled(deactivate.message) == false)
+    await modelFeedRespond(to: deactivate, core: core)
+    let disable = try await backend.waitForTargetMessage(
+        method: "Inspector.disable",
+        after: baseline
+    )
+    #expect(disable.targetIdentifier == ProtocolTarget.ID(targetID))
+    await modelFeedRespond(to: disable, core: core)
+}
+
+private func modelFeedElementPickerEnabled(_ message: String) throws -> Bool {
+    let object = try JSONSerialization.jsonObject(with: Data(message.utf8))
+    let dictionary = try #require(object as? [String: Any])
+    let parameters = try #require(dictionary["params"] as? [String: Any])
+    return try #require(parameters["enabled"] as? Bool)
+}
+
+private func modelFeedInspectorInspectMessage(objectID: String) -> String {
+    let data = try! JSONSerialization.data(
+        withJSONObject: [
+            "method": "Inspector.inspect",
+            "params": [
+                "object": [
+                    "objectId": objectID,
+                    "type": "object",
+                    "subtype": "node",
+                ],
+                "hints": [:] as [String: Any],
+            ] as [String: Any],
+        ],
+        options: [.sortedKeys]
+    )
+    return String(decoding: data, as: UTF8.self)
 }
 
 private func modelFeedOpenSuccessfully(
