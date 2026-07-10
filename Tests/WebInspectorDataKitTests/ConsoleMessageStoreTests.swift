@@ -221,6 +221,255 @@ func consoleMessageStoreOwnsTargetOrderAndClearEffects() async throws {
 
 @MainActor
 @Test
+func consoleMessageTransactionsPreserveInsertMoveAndUpdateSemantics() async throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let store = ConsoleMessageStore()
+    let firstTargetID = WebInspectorTarget.ID("sorted-first-target")
+    let secondTargetID = WebInspectorTarget.ID("sorted-second-target")
+    let results = WebInspectorFetchedResults<ConsoleMessage>(
+        fetchDescriptor: WebInspectorFetchDescriptor(
+            sortBy: [SortDescriptor(\.repeatCount, order: .reverse)]
+        ),
+        modelContext: context
+    )
+    store.register(results, modelContext: context, isolation: MainActor.shared)
+    var updates = results.updates().makeAsyncIterator()
+    guard case .initial? = await updates.next() else {
+        Issue.record("Expected the initial Console fetched-results snapshot.")
+        return
+    }
+
+    _ = await store.apply(
+        .messageAdded(Console.Message(
+            source: Console.Source(rawValue: "console-api"),
+            level: Console.Level(rawValue: "log"),
+            text: "first",
+            repeatCount: 1
+        )),
+        targetID: firstTargetID,
+        modelContext: context,
+        registerRuntimeObject: { _ in fatalError("The fixture has no Runtime parameters.") },
+        isolation: MainActor.shared
+    )
+    let firstID = try #require(results.items.first?.id)
+    guard case let .transaction(_, firstInsert, firstReconfigure)? = await updates.next() else {
+        Issue.record("Expected the first Console insertion transaction.")
+        return
+    }
+    #expect(firstInsert.itemChanges == [
+        .insert(
+            itemID: firstID,
+            indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)
+        ),
+    ])
+    #expect(firstReconfigure.isEmpty)
+
+    _ = await store.apply(
+        .messageAdded(Console.Message(
+            source: Console.Source(rawValue: "console-api"),
+            level: Console.Level(rawValue: "log"),
+            text: "second",
+            repeatCount: 2
+        )),
+        targetID: secondTargetID,
+        modelContext: context,
+        registerRuntimeObject: { _ in fatalError("The fixture has no Runtime parameters.") },
+        isolation: MainActor.shared
+    )
+    let secondID = try #require(results.items.first?.id)
+    guard case let .transaction(_, frontInsert, frontReconfigure)? = await updates.next() else {
+        Issue.record("Expected the front insertion transaction.")
+        return
+    }
+    #expect(results.items.map(\.id) == [secondID, firstID])
+    #expect(frontInsert.itemChanges == [
+        .insert(
+            itemID: secondID,
+            indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)
+        ),
+    ])
+    #expect(frontReconfigure.isEmpty)
+
+    _ = await store.apply(
+        .messageRepeatCountUpdated(count: 3, timestamp: 3),
+        targetID: firstTargetID,
+        modelContext: context,
+        registerRuntimeObject: { _ in fatalError("Repeat updates have no Runtime parameters.") },
+        isolation: MainActor.shared
+    )
+    guard case let .transaction(_, move, moveReconfigure)? = await updates.next() else {
+        Issue.record("Expected the Console sort-move transaction.")
+        return
+    }
+    #expect(results.items.map(\.id) == [firstID, secondID])
+    #expect(move.itemChanges == [
+        .move(
+            itemID: firstID,
+            from: WebInspectorFetchedResultsIndexPath(section: 0, item: 1),
+            to: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)
+        ),
+    ])
+    #expect(moveReconfigure == [firstID])
+
+    _ = await store.apply(
+        .messageRepeatCountUpdated(count: 4, timestamp: 4),
+        targetID: firstTargetID,
+        modelContext: context,
+        registerRuntimeObject: { _ in fatalError("Repeat updates have no Runtime parameters.") },
+        isolation: MainActor.shared
+    )
+    guard case let .transaction(_, update, updateReconfigure)? = await updates.next() else {
+        Issue.record("Expected the in-place Console update transaction.")
+        return
+    }
+    #expect(update.itemChanges == [
+        .update(
+            itemID: firstID,
+            indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)
+        ),
+    ])
+    #expect(updateReconfigure == [firstID])
+}
+
+@MainActor
+@Test
+func consoleMessageTransactionsPreserveSectionInsertionAndDeletion() async throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let store = ConsoleMessageStore()
+    let warningTargetID = WebInspectorTarget.ID("section-warning-target")
+    let errorTargetID = WebInspectorTarget.ID("section-error-target")
+    let results = WebInspectorFetchedResults<ConsoleMessage>(
+        fetchDescriptor: WebInspectorFetchDescriptor(),
+        sectionBy: WebInspectorSectionDescriptor(\.level),
+        modelContext: context
+    )
+    store.register(results, modelContext: context, isolation: MainActor.shared)
+    var updates = results.updates().makeAsyncIterator()
+    guard case .initial? = await updates.next() else {
+        Issue.record("Expected the initial sectioned Console snapshot.")
+        return
+    }
+
+    _ = await store.apply(
+        .messageAdded(Console.Message(
+            source: Console.Source(rawValue: "console-api"),
+            level: Console.Level(rawValue: "warning"),
+            text: "warning"
+        )),
+        targetID: warningTargetID,
+        modelContext: context,
+        registerRuntimeObject: { _ in fatalError("The fixture has no Runtime parameters.") },
+        isolation: MainActor.shared
+    )
+    let warningID = try #require(results.items.first?.id)
+    guard case let .transaction(_, warningInsert, _)? = await updates.next() else {
+        Issue.record("Expected the warning-section insertion transaction.")
+        return
+    }
+    #expect(warningInsert.sectionChanges == [
+        .insert(sectionID: WebInspectorFetchSectionID(rawValue: "warning"), index: 0),
+    ])
+    #expect(warningInsert.itemChanges == [
+        .insert(
+            itemID: warningID,
+            indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)
+        ),
+    ])
+
+    _ = await store.apply(
+        .messageAdded(Console.Message(
+            source: Console.Source(rawValue: "javascript"),
+            level: Console.Level(rawValue: "error"),
+            text: "error"
+        )),
+        targetID: errorTargetID,
+        modelContext: context,
+        registerRuntimeObject: { _ in fatalError("The fixture has no Runtime parameters.") },
+        isolation: MainActor.shared
+    )
+    let errorID = try #require(results.items.last?.id)
+    guard case let .transaction(_, errorInsert, _)? = await updates.next() else {
+        Issue.record("Expected the error-section insertion transaction.")
+        return
+    }
+    #expect(errorInsert.sectionChanges == [
+        .insert(sectionID: WebInspectorFetchSectionID(rawValue: "error"), index: 1),
+    ])
+    #expect(errorInsert.itemChanges == [
+        .insert(
+            itemID: errorID,
+            indexPath: WebInspectorFetchedResultsIndexPath(section: 1, item: 0)
+        ),
+    ])
+
+    _ = await store.apply(
+        .messagesCleared(reason: Console.ClearReason(rawValue: "console-api")),
+        targetID: warningTargetID,
+        modelContext: context,
+        registerRuntimeObject: { _ in fatalError("Clear events have no Runtime parameters.") },
+        isolation: MainActor.shared
+    )
+    guard case let .transaction(_, warningDelete, _)? = await updates.next() else {
+        Issue.record("Expected the warning-section deletion transaction.")
+        return
+    }
+    #expect(results.items.map(\.id) == [errorID])
+    #expect(warningDelete.sectionChanges == [
+        .delete(sectionID: WebInspectorFetchSectionID(rawValue: "warning"), index: 0),
+    ])
+    #expect(warningDelete.itemChanges == [
+        .delete(
+            itemID: warningID,
+            indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)
+        ),
+    ])
+}
+
+@MainActor
+@Test
+func consoleMessageTransactionPublishesMembershipChangeFromDeletedSection() {
+    let firstID = ConsoleMessage.ID(0)
+    let secondID = ConsoleMessage.ID(1)
+    let warningSection = WebInspectorFetchSectionID(rawValue: "warning")
+    let errorSection = WebInspectorFetchSectionID(rawValue: "error")
+    let oldSnapshot = WebInspectorFetchedResultsSnapshot(sections: [
+        WebInspectorFetchedResultsSnapshot.Section(
+            id: warningSection,
+            title: "warning",
+            itemIDs: [firstID]
+        ),
+        WebInspectorFetchedResultsSnapshot.Section(
+            id: errorSection,
+            title: "error",
+            itemIDs: [secondID]
+        ),
+    ])
+    let newSnapshot = WebInspectorFetchedResultsSnapshot(sections: [
+        WebInspectorFetchedResultsSnapshot.Section(
+            id: warningSection,
+            title: "warning",
+            itemIDs: [firstID, secondID]
+        ),
+    ])
+
+    let transaction = WebInspectorFetchedResultsTransaction<ConsoleMessage.ID>(
+        oldSnapshot: oldSnapshot,
+        newSnapshot: newSnapshot
+    )
+
+    #expect(transaction.sectionChanges == [
+        .delete(sectionID: errorSection, index: 1),
+    ])
+    #expect(transaction.itemChanges == [
+        .insert(
+            itemID: secondID,
+            indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 1)
+        ),
+    ])
+}
+
+@MainActor
+@Test
 func consoleMessageStoreTenThousandLiveInsertsAndMutationUseCompactProjections() async throws {
     let context = WebInspectorContext.preview(isolation: MainActor.shared)
     let store = ConsoleMessageStore()

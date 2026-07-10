@@ -191,13 +191,19 @@ public struct WebInspectorFetchedResultsTransaction<ItemID: Hashable & Sendable>
                 WebInspectorFetchedResultsSectionChange.insert(sectionID: section.id, index: index)
             }
 
-        let moves = newSnapshot.sections.enumerated()
-            .compactMap { newIndex, section -> WebInspectorFetchedResultsSectionChange? in
-                guard let oldIndex = oldIndexes[section.id], oldIndex != newIndex else {
-                    return nil
+        let oldCommonOrder = oldSnapshot.sectionIDs.filter { newIndexes[$0] != nil }
+        let newCommonOrder = newSnapshot.sectionIDs.filter { oldIndexes[$0] != nil }
+        let moves: [WebInspectorFetchedResultsSectionChange] = if oldCommonOrder == newCommonOrder {
+            []
+        } else {
+            newSnapshot.sections.enumerated()
+                .compactMap { newIndex, section -> WebInspectorFetchedResultsSectionChange? in
+                    guard let oldIndex = oldIndexes[section.id], oldIndex != newIndex else {
+                        return nil
+                    }
+                    return .move(sectionID: section.id, from: oldIndex, to: newIndex)
                 }
-                return .move(sectionID: section.id, from: oldIndex, to: newIndex)
-            }
+        }
 
         let updates = newSnapshot.sections.enumerated()
             .compactMap { newIndex, section -> WebInspectorFetchedResultsSectionChange? in
@@ -251,37 +257,118 @@ public struct WebInspectorFetchedResultsTransaction<ItemID: Hashable & Sendable>
                 )
             }
 
-        let moves = newPositions.values
-            .compactMap { newPosition -> WebInspectorFetchedResultsItemChange<ItemID>? in
-                guard let oldPosition = oldPositions[newPosition.itemID],
-                      oldPosition.indexPath != newPosition.indexPath else {
-                    return nil
-                }
+        let sectionMembershipChanges = sectionMembershipChanges(
+            from: oldSnapshot,
+            to: newSnapshot,
+            oldPositions: oldPositions,
+            newPositions: newPositions
+        )
+
+        let moves = moveChanges(
+            from: oldSnapshot,
+            to: newSnapshot,
+            oldPositions: oldPositions,
+            newPositions: newPositions,
+            updatedItemIDs: updatedItemIDs,
+            excludedItemIDs: Set(sectionMembershipChanges.map(itemID))
+        )
+
+        let updates = newSnapshot.itemIDs.compactMap { itemID -> WebInspectorFetchedResultsItemChange<ItemID>? in
+            guard updatedItemIDs.contains(itemID),
+                  let oldPosition = oldPositions[itemID],
+                  let newPosition = newPositions[itemID],
+                  oldPosition.sectionID == newPosition.sectionID,
+                  oldPosition.indexPath == newPosition.indexPath else {
+                return nil
+            }
+            return .update(itemID: itemID, indexPath: newPosition.indexPath)
+        }
+
+        return deletes + inserts + sectionMembershipChanges + moves + updates
+    }
+
+    private static func sectionMembershipChanges(
+        from oldSnapshot: WebInspectorFetchedResultsSnapshot<ItemID>,
+        to newSnapshot: WebInspectorFetchedResultsSnapshot<ItemID>,
+        oldPositions: [ItemID: ItemPosition],
+        newPositions: [ItemID: ItemPosition]
+    ) -> [WebInspectorFetchedResultsItemChange<ItemID>] {
+        let oldSectionIDs = Set(oldSnapshot.sectionIDs)
+        let newSectionIDs = Set(newSnapshot.sectionIDs)
+        let deletedSectionIDs = oldSectionIDs.subtracting(newSectionIDs)
+        let insertedSectionIDs = newSectionIDs.subtracting(oldSectionIDs)
+
+        return newSnapshot.itemIDs.compactMap { itemID -> WebInspectorFetchedResultsItemChange<ItemID>? in
+            guard let oldPosition = oldPositions[itemID],
+                  let newPosition = newPositions[itemID],
+                  oldPosition.sectionID != newPosition.sectionID else {
+                return nil
+            }
+            let oldSectionDeleted = deletedSectionIDs.contains(oldPosition.sectionID)
+            let newSectionInserted = insertedSectionIDs.contains(newPosition.sectionID)
+            switch (oldSectionDeleted, newSectionInserted) {
+            case (true, true):
+                return nil
+            case (true, false):
+                return .insert(itemID: itemID, indexPath: newPosition.indexPath)
+            case (false, true):
+                return .delete(itemID: itemID, indexPath: oldPosition.indexPath)
+            case (false, false):
                 return .move(
-                    itemID: newPosition.itemID,
+                    itemID: itemID,
                     from: oldPosition.indexPath,
                     to: newPosition.indexPath
                 )
             }
-            .sorted { lhs, rhs in
-                lhs.newIndexPathForOrdering < rhs.newIndexPathForOrdering
-            }
+        }
+    }
 
-        let updates = newPositions.values
-            .compactMap { newPosition -> WebInspectorFetchedResultsItemChange<ItemID>? in
-                guard let oldPosition = oldPositions[newPosition.itemID],
-                      oldPosition.sectionID == newPosition.sectionID,
-                      oldPosition.indexPath == newPosition.indexPath,
-                      updatedItemIDs.contains(newPosition.itemID) else {
-                    return nil
-                }
-                return .update(itemID: newPosition.itemID, indexPath: newPosition.indexPath)
-            }
-            .sorted { lhs, rhs in
-                lhs.newIndexPathForOrdering < rhs.newIndexPathForOrdering
-            }
+    private static func moveChanges(
+        from oldSnapshot: WebInspectorFetchedResultsSnapshot<ItemID>,
+        to newSnapshot: WebInspectorFetchedResultsSnapshot<ItemID>,
+        oldPositions: [ItemID: ItemPosition],
+        newPositions: [ItemID: ItemPosition],
+        updatedItemIDs: Set<ItemID>,
+        excludedItemIDs: Set<ItemID>
+    ) -> [WebInspectorFetchedResultsItemChange<ItemID>] {
+        let oldCommonOrder = oldSnapshot.itemIDs.filter { newPositions[$0] != nil }
+        let newCommonOrder = newSnapshot.itemIDs.filter { oldPositions[$0] != nil }
+        guard oldCommonOrder != newCommonOrder else {
+            return []
+        }
 
-        return deletes + inserts + moves + updates
+        if updatedItemIDs.count == 1,
+           let changedID = updatedItemIDs.first,
+           excludedItemIDs.contains(changedID) == false,
+           let oldPosition = oldPositions[changedID],
+           let newPosition = newPositions[changedID],
+           oldPosition.sectionID == newPosition.sectionID,
+           oldPosition.indexPath != newPosition.indexPath {
+            return [
+                .move(
+                    itemID: changedID,
+                    from: oldPosition.indexPath,
+                    to: newPosition.indexPath
+                ),
+            ]
+        }
+
+        return newCommonOrder.compactMap { itemID -> WebInspectorFetchedResultsItemChange<ItemID>? in
+            guard excludedItemIDs.contains(itemID) == false else {
+                return nil
+            }
+            guard let oldPosition = oldPositions[itemID],
+                  let newPosition = newPositions[itemID],
+                  oldPosition.sectionID == newPosition.sectionID,
+                  oldPosition.indexPath != newPosition.indexPath else {
+                return nil
+            }
+            return .move(
+                itemID: itemID,
+                from: oldPosition.indexPath,
+                to: newPosition.indexPath
+            )
+        }
     }
 
     private struct ItemPosition {
@@ -307,6 +394,18 @@ public struct WebInspectorFetchedResultsTransaction<ItemID: Hashable & Sendable>
             }
         }
         return positions
+    }
+
+    private static func itemID(
+        for change: WebInspectorFetchedResultsItemChange<ItemID>
+    ) -> ItemID {
+        switch change {
+        case let .insert(itemID, _),
+             let .delete(itemID, _),
+             let .update(itemID, _),
+             let .move(itemID, _, _):
+            return itemID
+        }
     }
 }
 
@@ -551,19 +650,6 @@ final class WebInspectorFetchedResultsUpdateBroker<ItemID: Hashable & Sendable>:
 
     deinit {
         finish()
-    }
-}
-
-extension WebInspectorFetchedResultsItemChange {
-    fileprivate var newIndexPathForOrdering: WebInspectorFetchedResultsIndexPath {
-        switch self {
-        case .insert(_, let indexPath),
-             .update(_, let indexPath),
-             .delete(_, let indexPath):
-            return indexPath
-        case .move(_, _, let indexPath):
-            return indexPath
-        }
     }
 }
 
