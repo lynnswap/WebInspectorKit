@@ -134,6 +134,7 @@ public final class WebInspectorViewController: UIViewController {
 
     /// The inspection session backing the view controller.
     public let session: WebInspectorSession
+    private let presentationContentStore: PresentationContentStore
 
     /// A Boolean value indicating whether the controller detaches its session
     /// after the root presentation ends.
@@ -170,6 +171,7 @@ public final class WebInspectorViewController: UIViewController {
     /// Creates a view controller backed by an inspection session.
     public init(session: WebInspectorSession = WebInspectorSession()) {
         self.session = session
+        self.presentationContentStore = PresentationContentStore()
         super.init(nibName: nil, bundle: nil)
         webInspectorSetDrawsBackgroundTraitOverride(drawsBackgroundStorage)
     }
@@ -285,7 +287,12 @@ public final class WebInspectorViewController: UIViewController {
     }
 
     private func finishRootPresentationLifecycle() {
-        presentationLifecycleCoordinator.finishIfNeeded { [session, automaticallyDetachesOnDismiss, presentationLifecycleCoordinator] generation in
+        presentationLifecycleCoordinator.finishIfNeeded { [
+            session,
+            presentationContentStore,
+            automaticallyDetachesOnDismiss,
+            presentationLifecycleCoordinator,
+        ] generation in
             removeActiveHost()
             Task { @MainActor in
                 defer {
@@ -299,7 +306,12 @@ public final class WebInspectorViewController: UIViewController {
                 guard presentationLifecycleCoordinator.isCurrentPresentation(generation) else {
                     return
                 }
-                await session.retireRootPresentation(detach: automaticallyDetachesOnDismiss)
+                presentationContentStore.clear()
+                if automaticallyDetachesOnDismiss {
+                    await session.detach()
+                } else {
+                    await session.suspendBackendInteraction()
+                }
             }
         }
     }
@@ -360,9 +372,15 @@ public final class WebInspectorViewController: UIViewController {
         let host: UIViewController
         switch kind {
         case .compact:
-            host = CompactTabBarController(session: session)
+            host = CompactTabBarController(
+                session: session,
+                contentStore: presentationContentStore
+            )
         case .regular:
-            host = RegularTabContentViewController(session: session)
+            host = RegularTabContentViewController(
+                session: session,
+                contentStore: presentationContentStore
+            )
         }
         host.webInspectorSetDrawsBackgroundTraitOverride(drawsBackgroundStorage)
 
@@ -398,6 +416,10 @@ public final class WebInspectorViewController: UIViewController {
     }
 
     #if DEBUG
+    package var presentationContentStoreForTesting: PresentationContentStore {
+        presentationContentStore
+    }
+
     package func finishRootPresentationLifecycleForTesting(cancelled: Bool = false) {
         guard cancelled == false else {
             return

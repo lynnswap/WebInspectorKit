@@ -83,8 +83,9 @@ public struct WebInspectorTab: Equatable, Hashable, Identifiable {
     /// Creates an app-provided inspector tab backed by a UIKit view controller.
     ///
     /// The factory is called the first time the tab content is needed for a
-    /// session. WebInspectorKit caches the returned controller for the tab ID
-    /// and reuses it across compact and regular presentations.
+    /// root inspector controller. WebInspectorKit caches the returned
+    /// controller for the tab ID and reuses it across that controller's compact
+    /// and regular hosts.
     public init(
         id: ID,
         title: String,

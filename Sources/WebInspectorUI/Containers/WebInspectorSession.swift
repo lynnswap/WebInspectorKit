@@ -4,12 +4,11 @@ import UIKit
 import WebKit
 import WebInspectorDataKit
 import WebInspectorUIBase
-import WebInspectorUINetwork
 
 /// The UIKit-facing inspection session used by `WebInspectorViewController`.
 ///
-/// A session owns attachment lifecycle, the current DataKit context, tab
-/// selection state, and page-derived presentation preferences.
+/// A session owns attachment lifecycle, the current DataKit context, and
+/// page-derived presentation preferences.
 @MainActor
 @Observable
 public final class WebInspectorSession {
@@ -56,7 +55,6 @@ public final class WebInspectorSession {
 
     isolated deinit {
         stopPageUserInterfaceStyleObservation()
-        interface.removeContentCache()
     }
 
     package var context: WebInspectorContext {
@@ -152,19 +150,8 @@ public final class WebInspectorSession {
         await stopContainer(replaceContextWithDetached: true)
     }
 
-    package func retireRootPresentation(detach: Bool) async {
-        guard detach else {
-            interface.removeContentCache()
-            await suspendBackendInteractionForPresentationEnd()
-            return
-        }
-        await detachAndReplaceContext()
-    }
-
-    /// Mirrors the legacy presentation-end retirement: without tearing down the
-    /// connection, disable the element picker and hide any visible highlight so
-    /// a re-presentation starts from a clean interaction state.
-    private func suspendBackendInteractionForPresentationEnd() async {
+    /// Disables transient page interaction without tearing down the connection.
+    package func suspendBackendInteraction() async {
         // Bind the context once: a concurrent attach can swap dataContext
         // across the awaits below, and this retirement must not touch the
         // replacement context.
@@ -217,11 +204,11 @@ public final class WebInspectorSession {
 
     package func installDataContext(_ context: WebInspectorContext) {
         dataContext = context
-        removeContextBoundContent()
+        interface.contextDidChange()
     }
 
     private func stopContainer(replaceContextWithDetached: Bool) async {
-        removeContextBoundContent()
+        interface.contextDidChange()
         if let container {
             self.container = nil
             await container.close()
@@ -231,10 +218,6 @@ public final class WebInspectorSession {
         if replaceContextWithDetached {
             installDataContext(Self.makeDetachedDataContext())
         }
-    }
-
-    private func removeContextBoundContent() {
-        interface.removeContextBoundContent()
     }
 
     private static func makeDetachedDataContext() -> WebInspectorContext {
@@ -253,12 +236,10 @@ extension WebInspectorSession {
 @MainActor
 @Observable
 package final class InterfaceModel {
-    package private(set) var tabs: [WebInspectorTab]
+    package let tabs: [WebInspectorTab]
     package private(set) var selectedItemID: WebInspectorTab.DisplayItem.ID?
     package private(set) var contextBoundContentRevision = 0
     @ObservationIgnored private let projection = WebInspectorTab.DisplayProjection()
-    @ObservationIgnored private let contentCache = WebInspectorTab.ContentCache()
-    @ObservationIgnored private var networkPanelModel: NetworkPanelModel?
 
     package init(tabs: [WebInspectorTab] = [.dom, .network]) {
         let uniqueTabs = Self.uniqueTabs(tabs)
@@ -312,58 +293,13 @@ package final class InterfaceModel {
         selectedItemID = displayItemID
     }
 
-    package func setTabs(_ tabs: [WebInspectorTab]) {
-        let uniqueTabs = Self.uniqueTabs(tabs)
-        self.tabs = uniqueTabs
-        pruneContentCache(retaining: reachableContentKeys(for: uniqueTabs))
-        guard let selectedItemID,
-              isValidItemID(selectedItemID) else {
-            self.selectedItemID = uniqueTabs.first.map { Self.displayItem(for: $0).id }
-            return
-        }
+    package func contextDidChange() {
+        precondition(
+            contextBoundContentRevision < Int.max,
+            "A presentation content revision must not overflow."
+        )
+        contextBoundContentRevision += 1
     }
-
-    package func viewController<Content: UIViewController>(
-        for key: WebInspectorTab.ContentKey,
-        make: () -> Content
-    ) -> Content {
-        contentCache.viewController(for: key, epoch: contextBoundContentRevision, make: make)
-    }
-
-    package func networkPanelModel(for context: WebInspectorContext) -> NetworkPanelModel {
-        if let networkPanelModel,
-           networkPanelModel.context === context {
-            return networkPanelModel
-        }
-
-        let model = NetworkPanelModel(context: context)
-        networkPanelModel = model
-        return model
-    }
-
-    package func removeNetworkPanelModel() {
-        networkPanelModel = nil
-    }
-
-    package func removeContextBoundContent() {
-        removeNetworkPanelModel()
-        removeContentCache()
-        contextBoundContentRevision &+= 1
-    }
-
-    package func pruneContentCache(retaining keys: Set<WebInspectorTab.ContentKey>) {
-        contentCache.prune(retaining: keys)
-    }
-
-    package func removeContentCache() {
-        contentCache.removeAll()
-    }
-
-    #if DEBUG
-    package var contentCacheCountForTesting: Int {
-        contentCache.countForTesting
-    }
-    #endif
 
     package var selectedTab: WebInspectorTab? {
         guard let selectedItemID else {
@@ -401,11 +337,6 @@ package final class InterfaceModel {
             return .tab(tab.id)
         }
         return .customTab(tab.id)
-    }
-
-    private func reachableContentKeys(for tabs: [WebInspectorTab]) -> Set<WebInspectorTab.ContentKey> {
-        projection.contentKeys(for: .compact, tabs: tabs)
-            .union(projection.contentKeys(for: .regular, tabs: tabs))
     }
 
     private static func uniqueTabs(_ tabs: [WebInspectorTab]) -> [WebInspectorTab] {
