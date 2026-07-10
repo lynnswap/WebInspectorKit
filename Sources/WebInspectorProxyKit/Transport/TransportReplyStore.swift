@@ -2,14 +2,76 @@ import Foundation
 
 extension TransportSession {
     struct PendingReply: Sendable {
-        var domain: ProtocolDomain
-        var method: String
-        var targetID: ProtocolTarget.ID?
-        var promise: ReplyPromise<ProtocolCommand.Result>
+        enum Purpose: Equatable, Sendable {
+            case client
+            case capability(
+                key: ConnectionCapabilityKey,
+                generation: WebInspectorPage.Generation,
+                operationID: UInt64
+            )
+        }
+
+        let purpose: Purpose
+        let domain: ProtocolDomain
+        let method: String
+        let targetID: ProtocolTarget.ID?
+        let promise: ReplyPromise<ProtocolCommand.Result>
         var hasBufferedProvisionalResponse: Bool
+
+        private init(
+            purpose: Purpose,
+            domain: ProtocolDomain,
+            method: String,
+            targetID: ProtocolTarget.ID?,
+            promise: ReplyPromise<ProtocolCommand.Result>
+        ) {
+            self.purpose = purpose
+            self.domain = domain
+            self.method = method
+            self.targetID = targetID
+            self.promise = promise
+            hasBufferedProvisionalResponse = false
+        }
+
+        static func client(
+            domain: ProtocolDomain,
+            method: String,
+            targetID: ProtocolTarget.ID?,
+            promise: ReplyPromise<ProtocolCommand.Result>
+        ) -> PendingReply {
+            PendingReply(
+                purpose: .client,
+                domain: domain,
+                method: method,
+                targetID: targetID,
+                promise: promise
+            )
+        }
+
+        static func capability(
+            domain: ProtocolDomain,
+            method: String,
+            targetID: ProtocolTarget.ID,
+            promise: ReplyPromise<ProtocolCommand.Result>,
+            key: ConnectionCapabilityKey,
+            generation: WebInspectorPage.Generation,
+            operationID: UInt64
+        ) -> PendingReply {
+            PendingReply(
+                purpose: .capability(
+                    key: key,
+                    generation: generation,
+                    operationID: operationID
+                ),
+                domain: domain,
+                method: method,
+                targetID: targetID,
+                promise: promise
+            )
+        }
     }
 
-    enum PendingKey: Sendable {
+    enum PendingKey: Hashable, Sendable {
         case root(UInt64)
         case target(ReplyKey)
     }
@@ -35,10 +97,27 @@ struct TransportReplyStore: Sendable {
     }
 
     var pendingReplies: [TransportSession.PendingReply] {
-        Array(rootReplies.values) + targetReplies.values.map(\.pending)
+        Array(pendingReplyRecords.values)
+    }
+
+    var pendingReplyRecords: [TransportSession.PendingKey: TransportSession.PendingReply] {
+        var records = Dictionary(uniqueKeysWithValues: rootReplies.map { commandID, pending in
+            (TransportSession.PendingKey.root(commandID), pending)
+        })
+        for (key, record) in targetReplies {
+            let pendingKey = TransportSession.PendingKey.target(key)
+            precondition(records[pendingKey] == nil, "A pending reply has duplicate routing ownership.")
+            records[pendingKey] = record.pending
+        }
+        return records
+    }
+
+    var pendingReplyPurposes: [TransportSession.PendingKey: TransportSession.PendingReply.Purpose] {
+        pendingReplyRecords.mapValues(\.purpose)
     }
 
     mutating func insertRootReply(_ pending: TransportSession.PendingReply, commandID: UInt64) {
+        precondition(rootReplies[commandID] == nil, "A root command identifier already owns a pending reply.")
         rootReplies[commandID] = pending
     }
 
@@ -47,15 +126,15 @@ struct TransportReplyStore: Sendable {
         key: TransportSession.ReplyKey,
         rootWrapperID: UInt64
     ) {
-        if let existingKey = targetReplyKeysByCommandID[key.commandID] {
-            _ = removeTargetReply(for: existingKey)
-        }
-        if let existingKey = targetReplyKeysByRootWrapperID[rootWrapperID] {
-            _ = removeTargetReply(for: existingKey)
-        }
-        if let existingRecord = targetReplies.removeValue(forKey: key) {
-            removeIndexes(for: key, record: existingRecord)
-        }
+        precondition(targetReplies[key] == nil, "A target reply key already owns a pending reply.")
+        precondition(
+            targetReplyKeysByCommandID[key.commandID] == nil,
+            "A target command identifier already owns a pending reply."
+        )
+        precondition(
+            targetReplyKeysByRootWrapperID[rootWrapperID] == nil,
+            "A target wrapper identifier already owns a pending reply."
+        )
 
         let record = TargetReplyRecord(pending: pending, rootWrapperID: rootWrapperID)
         targetReplies[key] = record
@@ -67,10 +146,13 @@ struct TransportReplyStore: Sendable {
     }
 
     mutating func takeTargetReplyKey(forRootWrapperID rootWrapperID: UInt64) -> TransportSession.ReplyKey? {
-        guard let key = targetReplyKeysByRootWrapperID.removeValue(forKey: rootWrapperID),
-              targetReplies[key]?.rootWrapperID == rootWrapperID else {
+        guard let key = targetReplyKeysByRootWrapperID.removeValue(forKey: rootWrapperID) else {
             return nil
         }
+        precondition(
+            targetReplies[key]?.rootWrapperID == rootWrapperID,
+            "A target wrapper index does not match its pending reply owner."
+        )
         targetReplies[key]?.rootWrapperID = nil
         return key
     }
@@ -83,12 +165,15 @@ struct TransportReplyStore: Sendable {
         return record.pending
     }
 
-    mutating func removePendingReply(_ key: TransportSession.PendingKey) {
+    @discardableResult
+    mutating func removePendingReply(
+        _ key: TransportSession.PendingKey
+    ) -> TransportSession.PendingReply? {
         switch key {
         case let .root(commandID):
             rootReplies.removeValue(forKey: commandID)
         case let .target(targetReplyKey):
-            _ = removeTargetReply(for: targetReplyKey)
+            removeTargetReply(for: targetReplyKey)
         }
     }
 
@@ -140,8 +225,16 @@ struct TransportReplyStore: Sendable {
 
     private mutating func insertIndexes(for key: TransportSession.ReplyKey, record: TargetReplyRecord) {
         if let rootWrapperID = record.rootWrapperID {
+            precondition(
+                targetReplyKeysByRootWrapperID[rootWrapperID] == nil,
+                "A target wrapper index already has an owner."
+            )
             targetReplyKeysByRootWrapperID[rootWrapperID] = key
         }
+        precondition(
+            targetReplyKeysByCommandID[key.commandID] == nil,
+            "A target command index already has an owner."
+        )
         targetReplyKeysByCommandID[key.commandID] = key
     }
 

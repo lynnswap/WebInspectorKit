@@ -1,7 +1,7 @@
 import Foundation
 import Testing
-import WebInspectorProxyKit
 import WebInspectorTestSupport
+@testable import WebInspectorProxyKit
 
 private let transportCommandBackendWaitTimeout: Duration = .milliseconds(750)
 
@@ -2238,6 +2238,72 @@ func transportCommandBackendDecodesRuntimePropertiesPreviewAndCollectionEntries(
 }
 
 @Test
+func pendingRepliesClassifyClientAndCapabilityOwners() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+
+    let clientTask = Task {
+        try await proxy.page.page.reload()
+    }
+    let reload = try await waitForTargetMessage(backend, method: "Page.reload")
+    let reloadPendingKey = TransportSession.PendingKey.target(
+        TransportSession.ReplyKey(
+            targetID: reload.targetIdentifier,
+            commandID: try messageID(reload.message)
+        )
+    )
+    #expect(await transport.pendingReplyPurposes() == [reloadPendingKey: .client])
+    await receiveTargetReply(
+        transport,
+        targetID: reload.targetIdentifier,
+        messageID: try messageID(reload.message),
+        result: "{}"
+    )
+    try await clientTask.value
+
+    let bodyGate = CloseConnectionGate()
+    let scopeTask = Task {
+        try await proxy.page.network.withEvents { _ in
+            await bodyGate.waitUntilReleased()
+        }
+    }
+    let generation = try await transport.pageGeneration()
+    let enable = try await waitForTargetMessage(backend, method: "Network.enable")
+    let enableOperationID = try await requireCapabilityReplyPurpose(
+        in: transport,
+        message: enable,
+        expectedGeneration: generation
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: enable.targetIdentifier,
+        messageID: try messageID(enable.message),
+        result: "{}"
+    )
+    await bodyGate.waitUntilStarted()
+    #expect(await transport.pendingReplyPurposes().isEmpty)
+
+    await bodyGate.release()
+    let disable = try await waitForTargetMessage(backend, method: "Network.disable")
+    let disableOperationID = try await requireCapabilityReplyPurpose(
+        in: transport,
+        message: disable,
+        expectedGeneration: generation
+    )
+    #expect(disableOperationID > enableOperationID)
+    await receiveTargetReply(
+        transport,
+        targetID: disable.targetIdentifier,
+        messageID: try messageID(disable.message),
+        result: "{}"
+    )
+    try await scopeTask.value
+    #expect(await transport.pendingReplyPurposes().isEmpty)
+}
+
+@Test
 func structuredNetworkScopeBuffersReplayBeforeEnableReplyAndBalancesDisable() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
@@ -4089,6 +4155,34 @@ private func pageTarget(proxy: WebInspectorProxy) -> WebInspectorTarget {
         proxy: proxy,
         route: RoutingTargetID("page-main")
     )
+}
+
+private func requireCapabilityReplyPurpose(
+    in transport: TransportSession,
+    message: SentTargetMessage,
+    expectedGeneration: WebInspectorPage.Generation
+) async throws -> UInt64 {
+    let pendingKey = TransportSession.PendingKey.target(
+        TransportSession.ReplyKey(
+            targetID: message.targetIdentifier,
+            commandID: try messageID(message.message)
+        )
+    )
+    let purposes = await transport.pendingReplyPurposes()
+    #expect(purposes.count == 1)
+    let purpose = try #require(purposes[pendingKey])
+    switch purpose {
+    case .client:
+        Issue.record("Expected a capability reply purpose.")
+        return 0
+    case let .capability(key, generation, operationID):
+        #expect(key.route == .currentPage)
+        #expect(key.targetID == .currentPage)
+        #expect(key.domain == .network)
+        #expect(generation == expectedGeneration)
+        #expect(operationID > 0)
+        return operationID
+    }
 }
 
 private func installPageTarget(

@@ -1,11 +1,16 @@
 import Foundation
 import Synchronization
 
+private struct ConnectionPendingReplyOwnership: Equatable, Sendable {
+    let key: TransportSession.PendingKey
+    let purpose: TransportSession.PendingReply.Purpose
+}
+
 private struct ConnectionCapabilityCommandOperation: Sendable {
     let backend: any TransportBackend
     let message: String
     let promise: ReplyPromise<ProtocolCommand.Result>
-    let pendingKey: TransportSession.PendingKey
+    let pendingReplyOwnership: ConnectionPendingReplyOwnership
     let timeoutAction: (@Sendable () async -> Void)?
 
     func value() async throws {
@@ -33,7 +38,7 @@ private struct ConnectionCapabilityCommandOperation: Sendable {
 
 private struct ConnectionCapabilityTask: Sendable {
     let task: Task<Void, Never>
-    let pendingKey: TransportSession.PendingKey?
+    let pendingReplyOwnership: ConnectionPendingReplyOwnership?
 }
 
 private struct PhysicalTargetDisappearanceWaiters: Sendable {
@@ -90,7 +95,7 @@ package actor ConnectionCore {
     private struct TerminalOperation: Sendable {
         let transportError: TransportSession.Error
         let scopeError: WebInspectorProxyError?
-        let pendingReplies: [ReplyPromise<ProtocolCommand.Result>]
+        let pendingReplies: [TransportSession.PendingReply]
         let mainPageTargetWaiters: [ReplyPromise<TransportSession.MainPageTarget>]
         let activationWaiters: [ReplyPromise<Void>]
         let releaseWaiters: [ReplyPromise<Void>]
@@ -99,7 +104,7 @@ package actor ConnectionCore {
 
         func run() async {
             for pending in pendingReplies {
-                await pending.fulfill(.failure(transportError))
+                await pending.promise.fulfill(.failure(transportError))
             }
             for waiter in mainPageTargetWaiters {
                 await waiter.fulfill(.failure(transportError))
@@ -213,8 +218,12 @@ package actor ConnectionCore {
         capabilityTasks.removeAll()
         for task in tasks {
             task.task.cancel()
-            if let pendingKey = task.pendingKey {
-                replyStore.removePendingReply(pendingKey)
+            if let ownership = task.pendingReplyOwnership,
+               let pending = replyStore.removePendingReply(ownership.key) {
+                precondition(
+                    pending.purpose == ownership.purpose,
+                    "A capability task attempted to remove a reply owned by another purpose."
+                )
             }
         }
         precondition(replyStore.pendingReplies.isEmpty, "ConnectionCore deinitialized with pending replies; call close() explicitly.")
@@ -596,6 +605,12 @@ package actor ConnectionCore {
         )
     }
 
+    func pendingReplyPurposes() -> [
+        TransportSession.PendingKey: TransportSession.PendingReply.Purpose
+    ] {
+        replyStore.pendingReplyPurposes
+    }
+
     package func targetID(forExecutionContext key: RuntimeContext.Key) -> ProtocolTarget.ID? {
         runtimeContextRegistry.targetID(for: key)
     }
@@ -809,7 +824,12 @@ package actor ConnectionCore {
     ) {
         let operation: ConnectionCapabilityCommandOperation
         do {
-            operation = try makeCapabilityCommandOperation(action, for: key)
+            operation = try makeCapabilityCommandOperation(
+                action,
+                for: key,
+                generation: generation,
+                operationID: id
+            )
         } catch {
             let result: Result<Void, any Swift.Error> = .failure(
                 Self.mapCapabilityError(error, action: action, domain: key.domain)
@@ -823,7 +843,11 @@ package actor ConnectionCore {
                     result: result
                 )
             }
-            capabilityTasks[id] = ConnectionCapabilityTask(task: task, pendingKey: nil)
+            precondition(capabilityTasks[id] == nil, "A capability operation identifier already has an owner.")
+            capabilityTasks[id] = ConnectionCapabilityTask(
+                task: task,
+                pendingReplyOwnership: nil
+            )
             return
         }
 
@@ -843,15 +867,18 @@ package actor ConnectionCore {
                 result: result
             )
         }
+        precondition(capabilityTasks[id] == nil, "A capability operation identifier already has an owner.")
         capabilityTasks[id] = ConnectionCapabilityTask(
             task: task,
-            pendingKey: operation.pendingKey
+            pendingReplyOwnership: operation.pendingReplyOwnership
         )
     }
 
     private func makeCapabilityCommandOperation(
         _ action: CapabilityWireAction,
-        for key: ConnectionCapabilityKey
+        for key: ConnectionCapabilityKey,
+        generation: WebInspectorPage.Generation,
+        operationID: UInt64
     ) throws -> ConnectionCapabilityCommandOperation {
         let method: String
         switch action {
@@ -890,16 +917,23 @@ package actor ConnectionCore {
             message: message
         )
         let promise = ReplyPromise<ProtocolCommand.Result>()
+        let pendingReply = TransportSession.PendingReply.capability(
+            domain: domain,
+            method: method,
+            targetID: targetID,
+            promise: promise,
+            key: key,
+            generation: generation,
+            operationID: operationID
+        )
         replyStore.insertTargetReply(
-            TransportSession.PendingReply(
-                domain: domain,
-                method: method,
-                targetID: targetID,
-                promise: promise,
-                hasBufferedProvisionalResponse: false
-            ),
+            pendingReply,
             key: replyKey,
             rootWrapperID: outerCommandID
+        )
+        let pendingReplyOwnership = ConnectionPendingReplyOwnership(
+            key: pendingKey,
+            purpose: pendingReply.purpose
         )
 
         let timeoutAction: (@Sendable () async -> Void)?
@@ -929,7 +963,7 @@ package actor ConnectionCore {
             backend: backend,
             message: wrapperMessage,
             promise: promise,
-            pendingKey: pendingKey,
+            pendingReplyOwnership: pendingReplyOwnership,
             timeoutAction: timeoutAction
         )
     }
@@ -941,8 +975,12 @@ package actor ConnectionCore {
         action: CapabilityWireAction,
         result: Result<Void, any Swift.Error>
     ) async {
-        if let pendingKey = capabilityTasks.removeValue(forKey: id)?.pendingKey {
-            replyStore.removePendingReply(pendingKey)
+        if let ownership = capabilityTasks.removeValue(forKey: id)?.pendingReplyOwnership,
+           let pending = replyStore.removePendingReply(ownership.key) {
+            precondition(
+                pending.purpose == ownership.purpose,
+                "A capability task attempted to remove a reply owned by another purpose."
+            )
         }
         guard isOpen, var capability = capabilities.states[key] else {
             return
@@ -1220,12 +1258,11 @@ package actor ConnectionCore {
     private func sendRoot(_ command: ProtocolCommand) async throws -> ProtocolCommand.Result {
         let commandID = allocateCommandID()
         let promise = ReplyPromise<ProtocolCommand.Result>()
-        replyStore.insertRootReply(TransportSession.PendingReply(
+        replyStore.insertRootReply(TransportSession.PendingReply.client(
             domain: command.domain,
             method: command.method,
             targetID: nil,
-            promise: promise,
-            hasBufferedProvisionalResponse: false
+            promise: promise
         ), commandID: commandID)
         do {
             try Task.checkCancellation()
@@ -1256,12 +1293,11 @@ package actor ConnectionCore {
         let outerCommandID = allocateCommandID()
         let key = TransportSession.ReplyKey(targetID: targetID, commandID: innerCommandID)
         let promise = ReplyPromise<ProtocolCommand.Result>()
-        replyStore.insertTargetReply(TransportSession.PendingReply(
+        replyStore.insertTargetReply(TransportSession.PendingReply.client(
             domain: command.domain,
             method: command.method,
             targetID: targetID,
-            promise: promise,
-            hasBufferedProvisionalResponse: false
+            promise: promise
         ), key: key, rootWrapperID: outerCommandID)
         do {
             try Task.checkCancellation()
@@ -1387,14 +1423,14 @@ package actor ConnectionCore {
            let key = replyStore.takeTargetReplyKey(forRootWrapperID: id) {
             if parsed.errorMessage != nil,
                let pending = replyStore.removeTargetReply(for: key) {
-                await resolve(pending, parsed: parsed)
+                await resolve(pending, key: .target(key), parsed: parsed)
             }
             return
         }
 
         if let id = parsed.id,
            let pending = replyStore.removeRootReply(commandID: id) {
-            await resolve(pending, parsed: parsed)
+            await resolve(pending, key: .root(id), parsed: parsed)
             return
         }
 
@@ -1478,7 +1514,7 @@ package actor ConnectionCore {
         if let id = parsed.id {
             let key = TransportSession.ReplyKey(targetID: targetID, commandID: id)
             if let pending = replyStore.removeTargetReply(for: key) {
-                await resolve(pending, parsed: parsed)
+                await resolve(pending, key: .target(key), parsed: parsed)
                 return
             }
         }
@@ -1529,7 +1565,12 @@ package actor ConnectionCore {
         )
     }
 
-    private func resolve(_ pending: TransportSession.PendingReply, parsed: ParsedProtocolMessage) async {
+    private func resolve(
+        _ pending: TransportSession.PendingReply,
+        key: TransportSession.PendingKey,
+        parsed: ParsedProtocolMessage
+    ) async {
+        validateReplyOwnership(pending, key: key)
         if let errorMessage = parsed.errorMessage {
             await pending.promise.fulfill(
                 .failure(
@@ -1543,18 +1584,60 @@ package actor ConnectionCore {
             return
         }
         let eventSequence = eventSequences.current
-        await pending.promise.fulfill(
-            .success(
-                ProtocolCommand.Result(
-                    domain: pending.domain,
-                    method: pending.method,
-                    targetID: pending.targetID,
-                    receivedSequence: eventSequence.sequence,
-                    receivedDomainSequences: eventSequence.receivedDomainSequences,
-                    resultData: parsed.resultData
-                )
-            )
+        let result = ProtocolCommand.Result(
+            domain: pending.domain,
+            method: pending.method,
+            targetID: pending.targetID,
+            receivedSequence: eventSequence.sequence,
+            receivedDomainSequences: eventSequence.receivedDomainSequences,
+            resultData: parsed.resultData
         )
+        processSuccessfulReply(result, for: pending)
+        await pending.promise.fulfill(
+            .success(result)
+        )
+    }
+
+    private func validateReplyOwnership(
+        _ pending: TransportSession.PendingReply,
+        key: TransportSession.PendingKey
+    ) {
+        switch pending.purpose {
+        case .client:
+            break
+        case let .capability(_, _, operationID):
+            guard let ownership = capabilityTasks[operationID]?.pendingReplyOwnership else {
+                preconditionFailure("A capability reply has no capability operation owner.")
+            }
+            precondition(
+                ownership.key == key,
+                "A capability reply key does not match its operation owner."
+            )
+            precondition(
+                ownership.purpose == pending.purpose,
+                "A capability reply purpose does not match its operation owner."
+            )
+        }
+    }
+
+    /// Synchronous phase boundary for successful reply-side effects.
+    ///
+    /// The ordered model feed adds capability markers to this purpose switch
+    /// in the next change. It must remain in the actor's inbound processing
+    /// slot before `ReplyPromise.fulfill` resumes the waiting operation.
+    private func processSuccessfulReply(
+        _ result: ProtocolCommand.Result,
+        for pending: TransportSession.PendingReply
+    ) {
+        switch pending.purpose {
+        case .client:
+            // Client replies have no internal publication side effect.
+            break
+        case .capability:
+            // The next change publishes the ordered model-feed marker here.
+            break
+        }
+        _ = result
     }
 
     private func updateRegistryFromRootEvent(
@@ -2301,6 +2384,11 @@ package actor ConnectionCore {
             capabilities.states[key] = capability
         }
 
+        let pendingReplyRecords = replyStore.pendingReplyRecords
+        for (key, pending) in pendingReplyRecords {
+            validateReplyOwnership(pending, key: key)
+        }
+        let pendingReplies = Array(pendingReplyRecords.values)
         let runningCapabilityTasks = capabilityTasks.values.map(\.task)
         capabilityTasks.removeAll()
         for task in runningCapabilityTasks {
@@ -2311,7 +2399,6 @@ package actor ConnectionCore {
         for waiter in eventScopeWaiters {
             waiter.continuation.resume()
         }
-        let pendingReplies = replyStore.pendingReplies.map(\.promise)
         let mainPageTargetWaiters = mainPageTargetWaiterStore.removeAll()
         replyStore.removeAll()
         provisionalTargetMessageStore.removeAll()
