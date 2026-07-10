@@ -305,8 +305,8 @@ struct ParentContainerTests {
         let factoryStarted = WebInspectorTestGate()
         let factoryRelease = WebInspectorTestGate()
         let contentStore = PresentationContentStore { context in
-            await factoryStarted.open()
-            await factoryRelease.wait()
+            factoryStarted.open()
+            await factoryRelease.waiter.wait()
             return try await NetworkPanelModel.make(context: context)
         }
         let observation = withPortableContinuousObservation { _ in
@@ -332,8 +332,8 @@ struct ParentContainerTests {
         #expect(resourceViewController.contentUnavailableConfiguration != nil)
         #expect(contentStore.networkResourceStatus == .loading)
 
-        await factoryStarted.wait()
-        await factoryRelease.open()
+        await factoryStarted.waiter.wait()
+        factoryRelease.open()
         await contentStore.waitForNetworkResourceTaskForTesting()
 
         #expect(await statuses.waitUntilValue(.ready))
@@ -393,12 +393,12 @@ struct ParentContainerTests {
             let model = try await NetworkPanelModel.make(context: context)
             if context === firstContext {
                 firstModel = model
-                await firstFactoryStarted.open()
-                await firstFactoryRelease.wait()
+                firstFactoryStarted.open()
+                await firstFactoryRelease.waiter.wait()
             } else {
                 #expect(context === secondContext)
-                await secondFactoryStarted.open()
-                await secondFactoryRelease.wait()
+                secondFactoryStarted.open()
+                await secondFactoryRelease.waiter.wait()
             }
             return model
         }
@@ -409,7 +409,7 @@ struct ParentContainerTests {
         ) { _ in
             UIViewController()
         }
-        await firstFactoryStarted.wait()
+        await firstFactoryStarted.waiter.wait()
         let withheldFirstModel = try #require(firstModel)
 
         let secondResourceViewController = contentStore.networkViewController(
@@ -423,14 +423,14 @@ struct ParentContainerTests {
         #expect(secondResourceViewController.phase == .loading)
         #expect(contentStore.contextEpoch == 2)
 
-        await firstFactoryRelease.open()
-        await secondFactoryStarted.wait()
+        firstFactoryRelease.open()
+        await secondFactoryStarted.waiter.wait()
 
         #expect(withheldFirstModel.isRetiredForTesting)
         #expect(contentStore.networkResourceStatus == .loading)
         #expect(secondResourceViewController.readyViewControllerForTesting == nil)
 
-        await secondFactoryRelease.open()
+        secondFactoryRelease.open()
         await contentStore.waitForNetworkResourceTaskForTesting()
 
         let secondModel = try #require(contentStore.networkPanelModelForTesting)
@@ -479,8 +479,8 @@ struct ParentContainerTests {
         let factoryRelease = WebInspectorTestGate()
         var contentStore: PresentationContentStore? = PresentationContentStore { context in
             let model = try await NetworkPanelModel.make(context: context)
-            await factoryStarted.open()
-            await factoryRelease.wait()
+            factoryStarted.open()
+            await factoryRelease.waiter.wait()
             return model
         }
         weak var retainedStore = contentStore
@@ -490,14 +490,14 @@ struct ParentContainerTests {
         ) { _ in
             UIViewController()
         }
-        await factoryStarted.wait()
+        await factoryStarted.waiter.wait()
 
         contentStore = nil
 
         #expect(retainedStore == nil)
         #expect(resourceViewController.phase == .loading)
 
-        await factoryRelease.open()
+        factoryRelease.open()
         #expect(resourceViewController.readyViewControllerForTesting == nil)
     }
 
