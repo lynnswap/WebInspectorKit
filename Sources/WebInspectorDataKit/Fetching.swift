@@ -539,11 +539,20 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
             )
         }
 
-        let revision = oldState.revision &+ 1
-        let topologyRevision = if isReset || oldState.snapshot != newSnapshot {
-            oldState.topologyRevision &+ 1
+        precondition(
+            oldState.revision < UInt64.max,
+            "WebInspectorFetchedResults publication revision overflowed."
+        )
+        let revision = oldState.revision + 1
+        let topologyRevision: UInt64
+        if isReset || oldState.snapshot != newSnapshot {
+            precondition(
+                oldState.topologyRevision < UInt64.max,
+                "WebInspectorFetchedResults topology revision overflowed."
+            )
+            topologyRevision = oldState.topologyRevision + 1
         } else {
-            oldState.topologyRevision
+            topologyRevision = oldState.topologyRevision
         }
         state = State(
             fetchDescriptor: fetchDescriptor ?? oldState.fetchDescriptor,
