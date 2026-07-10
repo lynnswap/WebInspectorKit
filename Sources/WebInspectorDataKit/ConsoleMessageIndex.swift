@@ -25,7 +25,7 @@ package actor ConsoleMessageIndex {
 
     private struct SequenceWaiter {
         var minimumSequence: UInt64
-        var continuation: CheckedContinuation<Void, Never>
+        var continuation: CheckedContinuation<Void, any Error>
     }
 
     private final class WeakLifetime {
@@ -163,7 +163,7 @@ package actor ConsoleMessageIndex {
         lifetime: WebInspectorQueryRegistrationLifetime,
         minimumSequence: UInt64
     ) async throws -> QueryProjection {
-        await waitUntilApplied(minimumSequence)
+        try await waitUntilApplied(minimumSequence)
         try Task.checkCancellation()
         pruneQueryRegistrations()
         guard lifetime.isCurrent(generation: generation) else {
@@ -196,7 +196,7 @@ package actor ConsoleMessageIndex {
         query: ConsoleQuery,
         minimumSequence: UInt64
     ) async throws -> QueryProjection {
-        await waitUntilApplied(minimumSequence)
+        try await waitUntilApplied(minimumSequence)
         try Task.checkCancellation()
         pruneQueryRegistrations()
         guard var registration = queryRegistrations[id],
@@ -283,7 +283,8 @@ package actor ConsoleMessageIndex {
         queryRegistrations[id] = registration
     }
 
-    private func waitUntilApplied(_ minimumSequence: UInt64) async {
+    private func waitUntilApplied(_ minimumSequence: UInt64) async throws {
+        try Task.checkCancellation()
         guard lastAppliedSequence < minimumSequence else {
             return
         }
@@ -293,13 +294,29 @@ package actor ConsoleMessageIndex {
         )
         let waiterID = nextSequenceWaiterID
         nextSequenceWaiterID += 1
-        await withCheckedContinuation { continuation in
-            sequenceWaiters[waiterID] = SequenceWaiter(
-                minimumSequence: minimumSequence,
-                continuation: continuation
-            )
-            resumeSequenceWaiters()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                sequenceWaiters[waiterID] = SequenceWaiter(
+                    minimumSequence: minimumSequence,
+                    continuation: continuation
+                )
+                if Task.isCancelled {
+                    cancelSequenceWaiter(id: waiterID)
+                } else {
+                    resumeSequenceWaiters()
+                }
+            }
+        } onCancel: {
+            Task {
+                await self.cancelSequenceWaiter(id: waiterID)
+            }
         }
+    }
+
+    private func cancelSequenceWaiter(id: UInt64) {
+        sequenceWaiters.removeValue(forKey: id)?.continuation.resume(
+            throwing: CancellationError()
+        )
     }
 
     private func resumeSequenceWaiters() {
@@ -307,7 +324,7 @@ package actor ConsoleMessageIndex {
             waiter.minimumSequence <= lastAppliedSequence ? id : nil
         }
         for id in readyIDs {
-            sequenceWaiters.removeValue(forKey: id)?.continuation.resume()
+            sequenceWaiters.removeValue(forKey: id)?.continuation.resume(returning: ())
         }
     }
 

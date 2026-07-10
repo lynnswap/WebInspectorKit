@@ -14,6 +14,118 @@ func consoleQueryProvidesClosedDefaults() {
     #expect(query.limit == nil)
 }
 
+@Test
+func consoleConcreteQueryRegistrationIncludesTheRequiredMutationSequence() async throws {
+    let index = ConsoleMessageIndex()
+    let secondMutation = Task {
+        await index.replace(with: [], sequence: 2)
+    }
+    try await waitForConcreteQueryCondition {
+        await index.isMutationPendingForTesting(sequence: 2)
+    }
+
+    let lifetime = WebInspectorQueryRegistrationLifetime()
+    let generation = lifetime.nextGeneration()
+    let registration = Task {
+        try await index.register(
+            id: WebInspectorQueryRegistrationID(rawValue: 11),
+            generation: generation,
+            query: ConsoleQuery(),
+            lifetime: lifetime,
+            minimumSequence: 2
+        )
+    }
+    try await waitForConcreteQueryCondition {
+        await index.isSequenceWaiterPendingForTesting(minimumSequence: 2)
+    }
+
+    _ = await index.replace(with: [], sequence: 1)
+    _ = await secondMutation.value
+    let projection = try await registration.value
+
+    #expect(projection.sequence == 2)
+    #expect(await index.isSequenceWaiterPendingForTesting(minimumSequence: 2) == false)
+    #expect(await index.queryRegistrationCountForTesting() == 1)
+}
+
+@Test
+func cancelledConsoleConcreteQueryRegistrationStopsWaitingWithoutTheMissingMutation() async throws {
+    var index: ConsoleMessageIndex? = ConsoleMessageIndex()
+    weak let weakIndex = index
+    let lifetime = WebInspectorQueryRegistrationLifetime()
+    let generation = lifetime.nextGeneration()
+    let registration = Task { [index] in
+        guard let index else {
+            throw CancellationError()
+        }
+        return try await index.register(
+            id: WebInspectorQueryRegistrationID(rawValue: 12),
+            generation: generation,
+            query: ConsoleQuery(),
+            lifetime: lifetime,
+            minimumSequence: 1
+        )
+    }
+    try await waitForConcreteQueryCondition { [weak index] in
+        guard let index else {
+            return false
+        }
+        return await index.isSequenceWaiterPendingForTesting(minimumSequence: 1)
+    }
+
+    registration.cancel()
+
+    await #expect(throws: CancellationError.self) {
+        try await registration.value
+    }
+    if let index {
+        #expect(await index.isSequenceWaiterPendingForTesting(minimumSequence: 1) == false)
+        #expect(await index.queryRegistrationCountForTesting() == 0)
+    }
+    index = nil
+    #expect(weakIndex == nil)
+}
+
+@Test
+func cancelledConsoleConcreteQueryReplacementStopsWaitingWithoutTheMissingMutation() async throws {
+    let index = ConsoleMessageIndex()
+    _ = await index.replace(with: [], sequence: 1)
+    let lifetime = WebInspectorQueryRegistrationLifetime()
+    let registrationID = WebInspectorQueryRegistrationID(rawValue: 13)
+    let activeGeneration = lifetime.nextGeneration()
+    _ = try await index.register(
+        id: registrationID,
+        generation: activeGeneration,
+        query: ConsoleQuery(),
+        lifetime: lifetime,
+        minimumSequence: 1
+    )
+
+    let cancelledGeneration = lifetime.nextGeneration()
+    let replacement = Task {
+        try await index.prepareReplacement(
+            id: registrationID,
+            generation: cancelledGeneration,
+            query: ConsoleQuery(sort: .insertionDescending),
+            minimumSequence: 2
+        )
+    }
+    try await waitForConcreteQueryCondition {
+        await index.isSequenceWaiterPendingForTesting(minimumSequence: 2)
+    }
+
+    replacement.cancel()
+
+    await #expect(throws: CancellationError.self) {
+        try await replacement.value
+    }
+    #expect(await index.isSequenceWaiterPendingForTesting(minimumSequence: 2) == false)
+    #expect(await index.commitReplacement(
+        id: registrationID,
+        generation: cancelledGeneration
+    ) == nil)
+}
+
 @MainActor
 @Test
 func consoleConcreteQueryFiltersSortsSectionsAndWindowsCompactRecords() async throws {

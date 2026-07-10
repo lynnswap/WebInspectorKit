@@ -118,6 +118,44 @@ func networkConcreteQueryRegistrationIncludesMutationAppliedWhileWaitingForIniti
     #expect(await index.queryRegistrationCountForTesting() == 1)
 }
 
+@Test
+func cancelledNetworkConcreteQueryRegistrationStopsWaitingWithoutTheMissingMutation() async throws {
+    var index: NetworkRequestIndex? = NetworkRequestIndex()
+    weak let weakIndex = index
+    let lifetime = WebInspectorQueryRegistrationLifetime()
+    let generation = lifetime.nextGeneration()
+    let registration = Task { [index] in
+        guard let index else {
+            throw CancellationError()
+        }
+        return try await index.register(
+            id: WebInspectorQueryRegistrationID(rawValue: 11),
+            generation: generation,
+            query: NetworkQuery(),
+            lifetime: lifetime,
+            minimumSequence: 1
+        )
+    }
+    try await waitForConcreteQueryCondition { [weak index] in
+        guard let index else {
+            return false
+        }
+        return await index.isSequenceWaiterPendingForTesting(minimumSequence: 1)
+    }
+
+    registration.cancel()
+
+    await #expect(throws: CancellationError.self) {
+        try await registration.value
+    }
+    if let index {
+        #expect(await index.isSequenceWaiterPendingForTesting(minimumSequence: 1) == false)
+        #expect(await index.queryRegistrationCountForTesting() == 0)
+    }
+    index = nil
+    #expect(weakIndex == nil)
+}
+
 @MainActor
 @Test
 func networkConcreteQueryReplacementAbsorbsMutationBetweenPrepareAndCommit() async throws {
@@ -221,17 +259,19 @@ func cancelledNetworkConcreteQueryReplacementLeavesTheActiveGenerationWhole() as
         await index.isSequenceWaiterPendingForTesting(minimumSequence: 2)
     }
     replacement.cancel()
-    let deliveries = await index.upsert(second.input, sequence: 2)
 
     await #expect(throws: CancellationError.self) {
         try await replacement.value
     }
-    #expect(deliveries.map(\.generation) == [activeGeneration])
-    #expect(deliveries.first?.projection.snapshot.itemIDs == [first.id, second.id])
+    #expect(await index.isSequenceWaiterPendingForTesting(minimumSequence: 2) == false)
     #expect(await index.commitReplacement(
         id: registrationID,
         generation: cancelledGeneration
     ) == nil)
+
+    let deliveries = await index.upsert(second.input, sequence: 2)
+    #expect(deliveries.map(\.generation) == [activeGeneration])
+    #expect(deliveries.first?.projection.snapshot.itemIDs == [first.id, second.id])
 }
 
 @MainActor
@@ -608,7 +648,7 @@ private func finishNetworkRequest(
     )
 }
 
-private func waitForConcreteQueryCondition(
+func waitForConcreteQueryCondition(
     timeout: Duration = .seconds(2),
     _ condition: @escaping @Sendable () async -> Bool
 ) async throws {
