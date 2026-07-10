@@ -378,12 +378,11 @@ promise.
 | native bridge and detach | `@MainActor NativeAttachment` | attach and deterministic close |
 | original inspectability and same-view lease membership | per-web-view `@MainActor InspectabilityCoordinator` | lease acquire/final release |
 | model attachment and physical binding generations | caller-confined `WebInspectorModelContext` | owning actor via attach, detach, close, and ordered feed application |
-| DOM identity, tree, selection, edits | package-internal `DOMStateStore` | DOM events and DOM commands |
+| DOM identity, tree, selection, edits, and node-bound CSS resources | package-internal `DOMStateStore` | DOM/CSS events and awaited DOM/CSS command results |
 | Network identity registry and query membership | package-internal `NetworkRequestStore` plus its off-main-actor index | Network events and clear/load operations |
 | Console identity registry and query membership | package-internal `ConsoleMessageStore` plus its off-main-actor index | Console events and clear operations |
 | one query projection's snapshot and delta sequence | public `WebInspectorFetchedResults` | its owning internal store only |
 | Runtime contexts and remote groups | package-internal `RuntimeStateStore` | Runtime events and scoped evaluation |
-| CSS state and mutation | package-internal `CSSStateStore` | CSS events and awaited CSS commands |
 | UI tabs and page style | UIKit `WebInspectorSession` and its package interface model | presentation and page-style events only |
 | content-controller cache and retirement | root `WebInspectorViewController` | tab selection and root presentation lifecycle |
 | tab layout/scroll/render caches | UIKit controllers | presentation events only |
@@ -1111,8 +1110,14 @@ write sets out of `WebInspectorContext`:
   collection epochs, weak fetched-results registrations, and compact Sendable
   records passed to their query indexes.
 - `RuntimeStateStore` owns execution-context identity and object-group
-  membership; `CSSStateStore` owns node-style resources, stale marking, and
-  awaited mutation serialization.
+  membership.
+
+CSS does not introduce another store. A `CSSStyles` resource is keyed by a
+registered `DOMNode`, becomes stale with that node's document epoch, and is
+discarded with the node, so its membership and lifetime belong to
+`DOMStateStore`. `WebInspectorModelContext` coordinates awaited CSS protocol I/O
+and applies each result back through that owner; it does not keep a parallel CSS
+identity map or CSS epoch.
 
 They are implementation owners, not observable facade objects. They do not
 mirror one another, and a store is not added until the corresponding Context
@@ -1852,7 +1857,7 @@ the design gate and implementation:
 5. `refactor(proxy)!: make domain subscriptions atomic and bounded`
 6. `test(data): characterize context and model contracts`
 7. `refactor(data)!: replace dynamic context with caller confinement`
-8. `refactor(data)!: move DOM and CSS state to domain owners`
+8. `refactor(data)!: move DOM and node-bound CSS state to one owner`
 9. `refactor(data)!: move Network and Console state to domain owners`
 10. `refactor(data)!: scope Runtime resources and concrete queries`
 11. `feat(testing): add high-level DataKit scenarios`
