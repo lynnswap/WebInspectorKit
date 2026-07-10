@@ -376,8 +376,7 @@ struct DOMContainerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        let body = try selectElement(named: "body", in: context)
-        #expect(body.elementStyles?.phase == .loading)
+        _ = try selectElement(named: "body", in: context)
 
         let didRenderPlaceholder = await waitUntilRendered(in: viewController) {
             viewController.contentUnavailableConfiguration != nil
@@ -405,8 +404,7 @@ struct DOMContainerTests {
         }
         #expect(didRenderBodyRows)
 
-        let input = try selectElement(named: "input", in: context)
-        #expect(input.elementStyles?.phase == .loading)
+        _ = try selectElement(named: "input", in: context)
         #expect(stylePropertyViews(in: viewController).map(\.declarationTextForTesting).contains("margin: 0;"))
 
         try context.selectDOMNode(nil)

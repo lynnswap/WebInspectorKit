@@ -564,77 +564,95 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func responsePreviewRequestsRuntimeFetchWhenBodyIsAvailable() async throws {
-        let context = makeContext()
-        let request = try #require(
-            await applyRequest(
-                to: context,
-                requestID: "1",
-                url: "https://example.com/api/data.json",
-                responseHeaders: ["content-type": "application/json"],
-                responseMimeType: "application/json"
+        try await withLiveNetworkContext { fixture in
+            let request = try #require(
+                await applyRequest(
+                    to: fixture.context,
+                    requestID: "1",
+                    url: "https://example.com/api/data.json",
+                    responseHeaders: ["content-type": "application/json"],
+                    responseMimeType: "application/json"
+                )
             )
-        )
-        let model = try await NetworkPanelModel.make(context: context)
-        model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
-        let window = showInWindow(viewController)
-        defer { window.isHidden = true }
-        viewController.setModeForTesting(.preview)
+            let model = try await NetworkPanelModel.make(context: fixture.context)
+            model.selectRequest(request)
+            let viewController = makeNetworkDetailViewController(model: model)
+            let window = showInWindow(viewController)
+            defer { window.isHidden = true }
+            await fixture.wire.fail(
+                "Network.getResponseBody",
+                message: "Intentional response-body failure."
+            )
+            viewController.setModeForTesting(.preview)
 
-        let didFetch = await waitUntilRendered(in: viewController) {
-            guard case .failed = request.responseBody.phase else {
-                return false
+            let didFetch = await waitUntilRendered(in: viewController) {
+                guard case .failed = request.responseBody.phase else {
+                    return false
+                }
+                return viewController.currentModeForTesting == .preview
+                    && viewController.currentPreviewRoleForTesting == .response
             }
-            return viewController.currentModeForTesting == .preview
-                && viewController.currentPreviewRoleForTesting == .response
+            #expect(didFetch)
+            #expect(fixture.wire.observations.commands.filter {
+                $0.method == "Network.getResponseBody"
+            }.count == 1)
         }
-        #expect(didFetch)
     }
 
     @Test
     func hiddenDetailDoesNotFetchResponseBodyUntilAppearingAgain() async throws {
-        let context = makeContext()
-        let request = try #require(
-            await applyRequest(
-                to: context,
-                requestID: "1",
-                url: "https://example.com/api/data.json",
-                responseHeaders: ["content-type": "application/json"],
-                responseMimeType: "application/json"
+        try await withLiveNetworkContext { fixture in
+            let request = try #require(
+                await applyRequest(
+                    to: fixture.context,
+                    requestID: "1",
+                    url: "https://example.com/api/data.json",
+                    responseHeaders: ["content-type": "application/json"],
+                    responseMimeType: "application/json"
+                )
             )
-        )
-        let model = try await NetworkPanelModel.make(context: context)
-        model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
-        let window = showInWindow(viewController)
-        defer { window.isHidden = true }
-        viewController.setModeForTesting(.headers)
+            let model = try await NetworkPanelModel.make(context: fixture.context)
+            model.selectRequest(request)
+            let viewController = makeNetworkDetailViewController(model: model)
+            let window = showInWindow(viewController)
+            defer { window.isHidden = true }
+            viewController.setModeForTesting(.headers)
 
-        let didRenderHeaders = await waitUntilRendered(in: viewController) {
-            viewController.currentModeForTesting == .headers
-                && viewController.headersTextViewForTesting.renderedTextForTesting.contains("content-type: application/json")
-        }
-        #expect(didRenderHeaders)
-        #expect(request.responseBody.phase == .available)
-
-        viewController.beginAppearanceTransition(false, animated: false)
-        viewController.endAppearanceTransition()
-        viewController.setModeForTesting(.preview)
-
-        #expect(request.responseBody.phase == .available)
-        #expect(viewController.headersTextViewForTesting.renderedTextForTesting.contains("content-type: application/json"))
-
-        viewController.beginAppearanceTransition(true, animated: false)
-        viewController.endAppearanceTransition()
-
-        let didFetchOnReturn = await waitUntilRendered(in: viewController) {
-            guard case .failed = request.responseBody.phase else {
-                return false
+            let didRenderHeaders = await waitUntilRendered(in: viewController) {
+                viewController.currentModeForTesting == .headers
+                    && viewController.headersTextViewForTesting.renderedTextForTesting.contains("content-type: application/json")
             }
-            return viewController.currentModeForTesting == .preview
-                && viewController.currentPreviewRoleForTesting == .response
+            #expect(didRenderHeaders)
+            #expect(request.responseBody.phase == .available)
+
+            viewController.beginAppearanceTransition(false, animated: false)
+            viewController.endAppearanceTransition()
+            viewController.setModeForTesting(.preview)
+
+            #expect(request.responseBody.phase == .available)
+            #expect(fixture.wire.observations.commands.contains {
+                $0.method == "Network.getResponseBody"
+            } == false)
+            await fixture.wire.fail(
+                "Network.getResponseBody",
+                message: "Intentional response-body failure."
+            )
+
+            viewController.beginAppearanceTransition(true, animated: false)
+            viewController.endAppearanceTransition()
+
+            let didFetchOnReturn = await waitUntilRendered(in: viewController) {
+                guard case .failed = request.responseBody.phase else {
+                    return false
+                }
+                return viewController.currentModeForTesting == .preview
+                    && viewController.currentPreviewRoleForTesting == .response
+            }
+            #expect(didFetchOnReturn)
+            #expect(fixture.wire.observations.commands.filter {
+                $0.method == "Network.getResponseBody"
+            }.count == 1)
         }
-        #expect(didFetchOnReturn)
     }
 
     @Test
