@@ -5,6 +5,8 @@ import Synchronization
 import Testing
 import WebInspectorDataKit
 import WebInspectorProxyKit
+import WebInspectorProxyKitTesting
+import WebInspectorTestSupport
 import UIKit
 @testable import WebInspectorUI
 @testable import WebInspectorUISyntaxBody
@@ -1225,79 +1227,98 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func responsePreviewWaitsForLoadingFinishedBeforeFetching() async throws {
-        let context = makeContext()
-        let request = try #require(
-            await applyRequest(
-                to: context,
-                requestID: "1",
-                url: "https://example.com/api/data.json",
-                responseHeaders: ["content-type": "application/json"],
-                responseMimeType: "application/json",
-                finishes: false
+        try await withLiveNetworkContext { fixture in
+            let request = try #require(
+                await applyRequest(
+                    to: fixture.context,
+                    requestID: "1",
+                    url: "https://example.com/api/data.json",
+                    responseHeaders: ["content-type": "application/json"],
+                    responseMimeType: "application/json",
+                    finishes: false
+                )
             )
-        )
-        let model = try await NetworkPanelModel.make(context: context)
-        model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
-        let window = showInWindow(viewController)
-        defer { window.isHidden = true }
-        viewController.setModeForTesting(.preview)
+            let model = try await NetworkPanelModel.make(context: fixture.context)
+            model.selectRequest(request)
+            let viewController = makeNetworkDetailViewController(model: model)
+            let window = showInWindow(viewController)
+            defer { window.isHidden = true }
+            viewController.setModeForTesting(.preview)
 
-        #expect(request.responseBody.phase == .available)
+            #expect(request.responseBody.phase == .available)
+            #expect(fixture.wire.observations.commands.contains {
+                $0.method == "Network.getResponseBody"
+            } == false)
 
-        await applyLoadingFinished(to: context, requestID: "1", timestamp: 3)
+            await fixture.wire.fail(
+                "Network.getResponseBody",
+                message: "Intentional response-body failure."
+            )
+            await applyLoadingFinished(to: fixture.context, requestID: "1", timestamp: 3)
 
-        let didFetch = await waitUntilRendered(in: viewController) {
-            guard case .failed = request.responseBody.phase else {
-                return false
+            let didFetch = await waitUntilRendered(in: viewController) {
+                guard case .failed = request.responseBody.phase else {
+                    return false
+                }
+                return true
             }
-            return true
+            #expect(didFetch)
+            #expect(fixture.wire.observations.commands.filter {
+                $0.method == "Network.getResponseBody"
+            }.count == 1)
         }
-        #expect(didFetch)
     }
 
     @Test
     func failedResponseBodyDoesNotRefetchFromRendering() async throws {
-        let context = makeContext()
-        let request = try #require(
-            await applyRequest(
-                to: context,
-                requestID: "1",
-                url: "https://example.com/api/data.json",
-                responseHeaders: ["content-type": "application/json"],
-                responseMimeType: "application/json"
+        try await withLiveNetworkContext { fixture in
+            let request = try #require(
+                await applyRequest(
+                    to: fixture.context,
+                    requestID: "1",
+                    url: "https://example.com/api/data.json",
+                    responseHeaders: ["content-type": "application/json"],
+                    responseMimeType: "application/json"
+                )
             )
-        )
-        let model = try await NetworkPanelModel.make(context: context)
-        model.fetchResponseBodyIfNeeded(for: request)
-        let didFailInitialFetch = await waitForNetworkBodyPhase(in: request.responseBody) { phase in
-            if case .failed = phase {
-                return true
+            let model = try await NetworkPanelModel.make(context: fixture.context)
+            await fixture.wire.fail(
+                "Network.getResponseBody",
+                message: "Intentional response-body failure."
+            )
+            model.fetchResponseBodyIfNeeded(for: request)
+            let didFailInitialFetch = await waitForNetworkBodyPhase(in: request.responseBody) { phase in
+                if case .failed = phase {
+                    return true
+                }
+                return false
+            } != nil
+            #expect(didFailInitialFetch)
+
+            model.selectRequest(request)
+            let viewController = makeNetworkDetailViewController(model: model)
+            let window = showInWindow(viewController)
+            defer { window.isHidden = true }
+            viewController.setModeForTesting(.preview)
+
+            let didRenderFailure = await waitUntilRendered(in: viewController) {
+                viewController.currentModeForTesting == .preview
+                    && viewController.currentPreviewRoleForTesting == .response
+                    && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text.isEmpty == false
             }
-            return false
-        } != nil
-        #expect(didFailInitialFetch)
+            #expect(didRenderFailure)
+            let failedPhase = request.responseBody.phase
 
-        model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
-        let window = showInWindow(viewController)
-        defer { window.isHidden = true }
-        viewController.setModeForTesting(.preview)
+            model.fetchResponseBodyIfNeeded(for: request)
 
-        let didRenderFailure = await waitUntilRendered(in: viewController) {
-            viewController.currentModeForTesting == .preview
-                && viewController.currentPreviewRoleForTesting == .response
-                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text.isEmpty == false
+            let didStayIdle = await waitUntilRendered(in: viewController) {
+                request.responseBody.phase == failedPhase
+            }
+            #expect(didStayIdle)
+            #expect(fixture.wire.observations.commands.filter {
+                $0.method == "Network.getResponseBody"
+            }.count == 1)
         }
-        #expect(didRenderFailure)
-        let failedPhase = request.responseBody.phase
-
-        model.fetchResponseBodyIfNeeded(for: request)
-
-        let didStayIdle = await waitUntilRendered(in: viewController) {
-            request.responseBody.phase == failedPhase
-        }
-        #expect(didStayIdle)
     }
 
     @Test
@@ -2012,12 +2033,55 @@ struct NetworkDetailViewControllerTests {
         #expect(weakViewController == nil)
     }
 
-    private func makeContext() -> WebInspectorContext {
-        WebInspectorContext.preview(isolation: MainActor.shared)
+    private func makeContext() -> WebInspectorModelContext {
+        WebInspectorModelContext.preview()
+    }
+
+    private struct LiveNetworkContextFixture {
+        let runtime: WebInspectorProxyTestRuntime
+        let wire: WebInspectorRawWireDriver
+        let context: WebInspectorModelContext
+    }
+
+    private func withLiveNetworkContext<Output>(
+        _ operation: @MainActor (LiveNetworkContextFixture) async throws -> Output
+    ) async throws -> Output {
+        let runtime = try await WebInspectorProxyTestRuntime.start()
+        let wire = WebInspectorRawWireDriver(peer: runtime.peer)
+        await wire.start()
+        await wire.respond(to: "Network.enable")
+        let context = WebInspectorModelContext(
+            configuration: .init(domains: [.network])
+        )
+        do {
+            try await context.attach(to: runtime.proxy, isolation: MainActor.shared)
+        } catch {
+            await runtime.close()
+            await wire.stop()
+            throw error
+        }
+
+        let fixture = LiveNetworkContextFixture(
+            runtime: runtime,
+            wire: wire,
+            context: context
+        )
+        let result: Result<Output, any Error>
+        do {
+            result = .success(try await operation(fixture))
+        } catch {
+            result = .failure(error)
+        }
+
+        await wire.respond(to: "Network.disable")
+        await context.close()
+        await runtime.close()
+        await wire.stop()
+        return try result.get()
     }
 
     private func applyRequest(
-        to context: WebInspectorContext,
+        to context: WebInspectorModelContext,
         requestID rawRequestID: String,
         url: String,
         requestHeaders: [String: String] = [:],
@@ -2072,7 +2136,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     private func applyRequestWithoutResponse(
-        to context: WebInspectorContext,
+        to context: WebInspectorModelContext,
         requestID rawRequestID: String,
         url: String,
         requestHeaders: [String: String] = [:],
@@ -2098,7 +2162,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     private func applyResponseReceived(
-        to context: WebInspectorContext,
+        to context: WebInspectorModelContext,
         requestID rawRequestID: String,
         url: String,
         responseHeaders: [String: String],
@@ -2124,7 +2188,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     private func applyDataReceived(
-        to context: WebInspectorContext,
+        to context: WebInspectorModelContext,
         requestID rawRequestID: String,
         dataLength: Int,
         encodedDataLength: Int,
@@ -2141,7 +2205,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     private func applyLoadingFinished(
-        to context: WebInspectorContext,
+        to context: WebInspectorModelContext,
         requestID rawRequestID: String,
         timestamp: Double
     ) async {
@@ -2156,7 +2220,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     private func applyResponseBody(
-        to context: WebInspectorContext,
+        to context: WebInspectorModelContext,
         request: NetworkRequest,
         body: String,
         base64Encoded: Bool = false

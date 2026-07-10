@@ -288,7 +288,7 @@ struct DOMContainerTests {
         }
         #expect(didRenderBodyRows)
 
-        context.select(input)
+        try context.selectDOMNode(input)
         applyBodyStyles(
             to: context,
             selector: "input",
@@ -324,7 +324,7 @@ struct DOMContainerTests {
         window.layoutIfNeeded()
         #expect(didRenderBodyRows)
 
-        let body = try #require(context.selectedNode)
+        let body = try #require(try context.selectedDOMNode)
         let input = try selectElement(named: "input", in: context)
         // Seed once to cancel the preview context's backend-less refresh
         // task, then hold the fresh selection in `.loading` so the pending
@@ -409,7 +409,7 @@ struct DOMContainerTests {
         #expect(input.elementStyles?.phase == .loading)
         #expect(stylePropertyViews(in: viewController).map(\.declarationTextForTesting).contains("margin: 0;"))
 
-        context.select(nil)
+        try context.selectDOMNode(nil)
 
         let didClearRows = await waitUntilRendered(in: viewController) {
             viewController.contentUnavailableConfiguration != nil
@@ -764,7 +764,7 @@ struct DOMContainerTests {
     }
 
     @Test
-    func elementStylePropertyViewSendsToggleActionWithImmediateControlFeedback() {
+    func elementStylePropertyViewSendsToggleActionWithImmediateControlFeedback() async {
         let propertyID = CSSStyleProperty.ID("test-style:0")
         let property = CSSStyleProperty(
             id: propertyID,
@@ -777,9 +777,11 @@ struct DOMContainerTests {
         let propertyView = DOMElementStylePropertyView()
         var requestedPropertyID: CSSStyleProperty.ID?
         var requestedEnabled: Bool?
-        propertyView.bind(property: property) { propertyID, enabled in
-            requestedPropertyID = propertyID
+        let acceptedRequest = WebInspectorTestGate()
+        propertyView.bind(property: property) { property, enabled in
+            requestedPropertyID = property.id
             requestedEnabled = enabled
+            acceptedRequest.open()
             return true
         }
         let window = showViewInWindow(propertyView)
@@ -787,14 +789,19 @@ struct DOMContainerTests {
 
         propertyView.tapToggleForTesting()
 
+        #expect(propertyView.isToggleOnForTesting == false)
+        await acceptedRequest.waiter.wait()
         #expect(requestedPropertyID == propertyID)
         #expect(requestedEnabled == false)
-        #expect(propertyView.isToggleOnForTesting == false)
 
+        let rejectedRequest = WebInspectorTestGate()
         propertyView.bind(property: property) { _, _ in
-            false
+            rejectedRequest.open()
+            return false
         }
         propertyView.tapToggleForTesting()
+        await rejectedRequest.waiter.wait()
+        await Task.yield()
         #expect(propertyView.isToggleOnForTesting == true)
     }
 
@@ -893,8 +900,8 @@ struct DOMContainerTests {
     @Test
     func navigationDeleteRegistersDOMUndoRedoAfterSuccessfulBackendDelete() async throws {
         let fixture = try await makeLiveDOMContext()
-        let input = try #require(fixture.context.node(for: DOMNode.ID(DOM.Node.ID("input"))))
-        fixture.context.select(input)
+        let input = try #require(try fixture.context.domNode(id: DOMNode.ID(DOM.Node.ID("input"))))
+        try fixture.context.selectDOMNode(input)
         let undoManager = UndoManager()
         undoManager.groupsByEvent = false
         let navigationItems = DOMNavigationItems(context: fixture.context)
@@ -922,8 +929,8 @@ struct DOMContainerTests {
     @Test
     func navigationDeleteDoesNotRegisterUndoWhenBackendDeleteFails() async throws {
         let fixture = try await makeLiveDOMContext()
-        let input = try #require(fixture.context.node(for: DOMNode.ID(DOM.Node.ID("input"))))
-        fixture.context.select(input)
+        let input = try #require(try fixture.context.domNode(id: DOMNode.ID(DOM.Node.ID("input"))))
+        try fixture.context.selectDOMNode(input)
         let undoManager = UndoManager()
         undoManager.groupsByEvent = false
         let navigationItems = DOMNavigationItems(context: fixture.context)
@@ -942,8 +949,8 @@ struct DOMContainerTests {
     @Test
     func navigationUndoDoesNotRegisterRedoWhenBackendUndoFails() async throws {
         let fixture = try await makeLiveDOMContext()
-        let input = try #require(fixture.context.node(for: DOMNode.ID(DOM.Node.ID("input"))))
-        fixture.context.select(input)
+        let input = try #require(try fixture.context.domNode(id: DOMNode.ID(DOM.Node.ID("input"))))
+        try fixture.context.selectDOMNode(input)
         let undoManager = UndoManager()
         undoManager.groupsByEvent = false
         let navigationItems = DOMNavigationItems(context: fixture.context)
@@ -966,8 +973,8 @@ struct DOMContainerTests {
     @Test
     func navigationDOMRedoClearsWhenUndoManagerRegistersAnotherAction() async throws {
         let fixture = try await makeLiveDOMContext()
-        let input = try #require(fixture.context.node(for: DOMNode.ID(DOM.Node.ID("input"))))
-        fixture.context.select(input)
+        let input = try #require(try fixture.context.domNode(id: DOMNode.ID(DOM.Node.ID("input"))))
+        try fixture.context.selectDOMNode(input)
         let undoManager = UndoManager()
         undoManager.groupsByEvent = false
         let navigationItems = DOMNavigationItems(context: fixture.context)
@@ -997,8 +1004,8 @@ struct DOMContainerTests {
     @Test
     func navigationPendingDOMRedoClearsWhenUndoManagerRegistersAnotherActionBeforeUndoCompletes() async throws {
         let fixture = try await makeLiveDOMContext()
-        let input = try #require(fixture.context.node(for: DOMNode.ID(DOM.Node.ID("input"))))
-        fixture.context.select(input)
+        let input = try #require(try fixture.context.domNode(id: DOMNode.ID(DOM.Node.ID("input"))))
+        try fixture.context.selectDOMNode(input)
         let undoManager = UndoManager()
         undoManager.groupsByEvent = false
         let navigationItems = DOMNavigationItems(context: fixture.context)
@@ -1033,8 +1040,8 @@ struct DOMContainerTests {
     @Test
     func navigationRedoDoesNotRegisterUndoWhenBackendRedoFails() async throws {
         let fixture = try await makeLiveDOMContext()
-        let input = try #require(fixture.context.node(for: DOMNode.ID(DOM.Node.ID("input"))))
-        fixture.context.select(input)
+        let input = try #require(try fixture.context.domNode(id: DOMNode.ID(DOM.Node.ID("input"))))
+        try fixture.context.selectDOMNode(input)
         let undoManager = UndoManager()
         undoManager.groupsByEvent = false
         let navigationItems = DOMNavigationItems(context: fixture.context)
@@ -1193,8 +1200,8 @@ struct DOMContainerTests {
         #expect(selectionHighlightNodeIDs.last == "input")
 
         let hoverFixture = try await makeLiveDOMContext()
-        let input = try #require(hoverFixture.context.node(for: DOMNode.ID(DOM.Node.ID("input"))))
-        hoverFixture.context.select(input)
+        let input = try #require(try hoverFixture.context.domNode(id: DOMNode.ID(DOM.Node.ID("input"))))
+        try hoverFixture.context.selectDOMNode(input)
         let hoverViewController = DOMTreeViewController(context: hoverFixture.context)
         let hoverWindow = showInWindow(hoverViewController, useUIKitVisibility: false)
         defer { hoverWindow.isHidden = true }
@@ -1378,14 +1385,14 @@ struct DOMContainerTests {
         })
     }
 
-    private func makeWebInspectorContext() -> WebInspectorContext {
-        WebInspectorContext.preview(isolation: MainActor.shared)
+    private func makeWebInspectorContext() -> WebInspectorModelContext {
+        WebInspectorModelContext.preview()
     }
 
     private struct LiveDOMContextFixture {
         var runtime: WebInspectorProxyTestRuntime
         var wire: WebInspectorRawWireDriver
-        var context: WebInspectorContext
+        var context: WebInspectorModelContext
     }
 
     private func makeLiveDOMContext(document: DOM.Node? = nil) async throws -> LiveDOMContextFixture {
@@ -1393,10 +1400,9 @@ struct DOMContainerTests {
         let wire = WebInspectorRawWireDriver(peer: runtime.peer)
         await wire.start()
         try await enqueueLiveStartupReplies(on: wire, document: document ?? documentNode())
-        let container = WebInspectorContainer(proxy: runtime.proxy)
-        let context = container.mainContext
-        let didAttach = await waitForAttachedState(in: context)
-        try #require(didAttach)
+        let context = WebInspectorModelContext()
+        try await context.attach(to: runtime.proxy, isolation: MainActor.shared)
+        #expect(context.state == .attached)
         return LiveDOMContextFixture(runtime: runtime, wire: wire, context: context)
     }
 
@@ -1404,34 +1410,18 @@ struct DOMContainerTests {
         on wire: WebInspectorRawWireDriver,
         document: DOM.Node
     ) async throws {
-        await wire.respond(to: "Inspector.enable")
-        await wire.respond(to: "Inspector.initialized")
-        await wire.respond(to: "Runtime.enable")
+        await wire.respond(to: "CSS.enable")
         await wire.respond(to: "Network.enable")
+        await wire.respond(to: "Console.enable")
+        await wire.respond(to: "Runtime.enable")
         await wire.respond(
             to: "DOM.getDocument",
             with: try webInspectorDOMDocumentResult(document)
         )
-        await wire.respond(to: "Console.enable")
         await wire.fail(
             "CSS.getMatchedStylesForNode",
             message: "Styles are intentionally unavailable in the DOM navigation fixture."
         )
-    }
-
-    private func waitForAttachedState(in context: WebInspectorContext) async -> Bool {
-        if context.state == .attached {
-            return true
-        }
-        for await status in context.statusUpdates {
-            if status.state == .attached {
-                return true
-            }
-            if status.state != .attaching {
-                return false
-            }
-        }
-        return context.state == .attached
     }
 
     private func waitForDOMRedoAvailability(_ isAvailable: Bool, undoManager: UndoManager?) async -> Bool {
@@ -1451,27 +1441,27 @@ struct DOMContainerTests {
         await wire.respond(to: "DOM.markUndoableState")
     }
 
-    private func makeElementContext() -> WebInspectorContext {
+    private func makeElementContext() -> WebInspectorModelContext {
         let context = makeWebInspectorContext()
         context.seedDOMDocument(documentNode())
         return context
     }
 
-    private func makeElementViewController(context: WebInspectorContext) -> DOMElementViewController {
+    private func makeElementViewController(context: WebInspectorModelContext) -> DOMElementViewController {
         let viewController = DOMElementViewController(context: context)
         viewController.disablesSnapshotAnimationsForTesting = true
         return viewController
     }
 
-    private func selectElement(named localName: String, in context: WebInspectorContext) throws -> DOMNode {
+    private func selectElement(named localName: String, in context: WebInspectorModelContext) throws -> DOMNode {
         let node = try #require(DOMPreviewFixtures.firstElement(named: localName, in: context))
-        context.select(node)
+        try context.selectDOMNode(node)
         return node
     }
 
     @discardableResult
     private func applyBodyStyles(
-        to context: WebInspectorContext,
+        to context: WebInspectorModelContext,
         selector: String = "body",
         sourceURL: String = "styles.css",
         sourceLine: Int = 1,
@@ -1531,7 +1521,7 @@ struct DOMContainerTests {
     }
 
     private func applyInheritedVariableStyles(
-        to context: WebInspectorContext,
+        to context: WebInspectorModelContext,
         bodyColorValue: String = "var(--foreground)",
         foregroundValue: String = "var(--palette-primary)",
         additionalBodyProperties: [PropertySpec] = [],

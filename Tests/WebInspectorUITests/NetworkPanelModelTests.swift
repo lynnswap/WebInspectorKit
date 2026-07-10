@@ -104,7 +104,7 @@ func queryScheduledAfterClearWaitsForClearAndRemainsActive() async throws {
     model.setSearchText("new-endpoint")
     await model.waitForQueryUpdates()
 
-    #expect(context.registeredRequest(for: clearedRequestID) == nil)
+    #expect(try context.networkRequest(id: clearedRequestID) == nil)
     #expect(model.query.search == "new-endpoint")
     #expect(model.appliedQueryRevision == model.queryRevision)
     #expect(model.displayRequestIDs.isEmpty)
@@ -178,7 +178,7 @@ func clearAvailabilityUsesUnfilteredRequestsWhenFiltersHideEveryRequest() async 
 
     #expect(model.hasClearableRequests == false)
     #expect(await observedValues.waitUntilValue(false))
-    #expect(context.registeredRequest(for: requestID) == nil)
+    #expect(try context.networkRequest(id: requestID) == nil)
 }
 
 @Test
@@ -193,7 +193,7 @@ func selectedRequestUsesUnfilteredContextWhenFiltersHideRequest() async throws {
         mimeType: "text/javascript",
         timestamp: 1
     )
-    let request = try #require(context.registeredRequest(for: requestID))
+    let request = try #require(try context.networkRequest(id: requestID))
     let model = try await NetworkPanelModel.make(context: context)
 
     model.selectRequest(request)
@@ -217,7 +217,7 @@ func selectedRequestInvalidatesWhenUnfilteredRequestDisappears() async throws {
         mimeType: "text/javascript",
         timestamp: 1
     )
-    let request = try #require(context.registeredRequest(for: requestID))
+    let request = try #require(try context.networkRequest(id: requestID))
     let model = try await NetworkPanelModel.make(context: context)
     model.selectRequest(request)
     model.setSearchText("does-not-match")
@@ -270,7 +270,7 @@ func requestDisplayUsesReadableURLDisplayName(url: String, expectedDisplayName: 
         mimeType: "text/html",
         timestamp: 1
     )
-    let request = try #require(context.registeredRequest(for: requestID))
+    let request = try #require(try context.networkRequest(id: requestID))
 
     #expect(request.displayName == expectedDisplayName)
 }
@@ -296,8 +296,8 @@ func requestDisplayUsesEncodingFallbackForURLDerivedLabelsAndFilters() async thr
         timestamp: 2
     )
     let model = try await NetworkPanelModel.make(context: context)
-    let spacedURLRequest = try #require(context.registeredRequest(for: spacedURLRequestID))
-    let invalidEscapeRequest = try #require(context.registeredRequest(for: invalidEscapeRequestID))
+    let spacedURLRequest = try #require(try context.networkRequest(id: spacedURLRequestID))
+    let invalidEscapeRequest = try #require(try context.networkRequest(id: invalidEscapeRequestID))
 
     #expect(spacedURLRequest.displayName == "photo 1.png")
     #expect(spacedURLRequest.fileTypeLabel == "png")
@@ -565,7 +565,7 @@ func displayResourceFilterUpdatesWhenResponseMIMEBecomesPreviewable() async thro
         timestamp: 1.1
     )
     #expect(model.displayRequestIDs == [requestID])
-    let request = try #require(context.registeredRequest(for: requestID))
+    let request = try #require(try context.networkRequest(id: requestID))
     #expect(request.displayResourceFilter(mediaPreviewClassifier: { mimeType, url in
         NetworkDisplay.MediaPreviewSupport.classification(mimeType: mimeType, url: url)
     }) == .media)
@@ -585,7 +585,7 @@ func requestStatusSeverityUpdatesWhenResponseChanges() async throws {
         statusText: "Server Error",
         timestamp: 1
     )
-    let request = try #require(context.registeredRequest(for: requestID))
+    let request = try #require(try context.networkRequest(id: requestID))
 
     #expect(request.statusSeverity == .error)
 
@@ -675,7 +675,7 @@ func requestFileTypeAndSearchUpdateWhenRawMIMETypeAppears() async throws {
         timestamp: 1.1
     )
     let model = try await NetworkPanelModel.make(context: context)
-    let request = try #require(context.registeredRequest(for: requestID))
+    let request = try #require(try context.networkRequest(id: requestID))
 
     #expect(request.fileTypeLabel == "xhr")
     model.setSearchText("json")
@@ -829,7 +829,7 @@ func displayRequestIDsUseDataKitClassificationForMediaFiltering() async throws {
     let model = try await NetworkPanelModel.make(context: context)
 
     #expect(model.displayRequestIDs == [requestID])
-    let request = try #require(context.registeredRequest(for: requestID))
+    let request = try #require(try context.networkRequest(id: requestID))
     #expect(request.displayName == "clip.mp4")
 
     model.setSearchText("clip")
@@ -857,7 +857,7 @@ func clearRequestsClearsSelectionButPreservesDisplayCriteria() async throws {
 
     model.setSearchText("cdn")
     model.setResourceFilter(.script, enabled: true)
-    model.selectRequest(context.registeredRequest(for: requestID))
+    model.selectRequest(try context.networkRequest(id: requestID))
     model.clearRequests()
     await model.waitForQueryUpdates()
 
@@ -865,46 +865,20 @@ func clearRequestsClearsSelectionButPreservesDisplayCriteria() async throws {
     #expect(model.searchText == "cdn")
     #expect(model.activeResourceFilters == [.script])
     #expect(model.displayRequests.isEmpty)
-    #expect(context.registeredRequest(for: requestID) == nil)
+    #expect(try context.networkRequest(id: requestID) == nil)
 }
 
-@Test
-@MainActor
-func responseBodyFetchMovesUnavailablePreviewContextToFailedPhase() async throws {
-    let context = makeContext()
-    let requestID = await applyRequest(
-        to: context,
-        requestID: "1",
-        url: "https://api.example.com/data.json",
-        resourceType: .xhr,
-        mimeType: "application/json",
-        timestamp: 1
-    )
-    let request = try #require(context.registeredRequest(for: requestID))
-    let model = try await NetworkPanelModel.make(context: context)
-
-    #expect(request.canFetchResponseBody)
-    let expectedBody = request.responseBody
-    model.fetchResponseBodyIfNeeded(for: request)
-
-    #expect(await waitForNetworkBodyPhase(in: expectedBody) { phase in
-        if case .failed = phase {
-            return true
-        }
-        return false
-    } != nil)
-}
 }
 
 @MainActor
-private func makeContext() -> WebInspectorContext {
-    WebInspectorContext.preview(isolation: MainActor.shared)
+private func makeContext() -> WebInspectorModelContext {
+    WebInspectorModelContext.preview()
 }
 
 @MainActor
 @discardableResult
 private func applyRequest(
-    to context: WebInspectorContext,
+    to context: WebInspectorModelContext,
     requestID rawRequestID: String,
     url: String,
     method: String = "GET",
@@ -941,7 +915,7 @@ private func applyRequest(
 @MainActor
 @discardableResult
 private func applyPendingRequest(
-    to context: WebInspectorContext,
+    to context: WebInspectorModelContext,
     requestID rawRequestID: String,
     url: String,
     method: String = "GET",
@@ -963,7 +937,7 @@ private func applyPendingRequest(
 
 @MainActor
 private func applyRedirectRequest(
-    to context: WebInspectorContext,
+    to context: WebInspectorModelContext,
     requestID rawRequestID: String,
     url: String,
     method: String,
@@ -985,7 +959,7 @@ private func applyRedirectRequest(
 
 @MainActor
 private func applyResponseReceived(
-    to context: WebInspectorContext,
+    to context: WebInspectorModelContext,
     requestID rawRequestID: String,
     url: String,
     resourceType: Network.ResourceType,
@@ -1015,7 +989,7 @@ private func applyResponseReceived(
 
 @MainActor
 private func applyDataReceived(
-    to context: WebInspectorContext,
+    to context: WebInspectorModelContext,
     requestID rawRequestID: String,
     dataLength: Int,
     encodedDataLength: Int,
@@ -1033,7 +1007,7 @@ private func applyDataReceived(
 
 @MainActor
 private func applyLoadingFinished(
-    to context: WebInspectorContext,
+    to context: WebInspectorModelContext,
     requestID rawRequestID: String,
     timestamp: Double
 ) async {

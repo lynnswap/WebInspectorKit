@@ -1532,22 +1532,22 @@ private final class CancellableVoidActionRecorder {
 
 @MainActor
 private final class DOMTreeTestFixture {
-    let context: WebInspectorContext
+    let context: WebInspectorModelContext
     let treeController: DOMTreeController
 
     init(root: DOM.Node) {
-        let context = WebInspectorContext.preview(isolation: MainActor.shared)
+        let context = WebInspectorModelContext.preview()
         context.seedDOMDocument(root)
         self.context = context
         self.treeController = context.rootTreeController()
     }
 
     var currentPageRootNode: DOMNode? {
-        context.rootNode
+        try? context.rootDOMNode
     }
 
     var selectedNode: DOMNode? {
-        context.selectedNode
+        try? context.selectedDOMNode
     }
 
     var treeRevision: UInt64 {
@@ -1560,7 +1560,7 @@ private final class DOMTreeTestFixture {
 
     var isSelectingElement: Bool {
         get {
-            context.isElementPickerEnabled
+            (try? context.isElementPickerEnabled) == true
         }
         set {
             context.seedElementPickerEnabled(newValue)

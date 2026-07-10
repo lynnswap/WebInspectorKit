@@ -11,7 +11,7 @@ extension WebInspectorUIRenderingTests {
 @Suite
 struct DOMElementStyleSnapshotCoordinatorTests {
     /// Keeps the weak `CSSStyles.modelContext` alive for the test lifetime.
-    private let modelContext = WebInspectorContext.preview(isolation: MainActor.shared)
+    private let modelContext = WebInspectorModelContext.preview()
 
     @Test
     func coordinatorRequestsNonAnimatedDiffForInitialLoadedSelection() throws {

@@ -70,7 +70,7 @@ struct ParentContainerTests {
     @Test
     func sessionUpdatesPageUserInterfaceStyleFromPageObserver() async throws {
         let observerRecorder = PageUserInterfaceStyleObserverRecorder(styleOnStart: .dark)
-        let session = makeSessionWithNoOpAttachment()
+        let session = makeAttachmentSession()
 
         try await attach(
             session,
@@ -89,7 +89,7 @@ struct ParentContainerTests {
     @Test
     func sessionClearsPageUserInterfaceStyleAndStopsObservingOnDetach() async throws {
         let observerRecorder = PageUserInterfaceStyleObserverRecorder(styleOnStart: .dark)
-        let session = makeSessionWithNoOpAttachment()
+        let session = makeAttachmentSession()
 
         try await attach(
             session,
@@ -111,7 +111,7 @@ struct ParentContainerTests {
     @Test
     func sessionClearsPageUserInterfaceStyleAndStopsObservingWhenAttachFails() async throws {
         let observerRecorder = PageUserInterfaceStyleObserverRecorder(styleOnStart: .dark)
-        let session = makeSessionWithNoOpAttachment()
+        let session = makeAttachmentSession()
 
         try await attach(
             session,
@@ -145,33 +145,29 @@ struct ParentContainerTests {
     @Test
     func staleAttachCompletionDoesNotReplaceNewerAttach() async throws {
         let observerRecorder = PageUserInterfaceStyleObserverRecorder(styleOnStart: .dark)
-        let session = makeSessionWithNoOpAttachment()
+        let session = makeAttachmentSession()
+        let stableModel = session.model
         let firstAttachStarted = WebInspectorTestGate()
         let firstAttachGate = WebInspectorTestGate()
 
         let firstAttach = Task { @MainActor in
             try await session.attachForTesting(
-                makeContainer: { [self] in
+                makeProxy: { [self] in
                     firstAttachStarted.open()
                     await firstAttachGate.waiter.wait()
-                    return try await makeFakeContainer()
+                    return try await makeFakeProxy()
                 },
                 makePageUserInterfaceStyleObserver: observerRecorder.makeObserver
             )
         }
         await firstAttachStarted.waiter.wait()
 
-        var secondContext: WebInspectorContext?
         try await session.attachForTesting(
-            makeContainer: { [self] in
-                let container = try await makeFakeContainer()
-                secondContext = container.mainContext
-                return container
+            makeProxy: { [self] in
+                try await makeFakeProxy()
             },
             makePageUserInterfaceStyleObserver: observerRecorder.makeObserver
         )
-        let installedSecondContext = try #require(secondContext)
-
         firstAttachGate.open()
         do {
             try await firstAttach.value
@@ -179,7 +175,8 @@ struct ParentContainerTests {
         } catch is CancellationError {
         }
 
-        #expect(session.context === installedSecondContext)
+        #expect(session.model === stableModel)
+        #expect(session.model.state == .attached)
         #expect(observerRecorder.observers.count == 1)
         #expect(observerRecorder.observers.first?.isStarted == true)
         #expect(observerRecorder.observers.first?.isInvalidated == false)
@@ -189,16 +186,17 @@ struct ParentContainerTests {
     @Test
     func detachInvalidatesInFlightAttachCompletion() async throws {
         let observerRecorder = PageUserInterfaceStyleObserverRecorder(styleOnStart: .dark)
-        let session = makeSessionWithNoOpAttachment()
+        let session = makeAttachmentSession()
+        let stableModel = session.model
         let attachStarted = WebInspectorTestGate()
         let attachGate = WebInspectorTestGate()
 
         let attachTask = Task { @MainActor in
             try await session.attachForTesting(
-                makeContainer: { [self] in
+                makeProxy: { [self] in
                     attachStarted.open()
                     await attachGate.waiter.wait()
-                    return try await makeFakeContainer()
+                    return try await makeFakeProxy()
                 },
                 makePageUserInterfaceStyleObserver: observerRecorder.makeObserver
             )
@@ -206,8 +204,6 @@ struct ParentContainerTests {
         await attachStarted.waiter.wait()
 
         await session.detach()
-        let detachedContext = session.context
-
         attachGate.open()
         do {
             try await attachTask.value
@@ -215,74 +211,41 @@ struct ParentContainerTests {
         } catch is CancellationError {
         }
 
-        #expect(session.context === detachedContext)
-        #expect(session.context.state == .detached)
+        #expect(session.model === stableModel)
+        #expect(session.model.state == .detached)
         #expect(observerRecorder.observers.isEmpty)
         #expect(session.hasPageUserInterfaceStyleObserverForTesting == false)
         #expect(session.pageUserInterfaceStyle == .unspecified)
     }
 
     @Test
-    func attachAdvancesContextEpochAndEvictsRootPresentationContent() async throws {
-        let session = makeSessionWithNoOpAttachment()
+    func attachPreservesStableModelAndRootPresentationContent() async throws {
+        let tab = makeNoOpTab(id: "webinspector_test_stable_attach")
+        let session = makeAttachmentSession(tabs: [tab])
         let viewController = WebInspectorViewController(session: session)
         let contentStore = viewController.presentationContentStoreForTesting
-        let initialContextRevision = session.interface.contextBoundContentRevision
-        _ = WebInspectorTab.ContentFactory.makeViewController(
-            for: .dom,
+        let stableModel = session.model
+        let initialContent = WebInspectorTab.ContentFactory.makeViewController(
+            for: .customTab(tab.id),
             session: session,
             contentStore: contentStore,
             hostLayout: .compact
         )
-        _ = WebInspectorTab.ContentFactory.makeViewController(
-            for: .network,
-            session: session,
-            contentStore: contentStore,
-            hostLayout: .regular
-        )
-        #expect(contentStore.contentCountForTesting > 0)
+        let initialContentCount = contentStore.contentCountForTesting
 
-        var installedContext: WebInspectorContext?
-        try await session.attachForTesting {
-            let container = try await makeFakeContainer()
-            installedContext = container.mainContext
-            return container
-        }
+        try await attach(session)
 
-        let context = try #require(installedContext)
-        #expect(session.context === context)
-        #expect(session.interface.contextBoundContentRevision > initialContextRevision)
-        contentStore.prepare(for: session.interface.contextBoundContentRevision)
-        #expect(contentStore.contentCountForTesting == 0)
-    }
-
-    @Test
-    func installingDataContextAdvancesContextEpochAndEvictsRootPresentationContent() {
-        let session = makeSessionWithNoOpAttachment()
-        let viewController = WebInspectorViewController(session: session)
-        let contentStore = viewController.presentationContentStoreForTesting
-        let initialContextRevision = session.interface.contextBoundContentRevision
-        _ = WebInspectorTab.ContentFactory.makeViewController(
-            for: .dom,
+        let contentAfterAttach = WebInspectorTab.ContentFactory.makeViewController(
+            for: .customTab(tab.id),
             session: session,
             contentStore: contentStore,
             hostLayout: .compact
         )
-        _ = WebInspectorTab.ContentFactory.makeViewController(
-            for: .network,
-            session: session,
-            contentStore: contentStore,
-            hostLayout: .regular
-        )
-        #expect(contentStore.contentCountForTesting > 0)
 
-        let context = makeContext()
-        session.installDataContext(context)
-
-        #expect(session.context === context)
-        #expect(session.interface.contextBoundContentRevision > initialContextRevision)
-        contentStore.prepare(for: session.interface.contextBoundContentRevision)
-        #expect(contentStore.contentCountForTesting == 0)
+        #expect(session.model === stableModel)
+        #expect(session.model.state == .attached)
+        #expect(contentAfterAttach === initialContent)
+        #expect(contentStore.contentCountForTesting == initialContentCount)
     }
 
     @Test
@@ -483,7 +446,7 @@ struct ParentContainerTests {
             await factoryRelease.waiter.wait()
             return model
         }
-        weak var retainedStore = contentStore
+        weak let retainedStore = contentStore
         let resourceViewController = try #require(contentStore).networkViewController(
             context: context,
             contextEpoch: 1
@@ -505,7 +468,7 @@ struct ParentContainerTests {
     func networkResourceStoreDeinitSynchronouslyRetiresReadyBackstop() async throws {
         let context = makeContext()
         var contentStore: PresentationContentStore? = PresentationContentStore()
-        weak var retainedStore = contentStore
+        weak let retainedStore = contentStore
         let resourceViewController = try #require(contentStore).networkViewController(
             context: context,
             contextEpoch: 1
@@ -553,7 +516,7 @@ struct ParentContainerTests {
     }
 
     @Test
-    func compactHostRebuildsActiveTabsWhenDataContextChanges() async throws {
+    func compactHostRebuildsActiveTabsWhenContentRevisionChanges() async throws {
         let session = makeSessionWithNoOpAttachment()
         let viewController = WebInspectorViewController(session: session)
         viewController.horizontalSizeClassOverrideForTesting = .compact
@@ -563,7 +526,7 @@ struct ParentContainerTests {
         let initialTabIdentities = initialTabs.map(ObjectIdentifier.init)
         #expect(initialTabs.isEmpty == false)
 
-        session.installDataContext(makeContext())
+        session.interface.contextDidChange()
 
         let didRebuildTabs = await waitUntilCompactHostRendered(in: compactHost) {
             let rebuiltTabs = compactHost.currentUITabsForTesting
@@ -574,7 +537,7 @@ struct ParentContainerTests {
     }
 
     @Test
-    func regularHostRebuildsVisibleContentWhenDataContextChanges() async throws {
+    func regularHostRebuildsVisibleContentWhenContentRevisionChanges() async throws {
         let session = makeSessionWithNoOpAttachment()
         let viewController = WebInspectorViewController(session: session)
         viewController.horizontalSizeClassOverrideForTesting = .regular
@@ -584,7 +547,7 @@ struct ParentContainerTests {
         )
         let initialRootViewController = try #require(regularHost.viewControllers.first)
 
-        session.installDataContext(makeContext())
+        session.interface.contextDidChange()
 
         let didRebuildContent = await waitUntilRegularHostRendered(in: regularHost) {
             guard let currentRootViewController = regularHost.viewControllers.first else {
@@ -598,7 +561,7 @@ struct ParentContainerTests {
     @Test
     func viewControllerDoesNotApplyPageUserInterfaceStyle() async throws {
         let observerRecorder = PageUserInterfaceStyleObserverRecorder(styleOnStart: .dark)
-        let session = makeSessionWithNoOpAttachment()
+        let session = makeAttachmentSession()
         let viewController = WebInspectorViewController(session: session)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
@@ -654,9 +617,9 @@ struct ParentContainerTests {
     @Test
     func viewControllerPreviewSessionInjectsMockDOMAndNetworkModels() async throws {
         let session = WebInspectorViewControllerPreviewFixtures.makeSession()
-        let model = try await NetworkPanelModel.make(context: session.context)
+        let model = try await NetworkPanelModel.make(context: session.model)
 
-        #expect(session.context.rootNode?.nodeName == "#document")
+        #expect(try session.model.rootDOMNode?.nodeName == "#document")
         #expect(model.displayRequests.count >= 2)
     }
 
@@ -968,7 +931,7 @@ struct ParentContainerTests {
         )
         viewController.loadViewIfNeeded()
         #expect(contentStore.contentCountForTesting > 0)
-        let contentRevisionBeforeRetirement = session.interface.contextBoundContentRevision
+        let stableModel = session.model
 
         viewController.finishRootPresentationLifecycleForTesting()
         #expect(await waitUntilDetachCount(1, in: session))
@@ -976,7 +939,8 @@ struct ParentContainerTests {
 
         #expect(session.detachCountForTesting == 1)
         #expect(contentStore.contentCountForTesting == 0)
-        #expect(session.interface.contextBoundContentRevision > contentRevisionBeforeRetirement)
+        #expect(session.model === stableModel)
+        #expect(session.model.state == .detached)
     }
 
     @Test
@@ -1118,7 +1082,7 @@ struct ParentContainerTests {
         viewController.automaticallyDetachesOnDismiss = false
         viewController.loadViewIfNeeded()
         #expect(contentStore.contentCountForTesting > 0)
-        let contentRevisionBeforeRetirement = session.interface.contextBoundContentRevision
+        let stableModel = session.model
 
         let retirementBaseline = viewController.rootPresentationRetirementTaskCompletionCountForTesting
         viewController.finishRootPresentationLifecycleForTesting()
@@ -1126,7 +1090,7 @@ struct ParentContainerTests {
 
         #expect(session.detachCountForTesting == 0)
         #expect(contentStore.contentCountForTesting == 0)
-        #expect(session.interface.contextBoundContentRevision == contentRevisionBeforeRetirement)
+        #expect(session.model === stableModel)
     }
 
     @Test
@@ -1274,7 +1238,7 @@ struct ParentContainerTests {
             requestID: "1",
             url: "https://example.com/app.js"
         )
-        let request = try #require(context.registeredRequest(for: requestID))
+        let request = try #require(try context.networkRequest(id: requestID))
         let compactResourceViewController = try #require(
             WebInspectorTab.ContentFactory.makeViewController(
                 for: .network,
@@ -1359,13 +1323,13 @@ struct ParentContainerTests {
         }
     }
 
-    private func makeContext() -> WebInspectorContext {
-        WebInspectorContext.preview(isolation: MainActor.shared)
+    private func makeContext() -> WebInspectorModelContext {
+        WebInspectorModelContext.preview()
     }
 
     @discardableResult
     private func applyRequest(
-        to context: WebInspectorContext,
+        to context: WebInspectorModelContext,
         requestID rawRequestID: String,
         url: String
     ) async -> WebInspectorDataKit.NetworkRequest.ID {
@@ -1450,9 +1414,9 @@ struct ParentContainerTests {
         }
     }
 
-    private func makeFakeContainer() async throws -> WebInspectorContainer {
+    private func makeFakeProxy() async throws -> WebInspectorProxy {
         let runtime = try await WebInspectorProxyTestRuntime.start()
-        return WebInspectorContainer(proxy: runtime.proxy)
+        return runtime.proxy
     }
 
     private func attach(
@@ -1463,9 +1427,9 @@ struct ParentContainerTests {
         ) -> (any WebInspectorPageUserInterfaceStyleObserving)? = { _ in nil }
     ) async throws {
         try await session.attachForTesting(
-            makeContainer: { [self] in
+            makeProxy: { [self] in
                 try await attachAction()
-                return try await makeFakeContainer()
+                return try await makeFakeProxy()
             },
             makePageUserInterfaceStyleObserver: makePageUserInterfaceStyleObserver
         )
@@ -1475,6 +1439,17 @@ struct ParentContainerTests {
         tabs: [WebInspectorTab] = [.dom, .network]
     ) -> WebInspectorSession {
         WebInspectorSession(context: makeContext(), tabs: tabs)
+    }
+
+    private func makeAttachmentSession(
+        tabs: [WebInspectorTab] = [.dom, .network]
+    ) -> WebInspectorSession {
+        WebInspectorSession(
+            context: WebInspectorModelContext.preview(
+                configuration: .init(domains: [])
+            ),
+            tabs: tabs
+        )
     }
 
     private func makeNoOpTab(
