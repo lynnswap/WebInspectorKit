@@ -72,6 +72,12 @@ private final class WebInspectorModelDeliveryBridge: @unchecked Sendable {
         mutex.withLock { _ in actor }
     }
 
+    func preconditionOwnerIsolation() {
+        resolveActor()?.preconditionIsolated(
+            "WebInspectorModelContext must be used by the actor that attached it."
+        )
+    }
+
     private func resolveContext(
         for isolation: any Actor
     ) -> WebInspectorModelContext? {
@@ -576,7 +582,8 @@ public final class WebInspectorModelContext {
     }
 
     package var status: Status {
-        Status(
+        preconditionOwnerIsolation()
+        return Status(
             state: state,
             selectedNodeID: domState.selectedNode?.id,
             isElementPickerEnabled: domState.isElementPickerEnabled
@@ -630,6 +637,10 @@ public final class WebInspectorModelContext {
 
     private func bindOwner(_ isolation: isolated (any Actor)) {
         deliveryBridge.bind(self, isolation: isolation)
+    }
+
+    package func preconditionOwnerIsolation() {
+        deliveryBridge.preconditionOwnerIsolation()
     }
 
     private func beginAttachment(
@@ -1103,6 +1114,7 @@ public final class WebInspectorModelContext {
     }
 
     private nonisolated(nonsending) func tearDown(terminal: Bool) async {
+        preconditionOwnerIsolation()
         if isTerminallyClosed {
             return
         }
@@ -1948,6 +1960,7 @@ public final class WebInspectorModelContext {
 
     /// Clears retained Network requests and emits reset transactions.
     public nonisolated(nonsending) func clearNetworkRequests() async {
+        preconditionOwnerIsolation()
         guard configuredDomains.contains(.network) else {
             return
         }
@@ -2391,6 +2404,7 @@ public final class WebInspectorModelContext {
     public nonisolated(nonsending) func reload(
         ignoringCache: Bool = false
     ) async throws {
+        preconditionOwnerIsolation()
         let page = try currentPageOrThrow()
         try await page.page.reload(ignoringCache: ignoringCache)
     }
@@ -2570,6 +2584,7 @@ public final class WebInspectorModelContext {
         _ query: NetworkQuery,
         for results: WebInspectorFetchedResults<NetworkRequest>
     ) async throws {
+        preconditionOwnerIsolation()
         guard results.modelContext === self else {
             preconditionFailure("Network fetched results are not registered in this WebInspectorModelContext.")
         }
@@ -2580,6 +2595,7 @@ public final class WebInspectorModelContext {
         _ query: ConsoleQuery,
         for results: WebInspectorFetchedResults<ConsoleMessage>
     ) async throws {
+        preconditionOwnerIsolation()
         guard results.modelContext === self else {
             preconditionFailure("Console fetched results are not registered in this WebInspectorModelContext.")
         }
@@ -2701,25 +2717,27 @@ public final class WebInspectorModelContext {
     package nonisolated(nonsending) func close(
         objectGroup: RuntimeObjectGroup
     ) async throws {
+        preconditionOwnerIsolation()
         guard objectGroup.modelContext === self else {
             throw WebInspectorModelError.staleModel
         }
-        defer {
-            runtimeState.invalidateGroup(objectGroup.id)
-        }
         guard isCurrent(objectGroup) else {
+            runtimeState.invalidateGroup(objectGroup.id)
             return
         }
         do {
             try await objectGroup.target.runtime.releaseObjectGroup(
                 objectGroup.wireGroup
             )
+            runtimeState.invalidateGroup(objectGroup.id)
         } catch WebInspectorProxyError.staleIdentifier {
+            runtimeState.invalidateGroup(objectGroup.id)
             return
         }
     }
 
     private func validate(_ objectGroup: RuntimeObjectGroup) throws {
+        preconditionOwnerIsolation()
         guard isCurrent(objectGroup) else {
             throw WebInspectorModelError.staleModel
         }
@@ -2822,6 +2840,7 @@ public final class WebInspectorModelContext {
     }
 
     private func requireConfigured(_ domain: Domain) throws {
+        preconditionOwnerIsolation()
         guard configuredDomains.contains(domain) else {
             throw WebInspectorModelError.domainNotConfigured(domain)
         }

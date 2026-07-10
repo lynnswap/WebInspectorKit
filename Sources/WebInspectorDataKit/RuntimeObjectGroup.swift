@@ -49,7 +49,11 @@ public final class RuntimeObjectGroup {
         _ expression: String,
         in context: RuntimeContext? = nil
     ) async throws -> RuntimeEvaluation {
-        guard !isClosed, let modelContext else {
+        guard let modelContext else {
+            throw WebInspectorModelError.staleModel
+        }
+        modelContext.preconditionOwnerIsolation()
+        guard !isClosed else {
             throw WebInspectorModelError.staleModel
         }
         return try await modelContext.evaluate(
@@ -63,7 +67,11 @@ public final class RuntimeObjectGroup {
         of object: RuntimeObject,
         ownProperties: Bool = true
     ) async throws -> [RuntimeProperty] {
-        guard !isClosed, let modelContext else {
+        guard let modelContext else {
+            throw WebInspectorModelError.staleModel
+        }
+        modelContext.preconditionOwnerIsolation()
+        guard !isClosed else {
             throw WebInspectorModelError.staleModel
         }
         return try await modelContext.properties(
@@ -76,22 +84,25 @@ public final class RuntimeObjectGroup {
     public nonisolated(nonsending) func preview(
         of object: RuntimeObject
     ) async throws -> RuntimeObjectPreview {
-        guard !isClosed, let modelContext else {
+        guard let modelContext else {
+            throw WebInspectorModelError.staleModel
+        }
+        modelContext.preconditionOwnerIsolation()
+        guard !isClosed else {
             throw WebInspectorModelError.staleModel
         }
         return try await modelContext.preview(of: object, objectGroup: self)
     }
 
     public nonisolated(nonsending) func close() async throws {
-        guard !isClosed else {
-            return
-        }
-        defer {
-            isClosed = true
-        }
         guard let modelContext else {
             throw WebInspectorModelError.staleModel
         }
+        modelContext.preconditionOwnerIsolation()
+        guard !isClosed else {
+            return
+        }
         try await modelContext.close(objectGroup: self)
+        isClosed = true
     }
 }

@@ -77,22 +77,26 @@ public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel
 
     /// The fetched models in display order.
     public var items: [Model] {
-        state.items
+        modelContext?.preconditionOwnerIsolation()
+        return state.items
     }
 
     /// The fetched models grouped into display sections.
     public var sections: [WebInspectorFetchSection<Model>] {
-        state.sections
+        modelContext?.preconditionOwnerIsolation()
+        return state.sections
     }
 
     /// The complete current section and item identity snapshot.
     public var snapshot: WebInspectorFetchedResultsSnapshot<Model.ID> {
-        state.snapshot
+        modelContext?.preconditionOwnerIsolation()
+        return state.snapshot
     }
 
     /// Monotonically increasing publication revision.
     public var revision: UInt64 {
-        state.revision
+        modelContext?.preconditionOwnerIsolation()
+        return state.revision
     }
 
     init(modelContext: WebInspectorModelContext) {
@@ -272,7 +276,8 @@ public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel
     /// transaction includes a full current snapshot, so consumers recover from
     /// a revision gap by replacing their local snapshot.
     public func updates() -> AsyncStream<WebInspectorFetchedResultsUpdate<Model.ID>> {
-        updateBroker.makeStream(initial: .initial(
+        modelContext?.preconditionOwnerIsolation()
+        return updateBroker.makeStream(initial: .initial(
             revision: state.revision,
             snapshot: state.snapshot
         ))
