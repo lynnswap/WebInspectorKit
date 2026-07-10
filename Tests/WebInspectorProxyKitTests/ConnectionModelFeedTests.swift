@@ -195,7 +195,12 @@ func directElementPickerDiscardsInspectReceivedBeforeModeActivationReply() async
 @Test
 func directElementPickerReinitializesAndReactivatesOnReplacementPage() async throws {
     let backend = FakeTransportBackend()
-    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    let parser = ModelFeedArmedMessageParser()
+    let core = ConnectionCore(
+        backend: backend,
+        responseTimeout: nil,
+        messageParser: { try await parser.parse($0) }
+    )
     _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
         id: "page-old",
         type: "page",
@@ -246,16 +251,42 @@ func directElementPickerReinitializesAndReactivatesOnReplacementPage() async thr
         after: replacementBaseline
     )
     #expect(activate.targetIdentifier == ProtocolTarget.ID("page-new"))
+    let activationPendingKey = TransportSession.PendingKey.target(
+        TransportSession.ReplyKey(
+            targetID: activate.targetIdentifier,
+            commandID: try modelFeedMessageID(activate.message)
+        )
+    )
+    let activationPurpose = try #require(
+        await core.pendingReplyPurposes()[activationPendingKey]
+    )
+    guard case let .elementPickerMode(key, generation, _, enabled) = activationPurpose else {
+        Issue.record("Expected the inspect-mode reply to retain its picker owner.")
+        return
+    }
+    #expect(key.route == .currentPage)
+    #expect(key.targetID == .currentPage)
+    #expect(key.domain == .inspector)
+    #expect(generation == (try await core.pageGeneration()))
+    #expect(enabled)
     _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
         targetID: "page-new",
         message: modelFeedInspectorInspectMessage(objectID: "before-new-activation")
     ))
-    await modelFeedRespond(to: activate, core: core)
-
-    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
-        targetID: "page-new",
-        message: modelFeedInspectorInspectMessage(objectID: "after-new-activation")
-    ))
+    await parser.armNextInvocation()
+    let activationReply = Task {
+        await modelFeedRespond(to: activate, core: core)
+    }
+    await parser.waitUntilBlocked()
+    let immediateInspect = Task {
+        await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+            targetID: "page-new",
+            message: modelFeedInspectorInspectMessage(objectID: "after-new-activation")
+        ))
+    }
+    _ = await immediateInspect.value
+    await parser.release()
+    await activationReply.value
     guard case .reset = try #require(try await iterator.next()) else {
         Issue.record("Expected the replacement page generation reset.")
         return
@@ -3932,6 +3963,66 @@ private func modelFeedTargetDispatchMessage(
         options: [.sortedKeys]
     )
     return String(decoding: data, as: UTF8.self)
+}
+
+private actor ModelFeedArmedMessageParser {
+    private var shouldBlockNextInvocation = false
+    private var isBlocked = false
+    private var isReleased = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func armNextInvocation() {
+        precondition(!shouldBlockNextInvocation && !isBlocked)
+        shouldBlockNextInvocation = true
+        isReleased = false
+    }
+
+    func parse(_ message: String) async throws -> ParsedProtocolMessage {
+        guard shouldBlockNextInvocation else {
+            return try await TransportMessageParser.parse(message)
+        }
+        shouldBlockNextInvocation = false
+        isBlocked = true
+        let startWaiters = self.startWaiters
+        self.startWaiters.removeAll()
+        for waiter in startWaiters {
+            waiter.resume()
+        }
+        if !isReleased {
+            await withCheckedContinuation { continuation in
+                if isReleased {
+                    continuation.resume()
+                } else {
+                    releaseWaiters.append(continuation)
+                }
+            }
+        }
+        isBlocked = false
+        return try await TransportMessageParser.parse(message)
+    }
+
+    func waitUntilBlocked() async {
+        guard !isBlocked else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            if isBlocked {
+                continuation.resume()
+            } else {
+                startWaiters.append(continuation)
+            }
+        }
+    }
+
+    func release() {
+        isReleased = true
+        let releaseWaiters = self.releaseWaiters
+        self.releaseWaiters.removeAll()
+        for waiter in releaseWaiters {
+            waiter.resume()
+        }
+    }
 }
 
 private actor ModelFeedAsyncGate {

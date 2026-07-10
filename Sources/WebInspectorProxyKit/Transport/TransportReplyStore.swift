@@ -7,6 +7,12 @@ extension TransportSession {
                 bindingGeneration: WebInspectorPage.Generation?,
                 documentEpoch: ModelDocumentEpoch?
             )
+            case elementPickerMode(
+                key: ConnectionCapabilityKey,
+                generation: WebInspectorPage.Generation,
+                documentEpoch: ModelDocumentEpoch,
+                enabled: Bool
+            )
             case modelCommand(
                 authorization: ConnectionModelCommandAuthorization,
                 operationID: UInt64
@@ -87,6 +93,28 @@ extension TransportSession {
                 ),
                 domain: domain,
                 method: method,
+                targetID: targetID,
+                promise: promise
+            )
+        }
+
+        static func elementPickerMode(
+            targetID: ProtocolTarget.ID,
+            promise: ReplyPromise<ProtocolCommand.Result>,
+            key: ConnectionCapabilityKey,
+            generation: WebInspectorPage.Generation,
+            documentEpoch: ModelDocumentEpoch,
+            enabled: Bool
+        ) -> PendingReply {
+            PendingReply(
+                purpose: .elementPickerMode(
+                    key: key,
+                    generation: generation,
+                    documentEpoch: documentEpoch,
+                    enabled: enabled
+                ),
+                domain: .dom,
+                method: "DOM.setInspectModeEnabled",
                 targetID: targetID,
                 promise: promise
             )

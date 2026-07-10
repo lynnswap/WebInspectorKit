@@ -3167,7 +3167,7 @@ private func requireCapabilityReplyPurpose(
     #expect(purposes.count == 1)
     let purpose = try #require(purposes[pendingKey])
     switch purpose {
-    case .direct, .modelCommand, .capabilityAuxiliary:
+    case .direct, .elementPickerMode, .modelCommand, .capabilityAuxiliary:
         Issue.record("Expected a capability reply purpose.")
         return 0
     case .modelBootstrap:

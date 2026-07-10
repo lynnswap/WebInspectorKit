@@ -43,6 +43,16 @@ private struct ConnectionDirectCommandAdmission: Sendable {
     let documentEpoch: ModelDocumentEpoch?
 }
 
+private enum ConnectionTargetCommandOwner: Sendable {
+    case direct(ConnectionDirectCommandAdmission)
+    case elementPickerMode(
+        key: ConnectionCapabilityKey,
+        generation: WebInspectorPage.Generation,
+        documentEpoch: ModelDocumentEpoch,
+        enabled: Bool
+    )
+}
+
 private enum ConnectionModelCommandFailureOverride: Sendable {
     case staleIdentifier
     case notActive
@@ -1165,7 +1175,11 @@ package actor ConnectionCore {
         if let result = transportLocalResult(for: command, targetID: targetID) {
             return result
         }
-        return try await sendTarget(command, targetID: targetID, admission: admission)
+        return try await sendTarget(
+            command,
+            targetID: targetID,
+            owner: .direct(admission)
+        )
     }
 
     private func beginModelCommand(
@@ -2432,16 +2446,27 @@ package actor ConnectionCore {
             failureOverride: .staleIdentifier,
             pendingFailureReason: .staleIdentifier
         )
-        let directReplies = replyStore.removePendingReplies { pending in
+        let bindingReplies = replyStore.removePendingReplies { pending in
             guard pending.targetID == targetID,
-                  isDocumentSensitive(pending.domain),
-                  case let .direct(bindingGeneration, documentEpoch) = pending.purpose else {
+                  isDocumentSensitive(pending.domain) else {
+                return false
+            }
+            let bindingGeneration: WebInspectorPage.Generation?
+            let documentEpoch: ModelDocumentEpoch?
+            switch pending.purpose {
+            case let .direct(generation, epoch):
+                bindingGeneration = generation
+                documentEpoch = epoch
+            case let .elementPickerMode(_, generation, epoch, _):
+                bindingGeneration = generation
+                documentEpoch = epoch
+            case .modelCommand, .capability, .capabilityAuxiliary, .modelBootstrap:
                 return false
             }
             return bindingGeneration == currentPageGeneration
                 && documentEpoch == oldEpoch
         }
-        effects.pendingFailures.append(contentsOf: directReplies.map {
+        effects.pendingFailures.append(contentsOf: bindingReplies.map {
             ConnectionPendingReplyFailure(pending: $0, reason: .staleIdentifier)
         })
 
@@ -2855,9 +2880,11 @@ package actor ConnectionCore {
         return try await sendTarget(
             command,
             targetID: targetID,
-            admission: ConnectionDirectCommandAdmission(
-                bindingGeneration: generation,
-                documentEpoch: modelDocumentEpoch(for: targetID)
+            owner: .elementPickerMode(
+                key: key,
+                generation: generation,
+                documentEpoch: modelDocumentEpoch(for: targetID),
+                enabled: enabled
             )
         )
     }
@@ -3634,7 +3661,7 @@ package actor ConnectionCore {
     private func sendTarget(
         _ command: ProtocolCommand,
         targetID: ProtocolTarget.ID,
-        admission: ConnectionDirectCommandAdmission
+        owner: ConnectionTargetCommandOwner
     ) async throws -> ProtocolCommand.Result {
         let innerCommandID = allocateCommandID()
         let outerCommandID = allocateCommandID()
@@ -3651,13 +3678,25 @@ package actor ConnectionCore {
             targetIdentifier: targetID.rawValue,
             message: message
         )
-        let pending = makeDirectPendingReply(
-            domain: command.domain,
-            method: command.method,
-            targetID: targetID,
-            promise: promise,
-            admission: admission
-        )
+        let pending: TransportSession.PendingReply = switch owner {
+        case let .direct(admission):
+            makeDirectPendingReply(
+                domain: command.domain,
+                method: command.method,
+                targetID: targetID,
+                promise: promise,
+                admission: admission
+            )
+        case let .elementPickerMode(key, generation, documentEpoch, enabled):
+            TransportSession.PendingReply.elementPickerMode(
+                targetID: targetID,
+                promise: promise,
+                key: key,
+                generation: generation,
+                documentEpoch: documentEpoch,
+                enabled: enabled
+            )
+        }
         replyStore.insertTargetReply(pending, key: key, rootWrapperID: outerCommandID)
         do {
             try await backend.sendJSONString(wrapperMessage)
@@ -3991,6 +4030,25 @@ package actor ConnectionCore {
         switch pending.purpose {
         case .direct:
             break
+        case let .elementPickerMode(key, generation, _, enabled):
+            precondition(
+                pending.method == "DOM.setInspectModeEnabled",
+                "An element-picker reply has the wrong command owner."
+            )
+            guard let mode = elementPickerModes[key],
+                  mode.physical.generation == generation else {
+                preconditionFailure(
+                    "An element-picker reply has no matching generation owner."
+                )
+            }
+            switch (enabled, mode.physical) {
+            case (true, .enabling), (false, .disabling):
+                break
+            case (true, _), (false, _):
+                preconditionFailure(
+                    "An element-picker reply does not match its active transition."
+                )
+            }
         case let .modelCommand(_, operationID):
             guard let ownership = modelCommandTasks[operationID]?.pendingReplyOwnership else {
                 preconditionFailure("A model command reply has no model command task owner.")
@@ -4043,6 +4101,13 @@ package actor ConnectionCore {
         case .direct, .modelCommand, .capabilityAuxiliary:
             // Consumer replies have no internal publication side effect.
             break
+        case let .elementPickerMode(key, generation, _, enabled):
+            publishElementPickerModeReplyIfCurrent(
+                result,
+                key: key,
+                generation: generation,
+                enabled: enabled
+            )
         case let .capability(key, generation, operationID):
             publishModelReplayCompletionIfNeeded(
                 result,
@@ -4067,6 +4132,30 @@ package actor ConnectionCore {
                 operationID: operationID
             )
         }
+    }
+
+    /// Publishes the picker activation watermark in the same inbound slot as
+    /// its successful wire reply. WebKit may emit `Inspector.inspect`
+    /// immediately after that reply; waiting for the command continuation to
+    /// resume would incorrectly classify the event as pre-activation.
+    private func publishElementPickerModeReplyIfCurrent(
+        _ result: ProtocolCommand.Result,
+        key: ConnectionCapabilityKey,
+        generation: WebInspectorPage.Generation,
+        enabled: Bool
+    ) {
+        guard enabled,
+              result.method == "DOM.setInspectModeEnabled",
+              result.targetID == targetRegistry.currentMainPageTargetID,
+              generation == currentPageGeneration,
+              var mode = elementPickerModes[key],
+              case .enabling(generation) = mode.physical else {
+            return
+        }
+        for owner in mode.owners {
+            mode.activatedThrough[owner] = result.receivedSequence
+        }
+        elementPickerModes[key] = mode
     }
 
     private func publishDOMBootstrapSnapshotIfCurrent(
@@ -4493,13 +4582,17 @@ package actor ConnectionCore {
             failureOverride: .staleIdentifier,
             pendingFailureReason: .staleIdentifier
         )
-        let directReplies = replyStore.removePendingReplies { pending in
-            guard case let .direct(bindingGeneration, _) = pending.purpose else {
+        let bindingReplies = replyStore.removePendingReplies { pending in
+            switch pending.purpose {
+            case let .direct(bindingGeneration, _):
+                return bindingGeneration == oldGeneration
+            case let .elementPickerMode(_, generation, _, _):
+                return generation == oldGeneration
+            case .modelCommand, .capability, .capabilityAuxiliary, .modelBootstrap:
                 return false
             }
-            return bindingGeneration == oldGeneration
         }
-        commandInvalidation.pendingFailures.append(contentsOf: directReplies.map {
+        commandInvalidation.pendingFailures.append(contentsOf: bindingReplies.map {
             ConnectionPendingReplyFailure(pending: $0, reason: .staleIdentifier)
         })
 
