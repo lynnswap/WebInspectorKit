@@ -42,18 +42,8 @@ package struct Inspector: Sendable, WebInspectorDomainHandle {
         package init() {}
     }
 
-    package struct EventOrigin: Sendable {
-        package let targetID: WebInspectorTarget.ID
-        package let route: RoutingTargetID
-
-        package init(targetID: WebInspectorTarget.ID, route: RoutingTargetID) {
-            self.targetID = targetID
-            self.route = route
-        }
-    }
-
     package enum Event: Sendable {
-        case inspect(Runtime.RemoteObject, hints: Runtime.JSONValue?, origin: EventOrigin?)
+        case inspect(Runtime.RemoteObject, hints: Runtime.JSONValue?)
         case unknown(RawEvent)
     }
 }

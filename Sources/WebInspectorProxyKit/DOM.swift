@@ -65,7 +65,10 @@ public struct DOM: Sendable, WebInspectorEventDomainHandle {
         )
     }
 
-    /// Resolves a runtime object into a DOM node identity.
+    /// Resolves a runtime object through the current page DOM agent.
+    ///
+    /// WebKit does not implement this command for frame targets. The returned
+    /// identity therefore belongs to the unscoped current-page DOM namespace.
     public func requestNode(forRemoteObject objectID: Runtime.RemoteObject.ID) async throws -> Node.ID {
         try await dispatch(
             method: "requestNode",

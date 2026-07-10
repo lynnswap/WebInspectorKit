@@ -134,7 +134,10 @@ External source evidence was read at fixed local revisions:
   ordinary class can acquire a runtime-selected nominal actor isolation.
 - WebKit `9d2c43b4dc9d9c47448c510c87e79ecaf40b60a4`: enable-time replay in Runtime
   protocol and Console/Network/CSS/Inspector agents, plus provisional target
-  commit ordering in `WebPageInspectorController.cpp`.
+  commit ordering in `WebPageInspectorController.cpp`; page-only Inspector and
+  `DOM.requestNode` contracts in `Inspector.json` / `DOM.json`, the unsupported
+  frame stub in `FrameDOMAgentStubs.cpp`, and main-target picker resolution in
+  `InspectorObserver.js` / `DOMManager.js`.
 - Swift Evolution [SE-0371: Isolated synchronous deinit](https://github.com/swiftlang/swift-evolution/blob/main/proposals/0371-isolated-synchronous-deinit.md)
   for the language-level lifecycle contract.
 
@@ -711,6 +714,25 @@ Element picker        -> DOM + Inspector + inspect-mode lease
 
 Element picking becomes a dedicated scoped operation rather than a Boolean
 `DOM.setInspectMode` that cannot represent multiple users:
+
+WebKit owns picker selection on the physical main-page agents. Its `Inspector`
+protocol excludes frame targets, `FrameInspectorController` installs no
+`InspectorAgent`, and the frame `DOM.requestNode` implementation is an explicit
+unsupported stub. Consequently an `Inspector.inspect` payload is always decoded
+against the main page, `DOM.requestNode` is sent to that same page DOM agent, and
+the returned node identifier remains in the unscoped main-page DOM namespace.
+There is no frame-origin fallback or synthetic frame scope. WebKit may emit the
+`DOM.setChildNodes` path needed by `requestNode` before its reply; after that
+reply the core publishes the picker selection with a new ordered event sequence.
+
+The picker lease registers before `Inspector.enable`, ignores enable-time pending
+inspect replay until `DOM.setInspectModeEnabled(true)` succeeds, and becomes
+active only after that reply. Release first disables inspect mode and then
+balances the Inspector capability. The core sends `Inspector.initialized` once
+per Inspector-capable physical page generation, not once per picker lease. A
+page generation, DOM document epoch, or picker lease change invalidates an
+in-flight resolution instead of retrying it against a different page or
+inventing an `unknown` DOM event.
 
 ```swift
 try await page.dom.withElementPicker { selections in

@@ -19,7 +19,7 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         } catch {
             throw mapTransportError(error, domain: command.domain.rawValue, method: command.method)
         }
-        let targetScopeRawValue = await targetScopeRawValue(for: command)
+        let targetScopeRawValue = await targetScopeRawValue(for: command.route)
         return try LiveProxyCommandDecoder.decode(
             Result.self,
             for: command,
@@ -138,13 +138,10 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         }
     }
 
-    private nonisolated func targetScopeRawValue<Payload: Sendable, Result: Sendable>(
-        for command: WebInspectorProxyCommand<Payload, Result>
+    private nonisolated func targetScopeRawValue(
+        for route: RoutingTargetID
     ) async -> String? {
-        if let resultTargetScopeRawValue = command.resultTargetScopeRawValue {
-            return resultTargetScopeRawValue
-        }
-        guard case let .target(rawValue) = command.route.storage else {
+        guard case let .target(rawValue) = route.storage else {
             return nil
         }
         let targetID = ProtocolTarget.ID(rawValue)

@@ -8,16 +8,13 @@ private let logger = Logger(subsystem: "WebInspectorKit", category: "WebInspecto
 private struct ProtocolCommandTarget: Sendable {
     var targetID: WebInspectorTarget.ID
     var route: RoutingTargetID
-    var resultTargetScopeRawValue: String?
 
     init(
         targetID: WebInspectorTarget.ID,
-        route: RoutingTargetID,
-        resultTargetScopeRawValue: String? = nil
+        route: RoutingTargetID
     ) {
         self.targetID = targetID
         self.route = route
-        self.resultTargetScopeRawValue = resultTargetScopeRawValue
     }
 }
 
@@ -297,7 +294,6 @@ public actor WebInspectorProxy {
         let command = WebInspectorProxyCommand<Payload, Result>(
             targetID: commandTarget.targetID,
             route: commandTarget.route,
-            resultTargetScopeRawValue: commandTarget.resultTargetScopeRawValue,
             domain: domain,
             method: method,
             payload: payload
@@ -330,7 +326,6 @@ public actor WebInspectorProxy {
                             }
                             await self.emitDOMInspectEvent(
                                 for: value,
-                                targetID: targetID,
                                 route: route,
                                 continuation: continuation
                             )
@@ -474,11 +469,10 @@ public actor WebInspectorProxy {
 
     private nonisolated func emitDOMInspectEvent(
         for event: Inspector.Event,
-        targetID: WebInspectorTarget.ID,
         route: RoutingTargetID,
         continuation: AsyncStream<DOM.Event>.Continuation
     ) async {
-        guard case let .inspect(object, _, origin) = event else {
+        guard case let .inspect(object, _) = event else {
             return
         }
         guard object.subtype?.rawValue == "node", let objectID = object.id else {
@@ -487,58 +481,28 @@ public actor WebInspectorProxy {
             )
             return
         }
-        let targets = Self.inspectResolutionTargets(targetID: targetID, route: route, origin: origin)
         logger.debug(
-            "Inspector.inspect resolving route=\(Self.logDescription(route), privacy: .public) objectID=\(objectID.rawValue, privacy: .public) commandTarget=\(targets.commandTargetID.rawValue, privacy: .public) commandRoute=\(Self.logDescription(targets.commandRoute), privacy: .public) projectionTarget=\(targets.projectionTargetID.rawValue, privacy: .public)"
+            "Inspector.inspect resolving route=\(Self.logDescription(route), privacy: .public) objectID=\(objectID.rawValue, privacy: .public)"
         )
-        // WebKit's FrameDOMAgent does not implement requestNode. Even when an
-        // Inspector.inspect event is target-wrapped for a frame, the frontend
-        // asks the page DOM agent to translate the RemoteObject into a node id.
-        // The returned node still belongs to the inspect origin for current-page
-        // projection, so keep that scope when emitting DOM.inspect.
+        // Inspector.inspect is a page-target event. WebInspectorUI resolves it
+        // through the main page DOM agent, whose node namespace is unscoped.
         do {
             let nodeID: DOM.Node.ID = try await dispatchCommand(
-                targetID: targets.commandTargetID,
-                route: targets.commandRoute,
+                targetID: .currentPage,
+                route: .currentPage,
                 domain: .dom,
                 method: "requestNode",
                 payload: DOM.RequestNodePayload(objectID: objectID)
             )
-            let projectedNodeID = Self.projectedDOMNodeID(nodeID, targetID: targets.projectionTargetID, route: route)
             logger.debug(
-                "Inspector.inspect resolved objectID=\(objectID.rawValue, privacy: .public) nodeID=\(nodeID.rawValue, privacy: .public) projectedNodeID=\(projectedNodeID.rawValue, privacy: .public)"
+                "Inspector.inspect resolved objectID=\(objectID.rawValue, privacy: .public) nodeID=\(nodeID.rawValue, privacy: .public)"
             )
-            continuation.yield(.inspect(projectedNodeID))
+            continuation.yield(.inspect(nodeID))
         } catch {
             logger.debug(
-                "Inspector.inspect requestNode failed objectID=\(objectID.rawValue, privacy: .public) commandTarget=\(targets.commandTargetID.rawValue, privacy: .public) error=\(String(describing: error), privacy: .public)"
-            )
-            continuation.yield(.unknown(RawEvent(domain: "Inspector", method: "inspect")))
-        }
-    }
-
-    private nonisolated static func inspectResolutionTargets(
-        targetID: WebInspectorTarget.ID,
-        route: RoutingTargetID,
-        origin: Inspector.EventOrigin?
-    ) -> (
-        commandTargetID: WebInspectorTarget.ID,
-        commandRoute: RoutingTargetID,
-        projectionTargetID: WebInspectorTarget.ID
-    ) {
-        guard route == .currentPage else {
-            let commandTargetID = origin?.targetID ?? targetID
-            return (
-                commandTargetID: commandTargetID,
-                commandRoute: origin?.route ?? route,
-                projectionTargetID: commandTargetID
+                "Inspector.inspect requestNode failed objectID=\(objectID.rawValue, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
         }
-        return (
-            commandTargetID: targetID,
-            commandRoute: route,
-            projectionTargetID: origin?.targetID ?? targetID
-        )
     }
 
     private nonisolated static func logDescription(_ route: RoutingTargetID) -> String {
@@ -599,11 +563,10 @@ public actor WebInspectorProxy {
                 route: RoutingTargetID(scopedTargetRawValue)
             )
         }
-        if let requestNodeObjectID = Self.requestNodeObjectID(from: payload, domain: domain) {
+        if Self.isRequestNodePayload(from: payload, domain: domain) {
             return ProtocolCommandTarget(
-                targetID: targetID,
-                route: route,
-                resultTargetScopeRawValue: requestNodeObjectID.targetScopeRawValue
+                targetID: .currentPage,
+                route: .currentPage
             )
         }
         if let remoteObjectID = Self.remoteObjectID(from: payload, domain: domain),
@@ -614,19 +577,6 @@ public actor WebInspectorProxy {
             )
         }
         return ProtocolCommandTarget(targetID: targetID, route: route)
-    }
-
-    private nonisolated static func projectedDOMNodeID(
-        _ nodeID: DOM.Node.ID,
-        targetID: WebInspectorTarget.ID,
-        route: RoutingTargetID
-    ) -> DOM.Node.ID {
-        guard route == .currentPage,
-              targetID != .currentPage,
-              nodeID.targetScopeRawValue == nil else {
-            return nodeID
-        }
-        return DOM.Node.ID(nodeID.rawValue, scopedToTargetRawValue: targetID.rawValue)
     }
 
     private nonisolated static func nodeID<Payload: Sendable>(
@@ -757,15 +707,11 @@ public actor WebInspectorProxy {
         }
     }
 
-    private nonisolated static func requestNodeObjectID<Payload: Sendable>(
+    private nonisolated static func isRequestNodePayload<Payload: Sendable>(
         from payload: Payload,
         domain: WebInspectorProxyDomain
-    ) -> Runtime.RemoteObject.ID? {
-        guard domain == .dom,
-              let payload = payload as? DOM.RequestNodePayload else {
-            return nil
-        }
-        return payload.objectID
+    ) -> Bool {
+        domain == .dom && payload is DOM.RequestNodePayload
     }
 
     private func bootstrapCurrentPage(from transport: TransportSession) async throws {

@@ -96,8 +96,7 @@ func inspectorInspectResolvesNodeRemoteObjectToDOMInspectEvent() async throws {
                 kind: .object,
                 subtype: Runtime.Subtype(rawValue: "node")
             ),
-            hints: .object([:]),
-            origin: nil
+            hints: .object([:])
         ),
         target: target
     )
@@ -166,8 +165,7 @@ func inspectorInspectIgnoresNonNodeRemoteObject() async throws {
                 id: Runtime.RemoteObject.ID("function-object"),
                 kind: .function
             ),
-            hints: .object([:]),
-            origin: nil
+            hints: .object([:])
         ),
         target: target
     )

@@ -32,8 +32,8 @@ package enum ConnectionEventProjection {
             guard let record = snapshot.targetsByID[targetID] else {
                 return false
             }
-            // WebKit reports subframe picker and request activity on frame
-            // targets while WebInspectorKit exposes a semantic current page.
+            // WebKit may report subframe domain activity on frame targets while
+            // WebInspectorKit exposes a semantic current page.
             switch event.domain {
             case .dom:
                 guard event.method != "DOM.documentUpdated" else {
@@ -41,7 +41,10 @@ package enum ConnectionEventProjection {
                 }
                 return Self.isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
             case .inspector:
-                return Self.isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
+                // Inspector excludes frame targets in WebKit's protocol. A
+                // frame-origin inspect event is not a state this projection
+                // boundary supports or rewrites into a page event.
+                return false
             case .network:
                 // WebKit's page/ProxyingNetworkAgent owns process-wide
                 // Network.enable. This branch only projects target-wrapped
@@ -107,10 +110,6 @@ package enum ConnectionEventProjection {
               let targetID = event.targetID else {
             return scopedProxyEvent
         }
-        if event.domain == .inspector,
-           targetID == snapshot.currentMainPageTargetID {
-            return Self.mainPageInspectorEvent(scopedProxyEvent)
-        }
         guard let currentMainPageTargetID = snapshot.currentMainPageTargetID,
               targetID != currentMainPageTargetID,
               let record = snapshot.targetsByID[targetID],
@@ -167,16 +166,6 @@ package enum ConnectionEventProjection {
             return nil
         }
         return agentTargetID.rawValue
-    }
-
-    private nonisolated static func mainPageInspectorEvent(
-        _ proxyEvent: WebInspectorProxyEvent
-    ) -> WebInspectorProxyEvent {
-        guard case let .inspector(event) = proxyEvent,
-              case let .inspect(object, hints, _) = event else {
-            return proxyEvent
-        }
-        return .inspector(.inspect(object, hints: hints, origin: nil))
     }
 
     private nonisolated static func scopedDOMEvent(

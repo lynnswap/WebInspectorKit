@@ -1104,7 +1104,7 @@ func transportBackendNormalizesInspectorInspectToDOMInspectEvent() async throws 
 }
 
 @Test
-func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async throws {
+func transportBackendProjectsFrameDOMEventsAndRoutesScopedCommands() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
@@ -1116,30 +1116,10 @@ func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async 
 
     let eventTask = Task {
         var iterator = target.dom.events.makeAsyncIterator()
-        let first = await iterator.next()
-        let second = await iterator.next()
-        return [first, second].compactMap { $0 }
+        return await iterator.next()
     }
 
     await waitForEventSubscription(target, domain: .dom)
-    await waitForEventSubscription(target, domain: .inspector)
-    await receiveTargetEvent(
-        transport,
-        targetID: ProtocolTarget.ID("frame-target"),
-        method: "Inspector.inspect",
-        params: #"{"object":{"objectId":"remote-frame-node","type":"object","subtype":"node"},"hints":{}}"#
-    )
-
-    let requestNode = try await waitForTargetMessage(backend, method: "DOM.requestNode")
-    #expect(requestNode.targetIdentifier == ProtocolTarget.ID("page-main"))
-    #expect(try messageParameters(requestNode.message)["objectId"] as? String == "remote-frame-node")
-    await receiveTargetReply(
-        transport,
-        targetID: requestNode.targetIdentifier,
-        messageID: try messageID(requestNode.message),
-        result: #"{"nodeId":42}"#
-    )
-
     await receiveTargetEvent(
         transport,
         targetID: ProtocolTarget.ID("frame-target"),
@@ -1147,14 +1127,8 @@ func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async 
         params: #"{"parentId":42,"nodes":[{"nodeId":43,"nodeType":1,"nodeName":"SPAN","localName":"span","nodeValue":"","childNodeCount":0}]}"#
     )
 
-    let events = try await value(of: eventTask)
-    #expect(events.count == 2)
-    guard case let .inspect(nodeID)? = events.first else {
-        Issue.record("Expected frame Inspector.inspect to normalize to DOM.inspect.")
-        return
-    }
-    #expect(nodeID == DOM.Node.ID("42", scopedToTargetRawValue: "frame-target"))
-    guard case let .setChildNodes(parentID, nodes)? = events.last else {
+    let event = try await value(of: eventTask)
+    guard case let .setChildNodes(parentID, nodes)? = event else {
         Issue.record("Expected frame DOM.setChildNodes to be projected into the current page DOM stream.")
         return
     }
@@ -1402,12 +1376,12 @@ func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async 
 }
 
 @Test
-func transportBackendNormalizesParentlessFrameInspectorInspectForCurrentPageRoute() async throws {
+func transportBackendIgnoresImpossibleFrameInspectorOrigin() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
     await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-page-target","type":"page","frameId":"child-frame","isProvisional":false}}}"#
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
     )
     let proxy = try await WebInspectorProxy(transport: transport)
     let target = try await proxy.waitForCurrentPage()
@@ -1421,14 +1395,20 @@ func transportBackendNormalizesParentlessFrameInspectorInspectForCurrentPageRout
     await waitForEventSubscription(target, domain: .inspector)
     await receiveTargetEvent(
         transport,
-        targetID: ProtocolTarget.ID("frame-page-target"),
+        targetID: ProtocolTarget.ID("frame-target"),
         method: "Inspector.inspect",
         params: #"{"object":{"objectId":"remote-frame-node","type":"object","subtype":"node"},"hints":{}}"#
+    )
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        method: "Inspector.inspect",
+        params: #"{"object":{"objectId":"remote-main-node","type":"object","subtype":"node"},"hints":{}}"#
     )
 
     let requestNode = try await waitForTargetMessage(backend, method: "DOM.requestNode")
     #expect(requestNode.targetIdentifier == ProtocolTarget.ID("page-main"))
-    #expect(try messageParameters(requestNode.message)["objectId"] as? String == "remote-frame-node")
+    #expect(try messageParameters(requestNode.message)["objectId"] as? String == "remote-main-node")
     await receiveTargetReply(
         transport,
         targetID: requestNode.targetIdentifier,
@@ -1438,10 +1418,10 @@ func transportBackendNormalizesParentlessFrameInspectorInspectForCurrentPageRout
 
     let event = try #require(try await value(of: eventTask))
     guard case let .inspect(nodeID) = event else {
-        Issue.record("Expected parentless frame Inspector.inspect to normalize to DOM.inspect.")
+        Issue.record("Expected main-page Inspector.inspect to normalize to DOM.inspect.")
         return
     }
-    #expect(nodeID == DOM.Node.ID("42", scopedToTargetRawValue: "frame-page-target"))
+    #expect(nodeID == DOM.Node.ID("42"))
 }
 
 @Test
@@ -1724,7 +1704,7 @@ func transportBackendKeepsBackendResourceIdentifierOnScopedFrameRequests() async
 }
 
 @Test
-func transportBackendRoutesRequestNodeThroughPageDOMAgentAndScopesResult() async throws {
+func transportBackendRoutesRequestNodeThroughPageDOMAgentWithoutInventingFrameScope() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
@@ -1732,7 +1712,7 @@ func transportBackendRoutesRequestNodeThroughPageDOMAgentAndScopesResult() async
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
     )
     let proxy = try await WebInspectorProxy(transport: transport)
-    let target = try await proxy.waitForCurrentPage()
+    let target = proxy.frameTarget(id: WebInspectorTarget.ID("frame-target"))
 
     let requestNodeTask = Task {
         try await target.dom.requestNode(
@@ -1749,8 +1729,8 @@ func transportBackendRoutesRequestNodeThroughPageDOMAgentAndScopesResult() async
         result: #"{"nodeId":"frame-node"}"#
     )
     let nodeID = try await requestNodeTask.value
-    #expect(nodeID == DOM.Node.ID("frame-node", scopedToTargetRawValue: "frame-target"))
-    #expect(nodeID.targetScopeRawValue == "frame-target")
+    #expect(nodeID == DOM.Node.ID("frame-node"))
+    #expect(nodeID.targetScopeRawValue == nil)
 }
 
 @Test
