@@ -36,6 +36,21 @@ package enum ModelDomain: Hashable, Sendable {
             [.runtime]
         }
     }
+
+    var replayCapability: WebInspectorProxyEventDomain? {
+        switch self {
+        case .dom:
+            nil
+        case .css:
+            .css
+        case .network:
+            .network
+        case .console:
+            .console
+        case .runtime:
+            .runtime
+        }
+    }
 }
 
 package struct ModelTarget: Equatable, Sendable {

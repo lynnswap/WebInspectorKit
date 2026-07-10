@@ -854,6 +854,12 @@ package actor ConnectionCore {
         capabilities.states.mapValues(\.leaseOwners)
     }
 
+    func desiredCapabilityLeaseOwnersForTesting() -> [
+        ConnectionCapabilityKey: Set<ConnectionCapabilityLeaseOwner>
+    ] {
+        capabilities.states.mapValues(\.desiredLeaseOwners)
+    }
+
     package func targetID(forExecutionContext key: RuntimeContext.Key) -> ProtocolTarget.ID? {
         runtimeContextRegistry.targetID(for: key)
     }
@@ -2100,9 +2106,8 @@ package actor ConnectionCore {
 
     /// Synchronous phase boundary for successful reply-side effects.
     ///
-    /// The ordered model feed adds capability markers to this purpose switch
-    /// in the next change. It must remain in the actor's inbound processing
-    /// slot before `ReplyPromise.fulfill` resumes the waiting operation.
+    /// Model replay boundaries remain in this actor's inbound processing slot
+    /// before `ReplyPromise.fulfill` resumes the waiting capability operation.
     private func processSuccessfulReply(
         _ result: ProtocolCommand.Result,
         for pending: TransportSession.PendingReply
@@ -2111,11 +2116,77 @@ package actor ConnectionCore {
         case .client:
             // Client replies have no internal publication side effect.
             break
-        case .capability:
-            // The next change publishes the ordered model-feed marker here.
-            break
+        case let .capability(key, generation, operationID):
+            publishModelReplayCompletionIfNeeded(
+                result,
+                pending: pending,
+                key: key,
+                generation: generation,
+                operationID: operationID
+            )
         }
-        _ = result
+    }
+
+    private func publishModelReplayCompletionIfNeeded(
+        _ result: ProtocolCommand.Result,
+        pending: TransportSession.PendingReply,
+        key: ConnectionCapabilityKey,
+        generation: WebInspectorPage.Generation,
+        operationID: UInt64
+    ) {
+        let enableMethod = "\(key.domain.rawValue).enable"
+        let disableMethod = "\(key.domain.rawValue).disable"
+        guard pending.method != disableMethod else {
+            return
+        }
+        precondition(
+            pending.method == enableMethod,
+            "A capability reply does not match its enable or disable operation."
+        )
+        guard let capability = capabilities.states[key],
+              case let .enabling(activeGeneration, activeOperationID, _) = capability.physical,
+              activeGeneration == generation,
+              activeOperationID == operationID else {
+            // A reply from a superseded physical binding cannot publish a
+            // boundary into the current model generation.
+            return
+        }
+        guard let registration = modelFeed else {
+            return
+        }
+        let replayDomains = ModelDomain.ordered(registration.configuredDomains).filter { domain in
+            domain.replayCapability == key.domain
+                && capability.desiredLeaseOwners.contains(.modelFeed(registration.id, domain))
+        }
+        guard !replayDomains.isEmpty else {
+            return
+        }
+        precondition(
+            key.route == .currentPage && key.targetID == .currentPage,
+            "A model feed capability must use the semantic current-page route."
+        )
+        precondition(
+            generation == currentPageGeneration,
+            "A current model-feed capability reply must match the current page generation."
+        )
+        precondition(
+            pending.targetID == targetRegistry.currentMainPageTargetID,
+            "A current model-feed capability reply must belong to the current physical target."
+        )
+
+        for domain in replayDomains {
+            guard enqueueModelFeedRecord(
+                .replayComplete(
+                    generation: generation,
+                    domain: domain,
+                    through: result.receivedSequence
+                )
+            ) else {
+                // enqueueModelFeedRecord synchronously claims terminal
+                // ownership for overflow or a terminated consumer.
+                return
+            }
+        }
     }
 
     private func updateRegistryFromRootEvent(

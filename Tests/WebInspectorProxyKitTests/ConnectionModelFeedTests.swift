@@ -159,6 +159,10 @@ func modelFeedPublishesFutureTargetAndConfiguredDomainEventsAfterSnapshotWaterma
     var iterator = feed.records.makeAsyncIterator()
     _ = try await modelFeedRequireReset(iterator.next())
     let initialSnapshot = try await modelFeedRequireTargetSnapshot(iterator.next())
+    let initialReplay = try await modelFeedRequireReplayCompletion(iterator.next())
+    #expect(initialReplay.generation == initialSnapshot.generation)
+    #expect(initialReplay.domain == .network)
+    #expect(initialReplay.through == initialSnapshot.through)
 
     let targetSequence = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
         id: "frame-a",
@@ -204,6 +208,58 @@ func modelFeedPublishesFutureTargetAndConfiguredDomainEventsAfterSnapshotWaterma
         message: #"{"id":\#(disableID),"result":{}}"#
     ))
     try await closeTask.value
+    await core.close()
+}
+
+@Test
+func modelFeedReplayCompletionFollowsEnableTimeEventsBeforeOpenReturns() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let openTask = Task {
+        try await core.openModelFeed(configuredDomains: [.network], capacity: 8)
+    }
+    let enable = try await backend.waitForTargetMessage(method: "Network.enable")
+
+    let replayedEventSequence = await core.receiveRootMessage(
+        modelFeedTargetDispatchMessage(
+            targetID: "page-main",
+            message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"enable-replay","request":{"url":"https://example.test/replay","method":"GET"},"timestamp":1,"type":"Document"}}"#
+        )
+    )
+    await modelFeedRespond(to: enable, core: core)
+    let feed = try await openTask.value
+
+    var iterator = feed.records.makeAsyncIterator()
+    _ = try await modelFeedRequireReset(iterator.next())
+    let snapshot = try await modelFeedRequireTargetSnapshot(iterator.next())
+    let replayedEvent = try await modelFeedRequireEvent(iterator.next())
+    let replayCompletion = try await modelFeedRequireReplayCompletion(iterator.next())
+
+    #expect(replayedEvent.sequence == replayedEventSequence)
+    #expect(replayedEvent.sequence > snapshot.through)
+    guard case let .network(_, event) = replayedEvent.payload,
+          case let .requestWillBeSent(id, _, _, _, _) = event else {
+        Issue.record("Expected the enable-time Network event before replay completion.")
+        return
+    }
+    #expect(id == Network.Request.ID("enable-replay"))
+    #expect(replayCompletion.generation == snapshot.generation)
+    #expect(replayCompletion.domain == .network)
+    #expect(replayCompletion.through == replayedEventSequence)
+
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Network.enable"]
+    )
+    #expect(try await iterator.next() == nil)
     await core.close()
 }
 
@@ -655,6 +711,26 @@ func modelFeedAcquiresAndReleasesConfiguredCapabilitiesInDeterministicOrder() as
     ])
     #expect(try await modelFeedSentTargetMethods(backend) == enableMethods)
 
+    var iterator = feed.records.makeAsyncIterator()
+    let reset = try await modelFeedRequireReset(iterator.next())
+    let snapshot = try await modelFeedRequireTargetSnapshot(iterator.next())
+    #expect(snapshot.generation == reset)
+    let replayCompletions = try await [
+        modelFeedRequireReplayCompletion(iterator.next()),
+        modelFeedRequireReplayCompletion(iterator.next()),
+        modelFeedRequireReplayCompletion(iterator.next()),
+        modelFeedRequireReplayCompletion(iterator.next()),
+    ]
+    #expect(replayCompletions.map(\.domain) == [
+        .css,
+        .network,
+        .console,
+        .runtime,
+    ])
+    #expect(replayCompletions.allSatisfy {
+        $0.generation == reset && $0.through == snapshot.through
+    })
+
     let owners = await core.capabilityLeaseOwnersForTesting()
     let domKey = ConnectionCapabilityKey(
         route: .currentPage,
@@ -692,7 +768,120 @@ func modelFeedAcquiresAndReleasesConfiguredCapabilitiesInDeterministicOrder() as
         "Network.disable",
         "CSS.disable",
     ])
+    // The shared local DOM lease emits no replay marker, and each physical
+    // wire capability emits exactly one marker.
+    #expect(try await iterator.next() == nil)
     #expect(await modelFeedAllCapabilityLeaseOwners(core).isEmpty)
+    await core.close()
+}
+
+@Test
+func replayMarkerOverflowClaimsTerminalStateAndCannotReturnAnOpenFeed() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let openTask = Task {
+        try await core.openModelFeed(
+            configuredDomains: [.network],
+            capacity: 2
+        )
+    }
+    let enable = try await backend.waitForTargetMessage(method: "Network.enable")
+
+    await modelFeedRespond(to: enable, core: core)
+    #expect(await core.terminalCause == .modelFeedFailure(.bufferOverflow(capacity: 2)))
+    do {
+        _ = try await openTask.value
+        Issue.record("A replay-marker overflow must not return an open model feed.")
+    } catch {
+        #expect(error is WebInspectorScopeError)
+    }
+    #expect(await backend.isDetached())
+}
+
+@Test
+func rejectedEnableDoesNotPublishReplayMarkerOrPoisonFullFeed() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let openTask = Task {
+        try await core.openModelFeed(
+            configuredDomains: [.network],
+            capacity: 2
+        )
+    }
+    let enable = try await backend.waitForTargetMessage(method: "Network.enable")
+    await modelFeedRespond(
+        to: enable,
+        core: core,
+        errorMessage: "enable rejected"
+    )
+
+    await #expect(throws: WebInspectorProxyError.commandRejected(
+        method: "Network.enable",
+        message: "enable rejected"
+    )) {
+        try await openTask.value
+    }
+    #expect(await core.terminalCause == nil)
+    #expect(await backend.isDetached() == false)
+
+    let replacement = try await core.openModelFeed(
+        configuredDomains: [],
+        capacity: 3
+    )
+    try await replacement.close()
+    await core.close()
+}
+
+@Test
+func cancelledActivationDoesNotPublishReplayMarkerAfterOwnerStopsBeingDesired() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let key = ConnectionCapabilityKey(
+        route: .currentPage,
+        targetID: .currentPage,
+        domain: .network
+    )
+    let openTask = Task {
+        try await core.openModelFeed(
+            configuredDomains: [.network],
+            capacity: 2
+        )
+    }
+    let enable = try await backend.waitForTargetMessage(method: "Network.enable")
+
+    openTask.cancel()
+    #expect(await modelFeedWaitForNoDesiredCapabilityOwners(core, key: key))
+    await modelFeedRespond(to: enable, core: core)
+    let disable = try await backend.waitForTargetMessage(method: "Network.disable")
+    await modelFeedRespond(to: disable, core: core)
+
+    await #expect(throws: CancellationError.self) {
+        try await openTask.value
+    }
+    #expect(await core.terminalCause == nil)
+    #expect(await backend.isDetached() == false)
+    #expect(await modelFeedAllCapabilityLeaseOwners(core).isEmpty)
+
+    let replacement = try await core.openModelFeed(
+        configuredDomains: [],
+        capacity: 3
+    )
+    try await replacement.close()
     await core.close()
 }
 
@@ -938,6 +1127,13 @@ func activeModelFeedLeaseReconcilesOntoReplacementTarget() async throws {
         configuredDomains: [.network],
         targetID: "page-old"
     )
+    var iterator = feed.records.makeAsyncIterator()
+    _ = try await modelFeedRequireReset(iterator.next())
+    let initialSnapshot = try await modelFeedRequireTargetSnapshot(iterator.next())
+    let initialReplay = try await modelFeedRequireReplayCompletion(iterator.next())
+    #expect(initialReplay.generation == initialSnapshot.generation)
+    #expect(initialReplay.domain == .network)
+    #expect(initialReplay.through == initialSnapshot.through)
 
     _ = await core.receiveRootMessage(
         #"{"method":"Target.targetDestroyed","params":{"targetId":"page-old"}}"#
@@ -963,7 +1159,26 @@ func activeModelFeedLeaseReconcilesOntoReplacementTarget() async throws {
     #expect(await modelFeedAllCapabilityLeaseOwners(core) == Set([
         .modelFeed(feed.id, .network),
     ]))
+    let replacementEventSequence = await core.receiveRootMessage(
+        modelFeedTargetDispatchMessage(
+            targetID: "page-new",
+            message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"replacement-replay","request":{"url":"https://example.test/replacement","method":"GET"},"timestamp":2,"type":"Document"}}"#
+        )
+    )
     await modelFeedRespond(to: replacementEnable, core: core)
+
+    let replacementReset = try await modelFeedRequireReset(iterator.next())
+    let replacementSnapshot = try await modelFeedRequireTargetSnapshot(iterator.next())
+    let replacementEvent = try await modelFeedRequireEvent(iterator.next())
+    let replacementReplay = try await modelFeedRequireReplayCompletion(iterator.next())
+    #expect(replacementReset.rawValue == initialSnapshot.generation.rawValue + 1)
+    #expect(replacementSnapshot.generation == replacementReset)
+    #expect(replacementEvent.generation == replacementReset)
+    #expect(replacementEvent.sequence == replacementEventSequence)
+    #expect(replacementEvent.sequence > replacementSnapshot.through)
+    #expect(replacementReplay.generation == replacementReset)
+    #expect(replacementReplay.domain == .network)
+    #expect(replacementReplay.through == replacementEventSequence)
 
     try await modelFeedCloseSuccessfully(
         feed,
@@ -972,6 +1187,7 @@ func activeModelFeedLeaseReconcilesOntoReplacementTarget() async throws {
         targetID: "page-new",
         enableMethods: ["Network.enable"]
     )
+    #expect(try await iterator.next() == nil)
     await core.close()
 }
 
@@ -1212,6 +1428,19 @@ private func modelFeedAllCapabilityLeaseOwners(
     }
 }
 
+private func modelFeedWaitForNoDesiredCapabilityOwners(
+    _ core: ConnectionCore,
+    key: ConnectionCapabilityKey
+) async -> Bool {
+    for _ in 0..<1_000 {
+        if await core.desiredCapabilityLeaseOwnersForTesting()[key]?.isEmpty == true {
+            return true
+        }
+        await Task.yield()
+    }
+    return false
+}
+
 private func modelFeedMessageMethod(_ message: String) throws -> String {
     let object = try JSONSerialization.jsonObject(with: Data(message.utf8))
     let dictionary = try #require(object as? [String: Any])
@@ -1260,6 +1489,12 @@ private struct ModelFeedSynchronizationRecord {
     let through: UInt64
 }
 
+private struct ModelFeedReplayCompletionRecord {
+    let generation: WebInspectorPage.Generation
+    let domain: ModelDomain
+    let through: UInt64
+}
+
 private enum ModelFeedTestError: Error {
     case unexpectedRecord
 }
@@ -1296,6 +1531,20 @@ private func modelFeedRequireSynchronization(
         throw ModelFeedTestError.unexpectedRecord
     }
     return ModelFeedSynchronizationRecord(generation: generation, through: through)
+}
+
+private func modelFeedRequireReplayCompletion(
+    _ record: ConnectionModelFeedRecord?
+) throws -> ModelFeedReplayCompletionRecord {
+    guard case let .replayComplete(generation, domain, through) = try #require(record) else {
+        Issue.record("Expected model feed replay completion.")
+        throw ModelFeedTestError.unexpectedRecord
+    }
+    return ModelFeedReplayCompletionRecord(
+        generation: generation,
+        domain: domain,
+        through: through
+    )
 }
 
 private func modelFeedRequireEvent(

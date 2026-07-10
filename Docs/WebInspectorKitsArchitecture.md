@@ -605,19 +605,31 @@ package enum ModelDomain: Hashable, Sendable { /* configured domains */ }
 
 The current transport slice implements the bounded exclusive feed, initial
 `reset`/`targetSnapshot`, future target lifecycle deltas, future events for
-configured domains, and transactional capability leases. Acquisition follows
-the deterministic domain order DOM, CSS, Network, Console, Runtime; CSS shares
-the DOM prerequisite, while DOM's capability is local and sends no wire command.
+configured domains, transactional capability leases, and enable-replay
+boundaries for CSS, Network, Console, and Runtime. Acquisition follows the
+deterministic domain order DOM, CSS, Network, Console, Runtime; CSS shares the
+DOM prerequisite, while DOM's capability is local and sends no wire command.
 The feed is registered and its initial records are published before the first
 capability await, and `openModelFeed` returns only after every configured
 capability is active. An acquisition failure or cancellation releases the
 successful prefix in reverse order before returning. For an empty
 configured-domain set the feed also emits `synchronizationComplete`.
-Replay-complete boundaries, DOM bootstrap, configured-domain synchronization,
-and the complete ordered retarget readiness sequence described below remain
-later slices; their record cases define the package contract but are not yet
-emitted. This distinction prevents active capabilities from being mistaken for
-model readiness behavior that the transport does not yet provide.
+
+For a successful wire `enable` reply, the connection core publishes one
+`replayComplete` for each configured model-domain owner of that physical
+capability. Publication is synchronous in reply processing: all earlier inbound
+events have already been projected into the feed, the marker uses the reply's
+current transport-sequence watermark, and only then can the capability promise
+resume `openModelFeed`. Shared leases do not duplicate a model-domain marker,
+rejected or superseded operations publish none, and a replacement physical
+binding publishes its marker in the replacement generation. Local DOM never
+publishes an invented replay boundary.
+
+DOM bootstrap, non-empty configured-domain `synchronizationComplete`, and the
+complete ordered retarget readiness sequence described below remain later
+slices. Their record cases define the package contract but are not yet all
+emitted. This distinction prevents wire replay completion from being mistaken
+for complete model readiness.
 
 The target snapshot contains the physical current page first, followed by its
 relevant committed frame targets in deterministic parent-before-child order.
@@ -728,8 +740,9 @@ When no physical page is temporarily committed, a command fails with
 `pageUnavailable`; it does not guess a stale target. During commit the core will
 eventually perform the following full ordered transition. The current slice
 establishes its synchronous reset, physical target snapshot, future-delta
-prefix, and capability-owner reconciliation onto the new physical target;
-replay/bootstrap watermarks and binding readiness remain later slices:
+prefix, capability-owner reconciliation onto the new physical target, and the
+wire capability replay watermarks described above; DOM bootstrap and binding
+readiness remain later slices:
 
 1. stop admission of new target-scoped commands and increment page generation;
 2. publish `.reset(newGeneration)` to public scopes and the package model feed;
