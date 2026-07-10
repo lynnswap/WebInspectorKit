@@ -3268,8 +3268,13 @@ extension WebInspectorModelContext {
 extension WebInspectorModelContext {
     func apply(
         _ event: Runtime.Event,
-        targetID: WebInspectorTarget.ID? = nil
+        targetID: WebInspectorTarget.ID? = nil,
+        isCurrentPageTarget: Bool = true
     ) {
-        runtimeState.apply(event, sourceTargetID: targetID)
+        runtimeState.apply(
+            event,
+            sourceTargetID: targetID,
+            isCurrentPageTarget: isCurrentPageTarget
+        )
     }
 }
