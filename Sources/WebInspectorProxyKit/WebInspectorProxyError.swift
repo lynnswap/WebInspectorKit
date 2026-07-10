@@ -11,11 +11,29 @@ public enum WebInspectorProxyError: Error, Sendable, Equatable {
     /// The proxy was closed before the requested operation completed.
     case closed
 
+    /// No physical page target is currently available for the logical page.
+    case pageUnavailable
+
+    /// A target-scoped identifier belongs to an older page generation.
+    case staleIdentifier
+
     /// The inspector connection disconnected.
     case disconnected(String)
 
     /// A protocol command failed in the backend.
     case commandFailed(domain: String, method: String, message: String)
+
+    /// The inspected target rejected a protocol command.
+    case commandRejected(method: String, message: String)
+
+    /// A known protocol envelope or event payload was malformed.
+    case protocolViolation(String)
+
+    /// A structured event subscriber could not retain another pending event.
+    case eventBufferOverflow(capacity: Int)
+
+    /// The underlying inspector transport failed.
+    case transportFailure(String)
 
     /// A protocol command did not receive a reply before its timeout.
     case timeout(domain: String, method: String)

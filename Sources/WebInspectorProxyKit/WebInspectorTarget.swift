@@ -218,6 +218,30 @@ package struct DomainClientContext: Sendable {
         )
     }
 
+    package func withEvents<Element: Sendable, Output>(
+        domain: WebInspectorProxyEventDomain,
+        buffering: WebInspectorEventBufferingPolicy,
+        isolation: isolated (any Actor)? = #isolation,
+        extract: @escaping @Sendable (WebInspectorProxyEvent) -> Element?,
+        _ operation: (
+            AsyncThrowingStream<WebInspectorPageEvent<Element>, any Error>
+        ) async throws -> Output
+    ) async throws -> Output {
+        guard let backend = proxy.structuredEventBackend else {
+            throw unimplementedCommand(domain: domain.rawValue, method: "withEvents")
+        }
+        return try await withWebInspectorEventScope(
+            backend: backend,
+            targetID: targetID,
+            route: route,
+            domain: domain,
+            buffering: buffering,
+            isolation: isolation,
+            extract: extract,
+            operation
+        )
+    }
+
     package func domEvents() -> AsyncStream<DOM.Event> {
         proxy.domEvents(targetID: targetID, route: route)
     }

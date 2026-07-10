@@ -1,5 +1,45 @@
 import Foundation
 
+private struct ConnectionCapabilityCommandOperation: Sendable {
+    let backend: any TransportBackend
+    let message: String
+    let promise: ReplyPromise<ProtocolCommand.Result>
+    let pendingKey: TransportSession.PendingKey
+    let timeoutAction: (@Sendable () async -> Void)?
+
+    func value() async throws {
+        try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            try await backend.sendJSONString(message)
+            try Task.checkCancellation()
+
+            let timeoutTask = timeoutAction.map { action in
+                Task {
+                    await action()
+                }
+            }
+            defer {
+                timeoutTask?.cancel()
+            }
+            _ = try await promise.value()
+        } onCancel: {
+            Task {
+                await promise.fulfill(.failure(CancellationError()))
+            }
+        }
+    }
+}
+
+private struct ConnectionCapabilityTask: Sendable {
+    let task: Task<Void, Never>
+    let pendingKey: TransportSession.PendingKey?
+}
+
+private struct PhysicalTargetDisappearanceWaiters: Sendable {
+    var activation: [ReplyPromise<Void>] = []
+    var release: [ReplyPromise<Void>] = []
+}
+
 /// Owns one physical inspector connection.
 ///
 /// Target membership, command/reply routing, inbound ordering, and terminal
@@ -13,6 +53,7 @@ package actor ConnectionCore {
     package enum TerminalCause: Equatable, Sendable {
         case explicitClose
         case fatal(String)
+        case protocolViolation(String)
     }
 
     private enum State {
@@ -34,6 +75,16 @@ package actor ConnectionCore {
     private var styleSheetRouting: TransportStyleSheetRouting
     private var runtimeContextRegistry: RuntimeContextRegistry
     private var eventSubscribers: TransportEventSubscriberRegistry
+    private var eventScopes: ConnectionEventScopeRegistry
+    private var capabilities: ConnectionCapabilityRegistry
+    private var capabilityTasks: [UInt64: ConnectionCapabilityTask]
+    private var currentPageGeneration: WebInspectorPage.Generation
+    private var currentPageBindingGapIsOpen: Bool
+    private var eventScopeRegistrationWaiters: [(
+        expectedCount: Int,
+        continuation: CheckedContinuation<Void, Never>
+    )]
+    private var eventScopeActivationCancellationAction: (@Sendable () async -> Void)?
     private var inboundMessageQueue: TransportInboundMessageQueue
     private var closeAction: CloseAction
     private var state: State
@@ -63,6 +114,13 @@ package actor ConnectionCore {
         styleSheetRouting = TransportStyleSheetRouting()
         runtimeContextRegistry = RuntimeContextRegistry()
         eventSubscribers = TransportEventSubscriberRegistry()
+        eventScopes = ConnectionEventScopeRegistry()
+        capabilities = ConnectionCapabilityRegistry()
+        capabilityTasks = [:]
+        currentPageGeneration = WebInspectorPage.Generation(rawValue: 0)
+        currentPageBindingGapIsOpen = false
+        eventScopeRegistrationWaiters = []
+        eventScopeActivationCancellationAction = nil
         inboundMessageQueue = TransportInboundMessageQueue()
         self.closeAction = closeAction ?? {
             await backend.detach()
@@ -80,9 +138,20 @@ package actor ConnectionCore {
         // deinitializer is only a synchronous backstop for actor-owned local
         // resources; native resources have their own isolated backstop.
         eventSubscribers.finishAndRemoveAll()
+        eventScopes.finishAndRemoveAll(with: WebInspectorProxyError.closed)
+        let tasks = Array(capabilityTasks.values)
+        capabilityTasks.removeAll()
+        for task in tasks {
+            task.task.cancel()
+            if let pendingKey = task.pendingKey {
+                replyStore.removePendingReply(pendingKey)
+            }
+        }
         precondition(replyStore.pendingReplies.isEmpty, "ConnectionCore deinitialized with pending replies; call close() explicitly.")
         precondition(mainPageTargetWaiterStore.isEmpty, "ConnectionCore deinitialized with pending target waiters; call close() explicitly.")
         precondition(closeWaiters.isEmpty, "ConnectionCore deinitialized with pending close waiters.")
+        precondition(capabilities.states.values.allSatisfy { $0.activationWaiters.isEmpty && $0.releaseWaiters.isEmpty }, "ConnectionCore deinitialized with pending capability waiters.")
+        precondition(eventScopeRegistrationWaiters.isEmpty, "ConnectionCore deinitialized with event-scope test waiters.")
     }
 
     private var isOpen: Bool {
@@ -118,6 +187,156 @@ package actor ConnectionCore {
             }
         }
         return pair.stream
+    }
+
+    package func pageGeneration() throws -> WebInspectorPage.Generation {
+        guard isOpen else {
+            throw terminalScopeError
+        }
+        guard targetRegistry.currentMainPageTargetID != nil else {
+            throw WebInspectorProxyError.pageUnavailable
+        }
+        return currentPageGeneration
+    }
+
+    package func acquireEventScope<Element: Sendable>(
+        route: RoutingTargetID,
+        targetID: WebInspectorTarget.ID,
+        domain: WebInspectorProxyEventDomain,
+        buffering: WebInspectorEventBufferingPolicy,
+        extract: @escaping @Sendable (WebInspectorProxyEvent) -> Element?
+    ) async throws -> WebInspectorProxyEventScope<Element> {
+        guard isOpen else {
+            throw terminalScopeError
+        }
+        try requireAvailableTarget(for: route)
+
+        let capacity = buffering.capacity
+        let mailbox = WebInspectorEventMailbox<Element>(capacity: capacity)
+        let stream = mailbox.makeStream()
+
+        let scopeID = WebInspectorProxyEventScopeID()
+        let key = ConnectionCapabilityKey(route: route, targetID: targetID, domain: domain)
+        let generation = generation(for: route)
+        let sink = WebInspectorEventSink(
+            id: scopeID,
+            route: route,
+            targetID: targetID,
+            domain: domain,
+            mailbox: mailbox,
+            extract: extract
+        )
+
+        // Registration and the initial generation marker happen before the
+        // logical lease can send its first wire enable command.
+        eventScopes.insert(
+            sink,
+            capability: key,
+            capacity: capacity,
+            generation: generation
+        )
+        resumeEventScopeRegistrationWaitersIfNeeded()
+
+        var capability = capabilities.states[key]
+            ?? ConnectionCapabilityRegistry.State(physical: .inactive(generation: generation))
+        precondition(capability.leaseIDs.insert(scopeID).inserted, "Duplicate capability lease identifier.")
+
+        let activation: ReplyPromise<Void>?
+        if case let .enabled(activeGeneration) = capability.physical,
+           activeGeneration == generation {
+            activation = nil
+            precondition(
+                capability.activatedLeaseIDs.insert(scopeID).inserted,
+                "A newly registered capability lease was already activated."
+            )
+        } else {
+            let promise = ReplyPromise<Void>()
+            capability.activationWaiters[scopeID] = promise
+            activation = promise
+        }
+        capabilities.states[key] = capability
+        await reconcileCapability(for: key)
+
+        do {
+            try await withTaskCancellationHandler {
+                try await activation?.value()
+            } onCancel: {
+                Task { [weak self] in
+                    await self?.cancelEventScopeActivation(scopeID, key: key)
+                }
+            }
+        } catch is CancellationError {
+            let cancellation = CancellationError()
+            do {
+                try await releaseEventScope(scopeID)
+            } catch {
+                throw WebInspectorScopeError(
+                    operationError: cancellation,
+                    cleanupError: error
+                )
+            }
+            throw cancellation
+        } catch {
+            await abandonEventScopeAfterFailedAcquisition(scopeID, key: key)
+            throw error
+        }
+
+        return WebInspectorProxyEventScope(id: scopeID, events: stream)
+    }
+
+    package func releaseEventScope(_ id: WebInspectorProxyEventScopeID) async throws {
+        guard let entry = eventScopes.remove(id) else {
+            return
+        }
+        resumeEventScopeRegistrationWaitersIfNeeded()
+        entry.sink?.finish(nil)
+
+        let key = entry.capability
+        guard var capability = capabilities.states[key],
+              capability.leaseIDs.remove(id) != nil else {
+            return
+        }
+        capability.failedLeaseIDs.remove(id)
+        capability.activatedLeaseIDs.remove(id)
+        capability.activationWaiters.removeValue(forKey: id)
+
+        guard case .open = state else {
+            capabilities.states[key] = capability
+            capabilities.removeEmptyState(for: key)
+            return
+        }
+
+        guard capability.desiredCount == 0 else {
+            capabilities.states[key] = capability
+            return
+        }
+
+        let cleanup: ReplyPromise<Void>?
+        switch capability.physical {
+        case .inactive:
+            cleanup = nil
+        case .enabled:
+            let promise = ReplyPromise<Void>()
+            capability.releaseWaiters[id] = promise
+            cleanup = promise
+        case let .enabling(generation, operationID, _):
+            let promise = ReplyPromise<Void>()
+            capability.releaseWaiters[id] = promise
+            capability.physical = .enabling(
+                generation: generation,
+                operationID: operationID,
+                mustDisableAfterEnable: true
+            )
+            cleanup = promise
+        case .disabling:
+            let promise = ReplyPromise<Void>()
+            capability.releaseWaiters[id] = promise
+            cleanup = promise
+        }
+        capabilities.states[key] = capability
+        await reconcileCapability(for: key)
+        try await cleanup?.value()
+        capabilities.removeEmptyState(for: key)
     }
 
     package func send(_ command: ProtocolCommand) async throws -> ProtocolCommand.Result {
@@ -202,6 +421,26 @@ package actor ConnectionCore {
         await withCheckedContinuation { continuation in
             closeWaiterRegistrationWaiters.append(continuation)
         }
+    }
+
+    package func waitForEventScopeCountForTesting(_ expectedCount: Int) async {
+        precondition(expectedCount >= 0)
+        guard eventScopes.entries.count != expectedCount else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            eventScopeRegistrationWaiters.append((expectedCount, continuation))
+        }
+    }
+
+    package func activeEventScopeSubscriberCountForTesting() -> Int {
+        eventScopes.entries.values.count { $0.sink != nil }
+    }
+
+    package func replaceEventScopeActivationCancellationActionForTesting(
+        _ action: @escaping @Sendable () async -> Void
+    ) {
+        eventScopeActivationCancellationAction = action
     }
 
     package func replaceCloseActionForTesting(_ action: @escaping CloseAction) {
@@ -315,6 +554,583 @@ package actor ConnectionCore {
         return record
     }
 
+    private func requireAvailableTarget(for route: RoutingTargetID) throws {
+        switch route.storage {
+        case let .target(rawValue):
+            guard targetRegistry.containsTarget(ProtocolTarget.ID(rawValue)) else {
+                throw WebInspectorProxyError.pageUnavailable
+            }
+        case .currentPage:
+            guard targetRegistry.currentMainPageTargetID != nil else {
+                throw WebInspectorProxyError.pageUnavailable
+            }
+        }
+    }
+
+    private func resumeEventScopeRegistrationWaitersIfNeeded() {
+        let count = eventScopes.entries.count
+        var pending: [(
+            expectedCount: Int,
+            continuation: CheckedContinuation<Void, Never>
+        )] = []
+        for waiter in eventScopeRegistrationWaiters {
+            if count == waiter.expectedCount {
+                waiter.continuation.resume()
+            } else {
+                pending.append(waiter)
+            }
+        }
+        eventScopeRegistrationWaiters = pending
+    }
+
+    private func generation(for route: RoutingTargetID) -> WebInspectorPage.Generation {
+        switch route.storage {
+        case .currentPage:
+            currentPageGeneration
+        case .target:
+            WebInspectorPage.Generation(rawValue: 0)
+        }
+    }
+
+    private func cancelEventScopeActivation(
+        _ id: WebInspectorProxyEventScopeID,
+        key: ConnectionCapabilityKey
+    ) async {
+        guard var capability = capabilities.states[key],
+              let waiter = capability.activationWaiters.removeValue(forKey: id) else {
+            return
+        }
+        capability.failedLeaseIDs.insert(id)
+        capabilities.states[key] = capability
+        let cancellationAction = eventScopeActivationCancellationAction
+        eventScopeActivationCancellationAction = nil
+        await cancellationAction?()
+        await waiter.fulfill(.failure(CancellationError()))
+    }
+
+    private func abandonEventScopeAfterFailedAcquisition(
+        _ id: WebInspectorProxyEventScopeID,
+        key: ConnectionCapabilityKey
+    ) async {
+        eventScopes.remove(id)?.sink?.finish(nil)
+        resumeEventScopeRegistrationWaitersIfNeeded()
+        guard var capability = capabilities.states[key] else {
+            return
+        }
+        capability.leaseIDs.remove(id)
+        capability.failedLeaseIDs.remove(id)
+        capability.activatedLeaseIDs.remove(id)
+        capability.activationWaiters.removeValue(forKey: id)
+        capability.releaseWaiters.removeValue(forKey: id)
+        capabilities.states[key] = capability
+        await reconcileCapability(for: key)
+        capabilities.removeEmptyState(for: key)
+    }
+
+    private func reconcileCapability(for key: ConnectionCapabilityKey) async {
+        guard isOpen, var capability = capabilities.states[key] else {
+            return
+        }
+
+        let expectedGeneration = generation(for: key.route)
+        guard capability.physical.generation == expectedGeneration else {
+            capability.physical = .inactive(generation: expectedGeneration)
+            capabilities.states[key] = capability
+            return await reconcileCapability(for: key)
+        }
+
+        if key.domain == .dom {
+            if capability.desiredCount > 0 {
+                capability.physical = .enabled(generation: expectedGeneration)
+                capability.activatedLeaseIDs.formUnion(capability.activationWaiters.keys)
+                let waiters = Array(capability.activationWaiters.values)
+                capability.activationWaiters.removeAll()
+                capabilities.states[key] = capability
+                for waiter in waiters {
+                    await waiter.fulfill(.success(()))
+                }
+            } else {
+                capability.physical = .inactive(generation: expectedGeneration)
+                let waiters = Array(capability.releaseWaiters.values)
+                capability.releaseWaiters.removeAll()
+                capabilities.states[key] = capability
+                for waiter in waiters {
+                    await waiter.fulfill(.success(()))
+                }
+            }
+            capabilities.removeEmptyState(for: key)
+            return
+        }
+
+        switch capability.physical {
+        case .inactive where capability.desiredCount > 0:
+            guard (try? requireAvailableTarget(for: key.route)) != nil else {
+                capabilities.states[key] = capability
+                return
+            }
+            startCapabilityEnable(for: key, generation: expectedGeneration)
+        case .enabled where capability.desiredCount == 0:
+            startCapabilityDisable(for: key, generation: expectedGeneration)
+        case .inactive, .enabling, .enabled, .disabling:
+            capabilities.states[key] = capability
+        }
+    }
+
+    private func startCapabilityEnable(
+        for key: ConnectionCapabilityKey,
+        generation: WebInspectorPage.Generation
+    ) {
+        guard var capability = capabilities.states[key] else {
+            return
+        }
+        let operationID = capabilities.allocateOperationID()
+        capability.physical = .enabling(
+            generation: generation,
+            operationID: operationID,
+            mustDisableAfterEnable: false
+        )
+        capabilities.states[key] = capability
+        startCapabilityTask(
+            id: operationID,
+            key: key,
+            generation: generation,
+            action: .enable
+        )
+    }
+
+    private func startCapabilityDisable(
+        for key: ConnectionCapabilityKey,
+        generation: WebInspectorPage.Generation
+    ) {
+        guard var capability = capabilities.states[key] else {
+            return
+        }
+        let operationID = capabilities.allocateOperationID()
+        capability.physical = .disabling(generation: generation, operationID: operationID)
+        capabilities.states[key] = capability
+        startCapabilityTask(
+            id: operationID,
+            key: key,
+            generation: generation,
+            action: .disable
+        )
+    }
+
+    private enum CapabilityWireAction: Equatable, Sendable {
+        case enable
+        case disable
+    }
+
+    private func startCapabilityTask(
+        id: UInt64,
+        key: ConnectionCapabilityKey,
+        generation: WebInspectorPage.Generation,
+        action: CapabilityWireAction
+    ) {
+        let operation: ConnectionCapabilityCommandOperation
+        do {
+            operation = try makeCapabilityCommandOperation(action, for: key)
+        } catch {
+            let result: Result<Void, any Swift.Error> = .failure(
+                Self.mapCapabilityError(error, action: action, domain: key.domain)
+            )
+            let task = Task { [weak self] in
+                _ = await self?.completeCapabilityOperation(
+                    id: id,
+                    key: key,
+                    generation: generation,
+                    action: action,
+                    result: result
+                )
+            }
+            capabilityTasks[id] = ConnectionCapabilityTask(task: task, pendingKey: nil)
+            return
+        }
+
+        let task = Task { [weak self, operation] in
+            let result: Result<Void, any Swift.Error>
+            do {
+                try await operation.value()
+                result = .success(())
+            } catch {
+                result = .failure(Self.mapCapabilityError(error, action: action, domain: key.domain))
+            }
+            _ = await self?.completeCapabilityOperation(
+                id: id,
+                key: key,
+                generation: generation,
+                action: action,
+                result: result
+            )
+        }
+        capabilityTasks[id] = ConnectionCapabilityTask(
+            task: task,
+            pendingKey: operation.pendingKey
+        )
+    }
+
+    private func makeCapabilityCommandOperation(
+        _ action: CapabilityWireAction,
+        for key: ConnectionCapabilityKey
+    ) throws -> ConnectionCapabilityCommandOperation {
+        let method: String
+        switch action {
+        case .enable:
+            method = "\(key.domain.rawValue).enable"
+        case .disable:
+            method = "\(key.domain.rawValue).disable"
+        }
+        let targetID: ProtocolTarget.ID
+        switch key.route.storage {
+        case let .target(rawValue):
+            targetID = ProtocolTarget.ID(rawValue)
+            guard targetRegistry.containsTarget(targetID) else {
+                throw TransportSession.Error.missingTarget(targetID)
+            }
+        case .currentPage:
+            targetID = try currentMainPageTarget()
+        }
+
+        let domain = protocolDomain(for: key.domain)
+        let innerCommandID = allocateCommandID()
+        let outerCommandID = allocateCommandID()
+        let replyKey = TransportSession.ReplyKey(
+            targetID: targetID,
+            commandID: innerCommandID
+        )
+        let pendingKey = TransportSession.PendingKey.target(replyKey)
+        let message = try TransportMessageParser.makeCommandString(
+            id: innerCommandID,
+            method: method,
+            parametersData: Data("{}".utf8)
+        )
+        let wrapperMessage = try TransportMessageParser.makeTargetWrapperCommandString(
+            id: outerCommandID,
+            targetIdentifier: targetID.rawValue,
+            message: message
+        )
+        let promise = ReplyPromise<ProtocolCommand.Result>()
+        replyStore.insertTargetReply(
+            TransportSession.PendingReply(
+                domain: domain,
+                method: method,
+                targetID: targetID,
+                promise: promise,
+                hasBufferedProvisionalResponse: false
+            ),
+            key: replyKey,
+            rootWrapperID: outerCommandID
+        )
+
+        let timeoutAction: (@Sendable () async -> Void)?
+        if let responseTimeout {
+            let timeoutSleep = self.timeoutSleep
+            let responseTimeoutDidFire = self.responseTimeoutDidFire
+            timeoutAction = { [weak self] in
+                do {
+                    try await timeoutSleep(responseTimeout)
+                } catch {
+                    return
+                }
+                await self?.failPendingReplyFromTimeout(
+                    pendingKey,
+                    error: TransportSession.Error.replyTimeout(
+                        method: method,
+                        targetID: targetID
+                    )
+                )
+                await responseTimeoutDidFire()
+            }
+        } else {
+            timeoutAction = nil
+        }
+
+        return ConnectionCapabilityCommandOperation(
+            backend: backend,
+            message: wrapperMessage,
+            promise: promise,
+            pendingKey: pendingKey,
+            timeoutAction: timeoutAction
+        )
+    }
+
+    private func completeCapabilityOperation(
+        id: UInt64,
+        key: ConnectionCapabilityKey,
+        generation: WebInspectorPage.Generation,
+        action: CapabilityWireAction,
+        result: Result<Void, any Swift.Error>
+    ) async {
+        if let pendingKey = capabilityTasks.removeValue(forKey: id)?.pendingKey {
+            replyStore.removePendingReply(pendingKey)
+        }
+        guard isOpen, var capability = capabilities.states[key] else {
+            return
+        }
+
+        switch (action, capability.physical) {
+        case let (.enable, .enabling(activeGeneration, operationID, mustDisableAfterEnable))
+            where activeGeneration == generation && operationID == id:
+            switch result {
+            case .success:
+                capability.physical = .enabled(generation: generation)
+                capabilities.states[key] = capability
+                if mustDisableAfterEnable, capability.desiredCount == 0 {
+                    startCapabilityDisable(for: key, generation: generation)
+                    return
+                }
+                capability.activatedLeaseIDs.formUnion(capability.activationWaiters.keys)
+                let waiters = Array(capability.activationWaiters.values)
+                capability.activationWaiters.removeAll()
+                let releaseWaiters = Array(capability.releaseWaiters.values)
+                capability.releaseWaiters.removeAll()
+                capabilities.states[key] = capability
+                for waiter in waiters {
+                    await waiter.fulfill(.success(()))
+                }
+                for waiter in releaseWaiters {
+                    await waiter.fulfill(.success(()))
+                }
+            case let .failure(error):
+                let activeLeaseFailed = capability.hasActivatedDesiredLease
+                let wireStateIsKnownInactive = Self.enableFailureProvesInactive(error)
+                let failedIDs = Set(capability.activationWaiters.keys)
+                capability.failedLeaseIDs.formUnion(failedIDs)
+                let activationWaiters = Array(capability.activationWaiters.values)
+                capability.activationWaiters.removeAll()
+                capability.physical = .inactive(generation: generation)
+                let releaseWaiters: [ReplyPromise<Void>]
+                if capability.desiredCount == 0 {
+                    releaseWaiters = Array(capability.releaseWaiters.values)
+                    capability.releaseWaiters.removeAll()
+                } else {
+                    releaseWaiters = []
+                }
+                let terminalCause: TerminalCause? = if wireStateIsKnownInactive == false
+                    || (activeLeaseFailed && Self.isCommandRejection(error)) {
+                    Self.terminalCauseForUncertainEnableFailure(
+                        error,
+                        domain: key.domain,
+                        wasReenable: activeLeaseFailed
+                    )
+                } else {
+                    nil
+                }
+                if let terminalCause {
+                    // Claim terminal ownership before resuming any waiter so
+                    // actor reentrancy cannot admit a duplicate enable while
+                    // the failed wire state is unknown.
+                    state = .closing(terminalCause)
+                }
+                capabilities.states[key] = capability
+                for waiter in activationWaiters {
+                    await waiter.fulfill(.failure(error))
+                }
+                for waiter in releaseWaiters {
+                    await waiter.fulfill(.success(()))
+                }
+                if let terminalCause {
+                    await finishClaimedTermination(terminalCause)
+                }
+            }
+
+        case let (.disable, .disabling(activeGeneration, operationID))
+            where activeGeneration == generation && operationID == id:
+            switch result {
+            case .success:
+                capability.physical = .inactive(generation: generation)
+                let releaseWaiters = Array(capability.releaseWaiters.values)
+                capability.releaseWaiters.removeAll()
+                capabilities.states[key] = capability
+                await reconcileCapability(for: key)
+                for waiter in releaseWaiters {
+                    await waiter.fulfill(.success(()))
+                }
+            case let .failure(error):
+                if Self.isCommandRejection(error) {
+                    // A rejected disable proves that the command did not
+                    // deactivate the physical domain. Retain the enabled state
+                    // so a late lease can use it and a future final release can
+                    // retry cleanup without sending a duplicate enable.
+                    capability.physical = .enabled(generation: generation)
+                    capability.activatedLeaseIDs.formUnion(capability.activationWaiters.keys)
+                    let activationWaiters = Array(capability.activationWaiters.values)
+                    capability.activationWaiters.removeAll()
+                    let releaseWaiters = Array(capability.releaseWaiters.values)
+                    capability.releaseWaiters.removeAll()
+                    capabilities.states[key] = capability
+                    for waiter in activationWaiters {
+                        await waiter.fulfill(.success(()))
+                    }
+                    for waiter in releaseWaiters {
+                        await waiter.fulfill(.failure(error))
+                    }
+                    return
+                }
+
+                if Self.isPageUnavailable(error) {
+                    // Target disappearance normally supersedes the operation
+                    // before its completion reaches this branch. If the local
+                    // target lookup wins that race, the vanished target makes
+                    // cleanup complete without establishing reusable wire state.
+                    let failedIDs = Set(capability.activationWaiters.keys)
+                    capability.failedLeaseIDs.formUnion(failedIDs)
+                    capability.physical = .inactive(generation: generation)
+                    let activationWaiters = Array(capability.activationWaiters.values)
+                    capability.activationWaiters.removeAll()
+                    let releaseWaiters = Array(capability.releaseWaiters.values)
+                    capability.releaseWaiters.removeAll()
+                    capabilities.states[key] = capability
+                    for waiter in activationWaiters {
+                        await waiter.fulfill(.failure(error))
+                    }
+                    for waiter in releaseWaiters {
+                        await waiter.fulfill(.success(()))
+                    }
+                    return
+                }
+
+                let terminalCause = Self.terminalCauseForUncertainDisableFailure(
+                    error,
+                    domain: key.domain
+                )
+                // Claim terminal ownership before resuming any waiter so actor
+                // reentrancy cannot admit a lease against uncertain wire state.
+                state = .closing(terminalCause)
+                let activationWaiters = Array(capability.activationWaiters.values)
+                capability.activationWaiters.removeAll()
+                let releaseWaiters = Array(capability.releaseWaiters.values)
+                capability.releaseWaiters.removeAll()
+                capabilities.states[key] = capability
+                for waiter in activationWaiters {
+                    await waiter.fulfill(.failure(error))
+                }
+                for waiter in releaseWaiters {
+                    await waiter.fulfill(.failure(error))
+                }
+                await finishClaimedTermination(terminalCause)
+            }
+
+        default:
+            // Completion from an older generation or superseded operation can
+            // release its task, but it cannot mutate current physical state.
+            return
+        }
+    }
+
+    private nonisolated static func mapCapabilityError(
+        _ error: any Swift.Error,
+        action: CapabilityWireAction,
+        domain: WebInspectorProxyEventDomain
+    ) -> any Swift.Error {
+        if let proxyError = error as? WebInspectorProxyError {
+            return proxyError
+        }
+        let method = "\(domain.rawValue).\(action == .enable ? "enable" : "disable")"
+        guard let transportError = error as? TransportSession.Error else {
+            return WebInspectorProxyError.transportFailure(String(describing: error))
+        }
+        switch transportError {
+        case .transportClosed:
+            return WebInspectorProxyError.closed
+        case let .transportFailure(message):
+            return WebInspectorProxyError.transportFailure(message)
+        case let .remoteError(_, _, message):
+            return WebInspectorProxyError.commandRejected(method: method, message: message)
+        case .missingMainPageTarget, .missingTarget:
+            return WebInspectorProxyError.pageUnavailable
+        case .malformedMessage:
+            return WebInspectorProxyError.protocolViolation("Malformed reply for \(method).")
+        case .replyTimeout:
+            return WebInspectorProxyError.timeout(domain: domain.rawValue, method: action == .enable ? "enable" : "disable")
+        }
+    }
+
+    private nonisolated static func enableFailureProvesInactive(
+        _ error: any Swift.Error
+    ) -> Bool {
+        guard let error = error as? WebInspectorProxyError else {
+            return false
+        }
+        switch error {
+        case .commandRejected, .pageUnavailable:
+            return true
+        case .unsupported, .attachFailed, .closed, .staleIdentifier,
+             .disconnected, .commandFailed, .protocolViolation,
+             .eventBufferOverflow, .transportFailure, .timeout:
+            return false
+        }
+    }
+
+    private nonisolated static func isCommandRejection(
+        _ error: any Swift.Error
+    ) -> Bool {
+        guard let error = error as? WebInspectorProxyError,
+              case .commandRejected = error else {
+            return false
+        }
+        return true
+    }
+
+    private nonisolated static func isPageUnavailable(
+        _ error: any Swift.Error
+    ) -> Bool {
+        guard let error = error as? WebInspectorProxyError,
+              case .pageUnavailable = error else {
+            return false
+        }
+        return true
+    }
+
+    private nonisolated static func terminalCauseForUncertainEnableFailure(
+        _ error: any Swift.Error,
+        domain: WebInspectorProxyEventDomain,
+        wasReenable: Bool
+    ) -> TerminalCause {
+        if let error = error as? WebInspectorProxyError,
+           case let .protocolViolation(message) = error {
+            return .protocolViolation(message)
+        }
+        let action = wasReenable ? "re-enable" : "enable"
+        return .fatal(
+            "Failed to \(action) \(domain.rawValue) with an uncertain wire state: \(error)"
+        )
+    }
+
+    private nonisolated static func terminalCauseForUncertainDisableFailure(
+        _ error: any Swift.Error,
+        domain: WebInspectorProxyEventDomain
+    ) -> TerminalCause {
+        if let error = error as? WebInspectorProxyError,
+           case let .protocolViolation(message) = error {
+            return .protocolViolation(message)
+        }
+        return .fatal(
+            "Failed to disable \(domain.rawValue) with an uncertain wire state: \(error)"
+        )
+    }
+
+    private func protocolDomain(for domain: WebInspectorProxyEventDomain) -> ProtocolDomain {
+        switch domain {
+        case .target:
+            .target
+        case .dom:
+            .dom
+        case .inspector:
+            .inspector
+        case .css:
+            .css
+        case .network:
+            .network
+        case .console:
+            .console
+        case .runtime:
+            .runtime
+        case .page:
+            .page
+        }
+    }
+
     private func sendRoot(_ command: ProtocolCommand) async throws -> ProtocolCommand.Result {
         let commandID = allocateCommandID()
         let promise = ReplyPromise<ProtocolCommand.Result>()
@@ -414,9 +1230,13 @@ package actor ConnectionCore {
             inboundMessageQueue.finishDraining()
         }
 
-        while let rawMessage = inboundMessageQueue.popNext() {
-            guard let parsed = try? await TransportMessageParser.parse(rawMessage) else {
-                continue
+        while isOpen, let rawMessage = inboundMessageQueue.popNext() {
+            let parsed: ParsedProtocolMessage
+            do {
+                parsed = try await TransportMessageParser.parse(rawMessage)
+            } catch {
+                await terminate(.protocolViolation("Malformed root protocol message."))
+                return
             }
             await handleRootMessage(parsed)
         }
@@ -486,9 +1306,11 @@ package actor ConnectionCore {
 
         if method == "Target.dispatchMessageFromTarget" {
             guard let dispatch = try? TransportMessageParser.decode(TargetDispatchParams.self, from: parsed.paramsData) else {
+                await terminate(.protocolViolation("Malformed Target.dispatchMessageFromTarget payload."))
                 return
             }
             guard let targetMessage = try? await TransportMessageParser.parse(dispatch.message) else {
+                await terminate(.protocolViolation("Malformed target protocol message."))
                 return
             }
             await handleTargetMessage(targetMessage, targetID: dispatch.targetId)
@@ -500,12 +1322,18 @@ package actor ConnectionCore {
         let destroyedCurrentMainPageTarget = method == "Target.targetDestroyed"
             && targetID != nil
             && targetID == targetRegistry.currentMainPageTargetID
-        let pendingStyleSheetAddedEvents = await updateRegistryFromRootEvent(
-            method: method,
-            targetID: targetID,
-            sourceTargetID: sourceTargetID,
-            paramsData: parsed.paramsData
-        )
+        let pendingStyleSheetAddedEvents: [ResolvedStyleSheetAddedEvent]
+        do {
+            pendingStyleSheetAddedEvents = try await updateRegistryFromRootEvent(
+                method: method,
+                targetID: targetID,
+                sourceTargetID: sourceTargetID,
+                paramsData: parsed.paramsData
+            )
+        } catch {
+            await terminate(.protocolViolation("Failed to decode \(method): \(error)"))
+            return
+        }
         await emit(
             domain: ProtocolDomain(method: method),
             method: method,
@@ -540,6 +1368,7 @@ package actor ConnectionCore {
         if method == "Target.dispatchMessageFromTarget" {
             guard let dispatch = try? TransportMessageParser.decode(TargetDispatchParams.self, from: parsed.paramsData),
                   let targetMessage = try? await TransportMessageParser.parse(dispatch.message) else {
+                await terminate(.protocolViolation("Malformed nested Target.dispatchMessageFromTarget payload."))
                 return
             }
             await handleTargetMessage(targetMessage, targetID: dispatch.targetId)
@@ -599,24 +1428,18 @@ package actor ConnectionCore {
         targetID: ProtocolTarget.ID?,
         sourceTargetID: ProtocolTarget.ID?,
         paramsData: Data
-    ) async -> [ResolvedStyleSheetAddedEvent] {
+    ) async throws -> [ResolvedStyleSheetAddedEvent] {
         switch method {
         case "Target.targetCreated":
-            guard let params = try? TransportMessageParser.decode(TargetCreatedParams.self, from: paramsData) else {
-                return []
-            }
-            return applyTargetCreated(record(for: params.targetInfo))
+            let params = try TransportMessageParser.decode(TargetCreatedParams.self, from: paramsData)
+            return await applyTargetCreated(record(for: params.targetInfo))
         case "Target.targetDestroyed":
-            guard let params = try? TransportMessageParser.decode(TargetDestroyedParams.self, from: paramsData) else {
-                return []
-            }
+            let params = try TransportMessageParser.decode(TargetDestroyedParams.self, from: paramsData)
             await applyTargetDestroyed(params.targetId)
             return []
         case "Target.didCommitProvisionalTarget":
-            guard let params = try? TransportMessageParser.decode(TargetCommittedParams.self, from: paramsData) else {
-                return []
-            }
-            return applyTargetCommitted(oldTargetID: params.oldTargetId, newTargetID: params.newTargetId)
+            let params = try TransportMessageParser.decode(TargetCommittedParams.self, from: paramsData)
+            return await applyTargetCommitted(oldTargetID: params.oldTargetId, newTargetID: params.newTargetId)
         case "Runtime.executionContextCreated", "Runtime.executionContextDestroyed", "Runtime.executionContextsCleared":
             updateRegistryFromTargetEvent(
                 method: method,
@@ -684,8 +1507,14 @@ package actor ConnectionCore {
         }
     }
 
-    private func applyTargetCreated(_ record: ProtocolTarget.Record) -> [ResolvedStyleSheetAddedEvent] {
-        resolvePendingStyleSheets(for: targetRegistry.recordTargetCreated(record))
+    private func applyTargetCreated(_ record: ProtocolTarget.Record) async -> [ResolvedStyleSheetAddedEvent] {
+        let previousMainPageTargetID = targetRegistry.currentMainPageTargetID
+        let resolution = targetRegistry.recordTargetCreated(record)
+        await currentPageBindingDidChange(
+            from: previousMainPageTargetID,
+            to: targetRegistry.currentMainPageTargetID
+        )
+        return resolvePendingStyleSheets(for: resolution)
     }
 
     private func record(for targetInfo: TargetInfoPayload) -> ProtocolTarget.Record {
@@ -711,33 +1540,145 @@ package actor ConnectionCore {
     }
 
     private func applyTargetDestroyed(_ targetID: ProtocolTarget.ID) async {
+        let previousMainPageTargetID = targetRegistry.currentMainPageTargetID
         targetRegistry.removeTarget(targetID)
+        let capabilityWaiters = physicalTargetDidDisappear(targetID)
+        let pendingReplies = replyStore.removeTargetReplies(for: targetID)
         provisionalTargetMessageStore.removeTarget(targetID)
         styleSheetRouting.removeTarget(targetID)
         runtimeContextRegistry.removeTarget(targetID)
-        let pendingReplies = replyStore.removeTargetReplies(for: targetID)
+        await currentPageBindingDidChange(
+            from: previousMainPageTargetID,
+            to: targetRegistry.currentMainPageTargetID
+        )
+        await resumePhysicalTargetDisappearanceWaiters(capabilityWaiters)
         for pending in pendingReplies {
             await pending.promise.fulfill(.failure(TransportSession.Error.missingTarget(targetID)))
         }
     }
 
     private func applyTargetCommitted(
-        oldTargetID: ProtocolTarget.ID?,
+        oldTargetID: ProtocolTarget.ID,
         newTargetID: ProtocolTarget.ID
-    ) -> [ResolvedStyleSheetAddedEvent] {
+    ) async -> [ResolvedStyleSheetAddedEvent] {
+        let previousMainPageTargetID = targetRegistry.currentMainPageTargetID
         let mutation = targetRegistry.commitTarget(oldTargetID: oldTargetID, newTargetID: newTargetID)
-        if let committedOldTargetID = mutation.committedOldTargetID {
-            moveBufferedProvisionalTargetMessages(from: committedOldTargetID, to: newTargetID)
-        }
+        var capabilityWaiters = PhysicalTargetDisappearanceWaiters()
+        var stalePendingReplies: [TransportSession.PendingReply] = []
 
-        if mutation.shouldRetargetExternalState,
-           let oldTargetID = mutation.committedOldTargetID {
-            replyStore.retargetPendingReplies(from: oldTargetID, to: newTargetID)
+        if mutation.shouldRetargetExternalState {
+            let oldTargetID = mutation.committedOldTargetID
+            capabilityWaiters = physicalTargetDidDisappear(oldTargetID)
+            stalePendingReplies = replyStore.removeTargetReplies(for: oldTargetID)
+            provisionalTargetMessageStore.removeTarget(oldTargetID)
             styleSheetRouting.retarget(from: oldTargetID, to: newTargetID)
             runtimeContextRegistry.retarget(oldTargetID: oldTargetID, newTargetID: newTargetID)
         }
 
+        await currentPageBindingDidChange(
+            from: previousMainPageTargetID,
+            to: targetRegistry.currentMainPageTargetID
+        )
+        await resumePhysicalTargetDisappearanceWaiters(capabilityWaiters)
+        for pending in stalePendingReplies {
+            await pending.promise.fulfill(
+                .failure(TransportSession.Error.missingTarget(mutation.committedOldTargetID))
+            )
+        }
+
         return resolvePendingStyleSheets(for: mutation.resolvedFrameTarget)
+    }
+
+    private func currentPageBindingDidChange(
+        from oldTargetID: ProtocolTarget.ID?,
+        to newTargetID: ProtocolTarget.ID?
+    ) async {
+        guard oldTargetID != newTargetID else {
+            return
+        }
+
+        if oldTargetID == nil,
+           newTargetID != nil,
+           currentPageBindingGapIsOpen {
+            // The old -> nil transition already opened the replacement
+            // generation and published its reset. Installing the replacement
+            // only reactivates that generation; a second generation would
+            // expose an empty intermediate binding as another logical page
+            // transition.
+            currentPageBindingGapIsOpen = false
+            let keys = capabilities.states.keys.filter { $0.route == .currentPage }
+            for key in keys {
+                await reconcileCapability(for: key)
+            }
+            return
+        }
+
+        currentPageBindingGapIsOpen = oldTargetID != nil && newTargetID == nil
+        currentPageGeneration = WebInspectorPage.Generation(
+            rawValue: currentPageGeneration.rawValue &+ 1
+        )
+        eventScopes.publishReset(currentPageGeneration) { sink in
+            sink.route == .currentPage
+        }
+
+        let keys = capabilities.states.keys.filter { $0.route == .currentPage }
+        var releaseWaiters: [ReplyPromise<Void>] = []
+        for key in keys {
+            guard var capability = capabilities.states[key] else {
+                continue
+            }
+            releaseWaiters.append(contentsOf: capability.releaseWaiters.values)
+            capability.releaseWaiters.removeAll()
+            capability.physical = .inactive(generation: currentPageGeneration)
+            capabilities.states[key] = capability
+        }
+
+        if newTargetID != nil {
+            for key in keys {
+                await reconcileCapability(for: key)
+            }
+        }
+        for waiter in releaseWaiters {
+            await waiter.fulfill(.success(()))
+        }
+    }
+
+    private func physicalTargetDidDisappear(
+        _ targetID: ProtocolTarget.ID
+    ) -> PhysicalTargetDisappearanceWaiters {
+        let route = RoutingTargetID(targetID.rawValue)
+        eventScopes.finishSubscribers(where: { sink in
+            sink.route == route
+        }, with: WebInspectorProxyError.pageUnavailable)
+
+        let keys = capabilities.states.keys.filter { $0.route == route }
+        var waiters = PhysicalTargetDisappearanceWaiters()
+        for key in keys {
+            guard var capability = capabilities.states[key] else {
+                continue
+            }
+            capability.failedLeaseIDs.formUnion(capability.activationWaiters.keys)
+            waiters.activation.append(contentsOf: capability.activationWaiters.values)
+            waiters.release.append(contentsOf: capability.releaseWaiters.values)
+            capability.activationWaiters.removeAll()
+            capability.releaseWaiters.removeAll()
+            capability.physical = .inactive(generation: capability.physical.generation)
+            capabilities.states[key] = capability
+            capabilities.removeEmptyState(for: key)
+        }
+
+        return waiters
+    }
+
+    private func resumePhysicalTargetDisappearanceWaiters(
+        _ waiters: PhysicalTargetDisappearanceWaiters
+    ) async {
+        for waiter in waiters.activation {
+            await waiter.fulfill(.failure(WebInspectorProxyError.pageUnavailable))
+        }
+        for waiter in waiters.release {
+            await waiter.fulfill(.success(()))
+        }
     }
 
     private func resolvePendingStyleSheets(
@@ -747,13 +1688,6 @@ package actor ConnectionCore {
             return []
         }
         return resolvePendingStyleSheets(frameID: frameTarget.frameID, targetID: frameTarget.targetID)
-    }
-
-    private func moveBufferedProvisionalTargetMessages(
-        from oldTargetID: ProtocolTarget.ID,
-        to newTargetID: ProtocolTarget.ID
-    ) {
-        provisionalTargetMessageStore.retargetMessages(from: oldTargetID, to: newTargetID)
     }
 
     private func dispatchCommittedProvisionalTargetMessagesIfNeeded(method: String, paramsData: Data) async {
@@ -944,6 +1878,84 @@ package actor ConnectionCore {
             paramsData: paramsData,
             destroyedCurrentMainPageTarget: destroyedCurrentMainPageTarget
         )
+        if let eventDomain = webInspectorEventDomain(for: domain) {
+            var terminalViolation: String?
+            let targetSnapshot = snapshot()
+            let sinks = eventScopes.sinks(for: eventDomain).filter { sink in
+                LiveWebInspectorProxyBackend.shouldDeliver(
+                    envelope,
+                    to: sink.route,
+                    in: targetSnapshot
+                )
+            }
+            var projectedEvents: [ConnectionCapabilityKey: WebInspectorProxyEvent] = [:]
+            do {
+                if sinks.isEmpty {
+                    let targetID = WebInspectorTarget.ID.currentPage
+                    _ = try LiveProxyEventDecoder.proxyEvent(
+                        from: envelope,
+                        targetID: targetID,
+                        lifecycleTarget: LiveWebInspectorProxyBackend.lifecycleTarget(
+                            for: envelope,
+                            route: .currentPage,
+                            targetID: targetID,
+                            in: targetSnapshot
+                        )
+                    )
+                }
+
+                for sink in sinks {
+                    let key = ConnectionCapabilityKey(
+                        route: sink.route,
+                        targetID: sink.targetID,
+                        domain: sink.domain
+                    )
+                    let projectedEvent: WebInspectorProxyEvent
+                    if let cachedEvent = projectedEvents[key] {
+                        projectedEvent = cachedEvent
+                    } else {
+                        let decodedEvent = try LiveProxyEventDecoder.proxyEvent(
+                            from: envelope,
+                            targetID: sink.targetID,
+                            lifecycleTarget: LiveWebInspectorProxyBackend.lifecycleTarget(
+                                for: envelope,
+                                route: sink.route,
+                                targetID: sink.targetID,
+                                in: targetSnapshot
+                            )
+                        )
+                        projectedEvent = LiveWebInspectorProxyBackend.projectedEvent(
+                            decodedEvent,
+                            from: envelope,
+                            route: sink.route,
+                            in: targetSnapshot
+                        )
+                        projectedEvents[key] = projectedEvent
+                    }
+
+                    let result = sink.yieldEvent(generation(for: sink.route), projectedEvent)
+                    switch result {
+                    case .mismatchedEvent:
+                        terminalViolation = "Decoded \(method) as an event outside \(eventDomain.rawValue)."
+                    case .enqueued, .dropped, .terminated:
+                        eventScopes.handleDelivery(
+                            result,
+                            id: sink.id,
+                            capacity: eventScopes.entries[sink.id]?.capacity
+                        )
+                    }
+                    if terminalViolation != nil {
+                        break
+                    }
+                }
+            } catch {
+                terminalViolation = "Failed to decode \(method): \(error)"
+            }
+            if let terminalViolation {
+                await terminate(.protocolViolation(terminalViolation))
+                return
+            }
+        }
         for continuation in eventSubscribers.continuations(for: domain) {
             continuation.yield(envelope)
         }
@@ -951,6 +1963,29 @@ package actor ConnectionCore {
             continuation.yield(envelope)
         }
         await notifyMainPageTargetWaitersIfNeeded(receivedSequence: eventSequence.sequence)
+    }
+
+    private func webInspectorEventDomain(for domain: ProtocolDomain) -> WebInspectorProxyEventDomain? {
+        switch domain {
+        case .target:
+            .target
+        case .runtime:
+            .runtime
+        case .dom:
+            .dom
+        case .css:
+            .css
+        case .network:
+            .network
+        case .console:
+            .console
+        case .page:
+            .page
+        case .inspector:
+            .inspector
+        case .storage, .other:
+            nil
+        }
     }
 
     private func notifyMainPageTargetWaitersIfNeeded(receivedSequence: UInt64) async {
@@ -1024,6 +2059,19 @@ package actor ConnectionCore {
             .transportClosed
         case let .closing(.fatal(message)), let .closed(.fatal(message)):
             .transportFailure(message)
+        case let .closing(.protocolViolation(message)), let .closed(.protocolViolation(message)):
+            .transportFailure(message)
+        }
+    }
+
+    private var terminalScopeError: any Swift.Error {
+        switch state {
+        case .open, .closing(.explicitClose), .closed(.explicitClose):
+            WebInspectorProxyError.closed
+        case let .closing(.fatal(message)), let .closed(.fatal(message)):
+            WebInspectorProxyError.transportFailure(message)
+        case let .closing(.protocolViolation(message)), let .closed(.protocolViolation(message)):
+            WebInspectorProxyError.protocolViolation(message)
         }
     }
 
@@ -1038,7 +2086,40 @@ package actor ConnectionCore {
             return
         }
 
+        await finishClaimedTermination(cause)
+    }
+
+    private func finishClaimedTermination(_ cause: TerminalCause) async {
         let transportError = terminalTransportError
+        let scopeError: (any Swift.Error)? = cause == .explicitClose ? nil : terminalScopeError
+        if let scopeError {
+            eventScopes.finishSubscribers(with: scopeError)
+        }
+
+        var activationWaiters: [ReplyPromise<Void>] = []
+        var releaseWaiters: [ReplyPromise<Void>] = []
+        for key in capabilities.states.keys {
+            guard var capability = capabilities.states[key] else {
+                continue
+            }
+            activationWaiters.append(contentsOf: capability.activationWaiters.values)
+            releaseWaiters.append(contentsOf: capability.releaseWaiters.values)
+            capability.activationWaiters.removeAll()
+            capability.releaseWaiters.removeAll()
+            capability.physical = .inactive(generation: capability.physical.generation)
+            capabilities.states[key] = capability
+        }
+
+        let runningCapabilityTasks = capabilityTasks.values.map(\.task)
+        capabilityTasks.removeAll()
+        for task in runningCapabilityTasks {
+            task.cancel()
+        }
+        let eventScopeWaiters = eventScopeRegistrationWaiters
+        eventScopeRegistrationWaiters.removeAll()
+        for waiter in eventScopeWaiters {
+            waiter.continuation.resume()
+        }
         for pending in replyStore.pendingReplies {
             await pending.promise.fulfill(.failure(transportError))
         }
@@ -1048,7 +2129,23 @@ package actor ConnectionCore {
         replyStore.removeAll()
         provisionalTargetMessageStore.removeAll()
         inboundMessageQueue = TransportInboundMessageQueue()
-        eventSubscribers.finishAndRemoveAll()
+        if cause != .explicitClose {
+            eventSubscribers.finishAndRemoveAll()
+        }
+
+        for waiter in activationWaiters {
+            await waiter.fulfill(.failure(scopeError ?? WebInspectorProxyError.closed))
+        }
+        for waiter in releaseWaiters {
+            if let scopeError {
+                await waiter.fulfill(.failure(scopeError))
+            } else {
+                await waiter.fulfill(.success(()))
+            }
+        }
+        for task in runningCapabilityTasks {
+            await task.value
+        }
 
         let closeAction = self.closeAction
         await closeAction()
@@ -1060,6 +2157,10 @@ package actor ConnectionCore {
             preconditionFailure("ConnectionCore terminal state changed outside terminate(_:).")
         }
         state = .closed(cause)
+        if cause == .explicitClose {
+            eventScopes.finishSubscribers(with: nil)
+            eventSubscribers.finishAndRemoveAll()
+        }
         resumeCloseWaiters(with: terminalResult(for: cause))
     }
 
@@ -1069,6 +2170,8 @@ package actor ConnectionCore {
             .success(())
         case let .fatal(message):
             .failure(WebInspectorProxyError.disconnected(message))
+        case let .protocolViolation(message):
+            .failure(WebInspectorProxyError.protocolViolation(message))
         }
     }
 
@@ -1146,7 +2249,7 @@ private struct TargetDestroyedParams: Decodable {
 }
 
 private struct TargetCommittedParams: Decodable {
-    var oldTargetId: ProtocolTarget.ID?
+    var oldTargetId: ProtocolTarget.ID
     var newTargetId: ProtocolTarget.ID
 }
 

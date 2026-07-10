@@ -131,26 +131,6 @@ struct TransportReplyStore: Sendable {
         return removeTargetReply(for: key)
     }
 
-    mutating func retargetPendingReplies(
-        from oldTargetID: ProtocolTarget.ID,
-        to newTargetID: ProtocolTarget.ID
-    ) {
-        let oldKeys = targetReplies.keys.filter { $0.targetID == oldTargetID }
-        for oldKey in oldKeys {
-            guard var record = targetReplies.removeValue(forKey: oldKey) else {
-                continue
-            }
-            removeIndexes(for: oldKey, record: record)
-            let newKey = TransportSession.ReplyKey(targetID: newTargetID, commandID: oldKey.commandID)
-            if let existingRecord = targetReplies.removeValue(forKey: newKey) {
-                removeIndexes(for: newKey, record: existingRecord)
-            }
-            record.pending.targetID = newTargetID
-            targetReplies[newKey] = record
-            insertIndexes(for: newKey, record: record)
-        }
-    }
-
     mutating func removeAll() {
         rootReplies.removeAll()
         targetReplies.removeAll()

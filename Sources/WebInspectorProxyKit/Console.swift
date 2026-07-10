@@ -28,6 +28,28 @@ public enum Console {
             )
         }
 
+        /// Runs an operation with an atomically registered Console event scope.
+        public func withEvents<Output>(
+            buffering: WebInspectorEventBufferingPolicy = .bounded(256),
+            isolation: isolated (any Actor)? = #isolation,
+            _ operation: (
+                AsyncThrowingStream<WebInspectorPageEvent<Console.Event>, any Error>
+            ) async throws -> Output
+        ) async throws -> Output {
+            try await context.withEvents(
+                domain: .console,
+                buffering: buffering,
+                isolation: isolation,
+                extract: { event in
+                    guard case let .console(value) = event else {
+                        return nil
+                    }
+                    return value.event
+                },
+                operation
+            )
+        }
+
         /// Clears console messages in the inspected target.
         public func clearMessages() async throws {
             try await context.dispatchVoid(

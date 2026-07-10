@@ -64,6 +64,15 @@ public actor WebInspectorProxy {
     private let backend: (any WebInspectorProxyBackend)?
     private let core: ConnectionCore
 
+    package nonisolated var structuredEventBackend: (any WebInspectorProxyBackend)? {
+        backend
+    }
+
+    /// The stable logical page inspected by this connection.
+    public nonisolated var page: WebInspectorPage {
+        WebInspectorPage(proxy: self)
+    }
+
     /// Attaches a Web Inspector protocol connection to a web view.
     ///
     /// Attach from the main actor because `WKWebView` is a UI object. Use
@@ -246,6 +255,10 @@ public actor WebInspectorProxy {
 
     package func waitForCloseWaiterForTesting() async {
         await core.waitForCloseWaiterForTesting()
+    }
+
+    package func pageGeneration() async throws -> WebInspectorPage.Generation {
+        try await core.pageGeneration()
     }
 
     package func dispatchCommand<Payload: Sendable, Result: Sendable>(

@@ -28,6 +28,28 @@ public enum CSS {
             )
         }
 
+        /// Runs an operation with an atomically registered CSS event scope.
+        public func withEvents<Output>(
+            buffering: WebInspectorEventBufferingPolicy = .bounded(256),
+            isolation: isolated (any Actor)? = #isolation,
+            _ operation: (
+                AsyncThrowingStream<WebInspectorPageEvent<CSS.Event>, any Error>
+            ) async throws -> Output
+        ) async throws -> Output {
+            try await context.withEvents(
+                domain: .css,
+                buffering: buffering,
+                isolation: isolation,
+                extract: { event in
+                    guard case let .css(value) = event else {
+                        return nil
+                    }
+                    return value
+                },
+                operation
+            )
+        }
+
         /// Returns cascade information for the supplied DOM node.
         public func matchedStyles(for node: DOM.Node.ID) async throws -> MatchedStyles {
             try await context.dispatch(

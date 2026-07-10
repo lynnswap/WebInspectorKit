@@ -50,6 +50,26 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         )
     }
 
+    package func acquireEventScope<Element: Sendable>(
+        route: RoutingTargetID,
+        targetID: WebInspectorTarget.ID,
+        domain: WebInspectorProxyEventDomain,
+        buffering: WebInspectorEventBufferingPolicy,
+        extract: @escaping @Sendable (WebInspectorProxyEvent) -> Element?
+    ) async throws -> WebInspectorProxyEventScope<Element> {
+        try await transport.acquireEventScope(
+            route: route,
+            targetID: targetID,
+            domain: domain,
+            buffering: buffering,
+            extract: extract
+        )
+    }
+
+    package func releaseEventScope(_ id: WebInspectorProxyEventScopeID) async throws {
+        try await transport.releaseEventScope(id)
+    }
+
     package nonisolated func events(
         route: RoutingTargetID,
         targetID: WebInspectorTarget.ID,
@@ -141,15 +161,22 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
     }
 
     private nonisolated func shouldDeliver(_ event: ProtocolEvent, to route: RoutingTargetID) async -> Bool {
+        let snapshot = await transport.snapshot()
+        return Self.shouldDeliver(event, to: route, in: snapshot)
+    }
+
+    package nonisolated static func shouldDeliver(
+        _ event: ProtocolEvent,
+        to route: RoutingTargetID,
+        in snapshot: TransportSession.Snapshot
+    ) -> Bool {
         switch route.storage {
         case let .target(rawValue):
             if let targetID = event.targetID {
                 return targetID.rawValue == rawValue
             }
-            let snapshot = await transport.snapshot()
             return snapshot.currentMainPageTargetID?.rawValue == rawValue
         case .currentPage:
-            let snapshot = await transport.snapshot()
             if event.domain == .target,
                event.method == "Target.targetDestroyed" {
                 // The registry has already dropped the destroyed record, so
@@ -176,27 +203,27 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
                 guard event.method != "DOM.documentUpdated" else {
                     return false
                 }
-                return isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
+                return Self.isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
             case .inspector:
-                return isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
+                return Self.isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
             case .network:
                 // WebKit's page/ProxyingNetworkAgent owns process-wide
                 // Network.enable. This branch only projects target-wrapped
                 // frame Network events if WebKit emits them.
-                return isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
+                return Self.isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
             case .css:
-                return isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
+                return Self.isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
             case .console:
-                return isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
+                return Self.isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
             case .runtime:
-                return isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
+                return Self.isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
             default:
                 return false
             }
         }
     }
 
-    private nonisolated func isCurrentPageFrameTarget(
+    private nonisolated static func isCurrentPageFrameTarget(
         _ record: ProtocolTarget.Record,
         in snapshot: TransportSession.Snapshot,
         currentMainPageTargetID: ProtocolTarget.ID
@@ -239,34 +266,43 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         route: RoutingTargetID
     ) async -> WebInspectorProxyEvent {
         let snapshot = await transport.snapshot()
-        let scopedProxyEvent = scopedAgentOwnedEvent(proxyEvent, from: event, route: route, snapshot: snapshot)
+        return Self.projectedEvent(proxyEvent, from: event, route: route, in: snapshot)
+    }
+
+    package nonisolated static func projectedEvent(
+        _ proxyEvent: WebInspectorProxyEvent,
+        from event: ProtocolEvent,
+        route: RoutingTargetID,
+        in snapshot: TransportSession.Snapshot
+    ) -> WebInspectorProxyEvent {
+        let scopedProxyEvent = Self.scopedAgentOwnedEvent(proxyEvent, from: event, route: route, snapshot: snapshot)
         guard case .currentPage = route.storage,
               let targetID = event.targetID else {
             return scopedProxyEvent
         }
         if event.domain == .inspector,
            targetID == snapshot.currentMainPageTargetID {
-            return mainPageInspectorEvent(scopedProxyEvent)
+            return Self.mainPageInspectorEvent(scopedProxyEvent)
         }
         guard let currentMainPageTargetID = snapshot.currentMainPageTargetID,
               targetID != currentMainPageTargetID,
               let record = snapshot.targetsByID[targetID],
-              isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID) else {
+              Self.isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID) else {
             return scopedProxyEvent
         }
         switch scopedProxyEvent {
         case let .dom(domEvent):
-            return .dom(scopedDOMEvent(domEvent, targetRawValue: targetID.rawValue))
+            return .dom(Self.scopedDOMEvent(domEvent, targetRawValue: targetID.rawValue))
         case let .css(cssEvent):
-            return .css(scopedCSSEvent(cssEvent, targetRawValue: targetID.rawValue))
+            return .css(Self.scopedCSSEvent(cssEvent, targetRawValue: targetID.rawValue))
         case let .network(networkEvent):
-            return .network(scopedNetworkEvent(networkEvent, targetRawValue: targetID.rawValue))
+            return .network(Self.scopedNetworkEvent(networkEvent, targetRawValue: targetID.rawValue))
         default:
             return scopedProxyEvent
         }
     }
 
-    private nonisolated func scopedAgentOwnedEvent(
+    private nonisolated static func scopedAgentOwnedEvent(
         _ proxyEvent: WebInspectorProxyEvent,
         from event: ProtocolEvent,
         route: RoutingTargetID,
@@ -286,7 +322,7 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         }
     }
 
-    private nonisolated func runtimeAgentScopeRawValue(
+    private nonisolated static func runtimeAgentScopeRawValue(
         for event: ProtocolEvent,
         route: RoutingTargetID,
         snapshot: TransportSession.Snapshot
@@ -306,7 +342,7 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         return agentTargetID.rawValue
     }
 
-    private nonisolated func mainPageInspectorEvent(
+    private nonisolated static func mainPageInspectorEvent(
         _ proxyEvent: WebInspectorProxyEvent
     ) -> WebInspectorProxyEvent {
         guard case let .inspector(event) = proxyEvent,
@@ -316,7 +352,7 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         return .inspector(.inspect(object, hints: hints, origin: nil))
     }
 
-    private nonisolated func scopedDOMEvent(
+    private nonisolated static func scopedDOMEvent(
         _ event: DOM.Event,
         targetRawValue: String
     ) -> DOM.Event {
@@ -380,7 +416,7 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         }
     }
 
-    private nonisolated func scopedDOMNode(
+    private nonisolated static func scopedDOMNode(
         _ node: DOM.Node,
         targetRawValue: String
     ) -> DOM.Node {
@@ -408,7 +444,7 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         )
     }
 
-    private nonisolated func scopedDOMNodeID(
+    private nonisolated static func scopedDOMNodeID(
         _ id: DOM.Node.ID,
         targetRawValue: String
     ) -> DOM.Node.ID {
@@ -418,7 +454,7 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         return DOM.Node.ID(id.rawValue, scopedToTargetRawValue: targetRawValue)
     }
 
-    private nonisolated func scopedCSSEvent(
+    private nonisolated static func scopedCSSEvent(
         _ event: CSS.Event,
         targetRawValue: String
     ) -> CSS.Event {
@@ -448,7 +484,7 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         }
     }
 
-    private nonisolated func scopedStyleSheetID(
+    private nonisolated static func scopedStyleSheetID(
         _ id: CSS.StyleSheet.ID,
         targetRawValue: String
     ) -> CSS.StyleSheet.ID {
@@ -458,7 +494,7 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         return CSS.StyleSheet.ID(id.rawValue, scopedToTargetRawValue: targetRawValue)
     }
 
-    private nonisolated func scopedRuntimeEvent(
+    private nonisolated static func scopedRuntimeEvent(
         _ event: Runtime.Event,
         targetScopeRawValue: String?
     ) -> Runtime.Event {
@@ -482,7 +518,7 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         }
     }
 
-    private nonisolated func scopedExecutionContextID(
+    private nonisolated static func scopedExecutionContextID(
         _ id: Runtime.ExecutionContext.ID,
         targetRawValue: String
     ) -> Runtime.ExecutionContext.ID {
@@ -492,7 +528,7 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         return Runtime.ExecutionContext.ID(id.rawValue, scopedToTargetRawValue: targetRawValue)
     }
 
-    private nonisolated func scopedConsoleEvent(
+    private nonisolated static func scopedConsoleEvent(
         _ event: Console.Event,
         targetScopeRawValue: String?
     ) -> Console.Event {
@@ -511,7 +547,7 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         }
     }
 
-    private nonisolated func scopedConsoleMessage(
+    private nonisolated static func scopedConsoleMessage(
         _ message: Console.Message,
         targetRawValue: String
     ) -> Console.Message {
@@ -533,7 +569,7 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         )
     }
 
-    private nonisolated func scopedRemoteObject(
+    private nonisolated static func scopedRemoteObject(
         _ object: Runtime.RemoteObject,
         targetRawValue: String
     ) -> Runtime.RemoteObject {
@@ -549,7 +585,7 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         )
     }
 
-    private nonisolated func scopedRemoteObjectID(
+    private nonisolated static func scopedRemoteObjectID(
         _ id: Runtime.RemoteObject.ID,
         targetRawValue: String
     ) -> Runtime.RemoteObject.ID {
@@ -559,7 +595,7 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         return Runtime.RemoteObject.ID(id.rawValue, scopedToTargetRawValue: targetRawValue)
     }
 
-    private nonisolated func scopedNetworkEvent(
+    private nonisolated static func scopedNetworkEvent(
         _ event: Network.Event,
         targetRawValue: String
     ) -> Network.Event {
@@ -614,7 +650,7 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         }
     }
 
-    private nonisolated func scopedWebSocketEvent(
+    private nonisolated static func scopedWebSocketEvent(
         _ event: Network.WebSocketEvent,
         targetRawValue: String
     ) -> Network.WebSocketEvent {
@@ -646,7 +682,7 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         }
     }
 
-    private nonisolated func scopedNetworkRequest(
+    private nonisolated static func scopedNetworkRequest(
         _ request: Network.Request,
         targetRawValue: String
     ) -> Network.Request {
@@ -662,7 +698,7 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         )
     }
 
-    private nonisolated func scopedNetworkRequestID(
+    private nonisolated static func scopedNetworkRequestID(
         _ id: Network.Request.ID,
         targetRawValue: String
     ) -> Network.Request.ID {
@@ -677,22 +713,36 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         route: RoutingTargetID,
         targetID: WebInspectorTarget.ID
     ) async -> WebInspectorLifecycleTarget? {
+        let snapshot = await transport.snapshot()
+        return Self.lifecycleTarget(
+            for: event,
+            route: route,
+            targetID: targetID,
+            in: snapshot
+        )
+    }
+
+    package nonisolated static func lifecycleTarget(
+        for event: ProtocolEvent,
+        route: RoutingTargetID,
+        targetID: WebInspectorTarget.ID,
+        in snapshot: TransportSession.Snapshot
+    ) -> WebInspectorLifecycleTarget? {
         guard event.domain == .target,
               event.method == "Target.didCommitProvisionalTarget",
               let protocolTargetID = event.targetID else {
             return nil
         }
-        let snapshot = await transport.snapshot()
         guard let record = snapshot.targetsByID[protocolTargetID] else {
             return nil
         }
         return WebInspectorLifecycleTarget(
-            semanticID: semanticTargetID(for: route, targetID: targetID),
+            semanticID: Self.semanticTargetID(for: route, targetID: targetID),
             record: record
         )
     }
 
-    private nonisolated func semanticTargetID(
+    private nonisolated static func semanticTargetID(
         for route: RoutingTargetID,
         targetID: WebInspectorTarget.ID
     ) -> WebInspectorTarget.ID {

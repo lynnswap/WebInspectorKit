@@ -3,26 +3,24 @@ import Testing
 @testable import WebInspectorProxyKit
 
 @Test
-func replyStoreRetargetsWrapperIndexWithPendingTargetReply() {
+func replyStoreRemovingTargetCleansWrapperIndex() {
     var store = TransportReplyStore()
     let oldKey = TransportSession.ReplyKey(targetID: .init("frame-old"), commandID: 7)
-    let newKey = TransportSession.ReplyKey(targetID: .init("frame-new"), commandID: 7)
 
     store.insertTargetReply(
         pendingReply(targetID: .init("frame-old")),
         key: oldKey,
         rootWrapperID: 100
     )
-    store.retargetPendingReplies(from: .init("frame-old"), to: .init("frame-new"))
+    let removed = store.removeTargetReplies(for: .init("frame-old"))
 
-    #expect(store.pendingTargetReplyKeys == [newKey])
-    #expect(store.takeTargetReplyKey(forRootWrapperID: 100) == newKey)
-    #expect(store.removeTargetReply(for: newKey) != nil)
+    #expect(removed.count == 1)
+    #expect(store.pendingTargetReplyKeys.isEmpty)
     #expect(store.takeTargetReplyKey(forRootWrapperID: 100) == nil)
 }
 
 @Test
-func replyStoreUsesCommandIndexForRetargetedTimeout() {
+func replyStoreTimeoutRemovesOriginalTargetReplyAndIndexes() {
     var store = TransportReplyStore()
     let oldKey = TransportSession.ReplyKey(targetID: .init("frame-old"), commandID: 7)
 
@@ -31,11 +29,11 @@ func replyStoreUsesCommandIndexForRetargetedTimeout() {
         key: oldKey,
         rootWrapperID: 100
     )
-    store.retargetPendingReplies(from: .init("frame-old"), to: .init("frame-new"))
     let removed = store.removeTargetReplyForTimeout(oldKey)
 
-    #expect(removed?.targetID == ProtocolTarget.ID("frame-new"))
+    #expect(removed?.targetID == ProtocolTarget.ID("frame-old"))
     #expect(store.pendingTargetReplyKeys.isEmpty)
+    #expect(store.takeTargetReplyKey(forRootWrapperID: 100) == nil)
 }
 
 @Test

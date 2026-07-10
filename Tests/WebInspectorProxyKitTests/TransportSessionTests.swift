@@ -164,7 +164,7 @@ func targetReplyCarriesPerDomainSequenceWatermarks() async throws {
     await receiveTargetDispatch(
         session,
         targetID: .init("page-main"),
-        message: #"{"method":"DOM.setChildNodes","params":{"parentId":2,"nodes":[{"nodeId":3,"nodeType":1,"nodeName":"DIV"}]}}"#
+        message: #"{"method":"DOM.setChildNodes","params":{"parentId":2,"nodes":[{"nodeId":3,"nodeType":1,"nodeName":"DIV","localName":"div","nodeValue":""}]}}"#
     )
     await receiveTargetDispatch(
         session,
@@ -527,13 +527,13 @@ func provisionalPageTargetWithKnownNonMainFrameIsClassifiedAsFrame() async throw
 }
 
 @Test
-func oldlessProvisionalPageCommitWithNonMainFrameDoesNotRetargetCurrentPage() async throws {
+func provisionalPageCommitWithNonMainFrameDoesNotRetargetCurrentPage() async throws {
     let backend = FakeTransportBackend()
     let session = TransportSession(backend: backend)
 
     await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
     await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"iframe-page-provisional","type":"page","frameId":"child-frame","isProvisional":true}}}"#)
-    await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"newTargetId":"iframe-page-provisional"}}"#)
+    await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"missing-old-frame","newTargetId":"iframe-page-provisional"}}"#)
     let snapshot = await session.snapshot()
 
     #expect(snapshot.currentMainPageTargetID == ProtocolTarget.ID("page-main"))
@@ -609,28 +609,24 @@ func subframeCommitDoesNotConsumeCurrentMainPageTarget() async throws {
 }
 
 @Test
-func targetCommitRetargetsPendingRepliesToCommittedTarget() async throws {
+func targetCommitFailsPendingRepliesForRemovedOldTarget() async throws {
     let backend = FakeTransportBackend()
     let session = TransportSession(backend: backend, responseTimeout: testResponseTimeout)
-    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-provisional","type":"frame","frameId":"ad-frame","isProvisional":true}}}"#)
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-next","type":"page","frameId":"main-frame","isProvisional":true}}}"#)
 
     let sendTask = Task {
         try await session.send(
-            ProtocolCommand(domain: .dom, method: "DOM.getDocument", routing: .target(.init("frame-provisional")))
+            ProtocolCommand(domain: .dom, method: "DOM.getDocument", routing: .target(.init("page-main")))
         )
     }
-    let sent = try await waitForTargetMessage(backend)
-    let innerID = try messageID(sent.message)
+    _ = try await waitForTargetMessage(backend)
 
-    await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"frame-provisional","newTargetId":"frame-committed"}}"#)
-    await receiveTargetDispatch(
-        session,
-        targetID: .init("frame-committed"),
-        message: ##"{"id":\##(innerID),"result":{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document"}}}"##
-    )
-    let result = try await sendTask.value
+    await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-main","newTargetId":"page-next"}}"#)
 
-    #expect(result.targetID == ProtocolTarget.ID("frame-committed"))
+    await #expect(throws: TransportSession.Error.missingTarget(.init("page-main"))) {
+        try await sendTask.value
+    }
     #expect(await session.snapshot().pendingTargetReplyKeys.isEmpty)
 }
 
@@ -638,11 +634,12 @@ func targetCommitRetargetsPendingRepliesToCommittedTarget() async throws {
 func provisionalTargetReplyIsBufferedUntilCommit() async throws {
     let backend = FakeTransportBackend()
     let session = TransportSession(backend: backend, responseTimeout: testResponseTimeout)
-    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-provisional","type":"frame","frameId":"ad-frame","isProvisional":true}}}"#)
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-next","type":"page","frameId":"main-frame","isProvisional":true}}}"#)
 
     let sendTask = Task {
         try await session.send(
-            ProtocolCommand(domain: .dom, method: "DOM.getDocument", routing: .target(.init("frame-provisional")))
+            ProtocolCommand(domain: .dom, method: "DOM.getDocument", routing: .target(.init("page-next")))
         )
     }
     let sent = try await waitForTargetMessage(backend)
@@ -650,17 +647,17 @@ func provisionalTargetReplyIsBufferedUntilCommit() async throws {
 
     await receiveTargetDispatch(
         session,
-        targetID: .init("frame-provisional"),
+        targetID: .init("page-next"),
         message: ##"{"id":\##(innerID),"result":{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document"}}}"##
     )
     #expect(await session.snapshot().pendingTargetReplyKeys == [
-        TransportSession.ReplyKey(targetID: .init("frame-provisional"), commandID: innerID),
+        TransportSession.ReplyKey(targetID: .init("page-next"), commandID: innerID),
     ])
 
-    await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"frame-provisional","newTargetId":"frame-committed"}}"#)
+    await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-main","newTargetId":"page-next"}}"#)
     let result = try await sendTask.value
 
-    #expect(result.targetID == ProtocolTarget.ID("frame-committed"))
+    #expect(result.targetID == ProtocolTarget.ID("page-next"))
     #expect(await session.snapshot().pendingTargetReplyKeys.isEmpty)
 }
 
@@ -678,11 +675,12 @@ func bufferedProvisionalTargetReplySurvivesResponseTimeoutBeforeCommit() async t
             await responseTimeout.recordHandledTimeout()
         }
     )
-    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-provisional","type":"frame","frameId":"ad-frame","isProvisional":true}}}"#)
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-next","type":"page","frameId":"main-frame","isProvisional":true}}}"#)
 
     let sendTask = Task {
         try await session.send(
-            ProtocolCommand(domain: .dom, method: "DOM.getDocument", routing: .target(.init("frame-provisional")))
+            ProtocolCommand(domain: .dom, method: "DOM.getDocument", routing: .target(.init("page-next")))
         )
     }
     let sent = try await waitForTargetMessage(backend)
@@ -690,7 +688,7 @@ func bufferedProvisionalTargetReplySurvivesResponseTimeoutBeforeCommit() async t
 
     await receiveTargetDispatch(
         session,
-        targetID: .init("frame-provisional"),
+        targetID: .init("page-next"),
         message: ##"{"id":\##(innerID),"result":{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document"}}}"##
     )
     await responseTimeout.waitUntilSuspended()
@@ -698,43 +696,14 @@ func bufferedProvisionalTargetReplySurvivesResponseTimeoutBeforeCommit() async t
     await responseTimeout.waitUntilHandledTimeout()
 
     #expect(await session.snapshot().pendingTargetReplyKeys == [
-        TransportSession.ReplyKey(targetID: .init("frame-provisional"), commandID: innerID),
+        TransportSession.ReplyKey(targetID: .init("page-next"), commandID: innerID),
     ])
 
-    await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"frame-provisional","newTargetId":"frame-committed"}}"#)
+    await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-main","newTargetId":"page-next"}}"#)
     let result = try await sendTask.value
 
-    #expect(result.targetID == ProtocolTarget.ID("frame-committed"))
+    #expect(result.targetID == ProtocolTarget.ID("page-next"))
     #expect(await session.snapshot().pendingTargetReplyKeys.isEmpty)
-}
-
-@Test
-func oldlessTargetCommitInfersSoleProvisionalTarget() async throws {
-    let backend = FakeTransportBackend()
-    let session = TransportSession(backend: backend, responseTimeout: testResponseTimeout)
-    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-provisional","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":true}}}"#)
-
-    let sendTask = Task {
-        try await session.send(
-            ProtocolCommand(domain: .dom, method: "DOM.getDocument", routing: .target(.init("frame-provisional")))
-        )
-    }
-    let sent = try await waitForTargetMessage(backend)
-    let innerID = try messageID(sent.message)
-
-    await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"newTargetId":"frame-committed"}}"#)
-    await receiveTargetDispatch(
-        session,
-        targetID: .init("frame-committed"),
-        message: ##"{"id":\##(innerID),"result":{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document"}}}"##
-    )
-    let result = try await sendTask.value
-    let snapshot = await session.snapshot()
-
-    #expect(result.targetID == ProtocolTarget.ID("frame-committed"))
-    #expect(snapshot.targetsByID[ProtocolTarget.ID("frame-provisional")] == nil)
-    #expect(snapshot.targetsByID[ProtocolTarget.ID("frame-committed")]?.frameID == ProtocolFrame.ID("ad-frame"))
-    #expect(snapshot.frameTargetIDsByFrameID[ProtocolFrame.ID("ad-frame")] == ProtocolTarget.ID("frame-committed"))
 }
 
 @Test
@@ -768,36 +737,7 @@ func provisionalTargetMessagesAreDispatchedAfterCommitTargetEvent() async throws
 }
 
 @Test
-func oldProvisionalTargetMessagesAreDispatchedAfterCommitTargetEvent() async throws {
-    let backend = FakeTransportBackend()
-    let session = TransportSession(backend: backend, responseTimeout: testResponseTimeout)
-
-    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-provisional","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":true}}}"#)
-
-    let targetStream = await session.events(for: .target)
-    let domStream = await session.events(for: .dom)
-    let targetEvents = ProtocolEventRecorder(stream: targetStream)
-    let domEvents = ProtocolEventRecorder(stream: domStream)
-
-    await receiveTargetDispatch(
-        session,
-        targetID: .init("frame-provisional"),
-        message: #"{"method":"DOM.childNodeCountUpdated","params":{"nodeId":3,"childNodeCount":1}}"#
-    )
-    await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"frame-provisional","newTargetId":"frame-committed"}}"#)
-
-    let targetEvent = try await targetEvents.event()
-    let domEvent = try await domEvents.event()
-
-    #expect(targetEvent.method == "Target.didCommitProvisionalTarget")
-    #expect(domEvent.method == "DOM.childNodeCountUpdated")
-    #expect(domEvent.targetID == ProtocolTarget.ID("frame-committed"))
-    #expect(domEvent.sequence > targetEvent.sequence)
-    #expect(domEvent.receivedSequence(for: .target) == targetEvent.sequence)
-}
-
-@Test
-func retargetedPendingReplyStillTimesOutAfterCommit() async throws {
+func removedTargetPendingReplyFailsAtCommitBeforeTimeout() async throws {
     let backend = FakeTransportBackend()
     let responseTimeout = ManualResponseTimeout()
     let session = TransportSession(
@@ -807,20 +747,20 @@ func retargetedPendingReplyStillTimesOutAfterCommit() async throws {
             try await responseTimeout.sleep(for: duration)
         }
     )
-    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-provisional","type":"frame","frameId":"ad-frame","isProvisional":true}}}"#)
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-next","type":"page","frameId":"main-frame","isProvisional":true}}}"#)
 
     let sendTask = Task {
         try await session.send(
-            ProtocolCommand(domain: .dom, method: "DOM.getDocument", routing: .target(.init("frame-provisional")))
+            ProtocolCommand(domain: .dom, method: "DOM.getDocument", routing: .target(.init("page-main")))
         )
     }
     _ = try await waitForTargetMessage(backend)
     await responseTimeout.waitUntilSuspended()
 
-    await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"frame-provisional","newTargetId":"frame-committed"}}"#)
-    await responseTimeout.fireNext()
+    await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-main","newTargetId":"page-next"}}"#)
 
-    await #expect(throws: TransportSession.Error.replyTimeout(method: "DOM.getDocument", targetID: .init("frame-provisional"))) {
+    await #expect(throws: TransportSession.Error.missingTarget(.init("page-main"))) {
         try await sendTask.value
     }
     #expect(await session.snapshot().pendingTargetReplyKeys.isEmpty)
@@ -832,8 +772,8 @@ func ambiguousTargetCommitPreservesExistingMetadataAndDoesNotInventTarget() asyn
     let session = TransportSession(backend: backend)
 
     await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-existing","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":false}}}"#)
-    await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"newTargetId":"frame-existing"}}"#)
-    await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"newTargetId":"missing-target"}}"#)
+    await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"missing-old","newTargetId":"frame-existing"}}"#)
+    await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"another-missing-old","newTargetId":"missing-target"}}"#)
     let snapshot = await session.snapshot()
 
     #expect(snapshot.targetsByID[ProtocolTarget.ID("frame-existing")]?.kind == .frame)
@@ -855,7 +795,7 @@ func rootScopedRuntimeDOMAndConsoleEventsResolveToCurrentPageTarget() async thro
     await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
     await session.receiveRootMessage(#"{"method":"Runtime.executionContextCreated","params":{"context":{"id":11,"frameId":"main-frame"}}}"#)
     await session.receiveRootMessage(#"{"method":"DOM.childNodeCountUpdated","params":{"nodeId":1,"childNodeCount":2}}"#)
-    await session.receiveRootMessage(#"{"method":"Console.messageAdded","params":{"message":{"text":"hello"}}}"#)
+    await session.receiveRootMessage(#"{"method":"Console.messageAdded","params":{"message":{"source":"javascript","level":"log","text":"hello"}}}"#)
     let snapshot = await session.snapshot()
 
     #expect(snapshot.executionContextsByKey[contextKey("page-main", 11)]?.targetID == ProtocolTarget.ID("page-main"))
@@ -1059,7 +999,7 @@ func domainStreamsReceiveIndependentTargetEventsInOrder() async throws {
 
     await receiveTargetDispatch(session, targetID: .init("frame-A"), message: #"{"method":"DOM.setChildNodes","params":{"parentId":1,"nodes":[]}}"#)
     await receiveTargetDispatch(session, targetID: .init("frame-A"), message: #"{"method":"CSS.styleSheetChanged","params":{"styleSheetId":"s1"}}"#)
-    await receiveTargetDispatch(session, targetID: .init("frame-A"), message: #"{"method":"Console.messageAdded","params":{"message":{"text":"hello"}}}"#)
+    await receiveTargetDispatch(session, targetID: .init("frame-A"), message: #"{"method":"Console.messageAdded","params":{"message":{"source":"javascript","level":"log","text":"hello"}}}"#)
     await receiveTargetDispatch(session, targetID: .init("page-main"), message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"r1","request":{"url":"https://example.com"},"timestamp":1}}"#)
 
     let domEvent = try await domEvents.event()
@@ -1081,7 +1021,7 @@ func rootCSSStyleSheetEventsResolveFrameTargetFromFrameIDAndStyleSheetOwnership(
 
     await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
     await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-A","type":"frame","frameId":"frame-A","parentFrameId":"main-frame","isProvisional":false}}}"#)
-    await session.receiveRootMessage(#"{"method":"CSS.styleSheetAdded","params":{"header":{"styleSheetId":"sheet-frame","frameId":"frame-A"}}}"#)
+    await session.receiveRootMessage(#"{"method":"CSS.styleSheetAdded","params":{"header":{"styleSheetId":"sheet-frame","frameId":"frame-A","origin":"author"}}}"#)
     await session.receiveRootMessage(#"{"method":"CSS.styleSheetChanged","params":{"styleSheetId":"sheet-frame"}}"#)
     await session.receiveRootMessage(#"{"method":"CSS.styleSheetRemoved","params":{"styleSheetId":"sheet-frame"}}"#)
     await session.receiveRootMessage(#"{"method":"CSS.styleSheetChanged","params":{"styleSheetId":"sheet-frame"}}"#)
@@ -1104,7 +1044,7 @@ func rootCSSStyleSheetAddedBeforeFrameTargetDoesNotPinSheetToPage() async throws
     let cssEvents = ProtocolEventRecorder(stream: cssStream)
 
     await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
-    await session.receiveRootMessage(#"{"method":"CSS.styleSheetAdded","params":{"header":{"styleSheetId":"sheet-late-frame","frameId":"late-frame"}}}"#)
+    await session.receiveRootMessage(#"{"method":"CSS.styleSheetAdded","params":{"header":{"styleSheetId":"sheet-late-frame","frameId":"late-frame","origin":"author"}}}"#)
     await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-late","type":"frame","frameId":"late-frame","parentFrameId":"main-frame","isProvisional":false}}}"#)
     await session.receiveRootMessage(#"{"method":"CSS.styleSheetChanged","params":{"styleSheetId":"sheet-late-frame"}}"#)
 
@@ -1125,7 +1065,7 @@ func rootCSSStyleSheetAddedBeforeProvisionalFrameTargetReplaysAfterCommit() asyn
     let cssEvents = ProtocolEventRecorder(stream: cssStream)
 
     await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
-    await session.receiveRootMessage(#"{"method":"CSS.styleSheetAdded","params":{"header":{"styleSheetId":"sheet-provisional-frame","frameId":"ad-frame"}}}"#)
+    await session.receiveRootMessage(#"{"method":"CSS.styleSheetAdded","params":{"header":{"styleSheetId":"sheet-provisional-frame","frameId":"ad-frame","origin":"author"}}}"#)
     await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-provisional","type":"frame","frameId":"ad-frame","parentFrameId":"main-frame","isProvisional":true}}}"#)
     await session.receiveRootMessage(#"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"frame-provisional","newTargetId":"frame-committed"}}"#)
 

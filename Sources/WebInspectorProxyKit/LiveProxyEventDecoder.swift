@@ -38,12 +38,12 @@ enum LiveProxyEventDecoder {
     ) throws -> WebInspectorTargetLifecycleEvent {
         switch event.method {
         case "Target.didCommitProvisionalTarget":
-            let params = try decode(TargetCommittedParams.self, from: event)
+            _ = try decode(TargetCommittedParams.self, from: event)
             guard let lifecycleTarget = target else {
                 return .unknown(rawEvent(from: event))
             }
             return .didCommitProvisionalTarget(WebInspectorTargetCommitLifecycle(
-                oldTargetID: params.oldTargetId.map { _ in targetID },
+                oldTargetID: targetID,
                 newTarget: lifecycleTarget
             ))
         case "Target.targetDestroyed":
@@ -308,7 +308,7 @@ enum LiveProxyEventDecoder {
 }
 
 private struct TargetCommittedParams: Decodable {
-    var oldTargetId: String?
+    var oldTargetId: String
     var newTargetId: String
 }
 

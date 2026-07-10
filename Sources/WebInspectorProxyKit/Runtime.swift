@@ -28,6 +28,28 @@ public enum Runtime {
             )
         }
 
+        /// Runs an operation with an atomically registered Runtime event scope.
+        public func withEvents<Output>(
+            buffering: WebInspectorEventBufferingPolicy = .bounded(256),
+            isolation: isolated (any Actor)? = #isolation,
+            _ operation: (
+                AsyncThrowingStream<WebInspectorPageEvent<Runtime.Event>, any Error>
+            ) async throws -> Output
+        ) async throws -> Output {
+            try await context.withEvents(
+                domain: .runtime,
+                buffering: buffering,
+                isolation: isolation,
+                extract: { event in
+                    guard case let .runtime(value) = event else {
+                        return nil
+                    }
+                    return value
+                },
+                operation
+            )
+        }
+
         /// Evaluates a JavaScript expression in an execution context.
         public func evaluate(
             _ expression: String,

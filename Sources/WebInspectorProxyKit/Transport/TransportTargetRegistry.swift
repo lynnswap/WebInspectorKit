@@ -101,13 +101,10 @@ struct TransportTargetRegistry: Sendable {
     }
 
     mutating func commitTarget(
-        oldTargetID: ProtocolTarget.ID?,
+        oldTargetID: ProtocolTarget.ID,
         newTargetID: ProtocolTarget.ID
     ) -> TransportTargetCommitMutation {
-        let committedOldTargetID = oldTargetID ?? inferredOldTargetIDForOldlessCommit(newTargetID: newTargetID)
-
-        if let oldTargetID = committedOldTargetID,
-           oldTargetID == currentMainPageTargetID,
+        if oldTargetID == currentMainPageTargetID,
            let existingNewRecord = targetsByID[newTargetID],
            !existingNewRecord.isTopLevelPage {
             var committedSubframeRecord = existingNewRecord
@@ -117,16 +114,16 @@ struct TransportTargetRegistry: Sendable {
                 frameTargetIDsByFrameID[frameID] = newTargetID
             }
             return TransportTargetCommitMutation(
-                committedOldTargetID: committedOldTargetID,
+                committedOldTargetID: oldTargetID,
                 shouldRetargetExternalState: false,
                 resolvedFrameTarget: committedFrameTargetResolution(for: committedSubframeRecord)
             )
         }
 
-        let oldRecord = committedOldTargetID.flatMap { targetsByID.removeValue(forKey: $0) }
+        let oldRecord = targetsByID.removeValue(forKey: oldTargetID)
         guard oldRecord != nil || targetsByID[newTargetID] != nil else {
             return TransportTargetCommitMutation(
-                committedOldTargetID: committedOldTargetID,
+                committedOldTargetID: oldTargetID,
                 shouldRetargetExternalState: false,
                 resolvedFrameTarget: nil
             )
@@ -139,15 +136,12 @@ struct TransportTargetRegistry: Sendable {
         newRecord.isProvisional = false
         targetsByID[newTargetID] = newRecord
 
-        if let oldTargetID = committedOldTargetID {
-            frameTargetIDsByFrameID = frameTargetIDsByFrameID.filter { $0.value != oldTargetID }
-        }
+        frameTargetIDsByFrameID = frameTargetIDsByFrameID.filter { $0.value != oldTargetID }
 
         if let frameID = newRecord.frameID {
             frameTargetIDsByFrameID[frameID] = newTargetID
         }
-        if let oldTargetID = committedOldTargetID,
-           currentMainPageTargetID == oldTargetID,
+        if currentMainPageTargetID == oldTargetID,
            newRecord.isTopLevelPage {
             currentMainPageTargetID = newTargetID
         }
@@ -158,36 +152,10 @@ struct TransportTargetRegistry: Sendable {
         }
 
         return TransportTargetCommitMutation(
-            committedOldTargetID: committedOldTargetID,
-            shouldRetargetExternalState: committedOldTargetID != nil,
+            committedOldTargetID: oldTargetID,
+            shouldRetargetExternalState: true,
             resolvedFrameTarget: committedFrameTargetResolution(for: newRecord)
         )
-    }
-
-    private func inferredOldTargetIDForOldlessCommit(
-        newTargetID: ProtocolTarget.ID
-    ) -> ProtocolTarget.ID? {
-        if let newRecord = targetsByID[newTargetID],
-           newRecord.isProvisional,
-           newRecord.isTopLevelPage,
-           let currentMainPageTargetID,
-           currentMainPageTargetID != newTargetID {
-            if let frameID = newRecord.frameID,
-               let currentMainFrameID,
-               frameID != currentMainFrameID {
-                return nil
-            }
-            return currentMainPageTargetID
-        }
-
-        guard targetsByID[newTargetID] == nil else {
-            return nil
-        }
-
-        let provisionalTargetIDs = targetsByID
-            .filter { $0.value.isProvisional }
-            .map(\.key)
-        return provisionalTargetIDs.count == 1 ? provisionalTargetIDs[0] : nil
     }
 
     private func committedFrameTargetResolution(
@@ -213,7 +181,7 @@ struct TransportFrameTargetResolution: Sendable {
 }
 
 struct TransportTargetCommitMutation: Sendable {
-    var committedOldTargetID: ProtocolTarget.ID?
+    var committedOldTargetID: ProtocolTarget.ID
     var shouldRetargetExternalState: Bool
     var resolvedFrameTarget: TransportFrameTargetResolution?
 }

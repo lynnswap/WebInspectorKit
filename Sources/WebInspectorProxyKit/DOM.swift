@@ -25,6 +25,28 @@ public enum DOM {
             self.context = context
         }
 
+        /// Runs an operation with an atomically registered DOM event scope.
+        public func withEvents<Output>(
+            buffering: WebInspectorEventBufferingPolicy = .bounded(256),
+            isolation: isolated (any Actor)? = #isolation,
+            _ operation: (
+                AsyncThrowingStream<WebInspectorPageEvent<DOM.Event>, any Error>
+            ) async throws -> Output
+        ) async throws -> Output {
+            try await context.withEvents(
+                domain: .dom,
+                buffering: buffering,
+                isolation: isolation,
+                extract: { event in
+                    guard case let .dom(value) = event else {
+                        return nil
+                    }
+                    return value
+                },
+                operation
+            )
+        }
+
         /// Returns the root document node for the target.
         public func getDocument() async throws -> Node {
             try await context.dispatch(

@@ -72,4 +72,38 @@ package protocol WebInspectorProxyBackend: Sendable {
         targetID: WebInspectorTarget.ID,
         domain: WebInspectorProxyEventDomain
     ) async
+
+    func acquireEventScope<Element: Sendable>(
+        route: RoutingTargetID,
+        targetID: WebInspectorTarget.ID,
+        domain: WebInspectorProxyEventDomain,
+        buffering: WebInspectorEventBufferingPolicy,
+        extract: @escaping @Sendable (WebInspectorProxyEvent) -> Element?
+    ) async throws -> WebInspectorProxyEventScope<Element>
+
+    func releaseEventScope(_ id: WebInspectorProxyEventScopeID) async throws
+}
+
+package extension WebInspectorProxyBackend {
+    func acquireEventScope<Element: Sendable>(
+        route: RoutingTargetID,
+        targetID: WebInspectorTarget.ID,
+        domain: WebInspectorProxyEventDomain,
+        buffering: WebInspectorEventBufferingPolicy,
+        extract: @escaping @Sendable (WebInspectorProxyEvent) -> Element?
+    ) async throws -> WebInspectorProxyEventScope<Element> {
+        _ = route
+        _ = targetID
+        _ = buffering
+        _ = extract
+        throw WebInspectorProxyError.commandFailed(
+            domain: domain.rawValue,
+            method: "withEvents",
+            message: "This backend does not implement structured event scopes."
+        )
+    }
+
+    func releaseEventScope(_ id: WebInspectorProxyEventScopeID) async throws {
+        _ = id
+    }
 }

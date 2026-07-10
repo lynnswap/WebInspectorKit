@@ -28,6 +28,31 @@ public enum Network {
             )
         }
 
+        /// Runs an operation with an atomically registered Network event scope.
+        ///
+        /// The first scope registers before `Network.enable` is sent. Scope
+        /// completion waits for the final matching `Network.disable`.
+        public func withEvents<Output>(
+            buffering: WebInspectorEventBufferingPolicy = .bounded(256),
+            isolation: isolated (any Actor)? = #isolation,
+            _ operation: (
+                AsyncThrowingStream<WebInspectorPageEvent<Network.Event>, any Error>
+            ) async throws -> Output
+        ) async throws -> Output {
+            try await context.withEvents(
+                domain: .network,
+                buffering: buffering,
+                isolation: isolation,
+                extract: { event in
+                    guard case let .network(value) = event else {
+                        return nil
+                    }
+                    return value
+                },
+                operation
+            )
+        }
+
         /// Returns the response body for a completed network request.
         public func responseBody(
             for id: Request.ID,

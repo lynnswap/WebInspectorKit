@@ -1907,11 +1907,11 @@ public final class WebInspectorContext {
         switch error {
         case let proxyError as WebInspectorProxyError:
             switch proxyError {
-            case .disconnected, .unsupported, .attachFailed:
+            case .disconnected, .unsupported, .attachFailed, .protocolViolation, .transportFailure:
                 fail(proxyError)
-            case .closed:
+            case .closed, .pageUnavailable:
                 WebInspectorDataKitLog.debug("\(operation) raced connection close")
-            case .commandFailed, .timeout:
+            case .staleIdentifier, .commandFailed, .commandRejected, .eventBufferOverflow, .timeout:
                 WebInspectorDataKitLog.debug("\(operation) failed: \(String(describing: proxyError))")
             }
         default:
