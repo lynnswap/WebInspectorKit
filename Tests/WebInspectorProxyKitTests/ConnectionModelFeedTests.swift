@@ -3076,6 +3076,85 @@ func terminalCloseDrainsPendingModelCommandTasks() async throws {
     #expect(await backend.isDetached())
 }
 
+@Test
+func readinessWaitingModelCommandRunnerDoesNotKeepCoreAlive() async throws {
+    let backend = FakeTransportBackend()
+    var core: ConnectionCore? = ConnectionCore(backend: backend, responseTimeout: nil)
+    weak let weakCore = core
+    _ = await core?.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+
+    var feed: ConnectionModelFeed? = try await core?.openModelFeed(
+        configuredDomains: [.dom],
+        capacity: 8
+    )
+    _ = try await backend.waitForTargetMessage(method: "DOM.getDocument")
+    let authorization = ConnectionModelCommandAuthorization(
+        feedID: try #require(feed?.id),
+        generation: try await #require(core).pageGeneration()
+    )
+    feed = nil
+
+    let runner = try await #require(core).startModelCommandForTesting(
+        modelFeedCommand(
+            domain: .page,
+            method: "Page.reload",
+            authority: authorization
+        ),
+        authorization: authorization
+    )
+    await core?.waitForModelCommandReadinessWaiterCountForTesting(1)
+
+    core = nil
+
+    #expect(weakCore == nil)
+    await #expect(throws: TransportSession.Error.transportClosed) {
+        try await runner.value
+    }
+}
+
+@Test
+func replyWaitingModelCommandRunnerDoesNotKeepCoreAlive() async throws {
+    let backend = FakeTransportBackend()
+    var core: ConnectionCore? = ConnectionCore(backend: backend, responseTimeout: nil)
+    weak let weakCore = core
+    _ = await core?.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+
+    var feed: ConnectionModelFeed? = try await core?.openModelFeed(
+        configuredDomains: [],
+        capacity: 8
+    )
+    let authorization = ConnectionModelCommandAuthorization(
+        feedID: try #require(feed?.id),
+        generation: try await #require(core).pageGeneration()
+    )
+    feed = nil
+
+    let runner = try await #require(core).startModelCommandForTesting(
+        modelFeedCommand(
+            domain: .page,
+            method: "Page.reload",
+            authority: authorization
+        ),
+        authorization: authorization
+    )
+    _ = try await backend.waitForTargetMessage(method: "Page.reload")
+
+    core = nil
+
+    #expect(weakCore == nil)
+    await #expect(throws: TransportSession.Error.transportClosed) {
+        try await runner.value
+    }
+}
+
 private func modelFeedCommand(
     domain: ProtocolDomain,
     method: String,

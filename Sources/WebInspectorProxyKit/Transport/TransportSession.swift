@@ -43,11 +43,6 @@ private struct ConnectionDirectCommandAdmission: Sendable {
     let documentEpoch: ModelDocumentEpoch?
 }
 
-private struct ConnectionModelCommandOperation: Sendable {
-    let id: UInt64
-    let task: Task<ProtocolCommand.Result, any Swift.Error>
-}
-
 private enum ConnectionModelCommandFailureOverride: Sendable {
     case staleIdentifier
     case notActive
@@ -68,27 +63,89 @@ private enum ConnectionModelCommandFailureOverride: Sendable {
     }
 }
 
-private struct ConnectionModelCommandTask: Sendable {
-    let task: Task<ProtocolCommand.Result, any Swift.Error>
-    let authorization: ConnectionModelCommandAuthorization
-    let domain: ProtocolDomain
-    var pendingReplyOwnership: ConnectionPendingReplyOwnership?
-    var failureOverride: ConnectionModelCommandFailureOverride?
+private final class ConnectionModelCommandControl: Sendable {
+    private struct State: Sendable {
+        var task: Task<ProtocolCommand.Result, any Swift.Error>?
+        var failure: ConnectionModelCommandFailureOverride?
+    }
+
+    private let state = Mutex(State())
+
+    func install(_ task: Task<ProtocolCommand.Result, any Swift.Error>) {
+        let shouldCancel = state.withLock { state in
+            precondition(state.task == nil, "A model command installed more than one runner task.")
+            state.task = task
+            return state.failure != nil
+        }
+        if shouldCancel {
+            task.cancel()
+        }
+    }
+
+    func cancelByCaller() {
+        let task = state.withLock { state in
+            if state.failure == nil {
+                state.failure = .cancelled
+            }
+            return state.task
+        }
+        task?.cancel()
+    }
+
+    func failFromOwner(_ failure: ConnectionModelCommandFailureOverride) {
+        let task = state.withLock { state in
+            switch state.failure {
+            case nil, .some(.cancelled):
+                state.failure = failure
+            case .some:
+                break
+            }
+            return state.task
+        }
+        task?.cancel()
+    }
+
+    var task: Task<ProtocolCommand.Result, any Swift.Error>? {
+        state.withLock { $0.task }
+    }
+
+    var failure: ConnectionModelCommandFailureOverride? {
+        state.withLock { $0.failure }
+    }
+
+    func resolve(
+        _ fallback: Result<ProtocolCommand.Result, any Swift.Error>
+    ) -> Result<ProtocolCommand.Result, any Swift.Error> {
+        if let failure {
+            return .failure(failure.error)
+        }
+        return fallback
+    }
 }
 
-private struct ConnectionModelCommandReadinessWaiter: Sendable {
-    let id: UInt64
-    let operationID: UInt64
+private struct ConnectionModelCommandOperation: Sendable {
+    let task: Task<ProtocolCommand.Result, any Swift.Error>
+    let control: ConnectionModelCommandControl
+}
+
+private struct ConnectionModelCommandTask: Sendable {
+    let control: ConnectionModelCommandControl
     let authorization: ConnectionModelCommandAuthorization
     let domain: ProtocolDomain
     let method: String
     let routing: ProtocolCommand.Routing
-    let continuation: CheckedContinuation<Void, any Swift.Error>
+    var pendingReplyOwnership: ConnectionPendingReplyOwnership?
+    var readinessSignal: ReplyPromise<Void>?
 }
 
 private enum ConnectionModelCommandReadiness: Sendable {
     case ready(targetID: ProtocolTarget.ID?)
     case waiting
+}
+
+private enum ConnectionModelCommandStep: Sendable {
+    case waiting(ReplyPromise<Void>)
+    case ready(ConnectionOwnedCommandOperation)
 }
 
 private enum ConnectionPendingReplyFailureReason: Sendable {
@@ -328,8 +385,6 @@ package actor ConnectionCore {
     private var modelBootstrapTasks: [UInt64: ConnectionModelBootstrapTask]
     private var nextModelCommandOperationID: UInt64
     private var modelCommandTasks: [UInt64: ConnectionModelCommandTask]
-    private var nextModelCommandReadinessWaiterID: UInt64
-    private var modelCommandReadinessWaiters: [UInt64: ConnectionModelCommandReadinessWaiter]
     private var modelCommandOwnerCountWaiters: [(
         expectedCount: Int,
         continuation: CheckedContinuation<Void, Never>
@@ -390,8 +445,6 @@ package actor ConnectionCore {
         modelBootstrapTasks = [:]
         nextModelCommandOperationID = 0
         modelCommandTasks = [:]
-        nextModelCommandReadinessWaiterID = 0
-        modelCommandReadinessWaiters = [:]
         modelCommandOwnerCountWaiters = []
         modelCommandReadinessCountWaiters = []
         modelDocumentEpochs = [:]
@@ -420,15 +473,10 @@ package actor ConnectionCore {
         eventScopes.finishAndRemoveAll(with: WebInspectorProxyError.closed)
         modelFeed?.mailbox.finish(throwing: WebInspectorProxyError.closed)
         modelFeed = nil
-        let readinessWaiters = modelCommandReadinessWaiters.values
-        modelCommandReadinessWaiters.removeAll()
-        for waiter in readinessWaiters {
-            waiter.continuation.resume(throwing: WebInspectorProxyError.closed)
-        }
         let modelTasks = Array(modelCommandTasks.values)
         modelCommandTasks.removeAll()
         for modelTask in modelTasks {
-            modelTask.task.cancel()
+            modelTask.control.failFromOwner(.terminal(.transportClosed))
             if let ownership = modelTask.pendingReplyOwnership {
                 _ = replyStore.removePendingReply(ownership.key)
             }
@@ -897,42 +945,44 @@ package actor ConnectionCore {
         try await releaseCapabilityLease(.eventScope(id), for: key)
     }
 
-    package func send(_ command: ProtocolCommand) async throws -> ProtocolCommand.Result {
+    package nonisolated func send(_ command: ProtocolCommand) async throws -> ProtocolCommand.Result {
         try Task.checkCancellation()
-        guard isOpen else {
-            throw terminalTransportError
-        }
 
         switch command.authority {
         case .direct:
-            // Admission owns both transport-local and wire-backed commands.
-            // A model feed must never be bypassed by DOM.enable's local result.
-            switch command.routing {
-            case .root:
-                try claimDirectConsumer()
-                return try await sendRoot(
-                    command,
-                    admission: ConnectionDirectCommandAdmission(
-                        bindingGeneration: nil,
-                        documentEpoch: nil
-                    )
-                )
-            case let .target(targetID):
-                return try await sendDirectTarget(command, targetID: targetID)
-            case let .octopus(pageTarget):
-                let resolvedTarget = try pageTarget ?? currentMainPageTarget()
-                return try await sendDirectTarget(command, targetID: resolvedTarget)
-            }
+            return try await sendDirect(command)
         case let .modelFeed(authorization):
-            let operation = try beginModelCommand(command, authorization: authorization)
+            let operation = try await beginModelCommand(command, authorization: authorization)
             return try await withTaskCancellationHandler {
                 try Task.checkCancellation()
                 return try await operation.task.value
             } onCancel: {
-                Task { [weak self] in
-                    await self?.cancelModelCommand(operation.id)
-                }
+                operation.control.cancelByCaller()
             }
+        }
+    }
+
+    private func sendDirect(_ command: ProtocolCommand) async throws -> ProtocolCommand.Result {
+        guard isOpen else {
+            throw terminalTransportError
+        }
+        // Admission owns both transport-local and wire-backed commands. A
+        // model feed must never be bypassed by DOM.enable's local result.
+        switch command.routing {
+        case .root:
+            try claimDirectConsumer()
+            return try await sendRoot(
+                command,
+                admission: ConnectionDirectCommandAdmission(
+                    bindingGeneration: nil,
+                    documentEpoch: nil
+                )
+            )
+        case let .target(targetID):
+            return try await sendDirectTarget(command, targetID: targetID)
+        case let .octopus(pageTarget):
+            let resolvedTarget = try pageTarget ?? currentMainPageTarget()
+            return try await sendDirectTarget(command, targetID: resolvedTarget)
         }
     }
 
@@ -961,6 +1011,7 @@ package actor ConnectionCore {
         _ command: ProtocolCommand,
         authorization: ConnectionModelCommandAuthorization
     ) throws -> ConnectionModelCommandOperation {
+        try Task.checkCancellation()
         try validateModelCommandAuthority(
             authorization,
             domain: command.domain,
@@ -972,25 +1023,38 @@ package actor ConnectionCore {
         )
         nextModelCommandOperationID += 1
         let operationID = nextModelCommandOperationID
-        let task = Task { [weak self, command, authorization] () throws -> ProtocolCommand.Result in
-            guard let self else {
-                throw WebInspectorProxyError.closed
-            }
+        let control = ConnectionModelCommandControl()
+        let task = Task { [weak self, command, authorization, control] () throws -> ProtocolCommand.Result in
             do {
-                let result = try await self.executeModelCommand(
-                    command,
-                    authorization: authorization,
-                    operationID: operationID
-                )
-                await self.finishModelCommand(operationID)
-                return result
+                while true {
+                    try Task.checkCancellation()
+                    guard let step = try await self?.prepareModelCommandStep(
+                        command,
+                        authorization: authorization,
+                        operationID: operationID
+                    ) else {
+                        throw WebInspectorProxyError.closed
+                    }
+                    switch step {
+                    case let .waiting(signal):
+                        try await signal.value()
+                    case let .ready(operation):
+                        let value = try await operation.result()
+                        let fallback = control.resolve(.success(value))
+                        let resolved = await self?.finishModelCommand(
+                            operationID,
+                            fallback: fallback
+                        ) ?? fallback
+                        return try resolved.get()
+                    }
+                }
             } catch {
-                let resolvedError = await self.modelCommandFailure(
+                let fallback = control.resolve(.failure(error))
+                let resolved = await self?.finishModelCommand(
                     operationID,
-                    fallback: error
-                )
-                await self.finishModelCommand(operationID)
-                throw resolvedError
+                    fallback: fallback
+                ) ?? fallback
+                return try resolved.get()
             }
         }
         precondition(
@@ -998,49 +1062,56 @@ package actor ConnectionCore {
             "A model command operation identifier already has an owner."
         )
         modelCommandTasks[operationID] = ConnectionModelCommandTask(
-            task: task,
+            control: control,
             authorization: authorization,
             domain: command.domain,
+            method: command.method,
+            routing: command.routing,
             pendingReplyOwnership: nil,
-            failureOverride: nil
+            readinessSignal: nil
         )
+        control.install(task)
         resumeModelCommandOwnerCountWaitersIfNeeded()
-        return ConnectionModelCommandOperation(id: operationID, task: task)
+        return ConnectionModelCommandOperation(task: task, control: control)
     }
 
-    private func executeModelCommand(
+    private func prepareModelCommandStep(
         _ command: ProtocolCommand,
         authorization: ConnectionModelCommandAuthorization,
         operationID: UInt64
-    ) async throws -> ProtocolCommand.Result {
-        while true {
-            try Task.checkCancellation()
-            switch try modelCommandReadiness(
+    ) throws -> ConnectionModelCommandStep {
+        guard var task = modelCommandTasks[operationID] else {
+            throw ConnectionModelCommandError.notActive
+        }
+        if let failure = task.control.failure {
+            throw failure.error
+        }
+        switch try modelCommandReadiness(
+            authorization: authorization,
+            domain: command.domain,
+            method: command.method,
+            routing: command.routing
+        ) {
+        case let .ready(targetID):
+            task.readinessSignal = nil
+            modelCommandTasks[operationID] = task
+            // There is intentionally no suspension between this final
+            // readiness check and pending-reply insertion.
+            return .ready(try makeModelCommandOperation(
+                command,
+                targetID: targetID,
                 authorization: authorization,
-                domain: command.domain,
-                method: command.method,
-                routing: command.routing
-            ) {
-            case let .ready(targetID):
-                try Task.checkCancellation()
-                // There is intentionally no suspension between this final
-                // readiness check and pending-reply insertion.
-                let operation = try makeModelCommandOperation(
-                    command,
-                    targetID: targetID,
-                    authorization: authorization,
-                    operationID: operationID
-                )
-                return try await operation.result()
-            case .waiting:
-                try await suspendModelCommandUntilReadinessChanges(
-                    operationID: operationID,
-                    authorization: authorization,
-                    domain: command.domain,
-                    method: command.method,
-                    routing: command.routing
-                )
+                operationID: operationID
+            ))
+        case .waiting:
+            if let signal = task.readinessSignal {
+                return .waiting(signal)
             }
+            let signal = ReplyPromise<Void>()
+            task.readinessSignal = signal
+            modelCommandTasks[operationID] = task
+            resumeModelCommandOwnerCountWaitersIfNeeded()
+            return .waiting(signal)
         }
     }
 
@@ -1147,88 +1218,30 @@ package actor ConnectionCore {
         return .ready(targetID: targetID)
     }
 
-    private func suspendModelCommandUntilReadinessChanges(
-        operationID: UInt64,
-        authorization: ConnectionModelCommandAuthorization,
-        domain: ProtocolDomain,
-        method: String,
-        routing: ProtocolCommand.Routing
-    ) async throws {
-        precondition(
-            nextModelCommandReadinessWaiterID < UInt64.max,
-            "A model command readiness waiter identifier exhausted UInt64."
-        )
-        nextModelCommandReadinessWaiterID += 1
-        let waiterID = nextModelCommandReadinessWaiterID
-        try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (
-                continuation: CheckedContinuation<Void, any Swift.Error>
-            ) in
-                if Task.isCancelled {
-                    continuation.resume(throwing: CancellationError())
-                    return
-                }
-                do {
-                    switch try modelCommandReadiness(
-                        authorization: authorization,
-                        domain: domain,
-                        method: method,
-                        routing: routing
-                    ) {
-                    case .ready:
-                        continuation.resume()
-                    case .waiting:
-                        modelCommandReadinessWaiters[waiterID] = ConnectionModelCommandReadinessWaiter(
-                            id: waiterID,
-                            operationID: operationID,
-                            authorization: authorization,
-                            domain: domain,
-                            method: method,
-                            routing: routing,
-                            continuation: continuation
-                        )
-                        resumeModelCommandOwnerCountWaitersIfNeeded()
-                    }
-                } catch {
-                    continuation.resume(throwing: error)
-                }
-            }
-        } onCancel: {
-            Task { [weak self] in
-                await self?.cancelModelCommandReadinessWaiter(waiterID)
-            }
-        }
-    }
-
     private func reevaluateModelCommandReadinessWaiters() {
-        for waiterID in modelCommandReadinessWaiters.keys.sorted() {
-            guard let waiter = modelCommandReadinessWaiters[waiterID] else {
+        for operationID in modelCommandTasks.keys.sorted() {
+            guard var task = modelCommandTasks[operationID],
+                  let signal = task.readinessSignal else {
                 continue
             }
             do {
                 guard case .ready = try modelCommandReadiness(
-                    authorization: waiter.authorization,
-                    domain: waiter.domain,
-                    method: waiter.method,
-                    routing: waiter.routing
+                    authorization: task.authorization,
+                    domain: task.domain,
+                    method: task.method,
+                    routing: task.routing
                 ) else {
                     continue
                 }
-                modelCommandReadinessWaiters.removeValue(forKey: waiterID)
-                waiter.continuation.resume()
+                task.readinessSignal = nil
+                modelCommandTasks[operationID] = task
+                signal.fulfill(.success(()))
             } catch {
-                modelCommandReadinessWaiters.removeValue(forKey: waiterID)
-                waiter.continuation.resume(throwing: error)
+                task.readinessSignal = nil
+                modelCommandTasks[operationID] = task
+                signal.fulfill(.failure(error))
             }
         }
-        resumeModelCommandOwnerCountWaitersIfNeeded()
-    }
-
-    private func cancelModelCommandReadinessWaiter(_ waiterID: UInt64) {
-        guard let waiter = modelCommandReadinessWaiters.removeValue(forKey: waiterID) else {
-            return
-        }
-        waiter.continuation.resume(throwing: CancellationError())
         resumeModelCommandOwnerCountWaitersIfNeeded()
     }
 
@@ -1323,16 +1336,12 @@ package actor ConnectionCore {
         )
     }
 
-    private func modelCommandFailure(
+    private func finishModelCommand(
         _ operationID: UInt64,
-        fallback: any Swift.Error
-    ) -> any Swift.Error {
-        modelCommandTasks[operationID]?.failureOverride?.error ?? fallback
-    }
-
-    private func finishModelCommand(_ operationID: UInt64) {
+        fallback: Result<ProtocolCommand.Result, any Swift.Error>
+    ) -> Result<ProtocolCommand.Result, any Swift.Error> {
         guard let task = modelCommandTasks.removeValue(forKey: operationID) else {
-            return
+            return fallback
         }
         if let ownership = task.pendingReplyOwnership,
            let pending = replyStore.removePendingReply(ownership.key) {
@@ -1341,34 +1350,9 @@ package actor ConnectionCore {
                 "A model command task attempted to remove a reply owned by another purpose."
             )
         }
-        if let waiterID = modelCommandReadinessWaiters.first(where: {
-            $0.value.operationID == operationID
-        })?.key,
-           let waiter = modelCommandReadinessWaiters.removeValue(forKey: waiterID) {
-            waiter.continuation.resume(throwing: CancellationError())
-        }
+        task.readinessSignal?.fulfill(.failure(CancellationError()))
         resumeModelCommandOwnerCountWaitersIfNeeded()
-    }
-
-    private func cancelModelCommand(_ operationID: UInt64) async {
-        guard var commandTask = modelCommandTasks[operationID] else {
-            return
-        }
-        commandTask.failureOverride = .cancelled
-        modelCommandTasks[operationID] = commandTask
-        if let waiterID = modelCommandReadinessWaiters.first(where: {
-            $0.value.operationID == operationID
-        })?.key,
-           let waiter = modelCommandReadinessWaiters.removeValue(forKey: waiterID) {
-            waiter.continuation.resume(throwing: CancellationError())
-        }
-        if let ownership = commandTask.pendingReplyOwnership,
-           let pending = replyStore.removePendingReply(ownership.key) {
-            precondition(pending.purpose == ownership.purpose)
-            pending.promise.fulfill(.failure(CancellationError()))
-        }
-        commandTask.task.cancel()
-        resumeModelCommandOwnerCountWaitersIfNeeded()
+        return task.control.resolve(fallback)
     }
 
     private func requiredModelDomain(for domain: ProtocolDomain) -> ModelDomain? {
@@ -1433,18 +1417,11 @@ package actor ConnectionCore {
                   shouldInvalidate(commandTask) else {
                 continue
             }
-            commandTask.failureOverride = failureOverride
+            commandTask.control.failFromOwner(failureOverride)
+            let readinessSignal = commandTask.readinessSignal
+            commandTask.readinessSignal = nil
             modelCommandTasks[operationID] = commandTask
-
-            let waiterIDs = modelCommandReadinessWaiters.compactMap { waiterID, waiter in
-                waiter.operationID == operationID ? waiterID : nil
-            }
-            for waiterID in waiterIDs {
-                guard let waiter = modelCommandReadinessWaiters.removeValue(forKey: waiterID) else {
-                    continue
-                }
-                waiter.continuation.resume(throwing: failureOverride.error)
-            }
+            readinessSignal?.fulfill(.failure(failureOverride.error))
 
             if let ownership = commandTask.pendingReplyOwnership,
                let pending = replyStore.removePendingReply(ownership.key) {
@@ -1459,8 +1436,9 @@ package actor ConnectionCore {
                     )
                 )
             }
-            commandTask.task.cancel()
-            effects.modelCommandTasksToAwait.append(commandTask.task)
+            if let task = commandTask.control.task {
+                effects.modelCommandTasksToAwait.append(task)
+            }
         }
         resumeModelCommandOwnerCountWaitersIfNeeded()
         return effects
@@ -1564,19 +1542,26 @@ package actor ConnectionCore {
         }
     }
 
+    package func startModelCommandForTesting(
+        _ command: ProtocolCommand,
+        authorization: ConnectionModelCommandAuthorization
+    ) throws -> Task<ProtocolCommand.Result, any Swift.Error> {
+        try beginModelCommand(command, authorization: authorization).task
+    }
+
     package func modelCommandOwnerCountForTesting() -> Int {
         modelCommandTasks.count
     }
 
     package func modelCommandReadinessWaiterCountForTesting() -> Int {
-        modelCommandReadinessWaiters.count
+        modelCommandTasks.values.count { $0.readinessSignal != nil }
     }
 
     package func waitForModelCommandReadinessWaiterCountForTesting(
         _ expectedCount: Int
     ) async {
         precondition(expectedCount >= 0)
-        guard modelCommandReadinessWaiters.count != expectedCount else {
+        guard modelCommandReadinessWaiterCountForTesting() != expectedCount else {
             return
         }
         await withCheckedContinuation { continuation in
@@ -1599,7 +1584,7 @@ package actor ConnectionCore {
         }
         modelCommandOwnerCountWaiters = pending
 
-        let readinessCount = modelCommandReadinessWaiters.count
+        let readinessCount = modelCommandReadinessWaiterCountForTesting()
         var pendingReadiness: [(
             expectedCount: Int,
             continuation: CheckedContinuation<Void, Never>
@@ -4764,22 +4749,21 @@ package actor ConnectionCore {
             validateReplyOwnership(pending, key: key)
         }
         let pendingReplies = Array(pendingReplyRecords.values)
-        let readinessWaiters = modelCommandReadinessWaiters.values
-        modelCommandReadinessWaiters.removeAll()
-        for waiter in readinessWaiters {
-            waiter.continuation.resume(throwing: transportError)
-        }
-        resumeModelCommandOwnerCountWaitersIfNeeded()
         var runningModelCommandTasks: [Task<ProtocolCommand.Result, any Swift.Error>] = []
         for operationID in modelCommandTasks.keys.sorted() {
             guard var commandTask = modelCommandTasks[operationID] else {
                 continue
             }
-            commandTask.failureOverride = .terminal(transportError)
+            commandTask.control.failFromOwner(.terminal(transportError))
+            let readinessSignal = commandTask.readinessSignal
+            commandTask.readinessSignal = nil
             modelCommandTasks[operationID] = commandTask
-            commandTask.task.cancel()
-            runningModelCommandTasks.append(commandTask.task)
+            readinessSignal?.fulfill(.failure(transportError))
+            if let task = commandTask.control.task {
+                runningModelCommandTasks.append(task)
+            }
         }
+        resumeModelCommandOwnerCountWaitersIfNeeded()
         let runningCapabilityTasks = capabilityTasks.values.map(\.task)
         capabilityTasks.removeAll()
         for task in runningCapabilityTasks {
