@@ -114,9 +114,9 @@ package final class NetworkPanelModel {
         activeResourceFilters = []
     }
 
-    package func clearRequests() {
+    package func clearRequests() async {
         selectedRequestID = nil
-        context.clearNetworkRequests()
+        await context.clearNetworkRequests()
     }
 
     package func fetchResponseBodyIfNeeded(for request: NetworkRequest) {

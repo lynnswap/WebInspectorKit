@@ -1019,7 +1019,7 @@ public final class WebInspectorModelContext {
     )
         async throws -> WebInspectorFetchedResults<ConsoleMessage>
     public func networkRequest(id: NetworkRequest.ID) throws -> NetworkRequest?
-    public func clearNetworkRequests() throws
+    public nonisolated(nonsending) func clearNetworkRequests() async
     public nonisolated(nonsending) func clearConsoleMessages() async throws
     public nonisolated(nonsending) func responseBody(
         for request: NetworkRequest
@@ -1270,15 +1270,19 @@ paths:
 ```swift
 public struct NetworkQuery: Sendable, Equatable {
     public var search: String?
-    public var resourceCategories: Set<NetworkRequest.ResourceCategory>?
+    public var resourceCategories: Set<NetworkRequest.ResourceCategory>
+    public var methods: Set<String>
     public var sort: NetworkSort
+    public var section: NetworkSection?
     public var offset: Int
     public var limit: Int?
 
     public init(
         search: String? = nil,
-        resourceCategories: Set<NetworkRequest.ResourceCategory>? = nil,
+        resourceCategories: Set<NetworkRequest.ResourceCategory> = [],
+        methods: Set<String> = [],
         sort: NetworkSort = .requestTimeDescending,
+        section: NetworkSection? = nil,
         offset: Int = 0,
         limit: Int? = nil
     )
@@ -1287,6 +1291,35 @@ public struct NetworkQuery: Sendable, Equatable {
 public enum NetworkSort: Sendable, Equatable {
     case requestTimeAscending
     case requestTimeDescending
+}
+
+public enum NetworkSection: Sendable, Equatable {
+    case method
+}
+
+public struct ConsoleQuery: Sendable, Equatable {
+    public var levels: Set<Console.Level>
+    public var sort: ConsoleSort
+    public var section: ConsoleSection?
+    public var offset: Int
+    public var limit: Int?
+
+    public init(
+        levels: Set<Console.Level> = [],
+        sort: ConsoleSort = .insertionAscending,
+        section: ConsoleSection? = nil,
+        offset: Int = 0,
+        limit: Int? = nil
+    )
+}
+
+public enum ConsoleSort: Sendable, Equatable {
+    case insertionAscending
+    case insertionDescending
+}
+
+public enum ConsoleSection: Sendable, Equatable {
+    case level
 }
 
 public struct WebInspectorFetchSection<Model: Identifiable>: Identifiable {
@@ -1343,8 +1376,11 @@ public extension WebInspectorFetchedResults where Model == ConsoleMessage {
 }
 ```
 
-`ConsoleQuery` follows the same closed pattern with supported message filters,
-ordering, and grouping. `WebInspectorFetchedResults` stores items, sections,
+Empty Network category/method sets and an empty Console level set mean “all.”
+Query initializers normalize an empty or whitespace-only Network search to
+`nil`, and fail fast for negative offsets or limits. Unsupported predicates,
+sort keys, and sections are unrepresentable.
+`WebInspectorFetchedResults` stores items, sections,
 snapshot, revision, and its concrete query in one private state value and
 replaces that value once per publication. Its public properties are computed
 projections, so Observation cannot expose a mixed revision/snapshot state.
@@ -1383,30 +1419,77 @@ tells the consumer to use the full newest snapshot, while the union preserves
 all applicable cell reconfiguration work. Delivery never relies on a second
 `AsyncStream.Continuation.yield` racing to replace an already-visible element.
 
-The existing `NetworkRequestIndex` actor remains the off-owner query/diff
-owner and is improved rather than replaced. It consumes compact Sendable record
-changes, maintains registered query membership/order, and returns identity
-snapshots and deltas; query replacement may perform a full scan on that actor,
-but a live insert must not dereference or filter every identity model on its
-owner actor.
-The index is also the sole owner of each identity's last mutation sequence.
-Replace and upsert operations enter one sequence-keyed queue; the index drains
-only the next contiguous operation, and each caller waits until its operation
-has been applied. Cross-actor job scheduling therefore cannot create a hole in
-the scalar high-water checkpoint.
-Every result keeps its own successfully applied index checkpoint, and a delta
-contains all still-visible identities changed after that checkpoint. Therefore,
-if an overlapping query is discarded because a newer index sequence arrived,
-the next delta recovers its property-only reconfiguration work instead of only
-reporting the mutation that happened to trigger the newer query. Query
-replacement and reset establish the checkpoint explicitly; stale or duplicate
-deltas cannot advance it.
+The existing `NetworkRequestIndex` actor remains the off-owner query/diff owner
+and is improved rather than replaced. It consumes compact Sendable record
+changes and owns each registered query's filter, membership, order, section,
+window, generation, and last mutation sequence. `NetworkRequestStore` owns model
+identity resolution and weak result registration; neither the Store nor the
+caller actor evaluates a full model graph to create or replace a query.
+
+Store mutations allocate one scalar sequence and submit exactly one replace or
+upsert operation. The index drains only the next contiguous
+sequence, so cross-actor scheduling cannot create a checkpoint hole. Result
+creation first records an initializing `(registrationID, generation)` in the
+Store and passes the current minimum mutation sequence to the index. After the
+index drains through that sequence, it installs the registration and computes
+its initial compact projection in the same actor turn. Later projections that
+reach the Store before result creation resumes coalesce to the newest complete
+generation/sequence. The Store installs the initial projection plus that
+pending state into one `WebInspectorFetchedResults` state value, adds the weak
+live registration, and only then returns the result.
+
+Query replacement uses an index-owned two-phase candidate. The old active query
+continues receiving mutations while the candidate scans. Cancellation or
+supersession before candidate commit discards only the candidate. The Store
+commits only its newest requested generation; once the index commits that
+generation, the Store completes one atomic result publication even if the
+calling task is subsequently cancelled. Mutations between index commit and
+owner publication coalesce into that generation's pending complete projection.
+Stale generations never publish and no retry-until-stable loop or later
+mutation is required for convergence.
+
+Each result owns an immutable registration lifetime token. The Store retains the
+result weakly and the index retains the token weakly, so dropping the result
+immediately makes the registration inactive without starting an unstructured
+cleanup task. Every structured index entry prunes inactive registrations before
+query work. Network clear and Console clear/reset are asynchronous boundaries:
+they publish an index source-epoch reset and all resulting empty/replacement
+states before returning or completing feed application.
+
+Lifecycle transitions split that reset into a synchronous semantic prepare and
+an asynchronous index finish. `start` clears the prior Network attachment,
+detach clears all attachment-backed state, and a committed-page transition
+clears DOM, Runtime, and Console state in the transition's actor turn. Legacy
+and concrete results become empty in that same turn; only the compact index
+source-epoch reset is awaited afterward. A destroyed current-page route
+intentionally keeps its last DOM snapshot visible during the bootstrap grace
+period, but clears Runtime and
+Console stream state immediately. Once a replacement is obtained, DOM resets
+before retarget enablement and the already-cleared streams are not cleared a
+second time, so early replacement events cannot be erased.
+
 The facade's result-creation methods are `async` so their first filtered/sorted
 snapshot is complete before return without doing that scan on the owner actor.
 Console receives the same internal index boundary. Newest-one delivery caps
 each result's queued topology state at one self-contained snapshot. Benchmarks
 and operation-count tests at 10,000 records guard Network and Console initial
 query, live insert/update, query replacement, and a stalled subscriber.
+
+Migration sequencing keeps `WebInspectorFetchDescriptor`, its Context overloads,
+and the legacy predicate/key-path planners only while repository consumers move
+to these concrete APIs. They remain compatibility build paths in the first query
+core and UI commits and are deleted together in the third query commit. During
+that compatibility window, a concrete-query result's inherited
+`fetchDescriptor` is an inert empty descriptor, not a second query source of
+truth. Descriptor-backed results accept only `updateFetchDescriptor`, while
+results created by `networkRequests(matching:)` or `consoleMessages(matching:)`
+accept only their domain `update(_:)`; both mismatches fail before either owner
+mutates. The third query commit removes the descriptor factories, descriptor
+update path, inherited descriptor/section properties, mutable request builder,
+and legacy planners once repository and Contract consumers no longer reference
+any of them. Nonoptional constrained `query` properties shown above are added in
+that same deletion commit, when every surviving result has a concrete query
+origin.
 
 ### Runtime object lifetime
 

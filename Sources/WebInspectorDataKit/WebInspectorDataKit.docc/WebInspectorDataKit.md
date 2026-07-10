@@ -65,6 +65,30 @@ DOM edits, fetched-results style collection updates, or derived DOM tree
 snapshots. Reach for WebInspectorProxyKit when you need direct typed protocol
 access with no model layer.
 
+Create live Network and Console collections with their closed query values. The
+index actor evaluates filters, ordering, sections, and windows; the context's
+owner actor only resolves the identities in the published window:
+
+```swift
+let requests = try await context.networkRequests(matching: NetworkQuery(
+    search: "api.example.com",
+    resourceCategories: [.xhrFetch],
+    methods: ["GET", "POST"],
+    sort: .requestTimeDescending,
+    section: .method,
+    limit: 100
+))
+
+try await requests.update(NetworkQuery(
+    resourceCategories: [.script],
+    sort: .requestTimeAscending
+))
+
+for await update in requests.updates() {
+    apply(update)
+}
+```
+
 ## Topics
 
 ### Creating a Model Context
@@ -83,6 +107,12 @@ access with no model layer.
 
 - ``NetworkRequest``
 - ``ConsoleMessage``
+- ``NetworkQuery``
+- ``NetworkSort``
+- ``NetworkSection``
+- ``ConsoleQuery``
+- ``ConsoleSort``
+- ``ConsoleSection``
 - ``WebInspectorFetchRequest``
 - ``WebInspectorFetchedResults``
 - ``WebInspectorFetchedResultsUpdate``

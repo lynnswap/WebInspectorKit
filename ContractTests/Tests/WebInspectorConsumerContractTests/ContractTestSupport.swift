@@ -197,14 +197,34 @@ actor ContractDataKitActor {
             context.fetchedResults(sectionBy: \.method)
         let sectionedConsole: WebInspectorFetchedResults<ConsoleMessage> =
             context.fetchedResults(sectionBy: \.level)
+        let concreteRequests = try await context.networkRequests(matching: NetworkQuery(
+            search: "  contract  ",
+            resourceCategories: [.xhrFetch],
+            methods: ["GET"],
+            sort: .requestTimeAscending,
+            section: .method,
+            offset: 0,
+            limit: 10
+        ))
+        let concreteConsole = try await context.consoleMessages(matching: ConsoleQuery(
+            levels: [Console.Level(rawValue: "warning")],
+            sort: .insertionDescending,
+            section: .level,
+            offset: 0,
+            limit: 10
+        ))
         #expect(requestResults.items.isEmpty)
         #expect(consoleResults.items.isEmpty)
         #expect(sectionedRequests.sections.isEmpty)
         #expect(sectionedConsole.sections.isEmpty)
+        #expect(concreteRequests.items.isEmpty)
+        #expect(concreteConsole.items.isEmpty)
         #expect(requestResults.snapshot.itemIDs.isEmpty)
         #expect(consoleResults.snapshot.itemIDs.isEmpty)
         _ = requestResults.updates()
         _ = consoleResults.updates()
+        try await concreteRequests.update(NetworkQuery(sort: .requestTimeDescending))
+        try await concreteConsole.update(ConsoleQuery(sort: .insertionAscending))
         #expect(context.state == .attached)
 
         let root = try #require(context.rootNode)
@@ -225,7 +245,7 @@ actor ContractDataKitActor {
         #expect(context.selectedNode === root)
         context.select(nil)
         context.selectContext(nil)
-        context.clearNetworkRequests()
+        await context.clearNetworkRequests()
         #expect(context.selectedNode == nil)
         #expect(context.selectedContext == nil)
     }

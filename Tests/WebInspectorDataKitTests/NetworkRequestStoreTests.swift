@@ -51,7 +51,7 @@ func networkRequestStoreOwnsIdentityOrderAndClearEpoch() async throws {
     #expect(first.statusCode == 200)
     #expect(store.collectionState.requestCount == 2)
 
-    store.clear(isolation: MainActor.shared)
+    await store.clear(isolation: MainActor.shared)
 
     let clearedFirst = store.request(forProxyID: firstProxyID, isolation: MainActor.shared)
     let clearedSecond = store.request(forProxyID: secondProxyID, isolation: MainActor.shared)

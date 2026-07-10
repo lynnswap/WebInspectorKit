@@ -8,7 +8,9 @@ package struct NetworkListOverflowMenuView: View {
 
     package var body: some View {
         Button(role: .destructive) {
-            model.clearRequests()
+            Task {
+                await model.clearRequests()
+            }
         } label: {
             Label(String(localized: "network.controls.clear", bundle: WebInspectorUILocalization.bundle), systemImage: "trash")
         }

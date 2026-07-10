@@ -239,9 +239,17 @@ public final class WebInspectorContext {
         state = .attaching
         notifyStatusChanged()
         teardownError = nil
-        resetNetworkModelsForNewAttachment(isolation: isolation)
-        startupTask = Task { [weak self, previousStartupTask, previousCurrentPageCleanupTask] in
+        let networkReset = networkRequests.prepareResetForNewAttachment(isolation: isolation)
+        let networkStore = networkRequests
+        startupTask = Task { [
+            weak self,
+            networkStore,
+            networkReset,
+            previousStartupTask,
+            previousCurrentPageCleanupTask,
+        ] in
             _ = isolation
+            await networkStore.finishQueryIndexReset(networkReset, isolation: isolation)
             await previousStartupTask?.value
             await previousCurrentPageCleanupTask?.value
             guard Task.isCancelled == false else {
@@ -299,9 +307,9 @@ public final class WebInspectorContext {
     }
 
     /// Clears retained Network requests and emits reset transactions.
-    public func clearNetworkRequests(isolation: isolated (any Actor) = #isolation) {
+    public func clearNetworkRequests(isolation: isolated (any Actor) = #isolation) async {
         requireOwner(isolation)
-        networkRequests.clear(isolation: isolation)
+        await networkRequests.clear(isolation: isolation)
     }
 
     /// Returns the registered Console message for an identifier.
@@ -718,6 +726,64 @@ public final class WebInspectorContext {
         )
     }
 
+    /// Creates live Network request results for a closed concrete query.
+    ///
+    /// The returned result already contains an atomic initial snapshot. Query
+    /// evaluation, ordering, sectioning, and windowing run on the Network index
+    /// actor rather than this context's owner actor.
+    public func networkRequests(
+        matching query: NetworkQuery = NetworkQuery(),
+        isolation: isolated (any Actor) = #isolation
+    ) async throws -> WebInspectorFetchedResults<NetworkRequest> {
+        requireOwner(isolation)
+        return try await networkRequests.results(
+            matching: query,
+            modelContext: self,
+            isolation: isolation
+        )
+    }
+
+    /// Creates live Console message results for a closed concrete query.
+    ///
+    /// The returned result already contains an atomic initial snapshot. Query
+    /// filtering, ordering, sectioning, and windowing run on the Console index
+    /// actor rather than this context's owner actor.
+    public func consoleMessages(
+        matching query: ConsoleQuery = ConsoleQuery(),
+        isolation: isolated (any Actor) = #isolation
+    ) async throws -> WebInspectorFetchedResults<ConsoleMessage> {
+        requireOwner(isolation)
+        return try await consoleMessages.results(
+            matching: query,
+            modelContext: self,
+            isolation: isolation
+        )
+    }
+
+    func updateNetworkQuery(
+        _ query: NetworkQuery,
+        for results: WebInspectorFetchedResults<NetworkRequest>,
+        isolation: isolated (any Actor) = #isolation
+    ) async throws {
+        requireOwner(isolation)
+        guard results.modelContext === self else {
+            preconditionFailure("Network fetched results are not registered in this WebInspectorContext.")
+        }
+        try await networkRequests.update(query, for: results, isolation: isolation)
+    }
+
+    func updateConsoleQuery(
+        _ query: ConsoleQuery,
+        for results: WebInspectorFetchedResults<ConsoleMessage>,
+        isolation: isolated (any Actor) = #isolation
+    ) async throws {
+        requireOwner(isolation)
+        guard results.modelContext === self else {
+            preconditionFailure("Console fetched results are not registered in this WebInspectorContext.")
+        }
+        try await consoleMessages.update(query, for: results, isolation: isolation)
+    }
+
     /// Creates observable fetched results for a supported model type.
     public func fetchedResults<Model: WebInspectorFetchableModel>(
         for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
@@ -1017,7 +1083,7 @@ public final class WebInspectorContext {
         currentPage = nil
         advanceCurrentPageGeneration(isolation: isolation)
         domState.advanceDocumentEpoch(isolation: isolation)
-        resetAttachmentBackedModels(isolation: isolation)
+        await resetAttachmentBackedModels(isolation: isolation)
         teardownError = nil
         teardownError = await disableEnabledDomains(isolation: isolation)
         transition(to: .detached)
@@ -1045,7 +1111,7 @@ public final class WebInspectorContext {
             guard isCurrentPageGeneration(generation, isolation: isolation) else {
                 return
             }
-            resetReplayBackedModelsBeforeEnable(isolation: isolation)
+            await resetReplayBackedModelsBeforeEnable(isolation: isolation)
             try await enableInspectorTracking(on: target, generation: generation, isolation: isolation)
             guard Task.isCancelled == false else {
                 await disableEnabledDomainsAfterCancellation(isolation: isolation)
@@ -1264,26 +1330,42 @@ public final class WebInspectorContext {
 
     private func resetReplayBackedModelsBeforeEnable(
         isolation: isolated (any Actor)
-    ) {
+    ) async {
         runtimeState.reset(isolation: isolation)
-        consoleMessages.resetForReplay(modelContext: self, isolation: isolation)
+        await consoleMessages.resetForReplay(modelContext: self, isolation: isolation)
     }
 
-    private func resetNetworkModelsForNewAttachment(
+    private func prepareCurrentPageStreamReset(
         isolation: isolated (any Actor)
-    ) {
-        networkRequests.resetForNewAttachment(isolation: isolation)
-    }
-
-    private func resetCurrentPageLifecycleModels(isolation: isolated (any Actor)) {
-        resetDOM(isolation: isolation)
+    ) -> ConsoleMessageStore.QueryIndexReset {
         runtimeState.reset(isolation: isolation)
-        clearConsoleMessages(isolation: isolation)
+        let preparation = consoleMessages.prepareClearForLifecycle(
+            modelContext: self,
+            isolation: isolation
+        )
+        applyConsoleMessageEffects(preparation.effects, isolation: isolation)
+        return preparation.queryIndexReset
     }
 
-    private func resetAttachmentBackedModels(isolation: isolated (any Actor)) {
-        resetCurrentPageLifecycleModels(isolation: isolation)
-        resetNetworkModelsForNewAttachment(isolation: isolation)
+    private func prepareCurrentPageLifecycleReset(
+        isolation: isolated (any Actor)
+    ) -> ConsoleMessageStore.QueryIndexReset {
+        resetDOM(isolation: isolation)
+        return prepareCurrentPageStreamReset(isolation: isolation)
+    }
+
+    private func finishCurrentPageLifecycleReset(
+        _ reset: ConsoleMessageStore.QueryIndexReset,
+        isolation: isolated (any Actor)
+    ) async {
+        await consoleMessages.finishQueryIndexReset(reset, isolation: isolation)
+    }
+
+    private func resetAttachmentBackedModels(isolation: isolated (any Actor)) async {
+        let consoleReset = prepareCurrentPageLifecycleReset(isolation: isolation)
+        let networkReset = networkRequests.prepareResetForNewAttachment(isolation: isolation)
+        await finishCurrentPageLifecycleReset(consoleReset, isolation: isolation)
+        await networkRequests.finishQueryIndexReset(networkReset, isolation: isolation)
     }
 
     private func disableEnabledDomains(
@@ -1542,6 +1624,8 @@ public final class WebInspectorContext {
         case .failed, .detached:
             return
         case .attaching, .attached:
+            // A terminal failure preserves the last complete model snapshot for
+            // diagnosis. Explicit stop/detach owns semantic model clearing.
             transition(to: .failed(error))
         }
     }
@@ -1716,16 +1800,24 @@ extension WebInspectorContext {
         documentReloadTask = nil
         let generation = advanceCurrentPageGeneration(isolation: isolation)
         domState.advanceDocumentEpoch(isolation: isolation)
-        resetCurrentPageLifecycleModels(isolation: isolation)
         cancelConsoleObjectGroupReleaseTasks()
         for task in styleToggleTasks.values {
             task.cancel()
         }
         styleToggleTasks = [:]
 
-        currentPageRetargetTask = Task { [weak self, refreshedTarget, generation] in
+        let lifecycleReset = prepareCurrentPageLifecycleReset(isolation: isolation)
+
+        currentPageRetargetTask = Task { [weak self, refreshedTarget, generation, lifecycleReset] in
             _ = isolation
-            await self?.retargetCurrentPage(refreshedTarget, generation: generation, isolation: isolation)
+            guard let self else {
+                return
+            }
+            await self.finishCurrentPageLifecycleReset(lifecycleReset, isolation: isolation)
+            guard self.isCurrentPageGeneration(generation, isolation: isolation) else {
+                return
+            }
+            await self.retargetCurrentPage(refreshedTarget, generation: generation, isolation: isolation)
         }
     }
 
@@ -1852,10 +1944,19 @@ extension WebInspectorContext {
         cancelConsoleObjectGroupReleaseTasks()
         let generation = advanceCurrentPageGeneration(isolation: isolation)
         domState.advanceDocumentEpoch(isolation: isolation)
+        let streamReset = prepareCurrentPageStreamReset(isolation: isolation)
 
-        currentPageRetargetTask = Task { [weak self, generation] in
+        currentPageRetargetTask = Task { [weak self, generation, streamReset] in
             _ = isolation
-            await self?.retargetDestroyedCurrentPage(generation: generation, isolation: isolation)
+            guard let self else {
+                return
+            }
+            await self.finishCurrentPageLifecycleReset(streamReset, isolation: isolation)
+            guard Task.isCancelled == false,
+                  self.isCurrentPageGeneration(generation, isolation: isolation) else {
+                return
+            }
+            await self.retargetDestroyedCurrentPage(generation: generation, isolation: isolation)
         }
     }
 
@@ -1880,7 +1981,7 @@ extension WebInspectorContext {
                 // page, so stop presenting the destroyed page's state and wait
                 // for the next page target to appear.
                 currentPage = nil
-                resetCurrentPageLifecycleModels(isolation: isolation)
+                resetDOM(isolation: isolation)
                 if state == .attached {
                     transition(to: .attaching)
                 }
@@ -1894,7 +1995,7 @@ extension WebInspectorContext {
                 return
             }
             currentPage = replacement
-            resetCurrentPageLifecycleModels(isolation: isolation)
+            resetDOM(isolation: isolation)
             await retargetCurrentPage(replacement, generation: generation, isolation: isolation)
         } catch is CancellationError {
             return
@@ -2591,14 +2692,6 @@ extension WebInspectorContext {
         case nil:
             break
         }
-    }
-
-    private func clearConsoleMessages(isolation: isolated (any Actor)) {
-        let effects = consoleMessages.clearForLifecycle(
-            modelContext: self,
-            isolation: isolation
-        )
-        applyConsoleMessageEffects(effects, isolation: isolation)
     }
 
     private func applyConsoleMessageEffects(

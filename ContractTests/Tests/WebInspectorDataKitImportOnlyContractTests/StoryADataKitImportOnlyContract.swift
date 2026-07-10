@@ -14,6 +14,18 @@ private actor DataKitImportOnlyActor {
             context.fetchedResults(sectionBy: \.method)
         let messagesByLevel: WebInspectorFetchedResults<ConsoleMessage> =
             context.fetchedResults(sectionBy: \.level)
+        let concreteRequests = try await context.networkRequests(matching: NetworkQuery(
+            search: "  import-only  ",
+            methods: ["GET"],
+            sort: .requestTimeDescending,
+            section: .method,
+            limit: 10
+        ))
+        let concreteMessages = try await context.consoleMessages(matching: ConsoleQuery(
+            sort: .insertionDescending,
+            section: .level,
+            limit: 10
+        ))
         _ = context.state
         _ = context.rootNode?.children
         _ = context.selectedNode?.attributes
@@ -22,7 +34,7 @@ private actor DataKitImportOnlyActor {
         _ = context.selectedNode?.elementStyles?.sections.first?.style.properties.first?.name
         _ = context.selectedNode?.elementStyles?.computedProperties.first?.value
         _ = context.isElementPickerEnabled
-        context.clearNetworkRequests()
+        await context.clearNetworkRequests()
         let treeController = try await context.treeController()
         let treeSnapshot: DOMTreeSnapshot = treeController.snapshot
         _ = treeSnapshot.rootNodeID
@@ -58,6 +70,8 @@ private actor DataKitImportOnlyActor {
         )
         _ = requests.revision
         _ = requests.updates()
+        _ = concreteRequests.snapshot
+        try await concreteRequests.update(NetworkQuery())
         _ = requestTransaction.hasChanges
         _ = messages.items.first?.text
         _ = messages.items.first?.parameters.first?.description
@@ -65,6 +79,8 @@ private actor DataKitImportOnlyActor {
         _ = messages.snapshot
         _ = messages.revision
         _ = messages.updates()
+        _ = concreteMessages.snapshot
+        try await concreteMessages.update(ConsoleQuery())
         _ = try await context.evaluate("1 + 1").object.description
 
         let request = NetworkRequestSnapshot(url: "https://example.com", method: "GET")

@@ -550,7 +550,7 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(didEnableMenu)
 
-        context.clearNetworkRequests()
+        await context.clearNetworkRequests()
 
         let didDisableMenu = await waitUntilRendered(in: viewController) {
             viewController.isDetailModeControlEnabledForTesting == false
@@ -1743,8 +1743,8 @@ struct NetworkDetailViewControllerTests {
         #expect(didPush)
         await waitForNavigationTransitionToFinish(in: navigationController)
 
-        withUIKitAnimationsDisabled {
-            context.clearNetworkRequests()
+        await withUIKitAnimationsDisabled {
+            await context.clearNetworkRequests()
         }
         #expect(model.selectedRequestID == request.id)
         #expect(model.selectedRequest == nil)
@@ -2361,6 +2361,13 @@ struct NetworkDetailViewControllerTests {
         UIView.setAnimationsEnabled(false)
         defer { UIView.setAnimationsEnabled(wereAnimationsEnabled) }
         return body()
+    }
+
+    private func withUIKitAnimationsDisabled<T>(_ body: () async -> T) async -> T {
+        let wereAnimationsEnabled = UIView.areAnimationsEnabled
+        UIView.setAnimationsEnabled(false)
+        defer { UIView.setAnimationsEnabled(wereAnimationsEnabled) }
+        return await body()
     }
 
     private func localizedResourceString(_ key: String, locale: String) -> String? {

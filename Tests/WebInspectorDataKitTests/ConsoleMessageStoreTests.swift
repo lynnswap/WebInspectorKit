@@ -165,7 +165,7 @@ func consoleMessageIndexDrainsMutationsInSequenceOrder() async throws {
         ConsoleMessageRecordInput(message: first, orderIndex: 0),
         sequence: 1
     )
-    await secondMutation.value
+    _ = await secondMutation.value
 
     let delta = await index.delta(
         plan: ConsoleMessageQueryPlan(descriptor: WebInspectorFetchDescriptor()),

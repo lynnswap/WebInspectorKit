@@ -79,7 +79,7 @@ func clearAvailabilityUsesUnfilteredRequestsWhenFiltersHideEveryRequest() async 
     #expect(model.displayRequestIDs.isEmpty)
     #expect(model.hasClearableRequests)
 
-    model.clearRequests()
+    await model.clearRequests()
 
     #expect(model.hasClearableRequests == false)
     #expect(await observedValues.waitUntilValue(false))
@@ -139,7 +139,7 @@ func selectedRequestInvalidatesWhenUnfilteredRequestDisappears() async throws {
     #expect(model.displayRequestIDs.isEmpty)
     #expect(model.selectedRequest === request)
 
-    context.clearNetworkRequests()
+    await context.clearNetworkRequests()
 
     #expect(model.selectedRequestID == requestID)
     #expect(model.selectedRequest == nil)
@@ -660,7 +660,7 @@ func displayRequestsClearAfterReset() async throws {
 
     #expect(model.displayRequestIDs.count == 1)
 
-    context.clearNetworkRequests()
+    await context.clearNetworkRequests()
 
     #expect(model.displayRequestIDs.isEmpty)
 }
@@ -746,7 +746,7 @@ func clearRequestsClearsSelectionButPreservesDisplayCriteria() async throws {
     model.setSearchText("cdn")
     model.setResourceFilter(.script, enabled: true)
     model.selectRequest(context.registeredRequest(for: requestID))
-    model.clearRequests()
+    await model.clearRequests()
 
     #expect(model.selectedRequestID == nil)
     #expect(model.searchText == "cdn")

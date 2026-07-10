@@ -305,11 +305,17 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
     private struct State {
         var fetchDescriptor: WebInspectorFetchDescriptor<Model>
         var sectionBy: WebInspectorSectionDescriptor<Model>?
+        var networkQuery: NetworkQuery?
+        var consoleQuery: ConsoleQuery?
         var items: [Model]
         var sections: [WebInspectorFetchSection<Model>]
+        var modelsByID: [Model.ID: Model]
         var snapshot: WebInspectorFetchedResultsSnapshot<Model.ID>
         var revision: UInt64
         var topologyRevision: UInt64
+        var queryGeneration: UInt64?
+        var querySourceEpoch: UInt64?
+        var querySequence: UInt64
     }
 
     private var state: State
@@ -322,6 +328,8 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
     @ObservationIgnored private var consoleQueryPlan: ConsoleMessageQueryPlan?
     @ObservationIgnored private var consoleQueryState: ConsoleMessageQueryState?
     @ObservationIgnored private var consoleIndexSequence: UInt64
+    @ObservationIgnored private var queryRegistrationID: WebInspectorQueryRegistrationID?
+    @ObservationIgnored private var queryRegistrationLifetime: WebInspectorQueryRegistrationLifetime?
 
     /// The descriptor currently used by the results.
     public var fetchDescriptor: WebInspectorFetchDescriptor<Model> {
@@ -367,11 +375,17 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
         state = State(
             fetchDescriptor: fetchDescriptor,
             sectionBy: sectionBy,
+            networkQuery: nil,
+            consoleQuery: nil,
             items: items,
             sections: sections,
+            modelsByID: Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) }),
             snapshot: WebInspectorFetchedResultsSnapshot(sections: sections),
             revision: 0,
-            topologyRevision: 0
+            topologyRevision: 0,
+            queryGeneration: nil,
+            querySourceEpoch: nil,
+            querySequence: 0
         )
         self.modelContext = modelContext
         networkQueryPlan = nil
@@ -380,10 +394,181 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
         consoleQueryPlan = nil
         consoleQueryState = nil
         consoleIndexSequence = 0
+        queryRegistrationID = nil
+        queryRegistrationLifetime = nil
     }
 
     deinit {
         updateBroker.finish()
+    }
+
+    func installQueryRegistration(
+        id: WebInspectorQueryRegistrationID,
+        lifetime: WebInspectorQueryRegistrationLifetime
+    ) {
+        precondition(
+            queryRegistrationID == nil && queryRegistrationLifetime == nil,
+            "WebInspectorFetchedResults already owns a query registration."
+        )
+        queryRegistrationID = id
+        queryRegistrationLifetime = lifetime
+    }
+
+    var concreteQueryRegistrationID: WebInspectorQueryRegistrationID? {
+        queryRegistrationID
+    }
+
+    func nextConcreteQueryGeneration() -> UInt64 {
+        guard let queryRegistrationLifetime else {
+            preconditionFailure("WebInspectorFetchedResults has no concrete query registration lifetime.")
+        }
+        return queryRegistrationLifetime.nextGeneration()
+    }
+
+    func isCurrentConcreteQueryGeneration(_ generation: UInt64) -> Bool {
+        queryRegistrationLifetime?.isCurrent(generation: generation) == true
+    }
+
+    private func installInitialConcreteState(
+        networkQuery: NetworkQuery? = nil,
+        consoleQuery: ConsoleQuery? = nil,
+        generation: UInt64,
+        projection: WebInspectorIndexedQueryProjection<Model.ID>,
+        lookup: (Model.ID) -> Model?
+    ) {
+        precondition(
+            state.queryGeneration == nil,
+            "A concrete fetched-results initial state can only be installed once."
+        )
+        precondition(
+            (networkQuery == nil) != (consoleQuery == nil),
+            "A concrete fetched-results state must own exactly one query kind."
+        )
+        let resolved = resolve(projection.snapshot, reusing: [:], lookup: lookup)
+        state = State(
+            fetchDescriptor: state.fetchDescriptor,
+            sectionBy: nil,
+            networkQuery: networkQuery,
+            consoleQuery: consoleQuery,
+            items: resolved.items,
+            sections: resolved.sections,
+            modelsByID: resolved.modelsByID,
+            snapshot: projection.snapshot,
+            revision: 0,
+            topologyRevision: 0,
+            queryGeneration: generation,
+            querySourceEpoch: projection.sourceEpoch,
+            querySequence: projection.sequence
+        )
+    }
+
+    @discardableResult
+    private func applyConcreteProjection(
+        networkQuery: NetworkQuery? = nil,
+        consoleQuery: ConsoleQuery? = nil,
+        generation: UInt64,
+        projection: WebInspectorIndexedQueryProjection<Model.ID>,
+        isReplacement: Bool,
+        lookup: (Model.ID) -> Model?
+    ) -> Bool {
+        guard let currentGeneration = state.queryGeneration,
+              let currentSourceEpoch = state.querySourceEpoch else {
+            preconditionFailure("A concrete fetched-results projection requires an installed initial state.")
+        }
+        guard projection.sourceEpoch >= currentSourceEpoch else {
+            return false
+        }
+        guard generation >= currentGeneration else {
+            return false
+        }
+        if generation == currentGeneration {
+            guard projection.sourceEpoch >= currentSourceEpoch else {
+                return false
+            }
+            if projection.sourceEpoch == currentSourceEpoch,
+               projection.sequence <= state.querySequence {
+                return false
+            }
+        } else {
+            precondition(
+                isReplacement,
+                "A newer concrete query generation must publish as one replacement."
+            )
+        }
+
+        let resetsSource = projection.sourceEpoch != currentSourceEpoch
+        let shouldReset = isReplacement || resetsSource
+        let resolved = resolve(
+            projection.snapshot,
+            reusing: resetsSource ? [:] : state.modelsByID,
+            lookup: lookup
+        )
+        let visibleReconfigureIDs = projection.reconfigureItemIDs.intersection(
+            projection.snapshot.itemIDs
+        )
+        if shouldReset == false,
+           state.snapshot == projection.snapshot,
+           visibleReconfigureIDs.isEmpty {
+            state.querySourceEpoch = projection.sourceEpoch
+            state.querySequence = projection.sequence
+            return true
+        }
+        publish(
+            items: resolved.items,
+            sections: resolved.sections,
+            modelsByID: resolved.modelsByID,
+            snapshot: projection.snapshot,
+            networkQuery: networkQuery,
+            consoleQuery: consoleQuery,
+            queryGeneration: generation,
+            querySourceEpoch: projection.sourceEpoch,
+            querySequence: projection.sequence,
+            isReset: shouldReset,
+            updatedItemIDs: visibleReconfigureIDs
+        )
+        return true
+    }
+
+    private func resolve(
+        _ snapshot: WebInspectorFetchedResultsSnapshot<Model.ID>,
+        reusing existingModelsByID: [Model.ID: Model],
+        lookup: (Model.ID) -> Model?
+    ) -> (
+        items: [Model],
+        sections: [WebInspectorFetchSection<Model>],
+        modelsByID: [Model.ID: Model]
+    ) {
+        var modelsByID: [Model.ID: Model] = [:]
+        modelsByID.reserveCapacity(snapshot.itemIDs.count)
+        for id in snapshot.itemIDs {
+            if let existing = existingModelsByID[id] {
+                modelsByID[id] = existing
+                continue
+            }
+            guard let model = lookup(id) else {
+                preconditionFailure("A concrete fetched-results snapshot referenced an unregistered \(Model.self).")
+            }
+            modelsByID[id] = model
+        }
+        let items = snapshot.itemIDs.map { id in
+            guard let model = modelsByID[id] else {
+                preconditionFailure("A concrete fetched-results identity map lost a visible \(Model.self).")
+            }
+            return model
+        }
+        let sections = snapshot.sections.map { section in
+            WebInspectorFetchSection(
+                id: section.id,
+                title: section.title,
+                items: section.itemIDs.map { id in
+                    guard let model = modelsByID[id] else {
+                        preconditionFailure("A concrete fetched-results section lost a visible \(Model.self).")
+                    }
+                    return model
+                }
+            )
+        }
+        return (items, sections, modelsByID)
     }
 
     /// Returns an atomic bounded stream beginning with the current result state.
@@ -487,11 +672,24 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
         return sequence
     }
 
-    /// Replaces the fetch descriptor and updates the result contents.
+    /// Replaces the fetch descriptor and updates descriptor-backed result contents.
+    ///
+    /// Results created by ``WebInspectorContext/networkRequests(matching:isolation:)``
+    /// or ``WebInspectorContext/consoleMessages(matching:isolation:)`` have a
+    /// concrete query owner and must instead be updated with the matching
+    /// domain-specific `update(_:isolation:)` overload.
+    ///
+    /// - Precondition: This result was created by a `fetchedResults(for:)`
+    ///   overload rather than a concrete domain query API.
     public func updateFetchDescriptor(
         _ descriptor: WebInspectorFetchDescriptor<Model>,
         isolation: isolated (any Actor) = #isolation
     ) {
+        guard state.queryGeneration == nil else {
+            preconditionFailure(
+                "A concrete query result must be updated with update(_:isolation:), not updateFetchDescriptor(_:isolation:)."
+            )
+        }
         guard let modelContext else {
             preconditionFailure("WebInspectorFetchedResults is not registered in a WebInspectorContext.")
         }
@@ -501,8 +699,14 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
     private func publish(
         items: [Model],
         sections: [WebInspectorFetchSection<Model>],
+        modelsByID: [Model.ID: Model]? = nil,
         snapshot: WebInspectorFetchedResultsSnapshot<Model.ID>? = nil,
         fetchDescriptor: WebInspectorFetchDescriptor<Model>? = nil,
+        networkQuery: NetworkQuery? = nil,
+        consoleQuery: ConsoleQuery? = nil,
+        queryGeneration: UInt64? = nil,
+        querySourceEpoch: UInt64? = nil,
+        querySequence: UInt64? = nil,
         isReset: Bool = false,
         transaction suppliedTransaction: WebInspectorFetchedResultsTransaction<Model.ID>? = nil,
         updatedItemIDs: Set<Model.ID> = []
@@ -557,11 +761,17 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
         state = State(
             fetchDescriptor: fetchDescriptor ?? oldState.fetchDescriptor,
             sectionBy: oldState.sectionBy,
+            networkQuery: networkQuery ?? oldState.networkQuery,
+            consoleQuery: consoleQuery ?? oldState.consoleQuery,
             items: items,
             sections: sections,
+            modelsByID: modelsByID ?? Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) }),
             snapshot: newSnapshot,
             revision: revision,
-            topologyRevision: topologyRevision
+            topologyRevision: topologyRevision,
+            queryGeneration: queryGeneration ?? oldState.queryGeneration,
+            querySourceEpoch: querySourceEpoch ?? oldState.querySourceEpoch,
+            querySequence: querySequence ?? oldState.querySequence
         )
         updateBroker.yield(.transaction(
             revision: revision,
@@ -631,6 +841,56 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
 }
 
 extension WebInspectorFetchedResults where Model == NetworkRequest {
+    func installInitialNetworkQuery(
+        _ query: NetworkQuery,
+        generation: UInt64,
+        projection: NetworkRequestIndex.QueryProjection,
+        lookup: (NetworkRequest.ID) -> NetworkRequest?
+    ) {
+        installInitialConcreteState(
+            networkQuery: query,
+            generation: generation,
+            projection: projection,
+            lookup: lookup
+        )
+    }
+
+    @discardableResult
+    func applyNetworkQueryProjection(
+        _ projection: NetworkRequestIndex.QueryProjection,
+        query: NetworkQuery,
+        generation: UInt64,
+        isReplacement: Bool,
+        lookup: (NetworkRequest.ID) -> NetworkRequest?
+    ) -> Bool {
+        applyConcreteProjection(
+            networkQuery: query,
+            generation: generation,
+            projection: projection,
+            isReplacement: isReplacement,
+            lookup: lookup
+        )
+    }
+
+    /// Replaces this result's concrete Network query atomically.
+    ///
+    /// - Precondition: This result was created by
+    ///   ``WebInspectorContext/networkRequests(matching:isolation:)``.
+    public func update(
+        _ query: NetworkQuery,
+        isolation: isolated (any Actor) = #isolation
+    ) async throws {
+        guard queryRegistrationID != nil, state.queryGeneration != nil else {
+            preconditionFailure(
+                "A Network query can only update results created by networkRequests(matching:isolation:)."
+            )
+        }
+        guard let modelContext else {
+            preconditionFailure("WebInspectorFetchedResults is not registered in a WebInspectorContext.")
+        }
+        try await modelContext.updateNetworkQuery(query, for: self, isolation: isolation)
+    }
+
     var networkSnapshotForDelta: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID> {
         state.snapshot
     }
@@ -743,6 +1003,56 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
 }
 
 extension WebInspectorFetchedResults where Model == ConsoleMessage {
+    func installInitialConsoleQuery(
+        _ query: ConsoleQuery,
+        generation: UInt64,
+        projection: ConsoleMessageIndex.QueryProjection,
+        lookup: (ConsoleMessage.ID) -> ConsoleMessage?
+    ) {
+        installInitialConcreteState(
+            consoleQuery: query,
+            generation: generation,
+            projection: projection,
+            lookup: lookup
+        )
+    }
+
+    @discardableResult
+    func applyConsoleQueryProjection(
+        _ projection: ConsoleMessageIndex.QueryProjection,
+        query: ConsoleQuery,
+        generation: UInt64,
+        isReplacement: Bool,
+        lookup: (ConsoleMessage.ID) -> ConsoleMessage?
+    ) -> Bool {
+        applyConcreteProjection(
+            consoleQuery: query,
+            generation: generation,
+            projection: projection,
+            isReplacement: isReplacement,
+            lookup: lookup
+        )
+    }
+
+    /// Replaces this result's concrete Console query atomically.
+    ///
+    /// - Precondition: This result was created by
+    ///   ``WebInspectorContext/consoleMessages(matching:isolation:)``.
+    public func update(
+        _ query: ConsoleQuery,
+        isolation: isolated (any Actor) = #isolation
+    ) async throws {
+        guard queryRegistrationID != nil, state.queryGeneration != nil else {
+            preconditionFailure(
+                "A Console query can only update results created by consoleMessages(matching:isolation:)."
+            )
+        }
+        guard let modelContext else {
+            preconditionFailure("WebInspectorFetchedResults is not registered in a WebInspectorContext.")
+        }
+        try await modelContext.updateConsoleQuery(query, for: self, isolation: isolation)
+    }
+
     var consoleSnapshotForDelta: WebInspectorFetchedResultsSnapshot<ConsoleMessage.ID> {
         state.snapshot
     }

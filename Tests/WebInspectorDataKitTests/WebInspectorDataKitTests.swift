@@ -1550,6 +1550,49 @@ func transportBackedStyleSheetTextEditRoutesToFrameTargetAndMarksUndo() async th
 
 @MainActor
 @Test
+func currentPageCommitClearsOldLifecycleStateBeforeAcceptingNewPageEvents() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (_, context) = try await startContext(runtime: runtime)
+    let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
+    let concreteResults = try await context.consoleMessages()
+    await context.apply(
+        .messageAdded(Console.Message(
+            source: Console.Source(rawValue: "console-api"),
+            level: Console.Level(rawValue: "log"),
+            text: "old page"
+        )),
+        targetID: .currentPage
+    )
+    try await waitUntil { results.items.map(\.text) == ["old page"] }
+    #expect(concreteResults.items.map(\.text) == ["old page"])
+
+    context.apply(.didCommitProvisionalTarget(WebInspectorTargetCommitLifecycle(
+        oldTargetID: .currentPage,
+        newTarget: WebInspectorLifecycleTarget(
+            id: .currentPage,
+            kind: .page,
+            frameID: FrameID("committed-main-frame"),
+            isProvisional: false,
+            pageBindingID: "committed-page"
+        )
+    )))
+
+    #expect(results.items.isEmpty)
+    #expect(concreteResults.items.isEmpty)
+    await context.apply(
+        .messageAdded(Console.Message(
+            source: Console.Source(rawValue: "console-api"),
+            level: Console.Level(rawValue: "log"),
+            text: "new page"
+        )),
+        targetID: .currentPage
+    )
+    #expect(results.items.map(\.text) == ["new page"])
+    #expect(concreteResults.items.map(\.text) == ["new page"])
+}
+
+@MainActor
+@Test
 func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
     let oldTargetID = ProtocolTarget.ID("page-old")
     let newTargetID = ProtocolTarget.ID("page-new")
@@ -1760,6 +1803,32 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
 
 @MainActor
 @Test
+func currentPageTargetDestroyedClearsStreamStateBeforeWaitingForReplacement() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (_, context) = try await startContext(runtime: runtime)
+    let oldRoot = context.rootNode
+    let legacyResults: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
+    let concreteResults = try await context.consoleMessages()
+    await context.apply(
+        .messageAdded(Console.Message(
+            source: Console.Source(rawValue: "console-api"),
+            level: Console.Level(rawValue: "log"),
+            text: "destroyed page"
+        )),
+        targetID: .currentPage
+    )
+    #expect(legacyResults.items.map(\.text) == ["destroyed page"])
+    #expect(concreteResults.items.map(\.text) == ["destroyed page"])
+
+    context.apply(.targetDestroyed(targetID: .currentPage))
+
+    #expect(context.rootNode === oldRoot)
+    #expect(legacyResults.items.isEmpty)
+    #expect(concreteResults.items.isEmpty)
+}
+
+@MainActor
+@Test
 func currentPageTargetDestroyedDuringRetargetDoesNotDetachOrClearNetwork() async throws {
     let oldTargetID = ProtocolTarget.ID("page-old")
     let newTargetID = ProtocolTarget.ID("page-new-after-destroy")
@@ -1894,6 +1963,8 @@ func startBeginsFreshNetworkAttachmentEpoch() async throws {
     try await waitUntil {
         networkResults.items.map(\.id) == [NetworkRequest.ID(staleRequestID)]
     }
+    let concreteNetworkResults = try await context.networkRequests()
+    #expect(concreteNetworkResults.items.map(\.id) == [NetworkRequest.ID(staleRequestID)])
 
     await enqueueDomainDisableReplies(on: runtime.backend)
     await enqueueStartupReplies(
@@ -1903,6 +1974,9 @@ func startBeginsFreshNetworkAttachmentEpoch() async throws {
 
     context.start()
 
+    #expect(networkResults.items.isEmpty)
+    #expect(concreteNetworkResults.items.isEmpty)
+    #expect(context.registeredRequest(for: NetworkRequest.ID(staleRequestID)) == nil)
     try await waitUntil { networkResults.items.isEmpty }
     try await waitUntil {
         context.rootNode?.id == DOMNode.ID(DOM.Node.ID("fresh-after-restart"))
@@ -3100,7 +3174,7 @@ func networkRequestIndexDrainsDifferentIDMutationsInSequenceOrder() async throws
         NetworkRequestRecordInput(request: first, orderIndex: 0),
         sequence: 1
     )
-    await secondMutation.value
+    _ = await secondMutation.value
 
     let delta = await index.delta(
         plan: NetworkRequestQueryPlan(
@@ -3148,7 +3222,7 @@ func networkRequestIndexBuffersUpsertUntilEarlierReplaceArrives() async throws {
         with: [NetworkRequestRecordInput(request: first, orderIndex: 0)],
         sequence: 1
     )
-    await upsert.value
+    _ = await upsert.value
 
     let delta = await index.delta(
         plan: NetworkRequestQueryPlan(
@@ -3327,7 +3401,7 @@ func stalledFetchedResultsSubscriberDoesNotReconfigureRemovedItems() async throw
         timestamp: 2,
         in: context
     )
-    context.clearNetworkRequests()
+    await context.clearNetworkRequests()
 
     let expectedRevision = try #require(results).revision
     results = nil
@@ -3806,7 +3880,7 @@ func clearNetworkRequestsResetsDescriptorBackedQueryState() async throws {
         NetworkRequest.ID(Network.Request.ID("stale-b")),
     ])
 
-    context.clearNetworkRequests()
+    await context.clearNetworkRequests()
     #expect(results.items.isEmpty)
 
     let freshID = Network.Request.ID("fresh-after-clear")
@@ -4123,7 +4197,7 @@ func clearNetworkRequestsPublishesResetAndIgnoresClearedEvents() async throws {
     try await recorder.waitForTransactionCount(2)
     #expect(results.snapshot.itemIDs == [firstModelID, secondModelID])
 
-    context.clearNetworkRequests()
+    await context.clearNetworkRequests()
 
     try await recorder.waitForTransactionCount(3)
     let reset = try #require(recorder.transactions.last)
@@ -6669,7 +6743,7 @@ func fetchResponseBodyDropsCompletionAfterNetworkClear() async throws {
         await runtime.backend.recordedCommands().contains(RecordedCommand(domain: "Network", method: "getResponseBody"))
     }
 
-    context.clearNetworkRequests()
+    await context.clearNetworkRequests()
     #expect(context.registeredRequest(for: NetworkRequest.ID(requestID)) == nil)
     await runtime.backend.enqueue(
         Network.Body(data: "stale-body", base64Encoded: false),
