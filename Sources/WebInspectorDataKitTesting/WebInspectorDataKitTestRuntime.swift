@@ -230,7 +230,7 @@ public final class WebInspectorDataKitTestRuntime {
         guard !isClosed else {
             throw RuntimeError.closed
         }
-        await driver.registerPickerSelection(
+        try await driver.registerPickerSelection(
             remoteObjectID: remoteObjectID,
             nodeID: nodeID
         )
@@ -255,8 +255,10 @@ public final class WebInspectorDataKitTestRuntime {
         while let status = await updates.next() {
             switch status.state {
             case .attached:
-                if status.selectedNodeID == expectedNodeID,
-                   !status.isElementPickerEnabled {
+                if !status.isElementPickerEnabled {
+                    guard status.selectedNodeID == expectedNodeID else {
+                        throw RuntimeError.selectedNodeMissing(nodeID)
+                    }
                     guard let node = try model.selectedDOMNode else {
                         throw RuntimeError.selectedNodeMissing(nodeID)
                     }
@@ -415,7 +417,10 @@ private actor ScenarioDriver {
         }
     }
 
-    func registerPickerSelection(remoteObjectID: String, nodeID: String) {
+    func registerPickerSelection(remoteObjectID: String, nodeID: String) throws {
+        guard document.children.contains(where: { $0.containsNode(id: nodeID) }) else {
+            throw WebInspectorDataKitTestRuntime.RuntimeError.selectedNodeMissing(nodeID)
+        }
         pickerSelections[remoteObjectID] = nodeID
     }
 
@@ -717,4 +722,10 @@ private struct ResponseBodyParameters: Decodable {
 private struct ResponseBodyResult: Encodable {
     let body: String
     let base64Encoded: Bool
+}
+
+private extension WebInspectorDataKitTestRuntime.Node {
+    func containsNode(id: String) -> Bool {
+        self.id == id || children.contains(where: { $0.containsNode(id: id) })
+    }
 }

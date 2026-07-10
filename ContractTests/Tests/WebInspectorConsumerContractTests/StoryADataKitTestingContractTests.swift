@@ -33,6 +33,14 @@ func readyDataKitScenarioIsUsableFromAConsumerPackage() async throws {
 
     try await runtime.replacePage(with: .init())
     #expect(try runtime.model.rootDOMNode?.nodeName == "#document")
+    do {
+        _ = try await runtime.selectElementWithPicker(nodeID: "missing")
+        Issue.record("Expected a missing picker fixture failure.")
+    } catch let error as WebInspectorDataKitTestRuntime.RuntimeError {
+        #expect(error == .selectedNodeMissing("missing"))
+    } catch {
+        Issue.record("Expected a DataKit testing runtime failure, got \(error).")
+    }
 
     await runtime.close()
     #expect(runtime.model.state == .closed)
