@@ -1314,7 +1314,7 @@ private final class ControlledNodeActionRecorder {
         func wait() async {
             switch self {
             case let .cancellationAware(gate):
-                await gate.waiter.wait()
+                await gate.wait()
             case let .cancellationIgnoring(gate):
                 await gate.wait()
             }
