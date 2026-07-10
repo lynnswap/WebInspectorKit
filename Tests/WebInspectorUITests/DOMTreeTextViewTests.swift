@@ -376,6 +376,86 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func changingSelectionReplacesInFlightPageHighlight() async throws {
+        let session = makeDOMTreeFixture()
+        let recorder = ControlledNodeActionRecorder()
+        let view = DOMTreeTextView(
+            context: session.context,
+            highlightNodeAction: { nodeID, owner in
+                try await recorder.run(nodeID, owner: owner)
+            }
+        )
+        configureTreeViewForDeterministicTesting(view)
+        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
+        view.layoutIfNeeded()
+        view.setRenderingActive(true)
+        #expect(await view.waitForRowDocumentForTesting())
+
+        view.primaryClickRowForTesting(containing: "<input disabled>")
+        await recorder.waitForInvocationCount(1)
+        let firstNodeID = try #require(session.selectedNode?.id)
+
+        view.primaryClickRowForTesting(containing: "<article")
+        await recorder.waitForInvocationCount(2)
+        let secondNodeID = try #require(session.selectedNode?.id)
+        #expect(firstNodeID != secondNodeID)
+
+        // The cancelled A completion must not clear B's operation token and
+        // allow a duplicate B invalidation to launch a third wire command.
+        await Task.yield()
+        view.routeCurrentSelectionInvalidationForTesting()
+        await Task.yield()
+        #expect(recorder.invocationCount == 2)
+        #expect(recorder.recordedNodeIDs == [firstNodeID, secondNodeID])
+
+        await recorder.resolveInvocation(at: 1, as: .success)
+        await view.waitForPageHighlightTaskForTesting()
+        #expect(recorder.recordedOwners == [.selection, .selection])
+    }
+
+    @Test
+    func staleSelectionHighlightCompletionCannotClearCurrentABAIntent() async throws {
+        let session = makeDOMTreeFixture()
+        let recorder = ControlledNodeActionRecorder(ignoresCancellation: true)
+        let view = DOMTreeTextView(
+            context: session.context,
+            highlightNodeAction: { nodeID, owner in
+                try await recorder.run(nodeID, owner: owner)
+            }
+        )
+        configureTreeViewForDeterministicTesting(view)
+        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
+        view.layoutIfNeeded()
+        view.setRenderingActive(true)
+        #expect(await view.waitForRowDocumentForTesting())
+
+        view.primaryClickRowForTesting(containing: "<input disabled>")
+        await recorder.waitForInvocationCount(1)
+        let nodeA = try #require(session.selectedNode?.id)
+
+        view.primaryClickRowForTesting(containing: "<article")
+        await recorder.waitForInvocationCount(2)
+        let nodeB = try #require(session.selectedNode?.id)
+
+        view.primaryClickRowForTesting(containing: "<input disabled>")
+        await recorder.waitForInvocationCount(3)
+        #expect(session.selectedNode?.id == nodeA)
+
+        // Complete stale A1 and B2 after A3 is current. Neither completion
+        // owns A3's intent, even though A1 has the same semantic node ID.
+        await recorder.resolveInvocation(at: 0, as: .success)
+        await recorder.resolveInvocation(at: 1, as: .success)
+        await recorder.resolveInvocation(at: 2, as: .failure)
+        await view.waitForPageHighlightTaskForTesting()
+
+        view.routeCurrentSelectionInvalidationForTesting()
+        await recorder.waitForInvocationCount(4)
+        #expect(recorder.recordedNodeIDs == [nodeA, nodeB, nodeA, nodeA])
+        await recorder.resolveInvocation(at: 3, as: .success)
+        await view.waitForPageHighlightTaskForTesting()
+    }
+
+    @Test
     func selectionHighlightFailureAllowsLaterInvalidationRetry() async throws {
         let session = makeDOMTreeFixture()
         let recorder = ControlledNodeActionRecorder()
@@ -1227,26 +1307,59 @@ private final class ControlledNodeActionRecorder {
 
     private struct IntentionalFailure: Error {}
 
+    private enum Gate {
+        case cancellationAware(WebInspectorTestGate)
+        case cancellationIgnoring(CancellationIgnoringGate)
+
+        func wait() async {
+            switch self {
+            case let .cancellationAware(gate):
+                await gate.waiter.wait()
+            case let .cancellationIgnoring(gate):
+                await gate.wait()
+            }
+        }
+
+        func open() async {
+            switch self {
+            case let .cancellationAware(gate):
+                await gate.open()
+            case let .cancellationIgnoring(gate):
+                await gate.open()
+            }
+        }
+    }
+
     private var nodeIDs: [DOMNode.ID] = []
     private var owners: [DOMTreePageHighlightOwner] = []
-    private var gates: [WebInspectorTestGate] = []
+    private var gates: [Gate] = []
     private var failedInvocationIndexes: Set<Int> = []
     private var invocationWaiters: [(
         count: Int,
         continuation: CheckedContinuation<Void, Never>
     )] = []
+    private let ignoresCancellation: Bool
+
+    init(ignoresCancellation: Bool = false) {
+        self.ignoresCancellation = ignoresCancellation
+    }
 
     func run(_ nodeID: DOMNode.ID, owner: DOMTreePageHighlightOwner) async throws {
         let invocationIndex = nodeIDs.count
-        let gate = WebInspectorTestGate()
+        let gate: Gate = if ignoresCancellation {
+            .cancellationIgnoring(CancellationIgnoringGate())
+        } else {
+            .cancellationAware(WebInspectorTestGate())
+        }
         nodeIDs.append(nodeID)
         owners.append(owner)
         gates.append(gate)
         resumeInvocationWaitersIfNeeded()
 
         await gate.wait()
-        try Task.checkCancellation()
-        try Task.checkCancellation()
+        if !ignoresCancellation {
+            try Task.checkCancellation()
+        }
         if failedInvocationIndexes.contains(invocationIndex) {
             throw IntentionalFailure()
         }
@@ -1298,6 +1411,35 @@ private final class ControlledNodeActionRecorder {
             }
         }
         invocationWaiters = pending
+    }
+}
+
+@MainActor
+private final class CancellationIgnoringGate {
+    private var isOpen = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func wait() async {
+        guard !isOpen else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            if isOpen {
+                continuation.resume()
+            } else {
+                precondition(self.continuation == nil, "A controlled highlight gate supports one waiter.")
+                self.continuation = continuation
+            }
+        }
+    }
+
+    func open() {
+        guard !isOpen else {
+            return
+        }
+        isOpen = true
+        continuation?.resume()
+        continuation = nil
     }
 }
 
