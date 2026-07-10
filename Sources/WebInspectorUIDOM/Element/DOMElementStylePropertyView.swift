@@ -1,6 +1,7 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
 import WebInspectorDataKit
+import ObservationBridge
 import UIKit
 
 @MainActor
@@ -12,6 +13,7 @@ package final class DOMElementStylePropertyView: UIView {
     private var property: CSSStyleProperty?
     private var toggleAction: ToggleAction?
     private var toggleTask: Task<Void, Never>?
+    private var propertyObservation: PortableObservationTracking.Token?
 
     override package init(frame: CGRect) {
         super.init(frame: frame)
@@ -23,31 +25,38 @@ package final class DOMElementStylePropertyView: UIView {
         nil
     }
 
+    isolated deinit {
+        propertyObservation?.cancel()
+    }
+
     package func bind(
         property: CSSStyleProperty,
         onToggle: ToggleAction? = nil
     ) {
-        if self.property?.id != property.id {
+        if self.property !== property {
             // A submitted mutation is committed user work and outlives cell
             // reuse. Drop only this view's completion handle.
             toggleTask = nil
         }
-        render(property: property, onToggle: onToggle)
-    }
-
-    package func render(
-        property: CSSStyleProperty,
-        onToggle: ToggleAction? = nil
-    ) {
+        propertyObservation?.cancel()
         self.property = property
         toggleAction = onToggle
-        renderAll(from: property)
+        propertyObservation = withPortableContinuousObservation { [weak self, weak property] _ in
+            guard let self,
+                  let property,
+                  self.property === property else {
+                return
+            }
+            self.renderAll(from: property)
+        }
     }
 
     package func clear() {
         // Do not cancel an accepted mutation when the collection view reuses
         // its presentation cell.
         toggleTask = nil
+        propertyObservation?.cancel()
+        propertyObservation = nil
         property = nil
         toggleAction = nil
         declarationTextView.attributedText = nil
@@ -107,7 +116,9 @@ package final class DOMElementStylePropertyView: UIView {
     }
 
     private func renderToggleState(from property: CSSStyleProperty, animated: Bool = false) {
-        toggleSwitch.setOn(property.isEnabled, animated: animated)
+        if property.isMutationPending == false {
+            toggleSwitch.setOn(property.isEnabled, animated: animated)
+        }
         toggleSwitch.isEnabled = canToggle(property)
     }
 
@@ -148,7 +159,7 @@ package final class DOMElementStylePropertyView: UIView {
         toggleTask = Task { @MainActor [weak self] in
             _ = await toggleAction(property, requestedEnabledState)
             guard let self,
-                  self.property?.id == property.id else {
+                  self.property === property else {
                 return
             }
             toggleTask = nil
@@ -159,7 +170,10 @@ package final class DOMElementStylePropertyView: UIView {
     }
 
     private func canToggle(_ property: CSSStyleProperty) -> Bool {
-        property.isEditable && toggleAction != nil && toggleTask == nil
+        property.isEditable
+            && property.isMutationPending == false
+            && toggleAction != nil
+            && toggleTask == nil
     }
 
     private func declarationText(for property: CSSStyleProperty) -> NSAttributedString {
@@ -228,16 +242,8 @@ package final class DOMElementStylePropertyView: UIView {
     stackView.isLayoutMarginsRelativeArrangement = true
 
     for property in DOMElementStylePropertyViewPreviewData.makeProperties() {
-        // Static preview: values do not observe, so re-render the row
-        // locally with the toggled value.
         let row = DOMElementStylePropertyView()
-        @MainActor func renderRow(_ property: CSSStyleProperty) {
-            row.render(property: property) { _, enabled in
-                renderRow(DOMElementStylePropertyViewPreviewData.toggled(property, enabled: enabled))
-                return true
-            }
-        }
-        renderRow(property)
+        row.bind(property: property)
         stackView.addArrangedSubview(row)
     }
 
@@ -246,26 +252,6 @@ package final class DOMElementStylePropertyView: UIView {
 
 @MainActor
 private enum DOMElementStylePropertyViewPreviewData {
-    static func sourceText(for property: CSSStyleProperty) -> String {
-        var text = "\(property.name): \(property.value)"
-        if let priority = property.priority, !priority.isEmpty {
-            text += " !\(priority)"
-        }
-        return text + ";"
-    }
-
-    static func toggled(_ property: CSSStyleProperty, enabled: Bool) -> CSSStyleProperty {
-        CSSStyleProperty(
-            id: property.id,
-            name: property.name,
-            value: property.value,
-            priority: property.priority,
-            text: enabled ? sourceText(for: property) : "/* \(sourceText(for: property)) */",
-            status: enabled ? .active : .disabled,
-            isEditable: property.isEditable
-        )
-    }
-
     static func makeProperties() -> [CSSStyleProperty] {
         [
             CSSStyleProperty(

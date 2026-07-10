@@ -98,7 +98,6 @@ package final class DOMElementStyleSnapshotCoordinator {
     package enum ApplyMode: Equatable {
         case none
         case diff(animated: Bool)
-        case reloadData
     }
 
     package enum PlaceholderMode: Equatable {
@@ -110,6 +109,10 @@ package final class DOMElementStyleSnapshotCoordinator {
         package var snapshot: Snapshot?
         package var applyMode: ApplyMode
         package var placeholderMode: PlaceholderMode
+        /// The selected CSS resource changed while its diffable identifiers
+        /// remained equal. Visible cells must bind the replacement property
+        /// identities without reloading collection topology.
+        package var rebindVisiblePropertyRows: Bool
         /// Sections whose rendered header content changed while keeping
         /// their identity; visible header views must be re-bound because
         /// diffable snapshots do not reconfigure supplementary views.
@@ -119,11 +122,13 @@ package final class DOMElementStyleSnapshotCoordinator {
             snapshot: Snapshot?,
             applyMode: ApplyMode,
             placeholderMode: PlaceholderMode,
+            rebindVisiblePropertyRows: Bool = false,
             updatedSectionIDs: Set<CSSStyleSection.ID> = []
         ) {
             self.snapshot = snapshot
             self.applyMode = applyMode
             self.placeholderMode = placeholderMode
+            self.rebindVisiblePropertyRows = rebindVisiblePropertyRows
             self.updatedSectionIDs = updatedSectionIDs
         }
     }
@@ -131,29 +136,6 @@ package final class DOMElementStyleSnapshotCoordinator {
     private struct SelectionEpoch {
         var stylesObjectID: ObjectIdentifier
         var hasRenderedLoadedSnapshot = false
-    }
-
-    /// The fields a property row renders. Sections and properties are value
-    /// types, so "did this row change" is decided by content comparison
-    /// (the legacy coordinator compared object identity instead).
-    private struct PropertyRenderContent: Equatable {
-        var name: String
-        var value: String
-        var priority: String?
-        var text: String?
-        var status: CSSStyleProperty.Status
-        var isEditable: Bool
-        var isModifiedByInspector: Bool
-
-        init(_ property: CSSStyleProperty) {
-            name = property.name
-            value = property.value
-            priority = property.priority
-            text = property.text
-            status = property.status
-            isEditable = property.isEditable
-            isModifiedByInspector = property.isModifiedByInspector
-        }
     }
 
     /// The fields a section header renders.
@@ -173,11 +155,11 @@ package final class DOMElementStyleSnapshotCoordinator {
 
     private struct VisibleRenderContent: Equatable {
         var sectionContents: [CSSStyleSection.ID: SectionRenderContent]
-        var propertyContents: [DOMElementStylePresentationItemIdentifier: PropertyRenderContent]
+        var propertyObjectIDs: [DOMElementStylePresentationItemIdentifier: ObjectIdentifier]
 
         static let empty = VisibleRenderContent(
             sectionContents: [:],
-            propertyContents: [:]
+            propertyObjectIDs: [:]
         )
     }
 
@@ -270,60 +252,62 @@ package final class DOMElementStyleSnapshotCoordinator {
         let oldItemIDs = visibleItemIDs
         let oldRenderContent = visibleRenderContent
         let replacesSelection = selectionEpoch?.hasRenderedLoadedSnapshot == false
-        let hadVisibleSnapshot = visibleSections.isEmpty == false
 
         displayedSections = sections
         rebuildVisibleSections()
 
-        var snapshot = diffableSnapshot()
+        let snapshot = diffableSnapshot()
         let newRenderContent = makeVisibleRenderContent()
         let hasStructuralChanges = Self.hasStructuralChanges(
             oldSectionIDs: oldSectionIDs,
             oldItemIDs: oldItemIDs,
             snapshot: snapshot
         )
-        let updatedItemIDs = Self.updatedKeys(
-            old: oldRenderContent.propertyContents,
-            new: newRenderContent.propertyContents
-        )
         let updatedSectionIDs = Self.updatedKeys(
             old: oldRenderContent.sectionContents,
             new: newRenderContent.sectionContents
+        )
+        let replacedPropertyIDs = Self.updatedKeys(
+            old: oldRenderContent.propertyObjectIDs,
+            new: newRenderContent.propertyObjectIDs
         )
 
         selectionEpoch?.hasRenderedLoadedSnapshot = true
         visibleRenderContent = newRenderContent
 
         if replacesSelection {
-            return SnapshotUpdate(
-                snapshot: snapshot,
-                applyMode: hadVisibleSnapshot ? .reloadData : .diff(animated: false),
-                placeholderMode: .none
-            )
-        }
-        if hasStructuralChanges {
-            snapshot.reconfigureItems(Array(updatedItemIDs))
-            return SnapshotUpdate(
-                snapshot: snapshot,
-                applyMode: .diff(animated: true),
-                placeholderMode: .none,
-                updatedSectionIDs: updatedSectionIDs
-            )
-        }
-        if updatedItemIDs.isEmpty == false {
-            snapshot.reconfigureItems(Array(updatedItemIDs))
-            return SnapshotUpdate(
-                snapshot: snapshot,
-                applyMode: .diff(animated: false),
-                placeholderMode: .none,
-                updatedSectionIDs: updatedSectionIDs
-            )
-        }
-        if updatedSectionIDs.isEmpty == false {
+            if hasStructuralChanges {
+                return SnapshotUpdate(
+                    snapshot: snapshot,
+                    applyMode: .diff(animated: false),
+                    placeholderMode: .none,
+                    rebindVisiblePropertyRows: true,
+                    updatedSectionIDs: updatedSectionIDs
+                )
+            }
             return SnapshotUpdate(
                 snapshot: nil,
                 applyMode: .none,
                 placeholderMode: .none,
+                rebindVisiblePropertyRows: true,
+                updatedSectionIDs: updatedSectionIDs
+            )
+        }
+        if hasStructuralChanges {
+            return SnapshotUpdate(
+                snapshot: snapshot,
+                applyMode: .diff(animated: true),
+                placeholderMode: .none,
+                rebindVisiblePropertyRows: replacedPropertyIDs.isEmpty == false,
+                updatedSectionIDs: updatedSectionIDs
+            )
+        }
+        if updatedSectionIDs.isEmpty == false || replacedPropertyIDs.isEmpty == false {
+            return SnapshotUpdate(
+                snapshot: nil,
+                applyMode: .none,
+                placeholderMode: .none,
+                rebindVisiblePropertyRows: replacedPropertyIDs.isEmpty == false,
                 updatedSectionIDs: updatedSectionIDs
             )
         }
@@ -331,13 +315,9 @@ package final class DOMElementStyleSnapshotCoordinator {
     }
 
     /// Pending phases (`loading`/`needsRefresh`) keep the displayed row
-    /// structure frozen until the follow-up refresh lands. When the pending
-    /// styles belong to the already-rendered selection, same-identity content
-    /// changes are still pushed through the reconfigure path: DataKit's
-    /// `applySetStyleText` rewrites sections in place (keeping identity) and
-    /// marks the styles stale, and the toggled declaration text plus the
-    /// modified-by-inspector badge must update immediately (the legacy build
-    /// rendered this through per-object observation in the cells).
+    /// structure frozen until the follow-up refresh lands. Same-identity
+    /// property content is rendered by each row's Observation binding and
+    /// never becomes a collection snapshot operation.
     private func updatePendingSnapshot(_ sections: [CSSStyleSection]) -> SnapshotUpdate {
         guard displayedSections != nil else {
             return updateUnavailableSnapshot()
@@ -350,7 +330,7 @@ package final class DOMElementStyleSnapshotCoordinator {
             sections: sections,
             expandedUnusedVariableSectionIDs: expandedUnusedVariableSectionIDs
         )
-        var snapshot = DOMElementStyleDiffableSnapshotBuilder.makeSnapshot(
+        let snapshot = DOMElementStyleDiffableSnapshotBuilder.makeSnapshot(
             visibleSections: prospectiveVisibleSections
         )
         guard Self.hasStructuralChanges(
@@ -366,27 +346,19 @@ package final class DOMElementStyleSnapshotCoordinator {
         let oldRenderContent = visibleRenderContent
         let newRenderContent = makeVisibleRenderContent()
         visibleRenderContent = newRenderContent
-        let updatedItemIDs = Self.updatedKeys(
-            old: oldRenderContent.propertyContents,
-            new: newRenderContent.propertyContents
-        )
         let updatedSectionIDs = Self.updatedKeys(
             old: oldRenderContent.sectionContents,
             new: newRenderContent.sectionContents
         )
-        guard updatedItemIDs.isEmpty == false else {
-            return SnapshotUpdate(
-                snapshot: nil,
-                applyMode: .none,
-                placeholderMode: .none,
-                updatedSectionIDs: updatedSectionIDs
-            )
-        }
-        snapshot.reconfigureItems(Array(updatedItemIDs))
+        let replacedPropertyIDs = Self.updatedKeys(
+            old: oldRenderContent.propertyObjectIDs,
+            new: newRenderContent.propertyObjectIDs
+        )
         return SnapshotUpdate(
-            snapshot: snapshot,
-            applyMode: .diff(animated: false),
+            snapshot: nil,
+            applyMode: .none,
             placeholderMode: .none,
+            rebindVisiblePropertyRows: replacedPropertyIDs.isEmpty == false,
             updatedSectionIDs: updatedSectionIDs
         )
     }
@@ -439,7 +411,9 @@ package final class DOMElementStyleSnapshotCoordinator {
             sectionsByID[section.id] = section
         }
         var sectionContents: [CSSStyleSection.ID: SectionRenderContent] = [:]
-        var propertyContents: [DOMElementStylePresentationItemIdentifier: PropertyRenderContent] = [:]
+        var propertyObjectIDs: [
+            DOMElementStylePresentationItemIdentifier: ObjectIdentifier
+        ] = [:]
 
         for visibleSection in visibleSections {
             guard let section = sectionsByID[visibleSection.id] else {
@@ -450,13 +424,13 @@ package final class DOMElementStyleSnapshotCoordinator {
                 guard let property = property(for: item, in: section) else {
                     continue
                 }
-                propertyContents[item] = PropertyRenderContent(property)
+                propertyObjectIDs[item] = ObjectIdentifier(property)
             }
         }
 
         return VisibleRenderContent(
             sectionContents: sectionContents,
-            propertyContents: propertyContents
+            propertyObjectIDs: propertyObjectIDs
         )
     }
 

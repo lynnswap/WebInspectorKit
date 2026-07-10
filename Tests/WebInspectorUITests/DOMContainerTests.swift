@@ -160,12 +160,9 @@ struct DOMContainerTests {
         #expect(didUpdateVisibleRow)
         #expect(viewController.collectionView.isHidden == false)
         #expect(visibleCellIDs(in: viewController) == cellIDsBeforeUpdate)
-        // Value-type rows cannot self-observe: the same-identity content
-        // change surfaces as exactly one reconfigure apply that keeps the
-        // existing cells (the legacy build re-rendered in place with no
-        // snapshot apply at all).
-        #expect(viewController.styleSnapshotApplyCountForTesting == applyCountBeforeUpdate + 1)
-        #expect(viewController.lastSnapshotApplyModeForTesting == .diff(animated: false))
+        // Property Observation updates the existing row. A content-only
+        // change never reaches the collection snapshot owner.
+        #expect(viewController.styleSnapshotApplyCountForTesting == applyCountBeforeUpdate)
     }
 
     @Test
@@ -287,6 +284,8 @@ struct DOMContainerTests {
                 .contains("margin: 0;")
         }
         #expect(didRenderBodyRows)
+        let applyCountBeforeSelection = viewController.styleSnapshotApplyCountForTesting
+        let cellIDsBeforeSelection = visibleCellIDs(in: viewController)
 
         try context.selectDOMNode(input)
         applyBodyStyles(
@@ -303,7 +302,8 @@ struct DOMContainerTests {
         }
 
         #expect(didRenderInputRows)
-        #expect(viewController.lastSnapshotApplyModeForTesting == .reloadData)
+        #expect(viewController.styleSnapshotApplyCountForTesting == applyCountBeforeSelection)
+        #expect(visibleCellIDs(in: viewController) == cellIDsBeforeSelection)
     }
 
     @Test
@@ -323,6 +323,8 @@ struct DOMContainerTests {
         }
         window.layoutIfNeeded()
         #expect(didRenderBodyRows)
+        let applyCountBeforeSelection = viewController.styleSnapshotApplyCountForTesting
+        let cellIDsBeforeSelection = visibleCellIDs(in: viewController)
 
         let body = try #require(try context.selectedDOMNode)
         let input = try selectElement(named: "input", in: context)
@@ -366,7 +368,8 @@ struct DOMContainerTests {
 
         #expect(didRenderInputRows)
         #expect(viewController.collectionView.isHidden == false)
-        #expect(viewController.lastSnapshotApplyModeForTesting == .reloadData)
+        #expect(viewController.styleSnapshotApplyCountForTesting == applyCountBeforeSelection)
+        #expect(visibleCellIDs(in: viewController) == cellIDsBeforeSelection)
     }
 
     @Test

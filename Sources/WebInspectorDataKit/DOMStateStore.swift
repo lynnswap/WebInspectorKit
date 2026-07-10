@@ -94,10 +94,10 @@ package final class DOMStateStore {
     }
 
     package func styles(
-        containing propertyID: CSSStyleProperty.ID
+        containing property: CSSStyleProperty
     ) -> CSSStyles? {
         nodesByID.values.lazy.compactMap(\.elementStyles).first {
-            $0.contains(propertyID: propertyID)
+            $0.contains(property: property)
         }
     }
 

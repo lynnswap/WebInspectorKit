@@ -551,11 +551,332 @@ func runtimeGroupCleansUpWhenTheOperationIsCancelled() async throws {
     }
 }
 
+@MainActor
+@Test
+func cssPropertyIdentitySurvivesRefreshAndQueuedMutationTouchesOnlySubmittedProperty() async throws {
+    let bodyID = DOM.Node.ID("body")
+    let document = DOM.Node(
+        id: DOM.Node.ID("document"),
+        nodeType: 9,
+        nodeName: "#document",
+        children: [
+            DOM.Node(
+                id: bodyID,
+                nodeType: 1,
+                nodeName: "BODY",
+                localName: "body"
+            ),
+        ]
+    )
+    try await withAttachedModelContext(
+        configuration: .init(domains: [.css]),
+        document: document
+    ) { fixture in
+        let body = try #require(try fixture.context.domNode(id: DOMNode.ID(bodyID)))
+        let initialStyle = cssTestStyle(margin: "0", paddingStatus: .active)
+        try await enqueueCSSLoadReplies(style: initialStyle, on: fixture.runtime.wire)
+        let styles = try await fixture.context.cssStyles(for: body)
+        let initialSection = try #require(styles.sections.first)
+        let margin = try #require(initialSection.style.properties.first { $0.name == "margin" })
+        let padding = try #require(initialSection.style.properties.first { $0.name == "padding" })
+
+        let stalePadding = CSSStyleProperty(
+            id: padding.id,
+            name: padding.name,
+            value: padding.value,
+            text: padding.text,
+            status: padding.status,
+            isEditable: padding.isEditable
+        )
+        await #expect(throws: WebInspectorModelError.staleModel) {
+            _ = try await fixture.context.setCSSProperty(
+                stalePadding,
+                enabled: false,
+                undo: .disabled
+            )
+        }
+        #expect(stalePadding.isMutationPending == false)
+
+        let refreshedStyle = cssTestStyle(margin: "4px", paddingStatus: .active)
+        let matchedReply = await fixture.runtime.wire.deferReply(
+            to: "CSS.getMatchedStylesForNode",
+            with: try rawCSSMatchedStylesResult(cssMatchedStyles(style: refreshedStyle))
+        )
+        await fixture.runtime.wire.respond(
+            to: "CSS.getInlineStylesForNode",
+            with: try rawCSSInlineStylesResult(.init())
+        )
+        await fixture.runtime.wire.respond(
+            to: "CSS.getComputedStyleForNode",
+            with: try rawCSSComputedStyleResult([])
+        )
+        let refresh = Task {
+            try await fixture.context.refreshCSSStyles(for: body)
+        }
+        _ = await fixture.runtime.wire.observations.waitForCommands(
+            method: "CSS.getMatchedStylesForNode",
+            count: 2
+        )
+
+        let disabledPaddingStyle = cssTestStyle(margin: "4px", paddingStatus: .disabled)
+        await fixture.runtime.wire.respond(
+            to: "CSS.setStyleText",
+            with: try rawCSSStyleResult(disabledPaddingStyle)
+        )
+        let toggle = Task {
+            _ = try await fixture.context.setCSSProperty(
+                padding,
+                enabled: false,
+                undo: .disabled
+            )
+        }
+        try await waitUntil { padding.isMutationPending }
+
+        #expect(margin.isMutationPending == false)
+        #expect(fixture.runtime.wire.observations.commands.filter {
+            $0.method == "CSS.setStyleText"
+        }.isEmpty)
+
+        matchedReply.open()
+        try await refresh.value
+        let setStyleCommand = await fixture.runtime.wire.observations.waitForCommands(
+            method: "CSS.setStyleText",
+            count: 1
+        ).last
+        #expect(try setStyleCommand.map { try commandStringParameter($0, "text") }
+            == "margin: 4px;\n/* padding: 8px; */")
+        _ = try await toggle.value
+
+        let currentSection = try #require(styles.sections.first)
+        let currentMargin = try #require(currentSection.style.properties.first { $0.name == "margin" })
+        let currentPadding = try #require(currentSection.style.properties.first { $0.name == "padding" })
+        #expect(currentMargin === margin)
+        #expect(currentPadding === padding)
+        #expect(margin.value == "4px")
+        #expect(margin.status == .active)
+        #expect(margin.isMutationPending == false)
+        #expect(padding.status == .disabled)
+        #expect(padding.text == "/* padding: 8px; */")
+        #expect(padding.isMutationPending == false)
+
+        let structurallyChangedStyle = cssTestStyleWithLeadingColor()
+        styles.load(
+            matchedStyles: cssMatchedStyles(style: structurallyChangedStyle),
+            inlineStyles: .init(),
+            computedProperties: []
+        )
+        let changedSection = try #require(styles.sections.first)
+        let replacementAtOldMarginID = try #require(changedSection.style.properties.first)
+        let shiftedMargin = try #require(
+            changedSection.style.properties.first { $0.name == "margin" }
+        )
+        #expect(replacementAtOldMarginID.id == margin.id)
+        #expect(replacementAtOldMarginID.name == "color")
+        #expect(replacementAtOldMarginID !== margin)
+        #expect(shiftedMargin !== margin)
+        await #expect(throws: WebInspectorModelError.staleModel) {
+            _ = try await fixture.context.setCSSProperty(
+                margin,
+                enabled: false,
+                undo: .disabled
+            )
+        }
+    }
+}
+
+@MainActor
+@Test
+func cssTopologyChangePreservesInspectorBaselineForUnrelatedStyle() throws {
+    let context = WebInspectorModelContext.preview()
+    let styles = CSSStyles(
+        nodeID: DOMNode.ID(DOM.Node.ID("baseline-node")),
+        modelContext: context
+    )
+    let editedBefore = cssBaselineTestStyle(
+        id: "edited-style",
+        properties: [("color", "red")]
+    )
+    let unrelatedBefore = cssBaselineTestStyle(
+        id: "unrelated-style",
+        properties: [("margin", "0")]
+    )
+    styles.load(
+        matchedStyles: cssBaselineMatchedStyles([editedBefore, unrelatedBefore]),
+        inlineStyles: .init(),
+        computedProperties: []
+    )
+    let editedProperty = try #require(
+        styles.sections
+            .flatMap(\.style.properties)
+            .first { $0.name == "color" }
+    )
+
+    let editedAfter = cssBaselineTestStyle(
+        id: "edited-style",
+        properties: [("color", "blue")]
+    )
+    styles.applySetStyleText(result: editedAfter, for: editedProperty.id)
+    #expect(editedProperty.isModifiedByInspector)
+
+    let unrelatedAfter = cssBaselineTestStyle(
+        id: "unrelated-style",
+        properties: [("display", "block"), ("margin", "0")]
+    )
+    styles.load(
+        matchedStyles: cssBaselineMatchedStyles([editedAfter, unrelatedAfter]),
+        inlineStyles: .init(),
+        computedProperties: []
+    )
+
+    #expect(editedProperty.isModifiedByInspector)
+    #expect(
+        styles.sections
+            .flatMap(\.style.properties)
+            .first { $0.name == "color" } === editedProperty
+    )
+}
+
 private struct AttachedModelFixture {
     let runtime: DataKitTestRuntime
     let target: WebInspectorTarget
     let context: WebInspectorModelContext
     let configuration: WebInspectorModelContext.Configuration
+}
+
+private func cssTestStyle(
+    margin: String,
+    paddingStatus: CSS.Status
+) -> CSS.Style {
+    let styleID = "test-style\u{1F}0"
+    let paddingText = paddingStatus == .disabled
+        ? "/* padding: 8px; */"
+        : "padding: 8px;"
+    return CSS.Style(
+        id: CSS.Style.ID(styleID),
+        properties: [
+            CSS.Property(
+                id: CSS.Property.ID("\(styleID)\u{1F}0"),
+                name: "margin",
+                value: margin,
+                text: "margin: \(margin);",
+                status: .active,
+                isEditable: true
+            ),
+            CSS.Property(
+                id: CSS.Property.ID("\(styleID)\u{1F}1"),
+                name: "padding",
+                value: "8px",
+                text: paddingText,
+                status: paddingStatus,
+                isEditable: true
+            ),
+        ],
+        cssText: "margin: \(margin);\n\(paddingText)",
+        isEditable: true
+    )
+}
+
+private func cssMatchedStyles(style: CSS.Style) -> CSS.MatchedStyles {
+    CSS.MatchedStyles(matchedRules: [
+        CSS.Rule(
+            id: CSS.Rule.ID("test-rule\u{1F}0"),
+            selectorList: CSS.Rule.SelectorList(selectors: ["body"], text: "body"),
+            origin: CSS.Origin(rawValue: "author"),
+            style: style
+        ),
+    ])
+}
+
+private func cssTestStyleWithLeadingColor() -> CSS.Style {
+    let styleID = "test-style\u{1F}0"
+    return CSS.Style(
+        id: CSS.Style.ID(styleID),
+        properties: [
+            CSS.Property(
+                id: CSS.Property.ID("\(styleID)\u{1F}0"),
+                name: "color",
+                value: "red",
+                text: "color: red;",
+                status: .active,
+                isEditable: true
+            ),
+            CSS.Property(
+                id: CSS.Property.ID("\(styleID)\u{1F}1"),
+                name: "margin",
+                value: "4px",
+                text: "margin: 4px;",
+                status: .active,
+                isEditable: true
+            ),
+            CSS.Property(
+                id: CSS.Property.ID("\(styleID)\u{1F}2"),
+                name: "padding",
+                value: "8px",
+                text: "/* padding: 8px; */",
+                status: .disabled,
+                isEditable: true
+            ),
+        ],
+        cssText: "color: red;\nmargin: 4px;\n/* padding: 8px; */",
+        isEditable: true
+    )
+}
+
+private func cssBaselineTestStyle(
+    id: String,
+    properties: [(name: String, value: String)]
+) -> CSS.Style {
+    CSS.Style(
+        id: CSS.Style.ID(id),
+        properties: properties.enumerated().map { index, property in
+            CSS.Property(
+                id: CSS.Property.ID("\(id)\u{1F}\(index)"),
+                name: property.name,
+                value: property.value,
+                text: "\(property.name): \(property.value);",
+                status: .active,
+                isEditable: true
+            )
+        },
+        cssText: properties
+            .map { "\($0.name): \($0.value);" }
+            .joined(separator: "\n"),
+        isEditable: true
+    )
+}
+
+private func cssBaselineMatchedStyles(_ styles: [CSS.Style]) -> CSS.MatchedStyles {
+    CSS.MatchedStyles(
+        matchedRules: styles.enumerated().map { index, style in
+            CSS.Rule(
+                id: CSS.Rule.ID("baseline-rule-\(index)"),
+                selectorList: CSS.Rule.SelectorList(
+                    selectors: [".baseline-\(index)"],
+                    text: ".baseline-\(index)"
+                ),
+                origin: CSS.Origin(rawValue: "author"),
+                style: style
+            )
+        }
+    )
+}
+
+private func enqueueCSSLoadReplies(
+    style: CSS.Style,
+    on wire: DataKitRawWireDriver
+) async throws {
+    await wire.respond(
+        to: "CSS.getMatchedStylesForNode",
+        with: try rawCSSMatchedStylesResult(cssMatchedStyles(style: style))
+    )
+    await wire.respond(
+        to: "CSS.getInlineStylesForNode",
+        with: try rawCSSInlineStylesResult(.init())
+    )
+    await wire.respond(
+        to: "CSS.getComputedStyleForNode",
+        with: try rawCSSComputedStyleResult([])
+    )
 }
 
 @MainActor

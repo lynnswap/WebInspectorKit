@@ -301,19 +301,15 @@ package final class DOMElementViewController: UICollectionViewController {
 
     private func applySnapshotUpdate(_ update: DOMElementStyleSnapshotCoordinator.SnapshotUpdate) {
         applyPlaceholder(update.placeholderMode)
-        rebindVisibleHeaders(update.updatedSectionIDs)
         switch update.applyMode {
         case .none:
+            applyVisibleBindings(update)
 #if DEBUG
             finishStyleRenderForTesting()
 #endif
         case let .diff(animated):
             guard let snapshot = update.snapshot else {
-#if DEBUG
-                lastSnapshotApplyModeForTesting = .none
-                finishStyleRenderForTesting()
-#endif
-                return
+                preconditionFailure("A CSS structural diff requires a snapshot.")
             }
 #if DEBUG
             let applyMode = DOMElementStyleSnapshotCoordinator.ApplyMode.diff(animated: animated)
@@ -325,30 +321,21 @@ package final class DOMElementViewController: UICollectionViewController {
             let shouldAnimateSnapshot = animated
 #endif
             dataSource.apply(snapshot, animatingDifferences: shouldAnimateSnapshot) { [weak self] in
-#if DEBUG
-                self?.finishStyleRenderForTesting()
-#endif
-            }
-        case .reloadData:
-            guard let snapshot = update.snapshot else {
-#if DEBUG
-                lastSnapshotApplyModeForTesting = .none
-                finishStyleRenderForTesting()
-#endif
-                return
-            }
-#if DEBUG
-            let applyMode = DOMElementStyleSnapshotCoordinator.ApplyMode.reloadData
-            lastSnapshotApplyModeForTesting = applyMode
-            styleSnapshotApplyModesForTesting.append(applyMode)
-            styleSnapshotApplyCountForTesting += 1
-#endif
-            dataSource.applySnapshotUsingReloadData(snapshot) { [weak self] in
+                self?.applyVisibleBindings(update)
 #if DEBUG
                 self?.finishStyleRenderForTesting()
 #endif
             }
         }
+    }
+
+    private func applyVisibleBindings(
+        _ update: DOMElementStyleSnapshotCoordinator.SnapshotUpdate
+    ) {
+        if update.rebindVisiblePropertyRows {
+            rebindVisiblePropertyRows()
+        }
+        rebindVisibleHeaders(update.updatedSectionIDs)
     }
 
     private func applyPlaceholder(_ placeholderMode: DOMElementStyleSnapshotCoordinator.PlaceholderMode) {
@@ -397,6 +384,19 @@ package final class DOMElementViewController: UICollectionViewController {
         }
     }
 
+    private func rebindVisiblePropertyRows() {
+        for indexPath in collectionView.indexPathsForVisibleItems {
+            guard let item = dataSource.itemIdentifier(for: indexPath),
+                  let section = section(for: item.sectionID),
+                  let property = property(for: item, in: section),
+                  let cell = collectionView.cellForItem(at: indexPath)
+                    as? DOMElementStylePropertyCollectionCell else {
+                continue
+            }
+            cell.bind(property: property, onToggle: toggleAction())
+        }
+    }
+
     private func section(for sectionID: CSSStyleSection.ID) -> CSSStyleSection? {
         styleSnapshotCoordinator.section(for: sectionID)
     }
@@ -428,6 +428,10 @@ package final class DOMElementViewController: UICollectionViewController {
                 )
                 return true
             } catch {
+                WebInspectorUIDOMLog.error(
+                    "CSS property toggle failed name=\(property.name) "
+                        + "id=\(property.id.rawValue): \(String(describing: error))"
+                )
                 return false
             }
         }

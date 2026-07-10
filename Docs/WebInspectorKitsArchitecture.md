@@ -1353,6 +1353,65 @@ A visible UIKit/custom consumer observes that phase and calls the awaited
 its next appearance refreshes once if stale. Thus presentation lifecycle owns
 refresh demand without a global hydration Boolean, lease, or retained task.
 
+### CSS declaration identity and rendering
+
+`CSSStyles` owns section/property membership and order. Each
+`CSSStyleProperty` is a non-`Sendable`, `@Observable` identity model belonging
+to the same caller actor as its `WebInspectorModelContext`:
+
+```swift
+@Observable
+public final class CSSStyleProperty: Identifiable {
+    public let id: ID
+    public private(set) var name: String
+    public private(set) var value: String
+    public private(set) var text: String?
+    public private(set) var status: Status
+    public private(set) var isEditable: Bool
+    public private(set) var isModifiedByInspector: Bool
+    public private(set) var isMutationPending: Bool
+}
+```
+
+WebKit's property ID is a style ID plus array index, so it is a backend
+coordinate rather than semantic declaration identity. Refresh and
+`CSS.setStyleText` results mutate existing properties in place only while the
+ordered declaration-name topology is unchanged. If insertion, removal, rename,
+or reordering changes that topology, replacement property objects make every
+old handle stale even when a new declaration reuses its raw positional ID.
+Changed duplicate-name declarations are also replaced unless the current
+mutation explicitly owns that declaration; the protocol cannot otherwise prove
+continuity. Setters compare the incoming field before writing, so an accepted
+toggle publishes changes only from the affected declaration and unchanged
+sibling properties do not emit Observation invalidations.
+
+The UIKit property row observes its property directly. Its switch state,
+declaration text, modified background, and accessibility value update through
+that observation while the cell and property identities remain stable. A
+submitted mutation sets `isMutationPending` only on the submitted property, so
+only that switch becomes temporarily unavailable. Other declaration switches
+keep their declaration-specific enabled state.
+
+The diffable collection snapshot is a topology artifact. It changes only when
+section/property membership or order changes (including selection replacement);
+same-identity property content never calls `reconfigureItems`, reloads a row,
+or reloads the collection. When a positional backend ID is reused by a
+replacement property without changing row count, the coordinator detects only
+the child object-identity change and rebinds visible cells in place; it does not
+apply a collection snapshot. Selection replacement follows the same rule.
+Section header content uses its own in-place render path and does not make
+property rows topology-dependent.
+
+`CSSStyles` serializes refresh and mutation operations for that resource. A
+toggle submitted during a refresh waits with only its own
+`isMutationPending == true`; after the preceding operation finishes it rebuilds
+its style-text intent from the latest property/style state. This prevents lost
+updates without globally disabling rows or moving a mutation queue into UIKit.
+
+The migration deletes `PropertyRenderContent`, property-content snapshot diffs,
+and preview-only replacement property copies. It does not add a UI mirror
+model, a compatibility value wrapper, or a second CSS source of truth.
+
 ```swift
 public struct DOMMutationFailure: Error, Hashable, Sendable {
     public let nodeID: DOMNode.ID

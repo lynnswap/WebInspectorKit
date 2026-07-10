@@ -3060,6 +3060,15 @@ extension WebInspectorModelContext {
         for node: DOMNode,
         into styles: CSSStyles
     ) async throws {
+        try await styles.withExclusiveOperation {
+            try await loadCSSStylesExclusively(for: node, into: styles)
+        }
+    }
+
+    private nonisolated(nonsending) func loadCSSStylesExclusively(
+        for node: DOMNode,
+        into styles: CSSStyles
+    ) async throws {
         let target = try domTarget(owning: node.id.proxyID)
         styles.markLoading()
         do {
@@ -3094,20 +3103,29 @@ extension WebInspectorModelContext {
         undo: WebInspectorUndoPolicy = .automatic
     ) async throws -> DOMUndoCapability? {
         try requireConfigured(.css)
-        guard let styles = domState.styles(containing: property.id),
-              let intent = styles.setStyleTextIntent(
-                  for: property.id,
-                  enabled: enabled
-              ) else {
+        guard let styles = domState.styles(containing: property),
+              property.beginMutation() else {
             throw WebInspectorModelError.staleModel
         }
-        let target = try cssTarget(owning: intent.styleID)
-        let result = try await target.css.setStyleText(intent.styleID, text: intent.text)
-        let options = DOMMutationPolicy(undo: undo)
-        domState.recordEditHistoryTarget(target, options: options)
-        try await Self.markDOMUndoableStateIfNeeded(on: target, options: options)
-        styles.applySetStyleText(result: result, for: property.id)
-        return makeDOMUndoCapability(policy: undo)
+        defer {
+            property.endMutation()
+        }
+        return try await styles.withExclusiveOperation {
+            try await loadCSSStylesForMutationIfNeeded(styles)
+            guard let intent = styles.setStyleTextIntent(
+                for: property,
+                enabled: enabled
+            ) else {
+                throw WebInspectorModelError.staleModel
+            }
+            let target = try cssTarget(owning: intent.styleID)
+            let result = try await target.css.setStyleText(intent.styleID, text: intent.text)
+            styles.applySetStyleText(result: result, for: property.id)
+            let options = DOMMutationPolicy(undo: undo)
+            domState.recordEditHistoryTarget(target, options: options)
+            try await Self.markDOMUndoableStateIfNeeded(on: target, options: options)
+            return makeDOMUndoCapability(policy: undo)
+        }
     }
 
     public nonisolated(nonsending) func setCSSDeclarationText(
@@ -3116,20 +3134,42 @@ extension WebInspectorModelContext {
         undo: WebInspectorUndoPolicy = .automatic
     ) async throws -> DOMUndoCapability? {
         try requireConfigured(.css)
-        guard let styles = domState.styles(containing: property.id),
-              let intent = styles.setDeclarationTextIntent(
-                  for: property.id,
-                  text: text
-              ) else {
+        guard let styles = domState.styles(containing: property),
+              property.beginMutation() else {
             throw WebInspectorModelError.staleModel
         }
-        let target = try cssTarget(owning: intent.styleID)
-        let result = try await target.css.setStyleText(intent.styleID, text: intent.text)
-        let options = DOMMutationPolicy(undo: undo)
-        domState.recordEditHistoryTarget(target, options: options)
-        try await Self.markDOMUndoableStateIfNeeded(on: target, options: options)
-        styles.applySetStyleText(result: result, for: property.id)
-        return makeDOMUndoCapability(policy: undo)
+        defer {
+            property.endMutation()
+        }
+        return try await styles.withExclusiveOperation {
+            try await loadCSSStylesForMutationIfNeeded(styles)
+            guard let intent = styles.setDeclarationTextIntent(
+                for: property,
+                text: text
+            ) else {
+                throw WebInspectorModelError.staleModel
+            }
+            let target = try cssTarget(owning: intent.styleID)
+            let result = try await target.css.setStyleText(intent.styleID, text: intent.text)
+            styles.applySetStyleText(result: result, for: property.id)
+            let options = DOMMutationPolicy(undo: undo)
+            domState.recordEditHistoryTarget(target, options: options)
+            try await Self.markDOMUndoableStateIfNeeded(on: target, options: options)
+            return makeDOMUndoCapability(policy: undo)
+        }
+    }
+
+    private nonisolated(nonsending) func loadCSSStylesForMutationIfNeeded(
+        _ styles: CSSStyles
+    ) async throws {
+        guard styles.phase != .loaded else {
+            return
+        }
+        guard let node = domState.node(for: styles.id.nodeID),
+              node.elementStyles === styles else {
+            throw WebInspectorModelError.staleModel
+        }
+        try await loadCSSStylesExclusively(for: node, into: styles)
     }
 
     public nonisolated(nonsending) func setCSSRuleSelector(
