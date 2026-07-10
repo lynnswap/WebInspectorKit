@@ -333,6 +333,37 @@ func consoleMessageTransactionsPreserveInsertMoveAndUpdateSemantics() async thro
 
 @MainActor
 @Test
+func consoleMessageReverseSortPreservesInsertionOrderForEqualKeys() async {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let store = ConsoleMessageStore()
+    let results = WebInspectorFetchedResults<ConsoleMessage>(
+        fetchDescriptor: WebInspectorFetchDescriptor(
+            sortBy: [SortDescriptor(\.level.rawValue, order: .reverse)],
+            fetchLimit: 1
+        ),
+        modelContext: context
+    )
+    store.register(results, modelContext: context, isolation: MainActor.shared)
+
+    for text in ["first", "second"] {
+        _ = await store.apply(
+            .messageAdded(Console.Message(
+                source: Console.Source(rawValue: "console-api"),
+                level: Console.Level(rawValue: "log"),
+                text: text
+            )),
+            targetID: nil,
+            modelContext: context,
+            registerRuntimeObject: { _ in fatalError("The fixture has no Runtime parameters.") },
+            isolation: MainActor.shared
+        )
+    }
+
+    #expect(results.items.map(\.text) == ["first"])
+}
+
+@MainActor
+@Test
 func consoleMessageTransactionsPreserveSectionInsertionAndDeletion() async throws {
     let context = WebInspectorContext.preview(isolation: MainActor.shared)
     let store = ConsoleMessageStore()

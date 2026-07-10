@@ -149,9 +149,6 @@ package struct ConsoleMessageQueryPlan: Sendable {
                 continue
             }
         }
-        if sortComparators.first?.usesReverseOrder == true {
-            return lhs.orderIndex > rhs.orderIndex
-        }
         return lhs.orderIndex < rhs.orderIndex
     }
 }
@@ -276,10 +273,6 @@ package struct ConsoleMessageRecordSortComparator: Sendable {
         case .reverse:
             return result.reversedForConsoleQuery
         }
-    }
-
-    fileprivate var usesReverseOrder: Bool {
-        order == .reverse
     }
 
     private static func key(
