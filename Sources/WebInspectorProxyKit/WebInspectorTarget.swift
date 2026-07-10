@@ -39,7 +39,7 @@ package struct RoutingTargetID: Hashable, Sendable {
 
 /// A typed handle for a Web Inspector protocol target.
 ///
-/// Targets vend domain clients such as ``dom``, ``network``, and ``runtime``.
+/// Targets vend domain handles such as ``dom``, ``network``, and ``runtime``.
 /// Keep the target that DataKit or ProxyKit gives you instead of constructing
 /// transport target identifiers yourself.
 public struct WebInspectorTarget: Identifiable, Sendable {
@@ -69,7 +69,7 @@ public struct WebInspectorTarget: Identifiable, Sendable {
         case serviceWorker
     }
 
-    /// The target identity used by typed domain clients.
+    /// The target identity used by typed domain handles.
     public let id: ID
 
     /// The backend target kind.
@@ -116,38 +116,38 @@ public struct WebInspectorTarget: Identifiable, Sendable {
         )
     }
 
-    /// A typed client for DOM protocol commands and events.
-    public var dom: DOM.Client {
-        DOM.Client(context: DomainClientContext(proxy: proxy, targetID: id, route: route))
+    /// A target-scoped handle for DOM protocol commands and events.
+    public var dom: DOM {
+        DOM(endpoint: endpoint)
     }
 
-    /// A typed client for CSS protocol commands and events.
-    public var css: CSS.Client {
-        CSS.Client(context: DomainClientContext(proxy: proxy, targetID: id, route: route))
+    /// A target-scoped handle for CSS protocol commands and events.
+    public var css: CSS {
+        CSS(endpoint: endpoint)
     }
 
-    /// A typed client for Network protocol commands and events.
-    public var network: Network.Client {
-        Network.Client(context: DomainClientContext(proxy: proxy, targetID: id, route: route))
+    /// A target-scoped handle for Network protocol commands and events.
+    public var network: Network {
+        Network(endpoint: endpoint)
     }
 
-    /// A typed client for Console protocol commands and events.
-    public var console: Console.Client {
-        Console.Client(context: DomainClientContext(proxy: proxy, targetID: id, route: route))
+    /// A target-scoped handle for Console protocol commands and events.
+    public var console: Console {
+        Console(endpoint: endpoint)
     }
 
-    /// A typed client for Runtime protocol commands and events.
-    public var runtime: Runtime.Client {
-        Runtime.Client(context: DomainClientContext(proxy: proxy, targetID: id, route: route))
+    /// A target-scoped handle for Runtime protocol commands and events.
+    public var runtime: Runtime {
+        Runtime(endpoint: endpoint)
     }
 
-    /// A typed client for Page protocol commands.
-    public var page: Page.Client {
-        Page.Client(context: DomainClientContext(proxy: proxy, targetID: id, route: route))
+    /// A target-scoped handle for Page protocol commands.
+    public var page: Page {
+        Page(endpoint: endpoint)
     }
 
-    package var inspector: Inspector.Client {
-        Inspector.Client(context: DomainClientContext(proxy: proxy, targetID: id, route: route))
+    package var inspector: Inspector {
+        Inspector(endpoint: endpoint)
     }
 
     package var lifecycleEvents: AsyncStream<WebInspectorTargetLifecycleEvent> {
@@ -163,6 +163,10 @@ public struct WebInspectorTarget: Identifiable, Sendable {
             await proxy.waitForEventSubscription(targetID: id, route: route, domain: domain)
         }
     }
+
+    private var endpoint: DomainEndpoint {
+        DomainEndpoint(proxy: proxy, targetID: id, route: route)
+    }
 }
 
 package extension WebInspectorProxy {
@@ -176,90 +180,4 @@ package extension WebInspectorProxy {
             route: RoutingTargetID(id.rawValue)
         )
     }
-}
-
-package struct DomainClientContext: Sendable {
-    package let proxy: WebInspectorProxy
-    package let targetID: WebInspectorTarget.ID
-    package let route: RoutingTargetID
-
-    package init(proxy: WebInspectorProxy, targetID: WebInspectorTarget.ID, route: RoutingTargetID) {
-        self.proxy = proxy
-        self.targetID = targetID
-        self.route = route
-    }
-
-    package func dispatch<Payload: Sendable, Result: Sendable>(
-        domain: WebInspectorProxyDomain,
-        method: String,
-        payload: Payload,
-        returning resultType: Result.Type = Result.self
-    ) async throws -> Result {
-        _ = resultType
-        return try await proxy.dispatchCommand(
-            targetID: targetID,
-            route: route,
-            domain: domain,
-            method: method,
-            payload: payload
-        )
-    }
-
-    package func dispatchVoid<Payload: Sendable>(
-        domain: WebInspectorProxyDomain,
-        method: String,
-        payload: Payload
-    ) async throws {
-        let _: Void = try await dispatch(
-            domain: domain,
-            method: method,
-            payload: payload,
-            returning: Void.self
-        )
-    }
-
-    package func withEvents<Element: Sendable, Output>(
-        domain: WebInspectorProxyEventDomain,
-        buffering: WebInspectorEventBufferingPolicy,
-        isolation: isolated (any Actor)? = #isolation,
-        extract: @escaping @Sendable (WebInspectorProxyEvent) -> Element?,
-        _ operation: (
-            AsyncThrowingStream<WebInspectorPageEvent<Element>, any Error>
-        ) async throws -> Output
-    ) async throws -> Output {
-        guard let backend = proxy.structuredEventBackend else {
-            throw unimplementedCommand(domain: domain.rawValue, method: "withEvents")
-        }
-        return try await withWebInspectorEventScope(
-            backend: backend,
-            targetID: targetID,
-            route: route,
-            domain: domain,
-            buffering: buffering,
-            isolation: isolation,
-            extract: extract,
-            operation
-        )
-    }
-
-    package func domEvents() -> AsyncStream<DOM.Event> {
-        proxy.domEvents(targetID: targetID, route: route)
-    }
-
-    package func cssEvents() -> AsyncStream<CSS.Event> {
-        proxy.cssEvents(targetID: targetID, route: route)
-    }
-
-    package func networkEvents() -> AsyncStream<Network.Event> {
-        proxy.networkEvents(targetID: targetID, route: route)
-    }
-
-    package func consoleEvents() -> AsyncStream<Console.Event> {
-        proxy.consoleEvents(targetID: targetID, route: route)
-    }
-
-    package func runtimeEvents() -> AsyncStream<Runtime.Event> {
-        proxy.runtimeEvents(targetID: targetID, route: route)
-    }
-
 }

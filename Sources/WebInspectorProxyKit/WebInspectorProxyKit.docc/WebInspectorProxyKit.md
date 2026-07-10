@@ -6,7 +6,7 @@ Typed Web Inspector protocol transport for an inspected `WKWebView`.
 
 Use WebInspectorProxyKit when you want direct access to WebKit's inspector
 protocol commands and events. ProxyKit attaches to a `WKWebView`, tracks the
-current page target, and exposes typed domain clients from ``WebInspectorTarget``.
+current page target, and exposes typed domain handles from ``WebInspectorTarget``.
 
 Create a ``WebInspectorProxy``, wait for the current page, and send protocol
 commands through target-scoped clients:

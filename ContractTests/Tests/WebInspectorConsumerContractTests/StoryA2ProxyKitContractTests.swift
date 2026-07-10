@@ -13,8 +13,35 @@ func webInspectorProxyPublicLifecycleAndCommandSurfaceWorksFromConsumerPackage()
     }
     #expect(await runtime.proxy.canReload)
 
+    let page = runtime.proxy.page
+    let targetDOM: DOM = target.dom
+    let targetCSS: CSS = target.css
+    let targetNetwork: Network = target.network
+    let targetConsole: Console = target.console
+    let targetRuntime: Runtime = target.runtime
+    let targetPage: Page = target.page
+    let currentPageDOM: DOM = page.dom
+    let currentPageCSS: CSS = page.css
+    let currentPageNetwork: Network = page.network
+    let currentPageConsole: Console = page.console
+    let currentPageRuntime: Runtime = page.runtime
+    let currentPageCommands: Page = page.page
+    _ = (
+        targetDOM,
+        targetCSS,
+        targetConsole,
+        targetRuntime,
+        targetPage,
+        currentPageDOM,
+        currentPageCSS,
+        currentPageNetwork,
+        currentPageConsole,
+        currentPageRuntime,
+        currentPageCommands
+    )
+
     await runtime.backend.enqueue((), for: "Network", method: "enable")
-    try await target.network.enable()
+    try await targetNetwork.enable()
 
     let commands = await runtime.backend.recordedCommands()
     #expect(commands.contains(RecordedCommand(domain: "Network", method: "enable")))
@@ -72,4 +99,34 @@ func webInspectorProxyNetworkEventsMulticastToConsumerSubscribers() async throws
     #expect(secondType == .fetch)
     #expect(firstTimestamp == 42)
     #expect(secondTimestamp == 42)
+}
+
+private func domStructuredEventSurfaceCompiles(_ handle: DOM) async throws {
+    try await handle.withEvents { events in
+        _ = events
+    }
+}
+
+private func cssStructuredEventSurfaceCompiles(_ handle: CSS) async throws {
+    try await handle.withEvents { events in
+        _ = events
+    }
+}
+
+private func networkStructuredEventSurfaceCompiles(_ handle: Network) async throws {
+    try await handle.withEvents { events in
+        _ = events
+    }
+}
+
+private func consoleStructuredEventSurfaceCompiles(_ handle: Console) async throws {
+    try await handle.withEvents { events in
+        _ = events
+    }
+}
+
+private func runtimeStructuredEventSurfaceCompiles(_ handle: Runtime) async throws {
+    try await handle.withEvents { events in
+        _ = events
+    }
 }

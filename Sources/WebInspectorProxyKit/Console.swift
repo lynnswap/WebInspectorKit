@@ -1,78 +1,74 @@
 import Foundation
 
-/// Types and commands for the Web Inspector Console domain.
-public enum Console {
-    /// A target-scoped client for Console commands and events.
-    public struct Client: Sendable {
-        package let context: DomainClientContext
+/// A target-scoped handle for Web Inspector Console commands and events.
+public struct Console: Sendable, WebInspectorEventDomainHandle {
+    package static let commandDomain = WebInspectorProxyDomain.console
+    package static let eventDomain = WebInspectorProxyEventDomain.console
 
-        package init(context: DomainClientContext) {
-            self.context = context
+    package let endpoint: DomainEndpoint
+
+    package init(endpoint: DomainEndpoint) {
+        self.endpoint = endpoint
+    }
+
+    package static func extractEvent(_ event: WebInspectorProxyEvent) -> Event? {
+        guard case let .console(value) = event else {
+            return nil
         }
+        return value.event
+    }
 
-        /// Enables Console domain events and commands for the target.
-        public func enable() async throws {
-            try await context.dispatchVoid(
-                domain: .console,
-                method: "enable",
-                payload: EnablePayload()
-            )
-        }
+    /// Enables Console domain events and commands for the target.
+    public func enable() async throws {
+        try await dispatchVoid(
+            method: "enable",
+            payload: EnablePayload()
+        )
+    }
 
-        /// Disables Console domain events for the target.
-        public func disable() async throws {
-            try await context.dispatchVoid(
-                domain: .console,
-                method: "disable",
-                payload: DisablePayload()
-            )
-        }
+    /// Disables Console domain events for the target.
+    public func disable() async throws {
+        try await dispatchVoid(
+            method: "disable",
+            payload: DisablePayload()
+        )
+    }
 
-        /// Runs an operation with an atomically registered Console event scope.
-        public func withEvents<Output>(
-            buffering: WebInspectorEventBufferingPolicy = .bounded(256),
-            isolation: isolated (any Actor)? = #isolation,
-            _ operation: (
-                AsyncThrowingStream<WebInspectorPageEvent<Console.Event>, any Error>
-            ) async throws -> Output
-        ) async throws -> Output {
-            try await context.withEvents(
-                domain: .console,
-                buffering: buffering,
-                isolation: isolation,
-                extract: { event in
-                    guard case let .console(value) = event else {
-                        return nil
-                    }
-                    return value.event
-                },
-                operation
-            )
-        }
+    /// Runs an operation with an atomically registered Console event scope.
+    public func withEvents<Output>(
+        buffering: WebInspectorEventBufferingPolicy = .bounded(256),
+        isolation: isolated (any Actor)? = #isolation,
+        _ operation: (
+            AsyncThrowingStream<WebInspectorPageEvent<Console.Event>, any Error>
+        ) async throws -> Output
+    ) async throws -> Output {
+        try await _withEvents(
+            buffering: buffering,
+            isolation: isolation,
+            operation
+        )
+    }
 
-        /// Clears console messages in the inspected target.
-        public func clearMessages() async throws {
-            try await context.dispatchVoid(
-                domain: .console,
-                method: "clearMessages",
-                payload: ClearMessagesPayload()
-            )
-        }
+    /// Clears console messages in the inspected target.
+    public func clearMessages() async throws {
+        try await dispatchVoid(
+            method: "clearMessages",
+            payload: ClearMessagesPayload()
+        )
+    }
 
-        /// Sets the logging level for a WebKit logging channel.
-        public func setLoggingChannelLevel(_ source: ChannelSource, level: ChannelLevel) async throws {
-            try await context.dispatchVoid(
-                domain: .console,
-                method: "setLoggingChannelLevel",
-                payload: SetLoggingChannelLevelPayload(source: source, level: level)
-            )
-        }
+    /// Sets the logging level for a WebKit logging channel.
+    public func setLoggingChannelLevel(_ source: ChannelSource, level: ChannelLevel) async throws {
+        try await dispatchVoid(
+            method: "setLoggingChannelLevel",
+            payload: SetLoggingChannelLevelPayload(source: source, level: level)
+        )
+    }
 
-        /// Console domain events emitted by this target.
-        public var events: EventStream {
-            EventStream {
-                context.consoleEvents()
-            }
+    /// Console domain events emitted by this target.
+    public var events: EventStream {
+        EventStream {
+            endpoint.consoleEvents()
         }
     }
 

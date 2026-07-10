@@ -1,129 +1,120 @@
 import Foundation
 
-/// Types and commands for the Web Inspector CSS domain.
-public enum CSS {
-    /// A target-scoped client for CSS commands and events.
-    public struct Client: Sendable {
-        package let context: DomainClientContext
+/// A target-scoped handle for Web Inspector CSS commands and events.
+public struct CSS: Sendable, WebInspectorEventDomainHandle {
+    package static let commandDomain = WebInspectorProxyDomain.css
+    package static let eventDomain = WebInspectorProxyEventDomain.css
 
-        package init(context: DomainClientContext) {
-            self.context = context
+    package let endpoint: DomainEndpoint
+
+    package init(endpoint: DomainEndpoint) {
+        self.endpoint = endpoint
+    }
+
+    package static func extractEvent(_ event: WebInspectorProxyEvent) -> Event? {
+        guard case let .css(value) = event else {
+            return nil
         }
+        return value
+    }
 
-        /// Enables CSS domain events and commands for the target.
-        public func enable() async throws {
-            try await context.dispatchVoid(
-                domain: .css,
-                method: "enable",
-                payload: EnablePayload()
-            )
-        }
+    /// Enables CSS domain events and commands for the target.
+    public func enable() async throws {
+        try await dispatchVoid(
+            method: "enable",
+            payload: EnablePayload()
+        )
+    }
 
-        /// Disables CSS domain events for the target.
-        public func disable() async throws {
-            try await context.dispatchVoid(
-                domain: .css,
-                method: "disable",
-                payload: DisablePayload()
-            )
-        }
+    /// Disables CSS domain events for the target.
+    public func disable() async throws {
+        try await dispatchVoid(
+            method: "disable",
+            payload: DisablePayload()
+        )
+    }
 
-        /// Runs an operation with an atomically registered CSS event scope.
-        public func withEvents<Output>(
-            buffering: WebInspectorEventBufferingPolicy = .bounded(256),
-            isolation: isolated (any Actor)? = #isolation,
-            _ operation: (
-                AsyncThrowingStream<WebInspectorPageEvent<CSS.Event>, any Error>
-            ) async throws -> Output
-        ) async throws -> Output {
-            try await context.withEvents(
-                domain: .css,
-                buffering: buffering,
-                isolation: isolation,
-                extract: { event in
-                    guard case let .css(value) = event else {
-                        return nil
-                    }
-                    return value
-                },
-                operation
-            )
-        }
+    /// Runs an operation with an atomically registered CSS event scope.
+    public func withEvents<Output>(
+        buffering: WebInspectorEventBufferingPolicy = .bounded(256),
+        isolation: isolated (any Actor)? = #isolation,
+        _ operation: (
+            AsyncThrowingStream<WebInspectorPageEvent<CSS.Event>, any Error>
+        ) async throws -> Output
+    ) async throws -> Output {
+        try await _withEvents(
+            buffering: buffering,
+            isolation: isolation,
+            operation
+        )
+    }
 
-        /// Returns cascade information for the supplied DOM node.
-        public func matchedStyles(for node: DOM.Node.ID) async throws -> MatchedStyles {
-            try await context.dispatch(
-                domain: .css,
-                method: "getMatchedStylesForNode",
-                payload: GetMatchedStylesForNodePayload(node: node),
-                returning: MatchedStyles.self
-            )
-        }
+    /// Returns cascade information for the supplied DOM node.
+    public func matchedStyles(for node: DOM.Node.ID) async throws -> MatchedStyles {
+        try await dispatch(
+            method: "getMatchedStylesForNode",
+            payload: GetMatchedStylesForNodePayload(node: node),
+            returning: MatchedStyles.self
+        )
+    }
 
-        /// Returns the computed CSS properties for the supplied DOM node.
-        public func computedStyle(for node: DOM.Node.ID) async throws -> [ComputedProperty] {
-            try await context.dispatch(
-                domain: .css,
-                method: "getComputedStyleForNode",
-                payload: GetComputedStyleForNodePayload(node: node),
-                returning: [ComputedProperty].self
-            )
-        }
+    /// Returns the computed CSS properties for the supplied DOM node.
+    public func computedStyle(for node: DOM.Node.ID) async throws -> [ComputedProperty] {
+        try await dispatch(
+            method: "getComputedStyleForNode",
+            payload: GetComputedStyleForNodePayload(node: node),
+            returning: [ComputedProperty].self
+        )
+    }
 
-        /// Returns the inline and attribute-derived style declarations for the node.
-        public func inlineStyles(for node: DOM.Node.ID) async throws -> InlineStyles {
-            try await context.dispatch(
-                domain: .css,
-                method: "getInlineStylesForNode",
-                payload: GetInlineStylesForNodePayload(node: node),
-                returning: InlineStyles.self
-            )
-        }
+    /// Returns the inline and attribute-derived style declarations for the node.
+    public func inlineStyles(for node: DOM.Node.ID) async throws -> InlineStyles {
+        try await dispatch(
+            method: "getInlineStylesForNode",
+            payload: GetInlineStylesForNodePayload(node: node),
+            returning: InlineStyles.self
+        )
+    }
 
-        /// Replaces the declaration text for a style and returns the updated style.
-        public func setStyleText(_ id: Style.ID, text: String) async throws -> Style {
-            try await context.dispatch(
-                domain: .css,
-                method: "setStyleText",
-                payload: SetStyleTextPayload(id: id, text: text),
-                returning: Style.self
-            )
-        }
+    /// Replaces the declaration text for a style and returns the updated style.
+    public func setStyleText(_ id: Style.ID, text: String) async throws -> Style {
+        try await dispatch(
+            method: "setStyleText",
+            payload: SetStyleTextPayload(id: id, text: text),
+            returning: Style.self
+        )
+    }
 
-        /// Replaces the full text of a stylesheet.
-        public func setStyleSheetText(_ id: StyleSheet.ID, text: String) async throws {
-            try await context.dispatchVoid(
-                domain: .css,
-                method: "setStyleSheetText",
-                payload: SetStyleSheetTextPayload(id: id, text: text)
-            )
-        }
+    /// Replaces the full text of a stylesheet.
+    public func setStyleSheetText(_ id: StyleSheet.ID, text: String) async throws {
+        try await dispatchVoid(
+            method: "setStyleSheetText",
+            payload: SetStyleSheetTextPayload(id: id, text: text)
+        )
+    }
 
-        /// Replaces the selector text for a rule and returns the updated rule.
-        public func setRuleSelector(_ id: Rule.ID, selector: String) async throws -> Rule {
-            try await context.dispatch(
-                domain: .css,
-                method: "setRuleSelector",
-                payload: SetRuleSelectorPayload(id: id, selector: selector),
-                returning: Rule.self
-            )
-        }
+    /// Replaces the selector text for a rule and returns the updated rule.
+    public func setRuleSelector(_ id: Rule.ID, selector: String) async throws -> Rule {
+        try await dispatch(
+            method: "setRuleSelector",
+            payload: SetRuleSelectorPayload(id: id, selector: selector),
+            returning: Rule.self
+        )
+    }
 
-        /// Replaces the grouping header for a nested rule and returns the updated grouping.
-        public func setGroupingHeaderText(_ id: Rule.ID, text: String) async throws -> Rule.Grouping {
-            try await context.dispatch(
-                domain: .css,
-                method: "setGroupingHeaderText",
-                payload: SetGroupingHeaderTextPayload(id: id, text: text),
-                returning: Rule.Grouping.self
-            )
-        }
+    /// Replaces the grouping header for a nested rule and returns the updated grouping.
+    public func setGroupingHeaderText(_ id: Rule.ID, text: String) async throws -> Rule.Grouping {
+        try await dispatch(
+            method: "setGroupingHeaderText",
+            payload: SetGroupingHeaderTextPayload(id: id, text: text),
+            returning: Rule.Grouping.self
+        )
+    }
 
-        /// CSS domain events emitted by this target.
-        public var events: EventStream {
-            EventStream {
-                context.cssEvents()
-            }
+    /// CSS domain events emitted by this target.
+    public var events: EventStream {
+        EventStream {
+            endpoint.cssEvents()
         }
     }
 

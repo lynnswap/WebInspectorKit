@@ -1,36 +1,33 @@
 import Foundation
 
-package enum Inspector {
-    package struct Client: Sendable {
-        private let context: DomainClientContext
+package struct Inspector: Sendable, WebInspectorDomainHandle {
+    package static let commandDomain = WebInspectorProxyDomain.inspector
 
-        package init(context: DomainClientContext) {
-            self.context = context
-        }
+    package let endpoint: DomainEndpoint
 
-        package func enable() async throws {
-            try await context.dispatchVoid(
-                domain: .inspector,
-                method: "enable",
-                payload: EnablePayload()
-            )
-        }
+    package init(endpoint: DomainEndpoint) {
+        self.endpoint = endpoint
+    }
 
-        package func disable() async throws {
-            try await context.dispatchVoid(
-                domain: .inspector,
-                method: "disable",
-                payload: DisablePayload()
-            )
-        }
+    package func enable() async throws {
+        try await dispatchVoid(
+            method: "enable",
+            payload: EnablePayload()
+        )
+    }
 
-        package func initialized() async throws {
-            try await context.dispatchVoid(
-                domain: .inspector,
-                method: "initialized",
-                payload: InitializedPayload()
-            )
-        }
+    package func disable() async throws {
+        try await dispatchVoid(
+            method: "disable",
+            payload: DisablePayload()
+        )
+    }
+
+    package func initialized() async throws {
+        try await dispatchVoid(
+            method: "initialized",
+            payload: InitializedPayload()
+        )
     }
 
     package struct EnablePayload: Sendable {

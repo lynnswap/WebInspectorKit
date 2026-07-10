@@ -259,38 +259,38 @@ public struct WebInspectorPage: Sendable {
         }
     }
 
-    /// A typed client for DOM protocol commands and events.
-    public var dom: DOM.Client {
-        DOM.Client(context: context)
+    /// A target-scoped handle for DOM protocol commands and events.
+    public var dom: DOM {
+        DOM(endpoint: endpoint)
     }
 
-    /// A typed client for CSS protocol commands and events.
-    public var css: CSS.Client {
-        CSS.Client(context: context)
+    /// A target-scoped handle for CSS protocol commands and events.
+    public var css: CSS {
+        CSS(endpoint: endpoint)
     }
 
-    /// A typed client for Network protocol commands and events.
-    public var network: Network.Client {
-        Network.Client(context: context)
+    /// A target-scoped handle for Network protocol commands and events.
+    public var network: Network {
+        Network(endpoint: endpoint)
     }
 
-    /// A typed client for Console protocol commands and events.
-    public var console: Console.Client {
-        Console.Client(context: context)
+    /// A target-scoped handle for Console protocol commands and events.
+    public var console: Console {
+        Console(endpoint: endpoint)
     }
 
-    /// A typed client for Runtime protocol commands and events.
-    public var runtime: Runtime.Client {
-        Runtime.Client(context: context)
+    /// A target-scoped handle for Runtime protocol commands and events.
+    public var runtime: Runtime {
+        Runtime(endpoint: endpoint)
     }
 
-    /// A typed client for Page protocol commands.
-    public var page: Page.Client {
-        Page.Client(context: context)
+    /// A target-scoped handle for Page protocol commands.
+    public var page: Page {
+        Page(endpoint: endpoint)
     }
 
-    private var context: DomainClientContext {
-        DomainClientContext(proxy: proxy, targetID: .currentPage, route: .currentPage)
+    private var endpoint: DomainEndpoint {
+        DomainEndpoint(proxy: proxy, targetID: .currentPage, route: .currentPage)
     }
 }
 

@@ -1,124 +1,116 @@
 import Foundation
 
-/// Types and commands for the Web Inspector Runtime domain.
-public enum Runtime {
-    /// A target-scoped client for Runtime commands and events.
-    public struct Client: Sendable {
-        package let context: DomainClientContext
+/// A target-scoped handle for Web Inspector Runtime commands and events.
+public struct Runtime: Sendable, WebInspectorEventDomainHandle {
+    package static let commandDomain = WebInspectorProxyDomain.runtime
+    package static let eventDomain = WebInspectorProxyEventDomain.runtime
 
-        package init(context: DomainClientContext) {
-            self.context = context
+    package let endpoint: DomainEndpoint
+
+    package init(endpoint: DomainEndpoint) {
+        self.endpoint = endpoint
+    }
+
+    package static func extractEvent(_ event: WebInspectorProxyEvent) -> Event? {
+        guard case let .runtime(value) = event else {
+            return nil
         }
+        return value
+    }
 
-        /// Enables Runtime domain events and commands for the target.
-        public func enable() async throws {
-            try await context.dispatchVoid(
-                domain: .runtime,
-                method: "enable",
-                payload: EnablePayload()
-            )
-        }
+    /// Enables Runtime domain events and commands for the target.
+    public func enable() async throws {
+        try await dispatchVoid(
+            method: "enable",
+            payload: EnablePayload()
+        )
+    }
 
-        /// Disables Runtime domain events for the target.
-        public func disable() async throws {
-            try await context.dispatchVoid(
-                domain: .runtime,
-                method: "disable",
-                payload: DisablePayload()
-            )
-        }
+    /// Disables Runtime domain events for the target.
+    public func disable() async throws {
+        try await dispatchVoid(
+            method: "disable",
+            payload: DisablePayload()
+        )
+    }
 
-        /// Runs an operation with an atomically registered Runtime event scope.
-        public func withEvents<Output>(
-            buffering: WebInspectorEventBufferingPolicy = .bounded(256),
-            isolation: isolated (any Actor)? = #isolation,
-            _ operation: (
-                AsyncThrowingStream<WebInspectorPageEvent<Runtime.Event>, any Error>
-            ) async throws -> Output
-        ) async throws -> Output {
-            try await context.withEvents(
-                domain: .runtime,
-                buffering: buffering,
-                isolation: isolation,
-                extract: { event in
-                    guard case let .runtime(value) = event else {
-                        return nil
-                    }
-                    return value
-                },
-                operation
-            )
-        }
+    /// Runs an operation with an atomically registered Runtime event scope.
+    public func withEvents<Output>(
+        buffering: WebInspectorEventBufferingPolicy = .bounded(256),
+        isolation: isolated (any Actor)? = #isolation,
+        _ operation: (
+            AsyncThrowingStream<WebInspectorPageEvent<Runtime.Event>, any Error>
+        ) async throws -> Output
+    ) async throws -> Output {
+        try await _withEvents(
+            buffering: buffering,
+            isolation: isolation,
+            operation
+        )
+    }
 
-        /// Evaluates a JavaScript expression in an execution context.
-        public func evaluate(
-            _ expression: String,
-            in context: ExecutionContext.ID? = nil
-        ) async throws -> EvaluationResult {
-            try await self.context.dispatch(
-                domain: .runtime,
-                method: "evaluate",
-                payload: EvaluatePayload(expression: expression, context: context),
-                returning: EvaluationResult.self
-            )
-        }
+    /// Evaluates a JavaScript expression in an execution context.
+    public func evaluate(
+        _ expression: String,
+        in context: ExecutionContext.ID? = nil
+    ) async throws -> EvaluationResult {
+        try await dispatch(
+            method: "evaluate",
+            payload: EvaluatePayload(expression: expression, context: context),
+            returning: EvaluationResult.self
+        )
+    }
 
-        /// Returns property descriptors for a remote object.
-        public func properties(
-            of object: RemoteObject.ID,
-            ownProperties: Bool = true
-        ) async throws -> [PropertyDescriptor] {
-            try await context.dispatch(
-                domain: .runtime,
-                method: "getProperties",
-                payload: GetPropertiesPayload(object: object, ownProperties: ownProperties),
-                returning: [PropertyDescriptor].self
-            )
-        }
+    /// Returns property descriptors for a remote object.
+    public func properties(
+        of object: RemoteObject.ID,
+        ownProperties: Bool = true
+    ) async throws -> [PropertyDescriptor] {
+        try await dispatch(
+            method: "getProperties",
+            payload: GetPropertiesPayload(object: object, ownProperties: ownProperties),
+            returning: [PropertyDescriptor].self
+        )
+    }
 
-        /// Returns a compact preview for a remote object.
-        public func preview(of object: RemoteObject.ID) async throws -> ObjectPreview {
-            try await context.dispatch(
-                domain: .runtime,
-                method: "getPreview",
-                payload: GetPreviewPayload(object: object),
-                returning: ObjectPreview.self
-            )
-        }
+    /// Returns a compact preview for a remote object.
+    public func preview(of object: RemoteObject.ID) async throws -> ObjectPreview {
+        try await dispatch(
+            method: "getPreview",
+            payload: GetPreviewPayload(object: object),
+            returning: ObjectPreview.self
+        )
+    }
 
-        /// Returns entries for an array-like, map-like, or set-like remote object.
-        public func collectionEntries(of object: RemoteObject.ID) async throws -> [CollectionEntry] {
-            try await context.dispatch(
-                domain: .runtime,
-                method: "getCollectionEntries",
-                payload: GetCollectionEntriesPayload(object: object),
-                returning: [CollectionEntry].self
-            )
-        }
+    /// Returns entries for an array-like, map-like, or set-like remote object.
+    public func collectionEntries(of object: RemoteObject.ID) async throws -> [CollectionEntry] {
+        try await dispatch(
+            method: "getCollectionEntries",
+            payload: GetCollectionEntriesPayload(object: object),
+            returning: [CollectionEntry].self
+        )
+    }
 
-        /// Releases one remote object handle.
-        public func releaseObject(_ id: RemoteObject.ID) async throws {
-            try await context.dispatchVoid(
-                domain: .runtime,
-                method: "releaseObject",
-                payload: ReleaseObjectPayload(id: id)
-            )
-        }
+    /// Releases one remote object handle.
+    public func releaseObject(_ id: RemoteObject.ID) async throws {
+        try await dispatchVoid(
+            method: "releaseObject",
+            payload: ReleaseObjectPayload(id: id)
+        )
+    }
 
-        /// Releases all remote object handles in an object group.
-        public func releaseObjectGroup(_ group: ObjectGroup) async throws {
-            try await context.dispatchVoid(
-                domain: .runtime,
-                method: "releaseObjectGroup",
-                payload: ReleaseObjectGroupPayload(group: group)
-            )
-        }
+    /// Releases all remote object handles in an object group.
+    public func releaseObjectGroup(_ group: ObjectGroup) async throws {
+        try await dispatchVoid(
+            method: "releaseObjectGroup",
+            payload: ReleaseObjectGroupPayload(group: group)
+        )
+    }
 
-        /// Runtime domain events emitted by this target.
-        public var events: EventStream {
-            EventStream {
-                context.runtimeEvents()
-            }
+    /// Runtime domain events emitted by this target.
+    public var events: EventStream {
+        EventStream {
+            endpoint.runtimeEvents()
         }
     }
 

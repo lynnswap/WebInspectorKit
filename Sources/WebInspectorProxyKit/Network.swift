@@ -1,76 +1,73 @@
 import Foundation
 
-/// Types and commands for the Web Inspector Network domain.
-public enum Network {
-    /// A target-scoped client for Network commands and events.
-    public struct Client: Sendable {
-        package let context: DomainClientContext
+/// A target-scoped handle for Web Inspector Network commands and events.
+public struct Network: Sendable, WebInspectorEventDomainHandle {
+    package static let commandDomain = WebInspectorProxyDomain.network
+    package static let eventDomain = WebInspectorProxyEventDomain.network
 
-        package init(context: DomainClientContext) {
-            self.context = context
+    package let endpoint: DomainEndpoint
+
+    package init(endpoint: DomainEndpoint) {
+        self.endpoint = endpoint
+    }
+
+    package static func extractEvent(_ event: WebInspectorProxyEvent) -> Event? {
+        guard case let .network(value) = event else {
+            return nil
         }
+        return value
+    }
 
-        /// Enables Network domain events and commands for the target.
-        public func enable() async throws {
-            try await context.dispatchVoid(
-                domain: .network,
-                method: "enable",
-                payload: EnablePayload()
-            )
-        }
+    /// Enables Network domain events and commands for the target.
+    public func enable() async throws {
+        try await dispatchVoid(
+            method: "enable",
+            payload: EnablePayload()
+        )
+    }
 
-        /// Disables Network domain events for the target.
-        public func disable() async throws {
-            try await context.dispatchVoid(
-                domain: .network,
-                method: "disable",
-                payload: DisablePayload()
-            )
-        }
+    /// Disables Network domain events for the target.
+    public func disable() async throws {
+        try await dispatchVoid(
+            method: "disable",
+            payload: DisablePayload()
+        )
+    }
 
-        /// Runs an operation with an atomically registered Network event scope.
-        ///
-        /// The first scope registers before `Network.enable` is sent. Scope
-        /// completion waits for the final matching `Network.disable`.
-        public func withEvents<Output>(
-            buffering: WebInspectorEventBufferingPolicy = .bounded(256),
-            isolation: isolated (any Actor)? = #isolation,
-            _ operation: (
-                AsyncThrowingStream<WebInspectorPageEvent<Network.Event>, any Error>
-            ) async throws -> Output
-        ) async throws -> Output {
-            try await context.withEvents(
-                domain: .network,
-                buffering: buffering,
-                isolation: isolation,
-                extract: { event in
-                    guard case let .network(value) = event else {
-                        return nil
-                    }
-                    return value
-                },
-                operation
-            )
-        }
+    /// Runs an operation with an atomically registered Network event scope.
+    ///
+    /// The first scope registers before `Network.enable` is sent. Scope
+    /// completion waits for the final matching `Network.disable`.
+    public func withEvents<Output>(
+        buffering: WebInspectorEventBufferingPolicy = .bounded(256),
+        isolation: isolated (any Actor)? = #isolation,
+        _ operation: (
+            AsyncThrowingStream<WebInspectorPageEvent<Network.Event>, any Error>
+        ) async throws -> Output
+    ) async throws -> Output {
+        try await _withEvents(
+            buffering: buffering,
+            isolation: isolation,
+            operation
+        )
+    }
 
-        /// Returns the response body for a completed network request.
-        public func responseBody(
-            for id: Request.ID,
-            backendResourceIdentifier: BackendResourceID? = nil
-        ) async throws -> Body {
-            try await context.dispatch(
-                domain: .network,
-                method: "getResponseBody",
-                payload: GetResponseBodyPayload(id: id, backendResourceIdentifier: backendResourceIdentifier),
-                returning: Body.self
-            )
-        }
+    /// Returns the response body for a completed network request.
+    public func responseBody(
+        for id: Request.ID,
+        backendResourceIdentifier: BackendResourceID? = nil
+    ) async throws -> Body {
+        try await dispatch(
+            method: "getResponseBody",
+            payload: GetResponseBodyPayload(id: id, backendResourceIdentifier: backendResourceIdentifier),
+            returning: Body.self
+        )
+    }
 
-        /// Network domain events emitted by this target.
-        public var events: EventStream {
-            EventStream {
-                context.networkEvents()
-            }
+    /// Network domain events emitted by this target.
+    public var events: EventStream {
+        EventStream {
+            endpoint.networkEvents()
         }
     }
 

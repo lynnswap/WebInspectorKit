@@ -352,7 +352,7 @@ semantic model state in DataKit and UI-specific state in WebInspectorUI.
 
 | Variation | Absorbed by | Must not leak into |
 | --- | --- | --- |
-| live native bridge versus scripted backend | internal connection-core backend boundary | domain clients and DataKit models |
+| live native bridge versus scripted backend | internal connection-core backend boundary | domain handles and DataKit models |
 | physical target replacement | core target/capability registries and ordered generation boundary | public page handle and UIKit controllers |
 | selected DataKit domains | context configuration and capability dependency table | unrelated store startup branches |
 | Network/Console filtering and ordering | concrete query value and result owner | generic model protocols or arbitrary key paths |
@@ -463,12 +463,12 @@ public struct WebInspectorPage: Sendable {
     public struct Generation: Hashable, Sendable { /* opaque */ }
 
     public var generation: Generation { get async throws }
-    public var dom: DOM.Client { get }
-    public var css: CSS.Client { get }
-    public var network: Network.Client { get }
-    public var console: Console.Client { get }
-    public var runtime: Runtime.Client { get }
-    public var page: Page.Client { get }
+    public var dom: DOM { get }
+    public var css: CSS { get }
+    public var network: Network { get }
+    public var console: Console { get }
+    public var runtime: Runtime { get }
+    public var page: Page { get }
 }
 
 public enum WebInspectorEventBufferingPolicy: Sendable {
@@ -486,7 +486,7 @@ public struct WebInspectorScopeError: Error {
     public let cleanupError: any Error
 }
 
-extension Network.Client {
+extension Network {
     public func withEvents<Result>(
         buffering: WebInspectorEventBufferingPolicy = .bounded(256),
         isolation: isolated (any Actor)? = #isolation,
@@ -500,7 +500,21 @@ extension Network.Client {
 }
 ```
 
-DOM, CSS, Console, and Runtime expose the same structured event scope. There is
+`DOM`, `CSS`, `Network`, `Console`, `Runtime`, and `Page` are concrete,
+target-scoped value handles as well as the namespaces for their protocol value
+types. There is no nested `Client` layer. A package-only
+`WebInspectorDomainHandle` protocol owns command dispatch, and the closed-set
+`WebInspectorEventDomainHandle` refinement owns structured event registration
+and extraction. These protocols are deliberately not public: ProxyKit does not
+support consumer-defined WebKit domains, so public conformance would promise an
+extension point the connection core cannot honor. Each concrete event handle
+keeps only the thin public `withEvents` forwarder required by Swift access
+control.
+
+Only the outer domain handles change from namespace enums to structs; nested
+sum types such as `DOM.Event` and `Network.Event` remain enums. `DOM`, `CSS`,
+`Network`, `Console`, and `Runtime` expose the same structured event scope,
+while `Page` is command-only. There is
 no separate public `enable()`, `disable()`, cold `events`, or subscription
 barrier. The closure is the capability lease. DataKit holds capabilities for the
 attachment lifetime through the acyclic ordered model-feed driver described
@@ -1472,7 +1486,7 @@ deinitializer is expected to break a cycle.
 
 | Surface | Access | Reason |
 | --- | --- | --- |
-| Proxy, logical page, typed domain clients/DTOs, structured event scopes | `public` | direct ProxyKit consumer story |
+| Proxy, logical page, typed domain handles/DTOs, structured event scopes | `public` | direct ProxyKit consumer story |
 | Physical target records, target registry, routing keys, capability registry | `package` or `internal` | one core owns routing; no external producer story |
 | DataKit model context, identity models, existing tree/query/resource types, concrete queries | `public` | caller-confined custom UI/headless story without facade proliferation |
 | Domain stores, mutation/event application, generation replacement, protocol adapters | `package` or `internal` | preserve one writer per model; stores are not public navigation API |
