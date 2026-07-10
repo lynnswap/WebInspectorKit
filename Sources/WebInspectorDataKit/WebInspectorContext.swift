@@ -154,12 +154,7 @@ public final class WebInspectorContext {
     private var consoleTrackingTarget: WebInspectorTarget?
     private let statusRelay: WebInspectorAsyncStreamRelay<Status>
     private let networkRequests: NetworkRequestStore
-    private var consoleMessagesByID: [ConsoleMessage.ID: ConsoleMessage]
-    private var orderedConsoleMessageIDs: [ConsoleMessage.ID]
-    private var lastConsoleMessageID: ConsoleMessage.ID?
-    private var lastConsoleMessageIDByTargetID: [WebInspectorTarget.ID: ConsoleMessage.ID]
-    private var nextConsoleMessageOrdinal: Int
-    private var consoleFetchedResults: [WeakWebInspectorFetchedResults<ConsoleMessage>]
+    private let consoleMessages: ConsoleMessageStore
     private var runtimeContextsByID: [RuntimeContext.ID: RuntimeContext]
     private var orderedRuntimeContextIDs: [RuntimeContext.ID]
     private var runtimeObjectsByID: [RuntimeObject.ID: RuntimeObject]
@@ -203,12 +198,7 @@ public final class WebInspectorContext {
         consoleTrackingTarget = nil
         statusRelay = WebInspectorAsyncStreamRelay()
         networkRequests = NetworkRequestStore()
-        consoleMessagesByID = [:]
-        orderedConsoleMessageIDs = []
-        lastConsoleMessageID = nil
-        lastConsoleMessageIDByTargetID = [:]
-        nextConsoleMessageOrdinal = 0
-        consoleFetchedResults = []
+        consoleMessages = ConsoleMessageStore()
         runtimeContextsByID = [:]
         orderedRuntimeContextIDs = []
         runtimeObjectsByID = [:]
@@ -333,7 +323,7 @@ public final class WebInspectorContext {
         isolation: isolated (any Actor) = #isolation
     ) -> ConsoleMessage? {
         requireOwner(isolation)
-        return consoleMessagesByID[id]
+        return consoleMessages.message(for: id, isolation: isolation)
     }
 
     /// Selects a DOM node and reveals it in registered tree controllers.
@@ -769,8 +759,7 @@ public final class WebInspectorContext {
             guard let consoleResults = results as? WebInspectorFetchedResults<ConsoleMessage> else {
                 preconditionFailure("ConsoleMessage descriptors can only fetch ConsoleMessage models.")
             }
-            consoleResults.setItems(consoleMessages(for: consoleResults.fetchDescriptor))
-            consoleFetchedResults.append(WeakWebInspectorFetchedResults(consoleResults))
+            consoleMessages.register(consoleResults, modelContext: self, isolation: isolation)
         }
         return results
     }
@@ -869,7 +858,12 @@ public final class WebInspectorContext {
                   let consoleResults = results as? WebInspectorFetchedResults<ConsoleMessage> else {
                 preconditionFailure("ConsoleMessage descriptors can only update ConsoleMessage fetched results.")
             }
-            consoleResults.applyFetchDescriptor(consoleDescriptor, items: consoleMessages(for: consoleDescriptor))
+            consoleMessages.updateFetchDescriptor(
+                consoleDescriptor,
+                for: consoleResults,
+                modelContext: self,
+                isolation: isolation
+            )
         }
     }
 
@@ -1193,7 +1187,7 @@ public final class WebInspectorContext {
             guard isCurrentPageGeneration(generation, isolation: isolation) else {
                 return
             }
-            resetReplayBackedModelsBeforeEnable()
+            resetReplayBackedModelsBeforeEnable(isolation: isolation)
             try await enableInspectorTracking(on: target, generation: generation, isolation: isolation)
             guard Task.isCancelled == false else {
                 await disableEnabledDomainsAfterCancellation(isolation: isolation)
@@ -1410,13 +1404,11 @@ public final class WebInspectorContext {
         return try await loadCurrentDOMDocument(on: target, isolation: isolation)
     }
 
-    private func resetReplayBackedModelsBeforeEnable() {
+    private func resetReplayBackedModelsBeforeEnable(
+        isolation: isolated (any Actor)
+    ) {
         clearExecutionContexts()
-        consoleMessagesByID = [:]
-        orderedConsoleMessageIDs = []
-        lastConsoleMessageID = nil
-        lastConsoleMessageIDByTargetID = [:]
-        refreshAllConsoleMessages()
+        consoleMessages.resetForReplay(modelContext: self, isolation: isolation)
     }
 
     private func resetNetworkModelsForNewAttachment(
@@ -1428,7 +1420,7 @@ public final class WebInspectorContext {
     private func resetCurrentPageLifecycleModels(isolation: isolated (any Actor)) {
         resetDOM(isolation: isolation)
         clearExecutionContexts()
-        clearConsoleMessages()
+        clearConsoleMessages(isolation: isolation)
     }
 
     private func resetAttachmentBackedModels(isolation: isolated (any Actor)) {
@@ -1535,7 +1527,7 @@ public final class WebInspectorContext {
 
         let consolePump = WebInspectorEventPump(stream: target.targetedConsoleEvents, isolation: isolation) { [weak self] event in
             guard let self else { return }
-            self.apply(event.event, targetID: event.targetID, isolation: isolation)
+            await self.apply(event.event, targetID: event.targetID, isolation: isolation)
             self.recordEventPumpAppliedForTesting()
         }
 
@@ -2717,57 +2709,44 @@ extension WebInspectorContext {
         _ event: Console.Event,
         targetID: WebInspectorTarget.ID? = nil,
         isolation: isolated (any Actor) = #isolation
-    ) {
+    ) async {
         requireOwner(isolation)
-        switch event {
-        case let .messageAdded(message):
-            applyMessageAdded(message, targetID: targetID)
-        case let .messageRepeatCountUpdated(count, timestamp):
-            let lastMessageID = targetID.flatMap { lastConsoleMessageIDByTargetID[$0] } ?? lastConsoleMessageID
-            guard let lastConsoleMessageID = lastMessageID,
-                  let message = consoleMessagesByID[lastConsoleMessageID] else {
-                skipEvent("Console.messageRepeatCountUpdated arrived before any tracked message")
-                return
-            }
-            message.updateRepeatCount(count, timestamp: timestamp)
-            refreshAllConsoleMessages(updatedItemIDs: [message.id])
-        case .messagesCleared:
-            clearConsoleMessages(targetID: targetID)
+        let effects = await consoleMessages.apply(
+            event,
+            targetID: targetID,
+            modelContext: self,
+            registerRuntimeObject: { [self] payload in
+                registerRuntimeObject(payload, owner: .console)
+            },
+            isolation: isolation
+        )
+        applyConsoleMessageEffects(effects)
+        switch effects.runtimeObjectGroupRelease {
+        case .currentPage:
+            releaseConsoleRuntimeObjectGroup(isolation: isolation)
+        case let .target(targetID):
             releaseConsoleRuntimeObjectGroup(targetID: targetID, isolation: isolation)
-        case .unknown:
+        case nil:
             break
         }
     }
 
-    private func clearConsoleMessages(targetID: WebInspectorTarget.ID? = nil) {
-        guard let targetID else {
-            consoleMessagesByID = [:]
-            orderedConsoleMessageIDs = []
-            lastConsoleMessageID = nil
-            lastConsoleMessageIDByTargetID = [:]
+    private func clearConsoleMessages(isolation: isolated (any Actor)) {
+        let effects = consoleMessages.clearForLifecycle(
+            modelContext: self,
+            isolation: isolation
+        )
+        applyConsoleMessageEffects(effects)
+    }
+
+    private func applyConsoleMessageEffects(_ effects: ConsoleMessageStore.Effects) {
+        if effects.clearedAllMessages {
             unregisterRuntimeObjects(owner: .console)
-            refreshAllConsoleMessages()
             return
         }
-        let removedMessages = consoleMessagesByID.values.filter { $0.targetID == targetID }
-        guard removedMessages.isEmpty == false else {
-            lastConsoleMessageIDByTargetID[targetID] = nil
-            refreshAllConsoleMessages()
-            return
+        for object in effects.runtimeObjectsToUnregister {
+            unregisterRuntimeObject(object, owner: .console)
         }
-        let removedIDs = Set(removedMessages.map(\.id))
-        for id in removedIDs {
-            consoleMessagesByID[id] = nil
-        }
-        orderedConsoleMessageIDs.removeAll { removedIDs.contains($0) }
-        if let lastConsoleMessageID, removedIDs.contains(lastConsoleMessageID) {
-            self.lastConsoleMessageID = orderedConsoleMessageIDs.last
-        }
-        lastConsoleMessageIDByTargetID[targetID] = orderedConsoleMessageIDs.last { id in
-            consoleMessagesByID[id]?.targetID == targetID
-        }
-        unregisterConsoleRuntimeObjectsIfUnreferenced(from: removedMessages)
-        refreshAllConsoleMessages()
     }
 
     private func releaseConsoleRuntimeObjectGroup(
@@ -2804,90 +2783,6 @@ extension WebInspectorContext {
             task.cancel()
         }
         consoleObjectGroupReleaseTasks = [:]
-    }
-
-    private func applyMessageAdded(_ payload: Console.Message, targetID: WebInspectorTarget.ID?) {
-        let id = ConsoleMessage.ID(nextConsoleMessageOrdinal)
-        nextConsoleMessageOrdinal += 1
-        let parameters = payload.parameters.map { registerRuntimeObject($0, owner: .console) }
-        let message = ConsoleMessage(
-            id: id,
-            message: payload,
-            parameters: parameters,
-            targetID: targetID,
-            modelContext: self
-        )
-        consoleMessagesByID[id] = message
-        orderedConsoleMessageIDs.append(id)
-        lastConsoleMessageID = id
-        if let targetID {
-            lastConsoleMessageIDByTargetID[targetID] = id
-        }
-        refreshAllConsoleMessages()
-    }
-
-    private func unregisterConsoleRuntimeObjectsIfUnreferenced(from removedMessages: [ConsoleMessage]) {
-        let removedObjects = Set(removedMessages.flatMap(\.parameters).map(\.id))
-        guard removedObjects.isEmpty == false else {
-            return
-        }
-        let remainingConsoleObjects = Set(consoleMessagesByID.values.flatMap(\.parameters).map(\.id))
-        for objectID in removedObjects.subtracting(remainingConsoleObjects) {
-            guard let object = runtimeObjectsByID[objectID] else {
-                continue
-            }
-            unregisterRuntimeObject(object, owner: .console)
-        }
-    }
-
-    private func currentConsoleMessages() -> [ConsoleMessage] {
-        orderedConsoleMessageIDs.compactMap { consoleMessagesByID[$0] }
-    }
-
-    private func consoleMessages(for descriptor: WebInspectorFetchDescriptor<ConsoleMessage>) -> [ConsoleMessage] {
-        var items = currentConsoleMessages()
-        if let predicate = descriptor.predicate {
-            items = items.filter { message in
-                do {
-                    return try predicate.evaluate(message)
-                } catch {
-                    preconditionFailure("ConsoleMessage predicate evaluation failed: \(error)")
-                }
-            }
-        }
-        if descriptor.sortBy.isEmpty == false {
-            items.sort { lhs, rhs in
-                for sortDescriptor in descriptor.sortBy {
-                    switch sortDescriptor.compare(lhs, rhs) {
-                    case .orderedAscending:
-                        return true
-                    case .orderedDescending:
-                        return false
-                    case .orderedSame:
-                        continue
-                    }
-                }
-                return lhs.id < rhs.id
-            }
-        }
-        let lowerBound = min(descriptor.fetchOffset, items.count)
-        let upperBound: Int
-        if let fetchLimit = descriptor.fetchLimit {
-            upperBound = min(lowerBound + fetchLimit, items.count)
-        } else {
-            upperBound = items.count
-        }
-        return Array(items[lowerBound..<upperBound])
-    }
-
-    private func refreshAllConsoleMessages(updatedItemIDs: Set<ConsoleMessage.ID> = []) {
-        consoleFetchedResults.removeAll { $0.value == nil }
-        for registration in consoleFetchedResults {
-            guard let results = registration.value else {
-                continue
-            }
-            results.setItems(consoleMessages(for: results.fetchDescriptor), updatedItemIDs: updatedItemIDs)
-        }
     }
 }
 

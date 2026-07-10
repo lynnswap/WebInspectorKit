@@ -87,6 +87,12 @@ func networkRequestStorePropertyMutationAtTenThousandRecordsUsesOneCompactProjec
         )
     }
 
+    let insertCounters = store.performanceCountersForTesting
+    #expect(insertCounters.incrementalRecordProjectionCount == recordCount)
+    #expect(insertCounters.fullRecordProjectionCount == 0)
+    #expect(insertCounters.fullModelProjectionCount == 0)
+    #expect(insertCounters.resultIdentityLookupCount == 0)
+
     let results = WebInspectorFetchedResults<NetworkRequest>(
         fetchDescriptor: WebInspectorFetchDescriptor(),
         modelContext: context

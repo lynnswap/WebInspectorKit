@@ -1583,11 +1583,11 @@ func consoleMessagesClearedForDistinctTargetsReleasesBothObjectGroups() async th
     await runtime.backend.enqueue((), for: "Runtime", method: "releaseObjectGroup")
     await runtime.backend.enqueue((), for: "Runtime", method: "releaseObjectGroup")
 
-    context.apply(
+    await context.apply(
         Console.Event.messagesCleared(reason: Console.ClearReason(rawValue: "console-api")),
         targetID: WebInspectorTarget.ID("console-frame-a")
     )
-    context.apply(
+    await context.apply(
         Console.Event.messagesCleared(reason: Console.ClearReason(rawValue: "console-api")),
         targetID: WebInspectorTarget.ID("console-frame-b")
     )
@@ -6973,6 +6973,10 @@ func consoleMessagesClearedReleasesConsoleRuntimeObjects() async throws {
         await runtime.backend.recordedCommands()
             .contains(RecordedCommand(domain: "Runtime", method: "releaseObjectGroup"))
     }
+    let releaseObjectGroupCommands = await runtime.backend.recordedCommands().filter {
+        $0 == RecordedCommand(domain: "Runtime", method: "releaseObjectGroup")
+    }
+    #expect(releaseObjectGroupCommands.count == 1)
     try await waitUntil { results.items.isEmpty }
     do {
         _ = try await parameter.properties()

@@ -319,6 +319,9 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
     @ObservationIgnored private var networkQueryPlan: NetworkRequestQueryPlan?
     @ObservationIgnored private var networkQueryState: NetworkRequestQueryState?
     @ObservationIgnored private var networkIndexSequence: UInt64
+    @ObservationIgnored private var consoleQueryPlan: ConsoleMessageQueryPlan?
+    @ObservationIgnored private var consoleQueryState: ConsoleMessageQueryState?
+    @ObservationIgnored private var consoleIndexSequence: UInt64
 
     /// The descriptor currently used by the results.
     public var fetchDescriptor: WebInspectorFetchDescriptor<Model> {
@@ -374,6 +377,9 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
         networkQueryPlan = nil
         networkQueryState = nil
         networkIndexSequence = 0
+        consoleQueryPlan = nil
+        consoleQueryState = nil
+        consoleIndexSequence = 0
     }
 
     deinit {
@@ -430,6 +436,55 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
             fetchDescriptor: descriptor,
             isReset: true
         )
+    }
+
+    private func applyIndexedDelta(
+        sequence: UInt64,
+        snapshot: WebInspectorFetchedResultsSnapshot<Model.ID>,
+        transaction: WebInspectorFetchedResultsTransaction<Model.ID>,
+        reconfigureItemIDs: Set<Model.ID>,
+        currentIndexSequence: UInt64,
+        lookup: (Model.ID) -> Model?
+    ) -> UInt64 {
+        guard sequence > currentIndexSequence else {
+            return currentIndexSequence
+        }
+        if snapshot == state.snapshot {
+            publish(
+                items: state.items,
+                sections: state.sections,
+                snapshot: snapshot,
+                transaction: transaction,
+                updatedItemIDs: reconfigureItemIDs
+            )
+            return sequence
+        }
+        let items = snapshot.itemIDs.map { id in
+            guard let model = lookup(id) else {
+                preconditionFailure("An indexed fetched-results snapshot referenced an unregistered \(Model.self).")
+            }
+            return model
+        }
+        let sections = snapshot.sections.map { section in
+            WebInspectorFetchSection(
+                id: section.id,
+                title: section.title,
+                items: section.itemIDs.map { id in
+                    guard let model = lookup(id) else {
+                        preconditionFailure("An indexed fetched-results section referenced an unregistered \(Model.self).")
+                    }
+                    return model
+                }
+            )
+        }
+        publish(
+            items: items,
+            sections: sections,
+            snapshot: snapshot,
+            transaction: transaction,
+            updatedItemIDs: reconfigureItemIDs
+        )
+        return sequence
     }
 
     /// Replaces the fetch descriptor and updates the result contents.
@@ -667,45 +722,117 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
         _ delta: NetworkResultSetDelta,
         lookup: (NetworkRequest.ID) -> NetworkRequest?
     ) {
-        guard delta.sequence > networkIndexSequence else {
-            return
-        }
-        if delta.snapshot == state.snapshot {
-            publish(
-                items: state.items,
-                sections: state.sections,
-                snapshot: delta.snapshot,
-                transaction: delta.transaction,
-                updatedItemIDs: delta.reconfigureItemIDs
-            )
-            networkIndexSequence = delta.sequence
-            return
-        }
-        let items = delta.snapshot.itemIDs.map { id in
-            guard let request = lookup(id) else {
-                preconditionFailure("A NetworkRequestIndex snapshot referenced an unregistered request.")
-            }
-            return request
-        }
-        let sections = delta.snapshot.sections.map { section in
-            WebInspectorFetchSection(
-                id: section.id,
-                title: section.title,
-                items: section.itemIDs.map { id in
-                    guard let request = lookup(id) else {
-                        preconditionFailure("A NetworkRequestIndex section referenced an unregistered request.")
-                    }
-                    return request
-                }
-            )
-        }
-        publish(
-            items: items,
-            sections: sections,
+        networkIndexSequence = applyIndexedDelta(
+            sequence: delta.sequence,
             snapshot: delta.snapshot,
             transaction: delta.transaction,
-            updatedItemIDs: delta.reconfigureItemIDs
+            reconfigureItemIDs: delta.reconfigureItemIDs,
+            currentIndexSequence: networkIndexSequence,
+            lookup: lookup
         )
-        networkIndexSequence = delta.sequence
+    }
+}
+
+extension WebInspectorFetchedResults where Model == ConsoleMessage {
+    var consoleSnapshotForDelta: WebInspectorFetchedResultsSnapshot<ConsoleMessage.ID> {
+        state.snapshot
+    }
+
+    var consoleIndexSequenceForDelta: UInt64 {
+        consoleIndexSequence
+    }
+
+    func currentConsoleQueryPlan(context: WebInspectorContext) -> ConsoleMessageQueryPlan {
+        if let consoleQueryPlan {
+            return consoleQueryPlan
+        }
+        let plan = ConsoleMessageQueryPlan(descriptor: state.fetchDescriptor, context: context)
+        consoleQueryPlan = plan
+        return plan
+    }
+
+    func setConsoleItems(
+        _ messages: [ConsoleMessage],
+        plan: ConsoleMessageQueryPlan,
+        indexSequence: UInt64,
+        lookup: (ConsoleMessage.ID) -> ConsoleMessage?
+    ) {
+        consoleQueryPlan = plan
+        if plan.requiresQuery {
+            let queryState = ConsoleMessageQueryState(plan: plan, messages: messages)
+            consoleQueryState = queryState
+            setItems(queryState.visibleMessages(lookup: lookup))
+        } else {
+            consoleQueryState = nil
+            setItems(messages)
+        }
+        consoleIndexSequence = indexSequence
+    }
+
+    func applyConsoleFetchDescriptor(
+        _ descriptor: WebInspectorFetchDescriptor<ConsoleMessage>,
+        plan: ConsoleMessageQueryPlan,
+        messages: [ConsoleMessage],
+        indexSequence: UInt64,
+        lookup: (ConsoleMessage.ID) -> ConsoleMessage?
+    ) {
+        consoleQueryPlan = plan
+        let visibleMessages: [ConsoleMessage]
+        if plan.requiresQuery {
+            let queryState = ConsoleMessageQueryState(plan: plan, messages: messages)
+            consoleQueryState = queryState
+            visibleMessages = queryState.visibleMessages(lookup: lookup)
+        } else {
+            consoleQueryState = nil
+            visibleMessages = messages
+        }
+        let sections = Self.sections(for: visibleMessages, sectionBy: state.sectionBy)
+        publish(
+            items: visibleMessages,
+            sections: sections,
+            fetchDescriptor: descriptor,
+            isReset: true
+        )
+        consoleIndexSequence = indexSequence
+    }
+
+    func insertConsoleMessage(
+        _ message: ConsoleMessage,
+        lookup: (ConsoleMessage.ID) -> ConsoleMessage?
+    ) {
+        guard var queryState = consoleQueryState else {
+            insertItem(message)
+            return
+        }
+        queryState.upsert(message: message)
+        consoleQueryState = queryState
+        setItems(queryState.visibleMessages(lookup: lookup))
+    }
+
+    func refreshConsoleMessageAfterMutation(
+        _ message: ConsoleMessage,
+        lookup: (ConsoleMessage.ID) -> ConsoleMessage?
+    ) {
+        guard var queryState = consoleQueryState else {
+            refreshAfterItemMutation(message)
+            return
+        }
+        queryState.upsert(message: message)
+        consoleQueryState = queryState
+        setItems(queryState.visibleMessages(lookup: lookup), updatedItemIDs: [message.id])
+    }
+
+    func applyConsoleDelta(
+        _ delta: ConsoleResultSetDelta,
+        lookup: (ConsoleMessage.ID) -> ConsoleMessage?
+    ) {
+        consoleIndexSequence = applyIndexedDelta(
+            sequence: delta.sequence,
+            snapshot: delta.snapshot,
+            transaction: delta.transaction,
+            reconfigureItemIDs: delta.reconfigureItemIDs,
+            currentIndexSequence: consoleIndexSequence,
+            lookup: lookup
+        )
     }
 }
