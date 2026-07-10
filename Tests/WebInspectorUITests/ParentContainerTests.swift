@@ -249,16 +249,18 @@ struct ParentContainerTests {
     }
 
     @Test
-    func presentationContentStoreEvictsEntriesFromPreviousContextEpoch() {
+    func presentationContentStoreReusesEntriesUntilRootClear() async {
         let contentStore = PresentationContentStore()
-        let key = WebInspectorTab.ContentKey(tabID: "epoch-tab", contentID: "root")
+        let key = WebInspectorTab.ContentKey(tabID: "cached-tab", contentID: "root")
 
-        let first = contentStore.viewController(for: key, contextEpoch: 0) { UIViewController() }
-        #expect(contentStore.viewController(for: key, contextEpoch: 0) { UIViewController() } === first)
+        let first = contentStore.viewController(for: key) { UIViewController() }
+        #expect(contentStore.viewController(for: key) { UIViewController() } === first)
 
-        let second = contentStore.viewController(for: key, contextEpoch: 1) { UIViewController() }
+        await contentStore.clear()
+
+        let second = contentStore.viewController(for: key) { UIViewController() }
         #expect(second !== first)
-        #expect(contentStore.viewController(for: key, contextEpoch: 1) { UIViewController() } === second)
+        #expect(contentStore.viewController(for: key) { UIViewController() } === second)
         #expect(contentStore.contentCountForTesting == 1)
     }
 
@@ -284,8 +286,7 @@ struct ParentContainerTests {
         }
 
         let resourceViewController = contentStore.networkViewController(
-            context: context,
-            contextEpoch: 1
+            context: context
         ) { _ in
             UIViewController()
         }
@@ -312,8 +313,7 @@ struct ParentContainerTests {
         let context = makeContext()
         let contentStore = PresentationContentStore()
         let firstResourceViewController = contentStore.networkViewController(
-            context: context,
-            contextEpoch: 1
+            context: context
         ) { _ in
             UIViewController()
         }
@@ -321,8 +321,7 @@ struct ParentContainerTests {
         let model = try #require(contentStore.networkPanelModelForTesting)
 
         let secondResourceViewController = contentStore.networkViewController(
-            context: context,
-            contextEpoch: 1
+            context: context
         ) { _ in
             UIViewController()
         }
@@ -344,22 +343,24 @@ struct ParentContainerTests {
     }
 
     @Test
-    func contextReplacementRejectsLateNetworkModelBeforePublishingNewReadyState() async throws {
-        let firstContext = makeContext()
-        let secondContext = makeContext()
+    func rootClearRejectsLateNetworkModelBeforePublishingRestartedReadyState() async throws {
+        let context = makeContext()
         let firstFactoryStarted = WebInspectorTestGate()
         let firstFactoryRelease = WebInspectorTestGate()
         let secondFactoryStarted = WebInspectorTestGate()
         let secondFactoryRelease = WebInspectorTestGate()
         var firstModel: NetworkPanelModel?
-        let contentStore = PresentationContentStore { context in
-            let model = try await NetworkPanelModel.make(context: context)
-            if context === firstContext {
+        var factoryInvocationCount = 0
+        let contentStore = PresentationContentStore { candidateContext in
+            #expect(candidateContext === context)
+            let model = try await NetworkPanelModel.make(context: candidateContext)
+            factoryInvocationCount += 1
+            if factoryInvocationCount == 1 {
                 firstModel = model
                 firstFactoryStarted.open()
                 await firstFactoryRelease.waiter.wait()
             } else {
-                #expect(context === secondContext)
+                #expect(factoryInvocationCount == 2)
                 secondFactoryStarted.open()
                 await secondFactoryRelease.waiter.wait()
             }
@@ -367,37 +368,44 @@ struct ParentContainerTests {
         }
 
         let firstResourceViewController = contentStore.networkViewController(
-            context: firstContext,
-            contextEpoch: 1
+            context: context
         ) { _ in
             UIViewController()
         }
         await firstFactoryStarted.waiter.wait()
         let withheldFirstModel = try #require(firstModel)
 
-        let secondResourceViewController = contentStore.networkViewController(
-            context: secondContext,
-            contextEpoch: 2
-        ) { _ in
-            UIViewController()
+        let clearTask = Task { @MainActor in
+            await contentStore.clear()
+        }
+        for _ in 0..<100 where contentStore.networkResourceStatus != .idle {
+            await Task.yield()
         }
 
         #expect(firstResourceViewController.phase == .loading)
-        #expect(secondResourceViewController.phase == .loading)
-        #expect(contentStore.contextEpoch == 2)
+        #expect(contentStore.networkResourceStatus == .idle)
 
         firstFactoryRelease.open()
-        await secondFactoryStarted.waiter.wait()
+        await clearTask.value
 
         #expect(withheldFirstModel.isRetiredForTesting)
-        #expect(contentStore.networkResourceStatus == .loading)
+        #expect(contentStore.networkResourceStatus == .idle)
+
+        let secondResourceViewController = contentStore.networkViewController(
+            context: context
+        ) { _ in
+            UIViewController()
+        }
+        await secondFactoryStarted.waiter.wait()
+
+        #expect(secondResourceViewController.phase == .loading)
         #expect(secondResourceViewController.readyViewControllerForTesting == nil)
 
         secondFactoryRelease.open()
         await contentStore.waitForNetworkResourceTaskForTesting()
 
         let secondModel = try #require(contentStore.networkPanelModelForTesting)
-        #expect(secondModel.context === secondContext)
+        #expect(secondModel.context === context)
         #expect(secondResourceViewController.phase == .ready)
         #expect(firstResourceViewController.phase == .loading)
 
@@ -411,8 +419,7 @@ struct ParentContainerTests {
             throw NetworkResourceFailure()
         }
         let resourceViewController = contentStore.networkViewController(
-            context: context,
-            contextEpoch: 1
+            context: context
         ) { _ in
             Issue.record("A failed Network resource must not create ready content.")
             return UIViewController()
@@ -448,8 +455,7 @@ struct ParentContainerTests {
         }
         weak let retainedStore = contentStore
         let resourceViewController = try #require(contentStore).networkViewController(
-            context: context,
-            contextEpoch: 1
+            context: context
         ) { _ in
             UIViewController()
         }
@@ -470,8 +476,7 @@ struct ParentContainerTests {
         var contentStore: PresentationContentStore? = PresentationContentStore()
         weak let retainedStore = contentStore
         let resourceViewController = try #require(contentStore).networkViewController(
-            context: context,
-            contextEpoch: 1
+            context: context
         ) { _ in
             UIViewController()
         }
@@ -516,29 +521,26 @@ struct ParentContainerTests {
     }
 
     @Test
-    func compactHostRebuildsActiveTabsWhenContentRevisionChanges() async throws {
-        let session = makeSessionWithNoOpAttachment()
+    func compactHostPreservesActiveTabsAcrossStableModelAttach() async throws {
+        let session = makeAttachmentSession()
         let viewController = WebInspectorViewController(session: session)
         viewController.horizontalSizeClassOverrideForTesting = .compact
         viewController.loadViewIfNeeded()
         let compactHost = try #require(viewController.activeHostViewControllerForTesting as? CompactTabBarController)
         let initialTabs = compactHost.currentUITabsForTesting
         let initialTabIdentities = initialTabs.map(ObjectIdentifier.init)
+        let stableModel = session.model
         #expect(initialTabs.isEmpty == false)
 
-        session.interface.contextDidChange()
+        try await attach(session)
 
-        let didRebuildTabs = await waitUntilCompactHostRendered(in: compactHost) {
-            let rebuiltTabs = compactHost.currentUITabsForTesting
-            return rebuiltTabs.count == initialTabs.count
-                && rebuiltTabs.map(ObjectIdentifier.init) != initialTabIdentities
-        }
-        #expect(didRebuildTabs)
+        #expect(session.model === stableModel)
+        #expect(compactHost.currentUITabsForTesting.map(ObjectIdentifier.init) == initialTabIdentities)
     }
 
     @Test
-    func regularHostRebuildsVisibleContentWhenContentRevisionChanges() async throws {
-        let session = makeSessionWithNoOpAttachment()
+    func regularHostPreservesVisibleContentAcrossStableModelAttach() async throws {
+        let session = makeAttachmentSession()
         let viewController = WebInspectorViewController(session: session)
         viewController.horizontalSizeClassOverrideForTesting = .regular
         viewController.loadViewIfNeeded()
@@ -546,16 +548,12 @@ struct ParentContainerTests {
             viewController.activeHostViewControllerForTesting as? RegularTabContentViewController
         )
         let initialRootViewController = try #require(regularHost.viewControllers.first)
+        let stableModel = session.model
 
-        session.interface.contextDidChange()
+        try await attach(session)
 
-        let didRebuildContent = await waitUntilRegularHostRendered(in: regularHost) {
-            guard let currentRootViewController = regularHost.viewControllers.first else {
-                return false
-            }
-            return currentRootViewController !== initialRootViewController
-        }
-        #expect(didRebuildContent)
+        #expect(session.model === stableModel)
+        #expect(regularHost.viewControllers.first === initialRootViewController)
     }
 
     @Test
