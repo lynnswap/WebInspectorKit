@@ -1105,6 +1105,82 @@ struct BrowserSessionRestoreTests {
     }
 
     @Test
+    func inFlightAttachmentDoesNotRetainLifecycleOwner() async throws {
+        let fixture = try makeAttachmentLifecycleFixture()
+        let actions = ControlledInspectorAttachmentActions()
+        var lifecycle: BrowserInspectorSessionAttachmentLifecycle? = BrowserInspectorSessionAttachmentLifecycle(
+            browserWindow: fixture.browserWindow,
+            inspectorSession: WebInspectorSession(),
+            attachAction: actions.attach,
+            detachAction: actions.detach
+        )
+        weak var retainedLifecycle = lifecycle
+
+        lifecycle?.request(.attached)
+        await actions.waitUntilAttachStarted(count: 1)
+
+        lifecycle = nil
+
+        #expect(retainedLifecycle == nil)
+
+        actions.releaseAttach()
+        await actions.waitUntilAttachCompleted(count: 1)
+    }
+
+    @Test
+    func lateAttachmentCompletionDoesNotStartPendingReattachmentAfterLifecycleRelease() async throws {
+        let fixture = try makeAttachmentLifecycleFixture()
+        let actions = ControlledInspectorAttachmentActions()
+        var lifecycle: BrowserInspectorSessionAttachmentLifecycle? = BrowserInspectorSessionAttachmentLifecycle(
+            browserWindow: fixture.browserWindow,
+            inspectorSession: WebInspectorSession(),
+            attachAction: actions.attach,
+            detachAction: actions.detach
+        )
+        weak var retainedLifecycle = lifecycle
+
+        lifecycle?.request(.attached)
+        await actions.waitUntilAttachStarted(count: 1)
+        fixture.browserWindow.selectTab(id: fixture.secondTabID)
+        lifecycle?.selectedWebViewDidChange(to: fixture.secondWebView)
+
+        lifecycle = nil
+        #expect(retainedLifecycle == nil)
+
+        actions.releaseAttach()
+        await actions.waitUntilAttachCompleted(count: 1)
+
+        #expect(actions.attachedWebViews == [fixture.firstWebView])
+        #expect(actions.detachCount == 0)
+    }
+
+    @Test
+    func cancellingInFlightAttachmentRejectsLateCompletionAndPendingReattachment() async throws {
+        let fixture = try makeAttachmentLifecycleFixture()
+        let actions = ControlledInspectorAttachmentActions()
+        let lifecycle = BrowserInspectorSessionAttachmentLifecycle(
+            browserWindow: fixture.browserWindow,
+            inspectorSession: WebInspectorSession(),
+            attachAction: actions.attach,
+            detachAction: actions.detach
+        )
+
+        lifecycle.request(.attached)
+        await actions.waitUntilAttachStarted(count: 1)
+        fixture.browserWindow.selectTab(id: fixture.secondTabID)
+        lifecycle.selectedWebViewDidChange(to: fixture.secondWebView)
+
+        lifecycle.cancel()
+        actions.releaseAttach()
+        await actions.waitUntilAttachCompleted(count: 1)
+        lifecycle.request(.attached)
+
+        #expect(actions.attachedWebViews == [fixture.firstWebView])
+        #expect(actions.attachCompletionCount == 1)
+        #expect(actions.detachCount == 0)
+    }
+
+    @Test
     func mainSceneDelegateConnectsWithRestoredBrowserStore() throws {
         try withTemporarySessionStore { sessionStore, _ in
             let windowScene = try makeWindowScene()
@@ -1360,24 +1436,28 @@ struct BrowserSessionRestoreTests {
     @MainActor
     private final class ControlledInspectorAttachmentActions {
         private(set) var attachedWebViews: [WKWebView] = []
+        private(set) var attachCompletionCount = 0
         private(set) var detachCount = 0
         private var attachContinuation: CheckedContinuation<Void, Never>?
         private var attachResult: Result<Void, any Error> = .success(())
         private var attachStartedWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+        private var attachCompletedWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
         private var detachWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
 
-        func attach(_ inspectorSession: WebInspectorSession, _ webView: WKWebView) async throws {
+        func attach(_ webView: WKWebView) async throws {
             attachedWebViews.append(webView)
             resumeAttachStartedWaiters()
             await withCheckedContinuation { continuation in
                 attachContinuation = continuation
             }
+            attachCompletionCount += 1
+            resumeAttachCompletedWaiters()
             let result = attachResult
             attachResult = .success(())
             try result.get()
         }
 
-        func detach(_ inspectorSession: WebInspectorSession) async {
+        func detach() async {
             detachCount += 1
             resumeDetachWaiters()
         }
@@ -1388,6 +1468,15 @@ struct BrowserSessionRestoreTests {
             }
             await withCheckedContinuation { continuation in
                 attachStartedWaiters.append((count, continuation))
+            }
+        }
+
+        func waitUntilAttachCompleted(count: Int) async {
+            guard attachCompletionCount < count else {
+                return
+            }
+            await withCheckedContinuation { continuation in
+                attachCompletedWaiters.append((count, continuation))
             }
         }
 
@@ -1410,6 +1499,14 @@ struct BrowserSessionRestoreTests {
         private func resumeAttachStartedWaiters() {
             let readyWaiters = attachStartedWaiters.filter { attachedWebViews.count >= $0.0 }
             attachStartedWaiters.removeAll { attachedWebViews.count >= $0.0 }
+            for waiter in readyWaiters {
+                waiter.1.resume()
+            }
+        }
+
+        private func resumeAttachCompletedWaiters() {
+            let readyWaiters = attachCompletedWaiters.filter { attachCompletionCount >= $0.0 }
+            attachCompletedWaiters.removeAll { attachCompletionCount >= $0.0 }
             for waiter in readyWaiters {
                 waiter.1.resume()
             }
