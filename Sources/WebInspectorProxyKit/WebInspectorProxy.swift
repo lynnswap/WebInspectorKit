@@ -192,11 +192,11 @@ public actor WebInspectorProxy {
 
     package func openModelFeed(
         configuredDomains: Set<ModelDomain>,
-        capacity: Int = 256
+        onRegistered: (@Sendable (ConnectionModelFeed) async -> Bool)? = nil
     ) async throws -> ConnectionModelFeed {
         try await core.openModelFeed(
             configuredDomains: configuredDomains,
-            capacity: capacity
+            onRegistered: onRegistered
         )
     }
 

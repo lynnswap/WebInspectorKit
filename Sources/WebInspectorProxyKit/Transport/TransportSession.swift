@@ -590,9 +590,8 @@ package actor ConnectionCore {
 
     package func openModelFeed(
         configuredDomains: Set<ModelDomain>,
-        capacity: Int
+        onRegistered: (@Sendable (ConnectionModelFeed) async -> Bool)? = nil
     ) async throws -> ConnectionModelFeed {
-        precondition(capacity > 0, "A bounded model feed must have a positive capacity.")
         guard isOpen else {
             throw terminalScopeError
         }
@@ -605,7 +604,7 @@ package actor ConnectionCore {
 
         let configuredDomains = ModelDomain.normalized(configuredDomains)
         let id = ConnectionModelFeedID()
-        let mailbox = ConnectionModelFeedMailbox(capacity: capacity)
+        let mailbox = ConnectionModelFeedMailbox()
         let feed = ConnectionModelFeed(id: id, owner: self, mailbox: mailbox)
         let resetGeneration: WebInspectorPage.Generation
         if targetRegistry.currentMainPageTargetID != nil || currentPageBindingGapIsOpen {
@@ -629,14 +628,18 @@ package actor ConnectionCore {
         )
 
         guard enqueueModelFeedRecord(.reset(resetGeneration)) else {
-            throw ConnectionModelFeedError.bufferOverflow(capacity: capacity)
+            throw ConnectionModelFeedError.consumerTerminated
         }
         if targetRegistry.currentMainPageTargetID != nil,
            !publishModelTargetSnapshot() {
-            throw ConnectionModelFeedError.bufferOverflow(capacity: capacity)
+            throw ConnectionModelFeedError.consumerTerminated
         }
 
         do {
+            if let onRegistered,
+               !(await onRegistered(feed)) {
+                throw ConnectionModelFeedError.consumerTerminated
+            }
             for domain in ModelDomain.ordered(configuredDomains) {
                 do {
                     let leaseOwner = ConnectionCapabilityLeaseOwner.modelFeed(id, domain)
@@ -678,15 +681,26 @@ package actor ConnectionCore {
             guard isOpen else {
                 throw terminalScopeError
             }
-            guard var registration = modelFeed,
+            guard let registration = modelFeed,
                   registration.id == id else {
                 preconditionFailure("A model feed lost its exclusive registration during acquisition.")
             }
             guard case .acquiring = registration.lifecycle else {
                 preconditionFailure("A model feed changed lifecycle before acquisition completed.")
             }
-            registration.lifecycle = .active
-            modelFeed = registration
+            guard publishModelSynchronizationIfReady(
+                allowWhileAcquiring: true
+            ) else {
+                throw ConnectionModelFeedError.consumerTerminated
+            }
+            guard var synchronizedRegistration = modelFeed,
+                  synchronizedRegistration.id == id,
+                  case .acquiring = synchronizedRegistration.lifecycle else {
+                preconditionFailure("A model feed changed lifecycle while publishing readiness.")
+            }
+            synchronizedRegistration.lifecycle = .active
+            modelFeed = synchronizedRegistration
+            reevaluateModelCommandReadinessWaiters()
             return feed
         } catch {
             let cleanupError = await rollbackModelFeedAcquisition(id)
@@ -1988,15 +2002,6 @@ package actor ConnectionCore {
         switch registration.mailbox.enqueue(record) {
         case .enqueued:
             return true
-        case .overflow:
-            handoffTermination(
-                .modelFeedFailure(
-                    ConnectionModelFeedError.bufferOverflow(
-                        capacity: registration.mailbox.capacity
-                    )
-                )
-            )
-            return false
         case .terminated:
             handoffTermination(
                 .modelFeedFailure(ConnectionModelFeedError.consumerTerminated)
@@ -2067,9 +2072,19 @@ package actor ConnectionCore {
     }
 
     @discardableResult
-    private func publishModelSynchronizationIfReady() -> Bool {
+    private func publishModelSynchronizationIfReady(
+        allowWhileAcquiring: Bool = false
+    ) -> Bool {
         guard var registration = modelFeed,
               var synchronization = registration.synchronization else {
+            return true
+        }
+        switch registration.lifecycle {
+        case .active:
+            break
+        case .acquiring where allowWhileAcquiring:
+            break
+        case .acquiring, .rollingBack, .closing:
             return true
         }
         guard synchronization.completedDomains == registration.configuredDomains else {

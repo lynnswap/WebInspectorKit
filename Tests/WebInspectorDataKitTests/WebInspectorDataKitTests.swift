@@ -130,6 +130,61 @@ func attachmentPublishesDOMSnapshotAndAcceptsFilteredSequenceGaps() async throws
 
 @MainActor
 @Test
+func attachmentDrainsLargeEnableReplayBeforePublishingReadiness() async throws {
+    try await withDataKitTestRuntime { runtime in
+        let target = try await runtime.proxy.waitForCurrentPage()
+        let configuration = WebInspectorModelContext.Configuration(
+            domains: [.network]
+        )
+        let context = WebInspectorModelContext(configuration: configuration)
+        let enableGate = await runtime.wire.deferReply(
+            to: "Network.enable",
+            with: try testJSONObject(#"{}"#)
+        )
+        let attachment = Task {
+            try await context.attach(
+                to: runtime.proxy,
+                isolation: MainActor.shared
+            )
+        }
+        _ = await runtime.wire.observations.waitForCommands(
+            method: "Network.enable",
+            count: 1
+        )
+
+        let replayEventCount = 512
+        for index in 0..<replayEventCount {
+            let id = Network.Request.ID("enable-replay-\(index)")
+            try await runtime.wire.emitRaw(
+                .requestWillBeSent(
+                    id: id,
+                    request: Network.Request(
+                        id: id,
+                        url: "https://example.com/\(index)",
+                        method: "GET"
+                    ),
+                    resourceType: .fetch,
+                    redirectResponse: nil,
+                    timestamp: Double(index)
+                ),
+                target: target
+            )
+        }
+        enableGate.open()
+
+        try await attachment.value
+        #expect(context.state == .attached)
+        #expect(try context.networkRequest(
+            id: NetworkRequest.ID(Network.Request.ID("enable-replay-511"))
+        ) != nil)
+
+        await runtime.wire.respond(to: "Network.disable")
+        await context.close()
+    }
+}
+
+@MainActor
+@Test
 func closeClearsAttachmentOwnedModelsAndBecomesTerminal() async throws {
     try await withDataKitTestRuntime { runtime in
         let configuration = WebInspectorModelContext.Configuration(domains: [.network])

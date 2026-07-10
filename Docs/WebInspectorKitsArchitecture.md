@@ -643,11 +643,11 @@ package enum ModelBootstrapSnapshot: Sendable { /* target + epoch + typed snapsh
 package enum ModelDomain: Hashable, Sendable { /* configured domains */ }
 package enum ConnectionModelFeedError: Error, Sendable {
     case bootstrapFailed(domain: ModelDomain, message: String)
-    // exclusive-use, overflow, and consumer-lifecycle cases omitted
+    // exclusive-use and consumer-lifecycle cases omitted
 }
 ```
 
-The current transport slice implements the bounded exclusive feed, initial
+The current transport slice implements the lossless exclusive feed, initial
 `reset`/`targetSnapshot`, future target lifecycle deltas, future events for
 configured domains, transactional capability leases, enable-replay boundaries
 for CSS, Network, Console, and Runtime, DOM snapshot bootstrap, and one
@@ -659,9 +659,14 @@ may interleave across domains; the single `synchronizationComplete` record is
 the only all-domain-ready barrier. DOM's capability lease itself is local and
 sends no `DOM.enable`; the separate bootstrap owner sends `DOM.getDocument`.
 The feed is registered and its initial records are published before the first
-capability await, and `openModelFeed` returns only after every configured
-capability is active. An acquisition failure or cancellation releases the
-successful prefix in reverse order before returning. For an empty
+capability await. DataKit installs and starts the sole feed driver through that
+registration barrier before capability activation begins, so enable-time replay
+is consumed while `openModelFeed` is still awaiting the wire. The all-domain
+`synchronizationComplete` marker remains gated until activation has completed;
+therefore `.attached` still implies that model commands are active.
+`openModelFeed` returns only after every configured capability is active. An
+acquisition failure or cancellation releases the successful prefix in reverse
+order before returning. For an empty
 configured-domain set the feed also emits `synchronizationComplete`.
 An inspected target's rejection of a configured domain activation is reported
 as `bootstrapFailed` with the `ModelDomain` already owned by the acquisition
@@ -699,13 +704,18 @@ that the next current-page binding will use. The later target snapshot and
 empty-domain synchronization record use that same generation and do not emit a
 duplicate same-sequence `targetCreated` delta.
 
-The feed is a bounded, oldest-first, single-consumer sequence. Overflow clears
-pending records and immediately poisons both the feed and connection; there is
-no silent drop, task relay, or unbounded default. Iterator cancellation or
-handle abandonment terminates that mailbox synchronously while retaining the
-exclusive connection claim. If the producer later attempts another enqueue to
-that terminated mailbox, that enqueue poisons the connection; an explicit
-`close()` before another enqueue remains a clean shutdown.
+The feed is an unbounded, oldest-first, single-consumer sequence. This is an
+explicit internal exception to the public stream default: it is the only
+authoritative snapshot/delta path, WebKit provides no producer backpressure,
+the upstream ingress queue can already accumulate messages, and Network/Console
+models intentionally retain their semantic records. An arbitrary pending-record
+limit would therefore break continuity without establishing a process memory
+bound. The consumer-registration barrier still prevents capability activation
+from creating a producer-only interval and reduces transient backlog. Iterator
+cancellation or handle abandonment terminates that mailbox synchronously while
+retaining the exclusive connection claim. If the producer later attempts
+another enqueue to that terminated mailbox, that enqueue poisons the connection;
+an explicit `close()` before another enqueue remains a clean shutdown.
 Explicit `ConnectionModelFeed.close()` is the sole feed-close surface. It
 releases configured capabilities in reverse acquisition order and releases the
 claim only after clean quiescence, allowing a replacement feed. Concurrent and
@@ -950,30 +960,14 @@ public enum WebInspectorProxyError: Error, Sendable {
 - Protocol event streams use bounded oldest-first buffering. The first drop
   terminates only that subscriber with `eventBufferOverflow`; peer subscribers
   continue.
-- The package model feed is also bounded. Overflow currently terminates the feed
-  and connection. The later DataKit driver maps that terminal failure to
-  `WebInspectorModelContext.Failure.feedBufferOverflow(capacity:)`; a mixed-feed
-  drop cannot truthfully attribute the failure to one domain. Neither layer may
-  fabricate a full domain resynchronization.
+- The package model feed is lossless and unbounded because it is the sole
+  authoritative snapshot/delta path. It never drops or fabricates a full-domain
+  resynchronization.
 - Coalescible state notifications use newest-one buffering.
 - Unexpected disconnect throws from event scopes. Explicit close ends scopes
   normally after all close work completes.
-- Unbounded buffering remains explicit opt-in, never the default.
-
-The context reducer owns the overflow transition in every lifecycle phase, and
-every overflow puts the context in
-`.failed(.feedBufferOverflow(capacity:))`. During attach/synchronization, shared
-transition waiters also throw that `Failure`. After attach has returned, state
-observation reports the failure; attachment is not retroactively failed. Before
-publishing `.failed`, the same reducer invalidates all model command authority,
-makes connection-scoped identities/resources stale or terminal, and resets
-every store. Existing DOM tree and fetched-results owners publish a full empty
-reset through their current identity and remain registered for recovery. New
-queries and all subsequent domain operations reject with the recorded `Failure`
-while the context is failed; state observation and explicit attach/detach/close
-remain available. An explicit attach from `.failed` tears down the poisoned
-connection, starts a new attachment generation, and delivers the new
-reset/snapshots through those existing result owners.
+- Unbounded buffering is not a public default; the exclusive authoritative
+  model feed is the documented internal exception.
 
 The implementation uses standard `AsyncThrowingStream<Element, any Error>` and
 throws concrete `WebInspectorProxyError` values. A custom typed-failure sequence
@@ -1050,7 +1044,6 @@ public final class WebInspectorModelContext {
     public enum Failure: Error, Equatable, Sendable {
         case connection(ConnectionFailure)
         case bootstrap(domain: Domain, message: String)
-        case feedBufferOverflow(capacity: Int)
     }
 
     public enum TransitionError: Error, Equatable, Sendable {
@@ -2088,13 +2081,10 @@ Tests are added before each owner is replaced. Required cases:
     emits `domDocumentInvalidated`; DataKit invalidates only that target's
     DOM/CSS authority, ignores pre-bootstrap deltas, and reauthorizes it only
     from the matching snapshot.
-12. A capacity-N stream receiving N+1 pending events throws overflow for that
-   subscriber while a peer continues. Separately, mixed model-feed overflow
-   fails DataKit with `feedBufferOverflow(capacity:)` and does not fabricate a
-   domain attribution. Before attach completion the context enters `.failed`
-   and the waiter throws; after attach, the same state transition resets existing
-   results and rejects operations. Only an explicit re-attach starts a
-   recoverable new generation.
+12. A capacity-N public event stream receiving N+1 pending events throws
+   overflow for that subscriber while a peer continues. Separately, the
+   authoritative model feed applies enable replay larger than 256 records in
+   exact sequence before publishing attachment readiness.
 13. A malformed known event and malformed root envelope terminate with protocol
    violation; an unknown method remains a raw event.
 14. Native fatal callbacks reach the connection terminal cause.

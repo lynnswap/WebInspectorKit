@@ -206,7 +206,6 @@ package struct ConnectionModelFeedID: Hashable, Sendable {
 
 package enum ConnectionModelFeedDeliveryResult: Sendable {
     case enqueued
-    case overflow
     case terminated
 }
 
@@ -216,7 +215,6 @@ package enum ConnectionModelFeedError: Error, Equatable, Sendable {
     /// A configured domain rejected the capability or document bootstrap that
     /// is required to construct or refresh its authoritative model state.
     case bootstrapFailed(domain: ModelDomain, message: String)
-    case bufferOverflow(capacity: Int)
     case consumerTerminated
 }
 
@@ -260,13 +258,9 @@ package final class ConnectionModelFeedMailbox: Sendable {
         }
     }
 
-    package let capacity: Int
     private let state = Mutex(State())
 
-    package init(capacity: Int) {
-        precondition(capacity > 0, "A bounded model feed must have a positive capacity.")
-        self.capacity = capacity
-    }
+    package init() {}
 
     package func claimIterator() {
         state.withLock { state in
@@ -291,13 +285,6 @@ package final class ConnectionModelFeedMailbox: Sendable {
             if let waiter = state.waiter {
                 state.waiter = nil
                 return (.enqueued, waiter)
-            }
-            guard state.pendingRecordCount < capacity else {
-                state.discardPendingRecords()
-                state.terminal = .failed(
-                    ConnectionModelFeedError.bufferOverflow(capacity: capacity)
-                )
-                return (.overflow, nil)
             }
             state.pendingRecords.append(record)
             return (.enqueued, nil)

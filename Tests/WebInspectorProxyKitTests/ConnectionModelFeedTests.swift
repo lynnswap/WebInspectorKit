@@ -452,8 +452,7 @@ func multiDomainSynchronizationAcceptsReplayBeforeDOMBootstrap() async throws {
 
     let openTask = Task {
         try await core.openModelFeed(
-            configuredDomains: [.dom, .network],
-            capacity: 12
+            configuredDomains: [.dom, .network]
         )
     }
     let getDocument = try await backend.waitForTargetMessage(method: "DOM.getDocument")
@@ -519,7 +518,7 @@ func modelFeedAtomicallyStartsWithResetTargetSnapshotAndEmptySynchronization() a
         parentFrameID: "frame-a"
     ))
 
-    let feed = try await core.openModelFeed(configuredDomains: [], capacity: 8)
+    let feed = try await core.openModelFeed(configuredDomains: [])
     var iterator = feed.records.makeAsyncIterator()
     let reset = try await modelFeedRequireReset(iterator.next())
     let snapshot = try await modelFeedRequireTargetSnapshot(iterator.next())
@@ -546,7 +545,7 @@ func modelFeedAtomicallyStartsWithResetTargetSnapshotAndEmptySynchronization() a
 @Test
 func modelFeedUnavailableBindingUsesOneGenerationForResetSnapshotAndSynchronization() async throws {
     let core = ConnectionCore(backend: FakeTransportBackend(), responseTimeout: nil)
-    let feed = try await core.openModelFeed(configuredDomains: [], capacity: 8)
+    let feed = try await core.openModelFeed(configuredDomains: [])
     var iterator = feed.records.makeAsyncIterator()
 
     let reset = try await modelFeedRequireReset(iterator.next())
@@ -583,7 +582,7 @@ func modelFeedPublishesFutureTargetAndConfiguredDomainEventsAfterSnapshotWaterma
         frameID: "main-frame"
     ))
     let openTask = Task {
-        try await core.openModelFeed(configuredDomains: [.network], capacity: 8)
+        try await core.openModelFeed(configuredDomains: [.network])
     }
     let enable = try await backend.waitForTargetMessage(method: "Network.enable")
     let enableID = try modelFeedMessageID(enable.message)
@@ -663,7 +662,7 @@ func modelFeedReplayCompletionFollowsEnableTimeEventsBeforeOpenReturns() async t
         frameID: "main-frame"
     ))
     let openTask = Task {
-        try await core.openModelFeed(configuredDomains: [.network], capacity: 8)
+        try await core.openModelFeed(configuredDomains: [.network])
     }
     let enable = try await backend.waitForTargetMessage(method: "Network.enable")
 
@@ -717,7 +716,7 @@ func cleanModelFeedCloseReleasesClaimForAReplacementFeed() async throws {
         frameID: "main-frame"
     ))
 
-    let firstFeed = try await core.openModelFeed(configuredDomains: [], capacity: 8)
+    let firstFeed = try await core.openModelFeed(configuredDomains: [])
     var firstIterator = firstFeed.records.makeAsyncIterator()
     _ = try await firstIterator.next()
     _ = try await firstIterator.next()
@@ -725,7 +724,7 @@ func cleanModelFeedCloseReleasesClaimForAReplacementFeed() async throws {
     try await firstFeed.close()
     #expect(try await firstIterator.next() == nil)
 
-    let replacementFeed = try await core.openModelFeed(configuredDomains: [], capacity: 8)
+    let replacementFeed = try await core.openModelFeed(configuredDomains: [])
     var replacementIterator = replacementFeed.records.makeAsyncIterator()
     _ = try await modelFeedRequireReset(replacementIterator.next())
     _ = try await modelFeedRequireTargetSnapshot(replacementIterator.next())
@@ -743,7 +742,7 @@ func cancelledIteratorRequiresExplicitFeedCloseBeforeReplacement() async throws 
         type: "page",
         frameID: "main-frame"
     ))
-    let feed = try await core.openModelFeed(configuredDomains: [], capacity: 8)
+    let feed = try await core.openModelFeed(configuredDomains: [])
     let ready = ModelFeedProbe()
     let consumer = Task {
         var iterator = feed.records.makeAsyncIterator()
@@ -760,11 +759,11 @@ func cancelledIteratorRequiresExplicitFeedCloseBeforeReplacement() async throws 
         try await consumer.value
     }
     await #expect(throws: ConnectionModelFeedError.alreadyOpen) {
-        try await core.openModelFeed(configuredDomains: [], capacity: 8)
+        try await core.openModelFeed(configuredDomains: [])
     }
 
     try await feed.close()
-    let replacementFeed = try await core.openModelFeed(configuredDomains: [], capacity: 8)
+    let replacementFeed = try await core.openModelFeed(configuredDomains: [])
     var replacementIterator = replacementFeed.records.makeAsyncIterator()
     _ = try await replacementIterator.next()
     _ = try await replacementIterator.next()
@@ -788,87 +787,16 @@ func admittedDirectCommandPermanentlyPreventsOpeningModelFeed() async throws {
     let sentMessage = try await backend.waitForMessage()
 
     await #expect(throws: ConnectionModelFeedError.connectionAlreadyUsedByDirectConsumer) {
-        try await core.openModelFeed(configuredDomains: [], capacity: 8)
+        try await core.openModelFeed(configuredDomains: [])
     }
 
     let commandID = try modelFeedMessageID(sentMessage)
     _ = await core.receiveRootMessage(#"{"id":\#(commandID),"result":{}}"#)
     _ = try await commandTask.value
     await #expect(throws: ConnectionModelFeedError.connectionAlreadyUsedByDirectConsumer) {
-        try await core.openModelFeed(configuredDomains: [], capacity: 8)
+        try await core.openModelFeed(configuredDomains: [])
     }
     await core.close()
-}
-
-@Test
-func modelFeedOverflowPoisonsFeedAndConnectionWithoutSilentDrop() async throws {
-    let core = ConnectionCore(backend: FakeTransportBackend(), responseTimeout: nil)
-    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
-        id: "page-main",
-        type: "page",
-        frameID: "main-frame"
-    ))
-    let feed = try await core.openModelFeed(configuredDomains: [], capacity: 3)
-
-    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
-        id: "frame-a",
-        type: "frame",
-        frameID: "frame-a",
-        parentFrameID: "main-frame"
-    ))
-
-    var iterator = feed.records.makeAsyncIterator()
-    await #expect(throws: ConnectionModelFeedError.bufferOverflow(capacity: 3)) {
-        try await iterator.next()
-    }
-    #expect(await core.terminalCause == .modelFeedFailure(.bufferOverflow(capacity: 3)))
-    await #expect(throws: WebInspectorProxyError.self) {
-        try await core.waitUntilClosed()
-    }
-}
-
-@Test
-func domDocumentInvalidationOverflowIsFirstTerminalAndDoesNotGuessResync() async throws {
-    let backend = FakeTransportBackend()
-    let core = ConnectionCore(backend: backend, responseTimeout: nil)
-    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
-        id: "page-main",
-        type: "page",
-        frameID: "main-frame"
-    ))
-    let feed = try await core.openModelFeed(configuredDomains: [.dom], capacity: 3)
-    var iterator = feed.records.makeAsyncIterator()
-    _ = try await modelFeedRequireReset(iterator.next())
-    _ = try await modelFeedRequireTargetSnapshot(iterator.next())
-
-    let initialDocument = try await backend.waitForTargetMessage(method: "DOM.getDocument")
-    await modelFeedRespondWithDocument(to: initialDocument, core: core, nodeID: "initial")
-    _ = try await modelFeedRequireDOMBootstrapSnapshot(iterator.next())
-    _ = try await modelFeedRequireBootstrapCompletion(iterator.next())
-    _ = try await modelFeedRequireSynchronization(iterator.next())
-
-    for nodeID in 1...3 {
-        _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
-            targetID: "page-main",
-            message: #"{"method":"DOM.childNodeCountUpdated","params":{"nodeId":\#(nodeID),"childNodeCount":0}}"#
-        ))
-    }
-    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
-        targetID: "page-main",
-        message: #"{"method":"DOM.documentUpdated","params":{}}"#
-    ))
-
-    let expectedError = ConnectionModelFeedError.bufferOverflow(capacity: 3)
-    #expect(await core.terminalCause == .modelFeedFailure(expectedError))
-    await #expect(throws: WebInspectorProxyError.self) {
-        try await core.waitUntilClosed()
-    }
-    await #expect(throws: expectedError) {
-        try await iterator.next()
-    }
-    #expect(try await modelFeedDOMGetDocumentMessages(backend).count == 1)
-    #expect(await backend.isDetached())
-    _ = feed
 }
 
 @Test
@@ -885,7 +813,7 @@ func modelFeedAndDirectConsumersClaimConnectionExclusivelyInBothOrders() async t
         routing: .octopus(pageTarget: nil)
     ))
     await #expect(throws: ConnectionModelFeedError.connectionAlreadyUsedByDirectConsumer) {
-        try await directFirstCore.openModelFeed(configuredDomains: [], capacity: 8)
+        try await directFirstCore.openModelFeed(configuredDomains: [])
     }
     await directFirstCore.close()
 
@@ -895,9 +823,9 @@ func modelFeedAndDirectConsumersClaimConnectionExclusivelyInBothOrders() async t
         type: "page",
         frameID: "main-frame"
     ))
-    let feed = try await feedFirstCore.openModelFeed(configuredDomains: [], capacity: 8)
+    let feed = try await feedFirstCore.openModelFeed(configuredDomains: [])
     await #expect(throws: ConnectionModelFeedError.alreadyOpen) {
-        try await feedFirstCore.openModelFeed(configuredDomains: [], capacity: 8)
+        try await feedFirstCore.openModelFeed(configuredDomains: [])
     }
     await #expect(throws: WebInspectorProxyError.connectionInUse) {
         try await feedFirstCore.send(ProtocolCommand(
@@ -941,7 +869,7 @@ func explicitConnectionCloseFinishesModelFeedOnlyAfterCloseQuiescence() async th
         type: "page",
         frameID: "main-frame"
     ))
-    let feed = try await core.openModelFeed(configuredDomains: [], capacity: 8)
+    let feed = try await core.openModelFeed(configuredDomains: [])
     let observerReady = ModelFeedProbe()
     let observerFinished = ModelFeedProbe()
     let observer = Task {
@@ -975,7 +903,7 @@ func fatalAndProtocolTerminationFailModelFeed() async throws {
         type: "page",
         frameID: "main-frame"
     ))
-    let fatalFeed = try await fatalCore.openModelFeed(configuredDomains: [], capacity: 8)
+    let fatalFeed = try await fatalCore.openModelFeed(configuredDomains: [])
     var fatalIterator = fatalFeed.records.makeAsyncIterator()
     _ = try await fatalIterator.next()
     _ = try await fatalIterator.next()
@@ -992,7 +920,7 @@ func fatalAndProtocolTerminationFailModelFeed() async throws {
         type: "page",
         frameID: "main-frame"
     ))
-    let protocolFeed = try await protocolCore.openModelFeed(configuredDomains: [], capacity: 8)
+    let protocolFeed = try await protocolCore.openModelFeed(configuredDomains: [])
     var protocolIterator = protocolFeed.records.makeAsyncIterator()
     _ = try await protocolIterator.next()
     _ = try await protocolIterator.next()
@@ -1012,8 +940,7 @@ func droppingModelFeedFinishesMailboxButKeepsConnectionClaimedUntilClose() async
         frameID: "main-frame"
     ))
     var feed: ConnectionModelFeed? = try await core.openModelFeed(
-        configuredDomains: [],
-        capacity: 8
+        configuredDomains: []
     )
     weak let weakFeed = feed
     let records = try #require(feed).records
@@ -1026,7 +953,7 @@ func droppingModelFeedFinishesMailboxButKeepsConnectionClaimedUntilClose() async
     #expect(try await iterator.next() == nil)
     #expect(weakFeed == nil)
     await #expect(throws: ConnectionModelFeedError.alreadyOpen) {
-        try await core.openModelFeed(configuredDomains: [], capacity: 8)
+        try await core.openModelFeed(configuredDomains: [])
     }
     await #expect(throws: WebInspectorProxyError.connectionInUse) {
         try await core.send(ProtocolCommand(
@@ -1041,7 +968,7 @@ func droppingModelFeedFinishesMailboxButKeepsConnectionClaimedUntilClose() async
 @Test
 func targetMutationCannotReenterBeforeSnapshotPublication() async throws {
     let core = ConnectionCore(backend: FakeTransportBackend(), responseTimeout: nil)
-    let feed = try await core.openModelFeed(configuredDomains: [], capacity: 8)
+    let feed = try await core.openModelFeed(configuredDomains: [])
     var iterator = feed.records.makeAsyncIterator()
     let reset = try await modelFeedRequireReset(iterator.next())
     let mutationGate = ModelFeedSynchronousGate()
@@ -1270,7 +1197,7 @@ func modelFeedAcquiresAndReleasesConfiguredCapabilitiesInDeterministicOrder() as
 }
 
 @Test
-func replayMarkerOverflowClaimsTerminalStateAndCannotReturnAnOpenFeed() async throws {
+func registeredModelFeedConsumerDrainsEnableReplayBeforeOpenReturns() async throws {
     let backend = FakeTransportBackend()
     let core = ConnectionCore(backend: backend, responseTimeout: nil)
     _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
@@ -1278,23 +1205,63 @@ func replayMarkerOverflowClaimsTerminalStateAndCannotReturnAnOpenFeed() async th
         type: "page",
         frameID: "main-frame"
     ))
+
+    let consumerTask = Mutex<Task<[ConnectionModelFeedRecord], any Error>?>(nil)
     let openTask = Task {
         try await core.openModelFeed(
             configuredDomains: [.network],
-            capacity: 2
+            onRegistered: { feed in
+                let task = Task {
+                    var records: [ConnectionModelFeedRecord] = []
+                    for try await record in feed.records {
+                        records.append(record)
+                        if case .synchronizationComplete = record {
+                            return records
+                        }
+                    }
+                    Issue.record("The model feed ended before synchronization.")
+                    return records
+                }
+                consumerTask.withLock { value in
+                    value = task
+                }
+                return true
+            }
         )
     }
     let enable = try await backend.waitForTargetMessage(method: "Network.enable")
 
-    await modelFeedRespond(to: enable, core: core)
-    #expect(await core.terminalCause == .modelFeedFailure(.bufferOverflow(capacity: 2)))
-    do {
-        _ = try await openTask.value
-        Issue.record("A replay-marker overflow must not return an open model feed.")
-    } catch {
-        #expect(error is WebInspectorScopeError)
+    let replayEventCount = 512
+    for index in 0..<replayEventCount {
+        _ = await core.receiveRootMessage(
+            modelFeedTargetDispatchMessage(
+                targetID: "page-main",
+                message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-\#(index)","request":{"url":"https://example.test/\#(index)","method":"GET"},"timestamp":\#(index),"type":"Fetch"}}"#
+            )
+        )
     }
-    #expect(await backend.isDetached())
+    await modelFeedRespond(to: enable, core: core)
+
+    let feed = try await openTask.value
+    let registeredConsumer = consumerTask.withLock { $0 }
+    let records = try await #require(registeredConsumer).value
+    let eventRecords = records.compactMap { record -> ModelProtocolEvent? in
+        guard case let .event(_, _, payload) = record else {
+            return nil
+        }
+        return payload
+    }
+    #expect(eventRecords.count == replayEventCount)
+    #expect(await core.terminalCause == nil)
+
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Network.enable"]
+    )
+    await core.close()
 }
 
 @Test
@@ -1308,8 +1275,7 @@ func rejectedEnableDoesNotPublishReplayMarkerOrPoisonFullFeed() async throws {
     ))
     let openTask = Task {
         try await core.openModelFeed(
-            configuredDomains: [.network],
-            capacity: 2
+            configuredDomains: [.network]
         )
     }
     let enable = try await backend.waitForTargetMessage(method: "Network.enable")
@@ -1329,8 +1295,7 @@ func rejectedEnableDoesNotPublishReplayMarkerOrPoisonFullFeed() async throws {
     #expect(await backend.isDetached() == false)
 
     let replacement = try await core.openModelFeed(
-        configuredDomains: [],
-        capacity: 3
+        configuredDomains: []
     )
     try await replacement.close()
     await core.close()
@@ -1348,13 +1313,13 @@ func modelFeedActivationPageUnavailableRemainsConnectionLifecycleError() async t
     await backend.setSendError(WebInspectorProxyError.pageUnavailable)
 
     await #expect(throws: WebInspectorProxyError.pageUnavailable) {
-        try await core.openModelFeed(configuredDomains: [.network], capacity: 8)
+        try await core.openModelFeed(configuredDomains: [.network])
     }
     #expect(await core.terminalCause == nil)
     #expect(await backend.isDetached() == false)
 
     await backend.setSendError(nil)
-    let replacement = try await core.openModelFeed(configuredDomains: [], capacity: 3)
+    let replacement = try await core.openModelFeed(configuredDomains: [])
     try await replacement.close()
     await core.close()
 }
@@ -1376,7 +1341,7 @@ func modelFeedActivationTerminalErrorIsNotRelabeledAsBootstrap(
     await backend.setSendError(activationError)
 
     do {
-        _ = try await core.openModelFeed(configuredDomains: [.network], capacity: 8)
+        _ = try await core.openModelFeed(configuredDomains: [.network])
         Issue.record("Expected activation to terminate the connection.")
     } catch let error as WebInspectorScopeError {
         #expect(error.operationError as? WebInspectorProxyError == activationError)
@@ -1407,8 +1372,7 @@ func cancelledActivationDoesNotPublishReplayMarkerAfterOwnerStopsBeingDesired() 
     )
     let openTask = Task {
         try await core.openModelFeed(
-            configuredDomains: [.network],
-            capacity: 2
+            configuredDomains: [.network]
         )
     }
     let enable = try await backend.waitForTargetMessage(method: "Network.enable")
@@ -1427,8 +1391,7 @@ func cancelledActivationDoesNotPublishReplayMarkerAfterOwnerStopsBeingDesired() 
     #expect(await modelFeedAllCapabilityLeaseOwners(core).isEmpty)
 
     let replacement = try await core.openModelFeed(
-        configuredDomains: [],
-        capacity: 3
+        configuredDomains: []
     )
     try await replacement.close()
     await core.close()
@@ -1456,8 +1419,7 @@ func modelFeedCapabilityFailureRollsBackSuccessfulPrefixInReverseOrder(
     ]
     let openTask = Task {
         try await core.openModelFeed(
-            configuredDomains: configuredDomains,
-            capacity: 32
+            configuredDomains: configuredDomains
         )
     }
 
@@ -1503,8 +1465,7 @@ func modelFeedCapabilityFailureRollsBackSuccessfulPrefixInReverseOrder(
     #expect(await modelFeedAllCapabilityLeaseOwners(core).isEmpty)
 
     let replacementFeed = try await core.openModelFeed(
-        configuredDomains: [],
-        capacity: 8
+        configuredDomains: []
     )
     try await replacementFeed.close()
     await core.close()
@@ -1521,8 +1482,7 @@ func modelFeedActivationCancellationRollsBackAfterEnableAndDisableQuiesce() asyn
     ))
     let openTask = Task {
         try await core.openModelFeed(
-            configuredDomains: [.network],
-            capacity: 8
+            configuredDomains: [.network]
         )
     }
     let enable = try await backend.waitForTargetMessage(method: "Network.enable")
@@ -1541,8 +1501,7 @@ func modelFeedActivationCancellationRollsBackAfterEnableAndDisableQuiesce() asyn
     ])
     #expect(await modelFeedAllCapabilityLeaseOwners(core).isEmpty)
     let replacementFeed = try await core.openModelFeed(
-        configuredDomains: [],
-        capacity: 8
+        configuredDomains: []
     )
     try await replacementFeed.close()
     await core.close()
@@ -1575,7 +1534,7 @@ func modelFeedCloseKeepsClaimUntilDisableAndSharesDuplicateCloseCompletion() asy
     duplicateClose.cancel()
 
     await #expect(throws: ConnectionModelFeedError.alreadyOpen) {
-        try await core.openModelFeed(configuredDomains: [], capacity: 8)
+        try await core.openModelFeed(configuredDomains: [])
     }
     await #expect(throws: WebInspectorProxyError.connectionInUse) {
         try await core.send(ProtocolCommand(
@@ -1592,8 +1551,7 @@ func modelFeedCloseKeepsClaimUntilDisableAndSharesDuplicateCloseCompletion() asy
     try await feed.close()
 
     let replacementFeed = try await core.openModelFeed(
-        configuredDomains: [],
-        capacity: 8
+        configuredDomains: []
     )
     try await replacementFeed.close()
 
@@ -1623,8 +1581,7 @@ func modelFeedRetargetDuringAcquisitionMovesPendingCapabilityToReplacement() asy
     ))
     let openTask = Task {
         try await core.openModelFeed(
-            configuredDomains: [.network],
-            capacity: 16
+            configuredDomains: [.network]
         )
     }
     let oldEnable = try await backend.waitForTargetMessage(method: "Network.enable")
@@ -1806,7 +1763,7 @@ func domBootstrapRequestsMainAndCommittedFramesInSnapshotOrder() async throws {
         parentFrameID: "main-frame"
     ))
 
-    let feed = try await core.openModelFeed(configuredDomains: [.dom], capacity: 16)
+    let feed = try await core.openModelFeed(configuredDomains: [.dom])
     let mainDocument = try await backend.waitForTargetMessage(
         method: "DOM.getDocument",
         ordinal: 0
@@ -1868,7 +1825,7 @@ func domDocumentInvalidationPrecedesMainTargetDeltasAndFreshBootstrap() async th
     ))
 
     let openTask = Task {
-        try await core.openModelFeed(configuredDomains: [.css], capacity: 24)
+        try await core.openModelFeed(configuredDomains: [.css])
     }
     let staleDocument = try await backend.waitForTargetMessage(
         method: "DOM.getDocument",
@@ -1985,7 +1942,7 @@ func frameDocumentUpdatedBypassesPublicFilterWithOneModelInvalidationBoundary() 
         parentFrameID: "main-frame"
     ))
 
-    let feed = try await core.openModelFeed(configuredDomains: [.dom], capacity: 24)
+    let feed = try await core.openModelFeed(configuredDomains: [.dom])
     var iterator = feed.records.makeAsyncIterator()
     let generation = try await modelFeedRequireReset(iterator.next())
     _ = try await modelFeedRequireTargetSnapshot(iterator.next())
@@ -2104,7 +2061,7 @@ func domBootstrapTracksTargetsAddedAndDestroyedBeforeInitialSync() async throws 
         frameID: "main-frame"
     ))
 
-    let feed = try await core.openModelFeed(configuredDomains: [.dom], capacity: 24)
+    let feed = try await core.openModelFeed(configuredDomains: [.dom])
     let mainDocument = try await backend.waitForTargetMessage(
         method: "DOM.getDocument",
         ordinal: 0
@@ -2241,7 +2198,7 @@ func pendingDOMBootstrapReplyFromSupersededBindingCannotPublish() async throws {
         type: "page",
         frameID: "main-frame"
     ))
-    let feed = try await core.openModelFeed(configuredDomains: [.dom], capacity: 12)
+    let feed = try await core.openModelFeed(configuredDomains: [.dom])
     let oldDocument = try await backend.waitForTargetMessage(
         method: "DOM.getDocument",
         ordinal: 0
@@ -2282,115 +2239,6 @@ func pendingDOMBootstrapReplyFromSupersededBindingCannotPublish() async throws {
 }
 
 @Test
-func domBootstrapSnapshotOverflowCannotAdvanceToNextTarget() async throws {
-    let backend = FakeTransportBackend()
-    let core = ConnectionCore(backend: backend, responseTimeout: nil)
-    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
-        id: "page-main",
-        type: "page",
-        frameID: "main-frame"
-    ))
-    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
-        id: "frame-a",
-        type: "frame",
-        frameID: "frame-a",
-        parentFrameID: "main-frame"
-    ))
-    let feed = try await core.openModelFeed(configuredDomains: [.dom], capacity: 2)
-    let mainDocument = try await backend.waitForTargetMessage(
-        method: "DOM.getDocument",
-        ordinal: 0
-    )
-    await modelFeedRespondWithDocument(to: mainDocument, core: core)
-
-    var iterator = feed.records.makeAsyncIterator()
-    await #expect(throws: ConnectionModelFeedError.bufferOverflow(capacity: 2)) {
-        try await iterator.next()
-    }
-    #expect(await core.terminalCause == .modelFeedFailure(.bufferOverflow(capacity: 2)))
-    await #expect(throws: WebInspectorProxyError.self) {
-        try await core.waitUntilClosed()
-    }
-    let getDocumentMessages = try await backend.sentTargetMessages().filter {
-        try modelFeedMessageMethod($0.message) == "DOM.getDocument"
-    }
-    #expect(getDocumentMessages.map(\.targetIdentifier) == [
-        ProtocolTarget.ID("page-main"),
-    ])
-}
-
-@Test
-func domBootstrapCompletionOverflowTerminatesAtTheBoundary() async throws {
-    let backend = FakeTransportBackend()
-    let core = ConnectionCore(backend: backend, responseTimeout: nil)
-    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
-        id: "page-main",
-        type: "page",
-        frameID: "main-frame"
-    ))
-    let feed = try await core.openModelFeed(configuredDomains: [.dom], capacity: 2)
-    let getDocument = try await backend.waitForTargetMessage(method: "DOM.getDocument")
-    var iterator = feed.records.makeAsyncIterator()
-    _ = try await modelFeedRequireReset(iterator.next())
-    let waitingCommand = Task {
-        try await core.send(modelFeedCommand(
-            domain: .page,
-            method: "Page.reload",
-            authority: ConnectionModelCommandAuthorization(
-                feedID: feed.id,
-                generation: try await core.pageGeneration()
-            )
-        ))
-    }
-    await core.waitForModelCommandReadinessWaiterCountForTesting(1)
-
-    // targetSnapshot remains queued. bootstrapSnapshot fills the second slot,
-    // so bootstrapComplete is the exact overflowing publication.
-    await modelFeedRespondWithDocument(to: getDocument, core: core)
-    await #expect(throws: WebInspectorProxyError.self) {
-        try await core.waitUntilClosed()
-    }
-    await #expect(throws: TransportSession.Error.self) {
-        try await waitingCommand.value
-    }
-    #expect(await core.modelCommandOwnerCountForTesting() == 0)
-    #expect(await core.modelCommandReadinessWaiterCountForTesting() == 0)
-    #expect(await core.terminalCause == .modelFeedFailure(.bufferOverflow(capacity: 2)))
-    await #expect(throws: ConnectionModelFeedError.bufferOverflow(capacity: 2)) {
-        try await iterator.next()
-    }
-    #expect(try await modelFeedDOMGetDocumentMessages(backend).count == 1)
-}
-
-@Test
-func domSynchronizationOverflowTerminatesAtTheBoundary() async throws {
-    let backend = FakeTransportBackend()
-    let core = ConnectionCore(backend: backend, responseTimeout: nil)
-    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
-        id: "page-main",
-        type: "page",
-        frameID: "main-frame"
-    ))
-    let feed = try await core.openModelFeed(configuredDomains: [.dom], capacity: 2)
-    let getDocument = try await backend.waitForTargetMessage(method: "DOM.getDocument")
-    var iterator = feed.records.makeAsyncIterator()
-    _ = try await modelFeedRequireReset(iterator.next())
-    _ = try await modelFeedRequireTargetSnapshot(iterator.next())
-
-    // The accepted snapshot and bootstrapComplete fill the mailbox, making
-    // synchronizationComplete the exact overflowing publication.
-    await modelFeedRespondWithDocument(to: getDocument, core: core)
-    await #expect(throws: WebInspectorProxyError.self) {
-        try await core.waitUntilClosed()
-    }
-    #expect(await core.terminalCause == .modelFeedFailure(.bufferOverflow(capacity: 2)))
-    await #expect(throws: ConnectionModelFeedError.bufferOverflow(capacity: 2)) {
-        try await iterator.next()
-    }
-    #expect(try await modelFeedDOMGetDocumentMessages(backend).count == 1)
-}
-
-@Test
 func terminatedDOMFeedCannotAdvanceBootstrapQueue() async throws {
     let backend = FakeTransportBackend()
     let core = ConnectionCore(backend: backend, responseTimeout: nil)
@@ -2406,8 +2254,7 @@ func terminatedDOMFeedCannotAdvanceBootstrapQueue() async throws {
         parentFrameID: "main-frame"
     ))
     var feed: ConnectionModelFeed? = try await core.openModelFeed(
-        configuredDomains: [.dom],
-        capacity: 8
+        configuredDomains: [.dom]
     )
     let records = try #require(feed).records
     let getDocument = try await backend.waitForTargetMessage(method: "DOM.getDocument")
@@ -2434,7 +2281,7 @@ func requiredDOMBootstrapFailureTerminatesTheFeed() async throws {
         type: "page",
         frameID: "main-frame"
     ))
-    let feed = try await core.openModelFeed(configuredDomains: [.dom], capacity: 8)
+    let feed = try await core.openModelFeed(configuredDomains: [.dom])
     var iterator = feed.records.makeAsyncIterator()
     _ = try await modelFeedRequireReset(iterator.next())
     _ = try await modelFeedRequireTargetSnapshot(iterator.next())
@@ -2522,7 +2369,7 @@ func malformedRequiredDOMBootstrapReplyTerminatesWithoutTaskLeak() async throws 
         type: "page",
         frameID: "main-frame"
     ))
-    let feed = try await core.openModelFeed(configuredDomains: [.dom], capacity: 8)
+    let feed = try await core.openModelFeed(configuredDomains: [.dom])
     var iterator = feed.records.makeAsyncIterator()
     _ = try await modelFeedRequireReset(iterator.next())
     _ = try await modelFeedRequireTargetSnapshot(iterator.next())
@@ -2559,7 +2406,7 @@ func closingDOMModelFeedCancelsAndAwaitsPendingBootstrap() async throws {
         type: "page",
         frameID: "main-frame"
     ))
-    let feed = try await core.openModelFeed(configuredDomains: [.dom], capacity: 8)
+    let feed = try await core.openModelFeed(configuredDomains: [.dom])
     _ = try await backend.waitForTargetMessage(method: "DOM.getDocument")
     var iterator = feed.records.makeAsyncIterator()
     _ = try await modelFeedRequireReset(iterator.next())
@@ -2570,7 +2417,7 @@ func closingDOMModelFeedCancelsAndAwaitsPendingBootstrap() async throws {
     #expect(try await iterator.next() == nil)
     #expect(await backend.isDetached() == false)
 
-    let replacement = try await core.openModelFeed(configuredDomains: [], capacity: 3)
+    let replacement = try await core.openModelFeed(configuredDomains: [])
     var replacementIterator = replacement.records.makeAsyncIterator()
     _ = try await modelFeedRequireReset(replacementIterator.next())
     _ = try await modelFeedRequireTargetSnapshot(replacementIterator.next())
@@ -2629,8 +2476,7 @@ func rollingBackModelFeedDoesNotReadmitDOMBootstrapDuringCommit() async throws {
     ))
     let openTask = Task {
         try await core.openModelFeed(
-            configuredDomains: [.dom, .network, .console],
-            capacity: 24
+            configuredDomains: [.dom, .network, .console]
         )
     }
     let getDocument = try await backend.waitForTargetMessage(method: "DOM.getDocument")
@@ -2679,8 +2525,7 @@ func terminalDuringModelFeedRollbackCompletesWithoutLeakingClaim() async throws 
     ))
     let openTask = Task {
         try await core.openModelFeed(
-            configuredDomains: [.network, .console],
-            capacity: 16
+            configuredDomains: [.network, .console]
         )
     }
     let networkEnable = try await backend.waitForTargetMessage(method: "Network.enable")
@@ -2714,8 +2559,7 @@ func explicitCloseDuringModelFeedRollbackLetsTerminalOwnerRetireRegistration() a
     ))
     let openTask = Task {
         try await core.openModelFeed(
-            configuredDomains: [.network, .console],
-            capacity: 16
+            configuredDomains: [.network, .console]
         )
     }
     let networkEnable = try await backend.waitForTargetMessage(method: "Network.enable")
@@ -2752,8 +2596,7 @@ func modelFeedRollbackDisableRejectionTerminatesInsteadOfReusingEnabledState() a
     ))
     let openTask = Task {
         try await core.openModelFeed(
-            configuredDomains: [.network, .console],
-            capacity: 16
+            configuredDomains: [.network, .console]
         )
     }
     let networkEnable = try await backend.waitForTargetMessage(method: "Network.enable")
@@ -2794,7 +2637,7 @@ func modelFeedRollbackDisableRejectionTerminatesInsteadOfReusingEnabledState() a
     #expect(await modelFeedAllCapabilityLeaseOwners(core).isEmpty)
     #expect(await backend.isDetached())
     await #expect(throws: WebInspectorProxyError.self) {
-        try await core.openModelFeed(configuredDomains: [], capacity: 8)
+        try await core.openModelFeed(configuredDomains: [])
     }
 }
 
@@ -2859,8 +2702,7 @@ func modelBindingCommandWaitsForInitialSynchronizationBeforeWire() async throws 
 
     let openTask = Task {
         try await core.openModelFeed(
-            configuredDomains: [.dom, .network],
-            capacity: 16
+            configuredDomains: [.dom, .network]
         )
     }
     let bootstrap = try await backend.waitForTargetMessage(method: "DOM.getDocument")
@@ -3082,7 +2924,7 @@ func modelAuthorityRejectsForeignUnconfiguredAndConnectionOwnedCommandsWithoutWi
         type: "page",
         frameID: "main-frame"
     ))
-    let feed = try await core.openModelFeed(configuredDomains: [], capacity: 8)
+    let feed = try await core.openModelFeed(configuredDomains: [])
     let authorization = ConnectionModelCommandAuthorization(
         feedID: feed.id,
         generation: try await core.pageGeneration(),
@@ -3149,7 +2991,7 @@ func modelPageHandlePropagatesAuthorizationThroughTypedDomainDispatch() async th
         type: "page",
         frameID: "main-frame"
     ))
-    let feed = try await core.openModelFeed(configuredDomains: [], capacity: 8)
+    let feed = try await core.openModelFeed(configuredDomains: [])
     let proxy = try await WebInspectorProxy(transport: core)
     let modelPage = WebInspectorPage(
         proxy: proxy,
@@ -3272,7 +3114,7 @@ func retargetFailsModelCommandsForOldMainAndFrameBinding() async throws {
         frameID: "main-frame",
         isProvisional: true
     ))
-    let feed = try await core.openModelFeed(configuredDomains: [], capacity: 16)
+    let feed = try await core.openModelFeed(configuredDomains: [])
     let authorization = ConnectionModelCommandAuthorization(
         feedID: feed.id,
         generation: try await core.pageGeneration()
@@ -3330,7 +3172,7 @@ func generationReadinessWaiterDoesNotChaseReplacementSynchronization() async thr
         type: "page",
         frameID: "main-frame"
     ))
-    let feed = try await core.openModelFeed(configuredDomains: [.dom], capacity: 24)
+    let feed = try await core.openModelFeed(configuredDomains: [.dom])
     let oldBootstrap = try await backend.waitForTargetMessage(method: "DOM.getDocument")
     let oldAuthorization = ConnectionModelCommandAuthorization(
         feedID: feed.id,
@@ -3396,7 +3238,7 @@ func terminalCloseDrainsPendingModelCommandTasks() async throws {
         type: "page",
         frameID: "main-frame"
     ))
-    let feed = try await core.openModelFeed(configuredDomains: [], capacity: 8)
+    let feed = try await core.openModelFeed(configuredDomains: [])
     let authorization = ConnectionModelCommandAuthorization(
         feedID: feed.id,
         generation: try await core.pageGeneration()
@@ -3432,8 +3274,7 @@ func readinessWaitingModelCommandRunnerDoesNotKeepCoreAlive() async throws {
     ))
 
     var feed: ConnectionModelFeed? = try await core?.openModelFeed(
-        configuredDomains: [.dom],
-        capacity: 8
+        configuredDomains: [.dom]
     )
     _ = try await backend.waitForTargetMessage(method: "DOM.getDocument")
     let authorization = ConnectionModelCommandAuthorization(
@@ -3472,8 +3313,7 @@ func replyWaitingModelCommandRunnerDoesNotKeepCoreAlive() async throws {
     ))
 
     var feed: ConnectionModelFeed? = try await core?.openModelFeed(
-        configuredDomains: [],
-        capacity: 8
+        configuredDomains: []
     )
     let authorization = ConnectionModelCommandAuthorization(
         feedID: try #require(feed?.id),
@@ -3637,8 +3477,7 @@ private func modelFeedOpenSuccessfully(
     let targetMessageCount = await backend.sentTargetMessages().count
     let openTask = Task {
         try await core.openModelFeed(
-            configuredDomains: configuredDomains,
-            capacity: 32
+            configuredDomains: configuredDomains
         )
     }
     if normalizedDomains.contains(.dom) {

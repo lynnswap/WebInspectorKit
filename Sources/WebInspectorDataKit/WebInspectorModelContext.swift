@@ -31,6 +31,7 @@ private final class WebInspectorModelDeliveryBridge: @unchecked Sendable {
             proxy: WebInspectorProxy,
             token: UInt64
         )
+        case completeAttachment(token: UInt64)
         case prepareFailure(WebInspectorModelContext.Failure, token: UInt64)
     }
 
@@ -111,6 +112,8 @@ private final class WebInspectorModelDeliveryBridge: @unchecked Sendable {
             return .accepted(
                 context.accept(feed: feed, proxy: proxy, token: token)
             )
+        case let .completeAttachment(token):
+            return .accepted(context.completeAttachment(token: token))
         case let .prepareFailure(failure, token):
             return .prepared(context.prepareFailure(failure, token: token))
         }
@@ -220,7 +223,6 @@ public final class WebInspectorModelContext {
     public enum Failure: Error, Equatable, Sendable {
         case connection(ConnectionFailure)
         case bootstrap(domain: Domain, message: String)
-        case feedBufferOverflow(capacity: Int)
     }
 
     public enum TransitionError: Error, Equatable, Sendable {
@@ -753,43 +755,41 @@ public final class WebInspectorModelContext {
             _ = await followup.run(commit: .record(token: token))
         }
 
+        let registrationWasAccepted = Mutex(false)
         do {
-            let feed = try await proxy.openModelFeed(
-                configuredDomains: configuredDomains
+            _ = try await proxy.openModelFeed(
+                configuredDomains: configuredDomains,
+                onRegistered: { feed in
+                    guard !Task.isCancelled else {
+                        return false
+                    }
+                    let accepted = await accept(
+                        feed: feed,
+                        proxy: proxy,
+                        token: token,
+                        bridge: bridge
+                    )
+                    registrationWasAccepted.withLock { value in
+                        value = accepted
+                    }
+                    return accepted
+                }
             )
-            guard !Task.isCancelled else {
-                return await closeUnacceptedFeed(feed)
-            }
-            let accepted = await accept(
-                feed: feed,
-                proxy: proxy,
-                token: token,
-                bridge: bridge
-            )
-            if !accepted {
-                return await closeUnacceptedFeed(feed)
-            }
+            await completeAttachment(token: token, bridge: bridge)
             return nil
         } catch is CancellationError {
             return nil
         } catch {
+            if registrationWasAccepted.withLock({ $0 }) {
+                await completeAttachment(token: token, bridge: bridge)
+                return nil
+            }
             await failAttachment(
                 mapAttachmentFailure(error),
                 token: token,
                 bridge: bridge
             )
             return nil
-        }
-    }
-
-    private nonisolated static func closeUnacceptedFeed(
-        _ feed: ConnectionModelFeed
-    ) async -> Failure? {
-        do {
-            try await feed.close()
-            return nil
-        } catch {
-            return mapAttachmentFailure(error)
         }
     }
 
@@ -869,6 +869,19 @@ public final class WebInspectorModelContext {
         return accepted
     }
 
+    private static func completeAttachment(
+        token: UInt64,
+        bridge: WebInspectorModelDeliveryBridge
+    ) async {
+        guard let owner = bridge.resolveActor() else {
+            return
+        }
+        _ = await bridge.deliver(
+            .completeAttachment(token: token),
+            isolation: owner
+        )
+    }
+
     private static func failAttachment(
         _ failure: Failure,
         token: UInt64,
@@ -932,7 +945,6 @@ public final class WebInspectorModelContext {
         }
         activeProxy = proxy
         activeFeed = feed
-        attachmentTask = nil
 
         let records = feed.records
         let bridge = deliveryBridge
@@ -941,6 +953,14 @@ public final class WebInspectorModelContext {
             token: token,
             bridge: bridge
         )
+        return true
+    }
+
+    fileprivate func completeAttachment(token: UInt64) -> Bool {
+        guard attachmentTransition?.token == token else {
+            return false
+        }
+        attachmentTask = nil
         return true
     }
 
@@ -1871,8 +1891,6 @@ public final class WebInspectorModelContext {
             switch feedError {
             case let .bootstrapFailed(domain, message):
                 return .bootstrap(domain: Self.domain(domain), message: message)
-            case let .bufferOverflow(capacity):
-                return .feedBufferOverflow(capacity: capacity)
             case .connectionAlreadyUsedByDirectConsumer:
                 return .connection(.protocolViolation(
                     "The Proxy connection was already used outside its model feed."
@@ -1905,7 +1923,9 @@ public final class WebInspectorModelContext {
             case .staleIdentifier:
                 return .connection(.protocolViolation("Attachment became stale during startup."))
             case let .eventBufferOverflow(capacity):
-                return .feedBufferOverflow(capacity: capacity)
+                return .connection(.transport(
+                    "An auxiliary event subscriber exceeded its buffer capacity of \(capacity)."
+                ))
             case .connectionInUse:
                 return .connection(.protocolViolation("The Proxy connection is already in use."))
             case let .timeout(domain, method):
