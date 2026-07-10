@@ -7,35 +7,33 @@ func webInspectorDataKitBaseSurfaceDoesNotRequireProxyKitImport() {
 }
 
 private actor DataKitImportOnlyActor {
-    func consume(_ context: WebInspectorContext) async throws {
-        let requests: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
-        let messages: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
-        let requestsByMethod: WebInspectorFetchedResults<NetworkRequest> =
-            context.fetchedResults(sectionBy: \.method)
-        let messagesByLevel: WebInspectorFetchedResults<ConsoleMessage> =
-            context.fetchedResults(sectionBy: \.level)
-        let concreteRequests = try await context.networkRequests(matching: NetworkQuery(
+    func consume(_ context: WebInspectorModelContext) async throws {
+        let requests = try await context.networkRequests(matching: NetworkQuery(
             search: "  import-only  ",
             methods: ["GET"],
             sort: .requestTimeDescending,
             section: .method,
             limit: 10
         ))
-        let concreteMessages = try await context.consoleMessages(matching: ConsoleQuery(
+        let messages = try await context.consoleMessages(matching: ConsoleQuery(
             sort: .insertionDescending,
             section: .level,
             limit: 10
         ))
+
         _ = context.state
-        _ = context.rootNode?.children
-        _ = context.selectedNode?.attributes
-        _ = context.selectedNode?.attributeList.first?.name
-        _ = context.selectedNode?.elementStyles?.sections.first?.rule?.selectorText
-        _ = context.selectedNode?.elementStyles?.sections.first?.style.properties.first?.name
-        _ = context.selectedNode?.elementStyles?.computedProperties.first?.value
-        _ = context.isElementPickerEnabled
+        _ = context.pageGeneration
+        _ = try context.rootDOMNode?.children
+        _ = try context.selectedDOMNode?.attributes
+        _ = try context.selectedDOMNode?.attributeList.first?.name
+        _ = try context.selectedDOMNode?.elementStyles?.sections.first?.rule?.selectorText
+        _ = try context.selectedDOMNode?.elementStyles?.sections.first?.style.properties.first?.name
+        _ = try context.selectedDOMNode?.elementStyles?.computedProperties.first?.value
+        _ = try context.isElementPickerEnabled
+        _ = try context.runtimeContexts.first?.name
+
         await context.clearNetworkRequests()
-        let treeController = try await context.treeController()
+        let treeController = try context.domTree
         let treeSnapshot: DOMTreeSnapshot = treeController.snapshot
         _ = treeSnapshot.rootNodeID
         _ = treeSnapshot.nodesByID.values.first?.attributeList.first?.value
@@ -45,22 +43,24 @@ private actor DataKitImportOnlyActor {
         _ = treeController.selectedNodeID
         _ = treeController.updates
         _ = treeController.revealRequests
-        if let selectedNode = context.selectedNode {
+
+        if let selectedNode = try context.selectedDOMNode {
             _ = try context.selectorPath(for: selectedNode)
             _ = try context.xPath(for: selectedNode)
-            _ = try await selectedNode.copyText(.selectorPath)
-            try await selectedNode.highlight()
-            try await selectedNode.delete()
+            _ = try await context.copyText(.selectorPath, for: selectedNode)
+            try await context.highlightDOMNode(selectedNode)
+            _ = try await context.removeDOMNodes([selectedNode])
         }
-        try await context.hideHighlight()
+        try await context.hideDOMHighlight()
         try await context.setElementPickerEnabled(false)
-        try await context.reloadPage()
+        try await context.reload()
+
         _ = requests.items.first?.url
         _ = requests.items.first?.state
         _ = requests.items.first?.hasResponse
         _ = requests.items.first?.hasResponseBody
         _ = requests.items.first?.metrics
-        _ = requestsByMethod.sections.first?.title
+        _ = requests.sections.first?.title
         let requestSnapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID> =
             requests.snapshot
         let requestTransaction = WebInspectorFetchedResultsTransaction<NetworkRequest.ID>(
@@ -70,20 +70,31 @@ private actor DataKitImportOnlyActor {
         )
         _ = requests.revision
         _ = requests.updates()
-        _ = concreteRequests.snapshot
-        try await concreteRequests.update(NetworkQuery())
+        try await requests.update(NetworkQuery())
         _ = requestTransaction.hasChanges
+        if let request = requests.items.first {
+            _ = try await context.responseBody(for: request)
+        }
+
         _ = messages.items.first?.text
         _ = messages.items.first?.parameters.first?.description
-        _ = messagesByLevel.sections.first?.id
+        _ = messages.sections.first?.id
         _ = messages.snapshot
         _ = messages.revision
         _ = messages.updates()
-        _ = concreteMessages.snapshot
-        try await concreteMessages.update(ConsoleQuery())
-        _ = try await context.evaluate("1 + 1").object.description
+        try await messages.update(ConsoleQuery())
 
-        let request = NetworkRequestSnapshot(url: "https://example.com", method: "GET")
+        try await context.withRuntimeObjectGroup(named: "import-only") { group in
+            let evaluation = try await group.evaluate("1 + 1")
+            _ = evaluation.object.description
+            _ = try await group.properties(of: evaluation.object)
+            _ = try await group.preview(of: evaluation.object)
+        }
+
+        let request = NetworkRequestSnapshot(
+            url: "https://example.com",
+            method: "GET"
+        )
         let response = NetworkResponseSnapshot(status: 200, mimeType: "text/html")
         let redirect = RedirectHop(request: request, response: response, timestamp: 1)
         _ = redirect.request.url

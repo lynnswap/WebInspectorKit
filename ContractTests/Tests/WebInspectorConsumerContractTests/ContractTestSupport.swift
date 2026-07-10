@@ -70,15 +70,6 @@ enum ContractTestSupport {
         ])
     }
 
-    static func dataReceivedParameters() throws -> WebInspectorTestJSONObject {
-        try jsonObject([
-            "requestId": "contract-request",
-            "dataLength": 7,
-            "encodedDataLength": 4,
-            "timestamp": 3,
-        ])
-    }
-
     static func loadingFinishedParameters() throws -> WebInspectorTestJSONObject {
         try jsonObject([
             "requestId": "contract-request",
@@ -89,16 +80,6 @@ enum ContractTestSupport {
                 "remoteAddress": "203.0.113.30:443",
                 "responseBodyBytesReceived": 4,
                 "responseBodyDecodedSize": 7,
-            ],
-        ])
-    }
-
-    static func consoleMessageParameters(text: String) throws -> WebInspectorTestJSONObject {
-        try jsonObject([
-            "message": [
-                "source": "javascript",
-                "level": "log",
-                "text": text,
             ],
         ])
     }
@@ -151,22 +132,6 @@ enum ContractTestSupport {
             await Task.yield()
         }
     }
-
-    static func waitUntil(
-        timeout: Duration = .seconds(1),
-        isolation: isolated (any Actor)? = #isolation,
-        condition: () async -> Bool
-    ) async throws {
-        _ = isolation
-        let clock = ContinuousClock()
-        let deadline = clock.now + timeout
-        while await condition() == false {
-            if clock.now >= deadline {
-                throw TimedOut()
-            }
-            await Task.yield()
-        }
-    }
 }
 
 struct TimedOut: Error {}
@@ -180,77 +145,52 @@ actor ContractDataKitActor {
         let canRequestProperties: Bool
     }
 
-    nonisolated let inspectorContainer: WebInspectorContainer
+    private struct BodySnapshot: Sendable {
+        let phase: NetworkBody.Phase
+        let text: String?
+        let isBase64Encoded: Bool
+    }
 
     private let runtime: WebInspectorProxyTestRuntime
-    private var context: WebInspectorContext?
+    private let context: WebInspectorModelContext
     private var commands: [WebInspectorTestPeer.Command]
 
-    init(runtime: WebInspectorProxyTestRuntime, inspectorContainer: WebInspectorContainer? = nil) {
+    init(runtime: WebInspectorProxyTestRuntime) {
         self.runtime = runtime
-        let container = inspectorContainer ?? WebInspectorContainer(proxy: runtime.proxy)
-        self.inspectorContainer = container
-        context = nil
+        context = WebInspectorModelContext()
         commands = []
     }
 
     @discardableResult
     func start(
-        document: WebInspectorTestJSONObject? = nil,
-        sharesDomainLeases: Bool = false
+        document: WebInspectorTestJSONObject? = nil
     ) async throws -> WebInspectorTarget {
-        let documentResult: WebInspectorTestJSONObject
-        if let document {
-            documentResult = document
-        } else {
-            documentResult = try ContractTestSupport.documentResult()
-        }
-
-        let context = modelContext()
         let target = try await runtime.proxy.waitForCurrentPage()
-        context.start()
-
-        if sharesDomainLeases == false {
-            var command = try await runtime.peer.commands.next()
-            commands.append(command)
-            try #require(command.destination == .target("page-main"))
-            try #require(command.method == "Inspector.enable")
-            try await runtime.peer.reply(to: command)
-
-            command = try await runtime.peer.commands.next()
-            commands.append(command)
-            try #require(command.destination == .target("page-main"))
-            try #require(command.method == "Inspector.initialized")
-            try await runtime.peer.reply(to: command)
-
-            command = try await runtime.peer.commands.next()
-            commands.append(command)
-            try #require(command.destination == .target("page-main"))
-            try #require(command.method == "Runtime.enable")
-            try await runtime.peer.reply(to: command)
-
-            command = try await runtime.peer.commands.next()
-            commands.append(command)
-            try #require(command.destination == .target("page-main"))
-            try #require(command.method == "Network.enable")
-            try await runtime.peer.reply(to: command)
+        let documentResult = try document ?? ContractTestSupport.documentResult()
+        let attachTask = Task {
+            try await context.attach(to: runtime.proxy, isolation: self)
         }
-
-        var command = try await runtime.peer.commands.next()
-        commands.append(command)
-        try #require(command.destination == .target("page-main"))
-        try #require(command.method == "DOM.getDocument")
-        try await runtime.peer.reply(to: command, with: documentResult)
-
-        if sharesDomainLeases == false {
-            command = try await runtime.peer.commands.next()
+        var observedMethods: Set<String> = []
+        for _ in 0..<5 {
+            let command = try await runtime.peer.commands.next()
             commands.append(command)
             try #require(command.destination == .target("page-main"))
-            try #require(command.method == "Console.enable")
-            try await runtime.peer.reply(to: command)
+            observedMethods.insert(command.method)
+            if command.method == "DOM.getDocument" {
+                try await runtime.peer.reply(to: command, with: documentResult)
+            } else {
+                try await runtime.peer.reply(to: command)
+            }
         }
-
-        try await ContractTestSupport.waitUntil { context.state == .attached }
+        #expect(observedMethods == [
+            "CSS.enable",
+            "Network.enable",
+            "Console.enable",
+            "Runtime.enable",
+            "DOM.getDocument",
+        ])
+        try await attachTask.value
+        #expect(context.state == .attached)
         return target
     }
 
@@ -259,14 +199,7 @@ actor ContractDataKitActor {
     }
 
     func assertPublicSurfaceIsUsable() async throws {
-        let context = modelContext()
-        let requestResults: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
-        let consoleResults: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
-        let sectionedRequests: WebInspectorFetchedResults<NetworkRequest> =
-            context.fetchedResults(sectionBy: \.method)
-        let sectionedConsole: WebInspectorFetchedResults<ConsoleMessage> =
-            context.fetchedResults(sectionBy: \.level)
-        let concreteRequests = try await context.networkRequests(matching: NetworkQuery(
+        let requests = try await context.networkRequests(matching: NetworkQuery(
             search: "  contract  ",
             resourceCategories: [.xhrFetch],
             methods: ["GET"],
@@ -275,33 +208,28 @@ actor ContractDataKitActor {
             offset: 0,
             limit: 10
         ))
-        let concreteConsole = try await context.consoleMessages(matching: ConsoleQuery(
+        let messages = try await context.consoleMessages(matching: ConsoleQuery(
             levels: [Console.Level(rawValue: "warning")],
             sort: .insertionDescending,
             section: .level,
             offset: 0,
             limit: 10
         ))
-        #expect(requestResults.items.isEmpty)
-        #expect(consoleResults.items.isEmpty)
-        #expect(sectionedRequests.sections.isEmpty)
-        #expect(sectionedConsole.sections.isEmpty)
-        #expect(concreteRequests.items.isEmpty)
-        #expect(concreteConsole.items.isEmpty)
-        #expect(requestResults.snapshot.itemIDs.isEmpty)
-        #expect(consoleResults.snapshot.itemIDs.isEmpty)
-        _ = requestResults.updates()
-        _ = consoleResults.updates()
-        try await concreteRequests.update(NetworkQuery(sort: .requestTimeDescending))
-        try await concreteConsole.update(ConsoleQuery(sort: .insertionAscending))
-        #expect(context.state == .attached)
+        #expect(requests.items.isEmpty)
+        #expect(messages.items.isEmpty)
+        #expect(requests.snapshot.itemIDs.isEmpty)
+        #expect(messages.snapshot.itemIDs.isEmpty)
+        _ = requests.updates()
+        _ = messages.updates()
+        try await requests.update(NetworkQuery(sort: .requestTimeDescending))
+        try await messages.update(ConsoleQuery(sort: .insertionAscending))
 
-        let root = try #require(context.rootNode)
+        let root = try #require(try context.rootDOMNode)
         #expect(root.nodeName == "#document")
-        #expect(context.node(for: root.id) === root)
+        #expect(try context.domNode(id: root.id) === root)
         requirePersistentModel(root)
 
-        let treeController = try await context.treeController()
+        let treeController = try context.domTree
         let treeSnapshot: DOMTreeSnapshot = treeController.snapshot
         #expect(treeSnapshot.rootNodeID == root.id)
         #expect(treeSnapshot.node(for: root.id)?.nodeName == "#document")
@@ -310,17 +238,15 @@ actor ContractDataKitActor {
         _ = treeController.updates
         _ = treeController.revealRequests
 
-        context.select(root)
-        #expect(context.selectedNode === root)
-        context.select(nil)
-        context.selectContext(nil)
+        try context.selectDOMNode(root)
+        #expect(try context.selectedDOMNode === root)
+        try context.selectDOMNode(nil)
         await context.clearNetworkRequests()
-        #expect(context.selectedNode == nil)
-        #expect(context.selectedContext == nil)
+        #expect(try context.selectedDOMNode == nil)
+        #expect(try context.runtimeContexts.isEmpty)
     }
 
     func assertRawPeerDrivesDOMNetworkAndRuntimeContracts() async throws {
-        let context = modelContext()
         try await start(document: ContractTestSupport.documentResult(
             id: "contract-document",
             documentURL: "https://example.com/",
@@ -332,111 +258,79 @@ actor ContractDataKitActor {
             method: "DOM.setChildNodes",
             parameters: ContractTestSupport.setChildNodesParameters()
         )
-
-        try await ContractTestSupport.waitUntil {
-            guard let root = context.rootNode,
+        try await ContractTestSupport.waitUntil(isolation: self) {
+            guard let root = try? context.rootDOMNode,
                   case let .loaded(children) = root.children else {
                 return false
             }
             return children.first?.attributes["data-contract"] == "dom"
         }
-        let root = try #require(context.rootNode)
+        let root = try #require(try context.rootDOMNode)
         guard case let .loaded(children) = root.children else {
             Issue.record("Expected the seeded document to load children.")
             return
         }
         let child = try #require(children.first)
-        #expect(context.node(for: child.id) === child)
+        #expect(try context.domNode(id: child.id) === child)
         #expect(child.attributeList.map(\.name) == ["data-contract", "data-second"])
-
-        let treeController = try await context.treeController()
-        #expect(treeController.snapshot.selectorPath(for: child.id) == "main")
         #expect(try context.selectorPath(for: child) == "main")
         #expect(try context.xPath(for: child) == "/main")
 
         let copyHTMLTask = Task {
-            try await child.copyText(.html, isolation: self)
+            try await context.copyText(.html, for: child)
         }
-        var command = try await runtime.peer.commands.next()
-        commands.append(command)
-        try #require(command.destination == .target("page-main"))
-        try #require(command.method == "DOM.getOuterHTML")
-        try await runtime.peer.reply(
-            to: command,
-            with: ContractTestSupport.outerHTMLResult("<main data-contract=\"dom\"></main>")
+        var command = try await replyNext(
+            expectedMethod: "DOM.getOuterHTML",
+            result: ContractTestSupport.outerHTMLResult(
+                "<main data-contract=\"dom\"></main>"
+            )
         )
         #expect(try await copyHTMLTask.value == "<main data-contract=\"dom\"></main>")
-        #expect(try await child.copyText(.selectorPath) == "main")
 
         let highlightTask = Task {
-            try await child.highlight(isolation: self)
+            try await context.highlightDOMNode(child)
         }
-        command = try await runtime.peer.commands.next()
-        commands.append(command)
-        try #require(command.method == "DOM.highlightNode")
-        try await runtime.peer.reply(to: command)
+        command = try await replyNext(expectedMethod: "DOM.highlightNode")
         try await highlightTask.value
 
-        let hideHighlightTask = Task {
-            try await context.hideHighlight(isolation: self)
+        let hideTask = Task {
+            try await context.hideDOMHighlight()
         }
-        command = try await runtime.peer.commands.next()
-        commands.append(command)
-        try #require(command.method == "DOM.hideHighlight")
-        try await runtime.peer.reply(to: command)
-        try await hideHighlightTask.value
+        command = try await replyNext(expectedMethod: "DOM.hideHighlight")
+        try await hideTask.value
 
-        let enablePickerTask = Task {
-            try await context.setElementPickerEnabled(true, isolation: self)
+        let enablePicker = Task {
+            try await context.setElementPickerEnabled(true)
         }
-        command = try await runtime.peer.commands.next()
-        commands.append(command)
-        try #require(command.method == "DOM.setInspectModeEnabled")
-        try await runtime.peer.reply(to: command)
-        try await enablePickerTask.value
-        #expect(context.isElementPickerEnabled)
+        _ = try await replyNext(expectedMethod: "Inspector.enable")
+        _ = try await replyNext(expectedMethod: "Inspector.initialized")
+        _ = try await replyNext(expectedMethod: "DOM.setInspectModeEnabled")
+        try await enablePicker.value
+        #expect(try context.isElementPickerEnabled)
 
-        let disablePickerTask = Task {
-            try await context.setElementPickerEnabled(false, isolation: self)
+        let disablePicker = Task {
+            try await context.setElementPickerEnabled(false)
         }
-        command = try await runtime.peer.commands.next()
-        commands.append(command)
-        try #require(command.method == "DOM.setInspectModeEnabled")
-        try await runtime.peer.reply(to: command)
-        try await disablePickerTask.value
-        #expect(context.isElementPickerEnabled == false)
+        _ = try await replyNext(expectedMethod: "DOM.setInspectModeEnabled")
+        _ = try await replyNext(expectedMethod: "Inspector.disable")
+        try await disablePicker.value
+        #expect(try context.isElementPickerEnabled == false)
 
         let deleteTask = Task {
-            try await child.delete(isolation: self)
+            try await context.removeDOMNodes([child]).appliedNodeIDs
         }
-        command = try await runtime.peer.commands.next()
-        commands.append(command)
-        try #require(command.method == "DOM.removeNode")
-        try await runtime.peer.reply(to: command)
-        command = try await runtime.peer.commands.next()
-        commands.append(command)
-        try #require(command.method == "DOM.markUndoableState")
-        try await runtime.peer.reply(to: command)
-        try await deleteTask.value
+        _ = try await replyNext(expectedMethod: "DOM.removeNode")
+        _ = try await replyNext(expectedMethod: "DOM.markUndoableState")
+        let deletedNodeIDs = try await deleteTask.value
+        #expect(deletedNodeIDs == [child.id])
 
         let reloadTask = Task {
-            try await context.reloadPage(isolation: self)
+            try await context.reload()
         }
-        command = try await runtime.peer.commands.next()
-        commands.append(command)
-        try #require(command.method == "Page.reload")
-        try await runtime.peer.reply(to: command)
+        _ = try await replyNext(expectedMethod: "Page.reload")
         try await reloadTask.value
 
-        #expect(commands.contains { $0.method == "DOM.getOuterHTML" })
-        #expect(commands.contains { $0.method == "DOM.highlightNode" })
-        #expect(commands.contains { $0.method == "DOM.hideHighlight" })
-        #expect(commands.contains { $0.method == "DOM.setInspectModeEnabled" })
-        #expect(commands.contains { $0.method == "DOM.removeNode" })
-        #expect(commands.contains { $0.method == "DOM.markUndoableState" })
-        #expect(commands.contains { $0.method == "Page.reload" })
-
-        let requestResults: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+        let requestResults = try await context.networkRequests()
         try await runtime.peer.emitTargetEvent(
             targetID: "page-main",
             method: "Network.requestWillBeSent",
@@ -449,152 +343,97 @@ actor ContractDataKitActor {
         )
         try await runtime.peer.emitTargetEvent(
             targetID: "page-main",
-            method: "Network.dataReceived",
-            parameters: ContractTestSupport.dataReceivedParameters()
-        )
-        try await runtime.peer.emitTargetEvent(
-            targetID: "page-main",
             method: "Network.loadingFinished",
             parameters: ContractTestSupport.loadingFinishedParameters()
         )
-
-        let requests: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
-        try await ContractTestSupport.waitUntil {
-            requests.items.first?.state == .finished
+        try await ContractTestSupport.waitUntil(isolation: self) {
+            requestResults.items.first?.state == .finished
         }
-        let requestModel = try #require(requests.items.first)
-        #expect(requestModel.url == "https://example.com/data.json")
-        #expect(requestModel.method == "GET")
-        #expect(requestModel.status == 200)
-        #expect(requestModel.statusText == "OK")
-        #expect(requestModel.responseURL == "https://example.com/data.json")
-        #expect(requestModel.responseSource == "network")
-        #expect(requestModel.hasResponse)
-        #expect(requestModel.hasResponseBody)
-        #expect(requestModel.responseHeaders["Content-Type"] == "application/json")
-        #expect(requestModel.decodedDataLength == 7)
-        #expect(requestModel.encodedDataLength == 4)
-        #expect(requestModel.sourceMapURL == "data.json.map")
-        #expect(requestModel.metrics?.networkProtocol == "h2")
-        #expect(requestModel.metrics?.remoteAddress == "203.0.113.30:443")
-        #expect(requestModel.metrics?.encodedDataLength == 4)
-        #expect(requestModel.metrics?.decodedBodyLength == 7)
-        #expect(context.registeredRequest(for: requestModel.id) === requestModel)
-        #expect(requestResults.snapshot.itemIDs == [requestModel.id])
+        let request = try #require(requestResults.items.first)
+        #expect(request.url == "https://example.com/data.json")
+        #expect(request.status == 200)
+        #expect(request.responseHeaders["Content-Type"] == "application/json")
+        #expect(request.metrics?.networkProtocol == "h2")
 
         let bodyTask = Task {
-            await requestModel.fetchResponseBody(isolation: self)
+            let body = try await context.responseBody(for: request, isolation: self)
+            return BodySnapshot(
+                phase: body.phase,
+                text: body.text,
+                isBase64Encoded: body.isBase64Encoded
+            )
         }
-        command = try await runtime.peer.commands.next()
-        commands.append(command)
-        try #require(command.method == "Network.getResponseBody")
-        try await runtime.peer.reply(
-            to: command,
-            with: ContractTestSupport.responseBodyResult(
+        _ = try await replyNext(
+            expectedMethod: "Network.getResponseBody",
+            result: ContractTestSupport.responseBodyResult(
                 "{\"ok\":true}",
                 base64Encoded: false
             )
         )
-        await bodyTask.value
-        #expect(requestModel.responseBody.phase == .loaded)
-        #expect(requestModel.responseBody.text == "{\"ok\":true}")
-        #expect(requestModel.responseBody.isBase64Encoded == false)
+        let body = try await bodyTask.value
+        #expect(body.phase == .loaded)
+        #expect(body.text == "{\"ok\":true}")
+        #expect(body.isBase64Encoded == false)
 
         let evaluationTask = Task {
-            let evaluation = try await context.evaluate(
-                "document.title",
-                isolation: self
-            )
-            return EvaluationSnapshot(
-                isException: evaluation.isException,
-                kind: evaluation.object.kind,
-                value: evaluation.object.value,
-                description: evaluation.object.description,
-                canRequestProperties: evaluation.object.canRequestProperties
-            )
+            try await context.withRuntimeObjectGroup(named: "contract") { group in
+                let evaluation = try await group.evaluate("document.title")
+                return EvaluationSnapshot(
+                    isException: evaluation.isException,
+                    kind: evaluation.object.kind,
+                    value: evaluation.object.value,
+                    description: evaluation.object.description,
+                    canRequestProperties: evaluation.object.canRequestProperties
+                )
+            }
         }
-        command = try await runtime.peer.commands.next()
-        commands.append(command)
-        try #require(command.method == "Runtime.evaluate")
-        try await runtime.peer.reply(
-            to: command,
-            with: ContractTestSupport.evaluationResult()
+        _ = try await replyNext(
+            expectedMethod: "Runtime.evaluate",
+            result: ContractTestSupport.evaluationResult()
         )
-
+        _ = try await replyNext(expectedMethod: "Runtime.releaseObjectGroup")
         let evaluation = try await evaluationTask.value
         #expect(evaluation.isException == false)
         #expect(evaluation.kind == .string)
         #expect(evaluation.value == .string("contract"))
         #expect(evaluation.description == "contract")
         #expect(evaluation.canRequestProperties)
-    }
 
-    func emitConsoleMessage(text: String) async throws {
-        try await runtime.peer.emitTargetEvent(
-            targetID: "page-main",
-            method: "Console.messageAdded",
-            parameters: ContractTestSupport.consoleMessageParameters(text: text)
-        )
-    }
-
-    func waitForConsoleMessage(text: String) async throws {
-        let context = modelContext()
-        let messages: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
-        try await ContractTestSupport.waitUntil {
-            messages.items.contains { $0.text == text }
-        }
-    }
-
-    private func modelContext() -> WebInspectorContext {
-        if let context {
-            return context
-        }
-        let context = WebInspectorContext(inspectorContainer, isolation: self)
-        self.context = context
-        return context
-    }
-
-    private func requirePersistentModel<Model: WebInspectorPersistentModel>(_ model: Model) {
-        #expect(Set([model]).contains(model))
-    }
-
-    func stopContext(expectsDomainDisableCommands: Bool = true) async throws {
-        guard let context else {
-            return
-        }
-        let stopTask = Task {
-            await context.stop(isolation: self)
-        }
-
-        if expectsDomainDisableCommands {
-            var command = try await runtime.peer.commands.next()
-            commands.append(command)
-            try #require(command.method == "Console.disable")
-            try await runtime.peer.reply(to: command)
-
-            command = try await runtime.peer.commands.next()
-            commands.append(command)
-            try #require(command.method == "Runtime.disable")
-            try await runtime.peer.reply(to: command)
-
-            command = try await runtime.peer.commands.next()
-            commands.append(command)
-            try #require(command.method == "Network.disable")
-            try await runtime.peer.reply(to: command)
-
-            command = try await runtime.peer.commands.next()
-            commands.append(command)
-            try #require(command.method == "Inspector.disable")
-            try await runtime.peer.reply(to: command)
-        }
-
-        await stopTask.value
-        #expect(context.state == .detached)
-        #expect(context.teardownError == nil)
+        _ = command
     }
 
     func close() async throws {
-        try await stopContext()
-        await inspectorContainer.close()
+        let closeTask = Task {
+            await context.close()
+        }
+        for expectedMethod in [
+            "Runtime.disable",
+            "Console.disable",
+            "Network.disable",
+            "CSS.disable",
+        ] {
+            _ = try await replyNext(expectedMethod: expectedMethod)
+        }
+        await closeTask.value
+        #expect(context.state == .closed)
+    }
+
+    @discardableResult
+    private func replyNext(
+        expectedMethod: String,
+        result: WebInspectorTestJSONObject = .empty
+    ) async throws -> WebInspectorTestPeer.Command {
+        let command = try await runtime.peer.commands.next()
+        commands.append(command)
+        try #require(command.destination == .target("page-main"))
+        try #require(command.method == expectedMethod)
+        try await runtime.peer.reply(to: command, with: result)
+        return command
+    }
+
+    private func requirePersistentModel<Model: WebInspectorPersistentModel>(
+        _ model: Model
+    ) {
+        #expect(Set([model]).contains(model))
     }
 }
