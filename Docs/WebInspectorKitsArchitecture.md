@@ -1606,7 +1606,8 @@ The migration removes rather than deprecates the following surfaces:
   caller-confined `WebInspectorModelContext` and one weak delivery bridge.
 - Stateless computed `DOMModelController`, `NetworkModelController`,
   `ConsoleModelController`, `RuntimeModelController`, `CSSModelController`,
-  `PageModelController`, and forwarding `WebInspectorEditHistory` wrappers.
+  `PageModelController`, and forwarding `WebInspectorEditHistory` wrapper,
+  all removed in this slice.
 - Duplicate direct Context/model convenience operations after their
   `WebInspectorModelContext` facade operation or scoped-resource equivalent
   exists.

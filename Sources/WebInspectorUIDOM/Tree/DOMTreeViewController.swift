@@ -19,7 +19,7 @@ package final class DOMTreeViewController: UIViewController {
                     return false
                 }
                 do {
-                    try await context.dom.requestChildren(of: nodeID)
+                    try await context.requestChildren(for: nodeID)
                     return true
                 } catch {
                     WebInspectorUIDOMLog.debug("DOM tree request children failed nodeID=\(String(describing: nodeID)): \(String(describing: error))")
@@ -30,16 +30,16 @@ package final class DOMTreeViewController: UIViewController {
                 guard let context else {
                     return
                 }
-                try await context.dom.highlight(nodeID)
+                try await context.highlightNode(for: nodeID)
             },
             restoreHighlightAction: { [weak context] in
                 guard let context else {
                     return
                 }
                 if let selectedNode = context.selectedNode {
-                    try await context.dom.highlight(selectedNode.id)
+                    try await context.highlightNode(for: selectedNode.id)
                 } else {
-                    try await context.dom.hideHighlight()
+                    try await context.hideHighlight()
                 }
             },
             copyNodeTextAction: { [weak context] nodeID, kind in
@@ -100,7 +100,10 @@ package final class DOMTreeViewController: UIViewController {
         let deletedNodeCount: Int
         let undoCommands: WebInspectorContext.DOMUndoRedoCommands
         do {
-            let result = try await context.dom.remove(nodeIDs)
+            let result = try await context.removeDOMNodes(
+                nodeIDs,
+                options: .automatic
+            )
             deletedNodeCount = result.acceptedNodeIDs.count
             undoCommands = try context.domUndoRedoCommands()
         } catch let error as WebInspectorContext.DOMDeletionPartialFailure {

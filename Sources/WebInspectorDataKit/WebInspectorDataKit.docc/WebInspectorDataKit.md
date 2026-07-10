@@ -25,7 +25,7 @@ final class InspectorModel {
     func attach(to webView: WKWebView) async throws {
         let container = try await WebInspectorContainer(attachingTo: webView)
         let context = container.mainContext
-        let tree = context.dom.treeController()
+        let tree = try await context.treeController()
 
         treeTask = Task { @MainActor in
             for await update in tree.updates {
@@ -50,13 +50,13 @@ Contexts are actor-owned. Read and mutate context state from the same actor you
 used to create or obtain the context. For UIKit clients, ``WebInspectorContainer``
 provides ``WebInspectorContainer/mainContext`` as a main-actor context.
 
-Use the domain controllers on ``WebInspectorContext`` for high-level operations:
+Use ``WebInspectorContext`` directly for high-level operations:
 
 ```swift
-try await context.dom.setInspectMode(enabled: true)
-try await context.page.reload()
+try await context.setElementPickerEnabled(true)
+try await context.reloadPage()
 
-let result = try await context.runtime.evaluate("document.title")
+let result = try await context.evaluate("document.title")
 print(result.object.description ?? "")
 ```
 
@@ -96,12 +96,10 @@ access with no model layer.
 - ``CSSStyleSection``
 - ``CSSStyleProperty``
 
-### Domain Operations
+### Mutations
 
-- ``DOMModelController``
-- ``NetworkModelController``
-- ``ConsoleModelController``
-- ``RuntimeModelController``
-- ``CSSModelController``
-- ``PageModelController``
-- ``WebInspectorEditHistory``
+- ``WebInspectorMutationOptions``
+- ``WebInspectorUndoPolicy``
+- ``WebInspectorStaleModelPolicy``
+- ``DOMRevealPolicy``
+- ``DOMMutationResult``

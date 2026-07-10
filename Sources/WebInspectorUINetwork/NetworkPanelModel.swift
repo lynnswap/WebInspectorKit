@@ -46,7 +46,7 @@ package final class NetworkPanelModel {
 
     package init(context: WebInspectorContext) {
         self.context = context
-        self.requests = context.network.fetchedResults(for: Self.makeNetworkFetchDescriptor(searchText: "", filters: []))
+        self.requests = context.fetchedResults(for: Self.makeNetworkFetchDescriptor(searchText: "", filters: []))
         self.collectionState = context.networkRequestsCollectionState
         self.responseBodyFetchCoordinator = NetworkResponseBodyFetchCoordinator()
     }
@@ -116,7 +116,7 @@ package final class NetworkPanelModel {
 
     package func clearRequests() {
         selectedRequestID = nil
-        context.network.clearRequests()
+        context.clearNetworkRequests()
     }
 
     package func fetchResponseBodyIfNeeded(for request: NetworkRequest) {

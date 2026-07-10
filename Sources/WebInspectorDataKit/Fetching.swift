@@ -19,7 +19,7 @@ import Observation
 ///     fetchLimit: 100
 /// )
 ///
-/// let results = context.network.fetchedResults(for: descriptor)
+/// let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: descriptor)
 /// ```
 public struct WebInspectorFetchDescriptor<Model: WebInspectorFetchableModel>: Sendable {
     enum Kind: Hashable, Sendable {

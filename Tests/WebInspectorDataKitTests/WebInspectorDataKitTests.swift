@@ -255,19 +255,19 @@ func domCommandsDispatchThroughDataKitContext() async throws {
     #expect(try context.xPath(for: child) == "/html/body/div/span")
 
     await runtime.backend.enqueue((), for: "DOM", method: "highlightNode")
-    try await context.dom.highlight(child.id)
+    try await context.highlightNode(for: child.id)
 
     await runtime.backend.enqueue((), for: "DOM", method: "hideHighlight")
-    try await context.dom.hideHighlight()
+    try await context.hideHighlight()
 
     await runtime.backend.enqueue((), for: "DOM", method: "undo")
-    try await context.editHistory.undo()
+    try await context.undoDOMChange()
 
     await runtime.backend.enqueue((), for: "DOM", method: "redo")
-    try await context.editHistory.redo()
+    try await context.redoDOMChange()
 
     await runtime.backend.enqueue((), for: "DOM", method: "setInspectModeEnabled")
-    try await context.dom.setInspectMode(enabled: true)
+    try await context.setElementPickerEnabled(true)
     #expect(context.isElementPickerEnabled)
 
     await enqueueCSSStyleReplies(on: runtime.backend)
@@ -279,23 +279,35 @@ func domCommandsDispatchThroughDataKitContext() async throws {
 
     await runtime.backend.enqueue((), for: "DOM", method: "setAttributeValue")
     await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
-    try await context.dom.setAttribute("class", value: "updated", on: parent.id)
+    try await context.setDOMAttribute(
+        "class",
+        value: "updated",
+        on: parent.id,
+        options: .automatic
+    )
 
     await runtime.backend.enqueue((), for: "DOM", method: "setOuterHTML")
     await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
-    try await context.dom.setOuterHTML("<span id=\"title\"></span>", of: child.id)
+    try await context.setDOMOuterHTML(
+        "<span id=\"title\"></span>",
+        of: child.id,
+        options: .automatic
+    )
 
     await runtime.backend.enqueue((), for: "DOM", method: "removeNode")
     await runtime.backend.enqueue((), for: "DOM", method: "removeNode")
     await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
     await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
-    let deletion = try await context.dom.remove([parent.id, child.id])
+    let deletion = try await context.removeDOMNodes(
+        [parent.id, child.id],
+        options: .automatic
+    )
     #expect(deletion.acceptedNodeIDs == [child.id, parent.id])
     #expect(context.selectedNode == nil)
     #expect(child.elementStyles == nil)
 
     await runtime.backend.enqueue((), for: "Page", method: "reload")
-    try await context.page.reload(ignoringCache: true)
+    try await context.reloadPage(ignoringCache: true)
 
     let commands = await runtime.backend.recordedCommands()
     let outerHTML = try #require(commands.first { $0.domain == "DOM" && $0.method == "getOuterHTML" })
@@ -352,17 +364,25 @@ func domMutationsAndUndoRedoUseOwningFrameTarget() async throws {
 
     await runtime.backend.enqueue((), for: "DOM", method: "setAttributeValue")
     await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
-    try await context.dom.setAttribute("data-edited", value: "page", on: document.id)
+    try await context.setDOMAttribute(
+        "data-edited",
+        value: "page",
+        on: document.id,
+        options: .automatic
+    )
 
     await runtime.backend.enqueue((), for: "DOM", method: "removeNode")
     await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
-    _ = try await context.dom.remove([DOMNode.ID(scopedNodeID)])
+    _ = try await context.removeDOMNodes(
+        [DOMNode.ID(scopedNodeID)],
+        options: .automatic
+    )
 
     await runtime.backend.enqueue((), for: "DOM", method: "undo")
-    try await context.editHistory.undo()
+    try await context.undoDOMChange()
 
     await runtime.backend.enqueue((), for: "DOM", method: "redo")
-    try await context.editHistory.redo()
+    try await context.redoDOMChange()
 
     let domCommands = await runtime.backend.recordedCommands()
         .filter { $0.domain == "DOM" && ["setAttributeValue", "removeNode", "markUndoableState", "undo", "redo"].contains($0.method) }
@@ -412,10 +432,10 @@ func domDeleteRejectsCrossTargetSelectionBeforeRemovingNodes() async throws {
         method: "removeNode",
         message: "Deleting nodes from multiple DOM targets in one mutation is not supported."
     )) {
-        _ = try await context.dom.remove([
+        _ = try await context.removeDOMNodes([
             DOMNode.ID(pageNodeID),
             DOMNode.ID(scopedFrameNodeID),
-        ])
+        ], options: .automatic)
     }
 
     let removeCommands = await runtime.backend.recordedCommands()
@@ -1537,7 +1557,7 @@ func transportBackedFrameRuntimeAndConsoleEventsKeepTargetScope() async throws {
 
     var capturedEvaluation: RuntimeEvaluation?
     let evaluationTask = Task { @MainActor in
-        capturedEvaluation = try await context.runtime.evaluate("window", in: frameContext)
+        capturedEvaluation = try await context.evaluate("window", in: frameContext)
     }
     let evaluate = try await waitForTransportTargetMessage(
         backend,
@@ -1616,7 +1636,11 @@ func transportBackedStyleSheetTextEditRoutesToFrameTargetAndMarksUndo() async th
     )
 
     let editTask = Task { @MainActor in
-        try await context.css.setStyleSheetText("body { color: red; }", for: styleSheetID)
+        try await context.setCSSStyleSheetText(
+            "body { color: red; }",
+            for: styleSheetID,
+            options: .automatic
+        )
     }
     let setStyleSheetText = try await waitForTransportTargetMessage(
         backend,
@@ -2386,7 +2410,12 @@ func documentUpdatedReloadsRootDocument() async throws {
     let document = try #require(context.rootNode)
     await runtime.backend.enqueue((), for: "DOM", method: "setAttributeValue")
     await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
-    try await context.dom.setAttribute("data-before-reset", value: "1", on: document.id)
+    try await context.setDOMAttribute(
+        "data-before-reset",
+        value: "1",
+        on: document.id,
+        options: .automatic
+    )
     let undoCommands = try context.domUndoRedoCommands()
     let controller = try await context.treeController()
     let recorder = DOMTreeUpdateRecorder(stream: controller.updates)
@@ -2432,7 +2461,7 @@ func documentUpdatedReloadsRootDocument() async throws {
     }
     await runtime.backend.enqueue((), for: "DOM", method: "undo")
     await #expect(throws: WebInspectorProxyError.disconnected("DOM undo/redo target is no longer current.")) {
-        try await context.editHistory.undo()
+        try await context.undoDOMChange()
     }
 
     let commands = await runtime.backend.recordedCommands()
@@ -2999,7 +3028,7 @@ func domTreeControllerPublishesSelectionDeltasWithoutOwningExpansion() async thr
     #expect(controller.snapshot.ancestorNodeIDs(of: child.id) == [parent.id, document.id])
 
     await enqueueCSSStyleReplies(on: runtime.backend)
-    try context.dom.select(child.id, reveal: .selectOnly)
+    try context.selectNode(child.id, reveal: .selectOnly)
 
     try await recorder.waitForUpdateCount(2)
     try await revealRecorder.waitForRequestCount(1)
@@ -3026,7 +3055,7 @@ func domTreeControllerPublishesSelectionDeltasWithoutOwningExpansion() async thr
     #expect(selectionCleared == .selectionChanged(nodeID: nil))
     #expect(controller.snapshot.selectedNodeID == nil)
 
-    try context.dom.select(document.id, reveal: .none)
+    try context.selectNode(document.id, reveal: .none)
     try await recorder.waitForUpdateCount(4)
     #expect(revealRecorder.requests.count == 1)
 }
@@ -4936,7 +4965,7 @@ func styleSheetChangedWhileHydrationActiveTriggersImmediateRefetch() async throw
     )
     let element = try await waitForChild(in: context)
 
-    context.css.setStyleHydrationActive(true)
+    context.setStyleHydrationActive(true)
     await enqueueCSSStyleReplies(on: runtime.backend)
     context.select(element)
     let styles = try #require(element.elementStyles)
@@ -4978,7 +5007,7 @@ func styleSheetChangedWhileHydrationInactiveDefersRefetchUntilActivation() async
     #expect(await matchedStylesCommandCount(on: runtime.backend) == 1)
 
     await enqueueCSSStyleReplies(on: runtime.backend)
-    context.css.setStyleHydrationActive(true)
+    context.setStyleHydrationActive(true)
 
     try await waitUntil { styles.phase == .loaded }
     #expect(await matchedStylesCommandCount(on: runtime.backend) == 2)
@@ -5000,7 +5029,7 @@ func requestSetCSSPropertyTogglesDeclarationAndRefreshesStyles() async throws {
     )
     let element = try await waitForChild(in: context)
 
-    context.css.setStyleHydrationActive(true)
+    context.setStyleHydrationActive(true)
     await enqueueCSSStyleReplies(on: runtime.backend)
     context.select(element)
     let styles = try #require(element.elementStyles)
@@ -5042,7 +5071,11 @@ func requestSetCSSPropertyTogglesDeclarationAndRefreshesStyles() async throws {
 
     let propertyID = try #require(styles.sections.first?.style.properties.first?.id)
     await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
-    #expect(context.css.requestSetProperty(propertyID, enabled: false))
+    #expect(context.requestSetCSSProperty(
+        propertyID,
+        enabled: false,
+        options: .automatic
+    ))
 
     try await waitUntil {
         await matchedStylesCommandCount(on: runtime.backend) == 2
@@ -5103,7 +5136,11 @@ func setCSSDeclarationTextRewritesStyleTextAndMarksUndoableState() async throws 
     await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
 
     let propertyID = try #require(styles.sections.first?.style.properties.first?.id)
-    try await context.css.setDeclarationText("display: flex;", for: propertyID)
+    try await context.setCSSDeclarationText(
+        "display: flex;",
+        for: propertyID,
+        options: .automatic
+    )
 
     let commands = await runtime.backend.recordedCommands()
     let setStyleText = try #require(commands.last { $0 == RecordedCommand(domain: "CSS", method: "setStyleText") })
@@ -5142,7 +5179,11 @@ func cssRuleSelectorEditsMarkUndoableStateOnOwningTarget() async throws {
     )
     await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
 
-    try await context.css.setRuleSelector(".updated", for: ruleID)
+    try await context.setCSSRuleSelector(
+        ".updated",
+        for: ruleID,
+        options: .automatic
+    )
 
     let commands = await runtime.backend.recordedCommands()
     let setRuleSelector = try #require(commands.first { $0.domain == "CSS" && $0.method == "setRuleSelector" })
@@ -5226,14 +5267,22 @@ func requestSetCSSPropertyRefusesStaleAndNonEditableProperties() async throws {
     let userAgentSection = try #require(styles.sections.first { $0.title == "div" })
     #expect(userAgentSection.isEditable == false)
     let userAgentPropertyID = try #require(userAgentSection.style.properties.first?.id)
-    #expect(context.css.requestSetProperty(userAgentPropertyID, enabled: false) == false)
+    #expect(context.requestSetCSSProperty(
+        userAgentPropertyID,
+        enabled: false,
+        options: .automatic
+    ) == false)
 
     let editableSection = try #require(styles.sections.first { $0.title == ".card" })
     let editablePropertyID = try #require(editableSection.style.properties.first?.id)
 
     await runtime.backend.emit(.styleSheetChanged(CSS.StyleSheet.ID("sheet-1")), target: target)
     try await waitUntil { styles.phase == .needsRefresh }
-    #expect(context.css.requestSetProperty(editablePropertyID, enabled: false) == false)
+    #expect(context.requestSetCSSProperty(
+        editablePropertyID,
+        enabled: false,
+        options: .automatic
+    ) == false)
 
     let commands = await runtime.backend.recordedCommands()
     #expect(commands.contains(RecordedCommand(domain: "CSS", method: "setStyleText")) == false)

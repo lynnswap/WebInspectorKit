@@ -14,7 +14,7 @@ import WebInspectorProxyKit
 /// let container = try await WebInspectorContainer(attachingTo: webView)
 /// let context = container.mainContext
 ///
-/// let tree = context.dom.treeController()
+/// let tree = try await context.treeController()
 /// render(tree.snapshot)
 ///
 /// await container.close()

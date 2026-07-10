@@ -45,7 +45,7 @@ package final class DOMElementViewController: UICollectionViewController {
 #if DEBUG
         resolveStyleRenderWaitersForTesting(result: false)
 #endif
-        context.css.setStyleHydrationActive(false)
+        context.setStyleHydrationActive(false)
         statusTask?.cancel()
         selectedStylesObservation?.cancel()
     }
@@ -67,11 +67,11 @@ package final class DOMElementViewController: UICollectionViewController {
 
     override package func viewIsAppearing(_ animated: Bool) {
         super.viewIsAppearing(animated)
-        context.css.setStyleHydrationActive(true)
+        context.setStyleHydrationActive(true)
     }
 
     override package func viewDidDisappear(_ animated: Bool) {
-        context.css.setStyleHydrationActive(false)
+        context.setStyleHydrationActive(false)
         super.viewDidDisappear(animated)
     }
 
@@ -348,7 +348,11 @@ package final class DOMElementViewController: UICollectionViewController {
 
     private func toggleAction() -> DOMElementStylePropertyView.ToggleAction? {
         return { [weak context] propertyID, enabled in
-            context?.css.requestSetProperty(propertyID, enabled: enabled) ?? false
+            context?.requestSetCSSProperty(
+                propertyID,
+                enabled: enabled,
+                options: .automatic
+            ) ?? false
         }
     }
 
