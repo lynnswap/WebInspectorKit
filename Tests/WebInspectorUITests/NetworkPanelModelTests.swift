@@ -633,6 +633,9 @@ func displaySearchFieldsUpdateWhenRequestChanges() async throws {
     model.setSearchText("PATCH")
     await model.waitForQueryUpdates()
     #expect(model.displayRequestIDs == [requestID])
+    model.setSearchText("/old")
+    await model.waitForQueryUpdates()
+    #expect(model.displayRequestIDs == [requestID])
 
     model.setSearchText("json")
     await model.waitForQueryUpdates()

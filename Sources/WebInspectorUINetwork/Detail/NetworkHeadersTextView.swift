@@ -38,7 +38,7 @@ final class NetworkHeadersTextView: UIView {
     }()
     private var sectionRules: [SectionRule] = []
     private var renderedText = ""
-    private weak var renderedRequest: NetworkRequest?
+    private var renderedRequests: [NetworkRequest] = []
 #if DEBUG
     private var attributedTextAssignmentCount = 0
 #endif
@@ -59,15 +59,20 @@ final class NetworkHeadersTextView: UIView {
     }
 
     func render(request: NetworkRequest) {
-        render(request: request, forceDocumentAssignment: false)
+        render(requests: [request])
+    }
+
+    func render(requests: [NetworkRequest]) {
+        render(requests: requests, forceDocumentAssignment: false)
     }
 
     private func render(
-        request: NetworkRequest,
+        requests: [NetworkRequest],
         forceDocumentAssignment: Bool
     ) {
-        renderedRequest = request
-        let document = NetworkHeadersTextDocumentBuilder(request: request).makeDocument()
+        precondition(requests.isEmpty == false, "Network headers require at least one request.")
+        renderedRequests = requests
+        let document = NetworkHeadersTextDocumentBuilder(requests: requests).makeDocument()
         let documentText = document.attributedString.string
         if forceDocumentAssignment == false, renderedText == documentText {
             updateSectionRuleRuns()
@@ -84,7 +89,7 @@ final class NetworkHeadersTextView: UIView {
     }
 
     func clear() {
-        renderedRequest = nil
+        renderedRequests = []
         renderedText = ""
         sectionRules = []
         textView.attributedText = NSAttributedString()
@@ -120,10 +125,10 @@ final class NetworkHeadersTextView: UIView {
     }
 
     private func rerenderIfNeeded() {
-        guard let renderedRequest else {
+        guard renderedRequests.isEmpty == false else {
             return
         }
-        render(request: renderedRequest, forceDocumentAssignment: true)
+        render(requests: renderedRequests, forceDocumentAssignment: true)
     }
 
     private func updateSectionRuleRuns() {
@@ -270,31 +275,52 @@ private struct NetworkHeadersTextDocumentBuilder {
         var ruleColor: UIColor
     }
 
-    var request: NetworkRequest
+    var requests: [NetworkRequest]
 
     func makeDocument() -> NetworkHeadersTextDocument {
         let text = NSMutableAttributedString()
         var rules: [NetworkHeadersTextSectionRule] = []
-        for section in sections() where section.rows.isEmpty == false {
-            append(section: section, to: text, rules: &rules)
+        for (index, request) in requests.enumerated() {
+            if requests.count > 1 {
+                appendRequestHeading(
+                    request: request,
+                    index: index,
+                    to: text
+                )
+            }
+            for section in sections(for: request) where section.rows.isEmpty == false {
+                append(section: section, to: text, rules: &rules)
+            }
         }
         return NetworkHeadersTextDocument(attributedString: text, sectionRules: rules)
     }
 
-    private func sections() -> [Section] {
-        [
-            summarySection(),
-            requestSection(),
-            responseSection(),
-        ].compactMap { $0 }
+    private func sections(for request: NetworkRequest) -> [Section] {
+        var sections = [summarySection(for: request)]
+        for (index, redirect) in request.redirects.enumerated() {
+            sections.append(redirectRequestSection(redirect.request, index: index))
+            sections.append(redirectResponseSection(redirect.response, index: index))
+        }
+        sections.append(requestSection(for: request))
+        if let responseSection = responseSection(for: request) {
+            sections.append(responseSection)
+        }
+        return sections
     }
 
-    private func summarySection() -> Section {
+    private func summarySection(for request: NetworkRequest) -> Section {
         var rows: [Row] = [
             Row(key: String(localized: "network.headers.summary.url", defaultValue: "URL", bundle: WebInspectorUILocalization.bundle), value: request.url, style: .summary),
-            Row(key: String(localized: "network.headers.summary.status", defaultValue: "Status", bundle: WebInspectorUILocalization.bundle), value: statusText(), style: .summary),
-            Row(key: String(localized: "network.headers.summary.source", defaultValue: "Source", bundle: WebInspectorUILocalization.bundle), value: sourceText(), style: .summary),
+            Row(key: String(localized: "network.headers.summary.status", defaultValue: "Status", bundle: WebInspectorUILocalization.bundle), value: statusText(for: request), style: .summary),
+            Row(key: String(localized: "network.headers.summary.source", defaultValue: "Source", bundle: WebInspectorUILocalization.bundle), value: sourceText(for: request), style: .summary),
         ]
+        if request.redirects.isEmpty == false {
+            rows.append(Row(
+                key: String(localized: "network.headers.summary.redirects", defaultValue: "Redirects", bundle: WebInspectorUILocalization.bundle),
+                value: String(request.redirects.count),
+                style: .summary
+            ))
+        }
         if let remoteAddress = request.metrics?.remoteAddress, remoteAddress.isEmpty == false {
             rows.append(
                 Row(
@@ -311,9 +337,13 @@ private struct NetworkHeadersTextDocumentBuilder {
         )
     }
 
-    private func requestSection() -> Section {
+    private func requestSection(for request: NetworkRequest) -> Section {
         let headers = request.requestHeaders
-        var rows: [Row] = requestProtocolRows()
+        var rows: [Row] = requestProtocolRows(
+            url: request.url,
+            method: request.method,
+            protocolName: request.metrics?.networkProtocol
+        )
         rows.append(contentsOf: headerRows(headers))
         if rows.isEmpty {
             rows.append(
@@ -331,12 +361,16 @@ private struct NetworkHeadersTextDocumentBuilder {
         )
     }
 
-    private func responseSection() -> Section? {
+    private func responseSection(for request: NetworkRequest) -> Section? {
         guard request.hasResponse else {
             return nil
         }
         let headers = request.responseHeaders
-        var rows: [Row] = responseProtocolRows()
+        var rows: [Row] = responseProtocolRows(
+            status: request.status,
+            statusText: request.statusText,
+            protocolName: request.metrics?.networkProtocol
+        )
         rows.append(contentsOf: headerRows(headers))
         if rows.isEmpty {
             rows.append(
@@ -354,12 +388,54 @@ private struct NetworkHeadersTextDocumentBuilder {
         )
     }
 
-    private func requestProtocolRows() -> [Row] {
-        let protocolName = request.metrics?.networkProtocol ?? ""
-        let components = URLComponents(string: request.url)
+    private func redirectRequestSection(
+        _ request: NetworkRequestSnapshot,
+        index: Int
+    ) -> Section {
+        var rows = requestProtocolRows(url: request.url, method: request.method, protocolName: nil)
+        rows.append(contentsOf: headerRows(request.headers))
+        return Section(
+            title: String(
+                localized: "network.section.redirect_request",
+                defaultValue: "Redirect Request",
+                bundle: WebInspectorUILocalization.bundle
+            ) + " \(index + 1)",
+            rows: rows,
+            ruleColor: NetworkHeadersWebKitStyle.networkHeaderColor
+        )
+    }
+
+    private func redirectResponseSection(
+        _ response: NetworkResponseSnapshot,
+        index: Int
+    ) -> Section {
+        var rows = responseProtocolRows(
+            status: response.status,
+            statusText: response.statusText,
+            protocolName: nil
+        )
+        rows.append(contentsOf: headerRows(response.headers))
+        return Section(
+            title: String(
+                localized: "network.section.redirect_response",
+                defaultValue: "Redirect Response",
+                bundle: WebInspectorUILocalization.bundle
+            ) + " \(index + 1)",
+            rows: rows,
+            ruleColor: NetworkHeadersWebKitStyle.networkHeaderColor
+        )
+    }
+
+    private func requestProtocolRows(
+        url: String,
+        method: String,
+        protocolName rawProtocolName: String?
+    ) -> [Row] {
+        let protocolName = rawProtocolName ?? ""
+        let components = URLComponents(string: url)
         if protocolName == "h2" {
             return [
-                Row(key: ":method", value: request.method, style: .pseudoHeader),
+                Row(key: ":method", value: method, style: .pseudoHeader),
                 Row(key: ":scheme", value: components?.scheme, style: .pseudoHeader),
                 Row(key: ":authority", value: authority(from: components), style: .pseudoHeader),
                 Row(key: ":path", value: path(from: components), style: .pseudoHeader),
@@ -373,25 +449,29 @@ private struct NetworkHeadersTextDocumentBuilder {
         let path = path(from: components) ?? "/"
         let suffix = protocolName.hasPrefix("http/1") ? " \(protocolName.uppercased())" : ""
         return [
-            Row(key: "\(request.method) \(path)\(suffix)", value: nil, style: .pseudoHeader),
+            Row(key: "\(method) \(path)\(suffix)", value: nil, style: .pseudoHeader),
         ]
     }
 
-    private func responseProtocolRows() -> [Row] {
-        guard let status = request.status else {
+    private func responseProtocolRows(
+        status: Int?,
+        statusText: String?,
+        protocolName rawProtocolName: String?
+    ) -> [Row] {
+        guard let status else {
             return []
         }
-        let protocolName = request.metrics?.networkProtocol ?? ""
+        let protocolName = rawProtocolName ?? ""
         if protocolName == "h2" {
             return [Row(key: ":status", value: "\(status)", style: .pseudoHeader)]
         }
         if protocolName.hasPrefix("http/1") {
-            let statusText = request.statusText ?? ""
-            let suffix = statusText.isEmpty ? "" : " \(statusText)"
+            let resolvedStatusText = statusText ?? ""
+            let suffix = resolvedStatusText.isEmpty ? "" : " \(resolvedStatusText)"
             return [Row(key: "\(protocolName.uppercased()) \(status)\(suffix)", value: nil, style: .pseudoHeader)]
         }
-        let statusText = request.statusText ?? ""
-        let suffix = statusText.isEmpty ? "" : " \(statusText)"
+        let resolvedStatusText = statusText ?? ""
+        let suffix = resolvedStatusText.isEmpty ? "" : " \(resolvedStatusText)"
         return [Row(key: "\(status)\(suffix)", value: nil, style: .pseudoHeader)]
     }
 
@@ -407,7 +487,7 @@ private struct NetworkHeadersTextDocumentBuilder {
             }
     }
 
-    private func statusText() -> String {
+    private func statusText(for request: NetworkRequest) -> String {
         guard request.hasResponse else {
             return "-"
         }
@@ -416,7 +496,7 @@ private struct NetworkHeadersTextDocumentBuilder {
         return request.status.map { "\($0)\(suffix)" } ?? (statusText.isEmpty ? "-" : statusText)
     }
 
-    private func sourceText() -> String {
+    private func sourceText(for request: NetworkRequest) -> String {
         guard let source = request.responseSource else {
             return "-"
         }
@@ -457,6 +537,21 @@ private struct NetworkHeadersTextDocumentBuilder {
         return path
     }
 
+    private func appendRequestHeading(
+        request: NetworkRequest,
+        index: Int,
+        to text: NSMutableAttributedString
+    ) {
+        if text.length > 0 {
+            text.append(NSAttributedString(string: "\n", attributes: rowAttributes(style: .message).value))
+        }
+        let displayName = NetworkDisplay.URLSummary(url: request.url).displayName
+        text.append(NSAttributedString(
+            string: "\(index + 1). \(displayName)\n",
+            attributes: requestHeadingAttributes()
+        ))
+    }
+
     private func append(
         section: Section,
         to text: NSMutableAttributedString,
@@ -493,6 +588,17 @@ private struct NetworkHeadersTextDocumentBuilder {
         paragraphStyle.paragraphSpacing = NetworkHeadersWebKitStyle.sectionTitleBottomSpacing
         return [
             .font: NetworkHeadersWebKitStyle.sectionTitleFont,
+            .foregroundColor: NetworkHeadersWebKitStyle.textColor,
+            .paragraphStyle: paragraphStyle,
+        ]
+    }
+
+    private func requestHeadingAttributes() -> [NSAttributedString.Key: Any] {
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineBreakMode = .byWordWrapping
+        paragraphStyle.paragraphSpacing = NetworkHeadersWebKitStyle.sectionTitleBottomSpacing
+        return [
+            .font: UIFont.preferredFont(forTextStyle: .headline),
             .foregroundColor: NetworkHeadersWebKitStyle.textColor,
             .paragraphStyle: paragraphStyle,
         ]
