@@ -2367,7 +2367,7 @@ struct NetworkDetailViewControllerTests {
         #expect(listViewController.displayedUIKitSectionCountForTesting == 1)
         let evaluationCount = listViewController.entryIDsEvaluationCountForTesting
         let applyCount = listViewController.snapshotApplyCountForTesting
-        let deliveryCount = listViewController.fetchedResultsUpdateDeliveryCountForTesting
+        let fetchedResultsRevision = model.requests.revision
 
         let segmentProxyID = Network.Request.ID("segment")
         await context.apply(.requestWillBeSent(
@@ -2384,11 +2384,11 @@ struct NetworkDetailViewControllerTests {
         ))
         _ = try #require(context.registeredRequest(forProxyID: segmentProxyID))
 
-        #expect(await waitUntilListShowsEntries(
-            [groupID],
-            in: listViewController,
-            afterUpdateDeliveryCount: deliveryCount
+        #expect(await listViewController.waitForFetchedResultsRevisionForTesting(
+            fetchedResultsRevision + 1
         ))
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+        #expect(listViewController.displayedEntryIDsForTesting == [groupID])
         #expect(listViewController.entryIDsEvaluationCountForTesting == evaluationCount)
         #expect(listViewController.snapshotApplyCountForTesting == applyCount + 1)
         #expect(listViewController.lastAppliedReconfigureEntryIDsForTesting == [groupID])
