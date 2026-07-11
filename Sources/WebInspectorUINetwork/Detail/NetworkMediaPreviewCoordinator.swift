@@ -14,12 +14,22 @@ package struct NetworkMediaPreviewMetadata: Equatable, Sendable {
     }
 }
 
+package struct NetworkMoviePreview: Equatable, Sendable {
+    package let bodyID: ObjectIdentifier
+    package let url: URL
+
+    package init(bodyID: ObjectIdentifier, url: URL) {
+        self.bodyID = bodyID
+        self.url = url
+    }
+}
+
 package enum NetworkMediaPreviewPreparationAction {
     case unavailable
     case failed
     case active
-    case remoteMovie(URL)
-    case cachedMovie(URL)
+    case remoteMovie(NetworkMoviePreview)
+    case cachedMovie(NetworkMoviePreview)
     case startedLoading
 }
 
@@ -27,7 +37,7 @@ package enum NetworkMediaPreviewResultAction {
     case ignore
     case fallback
     case showImage(UIImage)
-    case showMovie(URL)
+    case showMovie(NetworkMoviePreview)
 }
 
 @MainActor
@@ -46,14 +56,17 @@ package final class NetworkMediaPreviewCoordinator {
         metadata: NetworkMediaPreviewMetadata?,
         completion: @escaping @MainActor (NetworkMediaPreviewResultAction) -> Void
     ) -> NetworkMediaPreviewPreparationAction {
+        if case .failed = body.phase {
+            return .unavailable
+        }
         guard let source = mediaPreviewSource(for: body, metadata: metadata) else {
             return .unavailable
         }
 
         switch source {
-        case .remoteMovie(let url):
-            prepareRemoteMovie(url)
-            return .remoteMovie(url)
+        case .remoteMovie(let preview):
+            prepareRemoteMovie(preview)
+            return .remoteMovie(preview)
         case .body(let input):
             return prepareBodyPreview(for: input, completion: completion)
         }
@@ -105,7 +118,12 @@ package final class NetworkMediaPreviewCoordinator {
                    mimeType: metadata?.mimeType,
                    url: metadata?.url
                ) {
-                return .remoteMovie(remoteURL)
+                return .remoteMovie(
+                    NetworkMoviePreview(
+                        bodyID: ObjectIdentifier(body),
+                        url: remoteURL
+                    )
+                )
             }
             if body.role == .request {
                 return nil
@@ -142,17 +160,19 @@ package final class NetworkMediaPreviewCoordinator {
             cancelPending()
             failedInput = nil
             displayedIdentity = .body(input)
-            return .cachedMovie(fileURL)
+            return .cachedMovie(
+                NetworkMoviePreview(bodyID: input.bodyID, url: fileURL)
+            )
         }
 
         startPreparation(for: input, completion: completion)
         return .startedLoading
     }
 
-    private func prepareRemoteMovie(_ url: URL) {
+    private func prepareRemoteMovie(_ preview: NetworkMoviePreview) {
         cancelPending()
         failedInput = nil
-        displayedIdentity = .remoteMovie(url)
+        displayedIdentity = .remoteMovie(preview)
         removeCachedTemporaryFile()
     }
 
@@ -183,7 +203,12 @@ package final class NetworkMediaPreviewCoordinator {
             return .showImage(image)
         case .movie(let temporaryFile):
             replaceCachedTemporaryFile(with: temporaryFile)
-            return .showMovie(temporaryFile.fileURL)
+            return .showMovie(
+                NetworkMoviePreview(
+                    bodyID: input.bodyID,
+                    url: temporaryFile.fileURL
+                )
+            )
         }
     }
 
@@ -294,12 +319,12 @@ package final class NetworkMediaPreviewCoordinator {
 }
 
 private enum NetworkMediaPreviewSource {
-    case remoteMovie(URL)
+    case remoteMovie(NetworkMoviePreview)
     case body(NetworkMediaPreviewInput)
 }
 
 private enum NetworkMediaPreviewIdentity: Equatable {
-    case remoteMovie(URL)
+    case remoteMovie(NetworkMoviePreview)
     case body(NetworkMediaPreviewInput)
 }
 

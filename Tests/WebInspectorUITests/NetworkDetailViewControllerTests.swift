@@ -93,6 +93,28 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func responseBodyPreflightFailurePopulatesSyntaxPresentation() {
+        let body = NetworkBody(
+            role: .response,
+            kind: .text,
+            sourceSyntaxKind: .plainText,
+            phase: .failed(.model(.commandRejected(
+                method: "Network.getResponseBody",
+                message: "The response body is no longer available."
+            )))
+        )
+        let viewController = NetworkBodyViewController()
+        viewController.loadViewIfNeeded()
+        viewController.setSurface(.body(body, metadata: nil))
+        viewController.resumeRendering()
+
+        #expect(
+            viewController.syntaxModelTextForTesting
+                .contains("The response body is no longer available.")
+        )
+    }
+
+    @Test
     func listCanDisableBackgroundDrawing() async throws {
         guard #available(iOS 26.0, *) else {
             return
@@ -675,6 +697,11 @@ struct NetworkDetailViewControllerTests {
                     && viewController.currentPreviewRoleForTesting == .response
             }
             #expect(didFetch)
+            #expect(await waitUntilRendered(in: viewController) {
+                viewController.syntaxBodyViewControllerForTesting
+                    .syntaxViewForTesting.text
+                    .contains("Intentional response-body failure.")
+            })
             #expect(fixture.wire.observations.commands.filter {
                 $0.method == "Network.getResponseBody"
             }.count == 1)
@@ -867,11 +894,12 @@ struct NetworkDetailViewControllerTests {
             Issue.record("HLS response preview should not require body payload preparation")
         }
 
-        guard case .remoteMovie(let url) = action else {
+        guard case .remoteMovie(let preview) = action else {
             Issue.record("Expected HLS response preview to use the remote playlist URL")
             return
         }
-        #expect(url.absoluteString == playlistURL)
+        #expect(preview.url.absoluteString == playlistURL)
+        #expect(preview.bodyID == ObjectIdentifier(body))
     }
 
     @Test
@@ -895,11 +923,12 @@ struct NetworkDetailViewControllerTests {
             Issue.record("HLS response preview should not fetch or prepare body payloads")
         }
 
-        guard case .remoteMovie(let url) = action else {
+        guard case .remoteMovie(let preview) = action else {
             Issue.record("Expected HLS response preview to use the remote playlist URL before the body loads")
             return
         }
-        #expect(url.absoluteString == playlistURL)
+        #expect(preview.url.absoluteString == playlistURL)
+        #expect(preview.bodyID == ObjectIdentifier(body))
     }
 
     @Test
@@ -961,6 +990,56 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(didShowPlayer)
         #expect(playerCreationCount == 1)
+    }
+
+    @Test
+    func hlsPlaybackFailureReplacesPlayerWithVisibleErrorAndTearsDownObservers() async throws {
+        let playlistURL = "https://media.example.com/live/failing.m3u8"
+        let body = NetworkBody(
+            role: .response,
+            kind: .binary,
+            sourceSyntaxKind: .plainText,
+            phase: .available
+        )
+        let viewController = NetworkBodyViewController()
+        viewController.setSurface(.body(
+            body,
+            metadata: NetworkMediaPreviewMetadata(
+                mimeType: "application/vnd.apple.mpegurl",
+                url: playlistURL
+            )
+        ))
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.resumeRendering()
+
+        let item = try #require(viewController.mediaPlayerItemForTesting)
+        #expect(viewController.mediaPlayerURLForTesting?.absoluteString == playlistURL)
+        #expect(viewController.hasMoviePreviewObservationForTesting)
+        let observation = try #require(viewController.previewRenderObservationDeliveryForTesting)
+        let renderedFailure = await observation.values {
+            viewController.mediaPlayerURLForTesting == nil
+                && viewController.syntaxViewForTesting.text.contains("Simulated HLS playback failure.")
+        }
+        defer { renderedFailure.cancel() }
+
+        NotificationCenter.default.post(
+            name: AVPlayerItem.failedToPlayToEndTimeNotification,
+            object: item,
+            userInfo: [
+                AVPlayerItemFailedToPlayToEndTimeErrorKey: NSError(
+                    domain: "WebInspectorUITests",
+                    code: 1,
+                    userInfo: [
+                        NSLocalizedDescriptionKey: "Simulated HLS playback failure.",
+                    ]
+                ),
+            ]
+        )
+
+        #expect(await renderedFailure.waitUntil { $0 } != nil)
+        #expect(viewController.hasMoviePreviewObservationForTesting == false)
+        #expect(viewController.mediaPlayerItemForTesting == nil)
     }
 
     @Test
@@ -1051,6 +1130,129 @@ struct NetworkDetailViewControllerTests {
                     == "https://media.example.com/second-unplayed.m3u8"
         }
         #expect(didFollowSecondRequest)
+    }
+
+    @Test
+    func groupedPreviewSkipsCancelledAndNoContentMediaForHealthyMember() async throws {
+        let context = makeContext()
+        let nodeID = DOM.Node.ID("healthy-media-candidate")
+        let healthyRequest = try #require(await applyRequest(
+            to: context,
+            requestID: "healthy-playlist",
+            url: "https://media.example.com/healthy.m3u8",
+            responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
+            responseMimeType: "application/vnd.apple.mpegurl",
+            resourceType: .media,
+            timestamp: 1,
+            initiatorNodeID: nodeID
+        ))
+        let cancelledRequest = try #require(await applyRequest(
+            to: context,
+            requestID: "cancelled-playlist",
+            url: "https://media.example.com/cancelled.m3u8",
+            responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
+            responseMimeType: "application/vnd.apple.mpegurl",
+            resourceType: .media,
+            timestamp: 2,
+            initiatorNodeID: nodeID,
+            finishes: false
+        ))
+        await applyLoadingFailed(
+            to: context,
+            requestID: "cancelled-playlist",
+            errorText: "Cancelled",
+            canceled: true,
+            timestamp: 2.2
+        )
+        let noContentRequest = try #require(await applyRequest(
+            to: context,
+            requestID: "no-content-playlist",
+            url: "https://media.example.com/no-content.m3u8",
+            responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
+            responseMimeType: "application/vnd.apple.mpegurl",
+            responseStatus: 204,
+            resourceType: .media,
+            timestamp: 3,
+            initiatorNodeID: nodeID
+        ))
+        let model = try await NetworkPanelModel.make(context: context)
+        model.selectRequest(noContentRequest)
+        let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
+        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting { _ in
+            StubMoviePreviewPlayer()
+        }
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        #expect(await waitUntilRendered(in: viewController) {
+            model.selectedRequests.count == 3
+                && viewController.previewRequestIDForTesting == healthyRequest.id
+                && viewController.syntaxBodyViewControllerForTesting
+                    .mediaPlayerURLForTesting?.absoluteString == "https://media.example.com/healthy.m3u8"
+        })
+        #expect(cancelledRequest.responseBody.phase == .failed(.loadingFailed(
+            errorText: "Cancelled",
+            canceled: true
+        )))
+    }
+
+    @Test
+    func groupedHLSPreviewReplacesPlayerForNewRequestWithSameURL() async throws {
+        let context = makeContext()
+        let nodeID = DOM.Node.ID("same-url-playlist")
+        let playlistURL = "https://media.example.com/shared.m3u8"
+        let firstRequest = try #require(await applyRequest(
+            to: context,
+            requestID: "first-shared-playlist",
+            url: playlistURL,
+            responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
+            responseMimeType: "application/vnd.apple.mpegurl",
+            resourceType: .media,
+            timestamp: 1,
+            initiatorNodeID: nodeID
+        ))
+        let model = try await NetworkPanelModel.make(context: context)
+        model.selectRequest(firstRequest)
+        let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
+        let playerFactory = MoviePreviewPlayerFactorySpy()
+        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
+            playerFactory.makePlayer(for:)
+        )
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.previewRequestIDForTesting == firstRequest.id
+                && playerFactory.players.count == 1
+        })
+        let firstPlayerID = try #require(
+            viewController.syntaxBodyViewControllerForTesting.mediaPlayerIdentityForTesting
+        )
+
+        let secondRequest = try #require(await applyRequest(
+            to: context,
+            requestID: "second-shared-playlist",
+            url: playlistURL,
+            responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
+            responseMimeType: "application/vnd.apple.mpegurl",
+            resourceType: .media,
+            timestamp: 2,
+            initiatorNodeID: nodeID
+        ))
+
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.previewRequestIDForTesting == secondRequest.id
+                && playerFactory.players.count == 2
+        })
+        #expect(
+            viewController.syntaxBodyViewControllerForTesting.mediaPlayerIdentityForTesting
+                != firstPlayerID
+        )
+        let expectedPlaylistURL = try #require(URL(string: playlistURL))
+        #expect(playerFactory.requestedURLs == [
+            expectedPlaylistURL,
+            expectedPlaylistURL,
+        ])
     }
 
     @Test
@@ -2903,6 +3105,23 @@ struct NetworkDetailViewControllerTests {
                 timestamp: timestamp,
                 sourceMapURL: nil,
                 metrics: nil
+            )
+        )
+    }
+
+    private func applyLoadingFailed(
+        to context: WebInspectorModelContext,
+        requestID rawRequestID: String,
+        errorText: String,
+        canceled: Bool,
+        timestamp: Double
+    ) async {
+        await context.apply(
+            .loadingFailed(
+                id: Network.Request.ID(rawRequestID),
+                errorText: errorText,
+                canceled: canceled,
+                timestamp: timestamp
             )
         )
     }

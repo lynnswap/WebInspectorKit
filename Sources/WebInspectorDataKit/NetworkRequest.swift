@@ -284,7 +284,7 @@ public final class NetworkBody {
 
     enum ResponseFetchAcquisition {
         case loaded
-        case failed(WebInspectorProxyError)
+        case failed(Failure)
         case owner(ResponseFetchLease)
         case waiter(ResponseFetchLease)
     }
@@ -313,6 +313,24 @@ public final class NetworkBody {
 
         /// Binary body content.
         case binary
+    }
+
+    /// The terminal reason that made a response body unavailable.
+    public enum Failure: Error, Equatable, Sendable {
+        /// WebKit reported that the resource load failed or was cancelled.
+        case loadingFailed(errorText: String, canceled: Bool)
+
+        /// The semantic model rejected the response-body operation.
+        case model(WebInspectorModelError)
+
+        /// The model context entered a terminal attachment failure.
+        case context(WebInspectorModelContext.Failure)
+
+        /// The model context was already closed.
+        case transition(WebInspectorModelContext.TransitionError)
+
+        /// The inspector protocol or transport failed the response-body command.
+        case proxy(WebInspectorProxyError)
     }
 
     /// Syntax hint for text body rendering.
@@ -348,7 +366,7 @@ public final class NetworkBody {
         case loaded
 
         /// Loading the body failed.
-        case failed(WebInspectorProxyError)
+        case failed(Failure)
     }
 
     struct Payload: Equatable, Sendable {
@@ -523,7 +541,7 @@ public final class NetworkBody {
             load(body)
             lease.completion.fulfill(.success(body))
         case let .failure(error):
-            fail(error)
+            fail(.proxy(error))
             lease.completion.fulfill(.failure(error))
         }
     }
@@ -535,9 +553,22 @@ public final class NetworkBody {
             return
         }
         self.responseFetch = nil
-        fail(error)
+        fail(.proxy(error))
         responseFetch.lease.completion.fulfill(.failure(error))
         responseFetch.task?.cancel()
+    }
+
+    func failResponseFetch(
+        _ failure: Failure,
+        completionError: (any Error)? = nil
+    ) {
+        let responseFetch = self.responseFetch
+        self.responseFetch = nil
+        fail(failure)
+        responseFetch?.lease.completion.fulfill(
+            .failure(completionError ?? failure)
+        )
+        responseFetch?.task?.cancel()
     }
 
     func load(_ body: Network.Body) {
@@ -554,8 +585,8 @@ public final class NetworkBody {
         phase = .loaded
     }
 
-    func fail(_ error: WebInspectorProxyError) {
-        phase = .failed(error)
+    func fail(_ failure: Failure) {
+        phase = .failed(failure)
     }
 
     static func makeRequestBody(for request: Network.Request) -> NetworkBody? {
@@ -1134,6 +1165,9 @@ public final class NetworkRequest: WebInspectorPersistentModel {
     func fail(errorText: String, canceled: Bool, timestamp: Double) {
         finishedOrFailedTimestamp = timestamp
         state = .failed(errorText: errorText, canceled: canceled)
+        responseBody.failResponseFetch(
+            .loadingFailed(errorText: errorText, canceled: canceled)
+        )
     }
 
     func applyMemoryCache(response: Network.Response, resourceType: Network.ResourceType?, timestamp: Double) {

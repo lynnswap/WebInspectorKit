@@ -48,6 +48,21 @@ private final class NetworkResponseBodyFetchObservationBinding {
 
 @MainActor
 package final class NetworkDetailViewController: UIViewController {
+    private enum PreviewCandidate {
+        case remoteHLS(NetworkRequest)
+        case bodyMedia(NetworkRequest)
+        case unavailableMedia(NetworkRequest)
+
+        var request: NetworkRequest {
+            switch self {
+            case .remoteHLS(let request),
+                 .bodyMedia(let request),
+                 .unavailableMedia(let request):
+                request
+            }
+        }
+    }
+
     private let model: NetworkPanelModel
     private var modelObservation: PortableObservationTracking.Token?
     private var selectedRequestRenderObservation: PortableObservationTracking.Token?
@@ -624,19 +639,72 @@ package final class NetworkDetailViewController: UIViewController {
     }
 
     private func previewRequest(in requests: [NetworkRequest]) -> NetworkRequest? {
-        var latestPreviewableRequest: NetworkRequest?
-        for request in requests.reversed() where isPartialMediaRequest(request) == false {
-            guard let kind = responseMediaPreviewKind(for: request) else {
+        var latestBodyMedia: PreviewCandidate?
+        var latestUnavailableMedia: PreviewCandidate?
+        for request in requests.reversed() {
+            guard let candidate = previewCandidate(for: request) else {
                 continue
             }
-            if kind == .hlsPlaylist {
-                return request
-            }
-            if latestPreviewableRequest == nil {
-                latestPreviewableRequest = request
+            switch candidate {
+            case .remoteHLS:
+                return candidate.request
+            case .bodyMedia:
+                if latestBodyMedia == nil {
+                    latestBodyMedia = candidate
+                }
+            case .unavailableMedia:
+                if latestUnavailableMedia == nil {
+                    latestUnavailableMedia = candidate
+                }
             }
         }
-        return latestPreviewableRequest ?? requests.first
+        return latestBodyMedia?.request
+            ?? latestUnavailableMedia?.request
+            ?? requests.first
+    }
+
+    private func previewCandidate(for request: NetworkRequest) -> PreviewCandidate? {
+        guard isPartialMediaRequest(request) == false,
+              let kind = responseMediaPreviewKind(for: request) else {
+            return nil
+        }
+        guard request.hasResponse,
+              request.method.caseInsensitiveCompare("HEAD") != .orderedSame,
+              request.status.map({ status in
+                  (200..<300).contains(status)
+                      && status != 204
+                      && status != 205
+              }) ?? true else {
+            return .unavailableMedia(request)
+        }
+        if case .failed = request.state {
+            return .unavailableMedia(request)
+        }
+        if case .failed = request.responseBody.phase {
+            return .unavailableMedia(request)
+        }
+        if kind == .hlsPlaylist,
+           NetworkDisplay.MediaPreviewSupport.remoteHLSURL(
+               mimeType: mimeType(from: request.mimeType, headers: request.responseHeaders),
+               url: request.responseURL ?? request.url
+           ) != nil,
+           request.state == .responded || request.state == .finished {
+            return .remoteHLS(request)
+        }
+        guard request.state == .finished,
+              request.hasResponseBody else {
+            return .unavailableMedia(request)
+        }
+        switch request.responseBody.phase {
+        case .loaded, .fetching:
+            return .bodyMedia(request)
+        case .available:
+            return request.canFetchResponseBody
+                ? .bodyMedia(request)
+                : .unavailableMedia(request)
+        case .failed:
+            return .unavailableMedia(request)
+        }
     }
 
     private func responseMediaPreviewKind(

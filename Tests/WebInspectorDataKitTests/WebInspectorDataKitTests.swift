@@ -432,13 +432,80 @@ func clearingNetworkInvalidatesEveryJoinedResponseBodyWaiter() async throws {
         await #expect(throws: WebInspectorProxyError.staleIdentifier) {
             try await second.value
         }
-        guard case .failed(.staleIdentifier) = body.phase else {
+        guard case .failed(.proxy(.staleIdentifier)) = body.phase else {
             Issue.record("Expected the cleared response body to become stale.")
             return
         }
         #expect(try fixture.context.networkRequest(id: NetworkRequest.ID(requestID)) == nil)
         gate.open()
     }
+}
+
+@MainActor
+@Test
+func responseBodyPreflightFailurePublishesTypedBodyFailure() async {
+    let context = WebInspectorModelContext.preview(
+        configuration: .init(domains: [.network])
+    )
+    let requestID = Network.Request.ID("stale-body-preflight")
+    let request = NetworkRequest(
+        request: Network.Request(
+            id: requestID,
+            url: "https://example.com/stale",
+            method: "GET"
+        ),
+        initiator: nil,
+        resourceType: .fetch,
+        timestamp: 1,
+        modelContext: context
+    )
+
+    await #expect(throws: WebInspectorModelError.staleModel) {
+        _ = try await context.responseBody(for: request)
+    }
+    #expect(request.responseBody.phase == .failed(.model(.staleModel)))
+}
+
+@MainActor
+@Test
+func loadingFailureTerminatesResponseBodyWithWebKitReason() {
+    let context = WebInspectorModelContext.preview(
+        configuration: .init(domains: [.network])
+    )
+    let requestID = Network.Request.ID("failed-body")
+    let request = NetworkRequest(
+        request: Network.Request(
+            id: requestID,
+            url: "https://example.com/failed.mp4",
+            method: "GET"
+        ),
+        initiator: nil,
+        resourceType: .media,
+        timestamp: 1,
+        modelContext: context
+    )
+    request.applyResponse(
+        Network.Response(
+            url: "https://example.com/failed.mp4",
+            status: 200,
+            mimeType: "video/mp4"
+        ),
+        resourceType: .media,
+        timestamp: 2
+    )
+
+    request.fail(
+        errorText: "The media connection was interrupted.",
+        canceled: false,
+        timestamp: 3
+    )
+
+    #expect(
+        request.responseBody.phase == .failed(.loadingFailed(
+            errorText: "The media connection was interrupted.",
+            canceled: false
+        ))
+    )
 }
 
 @MainActor

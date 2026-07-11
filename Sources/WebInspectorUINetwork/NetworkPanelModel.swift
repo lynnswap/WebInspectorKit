@@ -23,14 +23,21 @@ private final class NetworkResponseBodyFetchCoordinator {
             return
         }
         fetchesInFlight.insert(request.id)
+        let body = request.responseBody
         Task { @MainActor in
             defer {
                 fetchesInFlight.remove(request.id)
             }
             do {
                 _ = try await context.responseBody(for: request)
-            } catch {
+            } catch WebInspectorModelError.staleModel where body.phase == .loaded {
                 return
+            } catch {
+                guard case .failed = body.phase else {
+                    preconditionFailure(
+                        "A failed Network.getResponseBody operation must publish its failure on NetworkBody."
+                    )
+                }
             }
         }
     }
