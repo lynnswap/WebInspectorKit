@@ -106,6 +106,11 @@ package final class NetworkRequestStore {
     private var requestsByID: [NetworkRequest.ID: NetworkRequest]
     private var orderedRequestIDs: [NetworkRequest.ID]
     private var orderIndicesByID: [NetworkRequest.ID: Int]
+    private var groupIDByRequestID: [NetworkRequest.ID: WebInspectorFetchSectionID]
+    private var orderedRequestIDsByGroupID: [
+        WebInspectorFetchSectionID: [NetworkRequest.ID]
+    ]
+    private var chronologyKeyByRequestID: [NetworkRequest.ID: NetworkRequestChronologyKey]
     private var clearedRequestIDs: Set<NetworkRequest.ID>
     private let queryIndex: NetworkRequestIndex
     private var queryIndexSequence: UInt64
@@ -127,6 +132,9 @@ package final class NetworkRequestStore {
         requestsByID = [:]
         orderedRequestIDs = []
         orderIndicesByID = [:]
+        groupIDByRequestID = [:]
+        orderedRequestIDsByGroupID = [:]
+        chronologyKeyByRequestID = [:]
         clearedRequestIDs = []
         queryIndex = NetworkRequestIndex()
         queryIndexSequence = 0
@@ -148,6 +156,10 @@ package final class NetworkRequestStore {
     package func resetPerformanceCountersForTesting() {
         performanceCounters = PerformanceCounters()
     }
+
+    package func validateLiveGroupLookupForTesting() {
+        validateLiveGroupLookup()
+    }
 #endif
 
     package func request(for id: NetworkRequest.ID) -> NetworkRequest? {
@@ -156,6 +168,33 @@ package final class NetworkRequestStore {
 
     package func request(forProxyID id: Network.Request.ID) -> NetworkRequest? {
         request(for: NetworkRequest.ID(id))
+    }
+
+    package func groupID(
+        containing requestID: NetworkRequest.ID
+    ) -> WebInspectorFetchSectionID? {
+        groupIDByRequestID[requestID]
+    }
+
+    package func requestIDs(
+        inGroup groupID: WebInspectorFetchSectionID
+    ) -> [NetworkRequest.ID]? {
+        orderedRequestIDsByGroupID[groupID]
+    }
+
+    package func requestGroup(
+        id groupID: WebInspectorFetchSectionID
+    ) -> WebInspectorFetchSection<NetworkRequest>? {
+        guard let requestIDs = orderedRequestIDsByGroupID[groupID] else {
+            return nil
+        }
+        let requests = requestIDs.map { requestID in
+            guard let request = requestsByID[requestID] else {
+                preconditionFailure("Network request group lookup lost a live request identity.")
+            }
+            return request
+        }
+        return WebInspectorFetchSection(id: groupID, title: nil, items: requests)
     }
 
     package nonisolated(nonsending) func results(
@@ -351,6 +390,7 @@ package final class NetworkRequestStore {
         responseStatusText: String,
         responseHeaders: [String: String] = [:],
         responseBody: String? = nil,
+        initiator: Network.Initiator? = nil,
         timestamp: Double,
         encodedBodyLength: Int = 0,
         modelContext: WebInspectorModelContext
@@ -371,7 +411,7 @@ package final class NetworkRequestStore {
             request = existing
             request.applyRequestWillBeSent(
                 request: payload,
-                initiator: nil,
+                initiator: initiator,
                 resourceType: resourceType,
                 timestamp: timestamp
             )
@@ -379,7 +419,7 @@ package final class NetworkRequestStore {
         } else {
             request = NetworkRequest(
                 request: payload,
-                initiator: nil,
+                initiator: initiator,
                 resourceType: resourceType,
                 timestamp: timestamp,
                 modelContext: modelContext
@@ -417,10 +457,8 @@ package final class NetworkRequestStore {
         if let responseBody {
             request.responseBody.load(Network.Body(data: responseBody, base64Encoded: false))
         }
+        _ = recordInput(for: request, inserted: inserted)
         queryIndexNeedsRebuild = true
-        if inserted {
-            collectionState.didInsertRequest()
-        }
         return request.id
     }
 
@@ -521,9 +559,7 @@ package final class NetworkRequestStore {
         guard let change else {
             return nil
         }
-        if change.inserted {
-            collectionState.didInsertRequest()
-        }
+        let input = recordInput(for: change.request, inserted: change.inserted)
         var actions: [IndexWork.Action] = []
         if queryIndexNeedsRebuild {
             queryIndexNeedsRebuild = false
@@ -534,7 +570,7 @@ package final class NetworkRequestStore {
             ))
         }
         actions.append(.upsert(
-            input: recordInput(for: change.request),
+            input: input,
             sequence: nextQueryIndexSequence()
         ))
         return IndexWork(index: queryIndex, actions: actions)
@@ -1077,10 +1113,13 @@ package final class NetworkRequestStore {
         requestsByID = [:]
         orderedRequestIDs = []
         orderIndicesByID = [:]
+        groupIDByRequestID = [:]
+        orderedRequestIDsByGroupID = [:]
+        chronologyKeyByRequestID = [:]
         queryIndexNeedsRebuild = false
         advanceQuerySourceEpoch()
         let sequence = nextQueryIndexSequence()
-        collectionState.replaceCount(0)
+        collectionState.reset(sourceEpoch: querySourceEpoch)
         let reset = QueryIndexReset(
             sequence: sequence,
             sourceEpoch: querySourceEpoch
@@ -1132,17 +1171,191 @@ package final class NetworkRequestStore {
 #if DEBUG
         performanceCounters.fullRecordProjectionCount += orderedRequestIDs.count
 #endif
+        validateLiveGroupLookup()
         return orderedRequestIDs.enumerated().compactMap { index, id in
             requestsByID[id].map { NetworkRequestRecordInput(request: $0, orderIndex: index) }
         }
     }
 
-    private func recordInput(for request: NetworkRequest) -> NetworkRequestRecordInput {
+    private func recordInput(
+        for request: NetworkRequest,
+        inserted: Bool
+    ) -> NetworkRequestRecordInput {
 #if DEBUG
         performanceCounters.incrementalRecordProjectionCount += 1
 #endif
         let orderIndex = orderIndicesByID[request.id] ?? orderedRequestIDs.count
-        return NetworkRequestRecordInput(request: request, orderIndex: orderIndex)
+        let input = NetworkRequestRecordInput(request: request, orderIndex: orderIndex)
+        synchronizeLiveGroupLookup(
+            requestID: input.id,
+            groupID: input.groupID,
+            chronologyKey: input.chronologyKey,
+            inserted: inserted
+        )
+        return input
+    }
+
+    private func synchronizeLiveGroupLookup(
+        for request: NetworkRequest,
+        inserted: Bool
+    ) {
+        let orderIndex = orderIndicesByID[request.id] ?? orderedRequestIDs.count
+        synchronizeLiveGroupLookup(
+            requestID: request.id,
+            groupID: NetworkRequestGroupIdentity.sectionID(
+                requestID: request.id,
+                initiatorNodeIDRawValue: request.initiator?.nodeID?.rawValue
+            ),
+            chronologyKey: NetworkRequestChronologyKey(
+                requestSentTimestamp: request.requestSentTimestamp,
+                orderIndex: orderIndex
+            ),
+            inserted: inserted
+        )
+    }
+
+    private func synchronizeLiveGroupLookup(
+        requestID: NetworkRequest.ID,
+        groupID: WebInspectorFetchSectionID,
+        chronologyKey: NetworkRequestChronologyKey,
+        inserted: Bool
+    ) {
+        let hadMembership = groupIDByRequestID[requestID] != nil
+        let topologyChanged = updateLiveGroupLookup(
+            requestID: requestID,
+            groupID: groupID,
+            chronologyKey: chronologyKey
+        )
+        if inserted {
+            precondition(
+                hadMembership == false && topologyChanged,
+                "A newly inserted Network request must create live group membership."
+            )
+            collectionState.didInsertRequest()
+        } else if topologyChanged {
+            precondition(
+                hadMembership,
+                "An existing Network request must already have live group membership."
+            )
+            collectionState.didChangeRequestGroupTopology()
+        }
+    }
+
+    private func updateLiveGroupLookup(
+        requestID: NetworkRequest.ID,
+        groupID newGroupID: WebInspectorFetchSectionID,
+        chronologyKey newChronologyKey: NetworkRequestChronologyKey
+    ) -> Bool {
+        let oldGroupID = groupIDByRequestID[requestID]
+        let oldChronologyKey = chronologyKeyByRequestID[requestID]
+        guard oldGroupID != newGroupID || oldChronologyKey != newChronologyKey else {
+            return false
+        }
+
+        let oldIndex: Int?
+        if let oldGroupID {
+            guard var oldMemberIDs = orderedRequestIDsByGroupID[oldGroupID],
+                  let existingIndex = oldMemberIDs.firstIndex(of: requestID) else {
+                preconditionFailure("Network request group lookup lost existing membership.")
+            }
+            oldIndex = existingIndex
+            oldMemberIDs.remove(at: existingIndex)
+            if oldMemberIDs.isEmpty {
+                orderedRequestIDsByGroupID[oldGroupID] = nil
+            } else {
+                orderedRequestIDsByGroupID[oldGroupID] = oldMemberIDs
+            }
+        } else {
+            oldIndex = nil
+        }
+
+        groupIDByRequestID[requestID] = newGroupID
+        chronologyKeyByRequestID[requestID] = newChronologyKey
+        let newIndex = insertRequestID(
+            requestID,
+            intoGroup: newGroupID,
+            key: newChronologyKey
+        )
+        return oldGroupID != newGroupID || oldIndex != newIndex
+    }
+
+    @discardableResult
+    private func insertRequestID(
+        _ requestID: NetworkRequest.ID,
+        intoGroup groupID: WebInspectorFetchSectionID,
+        key: NetworkRequestChronologyKey
+    ) -> Int {
+        var memberIDs = orderedRequestIDsByGroupID[groupID] ?? []
+        if let lastID = memberIDs.last {
+            guard let lastKey = chronologyKeyByRequestID[lastID] else {
+                preconditionFailure("Network request group lookup lost a chronology key.")
+            }
+            if NetworkRequestChronologyKey.ordersBefore(key, lastKey) == false {
+                memberIDs.append(requestID)
+                orderedRequestIDsByGroupID[groupID] = memberIDs
+                return memberIDs.count - 1
+            }
+        }
+
+        var lowerBound = 0
+        var upperBound = memberIDs.count
+        while lowerBound < upperBound {
+            let midpoint = (lowerBound + upperBound) / 2
+            guard let midpointKey = chronologyKeyByRequestID[memberIDs[midpoint]] else {
+                preconditionFailure("Network request group lookup lost a chronology key.")
+            }
+            if NetworkRequestChronologyKey.ordersBefore(midpointKey, key) {
+                lowerBound = midpoint + 1
+            } else {
+                upperBound = midpoint
+            }
+        }
+        memberIDs.insert(requestID, at: lowerBound)
+        orderedRequestIDsByGroupID[groupID] = memberIDs
+        return lowerBound
+    }
+
+    private func validateLiveGroupLookup() {
+        precondition(
+            groupIDByRequestID.count == requestsByID.count,
+            "Network request group lookup must contain every live request."
+        )
+        precondition(
+            chronologyKeyByRequestID.count == requestsByID.count,
+            "Network request group lookup must contain every chronology key."
+        )
+        let groupedRequestIDs = orderedRequestIDsByGroupID.values.flatMap { $0 }
+        precondition(
+            groupedRequestIDs.count == requestsByID.count
+                && Set(groupedRequestIDs).count == groupedRequestIDs.count
+                && Set(groupedRequestIDs) == Set(requestsByID.keys),
+            "Network request group lookup membership must match live requests exactly."
+        )
+        for (groupID, requestIDs) in orderedRequestIDsByGroupID {
+            precondition(
+                requestIDs.isEmpty == false,
+                "Network request group lookup cannot retain an empty group."
+            )
+            for requestID in requestIDs {
+                precondition(
+                    groupIDByRequestID[requestID] == groupID,
+                    "Network request group reverse lookup disagrees with group membership."
+                )
+            }
+            guard requestIDs.count > 1 else {
+                continue
+            }
+            for adjacentIndex in 1..<requestIDs.count {
+                guard let previousKey = chronologyKeyByRequestID[requestIDs[adjacentIndex - 1]],
+                      let currentKey = chronologyKeyByRequestID[requestIDs[adjacentIndex]] else {
+                    preconditionFailure("Network request group lookup lost a chronology key.")
+                }
+                precondition(
+                    NetworkRequestChronologyKey.ordersBefore(currentKey, previousKey) == false,
+                    "Network request group membership must remain chronological ascending."
+                )
+            }
+        }
     }
 
     private func isCurrent(_ request: NetworkRequest) -> Bool {
@@ -1179,13 +1392,17 @@ package final class NetworkRequestStore {
         _ request: NetworkRequest,
         modelContext: WebInspectorModelContext
     ) async {
-        collectionState.didInsertRequest()
+        // The live lookup must include the new request before a rebuild takes
+        // its complete input snapshot. The index input itself is captured only
+        // after that suspension so a concurrent mutation cannot be overwritten
+        // by an older request value with a newer mutation sequence.
+        synchronizeLiveGroupLookup(for: request, inserted: true)
         await syncQueryIndexIfNeeded()
         guard isCurrent(request) else {
             return
         }
+        let input = recordInput(for: request, inserted: false)
         let sequence = nextQueryIndexSequence()
-        let input = recordInput(for: request)
         let deliveries = await queryIndex.upsert(input, sequence: sequence)
         await applyConcreteDeliveries(deliveries)
         guard isCurrent(request) else {
@@ -1197,12 +1414,15 @@ package final class NetworkRequestStore {
         _ request: NetworkRequest,
         modelContext: WebInspectorModelContext
     ) async {
+        // Keep the unfiltered live lookup synchronous with model mutation while
+        // deferring the complete index input until any rebuild has completed.
+        synchronizeLiveGroupLookup(for: request, inserted: false)
         await syncQueryIndexIfNeeded()
         guard isCurrent(request) else {
             return
         }
+        let input = recordInput(for: request, inserted: false)
         let sequence = nextQueryIndexSequence()
-        let input = recordInput(for: request)
         let deliveries = await queryIndex.upsert(input, sequence: sequence)
         await applyConcreteDeliveries(deliveries)
         guard isCurrent(request) else {

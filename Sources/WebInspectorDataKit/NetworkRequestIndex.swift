@@ -31,29 +31,34 @@ package enum NetworkRequestQueryDomain: WebInspectorIndexedQueryDomain {
         _ rhs: Record,
         query: Query
     ) -> Bool {
-        let timestampOrder = compareOptional(lhs.requestSentTimestamp, rhs.requestSentTimestamp)
-        switch (query.sort, timestampOrder) {
-        case (.requestTimeAscending, .orderedAscending),
-             (.requestTimeDescending, .orderedDescending):
-            return true
-        case (.requestTimeAscending, .orderedDescending),
-             (.requestTimeDescending, .orderedAscending):
-            return false
-        case (_, .orderedSame):
-            switch query.sort {
-            case .requestTimeAscending:
-                return lhs.orderIndex < rhs.orderIndex
-            case .requestTimeDescending:
-                return lhs.orderIndex > rhs.orderIndex
-            }
+        switch query.sort {
+        case .requestTimeAscending:
+            return NetworkRequestChronologyKey.ordersBefore(
+                lhs.chronologyKey,
+                rhs.chronologyKey
+            )
+        case .requestTimeDescending:
+            return NetworkRequestChronologyKey.ordersBefore(
+                rhs.chronologyKey,
+                lhs.chronologyKey
+            )
         }
     }
 
     package static func makeSnapshot(
+        allItemIDsInSourceOrder: [ItemID],
         matchingItemIDs: [ItemID],
         recordsByID: [ItemID: Record],
         query: Query
     ) -> WebInspectorFetchedResultsSnapshot<ItemID> {
+        if query.section == .initiatorNode {
+            return makeInitiatorNodeSnapshot(
+                allItemIDsInSourceOrder: allItemIDsInSourceOrder,
+                matchingItemIDs: matchingItemIDs,
+                recordsByID: recordsByID,
+                query: query
+            )
+        }
         let lowerBound = min(query.offset, matchingItemIDs.count)
         let upperBound: Int
         if let limit = query.limit {
@@ -89,26 +94,85 @@ package enum NetworkRequestQueryDomain: WebInspectorIndexedQueryDomain {
         })
     }
 
-    private static func compareOptional<Value: Comparable>(
-        _ lhs: Value?,
-        _ rhs: Value?
-    ) -> ComparisonResult {
-        switch (lhs, rhs) {
-        case (nil, nil):
-            return .orderedSame
-        case (nil, _):
-            return .orderedAscending
-        case (_, nil):
-            return .orderedDescending
-        case let (lhs?, rhs?):
-            if lhs < rhs {
-                return .orderedAscending
+    private struct InitiatorGroup {
+        var id: WebInspectorFetchSectionID
+        var itemIDs: [ItemID]
+    }
+
+    private static func makeInitiatorNodeSnapshot(
+        allItemIDsInSourceOrder: [ItemID],
+        matchingItemIDs: [ItemID],
+        recordsByID: [ItemID: Record],
+        query: Query
+    ) -> WebInspectorFetchedResultsSnapshot<ItemID> {
+        let matchingGroupIDs = Set(matchingItemIDs.map { id in
+            guard let record = recordsByID[id] else {
+                preconditionFailure(
+                    "NetworkRequestQueryDomain lost a matching record while grouping a query."
+                )
             }
-            if lhs > rhs {
-                return .orderedDescending
-            }
-            return .orderedSame
+            return record.groupID
+        })
+        guard matchingGroupIDs.isEmpty == false else {
+            return WebInspectorFetchedResultsSnapshot()
         }
+
+        var itemIDsByGroupID: [WebInspectorFetchSectionID: [ItemID]] = [:]
+        itemIDsByGroupID.reserveCapacity(matchingGroupIDs.count)
+        for id in allItemIDsInSourceOrder {
+            guard let record = recordsByID[id] else {
+                preconditionFailure(
+                    "NetworkRequestQueryDomain lost an ordered record while grouping a query."
+                )
+            }
+            guard matchingGroupIDs.contains(record.groupID) else {
+                continue
+            }
+            itemIDsByGroupID[record.groupID, default: []].append(id)
+        }
+
+        var groups = itemIDsByGroupID.map { groupID, itemIDs in
+            InitiatorGroup(
+                id: groupID,
+                itemIDs: itemIDs.sorted { lhsID, rhsID in
+                    guard let lhs = recordsByID[lhsID], let rhs = recordsByID[rhsID] else {
+                        preconditionFailure(
+                            "NetworkRequestQueryDomain lost a group member while ordering a query."
+                        )
+                    }
+                    return NetworkRequestChronologyKey.ordersBefore(
+                        lhs.chronologyKey,
+                        rhs.chronologyKey
+                    )
+                }
+            )
+        }
+        groups.sort { lhsGroup, rhsGroup in
+            guard let lhsID = lhsGroup.itemIDs.first,
+                  let rhsID = rhsGroup.itemIDs.first,
+                  let lhs = recordsByID[lhsID],
+                  let rhs = recordsByID[rhsID] else {
+                preconditionFailure(
+                    "NetworkRequestQueryDomain created an empty initiator group."
+                )
+            }
+            return ordersBefore(lhs, rhs, query: query)
+        }
+
+        let lowerBound = min(query.offset, groups.count)
+        let upperBound: Int
+        if let limit = query.limit {
+            upperBound = min(lowerBound + limit, groups.count)
+        } else {
+            upperBound = groups.count
+        }
+        return WebInspectorFetchedResultsSnapshot(sections: groups[lowerBound..<upperBound].map {
+            WebInspectorFetchedResultsSnapshot.Section(
+                id: $0.id,
+                title: nil,
+                itemIDs: $0.itemIDs
+            )
+        })
     }
 }
 

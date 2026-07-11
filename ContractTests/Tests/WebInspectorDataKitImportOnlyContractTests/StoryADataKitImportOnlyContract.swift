@@ -12,7 +12,7 @@ private actor DataKitImportOnlyActor {
             search: "  import-only  ",
             methods: ["GET"],
             sort: .requestTimeDescending,
-            section: .method,
+            section: .initiatorNode,
             limit: 10
         ))
         let messages = try await context.consoleMessages(matching: ConsoleQuery(
@@ -113,5 +113,17 @@ private actor DataKitImportOnlyActor {
         let redirect = RedirectHop(request: request, response: response, timestamp: 1)
         _ = redirect.request.url
         _ = redirect.response.status
+
+        consumeNetworkSection(.method)
+        consumeNetworkSection(.initiatorNode)
+    }
+
+    private func consumeNetworkSection(_ section: NetworkSection) {
+        switch section {
+        case .method:
+            break
+        case .initiatorNode:
+            break
+        }
     }
 }

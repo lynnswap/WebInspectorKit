@@ -18,7 +18,11 @@ package protocol WebInspectorIndexedQueryDomain: SendableMetatype {
         query: Query
     ) -> Bool
 
+    /// Builds the semantic snapshot from the actor-owned unfiltered source
+    /// order and the query-sorted matching subset. The domain applies any
+    /// additional grouping and group/member ordering.
     static func makeSnapshot(
+        allItemIDsInSourceOrder: [ItemID],
         matchingItemIDs: [ItemID],
         recordsByID: [ItemID: Record],
         query: Query
@@ -419,6 +423,7 @@ package actor WebInspectorQueryIndex<Domain: WebInspectorIndexedQueryDomain> {
                 sequence: sequence
             ),
             snapshot: Domain.makeSnapshot(
+                allItemIDsInSourceOrder: orderedIDs,
                 matchingItemIDs: version.matchingIDs,
                 recordsByID: recordsByID,
                 query: version.query
@@ -444,6 +449,7 @@ package actor WebInspectorQueryIndex<Domain: WebInspectorIndexedQueryDomain> {
                     sequence: lastAppliedSequence
                 ),
                 snapshot: Domain.makeSnapshot(
+                    allItemIDsInSourceOrder: orderedIDs,
                     matchingItemIDs: matchingIDs,
                     recordsByID: recordsByID,
                     query: query

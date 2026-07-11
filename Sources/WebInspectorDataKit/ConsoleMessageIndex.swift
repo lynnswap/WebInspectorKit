@@ -30,6 +30,7 @@ package enum ConsoleMessageQueryDomain: WebInspectorIndexedQueryDomain {
     }
 
     package static func makeSnapshot(
+        allItemIDsInSourceOrder _: [ItemID],
         matchingItemIDs: [ItemID],
         recordsByID: [ItemID: Record],
         query: Query

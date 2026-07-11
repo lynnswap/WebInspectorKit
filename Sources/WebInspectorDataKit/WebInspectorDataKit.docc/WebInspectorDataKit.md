@@ -76,7 +76,7 @@ let requests = try await context.networkRequests(matching: NetworkQuery(
     resourceCategories: [.xhrFetch],
     methods: ["GET", "POST"],
     sort: .requestTimeDescending,
-    section: .method,
+    section: .initiatorNode,
     limit: 100
 ))
 
@@ -103,6 +103,14 @@ and published. An in-flight, cancelled, or superseded replacement does not
 change it. Query, items, sections, identity lookups, snapshot, and revision
 advance as one observable state. The identity subscripts perform constant-time
 lookups in that current published state.
+
+With ``NetworkSection/initiatorNode``, DataKit forms groups from the complete
+Network source before applying filters. A group becomes visible when any member
+matches, and its section contains every member chronologically ascending. Group
+order is based on the earliest member under ``NetworkQuery/sort``; offset and
+limit count groups. Treat ``WebInspectorFetchSectionID/rawValue`` as opaque.
+Node-backed and uninitiated singleton sections use distinct identity namespaces,
+and a section identity is stable only within its Network source epoch.
 
 ## Topics
 

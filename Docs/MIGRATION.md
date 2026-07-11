@@ -8,6 +8,40 @@ when upgrading WebInspectorKit. Sections are grouped by release, newest first.
 Unreleased builds require Swift 6.3+ and a minimum deployment target of iOS
 18.4+ or macOS 15.4+. The built-in UIKit inspector remains iOS-only.
 
+### Group Network requests by initiator node
+
+`NetworkSection` now includes `initiatorNode`. This is a source change for code
+that exhaustively switches over `NetworkSection`; add the new case when
+recompiling:
+
+```swift
+switch section {
+case .method:
+    renderMethodSections()
+case .initiatorNode:
+    renderInitiatorGroups()
+}
+```
+
+Use the new section mode to publish one semantic section for each initiating
+DOM node. Requests without a node are stable singleton sections:
+
+```swift
+let requests = try await context.networkRequests(matching: NetworkQuery(
+    search: "media",
+    sort: .requestTimeDescending,
+    section: .initiatorNode,
+    limit: 100
+))
+```
+
+Groups are formed before filtering. A group is visible when any member matches,
+and every member of a visible group is published chronologically ascending.
+Groups are ordered by their earliest member under the selected sort, while
+`offset` and `limit` count groups. Section raw values are opaque and stable only
+within a Network source epoch; node-backed and singleton identities occupy
+separate namespaces.
+
 ### Read Network request initiators from request events
 
 `Network.Event.requestWillBeSent` and

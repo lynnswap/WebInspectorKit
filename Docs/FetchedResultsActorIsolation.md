@@ -230,7 +230,7 @@ package protocol WebInspectorIndexedQueryDomain {
     static func matches(_ record: Record, query: Query) -> Bool
     static func ordersBefore(_ lhs: Record, _ rhs: Record, query: Query) -> Bool
     static func makeSnapshot(
-        orderedItemIDs: [ItemID],
+        allItemIDsInSourceOrder: [ItemID],
         matchingItemIDs: [ItemID],
         recordsByID: [ItemID: Record],
         query: Query
@@ -269,6 +269,11 @@ package actor WebInspectorQueryIndex<Domain: WebInspectorIndexedQueryDomain> {
     // active/candidate query versions, acknowledged state, and diff creation.
 }
 ```
+
+`allItemIDsInSourceOrder` is the actor-owned unfiltered insertion/source order,
+not query-sorted output. A domain that needs an unfiltered projection, such as
+Network initiator grouping, derives its member and group order inside
+`makeSnapshot`. Other domains continue sorting only their matching subset.
 
 Each active query version stores its latest state and optional last acknowledged
 state. Every incremental transaction is built from that acknowledged snapshot

@@ -2025,6 +2025,24 @@ public final class WebInspectorModelContext {
         networkRequests.collectionState
     }
 
+    package func networkRequestGroupID(
+        containing requestID: NetworkRequest.ID
+    ) -> WebInspectorFetchSectionID? {
+        networkRequests.groupID(containing: requestID)
+    }
+
+    package func networkRequestIDs(
+        inGroup groupID: WebInspectorFetchSectionID
+    ) -> [NetworkRequest.ID]? {
+        networkRequests.requestIDs(inGroup: groupID)
+    }
+
+    package func networkRequestGroup(
+        id groupID: WebInspectorFetchSectionID
+    ) -> WebInspectorFetchSection<NetworkRequest>? {
+        networkRequests.requestGroup(id: groupID)
+    }
+
     package func registeredRequest(
         forProxyID id: Network.Request.ID
     ) -> NetworkRequest? {
@@ -3301,6 +3319,7 @@ extension WebInspectorModelContext {
         responseStatusText: String,
         responseHeaders: [String: String] = [:],
         responseBody: String? = nil,
+        initiator: Network.Initiator? = nil,
         timestamp: Double,
         encodedBodyLength: Int = 0
     ) -> NetworkRequest.ID {
@@ -3316,6 +3335,7 @@ extension WebInspectorModelContext {
             responseStatusText: responseStatusText,
             responseHeaders: responseHeaders,
             responseBody: responseBody,
+            initiator: initiator,
             timestamp: timestamp,
             encodedBodyLength: encodedBodyLength,
             modelContext: self

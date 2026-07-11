@@ -23,6 +23,343 @@ func networkQueryNormalizesSearchAndProvidesClosedDefaults() {
 
 @MainActor
 @Test
+func networkInitiatorGroupIdentityNamespacesNodesSingletonsAndTargetScopes() {
+    let requestID = NetworkRequest.ID(Network.Request.ID("shared"))
+    let otherRequestID = NetworkRequest.ID(Network.Request.ID("other"))
+    let unscopedNodeID = DOM.Node.ID("shared")
+    let targetANodeID = DOM.Node.ID("7", scopedToTargetRawValue: "target-a")
+    let targetBNodeID = DOM.Node.ID("7", scopedToTargetRawValue: "target-b")
+    let targetARequestID = NetworkRequest.ID(Network.Request.ID(
+        "7",
+        scopedToTargetRawValue: "target-a"
+    ))
+    let targetBRequestID = NetworkRequest.ID(Network.Request.ID(
+        "7",
+        scopedToTargetRawValue: "target-b"
+    ))
+
+    let singletonID = NetworkRequestGroupIdentity.sectionID(
+        requestID: requestID,
+        initiatorNodeIDRawValue: nil
+    )
+    let unscopedNodeGroupID = NetworkRequestGroupIdentity.sectionID(
+        requestID: requestID,
+        initiatorNodeIDRawValue: unscopedNodeID.rawValue
+    )
+    let sameNodeFromAnotherRequestID = NetworkRequestGroupIdentity.sectionID(
+        requestID: otherRequestID,
+        initiatorNodeIDRawValue: unscopedNodeID.rawValue
+    )
+    let targetAGroupID = NetworkRequestGroupIdentity.sectionID(
+        requestID: requestID,
+        initiatorNodeIDRawValue: targetANodeID.rawValue
+    )
+    let targetBGroupID = NetworkRequestGroupIdentity.sectionID(
+        requestID: requestID,
+        initiatorNodeIDRawValue: targetBNodeID.rawValue
+    )
+    let targetASingletonID = NetworkRequestGroupIdentity.sectionID(
+        requestID: targetARequestID,
+        initiatorNodeIDRawValue: nil
+    )
+    let targetBSingletonID = NetworkRequestGroupIdentity.sectionID(
+        requestID: targetBRequestID,
+        initiatorNodeIDRawValue: nil
+    )
+
+    #expect(singletonID != unscopedNodeGroupID)
+    #expect(unscopedNodeGroupID == sameNodeFromAnotherRequestID)
+    #expect(targetAGroupID != targetBGroupID)
+    #expect(targetASingletonID != targetBSingletonID)
+}
+
+@MainActor
+@Test
+func networkInitiatorGroupsFilterByAnyMemberAndWindowGroupsInFirstMemberOrder() async throws {
+    let context = WebInspectorModelContext.preview()
+    let aFirst = makeIndexedNetworkRecord(
+        id: "group-a-first",
+        url: "https://example.com/group-a/first",
+        method: "GET",
+        timestamp: 1,
+        initiatorNodeIDRawValue: "node-a",
+        context: context
+    )
+    let aLaterMatch = makeIndexedNetworkRecord(
+        id: "group-a-later",
+        url: "https://example.com/group-a/needle",
+        method: "GET",
+        timestamp: 5,
+        initiatorNodeIDRawValue: "node-a",
+        context: context
+    )
+    let bFirst = makeIndexedNetworkRecord(
+        id: "group-b-first",
+        url: "https://example.com/group-b/first",
+        method: "POST",
+        timestamp: 2,
+        initiatorNodeIDRawValue: "node-b",
+        context: context
+    )
+    let bLater = makeIndexedNetworkRecord(
+        id: "group-b-later",
+        url: "https://example.com/group-b/later",
+        method: "POST",
+        timestamp: 3,
+        initiatorNodeIDRawValue: "node-b",
+        context: context
+    )
+    let singleton = makeIndexedNetworkRecord(
+        id: "group-singleton",
+        url: "https://example.com/singleton",
+        method: "GET",
+        timestamp: 4,
+        context: context
+    )
+    let groupAID = aFirst.input.groupID
+    let groupBID = bFirst.input.groupID
+    let singletonGroupID = singleton.input.groupID
+    let index = NetworkRequestIndex()
+    _ = await index.replace(
+        with: [
+            aLaterMatch.input,
+            bLater.input,
+            singleton.input,
+            aFirst.input,
+            bFirst.input,
+        ],
+        sequence: 1
+    )
+    let lifetime = WebInspectorQueryRegistrationLifetime()
+    let registrationID = WebInspectorQueryRegistrationID(rawValue: 20)
+
+    let ascendingGeneration = lifetime.nextGeneration()
+    let ascending = try await index.register(
+        id: registrationID,
+        generation: ascendingGeneration,
+        query: NetworkQuery(
+            sort: .requestTimeAscending,
+            section: .initiatorNode
+        ),
+        lifetime: lifetime,
+        minimumSequence: 1
+    )
+    #expect(ascending.state.snapshot.sectionIDs == [groupAID, groupBID, singletonGroupID])
+    #expect(ascending.state.snapshot.sections[0].itemIDs == [aFirst.id, aLaterMatch.id])
+    #expect(ascending.state.snapshot.sections[1].itemIDs == [bFirst.id, bLater.id])
+
+    let filteredGeneration = lifetime.nextGeneration()
+    _ = try await index.prepareReplacement(
+        id: registrationID,
+        generation: filteredGeneration,
+        query: NetworkQuery(
+            search: "needle",
+            sort: .requestTimeAscending,
+            section: .initiatorNode
+        ),
+        minimumSequence: 1
+    )
+    let filtered = try #require(await index.commitReplacement(
+        id: registrationID,
+        generation: filteredGeneration
+    ))
+    #expect(filtered.state.snapshot.sectionIDs == [groupAID])
+    #expect(filtered.state.snapshot.itemIDs == [aFirst.id, aLaterMatch.id])
+
+    let windowedGeneration = lifetime.nextGeneration()
+    _ = try await index.prepareReplacement(
+        id: registrationID,
+        generation: windowedGeneration,
+        query: NetworkQuery(
+            sort: .requestTimeDescending,
+            section: .initiatorNode,
+            offset: 1,
+            limit: 1
+        ),
+        minimumSequence: 1
+    )
+    let windowed = try #require(await index.commitReplacement(
+        id: registrationID,
+        generation: windowedGeneration
+    ))
+    #expect(windowed.state.snapshot.sectionIDs == [groupBID])
+    #expect(windowed.state.snapshot.itemIDs == [bFirst.id, bLater.id])
+}
+
+@MainActor
+@Test
+func networkInitiatorSameGroupInsertionKeepsSectionAndBuildsItemTransaction() async throws {
+    let context = WebInspectorModelContext.preview()
+    let first = makeIndexedNetworkRecord(
+        id: "same-group-first",
+        url: "https://example.com/first",
+        method: "GET",
+        timestamp: 1,
+        initiatorNodeIDRawValue: "same-node",
+        context: context
+    )
+    let second = makeIndexedNetworkRecord(
+        id: "same-group-second",
+        url: "https://example.com/second",
+        method: "GET",
+        timestamp: 2,
+        initiatorNodeIDRawValue: "same-node",
+        context: context
+    )
+    let index = NetworkRequestIndex()
+    _ = await index.replace(with: [first.input], sequence: 1)
+    let lifetime = WebInspectorQueryRegistrationLifetime()
+    let generation = lifetime.nextGeneration()
+    let registrationID = WebInspectorQueryRegistrationID(rawValue: 21)
+    let initial = try await index.register(
+        id: registrationID,
+        generation: generation,
+        query: NetworkQuery(
+            sort: .requestTimeAscending,
+            section: .initiatorNode
+        ),
+        lifetime: lifetime,
+        minimumSequence: 1
+    )
+    await index.acknowledge(
+        id: registrationID,
+        generation: generation,
+        state: initial.state
+    )
+
+    let deliveries = await index.upsert(second.input, sequence: 2)
+    let publication = try #require(deliveries.first?.publication)
+    guard case let .transaction(base, transaction) = publication.change else {
+        Issue.record("Expected a same-group insertion transaction.")
+        return
+    }
+
+    #expect(base == initial.state.cursor)
+    #expect(transaction.isReset == false)
+    #expect(transaction.sectionChanges.isEmpty)
+    #expect(transaction.oldSnapshot.sectionIDs == [first.input.groupID])
+    #expect(transaction.newSnapshot.sectionIDs == [first.input.groupID])
+    #expect(transaction.newSnapshot.itemIDs == [first.id, second.id])
+    #expect(transaction.itemChanges.contains { change in
+        guard case let .insert(itemID, indexPath) = change else {
+            return false
+        }
+        return itemID == second.id
+            && indexPath == WebInspectorFetchedResultsIndexPath(section: 0, item: 1)
+    })
+}
+
+@MainActor
+@Test
+func networkInitiatorQueryPreservesRedirectSearchAfterActorSideDerivation() async throws {
+    let context = WebInspectorModelContext.preview()
+    let store = NetworkRequestStore()
+    let proxyID = Network.Request.ID("redirect-search")
+    let nodeID = DOM.Node.ID("redirect-node")
+    await store.apply(
+        .requestWillBeSent(
+            id: proxyID,
+            request: Network.Request(
+                id: proxyID,
+                url: "https://redirect-origin.example/old-path",
+                method: "GET"
+            ),
+            initiator: Network.Initiator(kind: "other", nodeID: nodeID),
+            resourceType: .document,
+            redirectResponse: nil,
+            timestamp: 1
+        ),
+        modelContext: context
+    )
+    await store.apply(
+        .requestWillBeSent(
+            id: proxyID,
+            request: Network.Request(
+                id: proxyID,
+                url: "https://final.example/new-path",
+                method: "GET"
+            ),
+            initiator: Network.Initiator(kind: "other", nodeID: DOM.Node.ID("ignored-node")),
+            resourceType: .document,
+            redirectResponse: Network.Response(
+                url: "https://redirect-origin.example/old-path",
+                status: 302,
+                statusText: "Found",
+                mimeType: "text/html"
+            ),
+            timestamp: 2
+        ),
+        modelContext: context
+    )
+
+    let results = try await store.results(
+        matching: NetworkQuery(
+            search: "redirect-origin.example",
+            section: .initiatorNode
+        ),
+        modelContext: context
+    )
+    let request = try #require(store.request(forProxyID: proxyID))
+
+    #expect(results.items == [request])
+    #expect(results.sections.count == 1)
+    #expect(results.sections[0].items == [request])
+    #expect(results.sections[0].id == NetworkRequestGroupIdentity.sectionID(
+        requestID: request.id,
+        initiatorNodeIDRawValue: nodeID.rawValue
+    ))
+}
+
+@MainActor
+@Test
+func networkActorDerivesResourceCategoryFromRawResponseFields() async throws {
+    let context = WebInspectorModelContext.preview()
+    let store = NetworkRequestStore()
+    let proxyID = Network.Request.ID("header-category")
+    await store.apply(
+        .requestWillBeSent(
+            id: proxyID,
+            request: Network.Request(
+                id: proxyID,
+                url: "https://example.com/resource-without-extension",
+                method: "GET"
+            ),
+            initiator: Network.Initiator(kind: "other"),
+            resourceType: nil,
+            redirectResponse: nil,
+            timestamp: 1
+        ),
+        modelContext: context
+    )
+    await store.apply(
+        .responseReceived(
+            id: proxyID,
+            response: Network.Response(
+                url: "https://example.com/resource-without-extension",
+                status: 200,
+                headers: ["Content-Type": "image/png; charset=binary"]
+            ),
+            resourceType: nil,
+            timestamp: 2
+        ),
+        modelContext: context
+    )
+
+    let results = try await store.results(
+        matching: NetworkQuery(
+            resourceCategories: [.image],
+            section: .initiatorNode
+        ),
+        modelContext: context
+    )
+    let request = try #require(store.request(forProxyID: proxyID))
+
+    #expect(results.items == [request])
+    #expect(results.sections.count == 1)
+}
+
+@MainActor
+@Test
 func networkConcreteQueryUsesInsertionOrderToBreakEqualRequestTimes() async throws {
     let context = WebInspectorModelContext.preview()
     var first = makeIndexedNetworkRecord(
@@ -943,8 +1280,25 @@ func networkConcreteQueryProjectsTenThousandRecordsOffTheOwnerActor() async thro
 
     try await store.update(
         NetworkQuery(
+            methods: ["GET"],
+            sort: .requestTimeDescending,
+            section: .initiatorNode,
+            limit: 25
+        ),
+        for: results
+    )
+    counters = store.performanceCountersForTesting
+    #expect(results.items.count == 25)
+    #expect(results.sections.count == 25)
+    #expect(counters.fullModelProjectionCount == 0)
+    #expect(counters.fullRecordProjectionCount == 0)
+    #expect(counters.resultIdentityLookupCount == 26)
+
+    try await store.update(
+        NetworkQuery(
             methods: ["POST"],
             sort: .requestTimeAscending,
+            section: .initiatorNode,
             offset: 10,
             limit: 10
         ),
@@ -983,6 +1337,7 @@ private func makeIndexedNetworkRecord(
     url: String,
     method: String,
     timestamp: Double,
+    initiatorNodeIDRawValue: String? = nil,
     context: WebInspectorModelContext
 ) -> (id: NetworkRequest.ID, input: NetworkRequestRecordInput) {
     let modelID = context.seedNetworkRequest(
@@ -998,7 +1353,9 @@ private func makeIndexedNetworkRecord(
     guard let request = try! context.networkRequest(id: modelID) else {
         preconditionFailure("The indexed Network fixture was not registered.")
     }
-    return (modelID, NetworkRequestRecordInput(request: request, orderIndex: Int(timestamp)))
+    var input = NetworkRequestRecordInput(request: request, orderIndex: Int(timestamp))
+    input.initiatorNodeIDRawValue = initiatorNodeIDRawValue
+    return (modelID, input)
 }
 
 @MainActor
@@ -1006,6 +1363,7 @@ private func addNetworkRequest(
     _ id: Network.Request.ID,
     url: String,
     method: String,
+    initiatorNodeID: DOM.Node.ID? = nil,
     timestamp: Double,
     store: NetworkRequestStore,
     context: WebInspectorModelContext
@@ -1014,7 +1372,7 @@ private func addNetworkRequest(
         .requestWillBeSent(
             id: id,
             request: Network.Request(id: id, url: url, method: method),
-            initiator: Network.Initiator(kind: "other"),
+            initiator: Network.Initiator(kind: "other", nodeID: initiatorNodeID),
             resourceType: .fetch,
             redirectResponse: nil,
             timestamp: timestamp

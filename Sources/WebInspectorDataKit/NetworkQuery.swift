@@ -25,6 +25,9 @@ public struct NetworkQuery: Sendable, Equatable {
     public var section: NetworkSection?
 
     /// The number of matching requests skipped before publication.
+    ///
+    /// When ``NetworkSection/initiatorNode`` is selected, this counts visible
+    /// initiator groups rather than individual requests.
     public var offset: Int {
         didSet {
             Self.validate(offset: offset)
@@ -32,6 +35,9 @@ public struct NetworkQuery: Sendable, Equatable {
     }
 
     /// The maximum number of requests published after the offset, or `nil` for no limit.
+    ///
+    /// When ``NetworkSection/initiatorNode`` is selected, this limits visible
+    /// initiator groups rather than individual requests.
     public var limit: Int? {
         didSet {
             Self.validate(limit: limit)
@@ -81,9 +87,15 @@ public struct NetworkQuery: Sendable, Equatable {
 /// Supported Network request ordering.
 public enum NetworkSort: Sendable, Equatable {
     /// Orders requests from the earliest request time to the latest.
+    ///
+    /// Initiator groups are ordered by their earliest member. Members within a
+    /// group remain chronological ascending regardless of this value.
     case requestTimeAscending
 
     /// Orders requests from the latest request time to the earliest.
+    ///
+    /// Initiator groups are ordered by their earliest member. Members within a
+    /// group remain chronological ascending regardless of this value.
     case requestTimeDescending
 }
 
@@ -91,4 +103,13 @@ public enum NetworkSort: Sendable, Equatable {
 public enum NetworkSection: Sendable, Equatable {
     /// Groups visible requests by HTTP method.
     case method
+
+    /// Groups requests by their initiating DOM node.
+    ///
+    /// Requests without an initiating node are represented as stable singleton
+    /// groups. A group is visible when any member matches the query, and every
+    /// member of a visible group is published in chronological order. Group
+    /// identities are stable within one Network source epoch and use distinct
+    /// namespaces for nodes and singleton requests. Their raw values are opaque.
+    case initiatorNode
 }
