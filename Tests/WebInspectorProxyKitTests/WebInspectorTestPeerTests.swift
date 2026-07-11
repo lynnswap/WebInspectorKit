@@ -107,6 +107,28 @@ func commandAndEventAdmissionRejectCoreCloseBeforePeerDetach() async throws {
 }
 
 @Test
+func completedReplyRemainsSuccessfulWhenOwnerClosesAfterDrain() async throws {
+    let peer = WebInspectorTestPeer()
+    let core = await peer.makeConnection(configuration: .init())
+    let operation = Task {
+        try await core.send(ProtocolCommand(
+            domain: .target,
+            method: "Target.final",
+            routing: .root
+        ))
+    }
+    let command = try await peer.commands.next()
+    await peer.setPostDrainActionForTesting {
+        await core.close()
+    }
+
+    try await peer.reply(to: command)
+
+    _ = try await operation.value
+    #expect(await core.terminalCause == .explicitClose)
+}
+
+@Test
 func peerRejectsForeignAndStaleCorrelationsWithoutTombstones() async throws {
     let firstRuntime = try await WebInspectorProxyTestRuntime.start()
     let secondRuntime = try await WebInspectorProxyTestRuntime.start()

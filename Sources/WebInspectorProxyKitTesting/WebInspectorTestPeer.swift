@@ -187,6 +187,7 @@ public actor WebInspectorTestPeer {
     private var state: State
     private var nextCommandOrdinal: UInt64
     private var outstandingCommands: [UInt64: ReplyRoute]
+    private var postDrainActionForTesting: (@Sendable () async -> Void)?
 
     init() {
         let commandMailbox = WebInspectorTestCommandMailbox()
@@ -198,6 +199,7 @@ public actor WebInspectorTestPeer {
         state = .unattached
         nextCommandOrdinal = 0
         outstandingCommands = [:]
+        postDrainActionForTesting = nil
     }
 
     isolated deinit {
@@ -358,6 +360,12 @@ public actor WebInspectorTestPeer {
         core = nil
     }
 
+    func setPostDrainActionForTesting(
+        _ action: (@Sendable () async -> Void)?
+    ) {
+        postDrainActionForTesting = action
+    }
+
     private func takeReplyRoute(for command: Command) async throws -> ReplyRoute {
         guard command.correlation.peerID == peerID,
               command.correlation.ordinal <= nextCommandOrdinal else {
@@ -392,18 +400,41 @@ public actor WebInspectorTestPeer {
               core === admittedCore else {
             throw WebInspectorTestPeerError.connectionClosed
         }
+        precondition(messages.isEmpty == false, "A test peer receive must contain at least one message.")
+        var through: UInt64?
         for message in messages {
-            receiver.receive(message)
+            guard let acceptedOrdinal = receiver.receive(message) else {
+                finishConnection()
+                throw WebInspectorTestPeerError.connectionClosed
+            }
+            through = acceptedOrdinal
         }
-        let through = receiver.tailOrdinal()
+        guard let through else {
+            preconditionFailure("A non-empty test peer receive produced no watermark.")
+        }
         await receiver.waitUntilDrained(through: through)
+        let postDrainAction = postDrainActionForTesting
+        postDrainActionForTesting = nil
+        await postDrainAction?()
         do {
             try await admittedCore.requireOpen()
+            guard case .open = state, core === admittedCore else {
+                throw WebInspectorTestPeerError.connectionClosed
+            }
         } catch {
+            let terminalCause = await admittedCore.terminalCause
+            if terminalCause == .explicitClose {
+                // Explicit owner close may begin immediately after the reply
+                // fulfills its command. Wait for an active receiver drain to
+                // become quiescent before deciding whether this input was
+                // completed or discarded by close.
+                await receiver.close()
+                if receiver.hasCompletedDrain(through: through) {
+                    finishConnection()
+                    return
+                }
+            }
             finishConnection()
-            throw WebInspectorTestPeerError.connectionClosed
-        }
-        guard case .open = state, core === admittedCore else {
             throw WebInspectorTestPeerError.connectionClosed
         }
     }

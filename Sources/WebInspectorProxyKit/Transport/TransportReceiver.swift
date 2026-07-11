@@ -68,30 +68,34 @@ package final class TransportReceiver: Sendable {
         }
     }
 
-    package func receive(_ message: String) {
-        let drainGeneration = state.withLock {
-            guard !$0.isClosed else {
-                return nil as UInt64?
+    /// Accepts one message and returns its receiver-owned ordinal, or nil when
+    /// the receiver was already closed and did not accept the message.
+    @discardableResult
+    package func receive(_ message: String) -> UInt64? {
+        let admission = state.withLock { state in
+            guard !state.isClosed else {
+                return (ordinal: nil as UInt64?, drainGeneration: nil as UInt64?)
             }
-            precondition($0.tailOrdinal < UInt64.max, "TransportReceiver exhausted its message ordinal space.")
-            $0.tailOrdinal += 1
-            $0.messages.append(QueuedMessage(ordinal: $0.tailOrdinal, payload: message))
-            guard $0.core.value != nil else {
-                return nil
+            precondition(state.tailOrdinal < UInt64.max, "TransportReceiver exhausted its message ordinal space.")
+            state.tailOrdinal += 1
+            let ordinal = state.tailOrdinal
+            state.messages.append(QueuedMessage(ordinal: ordinal, payload: message))
+            guard state.core.value != nil else {
+                return (ordinal: ordinal, drainGeneration: nil)
             }
-            guard !$0.isDraining else {
-                return nil
+            guard !state.isDraining else {
+                return (ordinal: ordinal, drainGeneration: nil)
             }
-            $0.isDraining = true
-            return $0.generation
+            state.isDraining = true
+            return (ordinal: ordinal, drainGeneration: state.generation)
         }
 
-        guard let drainGeneration else {
-            return
+        if let drainGeneration = admission.drainGeneration {
+            Task {
+                await drain(generation: drainGeneration)
+            }
         }
-        Task {
-            await drain(generation: drainGeneration)
-        }
+        return admission.ordinal
     }
 
     /// Returns the ordinal of the newest message accepted by this receiver.
@@ -100,6 +104,12 @@ package final class TransportReceiver: Sendable {
     /// without waiting for messages that arrive later on the live connection.
     package func tailOrdinal() -> UInt64 {
         state.withLock { $0.tailOrdinal }
+    }
+
+    /// Reports whether Core completed the accepted prefix through `ordinal`.
+    /// Completion is monotonic and remains queryable after receiver close.
+    package func hasCompletedDrain(through ordinal: UInt64) -> Bool {
+        state.withLock { $0.completedOrdinal >= ordinal }
     }
 
     /// Suspends until `ConnectionCore` has completed every accepted message
