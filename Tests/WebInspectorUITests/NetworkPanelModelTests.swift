@@ -846,6 +846,80 @@ func displayRequestIDsUseDataKitClassificationForMediaFiltering() async throws {
 
 @Test
 @MainActor
+func requestsWithTheSameInitiatorNodeProjectAsOneEntry() async throws {
+    let context = makeContext()
+    let nodeID = DOM.Node.ID("media-element")
+    let playlistID = await applyRequest(
+        to: context,
+        requestID: "playlist",
+        url: "https://media.example.com/master.m3u8",
+        resourceType: .media,
+        mimeType: "application/vnd.apple.mpegurl",
+        timestamp: 1,
+        initiatorNodeID: nodeID
+    )
+    let unrelatedID = await applyRequest(
+        to: context,
+        requestID: "unrelated",
+        url: "https://example.com/app.js",
+        resourceType: .script,
+        mimeType: "text/javascript",
+        timestamp: 2
+    )
+    let segmentID = await applyRequest(
+        to: context,
+        requestID: "segment",
+        url: "https://media.example.com/segment-1.ts",
+        resourceType: .media,
+        mimeType: "video/mp2t",
+        timestamp: 3,
+        initiatorNodeID: nodeID
+    )
+
+    let model = try await NetworkPanelModel.make(context: context)
+
+    #expect(model.displayRequestIDs == [unrelatedID, playlistID])
+    #expect(model.displayEntries.last?.requests.map(\.id) == [playlistID, segmentID])
+
+    model.selectRequest(try context.networkRequest(id: segmentID))
+    #expect(model.selectedRequestID == playlistID)
+    #expect(model.selectedRequests.map(\.id) == [playlistID, segmentID])
+}
+
+@Test
+@MainActor
+func filteringOneGroupMemberKeepsTheWholeEntryForDetail() async throws {
+    let context = makeContext()
+    let nodeID = DOM.Node.ID("video")
+    let playlistID = await applyRequest(
+        to: context,
+        requestID: "playlist",
+        url: "https://media.example.com/master.m3u8",
+        resourceType: .media,
+        mimeType: "application/vnd.apple.mpegurl",
+        timestamp: 1,
+        initiatorNodeID: nodeID
+    )
+    let segmentID = await applyRequest(
+        to: context,
+        requestID: "segment",
+        url: "https://media.example.com/unique-segment.ts",
+        resourceType: .media,
+        mimeType: "video/mp2t",
+        timestamp: 2,
+        initiatorNodeID: nodeID
+    )
+    let model = try await NetworkPanelModel.make(context: context)
+
+    model.setSearchText("unique-segment")
+    await model.waitForQueryUpdates()
+
+    #expect(model.displayRequestIDs == [playlistID])
+    #expect(model.displayEntries.first?.requests.map(\.id) == [playlistID, segmentID])
+}
+
+@Test
+@MainActor
 func clearRequestsClearsSelectionButPreservesDisplayCriteria() async throws {
     let context = makeContext()
     let requestID = await applyRequest(
@@ -890,7 +964,8 @@ private func applyRequest(
     responseHeaders: [String: String] = [:],
     status: Int = 200,
     statusText: String = "OK",
-    timestamp: Double
+    timestamp: Double,
+    initiatorNodeID: DOM.Node.ID? = nil
 ) async -> NetworkRequest.ID {
     let requestID = await applyPendingRequest(
         to: context,
@@ -898,7 +973,8 @@ private func applyRequest(
         url: url,
         method: method,
         resourceType: resourceType,
-        timestamp: timestamp
+        timestamp: timestamp,
+        initiatorNodeID: initiatorNodeID
     )
     await applyResponseReceived(
         to: context,
@@ -923,14 +999,15 @@ private func applyPendingRequest(
     url: String,
     method: String = "GET",
     resourceType: Network.ResourceType,
-    timestamp: Double
+    timestamp: Double,
+    initiatorNodeID: DOM.Node.ID? = nil
 ) async -> NetworkRequest.ID {
     let requestID = Network.Request.ID(rawRequestID)
     await context.apply(
         .requestWillBeSent(
             id: requestID,
             request: Network.Request(id: requestID, url: url, method: method),
-            initiator: Network.Initiator(kind: "other"),
+            initiator: Network.Initiator(kind: "other", nodeID: initiatorNodeID),
             resourceType: resourceType,
             redirectResponse: nil,
             timestamp: timestamp

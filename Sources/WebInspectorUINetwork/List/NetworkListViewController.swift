@@ -16,6 +16,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private struct PendingSnapshotUpdate {
         var rows: NetworkListViewController.SnapshotRows
         var snapshot: NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkRequest.ID>
+        var forcesApply: Bool
     }
 
     private struct SnapshotCoordinator {
@@ -47,9 +48,12 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
     private let model: NetworkPanelModel
     private let fetchedResults: WebInspectorFetchedResults<NetworkRequest>
+    private let allFetchedResults: WebInspectorFetchedResults<NetworkRequest>
     private var requestSelectionAction: RequestSelectionAction
     private var fetchedResultsUpdateTask: Task<Void, Never>?
+    private var allFetchedResultsUpdateTask: Task<Void, Never>?
     private var lastFetchedResultsRevision: UInt64?
+    private var lastAllFetchedResultsRevision: UInt64?
     private var searchTextObservation: PortableObservationTracking.Token?
     private var resourceFilterObservation: PortableObservationTracking.Token?
     private var selectedRequestObservation: PortableObservationTracking.Token?
@@ -94,6 +98,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     package init(model: NetworkPanelModel) {
         self.model = model
         fetchedResults = model.requests
+        allFetchedResults = model.allRequests
         requestSelectionAction = { [model] request in
             model.selectRequest(request)
         }
@@ -108,6 +113,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
     isolated deinit {
         fetchedResultsUpdateTask?.cancel()
+        allFetchedResultsUpdateTask?.cancel()
         searchTextObservation?.cancel()
         resourceFilterObservation?.cancel()
         selectedRequestObservation?.cancel()
@@ -214,6 +220,15 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         fetchedResultsUpdateTask = Task { @MainActor [weak self] in
             for await update in updates {
                 self?.fetchedResultsDidPublish(update)
+            }
+        }
+
+        allFetchedResultsUpdateTask?.cancel()
+        let allUpdates = allFetchedResults.updates()
+        lastAllFetchedResultsRevision = allFetchedResults.revision
+        allFetchedResultsUpdateTask = Task { @MainActor [weak self] in
+            for await update in allUpdates {
+                self?.allFetchedResultsDidPublish(update)
             }
         }
     }
@@ -366,11 +381,12 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
     private func makeDataSource() -> UICollectionViewDiffableDataSource<SectionIdentifier, NetworkRequest.ID> {
         let listCellRegistration = UICollectionView.CellRegistration<NetworkListCell, NetworkRequest.ID> { [weak self] cell, _, id in
-            guard let request = self?.model.request(for: id) else {
+            guard let requests = self?.model.requests(forDisplayRequestID: id),
+                  requests.isEmpty == false else {
                 cell.unbind()
                 return
             }
-            cell.bind(request: request, renderingActive: self?.snapshotCoordinator.isRenderingActive == true)
+            cell.bind(requests: requests, renderingActive: self?.snapshotCoordinator.isRenderingActive == true)
         }
         return UICollectionViewDiffableDataSource<SectionIdentifier, NetworkRequest.ID>(
             collectionView: collectionView
@@ -401,14 +417,27 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         snapshotCoordinator.isRenderingActive && isViewLoaded
     }
 
-    private func requestSnapshotUpdate(requestIDs: [NetworkRequest.ID]) {
+    private func requestSnapshotUpdate(
+        requestIDs: [NetworkRequest.ID],
+        reconfigureExistingItems: Bool = false
+    ) {
         let rows = NetworkListViewController.SnapshotRows(requestIDs: requestIDs)
-        requestSnapshotUpdate(snapshot: makeSnapshot(requestIDs: requestIDs), rows: rows)
+        var snapshot = makeSnapshot(requestIDs: requestIDs)
+        if reconfigureExistingItems {
+            let currentIDs = Set(dataSource.snapshot().itemIdentifiers)
+            snapshot.reconfigureItems(requestIDs.filter { currentIDs.contains($0) })
+        }
+        requestSnapshotUpdate(
+            snapshot: snapshot,
+            rows: rows,
+            forceApply: reconfigureExistingItems
+        )
     }
 
     private func requestSnapshotUpdate(
         snapshot: NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkRequest.ID>,
-        rows: NetworkListViewController.SnapshotRows
+        rows: NetworkListViewController.SnapshotRows,
+        forceApply: Bool = false
     ) {
         guard isCollectionViewVisible else {
             snapshotCoordinator.markNeedsReloadOnNextAppearance()
@@ -416,30 +445,38 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         }
         snapshotCoordinator.needsReloadOnNextAppearance = false
         if let applyingRows = snapshotCoordinator.state.applyingRows {
-            if applyingRows.requestIDs == rows.requestIDs {
+            if forceApply == false, applyingRows.requestIDs == rows.requestIDs {
                 snapshotCoordinator.pendingUpdate = nil
                 return
             }
-        } else if dataSource.snapshot().itemIdentifiers == rows.requestIDs {
+        } else if forceApply == false,
+                  dataSource.snapshot().itemIdentifiers == rows.requestIDs {
             snapshotCoordinator.pendingUpdate = nil
             return
         }
-        enqueueSnapshotUpdate(snapshot: snapshot, rows: rows)
+        enqueueSnapshotUpdate(snapshot: snapshot, rows: rows, forceApply: forceApply)
     }
 
     private func enqueueSnapshotUpdate(
         snapshot: NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkRequest.ID>,
-        rows: NetworkListViewController.SnapshotRows
+        rows: NetworkListViewController.SnapshotRows,
+        forceApply: Bool
     ) {
         if let pendingSnapshotUpdate = snapshotCoordinator.pendingUpdate,
-           pendingSnapshotUpdate.rows.requestIDs == rows.requestIDs {
+           pendingSnapshotUpdate.rows.requestIDs == rows.requestIDs,
+           pendingSnapshotUpdate.forcesApply || forceApply == false {
             return
         }
-        guard snapshotCoordinator.state.isApplying
+        guard forceApply
+            || snapshotCoordinator.state.isApplying
             || dataSource.snapshot().itemIdentifiers != rows.requestIDs else {
             return
         }
-        snapshotCoordinator.pendingUpdate = PendingSnapshotUpdate(rows: rows, snapshot: snapshot)
+        snapshotCoordinator.pendingUpdate = PendingSnapshotUpdate(
+            rows: rows,
+            snapshot: snapshot,
+            forcesApply: forceApply
+        )
         applyPendingSnapshotUpdateIfNeeded()
     }
 
@@ -506,12 +543,14 @@ package final class NetworkListViewController: UICollectionViewController, UISea
                 }
                 return
             }
-            requestSnapshotUpdate(requestIDs: snapshot.itemIDs)
-            renderEmptyState(isEmpty: snapshot.itemIDs.isEmpty)
+            if model.hasInitiatorEntries {
+                reloadDataFromModel()
+            } else {
+                requestSnapshotUpdate(requestIDs: snapshot.itemIDs)
+                renderEmptyState(isEmpty: snapshot.itemIDs.isEmpty)
+            }
 
         case .transaction(let revision, let transaction, _):
-            // NetworkListCell observes each stable NetworkRequest identity
-            // directly, so this consumer only applies collection topology.
             let isContiguous = lastFetchedResultsRevision.map { previousRevision in
                 revision == previousRevision &+ 1
             } ?? false
@@ -519,15 +558,6 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 #if DEBUG
             recordFetchedResultsUpdateDeliveryForTesting()
 #endif
-            guard isContiguous else {
-                guard snapshotCoordinator.isRenderingActive else {
-                    snapshotCoordinator.markNeedsReloadOnNextAppearance()
-                    return
-                }
-                requestSnapshotUpdate(requestIDs: transaction.newSnapshot.itemIDs)
-                renderEmptyState(isEmpty: transaction.newSnapshot.itemIDs.isEmpty)
-                return
-            }
             guard transaction.hasNetworkListTopologyChanges else {
                 return
             }
@@ -535,7 +565,50 @@ package final class NetworkListViewController: UICollectionViewController, UISea
                 snapshotCoordinator.markNeedsReloadOnNextAppearance()
                 return
             }
-            applyTopologyTransaction(transaction)
+            guard model.hasInitiatorEntries else {
+                if isContiguous {
+                    applyTopologyTransaction(transaction)
+                } else {
+                    let requestIDs = transaction.newSnapshot.itemIDs
+                    requestSnapshotUpdate(requestIDs: requestIDs)
+                    renderEmptyState(isEmpty: requestIDs.isEmpty)
+                }
+                return
+            }
+            reloadDataFromModel()
+        }
+    }
+
+    private func allFetchedResultsDidPublish(
+        _ update: WebInspectorFetchedResultsUpdate<NetworkRequest.ID>
+    ) {
+        switch update {
+        case .initial(let revision, _):
+            guard lastAllFetchedResultsRevision != revision else {
+                return
+            }
+            lastAllFetchedResultsRevision = revision
+            guard model.hasInitiatorEntries else {
+                return
+            }
+            guard snapshotCoordinator.isRenderingActive else {
+                snapshotCoordinator.markNeedsReloadOnNextAppearance()
+                return
+            }
+            reloadDataFromModel(reconfigureExistingItems: true)
+        case .transaction(let revision, let transaction, _):
+            lastAllFetchedResultsRevision = revision
+            guard transaction.hasNetworkListTopologyChanges else {
+                return
+            }
+            guard model.hasInitiatorEntries else {
+                return
+            }
+            guard snapshotCoordinator.isRenderingActive else {
+                snapshotCoordinator.markNeedsReloadOnNextAppearance()
+                return
+            }
+            reloadDataFromModel(reconfigureExistingItems: true)
         }
     }
 
@@ -672,13 +745,16 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         }
     }
 
-    private func reloadDataFromModel() {
+    private func reloadDataFromModel(reconfigureExistingItems: Bool = false) {
         guard snapshotCoordinator.isRenderingActive else {
             snapshotCoordinator.markNeedsReloadOnNextAppearance()
             return
         }
         let requestIDs = displayRequestIDsFromModel()
-        requestSnapshotUpdate(requestIDs: requestIDs)
+        requestSnapshotUpdate(
+            requestIDs: requestIDs,
+            reconfigureExistingItems: reconfigureExistingItems
+        )
         renderEmptyState(isEmpty: requestIDs.isEmpty)
     }
 

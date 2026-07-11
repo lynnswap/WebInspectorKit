@@ -339,7 +339,10 @@ struct NetworkDetailViewControllerTests {
         let redirectRequest = try #require(text.range(of: "POST /start"))
         let redirectResponse = try #require(text.range(of: "302 Found"))
         let finalRequest = try #require(text.range(of: "GET /final"))
-        let finalResponse = try #require(text.range(of: "200 OK"))
+        let finalResponse = try #require(text.range(
+            of: "200 OK",
+            range: finalRequest.upperBound..<text.endIndex
+        ))
         #expect(redirectRequest.lowerBound < redirectResponse.lowerBound)
         #expect(redirectResponse.lowerBound < finalRequest.lowerBound)
         #expect(finalRequest.lowerBound < finalResponse.lowerBound)

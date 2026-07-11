@@ -4,6 +4,19 @@ import WebInspectorDataKit
 import WebInspectorUIBase
 
 @MainActor
+package struct NetworkListEntry: Identifiable {
+    package let id: NetworkRequest.ID
+    package let requests: [NetworkRequest]
+
+    package var representativeRequest: NetworkRequest {
+        guard let request = requests.first else {
+            preconditionFailure("A Network list entry must own at least one request.")
+        }
+        return request
+    }
+}
+
+@MainActor
 private final class NetworkResponseBodyFetchCoordinator {
     private var fetchesInFlight: Set<NetworkRequest.ID> = []
 
@@ -42,6 +55,7 @@ package final class NetworkPanelModel {
 
     package let context: WebInspectorModelContext
     package let requests: WebInspectorFetchedResults<NetworkRequest>
+    package let allRequests: WebInspectorFetchedResults<NetworkRequest>
     private let collectionState: NetworkRequestCollectionState
     package private(set) var selectedRequestID: NetworkRequest.ID?
     package private(set) var searchText: String
@@ -58,10 +72,12 @@ package final class NetworkPanelModel {
     private init(
         context: WebInspectorModelContext,
         requests: WebInspectorFetchedResults<NetworkRequest>,
+        allRequests: WebInspectorFetchedResults<NetworkRequest>,
         query: NetworkQuery
     ) {
         self.context = context
         self.requests = requests
+        self.allRequests = allRequests
         self.collectionState = context.networkRequestsCollectionState
         self.searchText = query.search ?? ""
         self.activeResourceFilters = []
@@ -78,7 +94,13 @@ package final class NetworkPanelModel {
     package static func make(context: WebInspectorModelContext) async throws -> NetworkPanelModel {
         let query = NetworkQuery(sort: .requestTimeDescending)
         let requests = try await context.networkRequests(matching: query)
-        return NetworkPanelModel(context: context, requests: requests, query: query)
+        let allRequests = try await context.networkRequests(matching: query)
+        return NetworkPanelModel(
+            context: context,
+            requests: requests,
+            allRequests: allRequests,
+            query: query
+        )
     }
 
     isolated deinit {
@@ -86,15 +108,27 @@ package final class NetworkPanelModel {
     }
 
     package var displayRequestIDs: [NetworkRequest.ID] {
-        requests.items.map(\.id)
+        displayEntries.map(\.id)
     }
 
     package var displayRequests: [NetworkRequest] {
-        displayRequestIDs.compactMap { request(for: $0) }
+        displayEntries.map(\.representativeRequest)
+    }
+
+    package var displayEntries: [NetworkListEntry] {
+        Self.makeEntries(
+            from: allRequests.items,
+            visibleRequestIDs: Set(requests.items.map(\.id)),
+            initiatorNodeID: { $0.initiator?.nodeID }
+        )
+    }
+
+    package var hasInitiatorEntries: Bool {
+        allRequests.items.contains { $0.initiator?.nodeID != nil }
     }
 
     package var isEmpty: Bool {
-        requests.items.isEmpty
+        displayEntries.isEmpty
     }
 
     package var hasClearableRequests: Bool {
@@ -106,22 +140,35 @@ package final class NetworkPanelModel {
     }
 
     package var selectedRequest: NetworkRequest? {
+        selectedRequests.first
+    }
+
+    package var selectedRequests: [NetworkRequest] {
         guard let selectedRequestID else {
-            return nil
+            return []
         }
-        // Observe the unfiltered request topology so registry removals invalidate
-        // the selection without tying selection lifetime to display filters.
-        _ = collectionState.topologyRevision
-        return request(for: selectedRequestID)
+        // Keep selection attached to the unfiltered entry. Search and resource
+        // filters only control whether its row is visible.
+        return allEntries.first { $0.id == selectedRequestID }?.requests ?? []
     }
 
     package func request(for id: NetworkRequest.ID) -> NetworkRequest? {
         try? context.networkRequest(id: id)
     }
 
+    package func requests(forDisplayRequestID id: NetworkRequest.ID) -> [NetworkRequest] {
+        displayEntries.first { $0.id == id }?.requests ?? []
+    }
+
     package func selectRequest(_ request: NetworkRequest?) {
         requireActive()
-        selectedRequestID = request?.id
+        guard let request else {
+            selectedRequestID = nil
+            return
+        }
+        selectedRequestID = allEntries.first { entry in
+            entry.requests.contains { $0.id == request.id }
+        }?.id
     }
 
     package func setSearchText(_ text: String) {
@@ -303,6 +350,50 @@ package final class NetworkPanelModel {
             return false
         }
         return queryGeneration == generation
+    }
+
+    private var allEntries: [NetworkListEntry] {
+        Self.makeEntries(
+            from: allRequests.items,
+            visibleRequestIDs: nil,
+            initiatorNodeID: { $0.initiator?.nodeID }
+        )
+    }
+
+    private static func makeEntries<NodeID: Hashable>(
+        from requests: [NetworkRequest],
+        visibleRequestIDs: Set<NetworkRequest.ID>?,
+        initiatorNodeID: (NetworkRequest) -> NodeID?
+    ) -> [NetworkListEntry] {
+        var groupedRequests: [NodeID: [NetworkRequest]] = [:]
+        for request in requests {
+            guard let nodeID = initiatorNodeID(request) else {
+                continue
+            }
+            groupedRequests[nodeID, default: []].append(request)
+        }
+
+        var entries: [NetworkListEntry] = []
+        entries.reserveCapacity(requests.count)
+        for request in requests {
+            guard let nodeID = initiatorNodeID(request) else {
+                if visibleRequestIDs?.contains(request.id) != false {
+                    entries.append(NetworkListEntry(id: request.id, requests: [request]))
+                }
+                continue
+            }
+            guard let requestsForNode = groupedRequests[nodeID],
+                  requestsForNode.last?.id == request.id else {
+                continue
+            }
+            let chronologicalRequests = Array(requestsForNode.reversed())
+            if let visibleRequestIDs,
+               chronologicalRequests.contains(where: { visibleRequestIDs.contains($0.id) }) == false {
+                continue
+            }
+            entries.append(NetworkListEntry(id: request.id, requests: chronologicalRequests))
+        }
+        return entries
     }
 
     #if DEBUG

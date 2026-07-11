@@ -74,6 +74,7 @@ package final class NetworkDetailViewController: UIViewController {
     private var previewRoles: [NetworkBody.Role] = []
     private var hasBoundSelectedRequest = false
     private weak var observedRequest: NetworkRequest?
+    private var observedRequests: [NetworkRequest] = []
     private var bodyTopToPreviewContainerConstraint: NSLayoutConstraint?
     private var bodyTopToPreviewRoleControlConstraint: NSLayoutConstraint?
 #if DEBUG
@@ -154,8 +155,8 @@ package final class NetworkDetailViewController: UIViewController {
         modelObservation?.cancel()
         let token = withPortableContinuousObservation { [weak self] _ in
             guard let self else { return }
-            bindSelectedRequest(
-                model.selectedRequest,
+            bindSelectedRequests(
+                model.selectedRequests,
                 force: selectedRequestRenderObservation == nil
             )
         }
@@ -167,12 +168,12 @@ package final class NetworkDetailViewController: UIViewController {
 
     private func resumeRendering() {
         guard isRenderingActive == false else {
-            bindSelectedRequest(model.selectedRequest, force: selectedRequestRenderObservation == nil)
+            bindSelectedRequests(model.selectedRequests, force: selectedRequestRenderObservation == nil)
             updateBodyRenderingActiveForCurrentSurface()
             return
         }
         isRenderingActive = true
-        bindSelectedRequest(model.selectedRequest, force: true)
+        bindSelectedRequests(model.selectedRequests, force: true)
         startObservingModel()
         updateBodyRenderingActiveForCurrentSurface()
     }
@@ -284,16 +285,18 @@ package final class NetworkDetailViewController: UIViewController {
         renderModeControl()
     }
 
-    private func bindSelectedRequest(_ request: NetworkRequest?, force: Bool = false) {
+    private func bindSelectedRequests(_ requests: [NetworkRequest], force: Bool = false) {
         guard isRenderingActive else {
             return
         }
-        guard force || hasBoundSelectedRequest == false || observedRequest !== request else {
-            renderModeControl(selectedRequest: request)
+        guard force
+            || hasBoundSelectedRequest == false
+            || observedRequests.map(\.id) != requests.map(\.id) else {
+            renderModeControl(selectedRequest: requests.first)
             return
         }
 
-        guard let request else {
+        guard let request = requests.first else {
             clearSelectedRequestPresentation(bodySurface: .none)
             return
         }
@@ -303,6 +306,7 @@ package final class NetworkDetailViewController: UIViewController {
         selectedRequestRenderObservation = nil
         unbindResponseBodyFetchObservation()
         observedRequest = request
+        observedRequests = requests
 #if DEBUG
         selectedRequestRenderObservationDelivery = nil
 #endif
@@ -311,7 +315,7 @@ package final class NetworkDetailViewController: UIViewController {
             contentUnavailableConfiguration = nil
         }
         renderModeControl(selectedRequest: request)
-        bindSelectedRequestRendering(request)
+        bindSelectedRequestRendering(requests)
     }
 
     private func rebindSelectedRequestRendering() {
@@ -324,22 +328,23 @@ package final class NetworkDetailViewController: UIViewController {
         guard isRenderingActive else {
             return
         }
-        guard let observedRequest else {
+        guard observedRequests.isEmpty == false else {
             return
         }
-        bindSelectedRequestRendering(observedRequest)
+        bindSelectedRequestRendering(observedRequests)
     }
 
-    private func bindSelectedRequestRendering(_ request: NetworkRequest) {
+    private func bindSelectedRequestRendering(_ requests: [NetworkRequest]) {
         guard isRenderingActive else {
             return
         }
-        let token = withPortableContinuousObservation { [weak self, weak request] _ in
-            guard let request,
-                  self?.observedRequest === request else {
+        let requestIDs = requests.map(\.id)
+        let token = withPortableContinuousObservation { [weak self] _ in
+            guard let self,
+                  observedRequests.map(\.id) == requestIDs else {
                 return
             }
-            self?.renderSelectedRequest(request)
+            renderSelectedRequests(observedRequests)
         }
         selectedRequestRenderObservation = token
 #if DEBUG
@@ -347,15 +352,15 @@ package final class NetworkDetailViewController: UIViewController {
 #endif
     }
 
-    private func renderSelectedRequest(_ request: NetworkRequest) {
-        guard isRenderingActive else {
+    private func renderSelectedRequests(_ requests: [NetworkRequest]) {
+        guard isRenderingActive, let request = requests.first else {
             return
         }
         switch mode {
         case .preview:
             renderPreviewSurface(selectedRequest: request)
         case .headers:
-            renderHeadersSurface(selectedRequest: request)
+            renderHeadersSurface(selectedRequests: requests)
         }
     }
 
@@ -366,10 +371,13 @@ package final class NetworkDetailViewController: UIViewController {
         updateBodyRenderingActiveForCurrentSurface()
     }
 
-    private func renderHeadersSurface(selectedRequest request: NetworkRequest) {
-        title = request.displayName
+    private func renderHeadersSurface(selectedRequests requests: [NetworkRequest]) {
+        guard let representativeRequest = requests.first else {
+            preconditionFailure("A selected Network entry must contain at least one request.")
+        }
+        title = representativeRequest.displayName
         showHeaders()
-        headersTextView.render(request: request)
+        headersTextView.render(requests: requests)
     }
 
     private func setMode(_ nextMode: NetworkDetailViewController.Mode) {
@@ -411,6 +419,7 @@ package final class NetworkDetailViewController: UIViewController {
         selectedRequestRenderObservation = nil
         unbindResponseBodyFetchObservation()
         observedRequest = nil
+        observedRequests = []
 #if DEBUG
         selectedRequestRenderObservationDelivery = nil
 #endif

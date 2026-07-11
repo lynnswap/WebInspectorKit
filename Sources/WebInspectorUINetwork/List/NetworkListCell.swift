@@ -9,7 +9,7 @@ package final class NetworkListCell: UICollectionViewListCell {
     private let statusIndicatorView = UIView(frame: CGRect(origin: .zero, size: CGSize(width: 8, height: 8)))
     private let fileTypeLabel = UILabel()
     private var requestObservation: PortableObservationTracking.Token?
-    private weak var observedRequest: NetworkRequest?
+    private var observedRequests: [NetworkRequest] = []
     private var isRenderingActive = true
 
     override init(frame: CGRect) {
@@ -31,12 +31,17 @@ package final class NetworkListCell: UICollectionViewListCell {
         unbind()
     }
 
-    package func bind(request: NetworkRequest, renderingActive: Bool) {
-        if observedRequest !== request {
+    package func bind(requests: [NetworkRequest], renderingActive: Bool) {
+        precondition(requests.isEmpty == false, "A Network list cell requires at least one request.")
+        if observedRequests.map(\.id) != requests.map(\.id) {
             cancelRequestObservation()
-            observedRequest = request
+            observedRequests = requests
         }
         setRenderingActive(renderingActive)
+    }
+
+    package func bind(request: NetworkRequest, renderingActive: Bool) {
+        bind(requests: [request], renderingActive: renderingActive)
     }
 
     package func setRenderingActive(_ isActive: Bool) {
@@ -59,31 +64,28 @@ package final class NetworkListCell: UICollectionViewListCell {
 
     package func unbind() {
         cancelRequestObservation()
-        observedRequest = nil
+        observedRequests = []
         render(displayName: "", statusSeverity: .neutral, fileTypeLabel: "")
     }
 
     private func startRequestObservationIfNeeded() {
         guard requestObservation == nil,
-              let observedRequest else {
+              observedRequests.isEmpty == false else {
             return
         }
-        requestObservation = withPortableContinuousObservation { [weak self, weak observedRequest] _ in
-            guard let self,
-                  let observedRequest,
-                  self.isRenderingActive,
-                  self.observedRequest === observedRequest else {
+        requestObservation = withPortableContinuousObservation { [weak self] _ in
+            guard let self, self.isRenderingActive else {
                 return
             }
-            render(request: observedRequest)
+            render(requests: observedRequests)
         }
     }
 
     private func renderObservedRequest() {
-        guard let observedRequest else {
+        guard observedRequests.isEmpty == false else {
             return
         }
-        render(request: observedRequest)
+        render(requests: observedRequests)
     }
 
     private func configureStaticViews() {
@@ -126,12 +128,29 @@ package final class NetworkListCell: UICollectionViewListCell {
         renderAccessories(statusSeverity: statusSeverity, fileTypeLabel: fileTypeLabel)
     }
 
-    private func render(request: NetworkRequest) {
+    private func render(requests: [NetworkRequest]) {
+        guard let representativeRequest = requests.first else {
+            preconditionFailure("A Network list cell cannot render an empty entry.")
+        }
+        let groupSuffix = requests.count > 1 ? " ×\(requests.count)" : ""
         render(
-            displayName: request.displayName,
-            statusSeverity: request.statusSeverity,
-            fileTypeLabel: request.fileTypeLabel
+            displayName: representativeRequest.displayName,
+            statusSeverity: statusSeverity(for: requests),
+            fileTypeLabel: representativeRequest.fileTypeLabel + groupSuffix
         )
+    }
+
+    private func statusSeverity(for requests: [NetworkRequest]) -> NetworkDisplay.StatusSeverity {
+        for severity in [
+            NetworkDisplay.StatusSeverity.error,
+            .warning,
+            .notice,
+            .success,
+            .neutral,
+        ] where requests.contains(where: { $0.statusSeverity == severity }) {
+            return severity
+        }
+        preconditionFailure("A nonempty Network entry must have a status severity.")
     }
 
     private func render(displayName: String) {
