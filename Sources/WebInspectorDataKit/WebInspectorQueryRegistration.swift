@@ -31,15 +31,55 @@ package final class WebInspectorQueryRegistrationLifetime: Sendable {
     }
 }
 
-package struct WebInspectorIndexedQueryProjection<ItemID: Hashable & Sendable>: Sendable {
-    package var sourceEpoch: UInt64
-    package var sequence: UInt64
-    package var snapshot: WebInspectorFetchedResultsSnapshot<ItemID>
-    package var reconfigureItemIDs: Set<ItemID>
+package struct WebInspectorIndexedQueryCursor: Hashable, Sendable {
+    package let sourceEpoch: UInt64
+    package let sequence: UInt64
+
+    package init(sourceEpoch: UInt64, sequence: UInt64) {
+        self.sourceEpoch = sourceEpoch
+        self.sequence = sequence
+    }
 }
 
-package struct WebInspectorIndexedQueryDelivery<ItemID: Hashable & Sendable>: Sendable {
-    package var registrationID: WebInspectorQueryRegistrationID
-    package var generation: UInt64
-    package var projection: WebInspectorIndexedQueryProjection<ItemID>
+package struct WebInspectorIndexedQueryState<ItemID: Hashable & Sendable>: Hashable, Sendable {
+    package let cursor: WebInspectorIndexedQueryCursor
+    package let snapshot: WebInspectorFetchedResultsSnapshot<ItemID>
+
+    package init(
+        cursor: WebInspectorIndexedQueryCursor,
+        snapshot: WebInspectorFetchedResultsSnapshot<ItemID>
+    ) {
+        self.cursor = cursor
+        self.snapshot = snapshot
+    }
+}
+
+package enum WebInspectorIndexedQueryChange<ItemID: Hashable & Sendable>: Hashable, Sendable {
+    case reset
+    case transaction(
+        base: WebInspectorIndexedQueryCursor,
+        transaction: WebInspectorFetchedResultsTransaction<ItemID>
+    )
+}
+
+package struct WebInspectorIndexedQueryPublication<ItemID: Hashable & Sendable>: Hashable, Sendable {
+    package let state: WebInspectorIndexedQueryState<ItemID>
+    package let change: WebInspectorIndexedQueryChange<ItemID>
+    package let reconfigureItemIDs: Set<ItemID>
+
+    package init(
+        state: WebInspectorIndexedQueryState<ItemID>,
+        change: WebInspectorIndexedQueryChange<ItemID>,
+        reconfigureItemIDs: Set<ItemID>
+    ) {
+        self.state = state
+        self.change = change
+        self.reconfigureItemIDs = reconfigureItemIDs
+    }
+}
+
+package struct WebInspectorIndexedQueryDelivery<ItemID: Hashable & Sendable>: Hashable, Sendable {
+    package let registrationID: WebInspectorQueryRegistrationID
+    package let generation: UInt64
+    package let publication: WebInspectorIndexedQueryPublication<ItemID>
 }

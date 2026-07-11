@@ -70,9 +70,6 @@ public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel
         var snapshot: WebInspectorFetchedResultsSnapshot<Model.ID>
         var revision: UInt64
         var query: ConcreteQuery?
-        var queryGeneration: UInt64?
-        var querySourceEpoch: UInt64?
-        var querySequence: UInt64
     }
 
     private var state: State
@@ -81,6 +78,8 @@ public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel
     @ObservationIgnored weak var modelContext: WebInspectorModelContext?
     @ObservationIgnored private var queryRegistrationID: WebInspectorQueryRegistrationID?
     @ObservationIgnored private var queryRegistrationLifetime: WebInspectorQueryRegistrationLifetime?
+    @ObservationIgnored private var queryGeneration: UInt64?
+    @ObservationIgnored private var indexedQueryState: WebInspectorIndexedQueryState<Model.ID>?
 
     /// The fetched models in display order.
     public var items: [Model] {
@@ -126,14 +125,13 @@ public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel
             sectionsByID: [:],
             snapshot: WebInspectorFetchedResultsSnapshot(),
             revision: 0,
-            query: nil,
-            queryGeneration: nil,
-            querySourceEpoch: nil,
-            querySequence: 0
+            query: nil
         )
         self.modelContext = modelContext
         queryRegistrationID = nil
         queryRegistrationLifetime = nil
+        queryGeneration = nil
+        indexedQueryState = nil
     }
 
     deinit {
@@ -167,51 +165,57 @@ public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel
         queryRegistrationLifetime?.isCurrent(generation: generation) == true
     }
 
+    @discardableResult
     private func installInitialConcreteState(
         query: ConcreteQuery,
         generation: UInt64,
-        projection: WebInspectorIndexedQueryProjection<Model.ID>,
+        publication: WebInspectorIndexedQueryPublication<Model.ID>,
         lookup: (Model.ID) -> Model?
-    ) {
+    ) -> WebInspectorIndexedQueryState<Model.ID> {
         precondition(
-            state.queryGeneration == nil,
+            queryGeneration == nil && indexedQueryState == nil,
             "A concrete fetched-results initial state can only be installed once."
         )
-        let resolved = resolve(projection.snapshot, reusing: [:], lookup: lookup)
+        guard case .reset = publication.change else {
+            preconditionFailure("A concrete fetched-results initial state must be a reset publication.")
+        }
+        let queryState = publication.state
+        let resolved = resolve(queryState.snapshot, reusing: [:], lookup: lookup)
         state = State(
             items: resolved.items,
             sections: resolved.sections,
             modelsByID: resolved.modelsByID,
             sectionsByID: resolved.sectionsByID,
-            snapshot: projection.snapshot,
+            snapshot: queryState.snapshot,
             revision: 0,
-            query: query,
-            queryGeneration: generation,
-            querySourceEpoch: projection.sourceEpoch,
-            querySequence: projection.sequence
+            query: query
         )
+        queryGeneration = generation
+        indexedQueryState = queryState
+        return queryState
     }
 
     @discardableResult
-    private func applyConcreteProjection(
+    private func applyConcretePublication(
         query: ConcreteQuery,
         generation: UInt64,
-        projection: WebInspectorIndexedQueryProjection<Model.ID>,
+        publication: WebInspectorIndexedQueryPublication<Model.ID>,
         isReplacement: Bool,
         lookup: (Model.ID) -> Model?
-    ) -> Bool {
-        guard let currentGeneration = state.queryGeneration,
-              let currentSourceEpoch = state.querySourceEpoch else {
-            preconditionFailure("A concrete fetched-results projection requires an installed initial state.")
+    ) -> WebInspectorIndexedQueryState<Model.ID>? {
+        guard let currentGeneration = queryGeneration,
+              let currentQueryState = indexedQueryState else {
+            preconditionFailure("A concrete fetched-results publication requires an installed initial state.")
         }
-        guard projection.sourceEpoch >= currentSourceEpoch,
+        let incomingState = publication.state
+        guard incomingState.cursor.sourceEpoch >= currentQueryState.cursor.sourceEpoch,
               generation >= currentGeneration else {
-            return false
+            return nil
         }
         if generation == currentGeneration {
-            if projection.sourceEpoch == currentSourceEpoch,
-               projection.sequence <= state.querySequence {
-                return false
+            if incomingState.cursor.sourceEpoch == currentQueryState.cursor.sourceEpoch,
+               incomingState.cursor.sequence <= currentQueryState.cursor.sequence {
+                return currentQueryState
             }
         } else {
             precondition(
@@ -220,55 +224,95 @@ public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel
             )
         }
 
-        let resetsSource = projection.sourceEpoch != currentSourceEpoch
-        let shouldReset = isReplacement || resetsSource
-        let visibleReconfigureIDs = projection.reconfigureItemIDs
-        let topologyIsUnchanged = shouldReset == false && state.snapshot == projection.snapshot
-        if topologyIsUnchanged, visibleReconfigureIDs.isEmpty {
-            state.querySourceEpoch = projection.sourceEpoch
-            state.querySequence = projection.sequence
-            return true
+        let resetsSource = incomingState.cursor.sourceEpoch != currentQueryState.cursor.sourceEpoch
+        if isReplacement || resetsSource {
+            guard case .reset = publication.change else {
+                preconditionFailure("A query replacement or source epoch change must publish as a reset.")
+            }
         }
-        if topologyIsUnchanged {
-            // A content-only update keeps the resolved identity graph intact.
-            // Reuse it instead of rebuilding every model and section in the query.
+
+        let transaction: WebInspectorFetchedResultsTransaction<Model.ID>
+        let rebuildsResolvedTopology: Bool
+        switch publication.change {
+        case .reset:
+            // Initial/replacement/source recovery carries a complete state and
+            // deliberately does not construct a collection diff on this owner.
+            transaction = WebInspectorFetchedResultsTransaction(
+                oldSnapshot: currentQueryState.snapshot,
+                newSnapshot: incomingState.snapshot,
+                isReset: true,
+                itemChanges: []
+            )
+            rebuildsResolvedTopology = true
+        case let .transaction(base, actorTransaction):
+            if base != currentQueryState.cursor {
+                // A bounded delivery gap is recoverable from the complete
+                // delivered state without rebuilding the actor's missing diff.
+                transaction = WebInspectorFetchedResultsTransaction(
+                    oldSnapshot: currentQueryState.snapshot,
+                    newSnapshot: incomingState.snapshot,
+                    isReset: true,
+                    itemChanges: []
+                )
+                rebuildsResolvedTopology = true
+            } else if actorTransaction.hasChanges == false,
+                      publication.reconfigureItemIDs.isEmpty {
+                queryGeneration = generation
+                indexedQueryState = incomingState
+                return incomingState
+            } else {
+                transaction = actorTransaction
+                rebuildsResolvedTopology = transactionChangesResolvedTopology(actorTransaction)
+            }
+        }
+
+        if rebuildsResolvedTopology {
+            let resolved = resolve(
+                incomingState.snapshot,
+                reusing: resetsSource ? [:] : state.modelsByID,
+                lookup: lookup
+            )
+            publish(
+                items: resolved.items,
+                sections: resolved.sections,
+                modelsByID: resolved.modelsByID,
+                sectionsByID: resolved.sectionsByID,
+                query: query,
+                queryGeneration: generation,
+                queryState: incomingState,
+                transaction: transaction,
+                reconfigureItemIDs: publication.reconfigureItemIDs
+            )
+        } else {
             publish(
                 items: state.items,
                 sections: state.sections,
                 modelsByID: state.modelsByID,
                 sectionsByID: state.sectionsByID,
-                snapshot: state.snapshot,
                 query: query,
                 queryGeneration: generation,
-                querySourceEpoch: projection.sourceEpoch,
-                querySequence: projection.sequence,
-                isReset: false,
-                topologyIsUnchanged: true,
-                updatedItemIDs: visibleReconfigureIDs
+                queryState: incomingState,
+                transaction: transaction,
+                reconfigureItemIDs: publication.reconfigureItemIDs
             )
+        }
+        return incomingState
+    }
+
+    private func transactionChangesResolvedTopology(
+        _ transaction: WebInspectorFetchedResultsTransaction<Model.ID>
+    ) -> Bool {
+        guard transaction.sectionChanges.isEmpty else {
             return true
         }
-
-        let resolved = resolve(
-            projection.snapshot,
-            reusing: resetsSource ? [:] : state.modelsByID,
-            lookup: lookup
-        )
-        publish(
-            items: resolved.items,
-            sections: resolved.sections,
-            modelsByID: resolved.modelsByID,
-            sectionsByID: resolved.sectionsByID,
-            snapshot: projection.snapshot,
-            query: query,
-            queryGeneration: generation,
-            querySourceEpoch: projection.sourceEpoch,
-            querySequence: projection.sequence,
-            isReset: shouldReset,
-            topologyIsUnchanged: false,
-            updatedItemIDs: visibleReconfigureIDs
-        )
-        return true
+        return transaction.itemChanges.contains { change in
+            switch change {
+            case .update:
+                return false
+            case .insert, .delete, .move:
+                return true
+            }
+        }
     }
 
     private func resolve(
@@ -342,46 +386,13 @@ public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel
         sections: [WebInspectorFetchSection<Model>],
         modelsByID: [Model.ID: Model],
         sectionsByID: [WebInspectorFetchSectionID: WebInspectorFetchSection<Model>],
-        snapshot: WebInspectorFetchedResultsSnapshot<Model.ID>,
         query: ConcreteQuery,
         queryGeneration: UInt64,
-        querySourceEpoch: UInt64,
-        querySequence: UInt64,
-        isReset: Bool,
-        topologyIsUnchanged: Bool,
-        updatedItemIDs: Set<Model.ID>
+        queryState: WebInspectorIndexedQueryState<Model.ID>,
+        transaction: WebInspectorFetchedResultsTransaction<Model.ID>,
+        reconfigureItemIDs: Set<Model.ID>
     ) {
         let oldState = state
-        let reconfigureItemIDs = updatedItemIDs
-        guard isReset
-            || topologyIsUnchanged == false
-            || reconfigureItemIDs.isEmpty == false else {
-            return
-        }
-
-        let transaction: WebInspectorFetchedResultsTransaction<Model.ID>
-        if isReset {
-            transaction = WebInspectorFetchedResultsTransaction(
-                oldSnapshot: oldState.snapshot,
-                newSnapshot: snapshot,
-                isReset: true,
-                itemChanges: []
-            )
-        } else {
-            if topologyIsUnchanged {
-                transaction = WebInspectorFetchedResultsTransaction(
-                    unchangedSnapshot: snapshot,
-                    updatedItemIDs: reconfigureItemIDs
-                )
-            } else {
-                transaction = WebInspectorFetchedResultsTransaction(
-                    oldSnapshot: oldState.snapshot,
-                    newSnapshot: snapshot,
-                    updatedItemIDs: reconfigureItemIDs
-                )
-            }
-        }
-
         precondition(
             oldState.revision < UInt64.max,
             "WebInspectorFetchedResults publication revision overflowed."
@@ -392,13 +403,12 @@ public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel
             sections: sections,
             modelsByID: modelsByID,
             sectionsByID: sectionsByID,
-            snapshot: snapshot,
+            snapshot: queryState.snapshot,
             revision: revision,
-            query: query,
-            queryGeneration: queryGeneration,
-            querySourceEpoch: querySourceEpoch,
-            querySequence: querySequence
+            query: query
         )
+        self.queryGeneration = queryGeneration
+        indexedQueryState = queryState
         updateBroker.yield(.transaction(
             revision: revision,
             transaction: transaction,
@@ -408,32 +418,33 @@ public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel
 }
 
 extension WebInspectorFetchedResults where Model == NetworkRequest {
+    @discardableResult
     func installInitialNetworkQuery(
         _ query: NetworkQuery,
         generation: UInt64,
-        projection: NetworkRequestIndex.QueryProjection,
+        publication: NetworkRequestIndex.QueryPublication,
         lookup: (NetworkRequest.ID) -> NetworkRequest?
-    ) {
+    ) -> NetworkRequestIndex.QueryState {
         installInitialConcreteState(
             query: .network(query),
             generation: generation,
-            projection: projection,
+            publication: publication,
             lookup: lookup
         )
     }
 
     @discardableResult
-    func applyNetworkQueryProjection(
-        _ projection: NetworkRequestIndex.QueryProjection,
+    func applyNetworkQueryPublication(
+        _ publication: NetworkRequestIndex.QueryPublication,
         query: NetworkQuery,
         generation: UInt64,
         isReplacement: Bool,
         lookup: (NetworkRequest.ID) -> NetworkRequest?
-    ) -> Bool {
-        applyConcreteProjection(
+    ) -> NetworkRequestIndex.QueryState? {
+        applyConcretePublication(
             query: .network(query),
             generation: generation,
-            projection: projection,
+            publication: publication,
             isReplacement: isReplacement,
             lookup: lookup
         )
@@ -456,7 +467,7 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
 
     /// Replaces this result's Network query atomically.
     public nonisolated(nonsending) func update(_ query: NetworkQuery) async throws {
-        guard queryRegistrationID != nil, state.queryGeneration != nil else {
+        guard queryRegistrationID != nil, queryGeneration != nil else {
             preconditionFailure(
                 "A Network query can only update results created by networkRequests(matching:)."
             )
@@ -469,32 +480,33 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
 }
 
 extension WebInspectorFetchedResults where Model == ConsoleMessage {
+    @discardableResult
     func installInitialConsoleQuery(
         _ query: ConsoleQuery,
         generation: UInt64,
-        projection: ConsoleMessageIndex.QueryProjection,
+        publication: ConsoleMessageIndex.QueryPublication,
         lookup: (ConsoleMessage.ID) -> ConsoleMessage?
-    ) {
+    ) -> ConsoleMessageIndex.QueryState {
         installInitialConcreteState(
             query: .console(query),
             generation: generation,
-            projection: projection,
+            publication: publication,
             lookup: lookup
         )
     }
 
     @discardableResult
-    func applyConsoleQueryProjection(
-        _ projection: ConsoleMessageIndex.QueryProjection,
+    func applyConsoleQueryPublication(
+        _ publication: ConsoleMessageIndex.QueryPublication,
         query: ConsoleQuery,
         generation: UInt64,
         isReplacement: Bool,
         lookup: (ConsoleMessage.ID) -> ConsoleMessage?
-    ) -> Bool {
-        applyConcreteProjection(
+    ) -> ConsoleMessageIndex.QueryState? {
+        applyConcretePublication(
             query: .console(query),
             generation: generation,
-            projection: projection,
+            publication: publication,
             isReplacement: isReplacement,
             lookup: lookup
         )
@@ -517,7 +529,7 @@ extension WebInspectorFetchedResults where Model == ConsoleMessage {
 
     /// Replaces this result's Console query atomically.
     public nonisolated(nonsending) func update(_ query: ConsoleQuery) async throws {
-        guard queryRegistrationID != nil, state.queryGeneration != nil else {
+        guard queryRegistrationID != nil, queryGeneration != nil else {
             preconditionFailure(
                 "A Console query can only update results created by consoleMessages(matching:)."
             )

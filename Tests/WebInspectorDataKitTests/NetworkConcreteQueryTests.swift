@@ -1,3 +1,5 @@
+import Observation
+import Synchronization
 import Testing
 @testable import WebInspectorDataKit
 import WebInspectorProxyKit
@@ -51,7 +53,7 @@ func networkConcreteQueryUsesInsertionOrderToBreakEqualRequestTimes() async thro
         lifetime: lifetime,
         minimumSequence: 1
     )
-    #expect(ascending.snapshot.itemIDs == [first.id, second.id])
+    #expect(ascending.state.snapshot.itemIDs == [first.id, second.id])
 
     let descendingGeneration = lifetime.nextGeneration()
     _ = try await index.prepareReplacement(
@@ -64,7 +66,7 @@ func networkConcreteQueryUsesInsertionOrderToBreakEqualRequestTimes() async thro
         id: registrationID,
         generation: descendingGeneration
     ))
-    #expect(descending.snapshot.itemIDs == [second.id, first.id])
+    #expect(descending.state.snapshot.itemIDs == [second.id, first.id])
 }
 
 @MainActor
@@ -111,10 +113,10 @@ func networkConcreteQueryRegistrationIncludesMutationAppliedWhileWaitingForIniti
 
     _ = await index.upsert(first.input, sequence: 1)
     _ = await secondMutation.value
-    let projection = try await registration.value
+    let publication = try await registration.value
 
-    #expect(projection.sequence == 2)
-    #expect(projection.snapshot.itemIDs == [first.id, second.id])
+    #expect(publication.state.cursor.sequence == 2)
+    #expect(publication.state.snapshot.itemIDs == [first.id, second.id])
     #expect(await index.queryRegistrationCountForTesting() == 1)
 }
 
@@ -198,21 +200,25 @@ func networkConcreteQueryReplacementAbsorbsMutationBetweenPrepareAndCommit() asy
         query: replacementQuery,
         minimumSequence: 1
     )
-    #expect(prepared.snapshot.itemIDs.isEmpty)
+    #expect(prepared.state.snapshot.itemIDs.isEmpty)
 
     let deliveries = await index.upsert(second.input, sequence: 2)
     let candidateDelivery = try #require(deliveries.first {
         $0.generation == replacementGeneration
     })
-    #expect(candidateDelivery.projection.snapshot.itemIDs == [second.id])
-    #expect(candidateDelivery.projection.reconfigureItemIDs == [second.id])
+    #expect(candidateDelivery.publication.state.snapshot.itemIDs == [second.id])
+    #expect(candidateDelivery.publication.reconfigureItemIDs.isEmpty)
+    guard case .reset = candidateDelivery.publication.change else {
+        Issue.record("Expected an unacknowledged candidate to publish a reset.")
+        return
+    }
 
     let committed = try #require(await index.commitReplacement(
         id: registrationID,
         generation: replacementGeneration
     ))
-    #expect(committed.sequence == 2)
-    #expect(committed.snapshot.itemIDs == [second.id])
+    #expect(committed.state.cursor.sequence == 2)
+    #expect(committed.state.snapshot.itemIDs == [second.id])
 }
 
 @MainActor
@@ -271,7 +277,7 @@ func cancelledNetworkConcreteQueryReplacementLeavesTheActiveGenerationWhole() as
 
     let deliveries = await index.upsert(second.input, sequence: 2)
     #expect(deliveries.map(\.generation) == [activeGeneration])
-    #expect(deliveries.first?.projection.snapshot.itemIDs == [first.id, second.id])
+    #expect(deliveries.first?.publication.state.snapshot.itemIDs == [first.id, second.id])
 }
 
 @MainActor
@@ -328,11 +334,11 @@ func overlappingNetworkConcreteQueryReplacementsCommitOnlyTheNewestGeneration() 
         id: registrationID,
         generation: newestGeneration
     ))
-    #expect(newest.snapshot.itemIDs.isEmpty)
+    #expect(newest.state.snapshot.itemIDs.isEmpty)
 
     let deliveries = await index.upsert(second.input, sequence: 2)
     #expect(deliveries.map(\.generation) == [newestGeneration])
-    #expect(deliveries.first?.projection.snapshot.itemIDs == [second.id])
+    #expect(deliveries.first?.publication.state.snapshot.itemIDs == [second.id])
 }
 
 @MainActor
@@ -364,10 +370,12 @@ func concreteFetchedResultsNeverRegressTheirSourceEpoch() throws {
     results.installInitialNetworkQuery(
         initialQuery,
         generation: 1,
-        projection: NetworkRequestIndex.QueryProjection(
-            sourceEpoch: 1,
-            sequence: 1,
-            snapshot: WebInspectorFetchedResultsSnapshot(itemIDs: [first.id]),
+        publication: NetworkRequestIndex.QueryPublication(
+            state: NetworkRequestIndex.QueryState(
+                cursor: WebInspectorIndexedQueryCursor(sourceEpoch: 1, sequence: 1),
+                snapshot: WebInspectorFetchedResultsSnapshot(itemIDs: [first.id])
+            ),
+            change: .reset,
             reconfigureItemIDs: []
         ),
         lookup: { models[$0] }
@@ -376,11 +384,13 @@ func concreteFetchedResultsNeverRegressTheirSourceEpoch() throws {
     #expect(results[id: first.id] === firstModel)
     #expect(results[section: .defaultSection]?.items.first === firstModel)
 
-    let resetApplied = results.applyNetworkQueryProjection(
-        NetworkRequestIndex.QueryProjection(
-            sourceEpoch: 2,
-            sequence: 2,
-            snapshot: WebInspectorFetchedResultsSnapshot(),
+    let resetApplied = results.applyNetworkQueryPublication(
+        NetworkRequestIndex.QueryPublication(
+            state: NetworkRequestIndex.QueryState(
+                cursor: WebInspectorIndexedQueryCursor(sourceEpoch: 2, sequence: 2),
+                snapshot: WebInspectorFetchedResultsSnapshot()
+            ),
+            change: .reset,
             reconfigureItemIDs: []
         ),
         query: initialQuery,
@@ -389,11 +399,13 @@ func concreteFetchedResultsNeverRegressTheirSourceEpoch() throws {
         lookup: { models[$0] }
     )
     let revisionAfterReset = results.revision
-    let staleNewGenerationApplied = results.applyNetworkQueryProjection(
-        NetworkRequestIndex.QueryProjection(
-            sourceEpoch: 1,
-            sequence: 3,
-            snapshot: WebInspectorFetchedResultsSnapshot(itemIDs: [second.id]),
+    let staleNewGenerationApplied = results.applyNetworkQueryPublication(
+        NetworkRequestIndex.QueryPublication(
+            state: NetworkRequestIndex.QueryState(
+                cursor: WebInspectorIndexedQueryCursor(sourceEpoch: 1, sequence: 3),
+                snapshot: WebInspectorFetchedResultsSnapshot(itemIDs: [second.id])
+            ),
+            change: .reset,
             reconfigureItemIDs: [second.id]
         ),
         query: NetworkQuery(methods: ["GET"]),
@@ -402,14 +414,384 @@ func concreteFetchedResultsNeverRegressTheirSourceEpoch() throws {
         lookup: { models[$0] }
     )
 
-    #expect(resetApplied)
-    #expect(staleNewGenerationApplied == false)
+    #expect(resetApplied != nil)
+    #expect(staleNewGenerationApplied == nil)
     #expect(results.items.isEmpty)
     #expect(results.snapshot.itemIDs.isEmpty)
     #expect(results.query == initialQuery)
     #expect(results.revision == revisionAfterReset)
     #expect(results[id: first.id] == nil)
     #expect(results[section: .defaultSection] == nil)
+}
+
+@MainActor
+@Test
+func networkActorTransactionsKeepTheLastAcknowledgedBaselineAcrossTwoUnacknowledgedUpdates() async throws {
+    let context = WebInspectorModelContext.preview()
+    let first = makeIndexedNetworkRecord(
+        id: "ack-baseline-first",
+        url: "https://example.com/first",
+        method: "GET",
+        timestamp: 1,
+        context: context
+    )
+    let second = makeIndexedNetworkRecord(
+        id: "ack-baseline-second",
+        url: "https://example.com/second",
+        method: "GET",
+        timestamp: 2,
+        context: context
+    )
+    let index = NetworkRequestIndex()
+    _ = await index.replace(with: [first.input, second.input], sequence: 1)
+    let lifetime = WebInspectorQueryRegistrationLifetime()
+    let registrationID = WebInspectorQueryRegistrationID(rawValue: 20)
+    let generation = lifetime.nextGeneration()
+    let initial = try await index.register(
+        id: registrationID,
+        generation: generation,
+        query: NetworkQuery(sort: .requestTimeAscending),
+        lifetime: lifetime,
+        minimumSequence: 1
+    )
+    await index.acknowledge(
+        id: registrationID,
+        generation: generation,
+        state: initial.state
+    )
+
+    let secondSequenceDelivery = try #require(
+        await index.upsert(first.input, sequence: 2).first
+    )
+    guard case let .transaction(secondBase, secondTransaction) =
+        secondSequenceDelivery.publication.change else {
+        Issue.record("Expected sequence 2 to publish an acknowledged transaction.")
+        return
+    }
+    #expect(secondBase == initial.state.cursor)
+    #expect(secondTransaction.oldSnapshot == initial.state.snapshot)
+
+    let thirdSequenceDelivery = try #require(
+        await index.upsert(second.input, sequence: 3).first
+    )
+    guard case let .transaction(thirdBase, thirdTransaction) =
+        thirdSequenceDelivery.publication.change else {
+        Issue.record("Expected sequence 3 to publish from the unchanged ACK baseline.")
+        return
+    }
+    #expect(thirdBase == initial.state.cursor)
+    #expect(thirdTransaction.oldSnapshot == initial.state.snapshot)
+    #expect(thirdSequenceDelivery.publication.reconfigureItemIDs == [first.id, second.id])
+
+    await index.acknowledge(
+        id: registrationID,
+        generation: generation,
+        state: thirdSequenceDelivery.publication.state
+    )
+    await index.acknowledge(
+        id: registrationID,
+        generation: generation,
+        state: initial.state
+    )
+    await index.acknowledge(
+        id: registrationID,
+        generation: generation,
+        state: NetworkRequestIndex.QueryState(
+            cursor: WebInspectorIndexedQueryCursor(sourceEpoch: 0, sequence: 99),
+            snapshot: thirdSequenceDelivery.publication.state.snapshot
+        )
+    )
+
+    let fourthSequenceDelivery = try #require(
+        await index.upsert(first.input, sequence: 4).first
+    )
+    guard case let .transaction(fourthBase, fourthTransaction) =
+        fourthSequenceDelivery.publication.change else {
+        Issue.record("Expected stale and ahead ACKs to leave the latest applied baseline intact.")
+        return
+    }
+    #expect(fourthBase == thirdSequenceDelivery.publication.state.cursor)
+    #expect(fourthTransaction.oldSnapshot == thirdSequenceDelivery.publication.state.snapshot)
+    #expect(fourthSequenceDelivery.publication.reconfigureItemIDs == [first.id])
+}
+
+@MainActor
+@Test
+func networkSourceEpochReplacementPublishesResetUntilItsStateIsAcknowledged() async throws {
+    let context = WebInspectorModelContext.preview()
+    let record = makeIndexedNetworkRecord(
+        id: "source-reset",
+        url: "https://example.com/reset",
+        method: "GET",
+        timestamp: 1,
+        context: context
+    )
+    let index = NetworkRequestIndex()
+    _ = await index.replace(with: [record.input], sequence: 1, sourceEpoch: 0)
+    let lifetime = WebInspectorQueryRegistrationLifetime()
+    let registrationID = WebInspectorQueryRegistrationID(rawValue: 21)
+    let generation = lifetime.nextGeneration()
+    let initial = try await index.register(
+        id: registrationID,
+        generation: generation,
+        query: NetworkQuery(),
+        lifetime: lifetime,
+        minimumSequence: 1
+    )
+    await index.acknowledge(
+        id: registrationID,
+        generation: generation,
+        state: initial.state
+    )
+
+    let resetDelivery = try #require(
+        await index.replace(
+            with: [record.input],
+            sequence: 2,
+            sourceEpoch: 1
+        ).first
+    )
+    guard case .reset = resetDelivery.publication.change else {
+        Issue.record("Expected a source epoch replacement to discard the old ACK baseline.")
+        return
+    }
+    #expect(resetDelivery.publication.state.cursor.sourceEpoch == 1)
+
+    await index.acknowledge(
+        id: registrationID,
+        generation: generation,
+        state: resetDelivery.publication.state
+    )
+    let incrementalDelivery = try #require(
+        await index.upsert(record.input, sequence: 3).first
+    )
+    guard case let .transaction(base, _) = incrementalDelivery.publication.change else {
+        Issue.record("Expected the acknowledged replacement to restore incremental transactions.")
+        return
+    }
+    #expect(base == resetDelivery.publication.state.cursor)
+}
+
+@MainActor
+@Test
+func fetchedResultsBaseMismatchRecoversWithResetAndCursorOnlyAdvanceDoesNotInvalidateObservation() async throws {
+    let context = WebInspectorModelContext.preview()
+    let first = makeIndexedNetworkRecord(
+        id: "owner-cursor-first",
+        url: "https://example.com/first",
+        method: "GET",
+        timestamp: 1,
+        context: context
+    )
+    let second = makeIndexedNetworkRecord(
+        id: "owner-cursor-second",
+        url: "https://example.com/second",
+        method: "GET",
+        timestamp: 2,
+        context: context
+    )
+    let firstModel = try #require(try context.networkRequest(id: first.id))
+    let secondModel = try #require(try context.networkRequest(id: second.id))
+    let models = [first.id: firstModel, second.id: secondModel]
+    let results = WebInspectorFetchedResults<NetworkRequest>(modelContext: context)
+    let firstCursor = WebInspectorIndexedQueryCursor(sourceEpoch: 1, sequence: 1)
+    let firstSnapshot = WebInspectorFetchedResultsSnapshot(itemIDs: [first.id])
+    _ = results.installInitialNetworkQuery(
+        NetworkQuery(),
+        generation: 1,
+        publication: NetworkRequestIndex.QueryPublication(
+            state: NetworkRequestIndex.QueryState(
+                cursor: firstCursor,
+                snapshot: firstSnapshot
+            ),
+            change: .reset,
+            reconfigureItemIDs: []
+        ),
+        lookup: { models[$0] }
+    )
+    var updates = results.updates().makeAsyncIterator()
+    guard case .initial? = await updates.next() else {
+        Issue.record("Expected the owner cursor fixture's initial state.")
+        return
+    }
+
+    let observationInvalidations = Mutex(0)
+    withObservationTracking {
+        _ = results.items
+        _ = results.snapshot
+        _ = results.revision
+    } onChange: {
+        observationInvalidations.withLock { $0 += 1 }
+    }
+
+    let secondCursor = WebInspectorIndexedQueryCursor(sourceEpoch: 1, sequence: 2)
+    let cursorOnlyState = NetworkRequestIndex.QueryState(
+        cursor: secondCursor,
+        snapshot: firstSnapshot
+    )
+    let cursorOnlyAppliedState = results.applyNetworkQueryPublication(
+        NetworkRequestIndex.QueryPublication(
+            state: cursorOnlyState,
+            change: .transaction(
+                base: firstCursor,
+                transaction: WebInspectorFetchedResultsTransaction(
+                    oldSnapshot: firstSnapshot,
+                    newSnapshot: firstSnapshot
+                )
+            ),
+            reconfigureItemIDs: []
+        ),
+        query: NetworkQuery(),
+        generation: 1,
+        isReplacement: false,
+        lookup: { models[$0] }
+    )
+    #expect(cursorOnlyAppliedState == cursorOnlyState)
+    #expect(results.revision == 0)
+    #expect(observationInvalidations.withLock { $0 } == 0)
+
+    let duplicateAppliedState = results.applyNetworkQueryPublication(
+        NetworkRequestIndex.QueryPublication(
+            state: cursorOnlyState,
+            change: .reset,
+            reconfigureItemIDs: []
+        ),
+        query: NetworkQuery(),
+        generation: 1,
+        isReplacement: false,
+        lookup: { models[$0] }
+    )
+    #expect(duplicateAppliedState == cursorOnlyState)
+    #expect(results.revision == 0)
+
+    let thirdCursor = WebInspectorIndexedQueryCursor(sourceEpoch: 1, sequence: 3)
+    let thirdSnapshot = WebInspectorFetchedResultsSnapshot(itemIDs: [first.id, second.id])
+    _ = results.applyNetworkQueryPublication(
+        NetworkRequestIndex.QueryPublication(
+            state: NetworkRequestIndex.QueryState(
+                cursor: thirdCursor,
+                snapshot: thirdSnapshot
+            ),
+            change: .transaction(
+                base: secondCursor,
+                transaction: WebInspectorFetchedResultsTransaction(
+                    oldSnapshot: firstSnapshot,
+                    newSnapshot: thirdSnapshot
+                )
+            ),
+            reconfigureItemIDs: []
+        ),
+        query: NetworkQuery(),
+        generation: 1,
+        isReplacement: false,
+        lookup: { models[$0] }
+    )
+    guard case let .transaction(thirdRevision, thirdTransaction, _)? = await updates.next() else {
+        Issue.record("Expected the cursor-authorized topology transaction.")
+        return
+    }
+    #expect(thirdRevision == 1)
+    #expect(thirdTransaction.isReset == false)
+    #expect(observationInvalidations.withLock { $0 } == 1)
+
+    let fifthCursor = WebInspectorIndexedQueryCursor(sourceEpoch: 1, sequence: 5)
+    let fifthSnapshot = WebInspectorFetchedResultsSnapshot(itemIDs: [second.id])
+    let recoveredState = results.applyNetworkQueryPublication(
+        NetworkRequestIndex.QueryPublication(
+            state: NetworkRequestIndex.QueryState(
+                cursor: fifthCursor,
+                snapshot: fifthSnapshot
+            ),
+            change: .transaction(
+                base: WebInspectorIndexedQueryCursor(sourceEpoch: 1, sequence: 4),
+                transaction: WebInspectorFetchedResultsTransaction(
+                    oldSnapshot: firstSnapshot,
+                    newSnapshot: fifthSnapshot
+                )
+            ),
+            reconfigureItemIDs: []
+        ),
+        query: NetworkQuery(),
+        generation: 1,
+        isReplacement: false,
+        lookup: { models[$0] }
+    )
+    guard case let .transaction(fifthRevision, recoveryTransaction, _)? = await updates.next() else {
+        Issue.record("Expected one reset publication for a cursor base mismatch.")
+        return
+    }
+    #expect(recoveredState?.cursor == fifthCursor)
+    #expect(fifthRevision == 2)
+    #expect(recoveryTransaction.isReset)
+    #expect(recoveryTransaction.oldSnapshot == thirdSnapshot)
+    #expect(recoveryTransaction.newSnapshot == fifthSnapshot)
+    #expect(recoveryTransaction.sectionChanges.isEmpty)
+    #expect(recoveryTransaction.itemChanges.isEmpty)
+
+    let staleAppliedState = results.applyNetworkQueryPublication(
+        NetworkRequestIndex.QueryPublication(
+            state: NetworkRequestIndex.QueryState(
+                cursor: WebInspectorIndexedQueryCursor(sourceEpoch: 1, sequence: 4),
+                snapshot: firstSnapshot
+            ),
+            change: .reset,
+            reconfigureItemIDs: []
+        ),
+        query: NetworkQuery(),
+        generation: 1,
+        isReplacement: false,
+        lookup: { models[$0] }
+    )
+    #expect(staleAppliedState?.cursor == fifthCursor)
+    #expect(results.revision == 2)
+}
+
+@MainActor
+@Test
+func networkSynchronousClearAcknowledgesItsActorStateBeforeTheNextMutation() async throws {
+    let context = WebInspectorModelContext.preview()
+    let store = NetworkRequestStore()
+    await addNetworkRequest(
+        Network.Request.ID("clear-before"),
+        url: "https://example.com/before",
+        method: "GET",
+        timestamp: 1,
+        store: store,
+        context: context
+    )
+    let results = try await store.results(
+        matching: NetworkQuery(sort: .requestTimeAscending),
+        modelContext: context
+    )
+    var updates = results.updates().makeAsyncIterator()
+    guard case .initial? = await updates.next() else {
+        Issue.record("Expected the synchronous clear fixture's initial state.")
+        return
+    }
+
+    await store.clear()
+    guard case let .transaction(_, clearTransaction, _)? = await updates.next() else {
+        Issue.record("Expected the synchronous clear reset.")
+        return
+    }
+    #expect(clearTransaction.isReset)
+
+    let afterID = Network.Request.ID("clear-after")
+    await addNetworkRequest(
+        afterID,
+        url: "https://example.com/after",
+        method: "GET",
+        timestamp: 2,
+        store: store,
+        context: context
+    )
+    guard case let .transaction(_, incrementalTransaction, _)? = await updates.next() else {
+        Issue.record("Expected an incremental publication after the clear ACK.")
+        return
+    }
+    #expect(incrementalTransaction.isReset == false)
+    #expect(incrementalTransaction.oldSnapshot.itemIDs.isEmpty)
+    #expect(incrementalTransaction.newSnapshot.itemIDs == [NetworkRequest.ID(afterID)])
 }
 
 @MainActor

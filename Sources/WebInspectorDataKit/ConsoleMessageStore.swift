@@ -1,6 +1,6 @@
 import WebInspectorProxyKit
 
-/// Owns Console message identity, order, query projection, and publication.
+/// Owns Console message identity, order, and query publication.
 ///
 /// Runtime-object membership remains in `WebInspectorModelContext`; clear
 /// operations return explicit ownership effects for that owner to apply. The
@@ -45,8 +45,7 @@ package final class ConsoleMessageStore {
         fileprivate struct Entry: Sendable {
             let id: WebInspectorQueryRegistrationID
             let generation: UInt64
-            let sourceEpoch: UInt64
-            let sequence: UInt64
+            let state: ConsoleMessageIndex.QueryState
         }
 
         fileprivate let index: ConsoleMessageIndex
@@ -57,8 +56,7 @@ package final class ConsoleMessageStore {
                 await index.acknowledge(
                     id: entry.id,
                     generation: entry.generation,
-                    sourceEpoch: entry.sourceEpoch,
-                    sequence: entry.sequence
+                    state: entry.state
                 )
             }
         }
@@ -72,7 +70,7 @@ package final class ConsoleMessageStore {
     private struct PendingConcreteQuery {
         var generation: UInt64
         var query: ConsoleQuery
-        var projection: ConsoleMessageIndex.QueryProjection?
+        var publication: ConsoleMessageIndex.QueryPublication?
     }
 
     private struct ConcreteQueryRegistration {
@@ -175,12 +173,12 @@ package final class ConsoleMessageStore {
         initializingConcreteQueries[id] = PendingConcreteQuery(
             generation: generation,
             query: query,
-            projection: nil
+            publication: nil
         )
 
-        let initialProjection: ConsoleMessageIndex.QueryProjection
+        let initialPublication: ConsoleMessageIndex.QueryPublication
         do {
-            initialProjection = try await queryIndex.register(
+            initialPublication = try await queryIndex.register(
                 id: id,
                 generation: generation,
                 query: query,
@@ -196,18 +194,18 @@ package final class ConsoleMessageStore {
               initialization.generation == generation else {
             preconditionFailure("Console query initialization lost its owner state after index commit.")
         }
-        initialization.projection = coalesce(
-            initialization.projection,
-            with: initialProjection
+        initialization.publication = newest(
+            initialization.publication,
+            initialPublication
         )
-        let installedProjection = initialization.projection ?? initialProjection
-        guard installedProjection.sourceEpoch == querySourceEpoch else {
+        let installedPublication = initialization.publication ?? initialPublication
+        guard installedPublication.state.cursor.sourceEpoch == querySourceEpoch else {
             throw CancellationError()
         }
-        results.installInitialConsoleQuery(
+        let installedState = results.installInitialConsoleQuery(
             query,
             generation: generation,
-            projection: installedProjection,
+            publication: installedPublication,
             lookup: { id in self.messageForResult(id) }
         )
         concreteQueryRegistrations[id] = ConcreteQueryRegistration(
@@ -220,8 +218,7 @@ package final class ConsoleMessageStore {
         await queryIndex.acknowledge(
             id: id,
             generation: generation,
-            sourceEpoch: installedProjection.sourceEpoch,
-            sequence: installedProjection.sequence
+            state: installedState
         )
         return results
     }
@@ -242,19 +239,19 @@ package final class ConsoleMessageStore {
         registration.candidate = PendingConcreteQuery(
             generation: generation,
             query: query,
-            projection: nil
+            publication: nil
         )
         concreteQueryRegistrations[id] = registration
 
         do {
-            let prepared = try await queryIndex.prepareReplacement(
+            let preparedPublication = try await queryIndex.prepareReplacement(
                 id: id,
                 generation: generation,
                 query: query,
                 minimumSequence: queryIndexSequence
             )
             buffer(
-                prepared,
+                preparedPublication,
                 for: id,
                 generation: generation,
                 query: query,
@@ -273,7 +270,7 @@ package final class ConsoleMessageStore {
         guard var beforeCommit = concreteQueryRegistrations[id],
               let candidate = beforeCommit.candidate,
               candidate.generation == generation,
-              candidate.projection?.sourceEpoch == querySourceEpoch else {
+              candidate.publication?.state.cursor.sourceEpoch == querySourceEpoch else {
             await queryIndex.discardCandidates(id: id, through: generation)
             clearCandidate(id: id, generation: generation)
             throw CancellationError()
@@ -282,7 +279,7 @@ package final class ConsoleMessageStore {
         beforeCommit.candidate = nil
         concreteQueryRegistrations[id] = beforeCommit
 
-        guard let committed = await queryIndex.commitReplacement(
+        guard let committedPublication = await queryIndex.commitReplacement(
             id: id,
             generation: generation
         ) else {
@@ -294,12 +291,12 @@ package final class ConsoleMessageStore {
               var pendingPublication = afterCommit.committing.removeValue(forKey: generation) else {
             preconditionFailure("Console query replacement lost committed publication state.")
         }
-        pendingPublication.projection = coalesce(
-            pendingPublication.projection,
-            with: committed
+        pendingPublication.publication = newest(
+            pendingPublication.publication,
+            committedPublication
         )
-        let publication = pendingPublication.projection ?? committed
-        let applied = results.applyConsoleQueryProjection(
+        let publication = pendingPublication.publication ?? committedPublication
+        let appliedState = results.applyConsoleQueryPublication(
             publication,
             query: query,
             generation: generation,
@@ -311,12 +308,11 @@ package final class ConsoleMessageStore {
             afterCommit.activeQuery = query
         }
         concreteQueryRegistrations[id] = afterCommit
-        if applied {
+        if let appliedState {
             await queryIndex.acknowledge(
                 id: id,
                 generation: generation,
-                sourceEpoch: publication.sourceEpoch,
-                sequence: publication.sequence
+                state: appliedState
             )
         }
     }
@@ -657,15 +653,20 @@ package final class ConsoleMessageStore {
             "Only a full Console lifecycle reset can publish an immediate empty query state."
         )
         pruneConcreteQueryRegistrations()
-        let projection = ConsoleMessageIndex.QueryProjection(
-            sourceEpoch: reset.sourceEpoch,
-            sequence: reset.sequence,
-            snapshot: WebInspectorFetchedResultsSnapshot(),
+        let publication = ConsoleMessageIndex.QueryPublication(
+            state: ConsoleMessageIndex.QueryState(
+                cursor: WebInspectorIndexedQueryCursor(
+                    sourceEpoch: reset.sourceEpoch,
+                    sequence: reset.sequence
+                ),
+                snapshot: WebInspectorFetchedResultsSnapshot()
+            ),
+            change: .reset,
             reconfigureItemIDs: []
         )
         for registration in concreteQueryRegistrations.values {
-            registration.results.value?.applyConsoleQueryProjection(
-                projection,
+            registration.results.value?.applyConsoleQueryPublication(
+                publication,
                 query: registration.activeQuery,
                 generation: registration.activeGeneration,
                 isReplacement: false,
@@ -748,16 +749,23 @@ package final class ConsoleMessageStore {
     ) -> [IndexAcknowledgementWork.Entry] {
         pruneConcreteQueryRegistrations()
         var acknowledgements: [IndexAcknowledgementWork.Entry] = []
+        var activeRegistrationIDs: [WebInspectorQueryRegistrationID] = []
+        var activePublications: [
+            WebInspectorQueryRegistrationID: (
+                generation: UInt64,
+                publication: ConsoleMessageIndex.QueryPublication
+            )
+        ] = [:]
         for delivery in deliveries {
-            guard delivery.projection.sourceEpoch == querySourceEpoch else {
+            guard delivery.publication.state.cursor.sourceEpoch == querySourceEpoch else {
                 continue
             }
             let id = delivery.registrationID
             if var initialization = initializingConcreteQueries[id],
                initialization.generation == delivery.generation {
-                initialization.projection = coalesce(
-                    initialization.projection,
-                    with: delivery.projection
+                initialization.publication = newest(
+                    initialization.publication,
+                    delivery.publication
                 )
                 initializingConcreteQueries[id] = initialization
                 continue
@@ -766,43 +774,65 @@ package final class ConsoleMessageStore {
                 continue
             }
             if delivery.generation == registration.activeGeneration {
-                guard let results = registration.results.value else {
-                    concreteQueryRegistrations[id] = nil
-                    continue
-                }
-                let applied = results.applyConsoleQueryProjection(
-                    delivery.projection,
-                    query: registration.activeQuery,
-                    generation: delivery.generation,
-                    isReplacement: false,
-                    lookup: { id in self.messageForResult(id) }
-                )
-                if applied {
-                    acknowledgements.append(IndexAcknowledgementWork.Entry(
-                        id: id,
+                if let current = activePublications[id] {
+                    precondition(
+                        current.generation == delivery.generation,
+                        "Console query delivery coalescing crossed active generations."
+                    )
+                    activePublications[id] = (
                         generation: delivery.generation,
-                        sourceEpoch: delivery.projection.sourceEpoch,
-                        sequence: delivery.projection.sequence
-                    ))
+                        publication: newest(current.publication, delivery.publication)
+                    )
+                } else {
+                    activeRegistrationIDs.append(id)
+                    activePublications[id] = (
+                        generation: delivery.generation,
+                        publication: delivery.publication
+                    )
                 }
             } else if var candidate = registration.candidate,
                       candidate.generation == delivery.generation {
-                candidate.projection = coalesce(candidate.projection, with: delivery.projection)
+                candidate.publication = newest(candidate.publication, delivery.publication)
                 registration.candidate = candidate
             } else if var committing = registration.committing[delivery.generation] {
-                committing.projection = coalesce(
-                    committing.projection,
-                    with: delivery.projection
+                committing.publication = newest(
+                    committing.publication,
+                    delivery.publication
                 )
                 registration.committing[delivery.generation] = committing
             }
             concreteQueryRegistrations[id] = registration
         }
+        for id in activeRegistrationIDs {
+            guard let active = activePublications[id],
+                  let registration = concreteQueryRegistrations[id],
+                  registration.activeGeneration == active.generation else {
+                continue
+            }
+            guard let results = registration.results.value else {
+                concreteQueryRegistrations[id] = nil
+                continue
+            }
+            let appliedState = results.applyConsoleQueryPublication(
+                active.publication,
+                query: registration.activeQuery,
+                generation: active.generation,
+                isReplacement: false,
+                lookup: { id in self.messageForResult(id) }
+            )
+            if let appliedState {
+                acknowledgements.append(IndexAcknowledgementWork.Entry(
+                    id: id,
+                    generation: active.generation,
+                    state: appliedState
+                ))
+            }
+        }
         return acknowledgements
     }
 
     private func buffer(
-        _ projection: ConsoleMessageIndex.QueryProjection,
+        _ publication: ConsoleMessageIndex.QueryPublication,
         for id: WebInspectorQueryRegistrationID,
         generation: UInt64,
         query: ConsoleQuery,
@@ -818,14 +848,14 @@ package final class ConsoleMessageStore {
                   candidate.query == query else {
                 return
             }
-            candidate.projection = coalesce(candidate.projection, with: projection)
+            candidate.publication = newest(candidate.publication, publication)
             registration.candidate = candidate
         case .committing:
             guard var committing = registration.committing[generation],
                   committing.query == query else {
                 return
             }
-            committing.projection = coalesce(committing.projection, with: projection)
+            committing.publication = newest(committing.publication, publication)
             registration.committing[generation] = committing
         }
         concreteQueryRegistrations[id] = registration
@@ -854,25 +884,19 @@ package final class ConsoleMessageStore {
         concreteQueryRegistrations[id] = registration
     }
 
-    private func coalesce(
-        _ current: ConsoleMessageIndex.QueryProjection?,
-        with incoming: ConsoleMessageIndex.QueryProjection
-    ) -> ConsoleMessageIndex.QueryProjection {
+    private func newest(
+        _ current: ConsoleMessageIndex.QueryPublication?,
+        _ incoming: ConsoleMessageIndex.QueryPublication
+    ) -> ConsoleMessageIndex.QueryPublication {
         guard let current else {
             return incoming
         }
-        let incomingIsNewer = incoming.sourceEpoch > current.sourceEpoch
-            || (incoming.sourceEpoch == current.sourceEpoch && incoming.sequence > current.sequence)
-        let newest = incomingIsNewer ? incoming : current
-        let reconfigureItemIDs = current.reconfigureItemIDs
-            .union(incoming.reconfigureItemIDs)
-            .intersection(newest.snapshot.itemIDs)
-        return ConsoleMessageIndex.QueryProjection(
-            sourceEpoch: newest.sourceEpoch,
-            sequence: newest.sequence,
-            snapshot: newest.snapshot,
-            reconfigureItemIDs: reconfigureItemIDs
-        )
+        let currentCursor = current.state.cursor
+        let incomingCursor = incoming.state.cursor
+        let incomingIsNewer = incomingCursor.sourceEpoch > currentCursor.sourceEpoch
+            || (incomingCursor.sourceEpoch == currentCursor.sourceEpoch
+                && incomingCursor.sequence >= currentCursor.sequence)
+        return incomingIsNewer ? incoming : current
     }
 
     private func pruneConcreteQueryRegistrations() {

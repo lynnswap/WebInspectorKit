@@ -1,7 +1,7 @@
 import Foundation
 import WebInspectorProxyKit
 
-/// Owns Network request identity, order, query projection, and publication.
+/// Owns Network request identity, order, and query publication.
 ///
 /// `WebInspectorModelContext` remains the attachment and transport coordinator. The
 /// model context confines access to the store, which never retains an actor token
@@ -46,8 +46,7 @@ package final class NetworkRequestStore {
         fileprivate struct Entry: Sendable {
             let id: WebInspectorQueryRegistrationID
             let generation: UInt64
-            let sourceEpoch: UInt64
-            let sequence: UInt64
+            let state: NetworkRequestIndex.QueryState
         }
 
         fileprivate let index: NetworkRequestIndex
@@ -58,8 +57,7 @@ package final class NetworkRequestStore {
                 await index.acknowledge(
                     id: entry.id,
                     generation: entry.generation,
-                    sourceEpoch: entry.sourceEpoch,
-                    sequence: entry.sequence
+                    state: entry.state
                 )
             }
         }
@@ -73,7 +71,7 @@ package final class NetworkRequestStore {
     private struct PendingConcreteQuery {
         var generation: UInt64
         var query: NetworkQuery
-        var projection: NetworkRequestIndex.QueryProjection?
+        var publication: NetworkRequestIndex.QueryPublication?
     }
 
     private struct ConcreteQueryRegistration {
@@ -173,12 +171,12 @@ package final class NetworkRequestStore {
         initializingConcreteQueries[id] = PendingConcreteQuery(
             generation: generation,
             query: query,
-            projection: nil
+            publication: nil
         )
 
-        let initialProjection: NetworkRequestIndex.QueryProjection
+        let initialPublication: NetworkRequestIndex.QueryPublication
         do {
-            initialProjection = try await queryIndex.register(
+            initialPublication = try await queryIndex.register(
                 id: id,
                 generation: generation,
                 query: query,
@@ -194,18 +192,18 @@ package final class NetworkRequestStore {
               initialization.generation == generation else {
             preconditionFailure("Network query initialization lost its owner state after index commit.")
         }
-        initialization.projection = coalesce(
-            initialization.projection,
-            with: initialProjection
+        initialization.publication = newest(
+            initialization.publication,
+            initialPublication
         )
-        let installedProjection = initialization.projection ?? initialProjection
-        guard installedProjection.sourceEpoch == querySourceEpoch else {
+        let installedPublication = initialization.publication ?? initialPublication
+        guard installedPublication.state.cursor.sourceEpoch == querySourceEpoch else {
             throw CancellationError()
         }
-        results.installInitialNetworkQuery(
+        let installedState = results.installInitialNetworkQuery(
             query,
             generation: generation,
-            projection: installedProjection,
+            publication: installedPublication,
             lookup: { id in self.requestForResult(id) }
         )
         concreteQueryRegistrations[id] = ConcreteQueryRegistration(
@@ -218,8 +216,7 @@ package final class NetworkRequestStore {
         await queryIndex.acknowledge(
             id: id,
             generation: generation,
-            sourceEpoch: installedProjection.sourceEpoch,
-            sequence: installedProjection.sequence
+            state: installedState
         )
         return results
     }
@@ -240,19 +237,19 @@ package final class NetworkRequestStore {
         registration.candidate = PendingConcreteQuery(
             generation: generation,
             query: query,
-            projection: nil
+            publication: nil
         )
         concreteQueryRegistrations[id] = registration
 
         do {
-            let prepared = try await queryIndex.prepareReplacement(
+            let preparedPublication = try await queryIndex.prepareReplacement(
                 id: id,
                 generation: generation,
                 query: query,
                 minimumSequence: queryIndexSequence
             )
             buffer(
-                prepared,
+                preparedPublication,
                 for: id,
                 generation: generation,
                 query: query,
@@ -271,7 +268,7 @@ package final class NetworkRequestStore {
         guard var beforeCommit = concreteQueryRegistrations[id],
               let candidate = beforeCommit.candidate,
               candidate.generation == generation,
-              candidate.projection?.sourceEpoch == querySourceEpoch else {
+              candidate.publication?.state.cursor.sourceEpoch == querySourceEpoch else {
             await queryIndex.discardCandidates(id: id, through: generation)
             clearCandidate(id: id, generation: generation)
             throw CancellationError()
@@ -280,7 +277,7 @@ package final class NetworkRequestStore {
         beforeCommit.candidate = nil
         concreteQueryRegistrations[id] = beforeCommit
 
-        guard let committed = await queryIndex.commitReplacement(
+        guard let committedPublication = await queryIndex.commitReplacement(
             id: id,
             generation: generation
         ) else {
@@ -292,12 +289,12 @@ package final class NetworkRequestStore {
               var pendingPublication = afterCommit.committing.removeValue(forKey: generation) else {
             preconditionFailure("Network query replacement lost committed publication state.")
         }
-        pendingPublication.projection = coalesce(
-            pendingPublication.projection,
-            with: committed
+        pendingPublication.publication = newest(
+            pendingPublication.publication,
+            committedPublication
         )
-        let publication = pendingPublication.projection ?? committed
-        let applied = results.applyNetworkQueryProjection(
+        let publication = pendingPublication.publication ?? committedPublication
+        let appliedState = results.applyNetworkQueryPublication(
             publication,
             query: query,
             generation: generation,
@@ -309,12 +306,11 @@ package final class NetworkRequestStore {
             afterCommit.activeQuery = query
         }
         concreteQueryRegistrations[id] = afterCommit
-        if applied {
+        if let appliedState {
             await queryIndex.acknowledge(
                 id: id,
                 generation: generation,
-                sourceEpoch: publication.sourceEpoch,
-                sequence: publication.sequence
+                state: appliedState
             )
         }
     }
@@ -1095,15 +1091,20 @@ package final class NetworkRequestStore {
 
     private func publishEmptyConcreteQueryResults(for reset: QueryIndexReset) {
         pruneConcreteQueryRegistrations()
-        let projection = NetworkRequestIndex.QueryProjection(
-            sourceEpoch: reset.sourceEpoch,
-            sequence: reset.sequence,
-            snapshot: WebInspectorFetchedResultsSnapshot(),
+        let publication = NetworkRequestIndex.QueryPublication(
+            state: NetworkRequestIndex.QueryState(
+                cursor: WebInspectorIndexedQueryCursor(
+                    sourceEpoch: reset.sourceEpoch,
+                    sequence: reset.sequence
+                ),
+                snapshot: WebInspectorFetchedResultsSnapshot()
+            ),
+            change: .reset,
             reconfigureItemIDs: []
         )
         for registration in concreteQueryRegistrations.values {
-            registration.results.value?.applyNetworkQueryProjection(
-                projection,
+            registration.results.value?.applyNetworkQueryPublication(
+                publication,
                 query: registration.activeQuery,
                 generation: registration.activeGeneration,
                 isReplacement: false,
@@ -1232,16 +1233,23 @@ package final class NetworkRequestStore {
     ) -> [IndexAcknowledgementWork.Entry] {
         pruneConcreteQueryRegistrations()
         var acknowledgements: [IndexAcknowledgementWork.Entry] = []
+        var activeRegistrationIDs: [WebInspectorQueryRegistrationID] = []
+        var activePublications: [
+            WebInspectorQueryRegistrationID: (
+                generation: UInt64,
+                publication: NetworkRequestIndex.QueryPublication
+            )
+        ] = [:]
         for delivery in deliveries {
-            guard delivery.projection.sourceEpoch == querySourceEpoch else {
+            guard delivery.publication.state.cursor.sourceEpoch == querySourceEpoch else {
                 continue
             }
             let id = delivery.registrationID
             if var initialization = initializingConcreteQueries[id],
                initialization.generation == delivery.generation {
-                initialization.projection = coalesce(
-                    initialization.projection,
-                    with: delivery.projection
+                initialization.publication = newest(
+                    initialization.publication,
+                    delivery.publication
                 )
                 initializingConcreteQueries[id] = initialization
                 continue
@@ -1250,43 +1258,65 @@ package final class NetworkRequestStore {
                 continue
             }
             if delivery.generation == registration.activeGeneration {
-                guard let results = registration.results.value else {
-                    concreteQueryRegistrations[id] = nil
-                    continue
-                }
-                let applied = results.applyNetworkQueryProjection(
-                    delivery.projection,
-                    query: registration.activeQuery,
-                    generation: delivery.generation,
-                    isReplacement: false,
-                    lookup: { id in self.requestForResult(id) }
-                )
-                if applied {
-                    acknowledgements.append(IndexAcknowledgementWork.Entry(
-                        id: id,
+                if let current = activePublications[id] {
+                    precondition(
+                        current.generation == delivery.generation,
+                        "Network query delivery coalescing crossed active generations."
+                    )
+                    activePublications[id] = (
                         generation: delivery.generation,
-                        sourceEpoch: delivery.projection.sourceEpoch,
-                        sequence: delivery.projection.sequence
-                    ))
+                        publication: newest(current.publication, delivery.publication)
+                    )
+                } else {
+                    activeRegistrationIDs.append(id)
+                    activePublications[id] = (
+                        generation: delivery.generation,
+                        publication: delivery.publication
+                    )
                 }
             } else if var candidate = registration.candidate,
                       candidate.generation == delivery.generation {
-                candidate.projection = coalesce(candidate.projection, with: delivery.projection)
+                candidate.publication = newest(candidate.publication, delivery.publication)
                 registration.candidate = candidate
             } else if var committing = registration.committing[delivery.generation] {
-                committing.projection = coalesce(
-                    committing.projection,
-                    with: delivery.projection
+                committing.publication = newest(
+                    committing.publication,
+                    delivery.publication
                 )
                 registration.committing[delivery.generation] = committing
             }
             concreteQueryRegistrations[id] = registration
         }
+        for id in activeRegistrationIDs {
+            guard let active = activePublications[id],
+                  let registration = concreteQueryRegistrations[id],
+                  registration.activeGeneration == active.generation else {
+                continue
+            }
+            guard let results = registration.results.value else {
+                concreteQueryRegistrations[id] = nil
+                continue
+            }
+            let appliedState = results.applyNetworkQueryPublication(
+                active.publication,
+                query: registration.activeQuery,
+                generation: active.generation,
+                isReplacement: false,
+                lookup: { id in self.requestForResult(id) }
+            )
+            if let appliedState {
+                acknowledgements.append(IndexAcknowledgementWork.Entry(
+                    id: id,
+                    generation: active.generation,
+                    state: appliedState
+                ))
+            }
+        }
         return acknowledgements
     }
 
     private func buffer(
-        _ projection: NetworkRequestIndex.QueryProjection,
+        _ publication: NetworkRequestIndex.QueryPublication,
         for id: WebInspectorQueryRegistrationID,
         generation: UInt64,
         query: NetworkQuery,
@@ -1302,14 +1332,14 @@ package final class NetworkRequestStore {
                   candidate.query == query else {
                 return
             }
-            candidate.projection = coalesce(candidate.projection, with: projection)
+            candidate.publication = newest(candidate.publication, publication)
             registration.candidate = candidate
         case .committing:
             guard var committing = registration.committing[generation],
                   committing.query == query else {
                 return
             }
-            committing.projection = coalesce(committing.projection, with: projection)
+            committing.publication = newest(committing.publication, publication)
             registration.committing[generation] = committing
         }
         concreteQueryRegistrations[id] = registration
@@ -1338,25 +1368,19 @@ package final class NetworkRequestStore {
         concreteQueryRegistrations[id] = registration
     }
 
-    private func coalesce(
-        _ current: NetworkRequestIndex.QueryProjection?,
-        with incoming: NetworkRequestIndex.QueryProjection
-    ) -> NetworkRequestIndex.QueryProjection {
+    private func newest(
+        _ current: NetworkRequestIndex.QueryPublication?,
+        _ incoming: NetworkRequestIndex.QueryPublication
+    ) -> NetworkRequestIndex.QueryPublication {
         guard let current else {
             return incoming
         }
-        let incomingIsNewer = incoming.sourceEpoch > current.sourceEpoch
-            || (incoming.sourceEpoch == current.sourceEpoch && incoming.sequence > current.sequence)
-        let newest = incomingIsNewer ? incoming : current
-        let reconfigureItemIDs = current.reconfigureItemIDs
-            .union(incoming.reconfigureItemIDs)
-            .intersection(newest.snapshot.itemIDs)
-        return NetworkRequestIndex.QueryProjection(
-            sourceEpoch: newest.sourceEpoch,
-            sequence: newest.sequence,
-            snapshot: newest.snapshot,
-            reconfigureItemIDs: reconfigureItemIDs
-        )
+        let currentCursor = current.state.cursor
+        let incomingCursor = incoming.state.cursor
+        let incomingIsNewer = incomingCursor.sourceEpoch > currentCursor.sourceEpoch
+            || (incomingCursor.sourceEpoch == currentCursor.sourceEpoch
+                && incomingCursor.sequence >= currentCursor.sequence)
+        return incomingIsNewer ? incoming : current
     }
 
     private func pruneConcreteQueryRegistrations() {

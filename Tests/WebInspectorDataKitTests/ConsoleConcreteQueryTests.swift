@@ -40,9 +40,9 @@ func consoleConcreteQueryRegistrationIncludesTheRequiredMutationSequence() async
 
     _ = await index.replace(with: [], sequence: 1)
     _ = await secondMutation.value
-    let projection = try await registration.value
+    let publication = try await registration.value
 
-    #expect(projection.sequence == 2)
+    #expect(publication.state.cursor.sequence == 2)
     #expect(await index.isSequenceWaiterPendingForTesting(minimumSequence: 2) == false)
     #expect(await index.queryRegistrationCountForTesting() == 1)
 }
@@ -155,7 +155,7 @@ func consoleConcreteQueryFiltersSortsSectionsAndWindowsCompactRecords() async th
     let lifetime = WebInspectorQueryRegistrationLifetime()
     let generation = lifetime.nextGeneration()
     let registrationID = WebInspectorQueryRegistrationID(rawValue: 10)
-    let projection = try await index.register(
+    let publication = try await index.register(
         id: registrationID,
         generation: generation,
         query: ConsoleQuery(
@@ -171,8 +171,13 @@ func consoleConcreteQueryFiltersSortsSectionsAndWindowsCompactRecords() async th
         minimumSequence: 1
     )
 
-    #expect(projection.snapshot.itemIDs == [error.id])
-    #expect(projection.snapshot.sections.map(\.id.rawValue) == ["error"])
+    #expect(publication.state.snapshot.itemIDs == [error.id])
+    #expect(publication.state.snapshot.sections.map(\.id.rawValue) == ["error"])
+    await index.acknowledge(
+        id: registrationID,
+        generation: generation,
+        state: publication.state
+    )
 
     let sameIDWithNewSection = makeIndexedConsoleMessage(
         id: 2,
@@ -182,9 +187,91 @@ func consoleConcreteQueryFiltersSortsSectionsAndWindowsCompactRecords() async th
     )
     let deliveries = await index.upsert(sameIDWithNewSection.input, sequence: 2)
     let updated = try #require(deliveries.first)
-    #expect(updated.projection.snapshot.itemIDs == [error.id])
-    #expect(updated.projection.snapshot.sections.map(\.id.rawValue) == ["warning"])
-    #expect(updated.projection.reconfigureItemIDs == [error.id])
+    #expect(updated.publication.state.snapshot.itemIDs == [error.id])
+    #expect(updated.publication.state.snapshot.sections.map(\.id.rawValue) == ["warning"])
+    #expect(updated.publication.reconfigureItemIDs == [error.id])
+}
+
+@MainActor
+@Test
+func consoleCandidateCommitPublishesResetUntilTheAppliedStateIsAcknowledged() async throws {
+    let context = WebInspectorModelContext.preview()
+    let first = makeIndexedConsoleMessage(
+        id: 10,
+        level: "log",
+        text: "first",
+        context: context
+    )
+    let second = makeIndexedConsoleMessage(
+        id: 11,
+        level: "log",
+        text: "second",
+        context: context
+    )
+    let index = ConsoleMessageIndex()
+    _ = await index.replace(with: [first.input], sequence: 1)
+    let lifetime = WebInspectorQueryRegistrationLifetime()
+    let registrationID = WebInspectorQueryRegistrationID(rawValue: 14)
+    let initialGeneration = lifetime.nextGeneration()
+    let initial = try await index.register(
+        id: registrationID,
+        generation: initialGeneration,
+        query: ConsoleQuery(),
+        lifetime: lifetime,
+        minimumSequence: 1
+    )
+    await index.acknowledge(
+        id: registrationID,
+        generation: initialGeneration,
+        state: initial.state
+    )
+
+    let replacementGeneration = lifetime.nextGeneration()
+    let prepared = try await index.prepareReplacement(
+        id: registrationID,
+        generation: replacementGeneration,
+        query: ConsoleQuery(sort: .insertionDescending),
+        minimumSequence: 1
+    )
+    guard case .reset = prepared.change else {
+        Issue.record("Expected a replacement candidate to begin without an ACK baseline.")
+        return
+    }
+    let committed = try #require(await index.commitReplacement(
+        id: registrationID,
+        generation: replacementGeneration
+    ))
+    guard case .reset = committed.change else {
+        Issue.record("Expected candidate commit not to acknowledge its own state.")
+        return
+    }
+
+    let unacknowledgedDelivery = try #require(
+        await index.upsert(second.input, sequence: 2).first {
+            $0.generation == replacementGeneration
+        }
+    )
+    guard case .reset = unacknowledgedDelivery.publication.change else {
+        Issue.record("Expected the committed generation to remain reset-only before owner ACK.")
+        return
+    }
+
+    await index.acknowledge(
+        id: registrationID,
+        generation: replacementGeneration,
+        state: unacknowledgedDelivery.publication.state
+    )
+    let acknowledgedDelivery = try #require(
+        await index.upsert(first.input, sequence: 3).first {
+            $0.generation == replacementGeneration
+        }
+    )
+    guard case let .transaction(base, transaction) = acknowledgedDelivery.publication.change else {
+        Issue.record("Expected owner ACK to restore incremental candidate transactions.")
+        return
+    }
+    #expect(base == unacknowledgedDelivery.publication.state.cursor)
+    #expect(transaction.oldSnapshot == unacknowledgedDelivery.publication.state.snapshot)
 }
 
 @MainActor

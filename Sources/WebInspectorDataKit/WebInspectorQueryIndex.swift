@@ -25,10 +25,11 @@ package protocol WebInspectorIndexedQueryDomain: SendableMetatype {
     ) -> WebInspectorFetchedResultsSnapshot<ItemID>
 }
 
-/// Owns compact records and concrete query projections away from the
+/// Owns compact records and acknowledged query publications away from the
 /// model-context actor.
 package actor WebInspectorQueryIndex<Domain: WebInspectorIndexedQueryDomain> {
-    package typealias QueryProjection = WebInspectorIndexedQueryProjection<Domain.ItemID>
+    package typealias QueryState = WebInspectorIndexedQueryState<Domain.ItemID>
+    package typealias QueryPublication = WebInspectorIndexedQueryPublication<Domain.ItemID>
     package typealias QueryDelivery = WebInspectorIndexedQueryDelivery<Domain.ItemID>
 
     private enum Mutation {
@@ -58,9 +59,8 @@ package actor WebInspectorQueryIndex<Domain: WebInspectorIndexedQueryDomain> {
         var generation: UInt64
         var query: Domain.Query
         var matchingIDs: [Domain.ItemID]
-        var snapshot: WebInspectorFetchedResultsSnapshot<Domain.ItemID>
-        var sequence: UInt64
-        var acknowledgedSequence: UInt64
+        var latestState: QueryState
+        var acknowledgedState: QueryState?
     }
 
     private struct QueryRegistration {
@@ -184,7 +184,7 @@ package actor WebInspectorQueryIndex<Domain: WebInspectorIndexedQueryDomain> {
         query: Domain.Query,
         lifetime: WebInspectorQueryRegistrationLifetime,
         minimumSequence: UInt64
-    ) async throws -> QueryProjection {
+    ) async throws -> QueryPublication {
         try await waitUntilApplied(minimumSequence)
         try Task.checkCancellation()
         pruneQueryRegistrations()
@@ -195,11 +195,7 @@ package actor WebInspectorQueryIndex<Domain: WebInspectorIndexedQueryDomain> {
             queryRegistrations[id] == nil,
             "WebInspectorQueryIndex received a duplicate query registration ID."
         )
-        let version = makeQueryVersion(
-            generation: generation,
-            query: query,
-            acknowledgedSequence: lastAppliedSequence
-        )
+        let version = makeQueryVersion(generation: generation, query: query)
         try Task.checkCancellation()
         guard lifetime.isCurrent(generation: generation) else {
             throw CancellationError()
@@ -209,7 +205,7 @@ package actor WebInspectorQueryIndex<Domain: WebInspectorIndexedQueryDomain> {
             active: version,
             candidate: nil
         )
-        return projection(for: version)
+        return publication(for: version)
     }
 
     package func prepareReplacement(
@@ -217,7 +213,7 @@ package actor WebInspectorQueryIndex<Domain: WebInspectorIndexedQueryDomain> {
         generation: UInt64,
         query: Domain.Query,
         minimumSequence: UInt64
-    ) async throws -> QueryProjection {
+    ) async throws -> QueryPublication {
         try await waitUntilApplied(minimumSequence)
         try Task.checkCancellation()
         pruneQueryRegistrations()
@@ -227,36 +223,31 @@ package actor WebInspectorQueryIndex<Domain: WebInspectorIndexedQueryDomain> {
               generation > (registration.candidate?.generation ?? 0) else {
             throw CancellationError()
         }
-        let candidate = makeQueryVersion(
-            generation: generation,
-            query: query,
-            acknowledgedSequence: lastAppliedSequence
-        )
+        let candidate = makeQueryVersion(generation: generation, query: query)
         try Task.checkCancellation()
         guard registration.lifetime.value?.isCurrent(generation: generation) == true else {
             throw CancellationError()
         }
         registration.candidate = candidate
         queryRegistrations[id] = registration
-        return projection(for: candidate)
+        return publication(for: candidate)
     }
 
     package func commitReplacement(
         id: WebInspectorQueryRegistrationID,
         generation: UInt64
-    ) -> QueryProjection? {
+    ) -> QueryPublication? {
         pruneQueryRegistrations()
         guard var registration = queryRegistrations[id],
               registration.lifetime.value?.isCurrent(generation: generation) == true,
-              var candidate = registration.candidate,
+              let candidate = registration.candidate,
               candidate.generation == generation else {
             return nil
         }
-        candidate.acknowledgedSequence = candidate.sequence
         registration.active = candidate
         registration.candidate = nil
         queryRegistrations[id] = registration
-        return projection(for: candidate)
+        return publication(for: candidate)
     }
 
     package func discardCandidate(
@@ -289,19 +280,34 @@ package actor WebInspectorQueryIndex<Domain: WebInspectorIndexedQueryDomain> {
     package func acknowledge(
         id: WebInspectorQueryRegistrationID,
         generation: UInt64,
-        sourceEpoch: UInt64,
-        sequence: UInt64
+        state: QueryState
     ) {
         pruneQueryRegistrations()
         guard var registration = queryRegistrations[id],
               registration.active.generation == generation,
-              self.sourceEpoch == sourceEpoch else {
+              self.sourceEpoch == state.cursor.sourceEpoch,
+              state.cursor.sequence <= registration.active.latestState.cursor.sequence else {
             return
         }
-        registration.active.acknowledgedSequence = max(
-            registration.active.acknowledgedSequence,
-            sequence
-        )
+        if let acknowledgedState = registration.active.acknowledgedState {
+            guard state.cursor.sequence >= acknowledgedState.cursor.sequence else {
+                return
+            }
+            if state.cursor == acknowledgedState.cursor {
+                precondition(
+                    state.snapshot == acknowledgedState.snapshot,
+                    "WebInspectorQueryIndex received conflicting snapshots for one acknowledged cursor."
+                )
+                return
+            }
+        }
+        if state.cursor == registration.active.latestState.cursor {
+            precondition(
+                state.snapshot == registration.active.latestState.snapshot,
+                "WebInspectorQueryIndex received an acknowledgement that changed its latest snapshot."
+            )
+        }
+        registration.active.acknowledgedState = state
         queryRegistrations[id] = registration
     }
 
@@ -371,7 +377,7 @@ package actor WebInspectorQueryIndex<Domain: WebInspectorIndexedQueryDomain> {
             deliveries.append(QueryDelivery(
                 registrationID: id,
                 generation: registration.active.generation,
-                projection: projection(for: registration.active)
+                publication: publication(for: registration.active)
             ))
             if var candidate = registration.candidate {
                 update(
@@ -384,7 +390,7 @@ package actor WebInspectorQueryIndex<Domain: WebInspectorIndexedQueryDomain> {
                 deliveries.append(QueryDelivery(
                     registrationID: id,
                     generation: candidate.generation,
-                    projection: projection(for: candidate)
+                    publication: publication(for: candidate)
                 ))
             }
             queryRegistrations[id] = registration
@@ -398,6 +404,7 @@ package actor WebInspectorQueryIndex<Domain: WebInspectorIndexedQueryDomain> {
         rebuilding: Bool,
         changedID: Domain.ItemID?
     ) {
+        let previousSourceEpoch = version.latestState.cursor.sourceEpoch
         if rebuilding {
             version.matchingIDs = matchingIDs(for: version.query)
         } else if let changedID {
@@ -406,42 +413,76 @@ package actor WebInspectorQueryIndex<Domain: WebInspectorIndexedQueryDomain> {
                 insert(changedID, into: &version.matchingIDs, query: version.query)
             }
         }
-        version.snapshot = Domain.makeSnapshot(
-            matchingItemIDs: version.matchingIDs,
-            recordsByID: recordsByID,
-            query: version.query
+        version.latestState = QueryState(
+            cursor: WebInspectorIndexedQueryCursor(
+                sourceEpoch: sourceEpoch,
+                sequence: sequence
+            ),
+            snapshot: Domain.makeSnapshot(
+                matchingItemIDs: version.matchingIDs,
+                recordsByID: recordsByID,
+                query: version.query
+            )
         )
-        version.sequence = sequence
+        if previousSourceEpoch != sourceEpoch {
+            version.acknowledgedState = nil
+        }
     }
 
     private func makeQueryVersion(
         generation: UInt64,
-        query: Domain.Query,
-        acknowledgedSequence: UInt64
+        query: Domain.Query
     ) -> QueryVersion {
         let matchingIDs = matchingIDs(for: query)
         return QueryVersion(
             generation: generation,
             query: query,
             matchingIDs: matchingIDs,
-            snapshot: Domain.makeSnapshot(
-                matchingItemIDs: matchingIDs,
-                recordsByID: recordsByID,
-                query: query
+            latestState: QueryState(
+                cursor: WebInspectorIndexedQueryCursor(
+                    sourceEpoch: sourceEpoch,
+                    sequence: lastAppliedSequence
+                ),
+                snapshot: Domain.makeSnapshot(
+                    matchingItemIDs: matchingIDs,
+                    recordsByID: recordsByID,
+                    query: query
+                )
             ),
-            sequence: lastAppliedSequence,
-            acknowledgedSequence: acknowledgedSequence
+            acknowledgedState: nil
         )
     }
 
-    private func projection(for version: QueryVersion) -> QueryProjection {
-        let reconfigureItemIDs = Set(version.snapshot.itemIDs.filter { id in
-            lastUpdatedSequenceByID[id, default: 0] > version.acknowledgedSequence
+    private func publication(for version: QueryVersion) -> QueryPublication {
+        guard let acknowledgedState = version.acknowledgedState else {
+            return QueryPublication(
+                state: version.latestState,
+                change: .reset,
+                reconfigureItemIDs: []
+            )
+        }
+        precondition(
+            acknowledgedState.cursor.sourceEpoch == version.latestState.cursor.sourceEpoch,
+            "WebInspectorQueryIndex retained an acknowledgement across a source epoch."
+        )
+        precondition(
+            acknowledgedState.cursor.sequence <= version.latestState.cursor.sequence,
+            "WebInspectorQueryIndex retained an acknowledgement ahead of its latest state."
+        )
+        let reconfigureItemIDs = Set(version.latestState.snapshot.itemIDs.filter { id in
+            lastUpdatedSequenceByID[id, default: 0] > acknowledgedState.cursor.sequence
         })
-        return QueryProjection(
-            sourceEpoch: sourceEpoch,
-            sequence: version.sequence,
-            snapshot: version.snapshot,
+        let transaction = WebInspectorFetchedResultsTransaction(
+            oldSnapshot: acknowledgedState.snapshot,
+            newSnapshot: version.latestState.snapshot,
+            updatedItemIDs: reconfigureItemIDs
+        )
+        return QueryPublication(
+            state: version.latestState,
+            change: .transaction(
+                base: acknowledgedState.cursor,
+                transaction: transaction
+            ),
             reconfigureItemIDs: reconfigureItemIDs
         )
     }
