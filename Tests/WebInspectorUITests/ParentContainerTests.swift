@@ -184,6 +184,52 @@ struct ParentContainerTests {
     }
 
     @Test
+    func staleInstalledAttachDetachesWhenNewerAttachFailsBeforeInstallation() async throws {
+        let session = makeAttachmentSession()
+        let firstModelAttachCompleted = WebInspectorTestGate()
+        let releaseFirstAttach = WebInspectorTestGate()
+        let secondAttachStarted = WebInspectorTestGate()
+        let releaseSecondAttach = WebInspectorTestGate()
+
+        let firstAttach = Task { @MainActor in
+            try await session.attachForTesting(
+                makeProxy: { [self] in
+                    try await makeFakeProxy()
+                },
+                afterModelAttach: {
+                    firstModelAttachCompleted.open()
+                    await releaseFirstAttach.waiter.wait()
+                }
+            )
+        }
+        await firstModelAttachCompleted.waiter.wait()
+        #expect(session.model.state == .attached)
+
+        let secondAttach = Task { @MainActor in
+            try await session.attachForTesting(
+                makeProxy: {
+                    secondAttachStarted.open()
+                    await releaseSecondAttach.waiter.wait()
+                    throw AttachmentFailure()
+                }
+            )
+        }
+        await secondAttachStarted.waiter.wait()
+        releaseFirstAttach.open()
+
+        await #expect(throws: CancellationError.self) {
+            try await firstAttach.value
+        }
+        #expect(session.model.state == .detached)
+
+        releaseSecondAttach.open()
+        await #expect(throws: AttachmentFailure.self) {
+            try await secondAttach.value
+        }
+        #expect(session.model.state == .detached)
+    }
+
+    @Test
     func detachInvalidatesInFlightAttachCompletion() async throws {
         let observerRecorder = PageUserInterfaceStyleObserverRecorder(styleOnStart: .dark)
         let session = makeAttachmentSession()

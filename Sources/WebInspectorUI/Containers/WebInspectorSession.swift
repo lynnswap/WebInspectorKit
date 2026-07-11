@@ -98,11 +98,13 @@ public final class WebInspectorSession {
         makeProxy: @escaping @MainActor () async throws -> WebInspectorProxy,
         makePageUserInterfaceStyleObserver: @escaping @MainActor (
             @escaping @MainActor (UIUserInterfaceStyle) -> Void
-        ) -> (any WebInspectorPageUserInterfaceStyleObserving)? = { _ in nil }
+        ) -> (any WebInspectorPageUserInterfaceStyleObserving)? = { _ in nil },
+        afterModelAttach: (@MainActor () async -> Void)? = nil
     ) async throws {
         try await attach(
             makeProxy: makeProxy,
-            makePageUserInterfaceStyleObserver: makePageUserInterfaceStyleObserver
+            makePageUserInterfaceStyleObserver: makePageUserInterfaceStyleObserver,
+            afterModelAttach: afterModelAttach
         )
     }
 
@@ -110,7 +112,8 @@ public final class WebInspectorSession {
         makeProxy: @MainActor () async throws -> WebInspectorProxy,
         makePageUserInterfaceStyleObserver: @MainActor (
             @escaping @MainActor (UIUserInterfaceStyle) -> Void
-        ) -> (any WebInspectorPageUserInterfaceStyleObserving)?
+        ) -> (any WebInspectorPageUserInterfaceStyleObserving)?,
+        afterModelAttach: (@MainActor () async -> Void)? = nil
     ) async throws {
         let generation = advanceAttachmentGeneration()
         stopPageUserInterfaceStyleObservation()
@@ -131,7 +134,11 @@ public final class WebInspectorSession {
                 await proxy.close()
                 throw error
             }
+            if let afterModelAttach {
+                await afterModelAttach()
+            }
             guard isCurrentAttachmentGeneration(generation) else {
+                await model.detachIfAttached(to: proxy)
                 throw CancellationError()
             }
             startPageUserInterfaceStyleObservation(makePageUserInterfaceStyleObserver)

@@ -304,15 +304,19 @@ public final class WebInspectorModelContext {
         case none
         case reset(
             network: NetworkRequestStore.IndexWork,
-            console: ConsoleMessageStore.IndexWork
+            console: ConsoleMessageStore.IndexWork,
+            pageHighlightDOM: DOM?
         )
+        case preparePageHighlightClear(DOM)
+        case pageHighlightClear(DOM)
         case network(NetworkRequestStore.IndexWork)
         case console(ConsoleMessageStore.IndexWork)
         case networkAcknowledgement(NetworkRequestStore.IndexAcknowledgementWork)
         case consoleAcknowledgement(ConsoleMessageStore.IndexAcknowledgementWork)
         case acknowledgements(
             network: NetworkRequestStore.IndexAcknowledgementWork?,
-            console: ConsoleMessageStore.IndexAcknowledgementWork?
+            console: ConsoleMessageStore.IndexAcknowledgementWork?,
+            pageHighlightDOM: DOM?
         )
         case inspectorSelection(
             dom: DOM,
@@ -325,14 +329,25 @@ public final class WebInspectorModelContext {
             switch self {
             case .none:
                 return ReducerWorkResult(commit: commit, output: .none)
-            case let .reset(network, console):
+            case let .reset(network, console, pageHighlightDOM):
+                let networkResult = await network.run()
+                let consoleResult = await console.run()
                 return ReducerWorkResult(
                     commit: commit,
                     output: .reset(
-                        network: await network.run(),
-                        console: await console.run()
+                        network: networkResult,
+                        console: consoleResult,
+                        pageHighlightDOM: pageHighlightDOM
                     )
                 )
+            case let .preparePageHighlightClear(dom):
+                return ReducerWorkResult(
+                    commit: commit,
+                    output: .pageHighlightClear(dom)
+                )
+            case let .pageHighlightClear(dom):
+                await Self.clearPageHighlight(using: dom)
+                return ReducerWorkResult(commit: commit, output: .none)
             case let .network(work):
                 return ReducerWorkResult(
                     commit: commit,
@@ -349,9 +364,10 @@ public final class WebInspectorModelContext {
             case let .consoleAcknowledgement(work):
                 await work.run()
                 return ReducerWorkResult(commit: commit, output: .none)
-            case let .acknowledgements(network, console):
+            case let .acknowledgements(network, console, pageHighlightDOM):
                 await network?.run()
                 await console?.run()
+                await Self.clearPageHighlight(using: pageHighlightDOM)
                 return ReducerWorkResult(commit: commit, output: .none)
             case let .inspectorSelection(
                 dom,
@@ -414,6 +430,19 @@ public final class WebInspectorModelContext {
                 )
             }
         }
+
+        private static func clearPageHighlight(using dom: DOM?) async {
+            guard let dom else {
+                return
+            }
+            do {
+                try await dom.hideHighlight()
+            } catch {
+                WebInspectorDataKitLog.debug(
+                    "DOM page highlight reset cleanup failed: \(String(describing: error))"
+                )
+            }
+        }
     }
 
     fileprivate enum ReducerCommit: Sendable {
@@ -425,8 +454,10 @@ public final class WebInspectorModelContext {
         case none
         case reset(
             network: NetworkRequestStore.IndexResult,
-            console: ConsoleMessageStore.IndexResult
+            console: ConsoleMessageStore.IndexResult,
+            pageHighlightDOM: DOM?
         )
+        case pageHighlightClear(DOM)
         case network(NetworkRequestStore.IndexResult)
         case console(ConsoleMessageStore.IndexResult)
         case inspectorSelection(InspectorSelectionOutcome)
@@ -632,6 +663,16 @@ public final class WebInspectorModelContext {
     }
 
     public nonisolated(nonsending) func detach() async {
+        await tearDown(terminal: false)
+    }
+
+    package nonisolated(nonsending) func detachIfAttached(
+        to proxy: WebInspectorProxy
+    ) async {
+        preconditionOwnerIsolation()
+        guard activeProxy === proxy else {
+            return
+        }
         await tearDown(terminal: false)
     }
 
@@ -1054,11 +1095,14 @@ public final class WebInspectorModelContext {
         switch result.output {
         case .none:
             followup = nil
-        case let .reset(networkResult, consoleResult):
+        case let .reset(networkResult, consoleResult, pageHighlightDOM):
             followup = .acknowledgements(
                 network: networkRequests.commit(networkResult),
-                console: consoleMessages.commit(consoleResult)
+                console: consoleMessages.commit(consoleResult),
+                pageHighlightDOM: pageHighlightDOM
             )
+        case let .pageHighlightClear(dom):
+            followup = .pageHighlightClear(dom)
         case let .network(networkResult):
             followup = networkRequests.commit(
                 networkResult
@@ -1205,12 +1249,13 @@ public final class WebInspectorModelContext {
             return nil
         }
         switch result.output {
-        case let .reset(networkResult, consoleResult):
+        case let .reset(networkResult, consoleResult, pageHighlightDOM):
             return .acknowledgements(
                 network: networkRequests.commit(networkResult),
-                console: consoleMessages.commit(consoleResult)
+                console: consoleMessages.commit(consoleResult),
+                pageHighlightDOM: pageHighlightDOM
             )
-        case .none, .network, .console, .inspectorSelection:
+        case .none, .network, .console, .pageHighlightClear, .inspectorSelection:
             preconditionFailure("A detached reset produced an invalid reducer result.")
         }
     }
@@ -1250,7 +1295,7 @@ public final class WebInspectorModelContext {
     private func prepareSemanticReset(
     ) -> ReducerWork {
         domState.advanceDocumentEpoch()
-        resetDOM()
+        let pageHighlightDOM = resetDOM()
         runtimeState.reset()
         let consoleReset = consoleMessages.prepareClearForLifecycle(
             modelContext: self
@@ -1259,7 +1304,8 @@ public final class WebInspectorModelContext {
         let networkReset = networkRequests.prepareResetForNewAttachment()
         return .reset(
             network: networkRequests.indexWork(for: networkReset),
-            console: consoleMessages.indexWork(for: consoleReset.queryIndexReset)
+            console: consoleMessages.indexWork(for: consoleReset.queryIndexReset),
+            pageHighlightDOM: pageHighlightDOM
         )
     }
 
@@ -1390,9 +1436,14 @@ public final class WebInspectorModelContext {
             }
             binding.domAuthority[target.id] = .awaiting(documentEpoch)
             self.binding = binding
+            let work: ReducerWork
             if target.id == binding.currentPageID {
                 domState.advanceDocumentEpoch()
-                resetDOM()
+                if let pageHighlightDOM = resetDOM() {
+                    work = .preparePageHighlightClear(pageHighlightDOM)
+                } else {
+                    work = .none
+                }
             } else if let frameID = target.frameID {
                 cssInspectorBaselineStore.reset(targetID: target.id)
                 applyDOMStateEffects(
@@ -1400,13 +1451,14 @@ public final class WebInspectorModelContext {
                         forFrameID: frameID
                     )
                 )
+                work = .none
             } else {
                 return prepareProtocolFailure(
                     "A non-page DOM target had no frame identity.",
                     token: token
                 )
             }
-            return PreparedReducerStep(work: .none, commit: .record(token: token))
+            return PreparedReducerStep(work: work, commit: .record(token: token))
 
         case let .event(generation, sequence, payload):
             guard var binding = bindingForSequencedRecord(
@@ -3008,10 +3060,14 @@ extension WebInspectorModelContext {
         )
     }
 
-    private func resetDOM() {
+    private func resetDOM() -> DOM? {
         cssInspectorBaselineStore.reset()
         let effects = domState.resetDocument()
+        let pageHighlightDOM = effects.shouldClearPageHighlight
+            ? currentPage?.dom
+            : nil
         applyDOMStateEffects(effects)
+        return pageHighlightDOM
     }
 }
 extension WebInspectorModelContext {

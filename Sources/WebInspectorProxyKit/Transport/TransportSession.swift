@@ -1234,7 +1234,10 @@ package actor ConnectionCore {
         let isCurrentPageTarget = targetRegistry.isCurrentPageModelTarget(target)
         let admission = ConnectionDirectCommandAdmission(
             bindingGeneration: isCurrentPageTarget ? currentPageGeneration : nil,
-            documentEpoch: isCurrentPageTarget && isDocumentSensitive(command.domain)
+            documentEpoch: isCurrentPageTarget && isDocumentSensitive(
+                command.domain,
+                method: command.method
+            )
                 ? modelDocumentEpoch(for: targetID)
                 : nil
         )
@@ -1387,7 +1390,7 @@ package actor ConnectionCore {
            !registration.configuredDomains.contains(requiredDomain) {
             throw ConnectionModelCommandError.domainNotConfigured(proxyDomain)
         }
-        if isDocumentSensitive(domain), authorization.document == nil {
+        if isDocumentSensitive(domain, method: method), authorization.document == nil {
             throw ConnectionModelCommandError.documentAuthorizationRequired(proxyDomain)
         }
     }
@@ -1431,7 +1434,7 @@ package actor ConnectionCore {
             targetID = candidate
         }
 
-        if isDocumentSensitive(domain) {
+        if isDocumentSensitive(domain, method: method) {
             guard let targetID,
                   let document = authorization.document,
                   ProtocolTarget.ID(document.targetID.rawValue) == targetID,
@@ -1447,7 +1450,7 @@ package actor ConnectionCore {
             return .waiting
         }
 
-        if isDocumentSensitive(domain) {
+        if isDocumentSensitive(domain, method: method) {
             guard let targetID,
                   let document = authorization.document,
                   let bootstrap = registration.domBootstrap,
@@ -1636,8 +1639,14 @@ package actor ConnectionCore {
         }
     }
 
-    private func isDocumentSensitive(_ domain: ProtocolDomain) -> Bool {
-        domain == .dom || domain == .css || domain == .inspector
+    private func isDocumentSensitive(
+        _ domain: ProtocolDomain,
+        method: String
+    ) -> Bool {
+        if domain == .dom, method == "DOM.hideHighlight" {
+            return false
+        }
+        return domain == .dom || domain == .css || domain == .inspector
     }
 
     private func isConnectionOwnedCommand(_ method: String) -> Bool {
@@ -2503,7 +2512,7 @@ package actor ConnectionCore {
         var effects = invalidateModelCommands(
             where: { task in
                 guard task.authorization.generation == currentPageGeneration,
-                      isDocumentSensitive(task.domain),
+                      isDocumentSensitive(task.domain, method: task.method),
                       let document = task.authorization.document else {
                     return false
                 }
@@ -2515,7 +2524,7 @@ package actor ConnectionCore {
         )
         let bindingReplies = replyStore.removePendingReplies { pending in
             guard pending.targetID == targetID,
-                  isDocumentSensitive(pending.domain) else {
+                  isDocumentSensitive(pending.domain, method: pending.method) else {
                 return false
             }
             let bindingGeneration: WebInspectorPage.Generation?

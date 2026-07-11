@@ -431,6 +431,54 @@ func explicitDOMSelectionSupersedesPendingPickerResolution() async throws {
 
 @MainActor
 @Test
+func documentResetHidesRecordedPageHighlight() async throws {
+    let highlightedID = DOM.Node.ID("highlighted-node")
+    let document = DOM.Node(
+        id: DOM.Node.ID("highlight-document"),
+        nodeType: 9,
+        nodeName: "#document",
+        children: [
+            DOM.Node(
+                id: highlightedID,
+                nodeType: 1,
+                nodeName: "MAIN",
+                localName: "main"
+            ),
+        ]
+    )
+    try await withAttachedModelContext(
+        configuration: .init(domains: [.dom]),
+        document: document
+    ) { fixture in
+        let highlightedNode = try #require(
+            try fixture.context.domNode(id: DOMNode.ID(highlightedID))
+        )
+        await fixture.runtime.wire.respond(to: "DOM.highlightNode")
+        try await fixture.context.highlightDOMNode(highlightedNode)
+
+        await fixture.runtime.wire.respond(to: "DOM.hideHighlight")
+        await fixture.runtime.wire.respond(
+            to: "DOM.getDocument",
+            with: try domDocumentResult(DOM.Node(
+                id: DOM.Node.ID("replacement-document"),
+                nodeType: 9,
+                nodeName: "#document"
+            ))
+        )
+        try await fixture.runtime.wire.emitRaw(.documentUpdated, target: fixture.target)
+
+        _ = await fixture.runtime.wire.observations.waitForCommands(
+            method: "DOM.hideHighlight",
+            count: 1
+        )
+        #expect(fixture.runtime.wire.observations.commands.filter {
+            $0.method == "DOM.hideHighlight"
+        }.count == 1)
+    }
+}
+
+@MainActor
+@Test
 func runtimeObjectGroupsUseUniqueWireNamesAndReleaseExactlyOnce() async throws {
     try await withAttachedModelContext(
         configuration: .init(domains: [.runtime])
