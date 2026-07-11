@@ -131,6 +131,126 @@ func attachmentPublishesDOMSnapshotAndAcceptsFilteredSequenceGaps() async throws
 
 @MainActor
 @Test
+func restoredPageReusesCSSAgentAndKeepsModelContextAttached() async throws {
+    let pageADocument = DOM.Node(
+        id: DOM.Node.ID("page-a-document"),
+        nodeType: 9,
+        nodeName: "#document"
+    )
+    try await withAttachedModelContext(
+        configuration: .init(domains: [.css]),
+        document: pageADocument
+    ) { fixture in
+        let pageAGeneration = try #require(fixture.context.pageGeneration)
+
+        let pageBDocument = DOM.Node(
+            id: DOM.Node.ID("page-b-document"),
+            nodeType: 9,
+            nodeName: "#document"
+        )
+        await enqueueStartupReplies(
+            on: fixture.runtime.wire,
+            configuration: fixture.configuration,
+            document: pageBDocument
+        )
+        try await fixture.runtime.peer.createTarget(.init(
+            id: "page-b",
+            type: "page",
+            frameID: "main-frame",
+            isProvisional: true
+        ))
+        let pageBBaseline = fixture.runtime.wire.observations.commands.count
+        try await fixture.runtime.peer.commitProvisionalTarget(
+            from: "page-main",
+            to: "page-b"
+        )
+        try await waitUntil {
+            guard fixture.context.state == .attached,
+                  fixture.context.pageGeneration != pageAGeneration else {
+                return false
+            }
+            return try fixture.context.rootDOMNode?.id
+                == DOMNode.ID(DOM.Node.ID("page-b-document"))
+        }
+
+        let pageBGeneration = try #require(fixture.context.pageGeneration)
+        let pageBCommands = Array(
+            fixture.runtime.wire.observations.commands.dropFirst(pageBBaseline)
+        )
+        let pageBMethods = pageBCommands.map(\.method)
+        #expect(pageBCommands.count == 3)
+        #expect(Set(pageBMethods) == Set([
+            "DOM.getDocument",
+            "Page.enable",
+            "CSS.enable",
+        ]))
+        let pageEnableIndex = try #require(
+            pageBMethods.firstIndex(of: "Page.enable")
+        )
+        let cssEnableIndex = try #require(
+            pageBMethods.firstIndex(of: "CSS.enable")
+        )
+        #expect(pageEnableIndex < cssEnableIndex)
+        #expect(pageBCommands.allSatisfy {
+            $0.destination == .target("page-b")
+        })
+
+        let restoredDocument = DOM.Node(
+            id: DOM.Node.ID("page-a-restored-document"),
+            nodeType: 9,
+            nodeName: "#document"
+        )
+        await fixture.runtime.wire.respond(
+            to: "DOM.getDocument",
+            with: try domDocumentResult(restoredDocument)
+        )
+        await fixture.runtime.wire.respond(
+            to: "CSS.getAllStyleSheets",
+            with: try testJSONObject(
+                #"{"headers":[{"styleSheetId":"restored-sheet","frameId":"main-frame","origin":"author","sourceURL":"https://example.test/restored.css"}]}"#
+            )
+        )
+        try await fixture.runtime.peer.createTarget(.init(
+            id: "page-main",
+            type: "page",
+            frameID: "main-frame",
+            isProvisional: true
+        ))
+        let restorationBaseline = fixture.runtime.wire.observations.commands.count
+        try await fixture.runtime.peer.commitProvisionalTarget(
+            from: "page-b",
+            to: "page-main"
+        )
+        try await waitUntil {
+            guard fixture.context.state == .attached,
+                  fixture.context.pageGeneration != pageBGeneration else {
+                return false
+            }
+            return try fixture.context.rootDOMNode?.id
+                == DOMNode.ID(DOM.Node.ID("page-a-restored-document"))
+        }
+
+        let restorationCommands = Array(
+            fixture.runtime.wire.observations.commands.dropFirst(restorationBaseline)
+        )
+        let restorationMethods = restorationCommands.map(\.method)
+        #expect(restorationCommands.count == 2)
+        #expect(Set(restorationMethods) == Set([
+            "DOM.getDocument",
+            "CSS.getAllStyleSheets",
+        ]))
+        #expect(!restorationMethods.contains("Page.enable"))
+        #expect(!restorationMethods.contains("CSS.enable"))
+        #expect(!restorationMethods.contains("CSS.disable"))
+        #expect(restorationCommands.allSatisfy {
+            $0.destination == .target("page-main")
+        })
+        #expect(fixture.context.state == .attached)
+    }
+}
+
+@MainActor
+@Test
 func attachmentDrainsLargeEnableReplayBeforePublishingReadiness() async throws {
     try await withDataKitTestRuntime { runtime in
         let target = try await runtime.proxy.waitForCurrentPage()

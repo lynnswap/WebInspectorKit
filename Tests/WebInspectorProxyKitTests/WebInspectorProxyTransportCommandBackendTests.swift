@@ -1388,6 +1388,120 @@ func structuredCSSScopeKeepsPageCapabilityAliveUntilCSSRelease() async throws {
 }
 
 @Test
+func structuredCSSScopeReusesRestoredPhysicalAgent() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(
+        in: transport,
+        targetID: ProtocolTarget.ID("page-a")
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let bodyGate = CloseConnectionGate()
+
+    let scopeTask = Task {
+        try await proxy.page.css.withEvents { _ in
+            await bodyGate.waitUntilReleased()
+        }
+    }
+
+    let pageAEnable = try await waitForTargetMessage(backend, method: "Page.enable")
+    #expect(pageAEnable.targetIdentifier == ProtocolTarget.ID("page-a"))
+    await receiveTargetReply(
+        transport,
+        targetID: pageAEnable.targetIdentifier,
+        messageID: try messageID(pageAEnable.message),
+        result: "{}"
+    )
+    let cssAEnable = try await waitForTargetMessage(backend, method: "CSS.enable")
+    #expect(cssAEnable.targetIdentifier == ProtocolTarget.ID("page-a"))
+    await receiveTargetReply(
+        transport,
+        targetID: cssAEnable.targetIdentifier,
+        messageID: try messageID(cssAEnable.message),
+        result: "{}"
+    )
+    await bodyGate.waitUntilStarted()
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-b","type":"page","frameId":"main-frame","isProvisional":true}}}"#
+    )
+    let pageBCommitBaseline = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-a","newTargetId":"page-b"}}"#
+    )
+    let pageBEnable = try await waitForTargetMessage(
+        backend,
+        method: "Page.enable",
+        after: pageBCommitBaseline
+    )
+    #expect(pageBEnable.targetIdentifier == ProtocolTarget.ID("page-b"))
+    await receiveTargetReply(
+        transport,
+        targetID: pageBEnable.targetIdentifier,
+        messageID: try messageID(pageBEnable.message),
+        result: "{}"
+    )
+    let cssBEnable = try await waitForTargetMessage(
+        backend,
+        method: "CSS.enable",
+        after: pageBCommitBaseline
+    )
+    #expect(cssBEnable.targetIdentifier == ProtocolTarget.ID("page-b"))
+    await receiveTargetReply(
+        transport,
+        targetID: cssBEnable.targetIdentifier,
+        messageID: try messageID(cssBEnable.message),
+        result: "{}"
+    )
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-a","type":"page","frameId":"main-frame","isProvisional":true}}}"#
+    )
+    let restorationBaseline = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-b","newTargetId":"page-a"}}"#
+    )
+
+    let restorationMethods = try await backend.sentTargetMessages()
+        .dropFirst(restorationBaseline)
+        .map { try messageMethod($0.message) }
+    #expect(restorationMethods.isEmpty)
+
+    await bodyGate.release()
+    let cssDisable = try await waitForTargetMessage(
+        backend,
+        method: "CSS.disable",
+        after: restorationBaseline
+    )
+    #expect(cssDisable.targetIdentifier == ProtocolTarget.ID("page-a"))
+    await receiveTargetReply(
+        transport,
+        targetID: cssDisable.targetIdentifier,
+        messageID: try messageID(cssDisable.message),
+        result: "{}"
+    )
+    let pageDisable = try await waitForTargetMessage(
+        backend,
+        method: "Page.disable",
+        after: restorationBaseline
+    )
+    #expect(pageDisable.targetIdentifier == ProtocolTarget.ID("page-a"))
+    await receiveTargetReply(
+        transport,
+        targetID: pageDisable.targetIdentifier,
+        messageID: try messageID(pageDisable.message),
+        result: "{}"
+    )
+
+    try await scopeTask.value
+    let finalMethods = try await backend.sentTargetMessages()
+        .dropFirst(restorationBaseline)
+        .map { try messageMethod($0.message) }
+    #expect(finalMethods == ["CSS.disable", "Page.disable"])
+    #expect(await transport.pendingReplyPurposes().isEmpty)
+}
+
+@Test
 func structuredFrameCSSScopeDoesNotRequirePageCapability() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
@@ -1439,6 +1553,95 @@ func structuredFrameCSSScopeDoesNotRequirePageCapability() async throws {
         try messageMethod($0.message)
     }
     #expect(completedMethods == ["CSS.enable", "CSS.disable"])
+}
+
+@Test
+func structuredNetworkScopeRefreshesRestoredPhysicalAgent() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(
+        in: transport,
+        targetID: ProtocolTarget.ID("page-a")
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let bodyGate = CloseConnectionGate()
+
+    let scopeTask = Task {
+        try await proxy.page.network.withEvents { _ in
+            await bodyGate.waitUntilReleased()
+        }
+    }
+
+    let pageAEnable = try await waitForTargetMessage(backend, method: "Network.enable")
+    #expect(pageAEnable.targetIdentifier == ProtocolTarget.ID("page-a"))
+    await receiveTargetReply(
+        transport,
+        targetID: pageAEnable.targetIdentifier,
+        messageID: try messageID(pageAEnable.message),
+        result: "{}"
+    )
+    await bodyGate.waitUntilStarted()
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-b","type":"page","frameId":"main-frame","isProvisional":true}}}"#
+    )
+    let pageBCommitBaseline = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-a","newTargetId":"page-b"}}"#
+    )
+    let pageBEnable = try await waitForTargetMessage(
+        backend,
+        method: "Network.enable",
+        after: pageBCommitBaseline
+    )
+    #expect(pageBEnable.targetIdentifier == ProtocolTarget.ID("page-b"))
+    await receiveTargetReply(
+        transport,
+        targetID: pageBEnable.targetIdentifier,
+        messageID: try messageID(pageBEnable.message),
+        result: "{}"
+    )
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-a","type":"page","frameId":"main-frame","isProvisional":true}}}"#
+    )
+    let restorationBaseline = await backend.sentTargetMessages().count
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-b","newTargetId":"page-a"}}"#
+    )
+    let restoredEnable = try await waitForTargetMessage(
+        backend,
+        method: "Network.enable",
+        after: restorationBaseline
+    )
+    #expect(restoredEnable.targetIdentifier == ProtocolTarget.ID("page-a"))
+    await receiveTargetReply(
+        transport,
+        targetID: restoredEnable.targetIdentifier,
+        messageID: try messageID(restoredEnable.message),
+        result: "{}"
+    )
+
+    await bodyGate.release()
+    let disable = try await waitForTargetMessage(
+        backend,
+        method: "Network.disable",
+        after: restorationBaseline
+    )
+    #expect(disable.targetIdentifier == ProtocolTarget.ID("page-a"))
+    await receiveTargetReply(
+        transport,
+        targetID: disable.targetIdentifier,
+        messageID: try messageID(disable.message),
+        result: "{}"
+    )
+
+    try await scopeTask.value
+    let restorationMethods = try await backend.sentTargetMessages()
+        .dropFirst(restorationBaseline)
+        .map { try messageMethod($0.message) }
+    #expect(restorationMethods == ["Network.enable", "Network.disable"])
+    #expect(await transport.pendingReplyPurposes().isEmpty)
 }
 
 @Test

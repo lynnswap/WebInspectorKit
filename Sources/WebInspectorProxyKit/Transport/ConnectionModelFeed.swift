@@ -143,12 +143,23 @@ package struct ModelDocumentEpoch: Hashable, Sendable {
     }
 }
 
+package struct ModelCSSStyleSheet: Sendable {
+    package let target: ModelTarget
+    package let header: CSS.StyleSheetHeader
+
+    package init(target: ModelTarget, header: CSS.StyleSheetHeader) {
+        self.target = target
+        self.header = header
+    }
+}
+
 package enum ModelBootstrapSnapshot: Sendable {
     case domDocument(
         target: ModelTarget,
         documentEpoch: ModelDocumentEpoch,
         root: DOM.Node
     )
+    case cssStyleSheets([ModelCSSStyleSheet])
 }
 
 package enum ConnectionModelFeedRecord: Sendable {

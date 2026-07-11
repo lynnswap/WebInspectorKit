@@ -590,7 +590,7 @@ private struct StyleSheetRemovedParams: Decodable {
     var styleSheetId: String
 }
 
-private struct StyleSheetAddedParams: Decodable {
+struct StyleSheetAddedParams: Codable {
     var header: StyleSheetHeaderPayload
 }
 
@@ -607,7 +607,7 @@ private struct NodeLayoutFlagsChangedParams: Decodable {
     }
 }
 
-private struct StyleSheetHeaderPayload: Decodable {
+struct StyleSheetHeaderPayload: Codable {
     var styleSheetId: String
     var frameId: String?
     var sourceURL: String?

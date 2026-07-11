@@ -186,8 +186,30 @@ private struct ConnectionCommandInvalidationEffects: Sendable {
 }
 
 private struct ConnectionCapabilityTask: Sendable {
+    enum StartingWireState: Equatable, Sendable {
+        case inactive
+        case unknown
+        case enabled
+    }
+
+    enum Policy: Equatable, Sendable {
+        case standard
+        case restoredPageEnable
+        case cssSnapshot
+        case cssEnableAndSnapshot
+        case replayRefresh
+    }
+
     let task: Task<Void, Never>
     var pendingReplyOwnership: ConnectionPendingReplyOwnership?
+    var startingWireState: StartingWireState?
+    var policy: Policy
+}
+
+private enum RememberedCurrentPageCapabilityState: Equatable, Sendable {
+    case inactive
+    case enabled
+    case unknown
 }
 
 private struct ConnectionModelBootstrapTask: Sendable {
@@ -326,6 +348,12 @@ private struct ConnectionElementPickerMode: Sendable {
 /// state deliberately live on the same actor so no public handle has to mirror
 /// transport state in order to stay current.
 package actor ConnectionCore {
+    /// WebKit's current process-pool back/forward cache holds at most two
+    /// suspended pages. `Target.targetDestroyed` does not identify which
+    /// membership removals remain physically suspended, so retain a generous
+    /// bounded window instead of treating that event as physical teardown.
+    private static let parkedCurrentPageTargetRetentionLimit = 64
+
     package typealias TimeoutSleep = @Sendable (Duration) async throws -> Void
     package typealias ResponseTimeoutDidFire = @Sendable () async -> Void
     package typealias CloseAction = @Sendable () async -> Void
@@ -433,6 +461,22 @@ package actor ConnectionCore {
     private var inspectorInitializedGeneration: [
         ConnectionCapabilityKey: WebInspectorPage.Generation
     ]
+    /// Wire state parked for page targets that remain connected but are no
+    /// longer members of the active Target graph (for example, BFCache).
+    /// The active target's state lives only in `capabilities`; transitions
+    /// move ownership between that registry and this ledger. WebKit exposes
+    /// `Target.targetDestroyed` for membership removal without disconnecting
+    /// the inspector channel, so parked state lives until restoration or
+    /// connection teardown rather than following that event.
+    private var parkedCurrentPageCapabilityLedger: [
+        ProtocolTarget.ID: [
+            WebInspectorProxyEventDomain: RememberedCurrentPageCapabilityState
+        ]
+    ]
+    private var parkedCurrentPageCapabilityLedgerOrder: [ProtocolTarget.ID]
+    private var modelReplaySuppressedDomains: [
+        ModelDomain: WebInspectorPage.Generation
+    ]
     private var capabilityTasks: [UInt64: ConnectionCapabilityTask]
     private var nextModelBootstrapOperationID: UInt64
     private var modelBootstrapTasks: [UInt64: ConnectionModelBootstrapTask]
@@ -494,6 +538,9 @@ package actor ConnectionCore {
         capabilities = ConnectionCapabilityRegistry()
         elementPickerModes = [:]
         inspectorInitializedGeneration = [:]
+        parkedCurrentPageCapabilityLedger = [:]
+        parkedCurrentPageCapabilityLedgerOrder = []
+        modelReplaySuppressedDomains = [:]
         capabilityTasks = [:]
         nextModelBootstrapOperationID = 0
         modelBootstrapTasks = [:]
@@ -1941,6 +1988,15 @@ package actor ConnectionCore {
         capabilities.states.mapValues(\.desiredLeaseOwners)
     }
 
+    func parkedCurrentPageCapabilityCountForTesting() -> Int {
+        precondition(
+            parkedCurrentPageCapabilityLedger.count
+                == parkedCurrentPageCapabilityLedgerOrder.count,
+            "The parked capability ledger and its retention order diverged."
+        )
+        return parkedCurrentPageCapabilityLedger.count
+    }
+
     package func targetID(forExecutionContext key: RuntimeContext.Key) -> ProtocolTarget.ID? {
         runtimeContextRegistry.targetID(for: key)
     }
@@ -2681,6 +2737,10 @@ package actor ConnectionCore {
         switch capability.physical {
         case .inactive:
             cleanup = nil
+        case .unknown, .replayRequired:
+            let promise = ReplyPromise<Void>()
+            capability.releaseWaiters[leaseOwner] = promise
+            cleanup = promise
         case .enabled:
             let promise = ReplyPromise<Void>()
             capability.releaseWaiters[leaseOwner] = promise
@@ -3036,6 +3096,17 @@ package actor ConnectionCore {
             return
         }
 
+        if capability.desiredCount > 0,
+           !capabilityDependenciesAreEnabled(for: key, generation: expectedGeneration) {
+            capabilities.states[key] = capability
+            return
+        }
+        if capability.desiredCount == 0,
+           !capabilityDependentsAreInactive(for: key, generation: expectedGeneration) {
+            capabilities.states[key] = capability
+            return
+        }
+
         switch capability.physical {
         case .inactive where capability.desiredCount > 0:
             guard (try? requireAvailableTarget(for: key.route)) != nil else {
@@ -3043,20 +3114,194 @@ package actor ConnectionCore {
                 return
             }
             startCapabilityEnable(for: key, generation: expectedGeneration)
+        case .unknown where capability.desiredCount > 0:
+            guard (try? requireAvailableTarget(for: key.route)) != nil else {
+                capabilities.states[key] = capability
+                return
+            }
+            switch key.domain {
+            case .page:
+                startCapabilityEnable(
+                    for: key,
+                    generation: expectedGeneration,
+                    policy: .restoredPageEnable
+                )
+            case .css:
+                if cssRequiresModelSnapshot(capability) {
+                    startCSSCapabilitySnapshot(
+                        for: key,
+                        generation: expectedGeneration,
+                        ensuringEnabled: true
+                    )
+                } else {
+                    startCapabilityEnable(for: key, generation: expectedGeneration)
+                }
+            case .console, .runtime:
+                startCapabilityDisable(
+                    for: key,
+                    generation: expectedGeneration,
+                    policy: .replayRefresh
+                )
+            case .inspector, .network:
+                startCapabilityEnable(for: key, generation: expectedGeneration)
+            case .dom:
+                preconditionFailure("DOM capability reconciliation is local-only.")
+            case .target:
+                preconditionFailure("Target is not an acquirable capability domain.")
+            }
+        case .replayRequired where capability.desiredCount > 0:
+            switch key.domain {
+            case .css:
+                precondition(
+                    cssRequiresModelSnapshot(capability),
+                    "A CSS replay requirement has no model-feed owner."
+                )
+                startCSSCapabilitySnapshot(
+                    for: key,
+                    generation: expectedGeneration,
+                    ensuringEnabled: false
+                )
+            case .network:
+                startCapabilityEnable(for: key, generation: expectedGeneration)
+            case .console, .runtime:
+                startCapabilityDisable(
+                    for: key,
+                    generation: expectedGeneration,
+                    policy: .replayRefresh
+                )
+            case .page, .inspector, .dom, .target:
+                preconditionFailure(
+                    "\(key.domain.rawValue) cannot require model replay while enabled."
+                )
+            }
+        case .replayRequired where capability.desiredCount == 0:
+            startCapabilityDisable(for: key, generation: expectedGeneration)
+        case .unknown where capability.desiredCount == 0:
+            startCapabilityDisable(for: key, generation: expectedGeneration)
         case .enabled where capability.desiredCount == 0:
             startCapabilityDisable(for: key, generation: expectedGeneration)
-        case .inactive, .enabling, .enabled, .disabling:
+        case .enabled:
+            capability.activatedLeaseOwners.formUnion(capability.activationWaiters.keys)
+            let waiters = Array(capability.activationWaiters.values)
+            capability.activationWaiters.removeAll()
+            capabilities.states[key] = capability
+            if key.domain == .inspector {
+                await reconcileElementPickerMode(for: key)
+            }
+            await reconcileCapabilityDependents(of: key)
+            for waiter in waiters {
+                waiter.fulfill(.success(()))
+            }
+        case .inactive:
+            capabilities.states[key] = capability
+            capabilities.removeEmptyState(for: key)
+        case .unknown, .replayRequired, .enabling, .disabling:
             capabilities.states[key] = capability
         }
     }
 
-    private func startCapabilityEnable(
+    private func cssRequiresModelSnapshot(
+        _ capability: ConnectionCapabilityRegistry.State
+    ) -> Bool {
+        guard let registration = modelFeed,
+              registration.configuredDomains.contains(.css) else {
+            return false
+        }
+        return capability.desiredLeaseOwners.contains(
+            .modelFeed(registration.id, .css)
+        )
+    }
+
+    private func capabilityDependenciesAreEnabled(
         for key: ConnectionCapabilityKey,
         generation: WebInspectorPage.Generation
+    ) -> Bool {
+        guard key.domain == .css else {
+            return true
+        }
+        let pageKey = ConnectionCapabilityKey(
+            route: key.route,
+            targetID: key.targetID,
+            domain: .page
+        )
+        guard let page = capabilities.states[pageKey] else {
+            // Frame CSS agents do not expose or retain Page.
+            return true
+        }
+        precondition(
+            page.desiredCount > 0,
+            "An active CSS capability lost its Page dependency lease."
+        )
+        guard case let .enabled(pageGeneration) = page.physical,
+              pageGeneration == generation else {
+            return false
+        }
+        return true
+    }
+
+    private func reconcileCapabilityDependents(of key: ConnectionCapabilityKey) async {
+        guard key.domain == .page else {
+            return
+        }
+        let cssKey = ConnectionCapabilityKey(
+            route: key.route,
+            targetID: key.targetID,
+            domain: .css
+        )
+        await reconcileCapability(for: cssKey)
+    }
+
+    private func capabilityDependentsAreInactive(
+        for key: ConnectionCapabilityKey,
+        generation: WebInspectorPage.Generation
+    ) -> Bool {
+        guard key.domain == .page else {
+            return true
+        }
+        let cssKey = ConnectionCapabilityKey(
+            route: key.route,
+            targetID: key.targetID,
+            domain: .css
+        )
+        guard let css = capabilities.states[cssKey] else {
+            return true
+        }
+        precondition(
+            css.desiredCount == 0,
+            "A Page dependency was released while CSS still required it."
+        )
+        guard css.physical.generation == generation,
+              case .inactive = css.physical else {
+            return false
+        }
+        return true
+    }
+
+    private func reconcileCapabilityDependenciesAfterCleanup(
+        of key: ConnectionCapabilityKey
+    ) async {
+        guard key.domain == .css else {
+            return
+        }
+        let pageKey = ConnectionCapabilityKey(
+            route: key.route,
+            targetID: key.targetID,
+            domain: .page
+        )
+        await reconcileCapability(for: pageKey)
+    }
+
+    private func startCapabilityEnable(
+        for key: ConnectionCapabilityKey,
+        generation: WebInspectorPage.Generation,
+        policy: ConnectionCapabilityTask.Policy = .standard
     ) {
         guard var capability = capabilities.states[key] else {
             return
         }
+        let startingWireState = capabilityEnableStartingWireState(
+            capability.physical
+        )
         let operationID = capabilities.allocateOperationID()
         capability.physical = .enabling(
             generation: generation,
@@ -3068,13 +3313,16 @@ package actor ConnectionCore {
             id: operationID,
             key: key,
             generation: generation,
-            action: .enable
+            action: .enable,
+            policy: policy,
+            startingWireState: startingWireState
         )
     }
 
     private func startCapabilityDisable(
         for key: ConnectionCapabilityKey,
-        generation: WebInspectorPage.Generation
+        generation: WebInspectorPage.Generation,
+        policy: ConnectionCapabilityTask.Policy = .standard
     ) {
         guard var capability = capabilities.states[key] else {
             return
@@ -3086,8 +3334,57 @@ package actor ConnectionCore {
             id: operationID,
             key: key,
             generation: generation,
-            action: .disable
+            action: .disable,
+            policy: policy,
+            startingWireState: nil
         )
+    }
+
+    private func startCSSCapabilitySnapshot(
+        for key: ConnectionCapabilityKey,
+        generation: WebInspectorPage.Generation,
+        ensuringEnabled: Bool
+    ) {
+        precondition(key.domain == .css, "A CSS snapshot requires the CSS capability.")
+        guard var capability = capabilities.states[key] else {
+            return
+        }
+        let startingWireState = capabilityEnableStartingWireState(
+            capability.physical
+        )
+        let operationID = capabilities.allocateOperationID()
+        capability.physical = .enabling(
+            generation: generation,
+            operationID: operationID,
+            mustDisableAfterEnable: false
+        )
+        capabilities.states[key] = capability
+        startCapabilityTask(
+            id: operationID,
+            key: key,
+            generation: generation,
+            action: .enable,
+            policy: ensuringEnabled ? .cssEnableAndSnapshot : .cssSnapshot,
+            startingWireState: startingWireState,
+            method: ensuringEnabled ? "CSS.enable" : "CSS.getAllStyleSheets"
+        )
+    }
+
+    private func capabilityEnableStartingWireState(
+        _ physical: ConnectionCapabilityRegistry.PhysicalState
+    ) -> ConnectionCapabilityTask.StartingWireState {
+        switch physical {
+        case .inactive:
+            return .inactive
+        case .unknown:
+            return .unknown
+        case .replayRequired:
+            return .enabled
+        case .enabling, .enabled, .disabling:
+            preconditionFailure(
+                "An enable operation must start from inactive, unknown, or replay-required wire state."
+            )
+        }
     }
 
     private enum CapabilityWireAction: Equatable, Sendable {
@@ -3099,19 +3396,41 @@ package actor ConnectionCore {
         id: UInt64,
         key: ConnectionCapabilityKey,
         generation: WebInspectorPage.Generation,
-        action: CapabilityWireAction
+        action: CapabilityWireAction,
+        policy: ConnectionCapabilityTask.Policy,
+        startingWireState: ConnectionCapabilityTask.StartingWireState?,
+        method: String? = nil
     ) {
+        precondition(
+            (action == .enable) == (startingWireState != nil),
+            "Only enable-class capability operations carry a starting wire state."
+        )
         let operation: ConnectionOwnedCommandOperation
         do {
-            operation = try makeCapabilityCommandOperation(
-                action,
-                for: key,
-                generation: generation,
-                operationID: id
-            )
+            operation = if let method {
+                try makeCapabilityCommandOperation(
+                    method: method,
+                    for: key,
+                    generation: generation,
+                    operationID: id,
+                    publishesReplay: false
+                )
+            } else {
+                try makeCapabilityCommandOperation(
+                    action,
+                    for: key,
+                    generation: generation,
+                    operationID: id
+                )
+            }
         } catch {
             let result: Result<Void, any Swift.Error> = .failure(
-                Self.mapCapabilityError(error, action: action, domain: key.domain)
+                Self.mapCapabilityError(
+                    error,
+                    action: action,
+                    domain: key.domain,
+                    method: method
+                )
             )
             let task = Task { [weak self] in
                 _ = await self?.completeCapabilityOperation(
@@ -3125,7 +3444,9 @@ package actor ConnectionCore {
             precondition(capabilityTasks[id] == nil, "A capability operation identifier already has an owner.")
             capabilityTasks[id] = ConnectionCapabilityTask(
                 task: task,
-                pendingReplyOwnership: nil
+                pendingReplyOwnership: nil,
+                startingWireState: startingWireState,
+                policy: policy
             )
             return
         }
@@ -3133,14 +3454,25 @@ package actor ConnectionCore {
         let task = Task { [weak self, operation] in
             let wireResult: Result<Void, any Swift.Error>
             do {
-                try await operation.value()
+                _ = try await operation.result()
+                if policy == .cssEnableAndSnapshot {
+                    guard let self else {
+                        return
+                    }
+                    try await self.requestAndPublishCSSSnapshotIfCurrent(
+                        key: key,
+                        generation: generation,
+                        operationID: id
+                    )
+                }
                 wireResult = .success(())
             } catch {
                 wireResult = .failure(
                     Self.mapCapabilityError(
                         error,
                         action: action,
-                        domain: key.domain
+                        domain: key.domain,
+                        method: method
                     )
                 )
             }
@@ -3162,8 +3494,55 @@ package actor ConnectionCore {
         precondition(capabilityTasks[id] == nil, "A capability operation identifier already has an owner.")
         capabilityTasks[id] = ConnectionCapabilityTask(
             task: task,
-            pendingReplyOwnership: operation.pendingReplyOwnership
+            pendingReplyOwnership: operation.pendingReplyOwnership,
+            startingWireState: startingWireState,
+            policy: policy
         )
+    }
+
+    private func requestAndPublishCSSSnapshotIfCurrent(
+        key: ConnectionCapabilityKey,
+        generation: WebInspectorPage.Generation,
+        operationID: UInt64
+    ) async throws {
+        guard let capability = capabilities.states[key],
+              case let .enabling(activeGeneration, activeOperationID, _) = capability.physical,
+              activeGeneration == generation,
+              activeOperationID == operationID,
+              capability.desiredCount > 0 else {
+            return
+        }
+        guard var task = capabilityTasks[operationID] else {
+            throw WebInspectorProxyError.closed
+        }
+        // CSS.enable has completed successfully. Any failure from this point
+        // belongs to the read-only snapshot while the physical CSS agent is
+        // known to remain enabled.
+        task.startingWireState = .enabled
+        task.policy = .cssSnapshot
+        capabilityTasks[operationID] = task
+        let operation = try makeCapabilityCommandOperation(
+            method: "CSS.getAllStyleSheets",
+            for: key,
+            generation: generation,
+            operationID: operationID,
+            publishesReplay: false
+        )
+        guard var activeTask = capabilityTasks[operationID] else {
+            throw WebInspectorProxyError.closed
+        }
+        activeTask.pendingReplyOwnership = operation.pendingReplyOwnership
+        capabilityTasks[operationID] = activeTask
+        do {
+            _ = try await operation.result()
+        } catch {
+            throw Self.mapCapabilityError(
+                error,
+                action: .enable,
+                domain: .css,
+                method: "CSS.getAllStyleSheets"
+            )
+        }
     }
 
     private func makeCapabilityCommandOperation(
@@ -3360,7 +3739,8 @@ package actor ConnectionCore {
         action: CapabilityWireAction,
         result: Result<Void, any Swift.Error>
     ) async {
-        if let ownership = capabilityTasks.removeValue(forKey: id)?.pendingReplyOwnership,
+        let task = capabilityTasks.removeValue(forKey: id)
+        if let ownership = task?.pendingReplyOwnership,
            let pending = replyStore.removePendingReply(ownership.key) {
             precondition(
                 pending.purpose == ownership.purpose,
@@ -3370,6 +3750,12 @@ package actor ConnectionCore {
         guard isOpen, var capability = capabilities.states[key] else {
             return
         }
+        let result = Self.normalizeCapabilityResult(
+            result,
+            action: action,
+            domain: key.domain,
+            policy: task?.policy ?? .standard
+        )
 
         switch (action, capability.physical) {
         case let (.enable, .enabling(activeGeneration, operationID, mustDisableAfterEnable))
@@ -3391,6 +3777,7 @@ package actor ConnectionCore {
                 let releaseWaiters = Array(capability.releaseWaiters.values)
                 capability.releaseWaiters.removeAll()
                 capabilities.states[key] = capability
+                await reconcileCapabilityDependents(of: key)
                 for waiter in waiters {
                     waiter.fulfill(.success(()))
                 }
@@ -3399,11 +3786,58 @@ package actor ConnectionCore {
                 }
             case let .failure(error):
                 let activeLeaseFailed = capability.hasActivatedDesiredLease
-                let wireStateIsKnownInactive = Self.enableFailureProvesInactive(error)
+                let startingWireState = task?.startingWireState ?? .unknown
                 let failedIDs = Set(capability.activationWaiters.keys)
                 capability.failedLeaseOwners.formUnion(failedIDs)
                 let activationWaiters = Array(capability.activationWaiters.values)
                 capability.activationWaiters.removeAll()
+
+                if startingWireState == .enabled,
+                   !Self.isPageUnavailable(error) {
+                    // Replay enables and auxiliary snapshots begin with a
+                    // physical agent that is already enabled. Their failure
+                    // cannot make that agent inactive, regardless of whether
+                    // the logical owner was released while awaiting the reply.
+                    capability.physical = .enabled(generation: generation)
+                    if capability.desiredCount == 0 {
+                        capabilities.states[key] = capability
+                        startCapabilityDisable(for: key, generation: generation)
+                        for waiter in activationWaiters {
+                            waiter.fulfill(.failure(error))
+                        }
+                        return
+                    }
+
+                    let releaseWaiters = Array(capability.releaseWaiters.values)
+                    capability.releaseWaiters.removeAll()
+                    let proposedTerminalCause = Self
+                        .terminalCauseForEnabledCapabilityRefreshFailure(
+                            error,
+                            domain: key.domain
+                        )
+                    // Claim terminal ownership before resuming any waiter so
+                    // actor reentrancy cannot continue against an enabled but
+                    // unsynchronized physical agent.
+                    let claimedTerminalCause = terminalClaim
+                        .claim(proposedTerminalCause)
+                        .cause
+                    state = .closing
+                    capabilities.states[key] = capability
+                    for waiter in activationWaiters {
+                        waiter.fulfill(.failure(error))
+                    }
+                    for waiter in releaseWaiters {
+                        waiter.fulfill(.failure(error))
+                    }
+                    await finishClaimedTermination(claimedTerminalCause)
+                    return
+                }
+
+                let wireStateIsKnownInactive = Self.isPageUnavailable(error)
+                    || (
+                        startingWireState == .inactive
+                            && Self.enableFailureProvesInactive(error)
+                    )
                 capability.physical = .inactive(generation: generation)
                 let releaseWaiters: [ReplyPromise<Void>]
                 if capability.desiredCount == 0 {
@@ -3453,12 +3887,17 @@ package actor ConnectionCore {
                 let releaseWaiters = Array(capability.releaseWaiters.values)
                 capability.releaseWaiters.removeAll()
                 capabilities.states[key] = capability
+                if task?.policy == .replayRefresh,
+                   let domain = modelDomain(for: protocolDomain(for: key.domain)) {
+                    modelReplaySuppressedDomains[domain] = nil
+                }
                 await reconcileCapability(for: key)
+                await reconcileCapabilityDependenciesAfterCleanup(of: key)
                 for waiter in releaseWaiters {
                     waiter.fulfill(.success(()))
                 }
             case let .failure(error):
-                if Self.isCommandRejection(error) {
+                if Self.isCommandRejection(error), task?.policy != .replayRefresh {
                     // A rejected disable proves that the command did not
                     // deactivate the physical domain. Retain the enabled state
                     // so a late lease can use it and a future final release can
@@ -3503,7 +3942,8 @@ package actor ConnectionCore {
 
                 let proposedTerminalCause = Self.terminalCauseForUncertainDisableFailure(
                     error,
-                    domain: key.domain
+                    domain: key.domain,
+                    wasReplayRefresh: task?.policy == .replayRefresh
                 )
                 // Claim terminal ownership before resuming any waiter so actor
                 // reentrancy cannot admit a lease against uncertain wire state.
@@ -3530,15 +3970,36 @@ package actor ConnectionCore {
         }
     }
 
+    private nonisolated static func normalizeCapabilityResult(
+        _ result: Result<Void, any Swift.Error>,
+        action: CapabilityWireAction,
+        domain: WebInspectorProxyEventDomain,
+        policy: ConnectionCapabilityTask.Policy
+    ) -> Result<Void, any Swift.Error> {
+        guard policy == .restoredPageEnable,
+              action == .enable,
+              domain == .page,
+              case let .failure(error) = result,
+              let error = error as? WebInspectorProxyError,
+              case let .commandRejected(method, message) = error,
+              method == "Page.enable",
+              message == "Page domain already enabled" else {
+            return result
+        }
+        return .success(())
+    }
+
     private nonisolated static func mapCapabilityError(
         _ error: any Swift.Error,
         action: CapabilityWireAction,
-        domain: WebInspectorProxyEventDomain
+        domain: WebInspectorProxyEventDomain,
+        method: String? = nil
     ) -> any Swift.Error {
         if let proxyError = error as? WebInspectorProxyError {
             return proxyError
         }
-        let method = "\(domain.rawValue).\(action == .enable ? "enable" : "disable")"
+        let method = method
+            ?? "\(domain.rawValue).\(action == .enable ? "enable" : "disable")"
         guard let transportError = error as? TransportSession.Error else {
             return WebInspectorProxyError.transportFailure(String(describing: error))
         }
@@ -3554,7 +4015,11 @@ package actor ConnectionCore {
         case .malformedMessage:
             return WebInspectorProxyError.protocolViolation("Malformed reply for \(method).")
         case .replyTimeout:
-            return WebInspectorProxyError.timeout(domain: domain.rawValue, method: action == .enable ? "enable" : "disable")
+            return WebInspectorProxyError.timeout(
+                domain: domain.rawValue,
+                method: method.split(separator: ".").last.map(String.init)
+                    ?? (action == .enable ? "enable" : "disable")
+            )
         }
     }
 
@@ -3665,7 +4130,7 @@ package actor ConnectionCore {
         )
     }
 
-    private nonisolated static func terminalCauseForUncertainDisableFailure(
+    private nonisolated static func terminalCauseForEnabledCapabilityRefreshFailure(
         _ error: any Swift.Error,
         domain: WebInspectorProxyEventDomain
     ) -> TerminalCause {
@@ -3674,7 +4139,22 @@ package actor ConnectionCore {
             return .protocolViolation(message)
         }
         return .fatal(
-            "Failed to disable \(domain.rawValue) with an uncertain wire state: \(error)"
+            "Failed to refresh \(domain.rawValue) while its physical agent remained enabled: \(error)"
+        )
+    }
+
+    private nonisolated static func terminalCauseForUncertainDisableFailure(
+        _ error: any Swift.Error,
+        domain: WebInspectorProxyEventDomain,
+        wasReplayRefresh: Bool = false
+    ) -> TerminalCause {
+        if let error = error as? WebInspectorProxyError,
+           case let .protocolViolation(message) = error {
+            return .protocolViolation(message)
+        }
+        let action = wasReplayRefresh ? "refresh" : "disable"
+        return .fatal(
+            "Failed to \(action) \(domain.rawValue) with an uncertain wire state: \(error)"
         )
     }
 
@@ -4174,9 +4654,24 @@ package actor ConnectionCore {
         for pending: TransportSession.PendingReply
     ) throws {
         switch pending.purpose {
-        case .direct, .modelCommand, .capabilityAuxiliary:
+        case .direct, .modelCommand:
             // Consumer replies have no internal publication side effect.
             break
+        case let .capabilityAuxiliary(key, generation, operationID):
+            guard pending.method == "CSS.getAllStyleSheets" else {
+                break
+            }
+            guard capabilityTasks[operationID]?.policy == .cssSnapshot else {
+                preconditionFailure(
+                    "A CSS snapshot reply has no snapshot capability owner."
+                )
+            }
+            try publishCSSSnapshotIfCurrent(
+                result,
+                key: key,
+                generation: generation,
+                operationID: operationID
+            )
         case let .elementPickerMode(key, generation, _, enabled):
             publishElementPickerModeReplyIfCurrent(
                 result,
@@ -4302,6 +4797,101 @@ package actor ConnectionCore {
         bootstrap.activeOperation = active
         registration.domBootstrap = bootstrap
         modelFeed = registration
+    }
+
+    private func publishCSSSnapshotIfCurrent(
+        _ result: ProtocolCommand.Result,
+        key: ConnectionCapabilityKey,
+        generation: WebInspectorPage.Generation,
+        operationID: UInt64
+    ) throws {
+        guard isOpen,
+              generation == currentPageGeneration,
+              result.targetID == targetRegistry.currentMainPageTargetID,
+              let capability = capabilities.states[key],
+              case let .enabling(activeGeneration, activeOperationID, _) = capability.physical,
+              activeGeneration == generation,
+              activeOperationID == operationID else {
+            return
+        }
+        let resultPayload: CSSAllStyleSheetsResult
+        do {
+            resultPayload = try JSONDecoder().decode(
+                CSSAllStyleSheetsResult.self,
+                from: result.resultData
+            )
+        } catch {
+            throw WebInspectorProxyError.protocolViolation(
+                "Failed to decode CSS.getAllStyleSheets reply: \(error)"
+            )
+        }
+        guard let targetSnapshot = targetRegistry.modelTargetSnapshot() else {
+            preconditionFailure("A CSS snapshot has no current model target snapshot.")
+        }
+        let currentTarget = targetSnapshot.targets.first {
+            $0.id == targetSnapshot.currentPageID
+        }
+        guard let currentTarget else {
+            preconditionFailure("A CSS snapshot has no current page target.")
+        }
+        let targetsByFrameID = Dictionary(
+            uniqueKeysWithValues: targetSnapshot.targets.compactMap { target in
+                target.frameID.map { ($0, target) }
+            }
+        )
+        let styleSheets = resultPayload.headers.map { payload in
+            let header = payload.proxyHeader
+            let target = header.frameID.flatMap { targetsByFrameID[$0] }
+                ?? currentTarget
+            return ModelCSSStyleSheet(
+                target: target,
+                header: ConnectionEventProjection.projectedCSSStyleSheetHeader(
+                    header,
+                    target: target
+                )
+            )
+        }
+
+        for target in targetSnapshot.targets {
+            styleSheetRouting.removeTarget(ProtocolTarget.ID(target.id.rawValue))
+        }
+        for (payload, styleSheet) in zip(resultPayload.headers, styleSheets) {
+            styleSheetRouting.recordAdded(
+                styleSheetID: payload.styleSheetId,
+                frameID: payload.frameId.map { ProtocolFrame.ID($0) },
+                paramsData: Data(),
+                resolvedTargetID: ProtocolTarget.ID(styleSheet.target.id.rawValue)
+            )
+        }
+
+        guard let registration = modelFeed,
+              registration.configuredDomains.contains(.css),
+              registration.synchronization?.generation == generation,
+              capability.desiredLeaseOwners.contains(
+                  .modelFeed(registration.id, .css)
+              ) else {
+            return
+        }
+        guard enqueueModelFeedRecord(
+            .bootstrapSnapshot(
+                generation: generation,
+                domain: .css,
+                sequence: result.receivedSequence,
+                payload: .cssStyleSheets(styleSheets)
+            )
+        ) else {
+            return
+        }
+        guard enqueueModelFeedRecord(
+            .bootstrapComplete(
+                generation: generation,
+                domain: .css,
+                through: result.receivedSequence
+            )
+        ) else {
+            return
+        }
+        _ = completeModelDomain(.css, generation: generation)
     }
 
     private func publishModelReplayCompletionIfNeeded(
@@ -4627,6 +5217,10 @@ package actor ConnectionCore {
             return CurrentPageBindingChangeEffects()
         }
 
+        if let oldTargetID {
+            rememberCurrentPageCapabilities(for: oldTargetID)
+        }
+
         let obsoleteBootstrapTasks = cancelModelBootstrapTasks(
             generation: currentPageGeneration
         )
@@ -4640,14 +5234,14 @@ package actor ConnectionCore {
             // expose an empty intermediate binding as another logical page
             // transition.
             currentPageBindingGapIsOpen = false
-            let keys = capabilities.states.keys.filter { $0.route == .currentPage }
+            let prepared = prepareCurrentPageCapabilities(for: newTargetID)
             publishModelBindingChange(hasCurrentBinding: true)
             guard isOpen else {
                 return CurrentPageBindingChangeEffects()
             }
             return CurrentPageBindingChangeEffects(
-                capabilityKeysToReconcile: keys,
-                releaseWaiters: [],
+                capabilityKeysToReconcile: prepared.keys,
+                releaseWaiters: prepared.releaseWaiters,
                 modelBootstrapTasksToAwait: obsoleteBootstrapTasks
             )
         }
@@ -4695,24 +5289,230 @@ package actor ConnectionCore {
             )
         }
 
-        let keys = capabilities.states.keys.filter { $0.route == .currentPage }
-        var releaseWaiters: [ReplyPromise<Void>] = []
-        for key in keys {
-            guard var capability = capabilities.states[key] else {
-                continue
-            }
-            releaseWaiters.append(contentsOf: capability.releaseWaiters.values)
-            capability.releaseWaiters.removeAll()
-            capability.physical = .inactive(generation: currentPageGeneration)
-            capabilities.states[key] = capability
-        }
+        let prepared = prepareCurrentPageCapabilities(for: newTargetID)
 
         return CurrentPageBindingChangeEffects(
-            capabilityKeysToReconcile: newTargetID == nil ? [] : keys,
-            releaseWaiters: releaseWaiters,
+            capabilityKeysToReconcile: newTargetID == nil ? [] : prepared.keys,
+            releaseWaiters: prepared.releaseWaiters,
             modelBootstrapTasksToAwait: obsoleteBootstrapTasks,
             commandInvalidation: commandInvalidation
         )
+    }
+
+    private func rememberCurrentPageCapabilities(for targetID: ProtocolTarget.ID) {
+        var remembered: [
+            WebInspectorProxyEventDomain: RememberedCurrentPageCapabilityState
+        ] = [:]
+        for (key, capability) in capabilities.states where key.route == .currentPage {
+            guard key.domain != .dom, key.domain != .target else {
+                continue
+            }
+            remembered[key.domain] = switch capability.physical {
+            case .inactive:
+                .inactive
+            case .enabled, .replayRequired:
+                .enabled
+            case .unknown, .enabling, .disabling:
+                .unknown
+            }
+        }
+        parkCurrentPageCapabilities(remembered, for: targetID)
+    }
+
+    private func parkCurrentPageCapabilities(
+        _ capabilities: [
+            WebInspectorProxyEventDomain: RememberedCurrentPageCapabilityState
+        ],
+        for targetID: ProtocolTarget.ID
+    ) {
+        parkedCurrentPageCapabilityLedger[targetID] = capabilities
+        parkedCurrentPageCapabilityLedgerOrder.removeAll { $0 == targetID }
+        parkedCurrentPageCapabilityLedgerOrder.append(targetID)
+
+        while parkedCurrentPageCapabilityLedgerOrder.count
+                > Self.parkedCurrentPageTargetRetentionLimit {
+            let evictedTargetID = parkedCurrentPageCapabilityLedgerOrder.removeFirst()
+            parkedCurrentPageCapabilityLedger[evictedTargetID] = nil
+        }
+    }
+
+    private func takeParkedCurrentPageCapabilities(
+        for targetID: ProtocolTarget.ID
+    ) -> [
+        WebInspectorProxyEventDomain: RememberedCurrentPageCapabilityState
+    ]? {
+        let capabilities = parkedCurrentPageCapabilityLedger.removeValue(
+            forKey: targetID
+        )
+        if capabilities != nil {
+            parkedCurrentPageCapabilityLedgerOrder.removeAll { $0 == targetID }
+        }
+        return capabilities
+    }
+
+    private func prepareCurrentPageCapabilities(
+        for targetID: ProtocolTarget.ID?
+    ) -> (keys: [ConnectionCapabilityKey], releaseWaiters: [ReplyPromise<Void>]) {
+        let remembered: [
+            WebInspectorProxyEventDomain: RememberedCurrentPageCapabilityState
+        ]?
+        if let targetID {
+            remembered = takeParkedCurrentPageCapabilities(for: targetID)
+        } else {
+            remembered = nil
+        }
+        modelReplaySuppressedDomains.removeAll(keepingCapacity: true)
+        var keys = Set(capabilities.states.keys.filter { $0.route == .currentPage })
+
+        if targetID != nil, let remembered {
+            for (domain, state) in remembered where state != .inactive {
+                guard domain != .dom, domain != .target else {
+                    continue
+                }
+                keys.insert(ConnectionCapabilityKey(
+                    route: .currentPage,
+                    targetID: .currentPage,
+                    domain: domain
+                ))
+            }
+        }
+
+        var releaseWaiters: [ReplyPromise<Void>] = []
+        for key in keys {
+            var capability = capabilities.states[key]
+                ?? ConnectionCapabilityRegistry.State(
+                    physical: .inactive(generation: currentPageGeneration)
+                )
+            releaseWaiters.append(contentsOf: capability.releaseWaiters.values)
+            capability.releaseWaiters.removeAll()
+            let modelFeedOwnsDomain = currentModelFeedOwns(
+                key.domain,
+                capability: capability
+            )
+            capability.physical = restoredCurrentPagePhysicalState(
+                domain: key.domain,
+                remembered: remembered?[key.domain],
+                hasBinding: targetID != nil,
+                modelFeedOwnsDomain: modelFeedOwnsDomain
+            )
+            capabilities.states[key] = capability
+
+            if modelFeedOwnsDomain,
+               (key.domain == .console || key.domain == .runtime) {
+                switch capability.physical {
+                case .unknown, .replayRequired:
+                    let domain = key.domain == .console
+                        ? ModelDomain.console
+                        : ModelDomain.runtime
+                    modelReplaySuppressedDomains[domain] = currentPageGeneration
+                case .inactive, .enabling, .enabled, .disabling:
+                    break
+                }
+            }
+
+            if key.domain == .inspector {
+                if case .enabled = capability.physical {
+                    inspectorInitializedGeneration[key] = currentPageGeneration
+                } else {
+                    inspectorInitializedGeneration[key] = nil
+                }
+            }
+        }
+
+        return (
+            keys: keys.sorted(by: currentPageCapabilityReconciliationPrecedes),
+            releaseWaiters: releaseWaiters
+        )
+    }
+
+    private func restoredCurrentPagePhysicalState(
+        domain: WebInspectorProxyEventDomain,
+        remembered: RememberedCurrentPageCapabilityState?,
+        hasBinding: Bool,
+        modelFeedOwnsDomain: Bool
+    ) -> ConnectionCapabilityRegistry.PhysicalState {
+        guard hasBinding, domain != .dom else {
+            return .inactive(generation: currentPageGeneration)
+        }
+        switch remembered {
+        case .inactive, nil:
+            return .inactive(generation: currentPageGeneration)
+        case .enabled:
+            switch domain {
+            case .page, .inspector:
+                return .enabled(generation: currentPageGeneration)
+            case .css, .console, .runtime:
+                guard modelFeedOwnsDomain else {
+                    return .enabled(generation: currentPageGeneration)
+                }
+                return .replayRequired(generation: currentPageGeneration)
+            case .network:
+                // WebKit's Network.enable is idempotent and republishes every
+                // active WebSocket. Both model feeds and direct event scopes
+                // need that replay after their logical generation resets.
+                return .replayRequired(generation: currentPageGeneration)
+            case .dom:
+                return .inactive(generation: currentPageGeneration)
+            case .target:
+                preconditionFailure("Target is not an acquirable capability domain.")
+            }
+        case .unknown:
+            return .unknown(generation: currentPageGeneration)
+        }
+    }
+
+    private func currentModelFeedOwns(
+        _ domain: WebInspectorProxyEventDomain,
+        capability: ConnectionCapabilityRegistry.State
+    ) -> Bool {
+        guard let registration = modelFeed,
+              let modelDomain = modelDomain(for: protocolDomain(for: domain)),
+              registration.configuredDomains.contains(modelDomain) else {
+            return false
+        }
+        return capability.desiredLeaseOwners.contains(
+            .modelFeed(registration.id, modelDomain)
+        )
+    }
+
+    private func currentPageCapabilityReconciliationPrecedes(
+        _ lhs: ConnectionCapabilityKey,
+        _ rhs: ConnectionCapabilityKey
+    ) -> Bool {
+        let lhsRank = currentPageCapabilityRank(lhs.domain)
+        let rhsRank = currentPageCapabilityRank(rhs.domain)
+        let lhsIsDesired = capabilities.states[lhs]?.desiredCount ?? 0 > 0
+        let rhsIsDesired = capabilities.states[rhs]?.desiredCount ?? 0 > 0
+        if lhsIsDesired != rhsIsDesired {
+            return lhsIsDesired
+        }
+        if lhsRank != rhsRank {
+            return lhsIsDesired ? lhsRank < rhsRank : lhsRank > rhsRank
+        }
+        return lhs.domain.rawValue < rhs.domain.rawValue
+    }
+
+    private func currentPageCapabilityRank(
+        _ domain: WebInspectorProxyEventDomain
+    ) -> Int {
+        switch domain {
+        case .page:
+            0
+        case .dom:
+            1
+        case .inspector:
+            2
+        case .css:
+            3
+        case .network:
+            4
+        case .console:
+            5
+        case .runtime:
+            6
+        case .target:
+            preconditionFailure("Target is not an acquirable capability domain.")
+        }
     }
 
     private func completeCurrentPageBindingChange(
@@ -5197,6 +5997,10 @@ package actor ConnectionCore {
         }
 
         let configuredDomain = modelDomain(for: event.domain)
+        if let configuredDomain,
+           modelReplaySuppressedDomains[configuredDomain] == currentPageGeneration {
+            return
+        }
         let elementPickerOwner = ConnectionCapabilityLeaseOwner.modelElementPicker(
             registration.id
         )
@@ -5719,4 +6523,8 @@ private struct CSSStyleSheetIDParams: Decodable {
     private enum CodingKeys: String, CodingKey {
         case styleSheetID = "styleSheetId"
     }
+}
+
+private struct CSSAllStyleSheetsResult: Decodable {
+    var headers: [StyleSheetHeaderPayload]
 }

@@ -184,6 +184,14 @@ struct ConnectionEventScopeRegistry {
 struct ConnectionCapabilityRegistry {
     enum PhysicalState: Sendable {
         case inactive(generation: WebInspectorPage.Generation)
+        /// The target is known, but an in-flight or previously enabled
+        /// physical agent prevents us from claiming either wire state.
+        /// Reconciliation must establish the domain-specific postcondition
+        /// before activating this logical generation.
+        case unknown(generation: WebInspectorPage.Generation)
+        /// The physical agent remains enabled, but its model state has not
+        /// yet been rebuilt for the newly bound logical generation.
+        case replayRequired(generation: WebInspectorPage.Generation)
         case enabling(
             generation: WebInspectorPage.Generation,
             operationID: UInt64,
@@ -195,6 +203,8 @@ struct ConnectionCapabilityRegistry {
         var generation: WebInspectorPage.Generation {
             switch self {
             case let .inactive(generation),
+                 let .unknown(generation),
+                 let .replayRequired(generation),
                  let .enabling(generation, _, _),
                  let .enabled(generation),
                  let .disabling(generation, _):

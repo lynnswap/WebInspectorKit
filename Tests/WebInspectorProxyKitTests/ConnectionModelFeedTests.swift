@@ -64,6 +64,76 @@ func modelDomainNormalizationAddsDOMOnlyWhenCSSRequiresIt() {
 }
 
 @Test
+func parkedCapabilityLedgerKeepsABoundedRestorationWindow() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-0",
+        type: "page",
+        frameID: "main-frame"
+    ))
+
+    let scopeTask = Task {
+        let scope: WebInspectorProxyEventScope<Network.Event> = try await core
+            .acquireEventScope(
+                route: .currentPage,
+                targetID: .currentPage,
+                domain: .network,
+                buffering: .bounded(256),
+                extract: { event in
+                    guard case let .network(value) = event else {
+                        return nil
+                    }
+                    return value
+                }
+            )
+        return scope
+    }
+    let initialEnable = try await backend.waitForTargetMessage(
+        method: "Network.enable"
+    )
+    await modelFeedRespond(to: initialEnable, core: core)
+    let scope = try await scopeTask.value
+
+    for index in 1...70 {
+        let oldTargetID = "page-\(index - 1)"
+        let newTargetID = "page-\(index)"
+        _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+            id: newTargetID,
+            type: "page",
+            frameID: "main-frame",
+            isProvisional: true
+        ))
+        let commitBaseline = await backend.sentTargetMessages().count
+        _ = await core.receiveRootMessage(
+            #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"\#(oldTargetID)","newTargetId":"\#(newTargetID)"}}"#
+        )
+        let enable = try await backend.waitForTargetMessage(
+            method: "Network.enable",
+            after: commitBaseline
+        )
+        #expect(enable.targetIdentifier == ProtocolTarget.ID(newTargetID))
+        await modelFeedRespond(to: enable, core: core)
+    }
+
+    #expect(await core.parkedCurrentPageCapabilityCountForTesting() == 64)
+
+    let releaseBaseline = await backend.sentTargetMessages().count
+    let releaseTask = Task {
+        try await core.releaseEventScope(scope.id)
+    }
+    let disable = try await backend.waitForTargetMessage(
+        method: "Network.disable",
+        after: releaseBaseline
+    )
+    #expect(disable.targetIdentifier == ProtocolTarget.ID("page-70"))
+    await modelFeedRespond(to: disable, core: core)
+    try await releaseTask.value
+    #expect(await core.terminalCause == nil)
+    await core.close()
+}
+
+@Test
 func directElementPickerScopesShareOnePhysicalModeAndInitializeOncePerGeneration() async throws {
     let backend = FakeTransportBackend()
     let core = ConnectionCore(backend: backend, responseTimeout: nil)
@@ -1705,6 +1775,623 @@ func activeModelFeedLeaseReconcilesOntoReplacementTarget() async throws {
         enableMethods: ["Network.enable"]
     )
     #expect(try await iterator.next() == nil)
+    await core.close()
+}
+
+@Test
+func restoredPageTargetReusesPageAgentAndRefreshesReplayDomains() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-a",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let configuredDomains: Set<ModelDomain> = [
+        .css,
+        .network,
+        .console,
+        .runtime,
+    ]
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: configuredDomains,
+        targetID: "page-a"
+    )
+    var iterator = feed.records.makeAsyncIterator()
+
+    _ = try await modelFeedRequireReset(iterator.next())
+    _ = try await modelFeedRequireTargetSnapshot(iterator.next())
+    _ = try await modelFeedRequireDOMBootstrapSnapshot(iterator.next())
+    _ = try await modelFeedRequireBootstrapCompletion(iterator.next())
+    for domain in [ModelDomain.css, .network, .console, .runtime] {
+        #expect(try await modelFeedRequireReplayCompletion(iterator.next()).domain == domain)
+    }
+    _ = try await modelFeedRequireSynchronization(iterator.next())
+
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-b",
+        type: "page",
+        frameID: "main-frame",
+        isProvisional: true
+    ))
+    let pageBCommitBaseline = await backend.sentTargetMessages().count
+    _ = await core.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-a","newTargetId":"page-b"}}"#
+    )
+
+    let pageBDocument = try await backend.waitForTargetMessage(
+        method: "DOM.getDocument",
+        after: pageBCommitBaseline
+    )
+    await modelFeedRespondWithDocument(to: pageBDocument, core: core, nodeID: "page-b")
+    for method in [
+        "Page.enable",
+        "CSS.enable",
+        "Network.enable",
+        "Console.enable",
+        "Runtime.enable",
+    ] {
+        let message = try await backend.waitForTargetMessage(
+            method: method,
+            after: pageBCommitBaseline
+        )
+        #expect(message.targetIdentifier == ProtocolTarget.ID("page-b"))
+        await modelFeedRespond(to: message, core: core)
+    }
+
+    _ = try await modelFeedRequireReset(iterator.next())
+    _ = try await modelFeedRequireTargetSnapshot(iterator.next())
+    _ = try await modelFeedRequireDOMBootstrapSnapshot(iterator.next())
+    _ = try await modelFeedRequireBootstrapCompletion(iterator.next())
+    for domain in [ModelDomain.css, .network, .console, .runtime] {
+        #expect(try await modelFeedRequireReplayCompletion(iterator.next()).domain == domain)
+    }
+    _ = try await modelFeedRequireSynchronization(iterator.next())
+
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-a",
+        type: "page",
+        frameID: "main-frame",
+        isProvisional: true
+    ))
+    let restorationBaseline = await backend.sentTargetMessages().count
+    _ = await core.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-b","newTargetId":"page-a"}}"#
+    )
+
+    let restoredDocument = try await backend.waitForTargetMessage(
+        method: "DOM.getDocument",
+        after: restorationBaseline
+    )
+    await modelFeedRespondWithDocument(to: restoredDocument, core: core, nodeID: "page-a-restored")
+
+    let cssSnapshot = try await backend.waitForTargetMessage(
+        method: "CSS.getAllStyleSheets",
+        after: restorationBaseline
+    )
+    let networkEnable = try await backend.waitForTargetMessage(
+        method: "Network.enable",
+        after: restorationBaseline
+    )
+    let consoleDisable = try await backend.waitForTargetMessage(
+        method: "Console.disable",
+        after: restorationBaseline
+    )
+    let runtimeDisable = try await backend.waitForTargetMessage(
+        method: "Runtime.disable",
+        after: restorationBaseline
+    )
+    for message in [cssSnapshot, networkEnable, consoleDisable, runtimeDisable] {
+        #expect(message.targetIdentifier == ProtocolTarget.ID("page-a"))
+    }
+
+    await modelFeedRespondWithStyleSheets(to: cssSnapshot, core: core)
+    let postSnapshotCSSSequence = await core.receiveRootMessage(
+        modelFeedTargetDispatchMessage(
+            targetID: "page-a",
+            message: #"{"method":"CSS.styleSheetAdded","params":{"header":{"styleSheetId":"post-snapshot-sheet","frameId":"main-frame","origin":"author"}}}"#
+        )
+    )
+    await modelFeedRespond(to: networkEnable, core: core)
+
+    await modelFeedRespond(to: consoleDisable, core: core)
+    let consoleEnable = try await backend.waitForTargetMessage(
+        method: "Console.enable",
+        after: restorationBaseline
+    )
+    await modelFeedRespond(to: consoleEnable, core: core)
+
+    await modelFeedRespond(to: runtimeDisable, core: core)
+    let runtimeEnable = try await backend.waitForTargetMessage(
+        method: "Runtime.enable",
+        after: restorationBaseline
+    )
+    await modelFeedRespond(to: runtimeEnable, core: core)
+
+    let restorationMethods = try await backend.sentTargetMessages()
+        .dropFirst(restorationBaseline)
+        .map { try modelFeedMessageMethod($0.message) }
+    #expect(!restorationMethods.contains("Page.enable"))
+    #expect(restorationMethods.filter { $0 == "Network.enable" }.count == 1)
+    #expect(restorationMethods.filter { $0 == "CSS.getAllStyleSheets" }.count == 1)
+    #expect(!restorationMethods.contains("CSS.disable"))
+    #expect(!restorationMethods.contains("CSS.enable"))
+    #expect(restorationMethods.filter { $0 == "Console.disable" }.count == 1)
+    #expect(restorationMethods.filter { $0 == "Console.enable" }.count == 1)
+    #expect(restorationMethods.filter { $0 == "Runtime.disable" }.count == 1)
+    #expect(restorationMethods.filter { $0 == "Runtime.enable" }.count == 1)
+
+    let restoredGeneration = try await modelFeedRequireReset(iterator.next())
+    let restoredSnapshot = try await modelFeedRequireTargetSnapshot(iterator.next())
+    #expect(restoredSnapshot.generation == restoredGeneration)
+    #expect(restoredSnapshot.snapshot.currentPageID == WebInspectorTarget.ID("page-a"))
+    _ = try await modelFeedRequireDOMBootstrapSnapshot(iterator.next())
+    _ = try await modelFeedRequireBootstrapCompletion(iterator.next())
+    _ = try await modelFeedRequireCSSBootstrapSnapshot(iterator.next())
+    let cssCompletion = try await modelFeedRequireBootstrapCompletion(iterator.next())
+    #expect(cssCompletion.domain == .css)
+    let postSnapshotCSS = try await modelFeedRequireEvent(iterator.next())
+    #expect(postSnapshotCSS.generation == restoredGeneration)
+    #expect(postSnapshotCSS.sequence == postSnapshotCSSSequence)
+    #expect(postSnapshotCSS.sequence > cssCompletion.through)
+    for domain in [ModelDomain.network, .console, .runtime] {
+        let replay = try await modelFeedRequireReplayCompletion(iterator.next())
+        #expect(replay.generation == restoredGeneration)
+        #expect(replay.domain == domain)
+    }
+    let synchronization = try await modelFeedRequireSynchronization(iterator.next())
+    #expect(synchronization.generation == restoredGeneration)
+    #expect(await core.terminalCause == nil)
+
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-a",
+        enableMethods: modelFeedExpectedEnableMethods(
+            ModelDomain.normalized(configuredDomains)
+        )
+    )
+    #expect(try await iterator.next() == nil)
+    await core.close()
+}
+
+@Test
+func restoredCSSSnapshotRejectionDuringCloseCleansKnownEnabledWireState() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-a",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [.css],
+        targetID: "page-a"
+    )
+
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-b",
+        type: "page",
+        frameID: "main-frame",
+        isProvisional: true
+    ))
+    let pageBCommitBaseline = await backend.sentTargetMessages().count
+    _ = await core.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-a","newTargetId":"page-b"}}"#
+    )
+    let pageBDocument = try await backend.waitForTargetMessage(
+        method: "DOM.getDocument",
+        after: pageBCommitBaseline
+    )
+    await modelFeedRespondWithDocument(to: pageBDocument, core: core)
+    for method in ["Page.enable", "CSS.enable"] {
+        let command = try await backend.waitForTargetMessage(
+            method: method,
+            after: pageBCommitBaseline
+        )
+        await modelFeedRespond(to: command, core: core)
+    }
+
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-a",
+        type: "page",
+        frameID: "main-frame",
+        isProvisional: true
+    ))
+    let restorationBaseline = await backend.sentTargetMessages().count
+    _ = await core.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-b","newTargetId":"page-a"}}"#
+    )
+    let restoredDocument = try await backend.waitForTargetMessage(
+        method: "DOM.getDocument",
+        after: restorationBaseline
+    )
+    await modelFeedRespondWithDocument(to: restoredDocument, core: core)
+    let cssSnapshot = try await backend.waitForTargetMessage(
+        method: "CSS.getAllStyleSheets",
+        after: restorationBaseline
+    )
+
+    let closeTask = Task {
+        try await feed.close()
+    }
+    let cssKey = ConnectionCapabilityKey(
+        route: .currentPage,
+        targetID: .currentPage,
+        domain: .css
+    )
+    #expect(await modelFeedWaitForNoDesiredCapabilityOwners(core, key: cssKey))
+    await modelFeedRespond(
+        to: cssSnapshot,
+        core: core,
+        errorMessage: "snapshot rejected"
+    )
+
+    let cssDisable = try await backend.waitForTargetMessage(
+        method: "CSS.disable",
+        after: restorationBaseline
+    )
+    #expect(cssDisable.targetIdentifier == ProtocolTarget.ID("page-a"))
+    await modelFeedRespond(to: cssDisable, core: core)
+    let pageDisable = try await backend.waitForTargetMessage(
+        method: "Page.disable",
+        after: restorationBaseline
+    )
+    #expect(pageDisable.targetIdentifier == ProtocolTarget.ID("page-a"))
+    await modelFeedRespond(to: pageDisable, core: core)
+
+    try await closeTask.value
+    let restorationMethods = try await backend.sentTargetMessages()
+        .dropFirst(restorationBaseline)
+        .map { try modelFeedMessageMethod($0.message) }
+    #expect(restorationMethods == [
+        "DOM.getDocument",
+        "CSS.getAllStyleSheets",
+        "CSS.disable",
+        "Page.disable",
+    ])
+    #expect(await core.terminalCause == nil)
+    await core.close()
+}
+
+@Test
+func restoredNetworkReplayRejectionDuringCloseDisablesKnownEnabledAgent() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-a",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [.network],
+        targetID: "page-a"
+    )
+
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-b",
+        type: "page",
+        frameID: "main-frame",
+        isProvisional: true
+    ))
+    let pageBCommitBaseline = await backend.sentTargetMessages().count
+    _ = await core.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-a","newTargetId":"page-b"}}"#
+    )
+    let pageBEnable = try await backend.waitForTargetMessage(
+        method: "Network.enable",
+        after: pageBCommitBaseline
+    )
+    await modelFeedRespond(to: pageBEnable, core: core)
+
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-a",
+        type: "page",
+        frameID: "main-frame",
+        isProvisional: true
+    ))
+    let restorationBaseline = await backend.sentTargetMessages().count
+    _ = await core.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-b","newTargetId":"page-a"}}"#
+    )
+    let restoredEnable = try await backend.waitForTargetMessage(
+        method: "Network.enable",
+        after: restorationBaseline
+    )
+
+    let closeTask = Task {
+        try await feed.close()
+    }
+    let networkKey = ConnectionCapabilityKey(
+        route: .currentPage,
+        targetID: .currentPage,
+        domain: .network
+    )
+    #expect(await modelFeedWaitForNoDesiredCapabilityOwners(core, key: networkKey))
+    await modelFeedRespond(
+        to: restoredEnable,
+        core: core,
+        errorMessage: "replay rejected"
+    )
+    let disable = try await backend.waitForTargetMessage(
+        method: "Network.disable",
+        after: restorationBaseline
+    )
+    #expect(disable.targetIdentifier == ProtocolTarget.ID("page-a"))
+    await modelFeedRespond(to: disable, core: core)
+
+    try await closeTask.value
+    let restorationMethods = try await backend.sentTargetMessages()
+        .dropFirst(restorationBaseline)
+        .map { try modelFeedMessageMethod($0.message) }
+    #expect(restorationMethods == ["Network.enable", "Network.disable"])
+    #expect(await core.terminalCause == nil)
+    await core.close()
+}
+
+@Test
+func uncertainRestoredPageAcceptsOnlyTheAlreadyEnabledPostcondition() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-a",
+        type: "page",
+        frameID: "main-frame"
+    ))
+
+    let openTask = Task {
+        try await core.openModelFeed(configuredDomains: [.css])
+    }
+    let pageADocument = try await backend.waitForTargetMessage(method: "DOM.getDocument")
+    await modelFeedRespondWithDocument(to: pageADocument, core: core)
+    _ = try await backend.waitForTargetMessage(method: "Page.enable")
+
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-b",
+        type: "page",
+        frameID: "main-frame",
+        isProvisional: true
+    ))
+    let pageBCommitBaseline = await backend.sentTargetMessages().count
+    _ = await core.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-a","newTargetId":"page-b"}}"#
+    )
+    let pageBDocument = try await backend.waitForTargetMessage(
+        method: "DOM.getDocument",
+        after: pageBCommitBaseline
+    )
+    await modelFeedRespondWithDocument(to: pageBDocument, core: core)
+    let pageBEnable = try await backend.waitForTargetMessage(
+        method: "Page.enable",
+        after: pageBCommitBaseline
+    )
+    await modelFeedRespond(to: pageBEnable, core: core)
+    let pageBCSSEnable = try await backend.waitForTargetMessage(
+        method: "CSS.enable",
+        after: pageBCommitBaseline
+    )
+    await modelFeedRespond(to: pageBCSSEnable, core: core)
+    let feed = try await openTask.value
+
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-a",
+        type: "page",
+        frameID: "main-frame",
+        isProvisional: true
+    ))
+    let restorationBaseline = await backend.sentTargetMessages().count
+    _ = await core.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-b","newTargetId":"page-a"}}"#
+    )
+    let restoredDocument = try await backend.waitForTargetMessage(
+        method: "DOM.getDocument",
+        after: restorationBaseline
+    )
+    await modelFeedRespondWithDocument(to: restoredDocument, core: core)
+    let restoredPageEnable = try await backend.waitForTargetMessage(
+        method: "Page.enable",
+        after: restorationBaseline
+    )
+    #expect(restoredPageEnable.targetIdentifier == ProtocolTarget.ID("page-a"))
+    await modelFeedRespond(
+        to: restoredPageEnable,
+        core: core,
+        errorMessage: "Page domain already enabled"
+    )
+    let restoredCSSEnable = try await backend.waitForTargetMessage(
+        method: "CSS.enable",
+        after: restorationBaseline
+    )
+    #expect(restoredCSSEnable.targetIdentifier == ProtocolTarget.ID("page-a"))
+    await modelFeedRespond(to: restoredCSSEnable, core: core)
+
+    #expect(await core.terminalCause == nil)
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-a",
+        enableMethods: ["Page.enable", "CSS.enable"]
+    )
+    await core.close()
+}
+
+@Test
+func restoredConsoleReplaySubsumesBufferedProvisionalMessages() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-a",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [.console],
+        targetID: "page-a"
+    )
+    var iterator = feed.records.makeAsyncIterator()
+    _ = try await modelFeedRequireReset(iterator.next())
+    _ = try await modelFeedRequireTargetSnapshot(iterator.next())
+    _ = try await modelFeedRequireReplayCompletion(iterator.next())
+    _ = try await modelFeedRequireSynchronization(iterator.next())
+
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-b",
+        type: "page",
+        frameID: "main-frame",
+        isProvisional: true
+    ))
+    let pageBCommitBaseline = await backend.sentTargetMessages().count
+    _ = await core.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-a","newTargetId":"page-b"}}"#
+    )
+    let pageBEnable = try await backend.waitForTargetMessage(
+        method: "Console.enable",
+        after: pageBCommitBaseline
+    )
+    await modelFeedRespond(to: pageBEnable, core: core)
+    _ = try await modelFeedRequireReset(iterator.next())
+    _ = try await modelFeedRequireTargetSnapshot(iterator.next())
+    _ = try await modelFeedRequireReplayCompletion(iterator.next())
+    _ = try await modelFeedRequireSynchronization(iterator.next())
+
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-a",
+        type: "page",
+        frameID: "main-frame",
+        isProvisional: true
+    ))
+    let message = #"{"method":"Console.messageAdded","params":{"message":{"source":"javascript","level":"log","text":"restored"}}}"#
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "page-a",
+        message: message
+    ))
+
+    let restorationBaseline = await backend.sentTargetMessages().count
+    _ = await core.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-b","newTargetId":"page-a"}}"#
+    )
+    let disable = try await backend.waitForTargetMessage(
+        method: "Console.disable",
+        after: restorationBaseline
+    )
+    await modelFeedRespond(to: disable, core: core)
+    let enable = try await backend.waitForTargetMessage(
+        method: "Console.enable",
+        after: restorationBaseline
+    )
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "page-a",
+        message: message
+    ))
+    await modelFeedRespond(to: enable, core: core)
+
+    _ = try await modelFeedRequireReset(iterator.next())
+    _ = try await modelFeedRequireTargetSnapshot(iterator.next())
+    let replayedMessage = try await modelFeedRequireEvent(iterator.next())
+    guard case let .console(_, .messageAdded(consoleMessage)) = replayedMessage.payload else {
+        Issue.record("Expected the authoritative Console replay message.")
+        return
+    }
+    #expect(consoleMessage.text == "restored")
+    #expect(try await modelFeedRequireReplayCompletion(iterator.next()).domain == .console)
+    _ = try await modelFeedRequireSynchronization(iterator.next())
+
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-a",
+        enableMethods: ["Console.enable"]
+    )
+    #expect(try await iterator.next() == nil)
+    await core.close()
+}
+
+@Test
+func parkedCSSAgentDisablesBeforeItsPageDependencyWhenNoOwnerReturns() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-a",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [.css],
+        targetID: "page-a"
+    )
+
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-b",
+        type: "page",
+        frameID: "main-frame",
+        isProvisional: true
+    ))
+    let pageBCommitBaseline = await backend.sentTargetMessages().count
+    _ = await core.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-a","newTargetId":"page-b"}}"#
+    )
+    let pageBDocument = try await backend.waitForTargetMessage(
+        method: "DOM.getDocument",
+        after: pageBCommitBaseline
+    )
+    await modelFeedRespondWithDocument(to: pageBDocument, core: core)
+    for method in ["Page.enable", "CSS.enable"] {
+        let command = try await backend.waitForTargetMessage(
+            method: method,
+            after: pageBCommitBaseline
+        )
+        await modelFeedRespond(to: command, core: core)
+    }
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-b",
+        enableMethods: ["Page.enable", "CSS.enable"]
+    )
+
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-a",
+        type: "page",
+        frameID: "main-frame",
+        isProvisional: true
+    ))
+    let restorationBaseline = await backend.sentTargetMessages().count
+    _ = await core.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-b","newTargetId":"page-a"}}"#
+    )
+    let cssDisable = try await backend.waitForTargetMessage(
+        method: "CSS.disable",
+        after: restorationBaseline
+    )
+    let commandsBeforeCSSCompletion = try await backend.sentTargetMessages()
+        .dropFirst(restorationBaseline)
+        .map { try modelFeedMessageMethod($0.message) }
+    #expect(commandsBeforeCSSCompletion == ["CSS.disable"])
+
+    await modelFeedRespond(to: cssDisable, core: core)
+    let pageDisable = try await backend.waitForTargetMessage(
+        method: "Page.disable",
+        after: restorationBaseline
+    )
+    await modelFeedRespond(to: pageDisable, core: core)
+    let cleanupMethods = try await backend.sentTargetMessages()
+        .dropFirst(restorationBaseline)
+        .map { try modelFeedMessageMethod($0.message) }
+    #expect(cleanupMethods == ["CSS.disable", "Page.disable"])
     await core.close()
 }
 
@@ -3622,6 +4309,31 @@ private func modelFeedRespondWithDocument(
     ))
 }
 
+private func modelFeedRespondWithStyleSheets(
+    to message: SentTargetMessage,
+    core: ConnectionCore
+) async {
+    let messageID = try! modelFeedMessageID(message.message)
+    let reply: [String: Any] = [
+        "id": messageID,
+        "result": [
+            "headers": [
+                [
+                    "styleSheetId": "restored-sheet",
+                    "frameId": "main-frame",
+                    "origin": "author",
+                    "sourceURL": "https://example.test/restored.css",
+                ] as [String: Any],
+            ],
+        ] as [String: Any],
+    ]
+    let data = try! JSONSerialization.data(withJSONObject: reply, options: [.sortedKeys])
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: message.targetIdentifier.rawValue,
+        message: String(decoding: data, as: UTF8.self)
+    ))
+}
+
 private struct ModelFeedEventRecord {
     let generation: WebInspectorPage.Generation
     let sequence: UInt64
@@ -3754,6 +4466,18 @@ private func modelFeedRequireDOMBootstrapSnapshot(
         documentEpoch: documentEpoch,
         root: root
     )
+}
+
+private func modelFeedRequireCSSBootstrapSnapshot(
+    _ record: ConnectionModelFeedRecord?
+) throws -> [ModelCSSStyleSheet] {
+    guard case let .bootstrapSnapshot(_, domain, _, payload) = try #require(record),
+          domain == .css,
+          case let .cssStyleSheets(styleSheets) = payload else {
+        Issue.record("Expected a CSS bootstrap snapshot.")
+        throw ModelFeedTestError.unexpectedRecord
+    }
+    return styleSheets
 }
 
 private func modelFeedRequireBootstrapCompletion(

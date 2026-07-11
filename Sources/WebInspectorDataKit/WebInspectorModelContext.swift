@@ -272,6 +272,7 @@ public final class WebInspectorModelContext {
         var currentPageID: WebInspectorTarget.ID?
         var targets: [WebInspectorTarget.ID: ModelTarget]
         var domAuthority: [WebInspectorTarget.ID: DOMTargetAuthority]
+        var bootstrapSnapshotDomains: Set<ModelDomain>
         var completedDomains: Set<ModelDomain>
         var didSynchronize: Bool
     }
@@ -1370,6 +1371,7 @@ public final class WebInspectorModelContext {
                 currentPageID: nil,
                 targets: [:],
                 domAuthority: [:],
+                bootstrapSnapshotDomains: [],
                 completedDomains: [],
                 didSynchronize: false
             )
@@ -1503,73 +1505,118 @@ public final class WebInspectorModelContext {
             return PreparedReducerStep(work: .none, commit: .record(token: token))
 
         case let .bootstrapSnapshot(generation, domain, sequence, payload):
-            guard domain == .dom,
-                  configuredDomains.contains(.dom),
-                  var binding = bindingForWatermarkedRecord(
-                      generation,
-                      sequence: sequence
-                  ) else {
+            switch (domain, payload) {
+            case let (.dom, .domDocument(target, documentEpoch, root)):
+                guard configuredDomains.contains(.dom),
+                      var binding = bindingForWatermarkedRecord(
+                          generation,
+                          sequence: sequence
+                      ) else {
+                    return prepareProtocolFailure(
+                        "A DOM bootstrap snapshot was stale or unconfigured.",
+                        token: token
+                    )
+                }
+                guard binding.targets[target.id] == target,
+                      case let .awaiting(expectedEpoch)? = binding.domAuthority[target.id],
+                      expectedEpoch == documentEpoch else {
+                    return prepareProtocolFailure(
+                        "A DOM bootstrap snapshot did not match its target epoch.",
+                        token: token
+                    )
+                }
+                let effects: DOMStateStore.Effects?
+                if target.id == binding.currentPageID {
+                    effects = domState.applyDocument(
+                        root,
+                        expectedEpoch: domState.documentEpoch,
+                        reason: didCompleteInitialAttachment ? .pageChanged : .initialDocument,
+                        modelContext: self
+                    )
+                } else {
+                    effects = domState.applyFrameDocument(
+                        root,
+                        frameTargetID: target.id,
+                        expectedEpoch: domState.documentEpoch,
+                        modelContext: self
+                    )
+                }
+                guard let effects else {
+                    return prepareProtocolFailure(
+                        "A DOM bootstrap snapshot lost its local document epoch.",
+                        token: token
+                    )
+                }
+                applyDOMStateEffects(effects)
+                binding.domAuthority[target.id] = .ready(documentEpoch)
+                self.binding = binding
+                return PreparedReducerStep(work: .none, commit: .record(token: token))
+
+            case let (.css, .cssStyleSheets(styleSheets)):
+                guard configuredModelDomains.contains(.css),
+                      var binding = bindingForWatermarkedRecord(
+                          generation,
+                          sequence: sequence
+                      ),
+                      binding.bootstrapSnapshotDomains.insert(.css).inserted,
+                      styleSheets.allSatisfy({
+                          binding.targets[$0.target.id] == $0.target
+                      }) else {
+                    return prepareProtocolFailure(
+                        "A CSS bootstrap snapshot was stale, duplicated, or unconfigured.",
+                        token: token
+                    )
+                }
+                domState.markAllStylesNeedsRefresh()
+                self.binding = binding
+                return PreparedReducerStep(work: .none, commit: .record(token: token))
+
+            case (.dom, .cssStyleSheets), (.css, .domDocument),
+                 (.network, _), (.console, _), (.runtime, _):
                 return prepareProtocolFailure(
-                    "A DOM bootstrap snapshot was stale or unconfigured.",
+                    "A bootstrap snapshot payload did not match its domain.",
                     token: token
                 )
             }
-            guard case let .domDocument(target, documentEpoch, root) = payload,
-                  binding.targets[target.id] == target,
-                  case let .awaiting(expectedEpoch)? = binding.domAuthority[target.id],
-                  expectedEpoch == documentEpoch else {
-                return prepareProtocolFailure(
-                    "A DOM bootstrap snapshot did not match its target epoch.",
-                    token: token
-                )
-            }
-            let effects: DOMStateStore.Effects?
-            if target.id == binding.currentPageID {
-                effects = domState.applyDocument(
-                    root,
-                    expectedEpoch: domState.documentEpoch,
-                    reason: didCompleteInitialAttachment ? .pageChanged : .initialDocument,
-                    modelContext: self
-                )
-            } else {
-                effects = domState.applyFrameDocument(
-                    root,
-                    frameTargetID: target.id,
-                    expectedEpoch: domState.documentEpoch,
-                    modelContext: self
-                )
-            }
-            guard let effects else {
-                return prepareProtocolFailure(
-                    "A DOM bootstrap snapshot lost its local document epoch.",
-                    token: token
-                )
-            }
-            applyDOMStateEffects(
-                effects
-            )
-            binding.domAuthority[target.id] = .ready(documentEpoch)
-            self.binding = binding
-            return PreparedReducerStep(work: .none, commit: .record(token: token))
 
         case let .bootstrapComplete(generation, domain, through):
-            guard domain == .dom,
-                  configuredDomains.contains(.dom),
-                  var binding = bindingForRecord(generation),
-                  binding.domAuthority.values.allSatisfy({ authority in
-                      if case .ready = authority { return true }
-                      return false
-                  }),
+            guard var binding = bindingForRecord(generation),
                   acceptWatermark(through, in: &binding) else {
                 return prepareProtocolFailure(
-                    "A DOM bootstrap completed before every target snapshot was applied.",
+                    "A bootstrap completion marker was stale.",
+                    token: token
+                )
+            }
+            switch domain {
+            case .dom:
+                guard configuredDomains.contains(.dom),
+                      binding.domAuthority.values.allSatisfy({ authority in
+                          if case .ready = authority { return true }
+                          return false
+                      }) else {
+                    return prepareProtocolFailure(
+                        "A DOM bootstrap completed before every target snapshot was applied.",
+                        token: token
+                    )
+                }
+            case .css:
+                guard configuredModelDomains.contains(.css),
+                      binding.bootstrapSnapshotDomains.contains(.css) else {
+                    return prepareProtocolFailure(
+                        "A CSS bootstrap completed before its snapshot was applied.",
+                        token: token
+                    )
+                }
+            case .network, .console, .runtime:
+                return prepareProtocolFailure(
+                    "A replay-only domain published a bootstrap completion.",
                     token: token
                 )
             }
             if !binding.didSynchronize {
-                guard binding.completedDomains.insert(.dom).inserted else {
+                guard binding.completedDomains.insert(domain).inserted else {
                     return prepareProtocolFailure(
-                        "The initial DOM bootstrap completed more than once.",
+                        "A model bootstrap completed more than once.",
                         token: token
                     )
                 }

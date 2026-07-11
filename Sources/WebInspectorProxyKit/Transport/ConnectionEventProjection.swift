@@ -11,6 +11,29 @@ package enum ConnectionEventProjection {
         return scopedDOMNode(node, targetRawValue: target.id.rawValue)
     }
 
+    package nonisolated static func projectedCSSStyleSheetHeader(
+        _ header: CSS.StyleSheetHeader,
+        target: ModelTarget
+    ) -> CSS.StyleSheetHeader {
+        guard target.kind == .frame else {
+            return header
+        }
+        return CSS.StyleSheetHeader(
+            styleSheetID: scopedStyleSheetID(
+                header.styleSheetID,
+                targetRawValue: target.id.rawValue
+            ),
+            frameID: header.frameID,
+            sourceURL: header.sourceURL,
+            origin: header.origin,
+            title: header.title,
+            disabled: header.disabled,
+            isInline: header.isInline,
+            startLine: header.startLine,
+            startColumn: header.startColumn
+        )
+    }
+
     package nonisolated static func shouldDeliver(
         _ event: ProtocolEvent,
         to route: RoutingTargetID,
