@@ -15,15 +15,6 @@ struct TransportProvisionalTargetMessageStore: Sendable {
         messagesByTargetID.removeValue(forKey: targetID)
     }
 
-    mutating func retargetMessages(from oldTargetID: ProtocolTarget.ID, to newTargetID: ProtocolTarget.ID) {
-        guard oldTargetID != newTargetID,
-              let messages = messagesByTargetID.removeValue(forKey: oldTargetID),
-              messages.isEmpty == false else {
-            return
-        }
-        messagesByTargetID[newTargetID, default: []].append(contentsOf: messages)
-    }
-
     mutating func takeMessages(for targetID: ProtocolTarget.ID) -> [ParsedProtocolMessage] {
         messagesByTargetID.removeValue(forKey: targetID) ?? []
     }

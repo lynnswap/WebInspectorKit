@@ -11,7 +11,7 @@ extension WebInspectorUIRenderingTests {
 @Suite
 struct DOMElementStyleSnapshotCoordinatorTests {
     /// Keeps the weak `CSSStyles.modelContext` alive for the test lifetime.
-    private let modelContext = WebInspectorContext.preview(isolation: MainActor.shared)
+    private let modelContext = WebInspectorModelContext.preview()
 
     @Test
     func coordinatorRequestsNonAnimatedDiffForInitialLoadedSelection() throws {
@@ -30,7 +30,7 @@ struct DOMElementStyleSnapshotCoordinatorTests {
     }
 
     @Test
-    func coordinatorReloadsWhenSwitchingToCachedSelectionStyles() throws {
+    func coordinatorDiffsWhenSwitchingToDifferentCachedPropertyIdentities() throws {
         let coordinator = DOMElementStyleSnapshotCoordinator()
         let bodyStyles = makeStyles(nodeID: "node-body")
         load(bodyStyles, with: makeFlatMatchedStyles())
@@ -51,13 +51,14 @@ struct DOMElementStyleSnapshotCoordinatorTests {
 
         let update = coordinator.updateSelectedNodeStyles(inputStyles)
 
-        #expect(update.applyMode == .reloadData)
+        #expect(update.applyMode == .diff(animated: false))
+        #expect(update.rebindVisiblePropertyRows)
         #expect(update.placeholderMode == .none)
         #expect(try loadedSnapshot(from: update).sectionIdentifiers == coordinator.visibleSectionIDs)
     }
 
     @Test
-    func coordinatorReloadsSelectionReplacementWithMatchingDiffableIdentifiers() {
+    func coordinatorRebindsSelectionReplacementWithMatchingDiffableIdentifiers() {
         let coordinator = DOMElementStyleSnapshotCoordinator()
         let oldStyles = makeStyles()
         load(oldStyles, with: makeFlatMatchedStyles())
@@ -76,7 +77,9 @@ struct DOMElementStyleSnapshotCoordinatorTests {
 
         let update = coordinator.updateSelectedNodeStyles(replacementStyles)
 
-        #expect(update.applyMode == .reloadData)
+        #expect(update.applyMode == .none)
+        #expect(update.snapshot == nil)
+        #expect(update.rebindVisiblePropertyRows)
         #expect(update.placeholderMode == .none)
     }
 
@@ -109,7 +112,8 @@ struct DOMElementStyleSnapshotCoordinatorTests {
         )
         let loadedUpdate = coordinator.updateSelectedNodeStyles(inputStyles)
 
-        #expect(loadedUpdate.applyMode == .reloadData)
+        #expect(loadedUpdate.applyMode == .diff(animated: false))
+        #expect(loadedUpdate.rebindVisiblePropertyRows)
         #expect(loadedUpdate.placeholderMode == .none)
     }
 
@@ -130,16 +134,19 @@ struct DOMElementStyleSnapshotCoordinatorTests {
         #expect(containsVisibleProperty(named: "color", in: snapshot, coordinator: coordinator))
     }
 
-    /// Value-world replacement for the legacy in-place property mutation
-    /// policy: rows no longer observe property objects, so a same-identity
-    /// content change must surface as a reconfigure apply.
+    /// Property content belongs to the stable observable property. The
+    /// collection snapshot remains a topology-only artifact.
     @Test
-    func coordinatorReconfiguresRowsForPropertyContentChangeWithoutStructuralChange() throws {
+    func coordinatorDoesNotApplySnapshotForObservablePropertyContentChange() throws {
         let coordinator = DOMElementStyleSnapshotCoordinator()
         let nodeStyles = makeStyles()
         load(nodeStyles, with: makeFlatMatchedStyles())
         coordinator.bindSelectedNodeStyles(nodeStyles)
-        let initialSnapshot = try loadedSnapshot(from: coordinator.updateSelectedNodeStyles(nodeStyles))
+        let initialUpdate = coordinator.updateSelectedNodeStyles(nodeStyles)
+        let initialSnapshot = try loadedSnapshot(from: initialUpdate)
+        let initialItem = try #require(initialSnapshot.itemIdentifiers.first)
+        let initialSection = try #require(coordinator.section(for: initialItem.sectionID))
+        let initialProperty = try #require(coordinator.property(for: initialItem, in: initialSection))
 
         load(
             nodeStyles,
@@ -150,16 +157,40 @@ struct DOMElementStyleSnapshotCoordinatorTests {
         )
         let update = coordinator.updateSelectedNodeStyles(nodeStyles)
 
-        #expect(update.applyMode == .diff(animated: false))
+        #expect(update.applyMode == .none)
+        #expect(update.snapshot == nil)
         #expect(update.placeholderMode == .none)
-        let snapshot = try loadedSnapshot(from: update)
-        #expect(snapshot.sectionIdentifiers == initialSnapshot.sectionIdentifiers)
-        #expect(snapshot.itemIdentifiers == initialSnapshot.itemIdentifiers)
-        let reconfiguredItems = snapshot.reconfiguredItemIdentifiers
-        #expect(reconfiguredItems.count == 1)
-        let reconfiguredItem = try #require(reconfiguredItems.first)
-        let section = try #require(coordinator.section(for: reconfiguredItem.sectionID))
-        #expect(coordinator.property(for: reconfiguredItem, in: section)?.name == "margin")
+        let updatedSection = try #require(coordinator.section(for: initialItem.sectionID))
+        let updatedProperty = try #require(coordinator.property(for: initialItem, in: updatedSection))
+        #expect(updatedProperty === initialProperty)
+        #expect(updatedProperty.value == "4px")
+        #expect(updatedProperty.text == "margin: 4px;")
+    }
+
+    @Test
+    func coordinatorRebindsWithoutSnapshotWhenPositionalIDsAreReusedAfterReorder() throws {
+        let coordinator = DOMElementStyleSnapshotCoordinator()
+        let nodeStyles = makeStyles()
+        load(nodeStyles, with: makeFlatMatchedStyles())
+        coordinator.bindSelectedNodeStyles(nodeStyles)
+        let initialSnapshot = try loadedSnapshot(
+            from: coordinator.updateSelectedNodeStyles(nodeStyles)
+        )
+        let firstItem = try #require(initialSnapshot.itemIdentifiers.first)
+        let initialSection = try #require(coordinator.section(for: firstItem.sectionID))
+        let oldFirstProperty = try #require(coordinator.property(for: firstItem, in: initialSection))
+        #expect(oldFirstProperty.name == "margin")
+
+        load(nodeStyles, with: makeReorderedFlatMatchedStyles())
+        let update = coordinator.updateSelectedNodeStyles(nodeStyles)
+
+        #expect(update.applyMode == .none)
+        #expect(update.snapshot == nil)
+        #expect(update.rebindVisiblePropertyRows)
+        let reorderedSection = try #require(coordinator.section(for: firstItem.sectionID))
+        let newFirstProperty = try #require(coordinator.property(for: firstItem, in: reorderedSection))
+        #expect(newFirstProperty.name == "padding")
+        #expect(newFirstProperty !== oldFirstProperty)
     }
 
     /// DataKit's `applySetStyleText` rewrites sections in place and marks
@@ -167,12 +198,15 @@ struct DOMElementStyleSnapshotCoordinatorTests {
     /// modified-by-inspector badge must reach the rows before the follow-up
     /// refresh lands.
     @Test
-    func coordinatorReconfiguresSameSelectionContentDuringNeedsRefresh() throws {
+    func coordinatorDoesNotApplySnapshotForPropertyContentDuringNeedsRefresh() throws {
         let coordinator = DOMElementStyleSnapshotCoordinator()
         let nodeStyles = makeStyles()
         load(nodeStyles, with: makeFlatMatchedStyles())
         coordinator.bindSelectedNodeStyles(nodeStyles)
         let initialSnapshot = try loadedSnapshot(from: coordinator.updateSelectedNodeStyles(nodeStyles))
+        let initialItem = try #require(initialSnapshot.itemIdentifiers.first)
+        let initialSection = try #require(coordinator.section(for: initialItem.sectionID))
+        let initialProperty = try #require(coordinator.property(for: initialItem, in: initialSection))
 
         load(
             nodeStyles,
@@ -184,11 +218,12 @@ struct DOMElementStyleSnapshotCoordinatorTests {
         nodeStyles.markNeedsRefresh()
         let update = coordinator.updateSelectedNodeStyles(nodeStyles)
 
-        #expect(update.applyMode == .diff(animated: false))
-        let snapshot = try loadedSnapshot(from: update)
-        #expect(snapshot.sectionIdentifiers == initialSnapshot.sectionIdentifiers)
-        #expect(snapshot.itemIdentifiers == initialSnapshot.itemIdentifiers)
-        #expect(snapshot.reconfiguredItemIdentifiers.count == 1)
+        #expect(update.applyMode == .none)
+        #expect(update.snapshot == nil)
+        let updatedSection = try #require(coordinator.section(for: initialItem.sectionID))
+        let updatedProperty = try #require(coordinator.property(for: initialItem, in: updatedSection))
+        #expect(updatedProperty === initialProperty)
+        #expect(updatedProperty.text == "/* margin: 4px; */")
     }
 
     /// Structure stays frozen while the styles are stale; structural changes
@@ -429,6 +464,27 @@ struct DOMElementStyleSnapshotCoordinatorTests {
             ],
             inherited: inheritedEntries
         )
+    }
+
+    private func makeReorderedFlatMatchedStyles() -> CSS.MatchedStyles {
+        let styleID = "style-flat"
+        let style = CSS.Style(
+            id: CSS.Style.ID(styleID),
+            properties: [
+                property(id: "\(styleID):0", name: "padding", value: "8px", text: "padding: 8px;"),
+                property(id: "\(styleID):1", name: "margin", value: "0", text: "margin: 0;"),
+            ],
+            cssText: "padding: 8px;\nmargin: 0;",
+            isEditable: true
+        )
+        return CSS.MatchedStyles(matchedRules: [
+            CSS.Rule(
+                id: CSS.Rule.ID("rule-flat"),
+                selectorList: CSS.Rule.SelectorList(selectors: ["body"], text: "body"),
+                origin: CSS.Origin(rawValue: "author"),
+                style: style
+            ),
+        ])
     }
 
     private func property(

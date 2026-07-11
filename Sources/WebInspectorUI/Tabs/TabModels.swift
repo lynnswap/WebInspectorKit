@@ -70,21 +70,12 @@ extension WebInspectorTab {
 extension WebInspectorTab {
     @MainActor
     package final class ContentCache {
-        private var epoch = 0
         private var viewControllerByKey: [WebInspectorTab.ContentKey: UIViewController] = [:]
 
         package func viewController<Content: UIViewController>(
             for key: WebInspectorTab.ContentKey,
-            epoch: Int,
             make: () -> Content
         ) -> Content {
-            if self.epoch != epoch {
-                // Content built for a previous context epoch must never
-                // satisfy a lookup from the current one, even when an explicit
-                // clear was missed or is still pending.
-                removeAll()
-                self.epoch = epoch
-            }
             if let cachedViewController = viewControllerByKey[key] {
                 if let contentViewController = cachedViewController as? Content {
                     return contentViewController
@@ -95,13 +86,6 @@ extension WebInspectorTab {
             let viewController = make()
             viewControllerByKey[key] = viewController
             return viewController
-        }
-
-        package func prune(retaining keys: Set<WebInspectorTab.ContentKey>) {
-            for (key, viewController) in viewControllerByKey where keys.contains(key) == false {
-                viewController.webInspectorDetachFromContainerForReuse()
-                viewControllerByKey[key] = nil
-            }
         }
 
         package func removeAll() {
@@ -188,20 +172,6 @@ extension WebInspectorTab {
             }
         }
 
-        package func contentKeys(
-            for hostLayout: WebInspectorTab.HostLayout,
-            tabs: [WebInspectorTab]
-        ) -> Set<WebInspectorTab.ContentKey> {
-            Set(
-                displayItems(for: hostLayout, tabs: tabs).flatMap { displayItem in
-                    WebInspectorTab.ContentFactory.contentKeys(
-                        for: hostLayout,
-                        displayItem: displayItem,
-                        tabs: tabs
-                    )
-                }
-            )
-        }
     }
 }
 #endif

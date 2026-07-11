@@ -1,403 +1,568 @@
 import Foundation
 
-package struct NetworkResultSetDelta: Sendable {
-    package var snapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID>
-    package var transaction: WebInspectorFetchedResultsTransaction<NetworkRequest>?
-}
-
 package actor NetworkRequestIndex {
+    package typealias QueryProjection = WebInspectorIndexedQueryProjection<NetworkRequest.ID>
+    package typealias QueryDelivery = WebInspectorIndexedQueryDelivery<NetworkRequest.ID>
+
+    private enum Mutation {
+        case replace([NetworkRequestRecordInput], sourceEpoch: UInt64?)
+        case upsert(NetworkRequestRecordInput)
+    }
+
+    private struct PendingMutation {
+        var mutation: Mutation
+        var continuation: CheckedContinuation<[QueryDelivery], Never>
+    }
+
+    private struct SequenceWaiter {
+        var minimumSequence: UInt64
+        var continuation: CheckedContinuation<Void, any Error>
+    }
+
+    private final class WeakLifetime {
+        weak var value: WebInspectorQueryRegistrationLifetime?
+
+        init(_ value: WebInspectorQueryRegistrationLifetime) {
+            self.value = value
+        }
+    }
+
+    private struct QueryVersion {
+        var generation: UInt64
+        var query: NetworkQuery
+        var matchingIDs: [NetworkRequest.ID]
+        var snapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID>
+        var sequence: UInt64
+        var acknowledgedSequence: UInt64
+    }
+
+    private struct QueryRegistration {
+        var lifetime: WeakLifetime
+        var active: QueryVersion
+        var candidate: QueryVersion?
+    }
+
     private var recordsByID: [NetworkRequest.ID: NetworkRequestRecord] = [:]
     private var orderedIDs: [NetworkRequest.ID] = []
+    private var lastUpdatedSequenceByID: [NetworkRequest.ID: UInt64] = [:]
     private var lastAppliedSequence: UInt64 = 0
+    private var sourceEpoch: UInt64 = 0
+    private var pendingMutationsBySequence: [UInt64: PendingMutation] = [:]
+    private var sequenceWaiters: [UInt64: SequenceWaiter] = [:]
+    private var nextSequenceWaiterID: UInt64 = 0
+    private var queryRegistrations: [WebInspectorQueryRegistrationID: QueryRegistration] = [:]
 
     package init() {}
 
-    package func replace(with inputs: [NetworkRequestRecordInput], sequence: UInt64) {
-        guard apply(sequence: sequence) else {
-            return
-        }
-        recordsByID = [:]
-        recordsByID.reserveCapacity(inputs.count)
-        orderedIDs = []
-        orderedIDs.reserveCapacity(inputs.count)
-        for input in inputs {
-            upsertRecord(input)
+    @discardableResult
+    package func replace(
+        with inputs: [NetworkRequestRecordInput],
+        sequence: UInt64,
+        sourceEpoch: UInt64? = nil
+    ) async -> [QueryDelivery] {
+        await enqueue(.replace(inputs, sourceEpoch: sourceEpoch), sequence: sequence)
+    }
+
+    @discardableResult
+    package func upsert(
+        _ input: NetworkRequestRecordInput,
+        sequence: UInt64
+    ) async -> [QueryDelivery] {
+        await enqueue(.upsert(input), sequence: sequence)
+    }
+
+    private func enqueue(_ mutation: Mutation, sequence: UInt64) async -> [QueryDelivery] {
+        precondition(
+            sequence > lastAppliedSequence,
+            "NetworkRequestIndex received an already-applied mutation sequence."
+        )
+        precondition(
+            pendingMutationsBySequence[sequence] == nil,
+            "NetworkRequestIndex received a duplicate mutation sequence."
+        )
+        return await withCheckedContinuation { continuation in
+            pendingMutationsBySequence[sequence] = PendingMutation(
+                mutation: mutation,
+                continuation: continuation
+            )
+            drainContiguousMutations()
         }
     }
 
-    package func upsert(_ input: NetworkRequestRecordInput, sequence: UInt64) {
-        guard apply(sequence: sequence) else {
-            return
+    private func drainContiguousMutations() {
+        while lastAppliedSequence < UInt64.max {
+            let sequence = lastAppliedSequence + 1
+            guard let pending = pendingMutationsBySequence.removeValue(forKey: sequence) else {
+                resumeSequenceWaiters()
+                return
+            }
+            let deliveries = apply(pending.mutation, sequence: sequence)
+            lastAppliedSequence = sequence
+            pending.continuation.resume(returning: deliveries)
         }
-        upsertRecord(input)
+        precondition(
+            pendingMutationsBySequence.isEmpty,
+            "NetworkRequestIndex mutation sequence overflowed."
+        )
+        resumeSequenceWaiters()
     }
 
-    private func apply(sequence: UInt64) -> Bool {
-        guard sequence > lastAppliedSequence else {
-            return false
+    private func apply(_ mutation: Mutation, sequence: UInt64) -> [QueryDelivery] {
+        switch mutation {
+        case let .replace(inputs, replacementSourceEpoch):
+            if let replacementSourceEpoch {
+                precondition(
+                    replacementSourceEpoch >= sourceEpoch,
+                    "NetworkRequestIndex source epochs must not move backwards."
+                )
+                sourceEpoch = replacementSourceEpoch
+            }
+            recordsByID = [:]
+            recordsByID.reserveCapacity(inputs.count)
+            orderedIDs = []
+            orderedIDs.reserveCapacity(inputs.count)
+            lastUpdatedSequenceByID = [:]
+            lastUpdatedSequenceByID.reserveCapacity(inputs.count)
+            for input in inputs {
+                upsertRecord(input, sequence: sequence)
+            }
+            return updateAllQueryRegistrations(sequence: sequence, rebuilding: true)
+        case let .upsert(input):
+            upsertRecord(input, sequence: sequence)
+            return updateAllQueryRegistrations(
+                sequence: sequence,
+                rebuilding: false,
+                changedID: input.id
+            )
         }
-        lastAppliedSequence = sequence
-        return true
     }
 
-    private func upsertRecord(_ input: NetworkRequestRecordInput) {
+    private func upsertRecord(_ input: NetworkRequestRecordInput, sequence: UInt64) {
         let isNewRecord = recordsByID[input.id] == nil
         let record = NetworkRequestRecord(input: input)
         recordsByID[record.id] = record
+        lastUpdatedSequenceByID[record.id] = sequence
         if isNewRecord {
             orderedIDs.append(record.id)
         }
     }
 
-    package func delta(
-        plan: NetworkRequestQueryPlan,
-        sectionBy: WebInspectorSectionDescriptor<NetworkRequest>?,
-        oldSnapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID>,
-        changedID: NetworkRequest.ID?
-    ) -> NetworkResultSetDelta? {
-        guard plan.requiresModelPredicate == false else {
-            return nil
+    package func register(
+        id: WebInspectorQueryRegistrationID,
+        generation: UInt64,
+        query: NetworkQuery,
+        lifetime: WebInspectorQueryRegistrationLifetime,
+        minimumSequence: UInt64
+    ) async throws -> QueryProjection {
+        try await waitUntilApplied(minimumSequence)
+        try Task.checkCancellation()
+        pruneQueryRegistrations()
+        guard lifetime.isCurrent(generation: generation) else {
+            throw CancellationError()
         }
-        let newSnapshot = snapshot(plan: plan, sectionBy: sectionBy)
-        guard oldSnapshot != newSnapshot else {
-            return nil
-        }
-        let transaction = NetworkResultSetTransactionBuilder.transaction(
-            oldSnapshot: oldSnapshot,
-            newSnapshot: newSnapshot,
-            changedID: changedID
+        precondition(
+            queryRegistrations[id] == nil,
+            "NetworkRequestIndex received a duplicate query registration ID."
         )
-        return NetworkResultSetDelta(snapshot: newSnapshot, transaction: transaction)
+        let version = makeQueryVersion(
+            generation: generation,
+            query: query,
+            acknowledgedSequence: lastAppliedSequence
+        )
+        try Task.checkCancellation()
+        guard lifetime.isCurrent(generation: generation) else {
+            throw CancellationError()
+        }
+        queryRegistrations[id] = QueryRegistration(
+            lifetime: WeakLifetime(lifetime),
+            active: version,
+            candidate: nil
+        )
+        return projection(for: version)
+    }
+
+    package func prepareReplacement(
+        id: WebInspectorQueryRegistrationID,
+        generation: UInt64,
+        query: NetworkQuery,
+        minimumSequence: UInt64
+    ) async throws -> QueryProjection {
+        try await waitUntilApplied(minimumSequence)
+        try Task.checkCancellation()
+        pruneQueryRegistrations()
+        guard var registration = queryRegistrations[id],
+              registration.lifetime.value?.isCurrent(generation: generation) == true,
+              generation > registration.active.generation,
+              generation > (registration.candidate?.generation ?? 0) else {
+            throw CancellationError()
+        }
+        let candidate = makeQueryVersion(
+            generation: generation,
+            query: query,
+            acknowledgedSequence: lastAppliedSequence
+        )
+        try Task.checkCancellation()
+        guard registration.lifetime.value?.isCurrent(generation: generation) == true else {
+            throw CancellationError()
+        }
+        registration.candidate = candidate
+        queryRegistrations[id] = registration
+        return projection(for: candidate)
+    }
+
+    package func commitReplacement(
+        id: WebInspectorQueryRegistrationID,
+        generation: UInt64
+    ) -> QueryProjection? {
+        pruneQueryRegistrations()
+        guard var registration = queryRegistrations[id],
+              registration.lifetime.value?.isCurrent(generation: generation) == true,
+              var candidate = registration.candidate,
+              candidate.generation == generation else {
+            return nil
+        }
+        candidate.acknowledgedSequence = candidate.sequence
+        registration.active = candidate
+        registration.candidate = nil
+        queryRegistrations[id] = registration
+        return projection(for: candidate)
+    }
+
+    package func discardCandidate(
+        id: WebInspectorQueryRegistrationID,
+        generation: UInt64
+    ) {
+        pruneQueryRegistrations()
+        guard var registration = queryRegistrations[id],
+              registration.candidate?.generation == generation else {
+            return
+        }
+        registration.candidate = nil
+        queryRegistrations[id] = registration
+    }
+
+    package func discardCandidates(
+        id: WebInspectorQueryRegistrationID,
+        through generation: UInt64
+    ) {
+        pruneQueryRegistrations()
+        guard var registration = queryRegistrations[id],
+              let candidate = registration.candidate,
+              candidate.generation <= generation else {
+            return
+        }
+        registration.candidate = nil
+        queryRegistrations[id] = registration
+    }
+
+    package func acknowledge(
+        id: WebInspectorQueryRegistrationID,
+        generation: UInt64,
+        sourceEpoch: UInt64,
+        sequence: UInt64
+    ) {
+        pruneQueryRegistrations()
+        guard var registration = queryRegistrations[id],
+              registration.active.generation == generation,
+              self.sourceEpoch == sourceEpoch else {
+            return
+        }
+        registration.active.acknowledgedSequence = max(
+            registration.active.acknowledgedSequence,
+            sequence
+        )
+        queryRegistrations[id] = registration
+    }
+
+    private func waitUntilApplied(_ minimumSequence: UInt64) async throws {
+        try Task.checkCancellation()
+        guard lastAppliedSequence < minimumSequence else {
+            return
+        }
+        precondition(
+            nextSequenceWaiterID < UInt64.max,
+            "NetworkRequestIndex sequence waiter identity overflowed."
+        )
+        let waiterID = nextSequenceWaiterID
+        nextSequenceWaiterID += 1
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                sequenceWaiters[waiterID] = SequenceWaiter(
+                    minimumSequence: minimumSequence,
+                    continuation: continuation
+                )
+                if Task.isCancelled {
+                    cancelSequenceWaiter(id: waiterID)
+                } else {
+                    resumeSequenceWaiters()
+                }
+            }
+        } onCancel: {
+            Task {
+                await self.cancelSequenceWaiter(id: waiterID)
+            }
+        }
+    }
+
+    private func cancelSequenceWaiter(id: UInt64) {
+        sequenceWaiters.removeValue(forKey: id)?.continuation.resume(
+            throwing: CancellationError()
+        )
+    }
+
+    private func resumeSequenceWaiters() {
+        let readyIDs = sequenceWaiters.compactMap { id, waiter in
+            waiter.minimumSequence <= lastAppliedSequence ? id : nil
+        }
+        for id in readyIDs {
+            sequenceWaiters.removeValue(forKey: id)?.continuation.resume(returning: ())
+        }
+    }
+
+    private func updateAllQueryRegistrations(
+        sequence: UInt64,
+        rebuilding: Bool,
+        changedID: NetworkRequest.ID? = nil
+    ) -> [QueryDelivery] {
+        pruneQueryRegistrations()
+        var deliveries: [QueryDelivery] = []
+        deliveries.reserveCapacity(queryRegistrations.count * 2)
+        for id in Array(queryRegistrations.keys) {
+            guard var registration = queryRegistrations[id] else {
+                continue
+            }
+            update(
+                &registration.active,
+                sequence: sequence,
+                rebuilding: rebuilding,
+                changedID: changedID
+            )
+            deliveries.append(QueryDelivery(
+                registrationID: id,
+                generation: registration.active.generation,
+                projection: projection(for: registration.active)
+            ))
+            if var candidate = registration.candidate {
+                update(
+                    &candidate,
+                    sequence: sequence,
+                    rebuilding: rebuilding,
+                    changedID: changedID
+                )
+                registration.candidate = candidate
+                deliveries.append(QueryDelivery(
+                    registrationID: id,
+                    generation: candidate.generation,
+                    projection: projection(for: candidate)
+                ))
+            }
+            queryRegistrations[id] = registration
+        }
+        return deliveries
+    }
+
+    private func update(
+        _ version: inout QueryVersion,
+        sequence: UInt64,
+        rebuilding: Bool,
+        changedID: NetworkRequest.ID?
+    ) {
+        if rebuilding {
+            version.matchingIDs = matchingIDs(for: version.query)
+        } else if let changedID {
+            version.matchingIDs.removeAll { $0 == changedID }
+            if let record = recordsByID[changedID], matches(record, query: version.query) {
+                insert(changedID, into: &version.matchingIDs, query: version.query)
+            }
+        }
+        version.snapshot = snapshot(matchingIDs: version.matchingIDs, query: version.query)
+        version.sequence = sequence
+    }
+
+    private func makeQueryVersion(
+        generation: UInt64,
+        query: NetworkQuery,
+        acknowledgedSequence: UInt64
+    ) -> QueryVersion {
+        let matchingIDs = matchingIDs(for: query)
+        return QueryVersion(
+            generation: generation,
+            query: query,
+            matchingIDs: matchingIDs,
+            snapshot: snapshot(matchingIDs: matchingIDs, query: query),
+            sequence: lastAppliedSequence,
+            acknowledgedSequence: acknowledgedSequence
+        )
+    }
+
+    private func projection(for version: QueryVersion) -> QueryProjection {
+        let reconfigureItemIDs = Set(version.snapshot.itemIDs.filter { id in
+            lastUpdatedSequenceByID[id, default: 0] > version.acknowledgedSequence
+        })
+        return QueryProjection(
+            sourceEpoch: sourceEpoch,
+            sequence: version.sequence,
+            snapshot: version.snapshot,
+            reconfigureItemIDs: reconfigureItemIDs
+        )
+    }
+
+    private func pruneQueryRegistrations() {
+        queryRegistrations = queryRegistrations.filter { _, registration in
+            registration.lifetime.value != nil
+        }
+    }
+
+#if DEBUG
+    package func isMutationPendingForTesting(sequence: UInt64) -> Bool {
+        pendingMutationsBySequence[sequence] != nil
+    }
+
+    package func isSequenceWaiterPendingForTesting(minimumSequence: UInt64) -> Bool {
+        sequenceWaiters.values.contains { $0.minimumSequence == minimumSequence }
+    }
+
+    package func queryRegistrationCountForTesting() -> Int {
+        pruneQueryRegistrations()
+        return queryRegistrations.count
+    }
+#endif
+
+    private func matchingIDs(for query: NetworkQuery) -> [NetworkRequest.ID] {
+        var ids = orderedIDs.filter { id in
+            recordsByID[id].map { matches($0, query: query) } ?? false
+        }
+        ids.sort { lhsID, rhsID in
+            guard let lhs = recordsByID[lhsID], let rhs = recordsByID[rhsID] else {
+                preconditionFailure("NetworkRequestIndex lost a matching record while sorting a query.")
+            }
+            return ordersBefore(lhs, rhs, query: query)
+        }
+        return ids
+    }
+
+    private func matches(_ record: NetworkRequestRecord, query: NetworkQuery) -> Bool {
+        if let search = query.search,
+           record.searchableText.localizedStandardContains(search) == false {
+            return false
+        }
+        if query.resourceCategories.isEmpty == false,
+           query.resourceCategories.contains(record.resourceCategory) == false {
+            return false
+        }
+        if query.methods.isEmpty == false,
+           query.methods.contains(record.method) == false {
+            return false
+        }
+        return true
+    }
+
+    private func insert(
+        _ id: NetworkRequest.ID,
+        into ids: inout [NetworkRequest.ID],
+        query: NetworkQuery
+    ) {
+        guard let record = recordsByID[id] else {
+            return
+        }
+        var lowerBound = 0
+        var upperBound = ids.count
+        while lowerBound < upperBound {
+            let midpoint = (lowerBound + upperBound) / 2
+            guard let midpointRecord = recordsByID[ids[midpoint]] else {
+                preconditionFailure("NetworkRequestIndex lost a matching record during insertion.")
+            }
+            if ordersBefore(midpointRecord, record, query: query) {
+                lowerBound = midpoint + 1
+            } else {
+                upperBound = midpoint
+            }
+        }
+        ids.insert(id, at: lowerBound)
+    }
+
+    private func ordersBefore(
+        _ lhs: NetworkRequestRecord,
+        _ rhs: NetworkRequestRecord,
+        query: NetworkQuery
+    ) -> Bool {
+        let timestampOrder = compareOptional(lhs.requestSentTimestamp, rhs.requestSentTimestamp)
+        switch (query.sort, timestampOrder) {
+        case (.requestTimeAscending, .orderedAscending),
+             (.requestTimeDescending, .orderedDescending):
+            return true
+        case (.requestTimeAscending, .orderedDescending),
+             (.requestTimeDescending, .orderedAscending):
+            return false
+        case (_, .orderedSame):
+            switch query.sort {
+            case .requestTimeAscending:
+                return lhs.orderIndex < rhs.orderIndex
+            case .requestTimeDescending:
+                return lhs.orderIndex > rhs.orderIndex
+            }
+        }
+    }
+
+    private func compareOptional<Value: Comparable>(
+        _ lhs: Value?,
+        _ rhs: Value?
+    ) -> ComparisonResult {
+        switch (lhs, rhs) {
+        case (nil, nil):
+            return .orderedSame
+        case (nil, _):
+            return .orderedAscending
+        case (_, nil):
+            return .orderedDescending
+        case let (lhs?, rhs?):
+            if lhs < rhs {
+                return .orderedAscending
+            }
+            if lhs > rhs {
+                return .orderedDescending
+            }
+            return .orderedSame
+        }
     }
 
     private func snapshot(
-        plan: NetworkRequestQueryPlan,
-        sectionBy: WebInspectorSectionDescriptor<NetworkRequest>?
+        matchingIDs: [NetworkRequest.ID],
+        query: NetworkQuery
     ) -> WebInspectorFetchedResultsSnapshot<NetworkRequest.ID> {
-        let matchingRecords = visibleRecords(plan: plan)
-        guard matchingRecords.isEmpty == false else {
+        let lowerBound = min(query.offset, matchingIDs.count)
+        let upperBound: Int
+        if let limit = query.limit {
+            upperBound = min(lowerBound + limit, matchingIDs.count)
+        } else {
+            upperBound = matchingIDs.count
+        }
+        let visibleIDs = Array(matchingIDs[lowerBound..<upperBound])
+        guard visibleIDs.isEmpty == false else {
             return WebInspectorFetchedResultsSnapshot()
         }
-        guard let sectionBy else {
-            return WebInspectorFetchedResultsSnapshot(itemIDs: matchingRecords.map(\.id))
+        guard query.section == .method else {
+            return WebInspectorFetchedResultsSnapshot(itemIDs: visibleIDs)
         }
-
-        var sections: [(
-            id: WebInspectorFetchSectionID,
-            title: String?,
-            itemIDs: [NetworkRequest.ID]
-        )] = []
-        for record in matchingRecords {
-            let identity = sectionIdentity(for: record, sectionBy: sectionBy)
-            if let index = sections.firstIndex(where: { $0.id == identity.id }) {
-                sections[index].itemIDs.append(record.id)
+        var sections: [(id: WebInspectorFetchSectionID, itemIDs: [NetworkRequest.ID])] = []
+        for id in visibleIDs {
+            guard let method = recordsByID[id]?.method else {
+                preconditionFailure("NetworkRequestIndex lost a visible record while sectioning a query.")
+            }
+            let sectionID = WebInspectorFetchSectionID(rawValue: method)
+            if let index = sections.firstIndex(where: { $0.id == sectionID }) {
+                sections[index].itemIDs.append(id)
             } else {
-                sections.append((
-                    id: identity.id,
-                    title: identity.title,
-                    itemIDs: [record.id]
-                ))
+                sections.append((sectionID, [id]))
             }
         }
         return WebInspectorFetchedResultsSnapshot(sections: sections.map { section in
             WebInspectorFetchedResultsSnapshot.Section(
                 id: section.id,
-                title: section.title,
+                title: section.id.rawValue,
                 itemIDs: section.itemIDs
             )
         })
     }
 
-    private func visibleRecords(plan: NetworkRequestQueryPlan) -> [NetworkRequestRecord] {
-        var records: [NetworkRequestRecord] = []
-        records.reserveCapacity(orderedIDs.count)
-        for id in orderedIDs {
-            guard let record = recordsByID[id] else {
-                continue
-            }
-            guard plan.matches(record: record) == true else {
-                continue
-            }
-            records.append(record)
-        }
-
-        if plan.sortComparators.isEmpty == false {
-            records.sort { lhs, rhs in
-                plan.ordersBefore(lhs, rhs)
-            }
-        }
-
-        let lowerBound = min(plan.fetchOffset, records.count)
-        let upperBound: Int
-        if let fetchLimit = plan.fetchLimit {
-            upperBound = min(lowerBound + fetchLimit, records.count)
-        } else {
-            upperBound = records.count
-        }
-        return Array(records[lowerBound..<upperBound])
-    }
-
-    private func sectionIdentity(
-        for record: NetworkRequestRecord,
-        sectionBy: WebInspectorSectionDescriptor<NetworkRequest>
-    ) -> (id: WebInspectorFetchSectionID, title: String?) {
-        let value: String?
-        switch sectionBy.key {
-        case .networkMethod:
-            value = record.method
-        case .networkResourceType:
-            value = record.resourceTypeRawValue
-        case .networkResourceCategory:
-            value = record.resourceCategory.rawValue
-        case .networkMIMEType:
-            value = record.mimeType
-        case .consoleSource,
-             .consoleLevel,
-             .consoleKind,
-             .consoleURL:
-            preconditionFailure("Console section descriptors cannot be applied to NetworkRequest results.")
-        }
-
-        let title = value ?? ""
-        return (WebInspectorFetchSectionID(rawValue: title), title)
-    }
-}
-
-private enum NetworkResultSetTransactionBuilder {
-    typealias Snapshot = WebInspectorFetchedResultsSnapshot<NetworkRequest.ID>
-    typealias ItemID = NetworkRequest.ID
-
-    static func transaction(
-        oldSnapshot: Snapshot,
-        newSnapshot: Snapshot,
-        changedID: ItemID?
-    ) -> WebInspectorFetchedResultsTransaction<NetworkRequest>? {
-        let sectionChanges = sectionChanges(from: oldSnapshot, to: newSnapshot)
-        let itemChanges = itemChanges(from: oldSnapshot, to: newSnapshot, changedID: changedID)
-        let transaction = WebInspectorFetchedResultsTransaction<NetworkRequest>(
-            oldSnapshot: oldSnapshot,
-            newSnapshot: newSnapshot,
-            isReset: false,
-            sectionChanges: sectionChanges,
-            itemChanges: itemChanges
-        )
-        return transaction.hasChanges ? transaction : nil
-    }
-
-    private static func sectionChanges(
-        from oldSnapshot: Snapshot,
-        to newSnapshot: Snapshot
-    ) -> [WebInspectorFetchedResultsSectionChange] {
-        let oldIndexes = indexSections(oldSnapshot.sections)
-        let newIndexes = indexSections(newSnapshot.sections)
-
-        let deletes = oldSnapshot.sections.enumerated()
-            .filter { _, section in newIndexes[section.id] == nil }
-            .sorted { lhs, rhs in lhs.offset > rhs.offset }
-            .map { index, section in
-                WebInspectorFetchedResultsSectionChange.delete(sectionID: section.id, index: index)
-            }
-
-        let inserts = newSnapshot.sections.enumerated()
-            .filter { _, section in oldIndexes[section.id] == nil }
-            .map { index, section in
-                WebInspectorFetchedResultsSectionChange.insert(sectionID: section.id, index: index)
-            }
-
-        let moves = newSnapshot.sections.enumerated()
-            .compactMap { newIndex, section -> WebInspectorFetchedResultsSectionChange? in
-                guard let oldIndex = oldIndexes[section.id], oldIndex != newIndex else {
-                    return nil
-                }
-                return .move(sectionID: section.id, from: oldIndex, to: newIndex)
-            }
-
-        let updates = newSnapshot.sections.enumerated()
-            .compactMap { newIndex, section -> WebInspectorFetchedResultsSectionChange? in
-                guard let oldIndex = oldIndexes[section.id] else {
-                    return nil
-                }
-                guard oldSnapshot.sections[oldIndex].title != section.title else {
-                    return nil
-                }
-                return .update(sectionID: section.id, index: newIndex)
-            }
-
-        return deletes + inserts + moves + updates
-    }
-
-    private static func itemChanges(
-        from oldSnapshot: Snapshot,
-        to newSnapshot: Snapshot,
-        changedID: ItemID?
-    ) -> [WebInspectorFetchedResultsItemChange<ItemID>] {
-        let oldPositions = indexItems(oldSnapshot)
-        let newPositions = indexItems(newSnapshot)
-
-        let deletes = oldPositions.values
-            .filter { newPositions[$0.itemID] == nil }
-            .sorted { lhs, rhs in lhs.indexPath > rhs.indexPath }
-            .map {
-                WebInspectorFetchedResultsItemChange.delete(
-                    itemID: $0.itemID,
-                    indexPath: $0.indexPath
-                )
-            }
-
-        let inserts = newPositions.values
-            .filter { oldPositions[$0.itemID] == nil }
-            .sorted { lhs, rhs in lhs.indexPath < rhs.indexPath }
-            .map {
-                WebInspectorFetchedResultsItemChange.insert(
-                    itemID: $0.itemID,
-                    indexPath: $0.indexPath
-                )
-            }
-
-        let sectionMembershipChanges = sectionMembershipChanges(
-            from: oldSnapshot,
-            to: newSnapshot,
-            oldPositions: oldPositions,
-            newPositions: newPositions
-        )
-
-        let moves = moveChanges(
-            from: oldSnapshot,
-            to: newSnapshot,
-            oldPositions: oldPositions,
-            newPositions: newPositions,
-            changedID: changedID,
-            excludedItemIDs: Set(sectionMembershipChanges.map(itemID))
-        )
-
-        return deletes + inserts + sectionMembershipChanges + moves
-    }
-
-    private static func sectionMembershipChanges(
-        from oldSnapshot: Snapshot,
-        to newSnapshot: Snapshot,
-        oldPositions: [ItemID: ItemPosition],
-        newPositions: [ItemID: ItemPosition]
-    ) -> [WebInspectorFetchedResultsItemChange<ItemID>] {
-        let oldSectionIDs = Set(oldSnapshot.sectionIDs)
-        let newSectionIDs = Set(newSnapshot.sectionIDs)
-        let deletedSectionIDs = oldSectionIDs.subtracting(newSectionIDs)
-        let insertedSectionIDs = newSectionIDs.subtracting(oldSectionIDs)
-
-        return newSnapshot.itemIDs.compactMap { itemID -> WebInspectorFetchedResultsItemChange<ItemID>? in
-            guard let oldPosition = oldPositions[itemID],
-                  let newPosition = newPositions[itemID],
-                  oldPosition.sectionID != newPosition.sectionID else {
-                return nil
-            }
-            let oldSectionDeleted = deletedSectionIDs.contains(oldPosition.sectionID)
-            let newSectionInserted = insertedSectionIDs.contains(newPosition.sectionID)
-            switch (oldSectionDeleted, newSectionInserted) {
-            case (true, true):
-                return nil
-            case (true, false):
-                return .insert(itemID: itemID, indexPath: newPosition.indexPath)
-            case (false, true):
-                return .delete(itemID: itemID, indexPath: oldPosition.indexPath)
-            case (false, false):
-                return .move(
-                    itemID: itemID,
-                    from: oldPosition.indexPath,
-                    to: newPosition.indexPath
-                )
-            }
-        }
-    }
-
-    private static func moveChanges(
-        from oldSnapshot: Snapshot,
-        to newSnapshot: Snapshot,
-        oldPositions: [ItemID: ItemPosition],
-        newPositions: [ItemID: ItemPosition],
-        changedID: ItemID?,
-        excludedItemIDs: Set<ItemID>
-    ) -> [WebInspectorFetchedResultsItemChange<ItemID>] {
-        let oldCommonOrder = oldSnapshot.itemIDs.filter { newPositions[$0] != nil }
-        let newCommonOrder = newSnapshot.itemIDs.filter { oldPositions[$0] != nil }
-        guard oldCommonOrder != newCommonOrder else {
-            return []
-        }
-
-        if let changedID,
-           excludedItemIDs.contains(changedID) == false,
-           let oldPosition = oldPositions[changedID],
-           let newPosition = newPositions[changedID],
-           oldPosition.sectionID == newPosition.sectionID,
-           oldPosition.indexPath != newPosition.indexPath {
-            return [
-                .move(
-                    itemID: changedID,
-                    from: oldPosition.indexPath,
-                    to: newPosition.indexPath
-                ),
-            ]
-        }
-
-        return newCommonOrder.compactMap { itemID -> WebInspectorFetchedResultsItemChange<ItemID>? in
-            guard excludedItemIDs.contains(itemID) == false else {
-                return nil
-            }
-            guard let oldPosition = oldPositions[itemID],
-                  let newPosition = newPositions[itemID],
-                  oldPosition.sectionID == newPosition.sectionID,
-                  oldPosition.indexPath != newPosition.indexPath else {
-                return nil
-            }
-            return .move(
-                itemID: itemID,
-                from: oldPosition.indexPath,
-                to: newPosition.indexPath
-            )
-        }
-    }
-
-    private static func indexSections(
-        _ sections: [Snapshot.Section]
-    ) -> [WebInspectorFetchSectionID: Int] {
-        Dictionary(
-            uniqueKeysWithValues: sections.enumerated().map { index, section in
-                (section.id, index)
-            }
-        )
-    }
-
-    private struct ItemPosition {
-        var itemID: ItemID
-        var sectionID: WebInspectorFetchSectionID
-        var indexPath: WebInspectorFetchedResultsIndexPath
-    }
-
-    private static func indexItems(_ snapshot: Snapshot) -> [ItemID: ItemPosition] {
-        var positions: [ItemID: ItemPosition] = [:]
-        for (sectionIndex, section) in snapshot.sections.enumerated() {
-            for (itemIndex, itemID) in section.itemIDs.enumerated() where positions[itemID] == nil {
-                positions[itemID] = ItemPosition(
-                    itemID: itemID,
-                    sectionID: section.id,
-                    indexPath: WebInspectorFetchedResultsIndexPath(
-                        section: sectionIndex,
-                        item: itemIndex
-                    )
-                )
-            }
-        }
-        return positions
-    }
-
-    private static func itemID(
-        for change: WebInspectorFetchedResultsItemChange<ItemID>
-    ) -> ItemID {
-        switch change {
-        case let .insert(itemID, _),
-             let .delete(itemID, _),
-             let .update(itemID, _),
-             let .move(itemID, _, _):
-            return itemID
-        }
-    }
 }

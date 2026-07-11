@@ -1,7 +1,13 @@
 #if canImport(UIKit)
+import OSLog
 import UIKit
 import WebKit
 import WebInspectorUIBase
+
+private let lifecycleLogger = Logger(
+    subsystem: "com.lynnswap.WebInspectorKit",
+    category: "WebInspectorUI.Lifecycle"
+)
 
 @MainActor
 private final class WebInspectorRootPresentationLifecycleCoordinator {
@@ -134,6 +140,7 @@ public final class WebInspectorViewController: UIViewController {
 
     /// The inspection session backing the view controller.
     public let session: WebInspectorSession
+    private let presentationContentStore: PresentationContentStore
 
     /// A Boolean value indicating whether the controller detaches its session
     /// after the root presentation ends.
@@ -170,6 +177,7 @@ public final class WebInspectorViewController: UIViewController {
     /// Creates a view controller backed by an inspection session.
     public init(session: WebInspectorSession = WebInspectorSession()) {
         self.session = session
+        self.presentationContentStore = PresentationContentStore()
         super.init(nibName: nil, bundle: nil)
         webInspectorSetDrawsBackgroundTraitOverride(drawsBackgroundStorage)
     }
@@ -285,7 +293,12 @@ public final class WebInspectorViewController: UIViewController {
     }
 
     private func finishRootPresentationLifecycle() {
-        presentationLifecycleCoordinator.finishIfNeeded { [session, automaticallyDetachesOnDismiss, presentationLifecycleCoordinator] generation in
+        presentationLifecycleCoordinator.finishIfNeeded { [
+            session,
+            presentationContentStore,
+            automaticallyDetachesOnDismiss,
+            presentationLifecycleCoordinator,
+        ] generation in
             removeActiveHost()
             Task { @MainActor in
                 defer {
@@ -299,7 +312,23 @@ public final class WebInspectorViewController: UIViewController {
                 guard presentationLifecycleCoordinator.isCurrentPresentation(generation) else {
                     return
                 }
-                await session.retireRootPresentation(detach: automaticallyDetachesOnDismiss)
+                await presentationContentStore.clear()
+                // Resource retirement may suspend long enough for this root to
+                // begin a new presentation. Never detach that newer lifetime.
+                guard presentationLifecycleCoordinator.isCurrentPresentation(generation) else {
+                    return
+                }
+                if automaticallyDetachesOnDismiss {
+                    await session.detach()
+                } else {
+                    do {
+                        try await session.suspendBackendInteraction()
+                    } catch {
+                        lifecycleLogger.error(
+                            "Root presentation cleanup failed: \(String(describing: error), privacy: .public)"
+                        )
+                    }
+                }
             }
         }
     }
@@ -360,9 +389,15 @@ public final class WebInspectorViewController: UIViewController {
         let host: UIViewController
         switch kind {
         case .compact:
-            host = CompactTabBarController(session: session)
+            host = CompactTabBarController(
+                session: session,
+                contentStore: presentationContentStore
+            )
         case .regular:
-            host = RegularTabContentViewController(session: session)
+            host = RegularTabContentViewController(
+                session: session,
+                contentStore: presentationContentStore
+            )
         }
         host.webInspectorSetDrawsBackgroundTraitOverride(drawsBackgroundStorage)
 
@@ -398,6 +433,10 @@ public final class WebInspectorViewController: UIViewController {
     }
 
     #if DEBUG
+    package var presentationContentStoreForTesting: PresentationContentStore {
+        presentationContentStore
+    }
+
     package func finishRootPresentationLifecycleForTesting(cancelled: Bool = false) {
         guard cancelled == false else {
             return

@@ -8,5 +8,5 @@ func webInspectorDataKitPublicSurfaceIsUsableFromConsumerPackage() async throws 
     let owner = ContractDataKitActor(runtime: runtime)
     try await owner.start()
     try await owner.assertPublicSurfaceIsUsable()
-    await owner.close()
+    try await owner.close()
 }

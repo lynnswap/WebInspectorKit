@@ -11,7 +11,7 @@ typealias DOMTreeMenuDeleteNodesAction = @MainActor ([DOMNode.ID], UndoManager?)
 @MainActor
 @Observable
 final class DOMTreeMenuModel {
-    let context: WebInspectorContext
+    let context: WebInspectorModelContext
     var nodeIDs: [DOMNode.ID] = []
     var selectedText: String?
     var localMarkupTextByNodeID: [DOMNode.ID: String] = [:]
@@ -23,7 +23,7 @@ final class DOMTreeMenuModel {
     private let deleteNodesAction: DOMTreeMenuDeleteNodesAction?
 
     init(
-        context: WebInspectorContext,
+        context: WebInspectorModelContext,
         copyNodeTextAction: DOMTreeMenuCopyNodeTextAction?,
         deleteNodesAction: DOMTreeMenuDeleteNodesAction?
     ) {

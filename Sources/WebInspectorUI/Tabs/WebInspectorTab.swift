@@ -1,10 +1,11 @@
 #if canImport(UIKit)
 import UIKit
+import WebInspectorDataKit
 
 /// A tab shown by the built-in WebInspectorKit UI.
 ///
 /// Use the built-in ``dom`` and ``network`` tabs, or create a custom tab backed
-/// by a UIKit view controller factory.
+/// by an asynchronous UIKit view controller factory.
 ///
 /// Example:
 ///
@@ -34,6 +35,9 @@ public struct WebInspectorTab: Equatable, Hashable, Identifiable {
 
     /// Optional tab image.
     public let image: UIImage?
+
+    /// Model domains that must be ready before this tab is used.
+    public let requiredDomains: Set<WebInspectorModelContext.Domain>
     package let content: Content
 
     package enum BuiltIn: Hashable {
@@ -43,7 +47,7 @@ public struct WebInspectorTab: Equatable, Hashable, Identifiable {
 
     @MainActor
     package struct CustomContent {
-        package let makeViewController: @MainActor (WebInspectorSession) -> UIViewController
+        package let makeViewController: @MainActor (WebInspectorSession) async throws -> UIViewController
     }
 
     package enum Content {
@@ -72,28 +76,34 @@ public struct WebInspectorTab: Equatable, Hashable, Identifiable {
         id: ID,
         title: String,
         image: UIImage?,
-        builtIn: BuiltIn
+        builtIn: BuiltIn,
+        requiredDomains: Set<WebInspectorModelContext.Domain>
     ) {
         self.id = id
         self.title = title
         self.image = image
+        self.requiredDomains = requiredDomains
         self.content = .builtIn(builtIn)
     }
 
     /// Creates an app-provided inspector tab backed by a UIKit view controller.
     ///
     /// The factory is called the first time the tab content is needed for a
-    /// session. WebInspectorKit caches the returned controller for the tab ID
-    /// and reuses it across compact and regular presentations.
+    /// root inspector controller. While it runs, WebInspectorKit presents a
+    /// native loading configuration. A failure presents a retry action.
+    /// Concurrent host requests join one factory invocation, and the returned
+    /// controller is reused across compact and regular hosts.
     public init(
         id: ID,
         title: String,
         image: UIImage? = nil,
-        makeViewController: @escaping @MainActor (_ session: WebInspectorSession) -> UIViewController
+        requiredDomains: Set<WebInspectorModelContext.Domain> = [],
+        makeViewController: @escaping @MainActor (_ session: WebInspectorSession) async throws -> UIViewController
     ) {
         self.id = id
         self.title = title
         self.image = image
+        self.requiredDomains = requiredDomains
         self.content = .custom(CustomContent(makeViewController: makeViewController))
     }
 
@@ -102,12 +112,14 @@ public struct WebInspectorTab: Equatable, Hashable, Identifiable {
         id: ID,
         title: String,
         systemImage: String,
-        makeViewController: @escaping @MainActor (_ session: WebInspectorSession) -> UIViewController
+        requiredDomains: Set<WebInspectorModelContext.Domain> = [],
+        makeViewController: @escaping @MainActor (_ session: WebInspectorSession) async throws -> UIViewController
     ) {
         self.init(
             id: id,
             title: title,
             image: UIImage(systemName: systemImage),
+            requiredDomains: requiredDomains,
             makeViewController: makeViewController
         )
     }
@@ -117,7 +129,8 @@ public struct WebInspectorTab: Equatable, Hashable, Identifiable {
         id: "webinspector_dom",
         title: "DOM",
         image: UIImage(systemName: "chevron.left.forwardslash.chevron.right"),
-        builtIn: .dom
+        builtIn: .dom,
+        requiredDomains: [.dom, .css]
     )
 
     /// Built-in Network inspector tab.
@@ -125,7 +138,8 @@ public struct WebInspectorTab: Equatable, Hashable, Identifiable {
         id: "webinspector_network",
         title: "Network",
         image: UIImage(systemName: "waveform.path.ecg.rectangle"),
-        builtIn: .network
+        builtIn: .network,
+        requiredDomains: [.network]
     )
 }
 #endif

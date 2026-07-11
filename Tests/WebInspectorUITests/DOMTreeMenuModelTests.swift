@@ -153,19 +153,19 @@ struct DOMTreeMenuModelTests {
 }
 
 private struct DOMTreeMenuModelFixture {
-    var context: WebInspectorContext
+    var context: WebInspectorModelContext
     var divID: DOMNode.ID
     var inputID: DOMNode.ID
 }
 
 @MainActor
 private func makeMenuFixture() throws -> DOMTreeMenuModelFixture {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorModelContext.preview()
     context.seedDOMDocument(menuFixtureDocument())
     let divID = DOMNode.ID(DOM.Node.ID("div"))
     let inputID = DOMNode.ID(DOM.Node.ID("input"))
-    _ = try #require(context.node(for: divID))
-    _ = try #require(context.node(for: inputID))
+    _ = try #require(try context.domNode(id: divID))
+    _ = try #require(try context.domNode(id: inputID))
     return DOMTreeMenuModelFixture(context: context, divID: divID, inputID: inputID)
 }
 

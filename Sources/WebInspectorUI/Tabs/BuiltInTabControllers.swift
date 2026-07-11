@@ -10,13 +10,10 @@ extension WebInspectorTab {
 
         func displayItems(for layout: WebInspectorTab.HostLayout) -> [WebInspectorTab.DisplayItem]
         func descriptor(for displayItem: WebInspectorTab.DisplayItem) -> WebInspectorTab.DisplayDescriptor?
-        func contentKeys(
-            for layout: WebInspectorTab.HostLayout,
-            displayItem: WebInspectorTab.DisplayItem
-        ) -> [WebInspectorTab.ContentKey]
         func makeViewController(
             for displayItem: WebInspectorTab.DisplayItem,
             session: WebInspectorSession,
+            contentStore: PresentationContentStore,
             layout: WebInspectorTab.HostLayout
         ) -> UIViewController
     }
@@ -32,13 +29,6 @@ extension WebInspectorTab.BuiltInController {
             return nil
         }
         return descriptor
-    }
-
-    package func contentKeys(
-        for layout: WebInspectorTab.HostLayout,
-        displayItem: WebInspectorTab.DisplayItem
-    ) -> [WebInspectorTab.ContentKey] {
-        [WebInspectorTab.ContentKey(tabID: tabID, contentID: "root")]
     }
 }
 
@@ -76,39 +66,28 @@ extension WebInspectorTab {
         package static func makeViewController(
             for tab: WebInspectorTab,
             session: WebInspectorSession,
+            contentStore: PresentationContentStore,
             hostLayout: WebInspectorTab.HostLayout
         ) -> UIViewController {
             makeViewController(
                 for: .tab(tab.id),
                 session: session,
-                hostLayout: hostLayout,
-                tabs: session.interface.tabs
+                contentStore: contentStore,
+                hostLayout: hostLayout
             )
         }
 
         package static func makeViewController(
             for displayItem: WebInspectorTab.DisplayItem,
             session: WebInspectorSession,
+            contentStore: PresentationContentStore,
             hostLayout: WebInspectorTab.HostLayout
-        ) -> UIViewController {
-            makeViewController(
-                for: displayItem,
-                session: session,
-                hostLayout: hostLayout,
-                tabs: session.interface.tabs
-            )
-        }
-
-        package static func makeViewController(
-            for displayItem: WebInspectorTab.DisplayItem,
-            session: WebInspectorSession,
-            hostLayout: WebInspectorTab.HostLayout,
-            tabs: [WebInspectorTab]
         ) -> UIViewController {
             if case .domElement = displayItem {
                 return catalog.controller(for: WebInspectorTab.BuiltIn.dom).makeViewController(
                     for: displayItem,
                     session: session,
+                    contentStore: contentStore,
                     layout: hostLayout
                 )
             }
@@ -121,17 +100,18 @@ extension WebInspectorTab {
                 return UIViewController()
             }
 
-            guard let tab = tabs.first(where: { $0.id == tabID }) else {
+            guard let tab = session.interface.tabs.first(where: { $0.id == tabID }) else {
                 return UIViewController()
             }
 
             if case let .custom(content) = tab.content {
-                let viewController = session.interface.viewController(for: customContentKey(for: tab)) {
-                    content.makeViewController(session)
-                }
+                let viewController = contentStore.customViewController(
+                    for: customContentKey(for: tab),
+                    session: session,
+                    makeViewController: content.makeViewController
+                )
                 switch hostLayout {
                 case .compact:
-                    viewController.webInspectorDetachFromContainerForReuse()
                     return viewController
                 case .regular:
                     return RegularSplitRootViewController(contentViewController: viewController)
@@ -145,41 +125,8 @@ extension WebInspectorTab {
             return controller.makeViewController(
                 for: displayItem,
                 session: session,
+                contentStore: contentStore,
                 layout: hostLayout
-            )
-        }
-
-        package static func contentKeys(
-            for hostLayout: WebInspectorTab.HostLayout,
-            displayItem: WebInspectorTab.DisplayItem,
-            tabs: [WebInspectorTab]
-        ) -> [WebInspectorTab.ContentKey] {
-            if case .domElement = displayItem {
-                return catalog.controller(for: WebInspectorTab.BuiltIn.dom).contentKeys(
-                    for: hostLayout,
-                    displayItem: displayItem
-                )
-            }
-
-            let tabID: WebInspectorTab.ID
-            switch displayItem {
-            case let .tab(id), let .customTab(id):
-                tabID = id
-            case .domElement:
-                return []
-            }
-
-            guard let tab = tabs.first(where: { $0.id == tabID }) else {
-                return []
-            }
-
-            guard let controller = catalog.controller(for: tab) else {
-                return [customContentKey(for: tab)]
-            }
-
-            return controller.contentKeys(
-                for: hostLayout,
-                displayItem: displayItem
             )
         }
 

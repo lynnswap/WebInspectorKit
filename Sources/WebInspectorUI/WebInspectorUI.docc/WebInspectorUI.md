@@ -39,9 +39,11 @@ app needs a UIKit panel that shares the same inspection session:
 let consoleTab = WebInspectorTab(
     id: "app_console",
     title: "Console",
-    systemImage: "terminal"
+    systemImage: "terminal",
+    requiredDomains: [.console]
 ) { session in
-    ConsoleViewController(inspectorSession: session)
+    let messages = try await session.model.consoleMessages()
+    return ConsoleViewController(messages: messages)
 }
 
 let inspector = WebInspectorViewController(
@@ -50,7 +52,9 @@ let inspector = WebInspectorViewController(
 ```
 
 Use ``WebInspectorSession`` when you need explicit access to attachment
-lifecycle, page style observation, or the DataKit context used by custom tabs.
+lifecycle, page style observation, or the stable DataKit model used by custom
+tabs. Custom factories are asynchronous; the root inspector owns their
+loading, failure, retry, cancellation, and controller reuse lifecycle.
 For custom inspector UIs that do not use the built-in UIKit surface, start with
 WebInspectorDataKit instead.
 

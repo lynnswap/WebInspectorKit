@@ -101,13 +101,10 @@ struct TransportTargetRegistry: Sendable {
     }
 
     mutating func commitTarget(
-        oldTargetID: ProtocolTarget.ID?,
+        oldTargetID: ProtocolTarget.ID,
         newTargetID: ProtocolTarget.ID
     ) -> TransportTargetCommitMutation {
-        let committedOldTargetID = oldTargetID ?? inferredOldTargetIDForOldlessCommit(newTargetID: newTargetID)
-
-        if let oldTargetID = committedOldTargetID,
-           oldTargetID == currentMainPageTargetID,
+        if oldTargetID == currentMainPageTargetID,
            let existingNewRecord = targetsByID[newTargetID],
            !existingNewRecord.isTopLevelPage {
             var committedSubframeRecord = existingNewRecord
@@ -117,16 +114,16 @@ struct TransportTargetRegistry: Sendable {
                 frameTargetIDsByFrameID[frameID] = newTargetID
             }
             return TransportTargetCommitMutation(
-                committedOldTargetID: committedOldTargetID,
+                committedOldTargetID: oldTargetID,
                 shouldRetargetExternalState: false,
                 resolvedFrameTarget: committedFrameTargetResolution(for: committedSubframeRecord)
             )
         }
 
-        let oldRecord = committedOldTargetID.flatMap { targetsByID.removeValue(forKey: $0) }
+        let oldRecord = targetsByID.removeValue(forKey: oldTargetID)
         guard oldRecord != nil || targetsByID[newTargetID] != nil else {
             return TransportTargetCommitMutation(
-                committedOldTargetID: committedOldTargetID,
+                committedOldTargetID: oldTargetID,
                 shouldRetargetExternalState: false,
                 resolvedFrameTarget: nil
             )
@@ -139,15 +136,12 @@ struct TransportTargetRegistry: Sendable {
         newRecord.isProvisional = false
         targetsByID[newTargetID] = newRecord
 
-        if let oldTargetID = committedOldTargetID {
-            frameTargetIDsByFrameID = frameTargetIDsByFrameID.filter { $0.value != oldTargetID }
-        }
+        frameTargetIDsByFrameID = frameTargetIDsByFrameID.filter { $0.value != oldTargetID }
 
         if let frameID = newRecord.frameID {
             frameTargetIDsByFrameID[frameID] = newTargetID
         }
-        if let oldTargetID = committedOldTargetID,
-           currentMainPageTargetID == oldTargetID,
+        if currentMainPageTargetID == oldTargetID,
            newRecord.isTopLevelPage {
             currentMainPageTargetID = newTargetID
         }
@@ -158,36 +152,87 @@ struct TransportTargetRegistry: Sendable {
         }
 
         return TransportTargetCommitMutation(
-            committedOldTargetID: committedOldTargetID,
-            shouldRetargetExternalState: committedOldTargetID != nil,
+            committedOldTargetID: oldTargetID,
+            shouldRetargetExternalState: true,
             resolvedFrameTarget: committedFrameTargetResolution(for: newRecord)
         )
     }
 
-    private func inferredOldTargetIDForOldlessCommit(
-        newTargetID: ProtocolTarget.ID
-    ) -> ProtocolTarget.ID? {
-        if let newRecord = targetsByID[newTargetID],
-           newRecord.isProvisional,
-           newRecord.isTopLevelPage,
-           let currentMainPageTargetID,
-           currentMainPageTargetID != newTargetID {
-            if let frameID = newRecord.frameID,
-               let currentMainFrameID,
-               frameID != currentMainFrameID {
-                return nil
-            }
-            return currentMainPageTargetID
-        }
-
-        guard targetsByID[newTargetID] == nil else {
+    func modelTargetSnapshot() -> ModelTargetSnapshot? {
+        guard let currentMainPageTargetID,
+              let currentPageRecord = targetsByID[currentMainPageTargetID],
+              !currentPageRecord.isProvisional,
+              let currentPageTarget = ModelTarget(record: currentPageRecord) else {
             return nil
         }
 
-        let provisionalTargetIDs = targetsByID
-            .filter { $0.value.isProvisional }
-            .map(\.key)
-        return provisionalTargetIDs.count == 1 ? provisionalTargetIDs[0] : nil
+        let frames = targetsByID.values.compactMap { record -> (
+            depth: Int,
+            target: ModelTarget
+        )? in
+            guard let depth = currentPageFrameDepth(for: record),
+                  let target = ModelTarget(record: record) else {
+                return nil
+            }
+            return (depth, target)
+        }.sorted { lhs, rhs in
+            if lhs.depth != rhs.depth {
+                return lhs.depth < rhs.depth
+            }
+            return lhs.target.id.rawValue < rhs.target.id.rawValue
+        }.map(\.target)
+
+        return ModelTargetSnapshot(
+            currentPageID: currentPageTarget.id,
+            targets: [currentPageTarget] + frames
+        )
+    }
+
+    func isCurrentPageModelTarget(_ record: ProtocolTarget.Record) -> Bool {
+        guard !record.isProvisional else {
+            return false
+        }
+        if record.id == currentMainPageTargetID {
+            return true
+        }
+        return currentPageFrameDepth(for: record) != nil
+    }
+
+    private func currentPageFrameDepth(
+        for record: ProtocolTarget.Record
+    ) -> Int? {
+        guard record.kind == .frame,
+              !record.isProvisional,
+              let frameID = record.frameID,
+              let currentMainPageTargetID,
+              let mainFrameID = targetsByID[currentMainPageTargetID]?.frameID,
+              frameID != mainFrameID else {
+            return nil
+        }
+        guard var parentFrameID = record.parentFrameID else {
+            // The registry has already classified this physical record as a
+            // frame. With no parent ancestry signal, its distinct frame ID is
+            // the only current-page membership fact owned by this registry.
+            return 1
+        }
+
+        var depth = 1
+        var visited = Set<ProtocolFrame.ID>()
+        while visited.insert(parentFrameID).inserted {
+            if parentFrameID == mainFrameID {
+                return depth
+            }
+            guard let parentTargetID = frameTargetIDsByFrameID[parentFrameID],
+                  let parentRecord = targetsByID[parentTargetID],
+                  parentRecord.kind == .frame,
+                  !parentRecord.isProvisional,
+                  let nextParentFrameID = parentRecord.parentFrameID else {
+                return nil
+            }
+            depth += 1
+            parentFrameID = nextParentFrameID
+        }
+        preconditionFailure("The current-page frame target graph contains a cycle.")
     }
 
     private func committedFrameTargetResolution(
@@ -213,7 +258,7 @@ struct TransportFrameTargetResolution: Sendable {
 }
 
 struct TransportTargetCommitMutation: Sendable {
-    var committedOldTargetID: ProtocolTarget.ID?
+    var committedOldTargetID: ProtocolTarget.ID
     var shouldRetargetExternalState: Bool
     var resolvedFrameTarget: TransportFrameTargetResolution?
 }

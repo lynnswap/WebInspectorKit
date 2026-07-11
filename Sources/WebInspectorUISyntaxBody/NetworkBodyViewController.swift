@@ -349,14 +349,19 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
 
     private func localizedDescription(for error: WebInspectorProxyError) -> String {
         switch error {
-        case .closed:
+        case .closed, .pageUnavailable, .staleIdentifier, .connectionInUse:
             String(localized: "network.body.fetch.error.unavailable", bundle: WebInspectorUILocalization.bundle)
         case .unsupported(let messages):
             messages.joined(separator: "\n")
         case .attachFailed(let message),
              .disconnected(let message),
-             .commandFailed(_, _, let message):
+             .commandFailed(_, _, let message),
+             .commandRejected(_, let message),
+             .protocolViolation(let message),
+             .transportFailure(let message):
             message
+        case .eventBufferOverflow(let capacity):
+            "Web Inspector event buffer exceeded \(capacity) pending events."
         case .timeout(let domain, let method):
             "\(domain).\(method) timed out."
         }

@@ -3,7 +3,7 @@ import Observation
 /// Base protocol for identity-preserving observable DataKit models.
 public protocol WebInspectorPersistentModel: AnyObject, Observable, Hashable, Identifiable, SendableMetatype
 where ID: Hashable & Sendable {
-    /// Stable model identity within a ``WebInspectorContext``.
+    /// Stable model identity within a ``WebInspectorModelContext``.
     nonisolated var id: ID { get }
 }
 
@@ -18,6 +18,3 @@ extension WebInspectorPersistentModel {
         hasher.combine(ObjectIdentifier(self))
     }
 }
-
-/// Marker protocol for DataKit models that can be returned by fetch descriptors.
-public protocol WebInspectorFetchableModel: WebInspectorPersistentModel {}

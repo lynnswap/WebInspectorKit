@@ -2,11 +2,9 @@ import Foundation
 
 package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
     private let transport: TransportSession
-    private let eventSubscriptions: LiveProxyEventSubscriptions
 
     package init(transport: TransportSession) {
         self.transport = transport
-        eventSubscriptions = LiveProxyEventSubscriptions()
     }
 
     package func dispatchCommand<Payload: Sendable, Result: Sendable>(
@@ -19,7 +17,7 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         } catch {
             throw mapTransportError(error, domain: command.domain.rawValue, method: command.method)
         }
-        let targetScopeRawValue = await targetScopeRawValue(for: command)
+        let targetScopeRawValue = await targetScopeRawValue(for: command.route)
         return try LiveProxyCommandDecoder.decode(
             Result.self,
             for: command,
@@ -28,72 +26,24 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         )
     }
 
-    package func waitForEventSubscription(
-        route: RoutingTargetID,
-        targetID: WebInspectorTarget.ID,
-        domain: WebInspectorProxyEventDomain
-    ) async {
-        await eventSubscriptions.waitForActiveSubscriber(
-            LiveProxyEventSubscriptionKey(route: route, targetID: targetID, domain: domain)
-        )
-    }
-
-    package func waitForEventSubscriptions(
+    package func acquireEventScope<Element: Sendable>(
         route: RoutingTargetID,
         targetID: WebInspectorTarget.ID,
         domain: WebInspectorProxyEventDomain,
-        minimumCount: Int
-    ) async {
-        await eventSubscriptions.waitForActiveSubscribers(
-            LiveProxyEventSubscriptionKey(route: route, targetID: targetID, domain: domain),
-            minimumCount: minimumCount
+        buffering: WebInspectorEventBufferingPolicy,
+        extract: @escaping @Sendable (WebInspectorProxyEvent) -> Element?
+    ) async throws -> WebInspectorProxyEventScope<Element> {
+        try await transport.acquireEventScope(
+            route: route,
+            targetID: targetID,
+            domain: domain,
+            buffering: buffering,
+            extract: extract
         )
     }
 
-    package nonisolated func events(
-        route: RoutingTargetID,
-        targetID: WebInspectorTarget.ID,
-        domain: WebInspectorProxyEventDomain
-    ) -> AsyncStream<WebInspectorProxyEvent> {
-        AsyncStream<WebInspectorProxyEvent> { continuation in
-            let key = LiveProxyEventSubscriptionKey(route: route, targetID: targetID, domain: domain)
-            let subscriptionID = LiveProxyEventSubscriptionID()
-            let task = Task {
-                let stream = await transport.events(for: protocolDomain(for: domain))
-                guard Task.isCancelled == false else {
-                    continuation.finish()
-                    return
-                }
-                await eventSubscriptions.register(key, id: subscriptionID)
-                for await event in stream {
-                    guard Task.isCancelled == false else {
-                        break
-                    }
-                    guard await shouldDeliver(event, to: route) else {
-                        continue
-                    }
-                    do {
-                        let lifecycleTarget = await lifecycleTarget(for: event, route: route, targetID: targetID)
-                        let proxyEvent = try LiveProxyEventDecoder.proxyEvent(
-                            from: event,
-                            targetID: targetID,
-                            lifecycleTarget: lifecycleTarget
-                        )
-                        continuation.yield(await projectedEvent(proxyEvent, from: event, route: route))
-                    } catch {
-                        preconditionFailure("Failed to decode \(event.method): \(error)")
-                    }
-                }
-                await eventSubscriptions.unregister(key, id: subscriptionID)
-                continuation.finish()
-            }
-            continuation.onTermination = { _ in
-                task.cancel()
-                Task {
-                    await eventSubscriptions.unregister(key, id: subscriptionID)
-                }
-            }
-        }
+    package func releaseEventScope(_ id: WebInspectorProxyEventScopeID) async throws {
+        try await transport.releaseEventScope(id)
     }
 
     private func mapTransportError(_ error: any Error, domain: String, method: String) -> any Error {
@@ -103,9 +53,11 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         switch transportError {
         case .transportClosed:
             return WebInspectorProxyError.closed
-        case let .replyTimeout(method, _):
+        case let .transportFailure(message):
+            return WebInspectorProxyError.disconnected(message)
+        case .replyTimeout:
             return WebInspectorProxyError.timeout(domain: domain, method: method)
-        case let .remoteError(method, _, message):
+        case let .remoteError(_, _, message):
             return WebInspectorProxyError.commandFailed(domain: domain, method: method, message: message)
         case .malformedMessage, .missingMainPageTarget, .missingTarget:
             return WebInspectorProxyError.commandFailed(
@@ -116,13 +68,10 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         }
     }
 
-    private nonisolated func targetScopeRawValue<Payload: Sendable, Result: Sendable>(
-        for command: WebInspectorProxyCommand<Payload, Result>
+    private nonisolated func targetScopeRawValue(
+        for route: RoutingTargetID
     ) async -> String? {
-        if let resultTargetScopeRawValue = command.resultTargetScopeRawValue {
-            return resultTargetScopeRawValue
-        }
-        guard case let .target(rawValue) = command.route.storage else {
+        guard case let .target(rawValue) = route.storage else {
             return nil
         }
         let targetID = ProtocolTarget.ID(rawValue)
@@ -138,697 +87,6 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         return rawValue
     }
 
-    private nonisolated func shouldDeliver(_ event: ProtocolEvent, to route: RoutingTargetID) async -> Bool {
-        switch route.storage {
-        case let .target(rawValue):
-            if let targetID = event.targetID {
-                return targetID.rawValue == rawValue
-            }
-            let snapshot = await transport.snapshot()
-            return snapshot.currentMainPageTargetID?.rawValue == rawValue
-        case .currentPage:
-            let snapshot = await transport.snapshot()
-            if event.domain == .target,
-               event.method == "Target.targetDestroyed" {
-                // The registry has already dropped the destroyed record, so
-                // route by the event-time fact: only the destruction of the
-                // then-current main page belongs to the semantic page route.
-                return event.destroyedCurrentMainPageTarget
-            }
-            guard let currentMainPageTargetID = snapshot.currentMainPageTargetID else {
-                return false
-            }
-            guard let targetID = event.targetID else {
-                return true
-            }
-            if targetID == currentMainPageTargetID {
-                return true
-            }
-            guard let record = snapshot.targetsByID[targetID] else {
-                return false
-            }
-            // WebKit reports subframe picker and request activity on frame
-            // targets while WebInspectorKit exposes a semantic current page.
-            switch event.domain {
-            case .dom:
-                guard event.method != "DOM.documentUpdated" else {
-                    return false
-                }
-                return isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
-            case .inspector:
-                return isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
-            case .network:
-                // WebKit's page/ProxyingNetworkAgent owns process-wide
-                // Network.enable. This branch only projects target-wrapped
-                // frame Network events if WebKit emits them.
-                return isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
-            case .css:
-                return isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
-            case .console:
-                return isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
-            case .runtime:
-                return isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
-            default:
-                return false
-            }
-        }
-    }
-
-    private nonisolated func isCurrentPageFrameTarget(
-        _ record: ProtocolTarget.Record,
-        in snapshot: TransportSession.Snapshot,
-        currentMainPageTargetID: ProtocolTarget.ID
-    ) -> Bool {
-        guard record.kind == .frame,
-              let mainFrameID = snapshot.targetsByID[currentMainPageTargetID]?.frameID else {
-            return false
-        }
-
-        guard var parentFrameID = record.parentFrameID else {
-            // WebKit may omit parentFrameId for a cross-origin frame target even
-            // though its frameId differs from the current page's main frame.
-            // TransportTargetRegistry already classifies that target as .frame;
-            // the current-page route must preserve the same semantic boundary
-            // or picker, DOM, and Network events are silently filtered.
-            guard let frameID = record.frameID else {
-                return false
-            }
-            return frameID != mainFrameID
-        }
-
-        var visitedFrameIDs = Set<ProtocolFrame.ID>()
-        while visitedFrameIDs.insert(parentFrameID).inserted {
-            if parentFrameID == mainFrameID {
-                return true
-            }
-            guard let parentTargetID = snapshot.frameTargetIDsByFrameID[parentFrameID],
-                  let parentRecord = snapshot.targetsByID[parentTargetID],
-                  let nextParentFrameID = parentRecord.parentFrameID else {
-                return false
-            }
-            parentFrameID = nextParentFrameID
-        }
-        return false
-    }
-
-    private nonisolated func projectedEvent(
-        _ proxyEvent: WebInspectorProxyEvent,
-        from event: ProtocolEvent,
-        route: RoutingTargetID
-    ) async -> WebInspectorProxyEvent {
-        let snapshot = await transport.snapshot()
-        let scopedProxyEvent = scopedAgentOwnedEvent(proxyEvent, from: event, route: route, snapshot: snapshot)
-        guard case .currentPage = route.storage,
-              let targetID = event.targetID else {
-            return scopedProxyEvent
-        }
-        if event.domain == .inspector,
-           targetID == snapshot.currentMainPageTargetID {
-            return mainPageInspectorEvent(scopedProxyEvent)
-        }
-        guard let currentMainPageTargetID = snapshot.currentMainPageTargetID,
-              targetID != currentMainPageTargetID,
-              let record = snapshot.targetsByID[targetID],
-              isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID) else {
-            return scopedProxyEvent
-        }
-        switch scopedProxyEvent {
-        case let .dom(domEvent):
-            return .dom(scopedDOMEvent(domEvent, targetRawValue: targetID.rawValue))
-        case let .css(cssEvent):
-            return .css(scopedCSSEvent(cssEvent, targetRawValue: targetID.rawValue))
-        case let .network(networkEvent):
-            return .network(scopedNetworkEvent(networkEvent, targetRawValue: targetID.rawValue))
-        default:
-            return scopedProxyEvent
-        }
-    }
-
-    private nonisolated func scopedAgentOwnedEvent(
-        _ proxyEvent: WebInspectorProxyEvent,
-        from event: ProtocolEvent,
-        route: RoutingTargetID,
-        snapshot: TransportSession.Snapshot
-    ) -> WebInspectorProxyEvent {
-        let targetScopeRawValue = runtimeAgentScopeRawValue(for: event, route: route, snapshot: snapshot)
-        switch proxyEvent {
-        case let .runtime(runtimeEvent):
-            return .runtime(scopedRuntimeEvent(runtimeEvent, targetScopeRawValue: targetScopeRawValue))
-        case let .console(targetedEvent):
-            return .console(Console.TargetedEvent(
-                event: scopedConsoleEvent(targetedEvent.event, targetScopeRawValue: targetScopeRawValue),
-                targetID: targetedEvent.targetID
-            ))
-        case .targetLifecycle, .dom, .inspector, .css, .network:
-            return proxyEvent
-        }
-    }
-
-    private nonisolated func runtimeAgentScopeRawValue(
-        for event: ProtocolEvent,
-        route: RoutingTargetID,
-        snapshot: TransportSession.Snapshot
-    ) -> String? {
-        let agentTargetID = event.sourceTargetID ?? event.targetID
-        guard let agentTargetID else {
-            return nil
-        }
-        if agentTargetID == snapshot.currentMainPageTargetID {
-            return nil
-        }
-        if let record = snapshot.targetsByID[agentTargetID],
-           record.kind == .page,
-           record.parentFrameID == nil {
-            return nil
-        }
-        return agentTargetID.rawValue
-    }
-
-    private nonisolated func mainPageInspectorEvent(
-        _ proxyEvent: WebInspectorProxyEvent
-    ) -> WebInspectorProxyEvent {
-        guard case let .inspector(event) = proxyEvent,
-              case let .inspect(object, hints, _) = event else {
-            return proxyEvent
-        }
-        return .inspector(.inspect(object, hints: hints, origin: nil))
-    }
-
-    private nonisolated func scopedDOMEvent(
-        _ event: DOM.Event,
-        targetRawValue: String
-    ) -> DOM.Event {
-        switch event {
-        case .documentUpdated:
-            .documentUpdated
-        case let .setChildNodes(parent, nodes):
-            .setChildNodes(
-                parent: scopedDOMNodeID(parent, targetRawValue: targetRawValue),
-                nodes: nodes.map { scopedDOMNode($0, targetRawValue: targetRawValue) }
-            )
-        case let .detachedRoot(node):
-            .detachedRoot(scopedDOMNode(node, targetRawValue: targetRawValue))
-        case let .childNodeInserted(parent, previous, node):
-            .childNodeInserted(
-                parent: scopedDOMNodeID(parent, targetRawValue: targetRawValue),
-                previous: previous.map { scopedDOMNodeID($0, targetRawValue: targetRawValue) },
-                node: scopedDOMNode(node, targetRawValue: targetRawValue)
-            )
-        case let .childNodeRemoved(parent, node):
-            .childNodeRemoved(
-                parent: scopedDOMNodeID(parent, targetRawValue: targetRawValue),
-                node: scopedDOMNodeID(node, targetRawValue: targetRawValue)
-            )
-        case let .childNodeCountUpdated(node, count):
-            .childNodeCountUpdated(scopedDOMNodeID(node, targetRawValue: targetRawValue), count: count)
-        case let .attributeModified(node, name, value):
-            .attributeModified(scopedDOMNodeID(node, targetRawValue: targetRawValue), name: name, value: value)
-        case let .attributeRemoved(node, name):
-            .attributeRemoved(scopedDOMNodeID(node, targetRawValue: targetRawValue), name: name)
-        case let .inlineStyleInvalidated(nodes):
-            .inlineStyleInvalidated(nodes.map { scopedDOMNodeID($0, targetRawValue: targetRawValue) })
-        case let .characterDataModified(node, value):
-            .characterDataModified(scopedDOMNodeID(node, targetRawValue: targetRawValue), value: value)
-        case let .shadowRootPushed(host, root):
-            .shadowRootPushed(
-                host: scopedDOMNodeID(host, targetRawValue: targetRawValue),
-                root: scopedDOMNode(root, targetRawValue: targetRawValue)
-            )
-        case let .shadowRootPopped(host, root):
-            .shadowRootPopped(
-                host: scopedDOMNodeID(host, targetRawValue: targetRawValue),
-                root: scopedDOMNodeID(root, targetRawValue: targetRawValue)
-            )
-        case let .pseudoElementAdded(parent, element):
-            .pseudoElementAdded(
-                parent: scopedDOMNodeID(parent, targetRawValue: targetRawValue),
-                element: scopedDOMNode(element, targetRawValue: targetRawValue)
-            )
-        case let .pseudoElementRemoved(parent, element):
-            .pseudoElementRemoved(
-                parent: scopedDOMNodeID(parent, targetRawValue: targetRawValue),
-                element: scopedDOMNodeID(element, targetRawValue: targetRawValue)
-            )
-        case let .willDestroyDOMNode(node):
-            .willDestroyDOMNode(scopedDOMNodeID(node, targetRawValue: targetRawValue))
-        case let .inspect(node):
-            .inspect(scopedDOMNodeID(node, targetRawValue: targetRawValue))
-        case let .unknown(rawEvent):
-            .unknown(rawEvent)
-        }
-    }
-
-    private nonisolated func scopedDOMNode(
-        _ node: DOM.Node,
-        targetRawValue: String
-    ) -> DOM.Node {
-        DOM.Node(
-            id: scopedDOMNodeID(node.id, targetRawValue: targetRawValue),
-            nodeType: node.nodeType,
-            nodeName: node.nodeName,
-            localName: node.localName,
-            nodeValue: node.nodeValue,
-            frameID: node.frameID,
-            documentURL: node.documentURL,
-            baseURL: node.baseURL,
-            attributes: node.attributes,
-            attributeList: node.attributeList,
-            childNodeCount: node.childNodeCount,
-            children: node.children?.map { scopedDOMNode($0, targetRawValue: targetRawValue) },
-            contentDocument: node.contentDocument.map { scopedDOMNode($0, targetRawValue: targetRawValue) },
-            shadowRoots: node.shadowRoots.map { scopedDOMNode($0, targetRawValue: targetRawValue) },
-            templateContent: node.templateContent.map { scopedDOMNode($0, targetRawValue: targetRawValue) },
-            beforePseudoElement: node.beforePseudoElement.map { scopedDOMNode($0, targetRawValue: targetRawValue) },
-            otherPseudoElements: node.otherPseudoElements.map { scopedDOMNode($0, targetRawValue: targetRawValue) },
-            afterPseudoElement: node.afterPseudoElement.map { scopedDOMNode($0, targetRawValue: targetRawValue) },
-            pseudoType: node.pseudoType,
-            shadowRootType: node.shadowRootType
-        )
-    }
-
-    private nonisolated func scopedDOMNodeID(
-        _ id: DOM.Node.ID,
-        targetRawValue: String
-    ) -> DOM.Node.ID {
-        guard id.targetScopeRawValue == nil else {
-            return id
-        }
-        return DOM.Node.ID(id.rawValue, scopedToTargetRawValue: targetRawValue)
-    }
-
-    private nonisolated func scopedCSSEvent(
-        _ event: CSS.Event,
-        targetRawValue: String
-    ) -> CSS.Event {
-        switch event {
-        case let .styleSheetChanged(id):
-            .styleSheetChanged(scopedStyleSheetID(id, targetRawValue: targetRawValue))
-        case let .styleSheetAdded(header):
-            .styleSheetAdded(CSS.StyleSheetHeader(
-                styleSheetID: scopedStyleSheetID(header.styleSheetID, targetRawValue: targetRawValue),
-                frameID: header.frameID,
-                sourceURL: header.sourceURL,
-                origin: header.origin,
-                title: header.title,
-                disabled: header.disabled,
-                isInline: header.isInline,
-                startLine: header.startLine,
-                startColumn: header.startColumn
-            ))
-        case let .styleSheetRemoved(id):
-            .styleSheetRemoved(scopedStyleSheetID(id, targetRawValue: targetRawValue))
-        case .mediaQueryResultChanged:
-            .mediaQueryResultChanged
-        case let .nodeLayoutFlagsChanged(id):
-            .nodeLayoutFlagsChanged(scopedDOMNodeID(id, targetRawValue: targetRawValue))
-        case let .unknown(rawEvent):
-            .unknown(rawEvent)
-        }
-    }
-
-    private nonisolated func scopedStyleSheetID(
-        _ id: CSS.StyleSheet.ID,
-        targetRawValue: String
-    ) -> CSS.StyleSheet.ID {
-        guard id.targetScopeRawValue == nil else {
-            return id
-        }
-        return CSS.StyleSheet.ID(id.rawValue, scopedToTargetRawValue: targetRawValue)
-    }
-
-    private nonisolated func scopedRuntimeEvent(
-        _ event: Runtime.Event,
-        targetScopeRawValue: String?
-    ) -> Runtime.Event {
-        guard let targetScopeRawValue else {
-            return event
-        }
-        switch event {
-        case let .executionContextCreated(context):
-            return .executionContextCreated(Runtime.ExecutionContext(
-                id: scopedExecutionContextID(context.id, targetRawValue: targetScopeRawValue),
-                name: context.name,
-                frameID: context.frameID,
-                kind: context.kind
-            ))
-        case let .executionContextDestroyed(id):
-            return .executionContextDestroyed(scopedExecutionContextID(id, targetRawValue: targetScopeRawValue))
-        case .executionContextsCleared:
-            return .executionContextsCleared(target: WebInspectorTarget.ID(targetScopeRawValue))
-        case let .unknown(rawEvent):
-            return .unknown(rawEvent)
-        }
-    }
-
-    private nonisolated func scopedExecutionContextID(
-        _ id: Runtime.ExecutionContext.ID,
-        targetRawValue: String
-    ) -> Runtime.ExecutionContext.ID {
-        guard id.targetScopeRawValue == nil else {
-            return id
-        }
-        return Runtime.ExecutionContext.ID(id.rawValue, scopedToTargetRawValue: targetRawValue)
-    }
-
-    private nonisolated func scopedConsoleEvent(
-        _ event: Console.Event,
-        targetScopeRawValue: String?
-    ) -> Console.Event {
-        guard let targetScopeRawValue else {
-            return event
-        }
-        switch event {
-        case let .messageAdded(message):
-            return .messageAdded(scopedConsoleMessage(message, targetRawValue: targetScopeRawValue))
-        case let .messageRepeatCountUpdated(count, timestamp):
-            return .messageRepeatCountUpdated(count: count, timestamp: timestamp)
-        case let .messagesCleared(reason):
-            return .messagesCleared(reason: reason)
-        case let .unknown(rawEvent):
-            return .unknown(rawEvent)
-        }
-    }
-
-    private nonisolated func scopedConsoleMessage(
-        _ message: Console.Message,
-        targetRawValue: String
-    ) -> Console.Message {
-        Console.Message(
-            source: message.source,
-            level: message.level,
-            type: message.type,
-            text: message.text,
-            url: message.url,
-            line: message.line,
-            column: message.column,
-            repeatCount: message.repeatCount,
-            parameters: message.parameters.map { scopedRemoteObject($0, targetRawValue: targetRawValue) },
-            stackTrace: message.stackTrace,
-            networkRequestID: message.networkRequestID.map {
-                scopedNetworkRequestID($0, targetRawValue: targetRawValue)
-            },
-            timestamp: message.timestamp
-        )
-    }
-
-    private nonisolated func scopedRemoteObject(
-        _ object: Runtime.RemoteObject,
-        targetRawValue: String
-    ) -> Runtime.RemoteObject {
-        Runtime.RemoteObject(
-            id: object.id.map { scopedRemoteObjectID($0, targetRawValue: targetRawValue) },
-            kind: object.kind,
-            subtype: object.subtype,
-            className: object.className,
-            description: object.description,
-            value: object.value,
-            size: object.size,
-            preview: object.preview
-        )
-    }
-
-    private nonisolated func scopedRemoteObjectID(
-        _ id: Runtime.RemoteObject.ID,
-        targetRawValue: String
-    ) -> Runtime.RemoteObject.ID {
-        guard id.targetScopeRawValue == nil else {
-            return id
-        }
-        return Runtime.RemoteObject.ID(id.rawValue, scopedToTargetRawValue: targetRawValue)
-    }
-
-    private nonisolated func scopedNetworkEvent(
-        _ event: Network.Event,
-        targetRawValue: String
-    ) -> Network.Event {
-        switch event {
-        case let .requestWillBeSent(id, request, resourceType, redirectResponse, timestamp):
-            .requestWillBeSent(
-                id: scopedNetworkRequestID(id, targetRawValue: targetRawValue),
-                request: scopedNetworkRequest(request, targetRawValue: targetRawValue),
-                resourceType: resourceType,
-                redirectResponse: redirectResponse,
-                timestamp: timestamp
-            )
-        case let .responseReceived(id, response, resourceType, timestamp):
-            .responseReceived(
-                id: scopedNetworkRequestID(id, targetRawValue: targetRawValue),
-                response: response,
-                resourceType: resourceType,
-                timestamp: timestamp
-            )
-        case let .dataReceived(id, dataLength, encodedDataLength, timestamp):
-            .dataReceived(
-                id: scopedNetworkRequestID(id, targetRawValue: targetRawValue),
-                dataLength: dataLength,
-                encodedDataLength: encodedDataLength,
-                timestamp: timestamp
-            )
-        case let .loadingFinished(id, timestamp, sourceMapURL, metrics):
-            .loadingFinished(
-                id: scopedNetworkRequestID(id, targetRawValue: targetRawValue),
-                timestamp: timestamp,
-                sourceMapURL: sourceMapURL,
-                metrics: metrics
-            )
-        case let .loadingFailed(id, errorText, canceled, timestamp):
-            .loadingFailed(
-                id: scopedNetworkRequestID(id, targetRawValue: targetRawValue),
-                errorText: errorText,
-                canceled: canceled,
-                timestamp: timestamp
-            )
-        case let .requestServedFromMemoryCache(id, response, resourceType, timestamp):
-            .requestServedFromMemoryCache(
-                id: scopedNetworkRequestID(id, targetRawValue: targetRawValue),
-                response: response,
-                resourceType: resourceType,
-                timestamp: timestamp
-            )
-        case let .webSocket(event):
-            .webSocket(scopedWebSocketEvent(event, targetRawValue: targetRawValue))
-        case let .unknown(rawEvent):
-            .unknown(rawEvent)
-        }
-    }
-
-    private nonisolated func scopedWebSocketEvent(
-        _ event: Network.WebSocketEvent,
-        targetRawValue: String
-    ) -> Network.WebSocketEvent {
-        switch event {
-        case let .created(id, url):
-            .created(id: scopedNetworkRequestID(id, targetRawValue: targetRawValue), url: url)
-        case let .handshakeRequest(id, request, timestamp):
-            .handshakeRequest(
-                id: scopedNetworkRequestID(id, targetRawValue: targetRawValue),
-                request: scopedNetworkRequest(request, targetRawValue: targetRawValue),
-                timestamp: timestamp
-            )
-        case let .handshakeResponse(id, response, timestamp):
-            .handshakeResponse(
-                id: scopedNetworkRequestID(id, targetRawValue: targetRawValue),
-                response: response,
-                timestamp: timestamp
-            )
-        case let .closed(id, timestamp):
-            .closed(id: scopedNetworkRequestID(id, targetRawValue: targetRawValue), timestamp: timestamp)
-        case let .frameSent(id, frame, timestamp):
-            .frameSent(id: scopedNetworkRequestID(id, targetRawValue: targetRawValue), frame: frame, timestamp: timestamp)
-        case let .frameReceived(id, frame, timestamp):
-            .frameReceived(id: scopedNetworkRequestID(id, targetRawValue: targetRawValue), frame: frame, timestamp: timestamp)
-        case let .error(id, message, timestamp):
-            .error(id: scopedNetworkRequestID(id, targetRawValue: targetRawValue), message: message, timestamp: timestamp)
-        case let .other(rawEvent):
-            .other(rawEvent)
-        }
-    }
-
-    private nonisolated func scopedNetworkRequest(
-        _ request: Network.Request,
-        targetRawValue: String
-    ) -> Network.Request {
-        Network.Request(
-            id: scopedNetworkRequestID(request.id, targetRawValue: targetRawValue),
-            url: request.url,
-            method: request.method,
-            headers: request.headers,
-            postData: request.postData,
-            referrerPolicy: request.referrerPolicy,
-            integrity: request.integrity,
-            backendResourceIdentifier: request.backendResourceIdentifier
-        )
-    }
-
-    private nonisolated func scopedNetworkRequestID(
-        _ id: Network.Request.ID,
-        targetRawValue: String
-    ) -> Network.Request.ID {
-        guard id.targetScopeRawValue == nil else {
-            return id
-        }
-        return Network.Request.ID(id.rawValue, scopedToTargetRawValue: targetRawValue)
-    }
-
-    private nonisolated func lifecycleTarget(
-        for event: ProtocolEvent,
-        route: RoutingTargetID,
-        targetID: WebInspectorTarget.ID
-    ) async -> WebInspectorLifecycleTarget? {
-        guard event.domain == .target,
-              event.method == "Target.didCommitProvisionalTarget",
-              let protocolTargetID = event.targetID else {
-            return nil
-        }
-        let snapshot = await transport.snapshot()
-        guard let record = snapshot.targetsByID[protocolTargetID] else {
-            return nil
-        }
-        return WebInspectorLifecycleTarget(
-            semanticID: semanticTargetID(for: route, targetID: targetID),
-            record: record
-        )
-    }
-
-    private nonisolated func semanticTargetID(
-        for route: RoutingTargetID,
-        targetID: WebInspectorTarget.ID
-    ) -> WebInspectorTarget.ID {
-        switch route.storage {
-        case .currentPage:
-            .currentPage
-        case .target:
-            targetID
-        }
-    }
-}
-
-private func protocolDomain(for domain: WebInspectorProxyEventDomain) -> ProtocolDomain {
-    switch domain {
-    case .target:
-        .target
-    case .dom:
-        .dom
-    case .inspector:
-        .inspector
-    case .css:
-        .css
-    case .network:
-        .network
-    case .console:
-        .console
-    case .runtime:
-        .runtime
-    case .page:
-        .page
-    }
-}
-
-private struct LiveProxyEventSubscriptionKey: Hashable, Sendable {
-    var route: RoutingTargetID
-    var targetID: WebInspectorTarget.ID
-    var domain: WebInspectorProxyEventDomain
-}
-
-private struct LiveProxyEventSubscriptionID: Hashable, Sendable {
-    var rawValue = UUID()
-}
-
-private actor LiveProxyEventSubscriptions {
-    private struct Waiter {
-        let id: UInt64
-        let minimumCount: Int
-        let continuation: CheckedContinuation<Void, Never>
-    }
-
-    private var activeSubscriberIDs: [LiveProxyEventSubscriptionKey: Set<LiveProxyEventSubscriptionID>] = [:]
-    private var waiters: [LiveProxyEventSubscriptionKey: [Waiter]] = [:]
-    private var nextWaiterID: UInt64 = 0
-    private var cancelledWaiterIDs: Set<UInt64> = []
-
-    func register(_ key: LiveProxyEventSubscriptionKey, id: LiveProxyEventSubscriptionID) {
-        let inserted = activeSubscriberIDs[key, default: []].insert(id).inserted
-        guard inserted else {
-            return
-        }
-        guard let pending = waiters.removeValue(forKey: key) else {
-            return
-        }
-        let count = activeSubscriberIDs[key, default: []].count
-        var remaining: [Waiter] = []
-        for waiter in pending {
-            if count >= waiter.minimumCount {
-                waiter.continuation.resume()
-            } else {
-                remaining.append(waiter)
-            }
-        }
-        if remaining.isEmpty == false {
-            waiters[key] = remaining
-        }
-    }
-
-    func unregister(_ key: LiveProxyEventSubscriptionKey, id: LiveProxyEventSubscriptionID) {
-        guard var ids = activeSubscriberIDs[key],
-              ids.remove(id) != nil else {
-            return
-        }
-        if ids.isEmpty {
-            activeSubscriberIDs[key] = nil
-        } else {
-            activeSubscriberIDs[key] = ids
-        }
-    }
-
-    func waitForActiveSubscriber(_ key: LiveProxyEventSubscriptionKey) async {
-        await waitForActiveSubscribers(key, minimumCount: 1)
-    }
-
-    func waitForActiveSubscribers(_ key: LiveProxyEventSubscriptionKey, minimumCount: Int) async {
-        guard activeSubscriberIDs[key, default: []].count < minimumCount else {
-            return
-        }
-        let waiterID = nextWaiterID
-        nextWaiterID += 1
-        await withTaskCancellationHandler {
-            await withCheckedContinuation { continuation in
-                addWaiter(
-                    Waiter(id: waiterID, minimumCount: minimumCount, continuation: continuation),
-                    key: key
-                )
-            }
-        } onCancel: {
-            Task {
-                await self.cancelWaiter(waiterID, key: key)
-            }
-        }
-        cancelledWaiterIDs.remove(waiterID)
-    }
-
-    private func addWaiter(_ waiter: Waiter, key: LiveProxyEventSubscriptionKey) {
-        guard cancelledWaiterIDs.remove(waiter.id) == nil else {
-            waiter.continuation.resume()
-            return
-        }
-        waiters[key, default: []].append(waiter)
-    }
-
-    private func cancelWaiter(_ id: UInt64, key: LiveProxyEventSubscriptionKey) {
-        guard var pending = waiters[key],
-              let index = pending.firstIndex(where: { $0.id == id }) else {
-            cancelledWaiterIDs.insert(id)
-            return
-        }
-        let waiter = pending.remove(at: index)
-        if pending.isEmpty {
-            waiters[key] = nil
-        } else {
-            waiters[key] = pending
-        }
-        // Resuming lets the cancelled caller return and observe its own
-        // Task.isCancelled state instead of staying suspended forever.
-        waiter.continuation.resume()
-    }
 }
 
 private enum LiveProxyCommandEncoder {
@@ -840,7 +98,8 @@ private enum LiveProxyCommandEncoder {
             domain: domain,
             method: "\(command.domain.rawValue).\(command.method)",
             routing: routing(for: command.route),
-            parametersData: try parametersData(for: command)
+            parametersData: try parametersData(for: command),
+            authority: command.authority
         )
     }
 
@@ -964,11 +223,7 @@ private enum LiveProxyCommandEncoder {
 
         case (.dom, "setInspectModeEnabled"):
             let payload = try payload(command.payload, as: DOM.SetInspectModeEnabledPayload.self, command: command)
-            var object: [String: Any] = ["enabled": payload.enabled]
-            if payload.enabled {
-                object["highlightConfig"] = highlightConfig()
-            }
-            return try data(object)
+            return try elementPickerModeParametersData(enabled: payload.enabled)
 
         case (.network, "getResponseBody"):
             let payload = try payload(command.payload, as: Network.GetResponseBodyPayload.self, command: command)
@@ -994,6 +249,9 @@ private enum LiveProxyCommandEncoder {
             if let context = payload.context {
                 let rawValue = context.unscopedRawValue
                 object["contextId"] = Int(rawValue) ?? rawValue
+            }
+            if let objectGroup = payload.objectGroup {
+                object["objectGroup"] = Self.objectGroupRawValue(objectGroup)
             }
             return try data(object)
 
@@ -1189,8 +447,8 @@ private enum LiveProxyCommandDecoder {
             return () as! Result
         }
         if Result.self == DOM.Node.self {
-            let payload = try decode(DocumentResult.self, from: result.resultData)
-            return try payload.root.proxyNode() as! Result
+            let payload = try decode(ProtocolDOMDocumentResult.self, from: result.resultData)
+            return try payload.proxyRoot() as! Result
         }
         if Result.self == DOM.Node.ID.self {
             let payload = try decode(RequestNodeResult.self, from: result.resultData)
@@ -1261,10 +519,6 @@ private enum LiveProxyCommandDecoder {
 
     private static func decode<Payload: Decodable>(_ type: Payload.Type, from data: Data) throws -> Payload {
         try JSONDecoder().decode(type, from: data)
-    }
-
-    private struct DocumentResult: Decodable {
-        var root: ProtocolDOMNodePayload
     }
 
     private struct RequestNodeResult: Decodable {

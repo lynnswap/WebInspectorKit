@@ -7,7 +7,7 @@ import UIKit
 package final class DOMSplitViewController: UISplitViewController {
     private let treeViewController: DOMTreeViewController
     private let elementViewController: DOMElementViewController
-    private let context: WebInspectorContext?
+    private let context: WebInspectorModelContext?
     private var domNavigationItems: DOMNavigationItems?
     private lazy var treeNavigationController = RegularSplitColumnNavigationController(
         rootViewController: treeViewController
@@ -16,7 +16,7 @@ package final class DOMSplitViewController: UISplitViewController {
         rootViewController: elementViewController
     )
 
-    package convenience init(context: WebInspectorContext) {
+    package convenience init(context: WebInspectorModelContext) {
         self.init(
             treeViewController: DOMTreeViewController(context: context),
             elementViewController: DOMElementViewController(context: context),
@@ -27,7 +27,7 @@ package final class DOMSplitViewController: UISplitViewController {
     package init(
         treeViewController: DOMTreeViewController,
         elementViewController: DOMElementViewController,
-        context: WebInspectorContext? = nil
+        context: WebInspectorModelContext? = nil
     ) {
         self.treeViewController = treeViewController
         self.elementViewController = elementViewController
@@ -145,7 +145,7 @@ extension DOMSplitViewController {
 @MainActor
 private enum DOMSplitViewControllerPreview {
     static func makeViewController() -> DOMSplitViewController {
-        DOMSplitViewController(context: DOMPreviewFixtures.makeWebInspectorContext())
+        DOMSplitViewController(context: DOMPreviewFixtures.makeWebInspectorModelContext())
     }
 }
 #endif

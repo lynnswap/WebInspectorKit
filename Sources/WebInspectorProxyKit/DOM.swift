@@ -1,7 +1,23 @@
 import Foundation
 
-/// Types and commands for the Web Inspector DOM domain.
-public enum DOM {
+/// A target-scoped handle for Web Inspector DOM commands and events.
+public struct DOM: Sendable, WebInspectorEventDomainHandle {
+    package static let commandDomain = WebInspectorProxyDomain.dom
+    package static let eventDomain = WebInspectorProxyEventDomain.dom
+
+    package let endpoint: DomainEndpoint
+
+    package init(endpoint: DomainEndpoint) {
+        self.endpoint = endpoint
+    }
+
+    package static func extractEvent(_ event: WebInspectorProxyEvent) -> Event? {
+        guard case let .dom(value) = event else {
+            return nil
+        }
+        return value
+    }
+
     /// A DOM element attribute.
     public struct Attribute: Hashable, Sendable {
         /// The attribute name.
@@ -17,174 +33,236 @@ public enum DOM {
         }
     }
 
-    /// A target-scoped client for DOM commands and events.
-    public struct Client: Sendable {
-        package let context: DomainClientContext
+    /// Runs an operation with an atomically registered DOM event scope.
+    public func withEvents<Output>(
+        buffering: WebInspectorEventBufferingPolicy = .bounded(256),
+        isolation: isolated (any Actor)? = #isolation,
+        _ operation: (
+            AsyncThrowingStream<WebInspectorPageEvent<DOM.Event>, any Error>
+        ) async throws -> Output
+    ) async throws -> Output {
+        try await _withEvents(
+            buffering: buffering,
+            isolation: isolation,
+            operation
+        )
+    }
 
-        package init(context: DomainClientContext) {
-            self.context = context
+    /// Returns the root document node for the target.
+    public func getDocument() async throws -> Node {
+        try await dispatch(
+            method: "getDocument",
+            payload: GetDocumentPayload(),
+            returning: Node.self
+        )
+    }
+
+    /// Requests child-node events for a node up to the supplied depth.
+    public func requestChildNodes(_ id: Node.ID, depth: Int = 1) async throws {
+        try await dispatchVoid(
+            method: "requestChildNodes",
+            payload: RequestChildNodesPayload(id: id, depth: depth)
+        )
+    }
+
+    /// Resolves a runtime object through the current page DOM agent.
+    ///
+    /// WebKit does not implement this command for frame targets. The returned
+    /// identity therefore belongs to the unscoped current-page DOM namespace.
+    public func requestNode(forRemoteObject objectID: Runtime.RemoteObject.ID) async throws -> Node.ID {
+        try await dispatch(
+            method: "requestNode",
+            payload: RequestNodePayload(objectID: objectID),
+            returning: Node.ID.self
+        )
+    }
+
+    /// Returns serialized outer HTML for a node.
+    public func outerHTML(of id: Node.ID) async throws -> String {
+        try await dispatch(
+            method: "getOuterHTML",
+            payload: GetOuterHTMLPayload(id: id),
+            returning: String.self
+        )
+    }
+
+    /// Returns the current attributes for a node.
+    public func attributes(of id: Node.ID) async throws -> [Attribute] {
+        try await dispatch(
+            method: "getAttributes",
+            payload: GetAttributesPayload(id: id),
+            returning: [Attribute].self
+        )
+    }
+
+    /// Sets a single attribute value on a node.
+    public func setAttributeValue(_ id: Node.ID, name: String, value: String) async throws {
+        try await dispatchVoid(
+            method: "setAttributeValue",
+            payload: SetAttributeValuePayload(id: id, name: name, value: value)
+        )
+    }
+
+    /// Replaces attributes on a node using raw attribute text.
+    public func setAttributesAsText(_ id: Node.ID, text: String, name: String? = nil) async throws {
+        try await dispatchVoid(
+            method: "setAttributesAsText",
+            payload: SetAttributesAsTextPayload(id: id, text: text, name: name)
+        )
+    }
+
+    /// Removes an attribute from a node.
+    public func removeAttribute(_ id: Node.ID, name: String) async throws {
+        try await dispatchVoid(
+            method: "removeAttribute",
+            payload: RemoveAttributePayload(id: id, name: name)
+        )
+    }
+
+    /// Replaces a node with the supplied outer HTML.
+    public func setOuterHTML(_ id: Node.ID, html: String) async throws {
+        try await dispatchVoid(
+            method: "setOuterHTML",
+            payload: SetOuterHTMLPayload(id: id, html: html)
+        )
+    }
+
+    /// Removes a node from the document.
+    public func removeNode(_ id: Node.ID) async throws {
+        try await dispatchVoid(
+            method: "removeNode",
+            payload: RemoveNodePayload(id: id)
+        )
+    }
+
+    /// Marks the current DOM state as an undoable editing checkpoint.
+    public func markUndoableState() async throws {
+        try await dispatchVoid(
+            method: "markUndoableState",
+            payload: MarkUndoableStatePayload()
+        )
+    }
+
+    /// Highlights a DOM node in the inspected page.
+    public func highlightNode(_ id: Node.ID) async throws {
+        // WebKit cannot highlight frame-owned DOM nodes from frame targets
+        // yet; its frontend intentionally no-ops these nodes instead of
+        // routing a scoped id to the wrong page node.
+        guard id.targetScopeRawValue == nil else {
+            return
         }
+        try await dispatchVoid(
+            method: "highlightNode",
+            payload: HighlightNodePayload(id: id)
+        )
+    }
 
-        /// Returns the root document node for the target.
-        public func getDocument() async throws -> Node {
-            try await context.dispatch(
-                domain: .dom,
-                method: "getDocument",
-                payload: GetDocumentPayload(),
-                returning: Node.self
+    /// Clears the current DOM highlight.
+    public func hideHighlight() async throws {
+        try await dispatchVoid(
+            method: "hideHighlight",
+            payload: HideHighlightPayload()
+        )
+    }
+
+    package func setInspectMode(enabled: Bool) async throws {
+        try await dispatchVoid(
+            method: "setInspectModeEnabled",
+            payload: SetInspectModeEnabledPayload(enabled: enabled)
+        )
+    }
+
+    /// Runs an operation while WebKit's element picker is enabled.
+    ///
+    /// The Inspector capability and its event subscriber are installed before
+    /// inspect mode is enabled. The scope disables inspect mode and releases
+    /// the capability on success, failure, and cancellation.
+    public func withElementPicker<Output>(
+        buffering: WebInspectorEventBufferingPolicy = .bounded(16),
+        isolation: isolated (any Actor)? = #isolation,
+        _ operation: (
+            AsyncThrowingStream<WebInspectorPageEvent<Node.ID>, any Error>
+        ) async throws -> Output
+    ) async throws -> Output {
+        let inspector = Inspector(endpoint: endpoint)
+        return try await inspector._withEvents(
+            buffering: buffering,
+            isolation: isolation
+        ) { inspectorEvents in
+            let pair = AsyncThrowingStream.makeStream(
+                of: WebInspectorPageEvent<Node.ID>.self
             )
-        }
-
-        /// Requests child-node events for a node up to the supplied depth.
-        public func requestChildNodes(_ id: Node.ID, depth: Int = 1) async throws {
-            try await context.dispatchVoid(
-                domain: .dom,
-                method: "requestChildNodes",
-                payload: RequestChildNodesPayload(id: id, depth: depth)
-            )
-        }
-
-        /// Resolves a runtime object into a DOM node identity.
-        public func requestNode(forRemoteObject objectID: Runtime.RemoteObject.ID) async throws -> Node.ID {
-            try await context.dispatch(
-                domain: .dom,
-                method: "requestNode",
-                payload: RequestNodePayload(objectID: objectID),
-                returning: Node.ID.self
-            )
-        }
-
-        /// Returns serialized outer HTML for a node.
-        public func outerHTML(of id: Node.ID) async throws -> String {
-            try await context.dispatch(
-                domain: .dom,
-                method: "getOuterHTML",
-                payload: GetOuterHTMLPayload(id: id),
-                returning: String.self
-            )
-        }
-
-        /// Returns the current attributes for a node.
-        public func attributes(of id: Node.ID) async throws -> [Attribute] {
-            try await context.dispatch(
-                domain: .dom,
-                method: "getAttributes",
-                payload: GetAttributesPayload(id: id),
-                returning: [Attribute].self
-            )
-        }
-
-        /// Sets a single attribute value on a node.
-        public func setAttributeValue(_ id: Node.ID, name: String, value: String) async throws {
-            try await context.dispatchVoid(
-                domain: .dom,
-                method: "setAttributeValue",
-                payload: SetAttributeValuePayload(id: id, name: name, value: value)
-            )
-        }
-
-        /// Replaces attributes on a node using raw attribute text.
-        public func setAttributesAsText(_ id: Node.ID, text: String, name: String? = nil) async throws {
-            try await context.dispatchVoid(
-                domain: .dom,
-                method: "setAttributesAsText",
-                payload: SetAttributesAsTextPayload(id: id, text: text, name: name)
-            )
-        }
-
-        /// Removes an attribute from a node.
-        public func removeAttribute(_ id: Node.ID, name: String) async throws {
-            try await context.dispatchVoid(
-                domain: .dom,
-                method: "removeAttribute",
-                payload: RemoveAttributePayload(id: id, name: name)
-            )
-        }
-
-        /// Replaces a node with the supplied outer HTML.
-        public func setOuterHTML(_ id: Node.ID, html: String) async throws {
-            try await context.dispatchVoid(
-                domain: .dom,
-                method: "setOuterHTML",
-                payload: SetOuterHTMLPayload(id: id, html: html)
-            )
-        }
-
-        /// Removes a node from the document.
-        public func removeNode(_ id: Node.ID) async throws {
-            try await context.dispatchVoid(
-                domain: .dom,
-                method: "removeNode",
-                payload: RemoveNodePayload(id: id)
-            )
-        }
-
-        /// Marks the current DOM state as an undoable editing checkpoint.
-        public func markUndoableState() async throws {
-            try await context.dispatchVoid(
-                domain: .dom,
-                method: "markUndoableState",
-                payload: MarkUndoableStatePayload()
-            )
-        }
-
-        /// Highlights a DOM node in the inspected page.
-        public func highlightNode(_ id: Node.ID) async throws {
-            // WebKit cannot highlight frame-owned DOM nodes from frame targets
-            // yet; its frontend intentionally no-ops these nodes instead of
-            // routing a scoped id to the wrong page node.
-            guard id.targetScopeRawValue == nil else {
-                return
+            let projectionTask = Task {
+                do {
+                    for try await pageEvent in inspectorEvents {
+                        switch pageEvent {
+                        case let .reset(generation):
+                            pair.continuation.yield(.reset(generation))
+                        case let .event(generation, event):
+                            guard case let .inspect(object, _) = event,
+                                  object.subtype?.rawValue == "node",
+                                  let objectID = object.id else {
+                                continue
+                            }
+                            let nodeID: Node.ID
+                            do {
+                                nodeID = try await requestNode(
+                                    forRemoteObject: objectID
+                                )
+                            } catch WebInspectorProxyError.staleIdentifier {
+                                continue
+                            } catch WebInspectorProxyError.pageUnavailable {
+                                continue
+                            }
+                            pair.continuation.yield(
+                                .event(generation, nodeID)
+                            )
+                        }
+                    }
+                    pair.continuation.finish()
+                } catch {
+                    pair.continuation.finish(throwing: error)
+                }
             }
-            try await context.dispatchVoid(
-                domain: .dom,
-                method: "highlightNode",
-                payload: HighlightNodePayload(id: id)
-            )
-        }
+            pair.continuation.onTermination = { _ in
+                projectionTask.cancel()
+            }
 
-        /// Clears the current DOM highlight.
-        public func hideHighlight() async throws {
-            try await context.dispatchVoid(
-                domain: .dom,
-                method: "hideHighlight",
-                payload: HideHighlightPayload()
-            )
-        }
+            let operationResult: Result<Output, any Error>
+            do {
+                operationResult = .success(
+                    try await operation(pair.stream)
+                )
+            } catch {
+                operationResult = .failure(error)
+            }
 
-        /// Enables or disables WebKit's element picker.
-        public func setInspectMode(enabled: Bool) async throws {
-            try await context.dispatchVoid(
-                domain: .dom,
-                method: "setInspectModeEnabled",
-                payload: SetInspectModeEnabledPayload(enabled: enabled)
-            )
-        }
-
-        /// Undoes the most recent DOM edit recorded by WebKit.
-        public func undo() async throws {
-            try await context.dispatchVoid(
-                domain: .dom,
-                method: "undo",
-                payload: UndoPayload()
-            )
-        }
-
-        /// Redoes the most recent DOM edit recorded by WebKit.
-        public func redo() async throws {
-            try await context.dispatchVoid(
-                domain: .dom,
-                method: "redo",
-                payload: RedoPayload()
-            )
-        }
-
-        /// DOM domain events emitted by this target.
-        public var events: EventStream {
-            EventStream {
-                context.domEvents()
+            projectionTask.cancel()
+            await projectionTask.value
+            pair.continuation.finish()
+            switch operationResult {
+            case let .success(output):
+                return output
+            case let .failure(error):
+                throw error
             }
         }
+    }
+
+    /// Undoes the most recent DOM edit recorded by WebKit.
+    public func undo() async throws {
+        try await dispatchVoid(
+            method: "undo",
+            payload: UndoPayload()
+        )
+    }
+
+    /// Redoes the most recent DOM edit recorded by WebKit.
+    public func redo() async throws {
+        try await dispatchVoid(
+            method: "redo",
+            payload: RedoPayload()
+        )
     }
 
     package struct GetDocumentPayload: Sendable {
@@ -534,29 +612,6 @@ public enum DOM {
         case unknown(RawEvent)
     }
 
-    /// An asynchronous stream of DOM domain events.
-    public struct EventStream: AsyncSequence, Sendable {
-        /// The event yielded by the stream.
-        public typealias Element = Event
-
-        /// The iterator type used by the stream.
-        public typealias AsyncIterator = AsyncStream<Event>.Iterator
-
-        private let makeStream: @Sendable () -> AsyncStream<Event>
-
-        package init(
-            _ makeStream: @escaping @Sendable () -> AsyncStream<Event> = {
-                finishedStream(of: Event.self)
-            }
-        ) {
-            self.makeStream = makeStream
-        }
-
-        /// Creates an iterator over DOM events.
-        public func makeAsyncIterator() -> AsyncIterator {
-            makeStream().makeAsyncIterator()
-        }
-    }
 }
 
 package extension DOM.Node.ID {

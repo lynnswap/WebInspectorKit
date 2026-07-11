@@ -1,7 +1,8 @@
+import Observation
 import WebInspectorProxyKit
 
 /// A display section in the CSS style sidebar for a DOM element.
-public struct CSSStyleSection: Sendable, Identifiable {
+public struct CSSStyleSection: Identifiable {
     /// The source of a style section.
     public enum Kind: Hashable, Sendable {
         /// The element's inline `style` declaration.
@@ -59,21 +60,23 @@ public struct CSSStyleSection: Sendable, Identifiable {
         title: String?,
         rule: CSS.Rule?,
         style: CSS.Style,
-        isEditable: Bool
+        isEditable: Bool,
+        propertyModels: [CSSStyleProperty]? = nil
     ) {
+        let styleModel = CSSStyle(style, propertyModels: propertyModels)
         self.id = id
         self.kind = kind
         self.title = title
-        self.rule = rule.map(CSSStyleRule.init)
-        self.style = CSSStyle(style)
+        self.rule = rule.map { CSSStyleRule($0, styleModel: styleModel) }
+        self.style = styleModel
         self.isEditable = isEditable
         proxyRule = rule
         proxyStyle = style
     }
 }
 
-/// A DataKit value model for a CSS declaration block.
-public struct CSSStyle: Sendable, Identifiable {
+/// A DataKit model for a CSS declaration block.
+public struct CSSStyle: Identifiable {
     /// Stable identity for a CSS declaration block.
     public struct ID: Hashable, Sendable {
         /// The raw backend style identifier.
@@ -207,10 +210,13 @@ public struct CSSStyle: Sendable, Identifiable {
         self.isEditable = isEditable
     }
 
-    package init(_ style: CSS.Style) {
+    package init(
+        _ style: CSS.Style,
+        propertyModels: [CSSStyleProperty]? = nil
+    ) {
         self.init(
             id: ID(style.id),
-            properties: style.properties.map(CSSStyleProperty.init),
+            properties: propertyModels ?? style.properties.map(CSSStyleProperty.init),
             shorthandEntries: style.shorthandEntries.map(ShorthandEntry.init),
             cssText: style.cssText,
             range: style.range.map(SourceRange.init),
@@ -221,8 +227,8 @@ public struct CSSStyle: Sendable, Identifiable {
     }
 }
 
-/// A DataKit value model for a matched CSS rule.
-public struct CSSStyleRule: Sendable {
+/// A DataKit model for a matched CSS rule.
+public struct CSSStyleRule {
     /// Stable identity for an editable CSS rule.
     public struct ID: Hashable, Sendable {
         /// The raw backend rule identifier.
@@ -337,7 +343,7 @@ public struct CSSStyleRule: Sendable {
         self.isImplicitlyNested = isImplicitlyNested
     }
 
-    package init(_ rule: CSS.Rule) {
+    package init(_ rule: CSS.Rule, styleModel: CSSStyle? = nil) {
         self.init(
             id: rule.id.map(ID.init),
             selectors: rule.selectorList.selectors,
@@ -347,15 +353,16 @@ public struct CSSStyleRule: Sendable {
             sourceLine: rule.sourceLine,
             sourceLocation: rule.sourceLocation.map(CSSStyle.SourceRange.init),
             origin: Origin(rule.origin),
-            style: CSSStyle(rule.style),
+            style: styleModel ?? CSSStyle(rule.style),
             groupings: rule.groupings.map(Grouping.init),
             isImplicitlyNested: rule.isImplicitlyNested
         )
     }
 }
 
-/// A DataKit value model for a CSS property declaration.
-public struct CSSStyleProperty: Sendable, Identifiable {
+/// An observable CSS property declaration with stable backend identity.
+@Observable
+public final class CSSStyleProperty: Identifiable {
     /// Stable identity for an editable CSS property.
     public struct ID: Hashable, Sendable {
         /// The raw backend property identifier.
@@ -418,34 +425,37 @@ public struct CSSStyleProperty: Sendable, Identifiable {
     public let id: ID
 
     /// The property name.
-    public let name: String
+    public private(set) var name: String
 
     /// The property value.
-    public let value: String
+    public private(set) var value: String
 
     /// The declaration priority, such as `important`.
-    public let priority: String?
+    public private(set) var priority: String?
 
     /// The original declaration text, if WebKit reported it.
-    public let text: String?
+    public private(set) var text: String?
 
     /// A Boolean value indicating whether WebKit parsed the declaration successfully.
-    public let parsedOk: Bool
+    public private(set) var parsedOk: Bool
 
     /// The cascade status of the declaration.
-    public let status: Status
+    public private(set) var status: Status
 
     /// A Boolean value indicating whether the declaration is implicit.
-    public let implicit: Bool
+    public private(set) var implicit: Bool
 
     /// Source range for the declaration, if known.
-    public let range: CSSStyle.SourceRange?
+    public private(set) var range: CSSStyle.SourceRange?
 
     /// A Boolean value indicating whether WebKit accepts edits for this declaration.
-    public let isEditable: Bool
+    public private(set) var isEditable: Bool
 
     /// A Boolean value indicating whether the declaration was changed through DataKit.
-    public let isModifiedByInspector: Bool
+    public private(set) var isModifiedByInspector: Bool
+
+    /// A Boolean value indicating whether this declaration has a submitted mutation awaiting completion.
+    public private(set) var isMutationPending: Bool
 
     /// A Boolean value indicating whether the declaration is enabled.
     public var isEnabled: Bool {
@@ -482,9 +492,10 @@ public struct CSSStyleProperty: Sendable, Identifiable {
         self.range = range
         self.isEditable = isEditable
         self.isModifiedByInspector = isModifiedByInspector
+        isMutationPending = false
     }
 
-    package init(_ property: CSS.Property) {
+    package convenience init(_ property: CSS.Property) {
         self.init(
             id: ID(property.id),
             name: property.name,
@@ -498,6 +509,33 @@ public struct CSSStyleProperty: Sendable, Identifiable {
             isEditable: property.isEditable,
             isModifiedByInspector: property.isModifiedByInspector
         )
+    }
+
+    package func update(from property: CSSStyleProperty) {
+        if name != property.name { name = property.name }
+        if value != property.value { value = property.value }
+        if priority != property.priority { priority = property.priority }
+        if text != property.text { text = property.text }
+        if parsedOk != property.parsedOk { parsedOk = property.parsedOk }
+        if status != property.status { status = property.status }
+        if implicit != property.implicit { implicit = property.implicit }
+        if range != property.range { range = property.range }
+        if isEditable != property.isEditable { isEditable = property.isEditable }
+        if isModifiedByInspector != property.isModifiedByInspector {
+            isModifiedByInspector = property.isModifiedByInspector
+        }
+    }
+
+    package func beginMutation() -> Bool {
+        guard isMutationPending == false else {
+            return false
+        }
+        isMutationPending = true
+        return true
+    }
+
+    package func endMutation() {
+        isMutationPending = false
     }
 }
 

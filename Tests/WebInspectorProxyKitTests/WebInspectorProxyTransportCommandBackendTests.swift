@@ -1,7 +1,7 @@
 import Foundation
 import Testing
-import WebInspectorProxyKit
 import WebInspectorTestSupport
+@testable import WebInspectorProxyKit
 
 private let transportCommandBackendWaitTimeout: Duration = .milliseconds(750)
 
@@ -10,7 +10,8 @@ func transportCommandBackendDispatchesPageReloadThroughTargetRoute() async throw
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = pageTarget(proxy: proxy)
 
     let reloadTask = Task {
         try await target.page.reload()
@@ -35,7 +36,8 @@ func transportCommandBackendDecodesDOMRequestNodeResult() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = pageTarget(proxy: proxy)
 
     let requestNodeTask = Task {
         try await target.dom.requestNode(forRemoteObject: Runtime.RemoteObject.ID("remote-node"))
@@ -61,7 +63,8 @@ func transportCommandBackendPreservesDOMRequestChildNodesRecursiveDepth() async 
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = pageTarget(proxy: proxy)
 
     let requestChildrenTask = Task {
         try await target.dom.requestChildNodes(DOM.Node.ID("document"), depth: -1)
@@ -88,7 +91,8 @@ func transportCommandBackendEncodesDOMEditingCommandsAndDecodesAttributes() asyn
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = pageTarget(proxy: proxy)
 
     let attributesTask = Task {
         try await target.dom.attributes(of: DOM.Node.ID("42"))
@@ -175,7 +179,8 @@ func transportCommandBackendEncodesDOMHighlightAndInspectModeCommands() async th
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = pageTarget(proxy: proxy)
 
     let highlightTask = Task {
         try await target.dom.highlightNode(DOM.Node.ID("42"))
@@ -249,7 +254,8 @@ func transportCommandBackendDecodesDOMDocumentResult() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = pageTarget(proxy: proxy)
 
     let documentTask = Task {
         try await target.dom.getDocument()
@@ -284,7 +290,8 @@ func transportCommandBackendEncodesAndDecodesCSSStyleCommands() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = pageTarget(proxy: proxy)
 
     let matchedStylesTask = Task {
         try await target.css.matchedStyles(for: DOM.Node.ID("42"))
@@ -547,26 +554,6 @@ func transportBackedProxyMaterializesCurrentPageFromTransportRegistry() async th
 }
 
 @Test
-func transportBackedProxyCloseDetachesTransportAndFinishesEventStreams() async throws {
-    let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
-    await installPageTarget(in: transport)
-    let proxy = try await WebInspectorProxy(transport: transport)
-    let target = try await proxy.waitForCurrentPage()
-
-    let eventTask = Task {
-        var iterator = target.dom.events.makeAsyncIterator()
-        return await iterator.next()
-    }
-
-    await waitForEventSubscription(target, domain: .dom)
-    await proxy.close()
-
-    #expect(await backend.isDetached())
-    #expect(try await value(of: eventTask) == nil)
-}
-
-@Test
 func transportBackedProxyWaitUntilClosedSuspendsUntilClose() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
@@ -587,8 +574,29 @@ func transportBackedProxyWaitUntilClosedSuspendsUntilClose() async throws {
 }
 
 @Test
+func nativeFatalCallbackPropagatesThroughProxyTerminalAPI() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: .milliseconds(750))
+    let receiver = TransportReceiver()
+    receiver.setCore(core)
+    await installPageTarget(in: core)
+    let proxy = try await WebInspectorProxy(transport: core)
+    let page = try await proxy.waitForCurrentPage()
+
+    receiver.fail("native frontend disconnected")
+
+    await #expect(throws: WebInspectorProxyError.disconnected("native frontend disconnected")) {
+        try await proxy.waitUntilClosed()
+    }
+    await #expect(throws: WebInspectorProxyError.disconnected("native frontend disconnected")) {
+        try await page.page.reload()
+    }
+    #expect(await backend.isDetached())
+}
+
+@Test
 func proxyWaitUntilClosedReturnsImmediatelyAfterClose() async throws {
-    let proxy = WebInspectorProxy()
+    let proxy = WebInspectorProxy(localStateOnly: ())
 
     await proxy.close()
 
@@ -599,9 +607,103 @@ func proxyWaitUntilClosedReturnsImmediatelyAfterClose() async throws {
 }
 
 @Test
+func proxyHandleDeallocatesAfterExplicitClose() async {
+    weak var weakProxy: WebInspectorProxy?
+
+    do {
+        let proxy = WebInspectorProxy(localStateOnly: ())
+        weakProxy = proxy
+        await proxy.close()
+    }
+
+    #expect(weakProxy == nil)
+}
+
+@Test
+func droppingOpenProxyHandleReachesConnectionCoreDeinit() {
+    weak var weakProxy: WebInspectorProxy?
+
+    do {
+        let proxy = WebInspectorProxy(localStateOnly: ())
+        weakProxy = proxy
+    }
+
+    #expect(weakProxy == nil)
+}
+
+@Test
+func pageTargetAndDomainHandlesDoNotOwnTheProxyLifecycle() async {
+    weak var weakProxy: WebInspectorProxy?
+    var page: WebInspectorPage?
+    var dom: DOM?
+
+    do {
+        let proxy = WebInspectorProxy(localStateOnly: ())
+        weakProxy = proxy
+        page = proxy.page
+        dom = page?.dom
+    }
+
+    #expect(weakProxy == nil)
+    await #expect(throws: WebInspectorProxyError.closed) {
+        _ = try await page?.generation
+    }
+    await #expect(throws: WebInspectorProxyError.closed) {
+        _ = try await dom?.getDocument()
+    }
+    await #expect(throws: WebInspectorProxyError.closed) {
+        try await dom?.withEvents { _ in }
+    }
+}
+
+@Test
+func pendingCapabilitySendDoesNotRetainDroppedConnectionCore() async throws {
+    let backend = SuspendedSendTransportBackend()
+    weak var weakTransport: TransportSession?
+
+    do {
+        let transport = TransportSession(backend: backend, responseTimeout: nil)
+        weakTransport = transport
+        await installPageTarget(in: transport)
+        await transport.receiveRootMessage(
+            #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
+        )
+        let proxy = try await WebInspectorProxy(transport: transport)
+        let frame = WebInspectorTarget(
+            id: WebInspectorTarget.ID("frame-target"),
+            kind: .frame,
+            frameID: FrameID("child-frame"),
+            isProvisional: false,
+            proxy: proxy,
+            route: RoutingTargetID("frame-target")
+        )
+        let scopeTask = Task {
+            do {
+                try await frame.network.withEvents { _ in }
+                return StructuredScopeOutcome.succeeded
+            } catch WebInspectorProxyError.pageUnavailable {
+                return .pageUnavailable
+            } catch {
+                return .other(String(describing: error))
+            }
+        }
+
+        await backend.waitUntilSendStarted()
+        await transport.receiveRootMessage(
+            #"{"method":"Target.targetDestroyed","params":{"targetId":"frame-target"}}"#
+        )
+        #expect(try await value(of: scopeTask) == .pageUnavailable)
+        await transport.waitForEventScopeCountForTesting(0)
+    }
+
+    #expect(weakTransport == nil)
+    await backend.releaseSend()
+}
+
+@Test
 func proxyWaitUntilClosedWaitsForInFlightCloseConnection() async throws {
     let closeGate = CloseConnectionGate()
-    let proxy = WebInspectorProxy(closeConnection: {
+    let proxy = WebInspectorProxy(localStateOnly: (), closeConnection: {
         await closeGate.waitUntilReleased()
     })
 
@@ -626,7 +728,7 @@ func proxyWaitUntilClosedWaitsForInFlightCloseConnection() async throws {
 
 @Test
 func proxyWaitUntilClosedCancellationRemovesWaiter() async throws {
-    let proxy = WebInspectorProxy()
+    let proxy = WebInspectorProxy(localStateOnly: ())
 
     let waitTask = Task {
         try await proxy.waitUntilClosed()
@@ -722,95 +824,6 @@ func transportBackedCurrentPageRouteFollowsCommittedMainPageTarget() async throw
 }
 
 @Test
-func transportBackendDeliversCurrentPageTargetCommitLifecycleAfterRetarget() async throws {
-    let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
-    await installPageTarget(
-        in: transport,
-        targetID: ProtocolTarget.ID("page-old"),
-        frameID: nil
-    )
-    let proxy = try await WebInspectorProxy(transport: transport)
-    let target = try await proxy.waitForCurrentPage()
-    #expect(target.frameID == nil)
-
-    let eventTask = Task<WebInspectorTargetLifecycleEvent?, Never> {
-        var iterator = target.lifecycleEvents.makeAsyncIterator()
-        while let event = await iterator.next() {
-            if case .didCommitProvisionalTarget = event {
-                return event
-            }
-        }
-        return nil
-    }
-
-    await waitForEventSubscription(target, domain: .target)
-    await installPageTarget(
-        in: transport,
-        targetID: ProtocolTarget.ID("page-new"),
-        frameID: "new-main-frame"
-    )
-    await transport.receiveRootMessage(
-        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-old","newTargetId":"page-new"}}"#
-    )
-
-    let event = try #require(try await value(of: eventTask))
-    guard case let .didCommitProvisionalTarget(commit) = event else {
-        Issue.record("Expected Target.didCommitProvisionalTarget lifecycle event.")
-        return
-    }
-    #expect(commit.oldTargetID == WebInspectorTarget.ID.currentPage)
-    #expect(commit.newTarget.id == WebInspectorTarget.ID.currentPage)
-    guard case .page = commit.newTarget.kind else {
-        Issue.record("Expected committed target to remain a page.")
-        return
-    }
-    #expect(commit.newTarget.frameID == FrameID("new-main-frame"))
-    #expect(commit.newTarget.isProvisional == false)
-    let cachedTarget = try await proxy.waitForCurrentPage()
-    #expect(cachedTarget.frameID == FrameID("new-main-frame"))
-    #expect(cachedTarget.isProvisional == false)
-    #expect(await transport.snapshot().currentMainPageTargetID == ProtocolTarget.ID("page-new"))
-}
-
-@Test
-func transportBackendDeliversCurrentPageTargetDestroyedLifecycle() async throws {
-    let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
-    await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-main"))
-    let proxy = try await WebInspectorProxy(transport: transport)
-    let target = try await proxy.waitForCurrentPage()
-
-    let eventTask = Task {
-        var iterator = target.lifecycleEvents.makeAsyncIterator()
-        return await iterator.next()
-    }
-
-    await waitForEventSubscription(target, domain: .target)
-    await transport.receiveRootMessage(
-        #"{"method":"Target.targetDestroyed","params":{"targetId":"page-main"}}"#
-    )
-
-    let event = try #require(try await value(of: eventTask))
-    guard case let .targetDestroyed(targetID) = event else {
-        Issue.record("Expected Target.targetDestroyed lifecycle event.")
-        return
-    }
-    #expect(targetID == .currentPage)
-    #expect(await transport.snapshot().currentMainPageTargetID == nil)
-    #expect(await proxy.currentPage == nil)
-
-    let replacementTask = Task {
-        try await proxy.waitForCurrentPage()
-    }
-    await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-replacement"))
-    let replacement = try await throwingValue(of: replacementTask)
-    #expect(replacement.id == .currentPage)
-    #expect(replacement.route == .currentPage)
-    #expect(await transport.snapshot().currentMainPageTargetID == ProtocolTarget.ID("page-replacement"))
-}
-
-@Test
 func transportBackedWaitForCurrentPageRefreshesDestroyedTargetWithoutLifecycleSubscription() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
@@ -837,184 +850,7 @@ func transportBackedWaitForCurrentPageRefreshesDestroyedTargetWithoutLifecycleSu
 }
 
 @Test
-func transportBackendDeliversCurrentPagePageFrameLifecycle() async throws {
-    let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
-    await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-main"))
-    let proxy = try await WebInspectorProxy(transport: transport)
-    let target = try await proxy.waitForCurrentPage()
-
-    let eventTask = Task {
-        var iterator = target.lifecycleEvents.makeAsyncIterator()
-        let first = await iterator.next()
-        let second = await iterator.next()
-        return [first, second].compactMap { $0 }
-    }
-
-    await waitForEventSubscription(target, domain: .page)
-    await transport.receiveRootMessage(
-        #"{"method":"Page.frameNavigated","params":{"frame":{"id":"main-frame","loaderId":"loader-1","name":"Main","url":"https://example.test/","securityOrigin":"https://example.test","mimeType":"text/html"}}}"#
-    )
-    await transport.receiveRootMessage(
-        #"{"method":"Page.frameDetached","params":{"frameId":"child-frame"}}"#
-    )
-
-    let events = try await value(of: eventTask)
-    #expect(events.count == 2)
-    guard case let .frameNavigated(frame) = events[0] else {
-        Issue.record("Expected Page.frameNavigated lifecycle event.")
-        return
-    }
-    #expect(frame.id == FrameID("main-frame"))
-    #expect(frame.parentID == nil)
-    #expect(frame.loaderID == "loader-1")
-    #expect(frame.name == "Main")
-    #expect(frame.url == "https://example.test/")
-    #expect(frame.securityOrigin == "https://example.test")
-    #expect(frame.mimeType == "text/html")
-
-    guard case let .frameDetached(frameID) = events[1] else {
-        Issue.record("Expected Page.frameDetached lifecycle event.")
-        return
-    }
-    #expect(frameID == FrameID("child-frame"))
-}
-
-@Test
-func transportBackendDecodesRootScopedDOMDocumentUpdatedForCurrentPage() async throws {
-    let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
-    await installPageTarget(in: transport)
-    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
-
-    let eventTask = Task {
-        var iterator = target.dom.events.makeAsyncIterator()
-        return await iterator.next()
-    }
-
-    await waitForEventSubscription(target, domain: .dom)
-    await transport.receiveRootMessage(#"{"method":"DOM.documentUpdated","params":{}}"#)
-
-    let event = try #require(try await value(of: eventTask))
-    guard case .documentUpdated = event else {
-        Issue.record("Expected DOM.documentUpdated.")
-        return
-    }
-}
-
-@Test
-func transportBackendDecodesDOMShadowAndPseudoEventsForTargetRoute() async throws {
-    let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
-    await installPageTarget(in: transport)
-    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
-
-    let eventTask = Task {
-        var iterator = target.dom.events.makeAsyncIterator()
-        var events: [DOM.Event] = []
-        for _ in 0..<4 {
-            if let event = await iterator.next() {
-                events.append(event)
-            }
-        }
-        return events
-    }
-
-    await waitForEventSubscription(target, domain: .dom)
-    await receiveTargetEvent(
-        transport,
-        targetID: ProtocolTarget.ID("page-main"),
-        method: "DOM.shadowRootPushed",
-        params: ##"{"hostId":1,"root":{"nodeId":2,"nodeType":11,"nodeName":"#document-fragment","localName":"","nodeValue":"","childNodeCount":0}}"##
-    )
-    await receiveTargetEvent(
-        transport,
-        targetID: ProtocolTarget.ID("page-main"),
-        method: "DOM.shadowRootPopped",
-        params: #"{"hostId":1,"rootId":2}"#
-    )
-    await receiveTargetEvent(
-        transport,
-        targetID: ProtocolTarget.ID("page-main"),
-        method: "DOM.pseudoElementAdded",
-        params: #"{"parentId":1,"pseudoElement":{"nodeId":3,"nodeType":1,"nodeName":"::before","localName":"","nodeValue":"","childNodeCount":0,"pseudoType":"before"}}"#
-    )
-    await receiveTargetEvent(
-        transport,
-        targetID: ProtocolTarget.ID("page-main"),
-        method: "DOM.pseudoElementRemoved",
-        params: #"{"parentId":1,"pseudoElementId":3}"#
-    )
-
-    let events = try await value(of: eventTask)
-    #expect(events.count == 4)
-    guard case let .shadowRootPushed(host, root) = events[0] else {
-        Issue.record("Expected DOM.shadowRootPushed.")
-        return
-    }
-    #expect(host == DOM.Node.ID("1"))
-    #expect(root.id == DOM.Node.ID("2"))
-    guard case let .shadowRootPopped(poppedHost, poppedRoot) = events[1] else {
-        Issue.record("Expected DOM.shadowRootPopped.")
-        return
-    }
-    #expect(poppedHost == DOM.Node.ID("1"))
-    #expect(poppedRoot == DOM.Node.ID("2"))
-    guard case let .pseudoElementAdded(parent, element) = events[2] else {
-        Issue.record("Expected DOM.pseudoElementAdded.")
-        return
-    }
-    #expect(parent == DOM.Node.ID("1"))
-    #expect(element.id == DOM.Node.ID("3"))
-    guard case let .pseudoElementRemoved(removedParent, removedElement) = events[3] else {
-        Issue.record("Expected DOM.pseudoElementRemoved.")
-        return
-    }
-    #expect(removedParent == DOM.Node.ID("1"))
-    #expect(removedElement == DOM.Node.ID("3"))
-}
-
-@Test
-func transportBackendNormalizesInspectorInspectToDOMInspectEvent() async throws {
-    let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
-    await installPageTarget(in: transport)
-    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
-
-    let eventTask = Task {
-        var iterator = target.dom.events.makeAsyncIterator()
-        return await iterator.next()
-    }
-
-    await waitForEventSubscription(target, domain: .dom)
-    await waitForEventSubscription(target, domain: .inspector)
-    await receiveTargetEvent(
-        transport,
-        targetID: ProtocolTarget.ID("page-main"),
-        method: "Inspector.inspect",
-        params: #"{"object":{"objectId":"remote-node","type":"object","subtype":"node"},"hints":{}}"#
-    )
-
-    let requestNode = try await waitForTargetMessage(backend, method: "DOM.requestNode")
-    #expect(requestNode.targetIdentifier == ProtocolTarget.ID("page-main"))
-    #expect(try messageParameters(requestNode.message)["objectId"] as? String == "remote-node")
-    await receiveTargetReply(
-        transport,
-        targetID: requestNode.targetIdentifier,
-        messageID: try messageID(requestNode.message),
-        result: #"{"nodeId":42}"#
-    )
-
-    let event = try #require(try await value(of: eventTask))
-    guard case let .inspect(nodeID) = event else {
-        Issue.record("Expected Inspector.inspect to normalize to DOM.inspect.")
-        return
-    }
-    #expect(nodeID == DOM.Node.ID("42"))
-}
-
-@Test
-func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async throws {
+func transportBackendProjectsFrameDOMEventsAndRoutesScopedCommands() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
@@ -1023,53 +859,6 @@ func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async 
     )
     let proxy = try await WebInspectorProxy(transport: transport)
     let target = try await proxy.waitForCurrentPage()
-
-    let eventTask = Task {
-        var iterator = target.dom.events.makeAsyncIterator()
-        let first = await iterator.next()
-        let second = await iterator.next()
-        return [first, second].compactMap { $0 }
-    }
-
-    await waitForEventSubscription(target, domain: .dom)
-    await waitForEventSubscription(target, domain: .inspector)
-    await receiveTargetEvent(
-        transport,
-        targetID: ProtocolTarget.ID("frame-target"),
-        method: "Inspector.inspect",
-        params: #"{"object":{"objectId":"remote-frame-node","type":"object","subtype":"node"},"hints":{}}"#
-    )
-
-    let requestNode = try await waitForTargetMessage(backend, method: "DOM.requestNode")
-    #expect(requestNode.targetIdentifier == ProtocolTarget.ID("page-main"))
-    #expect(try messageParameters(requestNode.message)["objectId"] as? String == "remote-frame-node")
-    await receiveTargetReply(
-        transport,
-        targetID: requestNode.targetIdentifier,
-        messageID: try messageID(requestNode.message),
-        result: #"{"nodeId":42}"#
-    )
-
-    await receiveTargetEvent(
-        transport,
-        targetID: ProtocolTarget.ID("frame-target"),
-        method: "DOM.setChildNodes",
-        params: #"{"parentId":42,"nodes":[{"nodeId":43,"nodeType":1,"nodeName":"SPAN","localName":"span","nodeValue":"","childNodeCount":0}]}"#
-    )
-
-    let events = try await value(of: eventTask)
-    #expect(events.count == 2)
-    guard case let .inspect(nodeID)? = events.first else {
-        Issue.record("Expected frame Inspector.inspect to normalize to DOM.inspect.")
-        return
-    }
-    #expect(nodeID == DOM.Node.ID("42", scopedToTargetRawValue: "frame-target"))
-    guard case let .setChildNodes(parentID, nodes)? = events.last else {
-        Issue.record("Expected frame DOM.setChildNodes to be projected into the current page DOM stream.")
-        return
-    }
-    #expect(parentID == DOM.Node.ID("42", scopedToTargetRawValue: "frame-target"))
-    #expect(nodes.first?.id == DOM.Node.ID("43", scopedToTargetRawValue: "frame-target"))
 
     let frameNodeID = DOM.Node.ID("42", scopedToTargetRawValue: "frame-target")
     let frameAttributesTask = Task {
@@ -1291,136 +1080,10 @@ func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async 
     )
     #expect(try await frameSetGroupingHeaderTask.value.text == "@media (min-width: 600px)")
 
-    let cssEventTask = Task {
-        var iterator = target.css.events.makeAsyncIterator()
-        return await iterator.next()
-    }
-    await waitForEventSubscription(target, domain: .css)
-    await receiveTargetEvent(
-        transport,
-        targetID: ProtocolTarget.ID("frame-target"),
-        method: "CSS.styleSheetChanged",
-        params: #"{"styleSheetId":"frame-sheet"}"#
-    )
-    let cssEvent = try #require(try await value(of: cssEventTask))
-    guard case let .styleSheetChanged(styleSheetID) = cssEvent else {
-        Issue.record("Expected frame CSS.styleSheetChanged to be projected into the current page CSS stream.")
-        return
-    }
-    #expect(styleSheetID.targetScopeRawValue == "frame-target")
-    #expect(styleSheetID.unscopedRawValue == "frame-sheet")
 }
 
 @Test
-func transportBackendNormalizesParentlessFrameInspectorInspectForCurrentPageRoute() async throws {
-    let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
-    await installPageTarget(in: transport)
-    await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-page-target","type":"page","frameId":"child-frame","isProvisional":false}}}"#
-    )
-    let proxy = try await WebInspectorProxy(transport: transport)
-    let target = try await proxy.waitForCurrentPage()
-
-    let eventTask = Task {
-        var iterator = target.dom.events.makeAsyncIterator()
-        return await iterator.next()
-    }
-
-    await waitForEventSubscription(target, domain: .dom)
-    await waitForEventSubscription(target, domain: .inspector)
-    await receiveTargetEvent(
-        transport,
-        targetID: ProtocolTarget.ID("frame-page-target"),
-        method: "Inspector.inspect",
-        params: #"{"object":{"objectId":"remote-frame-node","type":"object","subtype":"node"},"hints":{}}"#
-    )
-
-    let requestNode = try await waitForTargetMessage(backend, method: "DOM.requestNode")
-    #expect(requestNode.targetIdentifier == ProtocolTarget.ID("page-main"))
-    #expect(try messageParameters(requestNode.message)["objectId"] as? String == "remote-frame-node")
-    await receiveTargetReply(
-        transport,
-        targetID: requestNode.targetIdentifier,
-        messageID: try messageID(requestNode.message),
-        result: #"{"nodeId":42}"#
-    )
-
-    let event = try #require(try await value(of: eventTask))
-    guard case let .inspect(nodeID) = event else {
-        Issue.record("Expected parentless frame Inspector.inspect to normalize to DOM.inspect.")
-        return
-    }
-    #expect(nodeID == DOM.Node.ID("42", scopedToTargetRawValue: "frame-page-target"))
-}
-
-@Test
-func transportBackendDecodesNetworkResponseEventForTargetRoute() async throws {
-    let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
-    await installPageTarget(in: transport)
-    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
-
-    let eventTask = Task {
-        var iterator = target.network.events.makeAsyncIterator()
-        return await iterator.next()
-    }
-
-    await waitForEventSubscription(target, domain: .network)
-    await receiveTargetEvent(
-        transport,
-        targetID: ProtocolTarget.ID("page-main"),
-        method: "Network.responseReceived",
-        params: #"{"requestId":"request-1","type":"Document","response":{"url":"https://example.test/","status":200,"statusText":"OK","mimeType":"text/html","headers":{"content-type":"text/html"},"source":"network"},"timestamp":12.5}"#
-    )
-
-    let event = try #require(try await value(of: eventTask))
-    guard case let .responseReceived(id, response, resourceType, timestamp) = event else {
-        Issue.record("Expected Network.responseReceived.")
-        return
-    }
-    #expect(id == Network.Request.ID("request-1"))
-    #expect(response.url == "https://example.test/")
-    #expect(response.status == 200)
-    #expect(response.headers["content-type"] == "text/html")
-    #expect(response.source == Network.Source(rawValue: "network"))
-    #expect(resourceType == .document)
-    #expect(timestamp == 12.5)
-}
-
-@Test
-func transportBackendDecodesNetworkResponseEventWithoutType() async throws {
-    let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
-    await installPageTarget(in: transport)
-    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
-
-    let eventTask = Task {
-        var iterator = target.network.events.makeAsyncIterator()
-        return await iterator.next()
-    }
-
-    await waitForEventSubscription(target, domain: .network)
-    await receiveTargetEvent(
-        transport,
-        targetID: ProtocolTarget.ID("page-main"),
-        method: "Network.responseReceived",
-        params: #"{"requestId":"request-1","response":{"url":"https://example.test/","status":200,"statusText":"OK","mimeType":"text/html","headers":{"content-type":"text/html"},"source":"network"},"timestamp":12.5}"#
-    )
-
-    let event = try #require(try await value(of: eventTask))
-    guard case let .responseReceived(id, response, resourceType, timestamp) = event else {
-        Issue.record("Expected Network.responseReceived.")
-        return
-    }
-    #expect(id == Network.Request.ID("request-1"))
-    #expect(response.url == "https://example.test/")
-    #expect(resourceType == nil)
-    #expect(timestamp == 12.5)
-}
-
-@Test
-func transportBackendDeliversFrameNetworkEventsToCurrentPageRoute() async throws {
+func transportBackendRoutesRequestNodeThroughPageDOMAgentWithoutInventingFrameScope() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
@@ -1428,221 +1091,7 @@ func transportBackendDeliversFrameNetworkEventsToCurrentPageRoute() async throws
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
     )
     let proxy = try await WebInspectorProxy(transport: transport)
-    let target = try await proxy.waitForCurrentPage()
-    #expect(target.route == .currentPage)
-
-    let eventTask = Task {
-        var iterator = target.network.events.makeAsyncIterator()
-        return await iterator.next()
-    }
-
-    await waitForEventSubscription(target, domain: .network)
-    await receiveTargetEvent(
-        transport,
-        targetID: ProtocolTarget.ID("frame-target"),
-        method: "Network.requestWillBeSent",
-        params: #"{"requestId":"frame-request","frameId":"child-frame","request":{"url":"https://frame.example.test/","method":"GET"},"timestamp":7.5,"type":"Document"}"#
-    )
-
-    let event = try #require(try await value(of: eventTask))
-    guard case let .requestWillBeSent(id, request, resourceType, _, timestamp) = event else {
-        Issue.record("Expected current-page route to receive frame Network.requestWillBeSent.")
-        return
-    }
-    #expect(id == Network.Request.ID("frame-request", scopedToTargetRawValue: "frame-target"))
-    #expect(request.id == id)
-    #expect(request.url == "https://frame.example.test/")
-    #expect(request.method == "GET")
-    #expect(resourceType == .document)
-    #expect(timestamp == 7.5)
-
-    let bodyTask = Task {
-        try await target.network.responseBody(for: id)
-    }
-    let bodyCommand = try await waitForTargetMessage(backend, method: "Network.getResponseBody")
-    #expect(bodyCommand.targetIdentifier == ProtocolTarget.ID("frame-target"))
-    #expect(try messageParameters(bodyCommand.message)["requestId"] as? String == "frame-request")
-    await receiveTargetReply(
-        transport,
-        targetID: bodyCommand.targetIdentifier,
-        messageID: try messageID(bodyCommand.message),
-        result: #"{"body":"frame body","base64Encoded":false}"#
-    )
-    let body = try await bodyTask.value
-    #expect(body.data == "frame body")
-    #expect(body.base64Encoded == false)
-}
-
-@Test
-func transportBackendDropsNonPageDestroyAfterPageDestroyed() async throws {
-    let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
-    await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-main"))
-    await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
-    )
-    let proxy = try await WebInspectorProxy(transport: transport)
-    let target = try await proxy.waitForCurrentPage()
-
-    let recorder = LifecycleEventRecorder()
-    let consumeTask = Task {
-        for await event in target.lifecycleEvents {
-            await recorder.record(event)
-        }
-    }
-    defer { consumeTask.cancel() }
-    await waitForEventSubscription(target, domain: .target)
-
-    await transport.receiveRootMessage(
-        #"{"method":"Target.targetDestroyed","params":{"targetId":"page-main"}}"#
-    )
-    // With no current page registered, a frame teardown must not surface as a
-    // current-page destruction; the replacement's creation event marks the
-    // point past which the frame destroy would have been delivered.
-    await transport.receiveRootMessage(
-        #"{"method":"Target.targetDestroyed","params":{"targetId":"frame-target"}}"#
-    )
-    await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-replacement"))
-
-    let clock = ContinuousClock()
-    let deadline = clock.now + .seconds(2)
-    while clock.now < deadline {
-        if await recorder.snapshot().count >= 2 {
-            break
-        }
-        await Task.yield()
-    }
-
-    let events = await recorder.snapshot()
-    guard events.count >= 2 else {
-        Issue.record("Expected the page destruction and the replacement creation to be delivered.")
-        return
-    }
-    guard case .targetDestroyed(.currentPage) = events[0] else {
-        Issue.record("Expected the page destruction on the current-page route.")
-        return
-    }
-    if case .targetDestroyed = events[1] {
-        Issue.record("Frame target destruction was misdelivered to the current-page route.")
-    }
-}
-
-private actor LifecycleEventRecorder {
-    private var events: [WebInspectorTargetLifecycleEvent] = []
-
-    func record(_ event: WebInspectorTargetLifecycleEvent) {
-        events.append(event)
-    }
-
-    func snapshot() -> [WebInspectorTargetLifecycleEvent] {
-        events
-    }
-}
-
-@Test
-func transportBackendEventSubscriptionWaitCompletesOnCancellation() async throws {
-    let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
-    await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-main"))
-    let proxy = try await WebInspectorProxy(transport: transport)
-    let target = try await proxy.waitForCurrentPage()
-
-    let waitTask = Task {
-        await target.proxy.waitForEventSubscription(
-            targetID: target.id,
-            route: target.route,
-            domain: .network
-        )
-        return Task.isCancelled
-    }
-    for _ in 0..<10 {
-        await Task.yield()
-    }
-    waitTask.cancel()
-
-    let wasCancelled = try await value(of: waitTask, timeout: .seconds(2))
-    #expect(wasCancelled)
-}
-
-@Test
-func transportBackendDecodesMemoryCacheResourceType() async throws {
-    let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
-    await installPageTarget(in: transport)
-    let proxy = try await WebInspectorProxy(transport: transport)
-    let target = try await proxy.waitForCurrentPage()
-
-    let eventTask = Task {
-        var iterator = target.network.events.makeAsyncIterator()
-        return await iterator.next()
-    }
-
-    await waitForEventSubscription(target, domain: .network)
-    await receiveTargetEvent(
-        transport,
-        targetID: ProtocolTarget.ID("page-main"),
-        method: "Network.requestServedFromMemoryCache",
-        params: #"{"requestId":"cached-1","timestamp":3,"resource":{"url":"https://example.test/app.css","type":"Stylesheet","bodySize":1234,"response":{"url":"https://example.test/app.css","status":200,"mimeType":"text/css","headers":{}}}}"#
-    )
-
-    let event = try #require(try await value(of: eventTask))
-    guard case let .requestServedFromMemoryCache(id, response, resourceType, timestamp) = event else {
-        Issue.record("Expected Network.requestServedFromMemoryCache event.")
-        return
-    }
-    #expect(id == Network.Request.ID("cached-1"))
-    #expect(response.url == "https://example.test/app.css")
-    #expect(response.bodySize == 1234)
-    #expect(resourceType == .stylesheet)
-    #expect(timestamp == 3)
-}
-
-@Test
-func transportBackendKeepsBackendResourceIdentifierOnScopedFrameRequests() async throws {
-    let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
-    await installPageTarget(in: transport)
-    await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
-    )
-    let proxy = try await WebInspectorProxy(transport: transport)
-    let target = try await proxy.waitForCurrentPage()
-
-    let eventTask = Task {
-        var iterator = target.network.events.makeAsyncIterator()
-        return await iterator.next()
-    }
-
-    await waitForEventSubscription(target, domain: .network)
-    await receiveTargetEvent(
-        transport,
-        targetID: ProtocolTarget.ID("frame-target"),
-        method: "Network.requestWillBeSent",
-        params: #"{"requestId":"frame-cached","request":{"url":"https://frame.example.test/cached","method":"GET"},"timestamp":1,"type":"Image","backendResourceIdentifier":{"sourceProcessID":"9","resourceID":"42"}}"#
-    )
-
-    let event = try #require(try await value(of: eventTask))
-    guard case let .requestWillBeSent(id, request, _, _, _) = event else {
-        Issue.record("Expected projected frame Network.requestWillBeSent.")
-        return
-    }
-    #expect(id.targetScopeRawValue == "frame-target")
-    #expect(request.backendResourceIdentifier == Network.BackendResourceID(
-        sourceProcessID: "9",
-        resourceID: "42"
-    ))
-}
-
-@Test
-func transportBackendRoutesRequestNodeThroughPageDOMAgentAndScopesResult() async throws {
-    let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
-    await installPageTarget(in: transport)
-    await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
-    )
-    let proxy = try await WebInspectorProxy(transport: transport)
-    let target = try await proxy.waitForCurrentPage()
+    let target = proxy.frameTarget(id: WebInspectorTarget.ID("frame-target"))
 
     let requestNodeTask = Task {
         try await target.dom.requestNode(
@@ -1659,8 +1108,8 @@ func transportBackendRoutesRequestNodeThroughPageDOMAgentAndScopesResult() async
         result: #"{"nodeId":"frame-node"}"#
     )
     let nodeID = try await requestNodeTask.value
-    #expect(nodeID == DOM.Node.ID("frame-node", scopedToTargetRawValue: "frame-target"))
-    #expect(nodeID.targetScopeRawValue == "frame-target")
+    #expect(nodeID == DOM.Node.ID("frame-node"))
+    #expect(nodeID.targetScopeRawValue == nil)
 }
 
 @Test
@@ -1670,34 +1119,16 @@ func transportBackendForwardsBackendResourceIdentifierToResponseBodyCommand() as
     await installPageTarget(in: transport)
     let proxy = try await WebInspectorProxy(transport: transport)
     let target = try await proxy.waitForCurrentPage()
-
-    let eventTask = Task {
-        var iterator = target.network.events.makeAsyncIterator()
-        return await iterator.next()
-    }
-
-    await waitForEventSubscription(target, domain: .network)
-    await receiveTargetEvent(
-        transport,
-        targetID: ProtocolTarget.ID("page-main"),
-        method: "Network.requestWillBeSent",
-        params: #"{"requestId":"cached-request","request":{"url":"https://example.test/cached","method":"GET"},"timestamp":1,"type":"Image","backendResourceIdentifier":{"sourceProcessID":"77","resourceID":"1234"}}"#
-    )
-
-    let event = try #require(try await value(of: eventTask))
-    guard case let .requestWillBeSent(id, request, _, _, _) = event else {
-        Issue.record("Expected Network.requestWillBeSent for the current page.")
-        return
-    }
-    #expect(request.backendResourceIdentifier == Network.BackendResourceID(
+    let id = Network.Request.ID("cached-request")
+    let backendResourceIdentifier = Network.BackendResourceID(
         sourceProcessID: "77",
         resourceID: "1234"
-    ))
+    )
 
     let bodyTask = Task {
         try await target.network.responseBody(
             for: id,
-            backendResourceIdentifier: request.backendResourceIdentifier
+            backendResourceIdentifier: backendResourceIdentifier
         )
     }
     let bodyCommand = try await waitForTargetMessage(backend, method: "Network.getResponseBody")
@@ -1717,328 +1148,12 @@ func transportBackendForwardsBackendResourceIdentifierToResponseBodyCommand() as
 }
 
 @Test
-func transportBackendDeliversParentlessFrameNetworkEventsToCurrentPageRoute() async throws {
-    let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
-    await installPageTarget(in: transport)
-    await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-page-target","type":"page","frameId":"child-frame","isProvisional":false}}}"#
-    )
-    let proxy = try await WebInspectorProxy(transport: transport)
-    let target = try await proxy.waitForCurrentPage()
-    #expect(target.route == .currentPage)
-
-    let eventTask = Task {
-        var iterator = target.network.events.makeAsyncIterator()
-        return await iterator.next()
-    }
-
-    await waitForEventSubscription(target, domain: .network)
-    await receiveTargetEvent(
-        transport,
-        targetID: ProtocolTarget.ID("frame-page-target"),
-        method: "Network.requestWillBeSent",
-        params: #"{"requestId":"frame-request","frameId":"child-frame","request":{"url":"https://frame.example.test/","method":"GET"},"timestamp":7.5,"type":"Document"}"#
-    )
-
-    let event = try #require(try await value(of: eventTask))
-    guard case let .requestWillBeSent(id, request, resourceType, _, timestamp) = event else {
-        Issue.record("Expected current-page route to receive parentless frame Network.requestWillBeSent.")
-        return
-    }
-    #expect(id == Network.Request.ID("frame-request", scopedToTargetRawValue: "frame-page-target"))
-    #expect(request.id == id)
-    #expect(request.url == "https://frame.example.test/")
-    #expect(request.method == "GET")
-    #expect(resourceType == .document)
-    #expect(timestamp == 7.5)
-}
-
-@Test
-func transportBackendDoesNotDeliverUnrelatedFrameNetworkEventsToCurrentPageRoute() async throws {
-    let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
-    await installPageTarget(in: transport)
-    await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"other-frame-target","type":"frame","frameId":"other-child-frame","parentFrameId":"other-main-frame","isProvisional":false}}}"#
-    )
-    let proxy = try await WebInspectorProxy(transport: transport)
-    let target = try await proxy.waitForCurrentPage()
-    #expect(target.route == .currentPage)
-
-    let eventProbe = CompletionProbe()
-    let eventTask = Task {
-        var iterator = target.network.events.makeAsyncIterator()
-        if await iterator.next() != nil {
-            await eventProbe.finish()
-        }
-    }
-    defer {
-        eventTask.cancel()
-    }
-
-    await waitForEventSubscription(target, domain: .network)
-    await receiveTargetEvent(
-        transport,
-        targetID: ProtocolTarget.ID("other-frame-target"),
-        method: "Network.requestWillBeSent",
-        params: #"{"requestId":"other-frame-request","frameId":"other-child-frame","request":{"url":"https://other-frame.example.test/","method":"GET"},"timestamp":8.5,"type":"Document"}"#
-    )
-
-    try await Task.sleep(for: .milliseconds(100))
-    #expect(await eventProbe.isFinished() == false)
-}
-
-@Test
-func transportBackendDoesNotDeliverFrameDocumentUpdatedToCurrentPageDOMRoute() async throws {
-    let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
-    await installPageTarget(in: transport)
-    await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
-    )
-    let proxy = try await WebInspectorProxy(transport: transport)
-    let target = try await proxy.waitForCurrentPage()
-    #expect(target.route == .currentPage)
-
-    let eventProbe = CompletionProbe()
-    let eventTask = Task {
-        var iterator = target.dom.events.makeAsyncIterator()
-        if await iterator.next() != nil {
-            await eventProbe.finish()
-        }
-    }
-    defer {
-        eventTask.cancel()
-    }
-
-    await waitForEventSubscription(target, domain: .dom)
-    await receiveTargetEvent(
-        transport,
-        targetID: ProtocolTarget.ID("frame-target"),
-        method: "DOM.documentUpdated",
-        params: "{}"
-    )
-
-    try await Task.sleep(for: .milliseconds(100))
-    #expect(await eventProbe.isFinished() == false)
-}
-
-@Test
-func transportBackendDecodesWebSocketHandshakeEventsForTargetRoute() async throws {
-    let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
-    await installPageTarget(in: transport)
-    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
-
-    let requestEventTask = Task {
-        var iterator = target.network.events.makeAsyncIterator()
-        return await iterator.next()
-    }
-
-    await waitForEventSubscription(target, domain: .network)
-    await receiveTargetEvent(
-        transport,
-        targetID: ProtocolTarget.ID("page-main"),
-        method: "Network.webSocketWillSendHandshakeRequest",
-        params: #"{"requestId":"ws-1","timestamp":1.25,"request":{"headers":{"Upgrade":"websocket","Sec-WebSocket-Key":"abc"}}}"#
-    )
-
-    let requestEvent = try #require(try await value(of: requestEventTask))
-    guard case let .webSocket(.handshakeRequest(id, request, timestamp)) = requestEvent else {
-        Issue.record("Expected Network.webSocketWillSendHandshakeRequest.")
-        return
-    }
-    #expect(id == Network.Request.ID("ws-1"))
-    #expect(request.id == Network.Request.ID("ws-1"))
-    #expect(request.method == "GET")
-    #expect(request.headers["Upgrade"] == "websocket")
-    #expect(request.headers["Sec-WebSocket-Key"] == "abc")
-    #expect(timestamp == 1.25)
-
-    let responseEventTask = Task {
-        var iterator = target.network.events.makeAsyncIterator()
-        return await iterator.next()
-    }
-
-    await waitForEventSubscription(target, domain: .network)
-    await receiveTargetEvent(
-        transport,
-        targetID: ProtocolTarget.ID("page-main"),
-        method: "Network.webSocketHandshakeResponseReceived",
-        params: #"{"requestId":"ws-1","timestamp":2.5,"response":{"status":101,"statusText":"Switching Protocols","headers":{"Upgrade":"websocket"}}}"#
-    )
-
-    let responseEvent = try #require(try await value(of: responseEventTask))
-    guard case let .webSocket(.handshakeResponse(responseID, response, responseTimestamp)) = responseEvent else {
-        Issue.record("Expected Network.webSocketHandshakeResponseReceived.")
-        return
-    }
-    #expect(responseID == Network.Request.ID("ws-1"))
-    #expect(response.status == 101)
-    #expect(response.statusText == "Switching Protocols")
-    #expect(response.headers["Upgrade"] == "websocket")
-    #expect(responseTimestamp == 2.5)
-}
-
-@Test
-func transportBackendFiltersEventsByRoute() async throws {
-    let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
-    await installPageTarget(in: transport)
-    await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"frame-1","isProvisional":false}}}"#
-    )
-    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
-    let page = pageTarget(proxy: proxy)
-    let frame = WebInspectorTarget(
-        id: WebInspectorTarget.ID("frame-target"),
-        kind: .frame,
-        frameID: FrameID("frame-1"),
-        isProvisional: false,
-        proxy: proxy,
-        route: RoutingTargetID("frame-target")
-    )
-
-    let pageEventTask = Task {
-        var iterator = page.network.events.makeAsyncIterator()
-        return await iterator.next()
-    }
-    let frameEventTask = Task {
-        var iterator = frame.network.events.makeAsyncIterator()
-        return await iterator.next()
-    }
-
-    await waitForEventSubscription(page, domain: .network)
-    await waitForEventSubscription(frame, domain: .network)
-    await receiveTargetEvent(
-        transport,
-        targetID: ProtocolTarget.ID("frame-target"),
-        method: "Network.loadingFinished",
-        params: #"{"requestId":"frame-request","timestamp":4,"sourceMapURL":"frame.js.map","metrics":{"protocol":"h2","remoteAddress":"203.0.113.10:443","responseBodyBytesReceived":128,"responseBodyDecodedSize":256}}"#
-    )
-
-    let frameEvent = try #require(try await value(of: frameEventTask))
-    guard case let .loadingFinished(id, timestamp, sourceMapURL, metrics) = frameEvent else {
-        Issue.record("Expected frame route to receive Network.loadingFinished.")
-        return
-    }
-    #expect(id == Network.Request.ID("frame-request"))
-    #expect(timestamp == 4)
-    #expect(sourceMapURL == "frame.js.map")
-    #expect(metrics?.networkProtocol == "h2")
-    #expect(metrics?.remoteAddress == "203.0.113.10:443")
-    #expect(metrics?.encodedDataLength == 128)
-    #expect(metrics?.decodedBodyLength == 256)
-
-    pageEventTask.cancel()
-}
-
-@Test
-func transportBackendKeepsPeerSubscriberActiveWhenOneStreamTerminates() async throws {
-    let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
-    await installPageTarget(in: transport)
-    let proxyBackend = LiveWebInspectorProxyBackend(transport: transport)
-    let page = pageTarget(proxy: WebInspectorProxy(backend: proxyBackend))
-    let probe = EventDeliveryProbe()
-
-    let firstSubscriber = Task {
-        var iterator = page.network.events.makeAsyncIterator()
-        if await iterator.next() != nil {
-            await probe.recordFirst()
-        }
-    }
-    let secondSubscriber = Task {
-        var iterator = page.network.events.makeAsyncIterator()
-        while await iterator.next() != nil {
-            await probe.recordSecond()
-        }
-    }
-
-    // Barrier on both subscribers being registered before the first event is
-    // published; a generous bound keeps subscriber-task startup contention
-    // (CI) from turning into an execution-time-allowance kill.
-    try await value(
-        of: Task {
-            await proxyBackend.waitForEventSubscriptions(
-                route: page.route,
-                targetID: page.id,
-                domain: .network,
-                minimumCount: 2
-            )
-        },
-        timeout: .seconds(10)
-    )
-    await receiveTargetEvent(
-        transport,
-        targetID: ProtocolTarget.ID("page-main"),
-        method: "Network.loadingFinished",
-        params: #"{"requestId":"first","timestamp":1}"#
-    )
-
-    try await value(of: Task { await probe.waitForFirstCount(1) }, timeout: transportCommandBackendWaitTimeout)
-    try await value(of: Task { await probe.waitForSecondCount(1) }, timeout: transportCommandBackendWaitTimeout)
-    try await value(of: firstSubscriber, timeout: transportCommandBackendWaitTimeout)
-
-    try await value(
-        of: Task { await waitForEventSubscription(page, domain: .network) },
-        timeout: transportCommandBackendWaitTimeout
-    )
-
-    await receiveTargetEvent(
-        transport,
-        targetID: ProtocolTarget.ID("page-main"),
-        method: "Network.loadingFinished",
-        params: #"{"requestId":"second","timestamp":2}"#
-    )
-    try await value(of: Task { await probe.waitForSecondCount(2) }, timeout: transportCommandBackendWaitTimeout)
-
-    secondSubscriber.cancel()
-}
-
-@Test
-func transportBackendRuntimeClearedUsesSemanticTargetID() async throws {
-    let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
-    await installPageTarget(in: transport)
-    let proxy = WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport))
-    let retargeted = WebInspectorTarget(
-        id: WebInspectorTarget.ID("semantic-page"),
-        kind: .page,
-        frameID: FrameID("main-frame"),
-        isProvisional: false,
-        proxy: proxy,
-        route: RoutingTargetID("page-main")
-    )
-
-    let eventTask = Task {
-        var iterator = retargeted.runtime.events.makeAsyncIterator()
-        return await iterator.next()
-    }
-
-    await waitForEventSubscription(retargeted, domain: .runtime)
-    await receiveTargetEvent(
-        transport,
-        targetID: ProtocolTarget.ID("page-main"),
-        method: "Runtime.executionContextsCleared",
-        params: "{}"
-    )
-
-    let event = try #require(try await value(of: eventTask))
-    guard case let .executionContextsCleared(target) = event else {
-        Issue.record("Expected Runtime.executionContextsCleared.")
-        return
-    }
-    #expect(target == WebInspectorTarget.ID("semantic-page"))
-}
-
-@Test
 func transportCommandBackendDecodesRuntimeEvaluationResult() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = pageTarget(proxy: proxy)
 
     let evaluateTask = Task {
         try await target.runtime.evaluate("document.title", in: Runtime.ExecutionContext.ID("7"))
@@ -2071,7 +1186,8 @@ func transportCommandBackendDecodesRuntimePropertiesPreviewAndCollectionEntries(
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
-    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = pageTarget(proxy: proxy)
     let objectID = Runtime.RemoteObject.ID("object-1")
 
     let propertiesTask = Task {
@@ -2147,6 +1263,1988 @@ func transportCommandBackendDecodesRuntimePropertiesPreviewAndCollectionEntries(
     #expect(entries[1].value.value == .number(42))
 }
 
+@Test
+func pendingRepliesClassifyDirectAndCapabilityOwners() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+
+    let directTask = Task {
+        try await proxy.page.page.reload()
+    }
+    let reload = try await waitForTargetMessage(backend, method: "Page.reload")
+    let reloadPendingKey = TransportSession.PendingKey.target(
+        TransportSession.ReplyKey(
+            targetID: reload.targetIdentifier,
+            commandID: try messageID(reload.message)
+        )
+    )
+    let reloadPurposes = await transport.pendingReplyPurposes()
+    guard case let .direct(bindingGeneration, documentEpoch) = try #require(
+        reloadPurposes[reloadPendingKey]
+    ) else {
+        Issue.record("Expected a direct reply purpose.")
+        return
+    }
+    #expect(bindingGeneration == (try await transport.pageGeneration()))
+    #expect(documentEpoch == nil)
+    await receiveTargetReply(
+        transport,
+        targetID: reload.targetIdentifier,
+        messageID: try messageID(reload.message),
+        result: "{}"
+    )
+    try await directTask.value
+
+    let bodyGate = CloseConnectionGate()
+    let scopeTask = Task {
+        try await proxy.page.network.withEvents { _ in
+            await bodyGate.waitUntilReleased()
+        }
+    }
+    let generation = try await transport.pageGeneration()
+    let enable = try await waitForTargetMessage(backend, method: "Network.enable")
+    let enableOperationID = try await requireCapabilityReplyPurpose(
+        in: transport,
+        message: enable,
+        expectedGeneration: generation
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: enable.targetIdentifier,
+        messageID: try messageID(enable.message),
+        result: "{}"
+    )
+    await bodyGate.waitUntilStarted()
+    #expect(await transport.pendingReplyPurposes().isEmpty)
+
+    await bodyGate.release()
+    let disable = try await waitForTargetMessage(backend, method: "Network.disable")
+    let disableOperationID = try await requireCapabilityReplyPurpose(
+        in: transport,
+        message: disable,
+        expectedGeneration: generation
+    )
+    #expect(disableOperationID > enableOperationID)
+    await receiveTargetReply(
+        transport,
+        targetID: disable.targetIdentifier,
+        messageID: try messageID(disable.message),
+        result: "{}"
+    )
+    try await scopeTask.value
+    #expect(await transport.pendingReplyPurposes().isEmpty)
+}
+
+@Test
+func structuredCSSScopeKeepsPageCapabilityAliveUntilCSSRelease() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let bodyGate = CloseConnectionGate()
+
+    let scopeTask = Task {
+        try await proxy.page.css.withEvents { _ in
+            await bodyGate.waitUntilReleased()
+        }
+    }
+
+    let pageEnable = try await waitForTargetMessage(backend, method: "Page.enable")
+    await receiveTargetReply(
+        transport,
+        targetID: pageEnable.targetIdentifier,
+        messageID: try messageID(pageEnable.message),
+        result: "{}"
+    )
+    let cssEnable = try await waitForTargetMessage(backend, method: "CSS.enable")
+    await receiveTargetReply(
+        transport,
+        targetID: cssEnable.targetIdentifier,
+        messageID: try messageID(cssEnable.message),
+        result: "{}"
+    )
+    await bodyGate.waitUntilStarted()
+
+    await bodyGate.release()
+    let cssDisable = try await waitForTargetMessage(backend, method: "CSS.disable")
+    await receiveTargetReply(
+        transport,
+        targetID: cssDisable.targetIdentifier,
+        messageID: try messageID(cssDisable.message),
+        result: "{}"
+    )
+    let pageDisable = try await waitForTargetMessage(backend, method: "Page.disable")
+    await receiveTargetReply(
+        transport,
+        targetID: pageDisable.targetIdentifier,
+        messageID: try messageID(pageDisable.message),
+        result: "{}"
+    )
+
+    try await scopeTask.value
+    #expect(await transport.pendingReplyPurposes().isEmpty)
+}
+
+@Test
+func structuredFrameCSSScopeDoesNotRequirePageCapability() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false,"domains":["CSS"]}}}"#
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let frame = WebInspectorTarget(
+        id: WebInspectorTarget.ID("frame-target"),
+        kind: .frame,
+        frameID: FrameID("child-frame"),
+        isProvisional: false,
+        proxy: proxy,
+        route: RoutingTargetID("frame-target")
+    )
+    let bodyGate = CloseConnectionGate()
+
+    let scopeTask = Task {
+        try await frame.css.withEvents { _ in
+            await bodyGate.waitUntilReleased()
+        }
+    }
+
+    let cssEnable = try await waitForTargetMessage(backend, method: "CSS.enable")
+    #expect(cssEnable.targetIdentifier == ProtocolTarget.ID("frame-target"))
+    let enableMethods = try await backend.sentTargetMessages().map {
+        try messageMethod($0.message)
+    }
+    #expect(enableMethods == ["CSS.enable"])
+    await receiveTargetReply(
+        transport,
+        targetID: cssEnable.targetIdentifier,
+        messageID: try messageID(cssEnable.message),
+        result: "{}"
+    )
+    await bodyGate.waitUntilStarted()
+
+    await bodyGate.release()
+    let cssDisable = try await waitForTargetMessage(backend, method: "CSS.disable")
+    await receiveTargetReply(
+        transport,
+        targetID: cssDisable.targetIdentifier,
+        messageID: try messageID(cssDisable.message),
+        result: "{}"
+    )
+    try await scopeTask.value
+    let completedMethods = try await backend.sentTargetMessages().map {
+        try messageMethod($0.message)
+    }
+    #expect(completedMethods == ["CSS.enable", "CSS.disable"])
+}
+
+@Test
+func structuredNetworkScopeBuffersReplayBeforeEnableReplyAndBalancesDisable() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+
+    let scopeTask = Task {
+        try await proxy.page.network.withEvents(buffering: .bounded(1)) { events in
+            var iterator = events.makeAsyncIterator()
+            let reset = try await iterator.next()
+            let event = try await iterator.next()
+            return (reset, event)
+        }
+    }
+
+    let enable = try await waitForTargetMessage(backend, method: "Network.enable")
+    await receiveTargetEvent(
+        transport,
+        targetID: enable.targetIdentifier,
+        method: "Network.loadingFinished",
+        params: #"{"requestId":"enable-replay","timestamp":1}"#
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: enable.targetIdentifier,
+        messageID: try messageID(enable.message),
+        result: "{}"
+    )
+
+    let disable = try await waitForTargetMessage(backend, method: "Network.disable")
+    await receiveTargetReply(
+        transport,
+        targetID: disable.targetIdentifier,
+        messageID: try messageID(disable.message),
+        result: "{}"
+    )
+
+    let (reset, event) = try await throwingValue(of: scopeTask)
+    let generation: WebInspectorPage.Generation
+    guard case let .reset(value)? = reset else {
+        Issue.record("Expected an initial generation reset.")
+        return
+    }
+    generation = value
+    guard case let .event(eventGeneration, .loadingFinished(id, _, _, _))? = event else {
+        Issue.record("Expected enable-time Network replay.")
+        return
+    }
+    #expect(eventGeneration == generation)
+    #expect(id == Network.Request.ID("enable-replay"))
+}
+
+@Test
+func structuredNetworkScopePreservesFrameScopedIdentifiers() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+
+    let scopeTask = Task {
+        try await proxy.page.network.withEvents { events in
+            var iterator = events.makeAsyncIterator()
+            _ = try await iterator.next()
+            return try await iterator.next()
+        }
+    }
+
+    let enable = try await waitForTargetMessage(backend, method: "Network.enable")
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("frame-target"),
+        method: "Network.requestWillBeSent",
+        params: #"{"requestId":"frame-request","request":{"url":"https://frame.example.test/","method":"GET"},"timestamp":1}"#
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: enable.targetIdentifier,
+        messageID: try messageID(enable.message),
+        result: "{}"
+    )
+    let disable = try await waitForTargetMessage(backend, method: "Network.disable")
+    await receiveTargetReply(
+        transport,
+        targetID: disable.targetIdentifier,
+        messageID: try messageID(disable.message),
+        result: "{}"
+    )
+
+    guard case let .event(_, .requestWillBeSent(id, request, _, _, _))? = try await throwingValue(of: scopeTask) else {
+        Issue.record("Expected a projected frame Network event.")
+        return
+    }
+    #expect(id.targetScopeRawValue == "frame-target")
+    #expect(request.id.targetScopeRawValue == "frame-target")
+}
+
+@Test
+func structuredRuntimeScopePreservesFrameScopedIdentifiers() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+
+    let scopeTask = Task {
+        try await proxy.page.runtime.withEvents { events in
+            var iterator = events.makeAsyncIterator()
+            _ = try await iterator.next()
+            return try await iterator.next()
+        }
+    }
+
+    let enable = try await waitForTargetMessage(backend, method: "Runtime.enable")
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("frame-target"),
+        method: "Runtime.executionContextCreated",
+        params: #"{"context":{"id":7,"name":"Frame","frameId":"child-frame","type":"normal"}}"#
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: enable.targetIdentifier,
+        messageID: try messageID(enable.message),
+        result: "{}"
+    )
+    let disable = try await waitForTargetMessage(backend, method: "Runtime.disable")
+    await receiveTargetReply(
+        transport,
+        targetID: disable.targetIdentifier,
+        messageID: try messageID(disable.message),
+        result: "{}"
+    )
+
+    guard case let .event(_, .executionContextCreated(context))? = try await throwingValue(of: scopeTask) else {
+        Issue.record("Expected a projected frame Runtime event.")
+        return
+    }
+    #expect(context.id.targetScopeRawValue == "frame-target")
+}
+
+@Test
+func structuredConsoleScopePreservesFrameScopedIdentifiers() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+
+    let scopeTask = Task {
+        try await proxy.page.console.withEvents { events in
+            var iterator = events.makeAsyncIterator()
+            _ = try await iterator.next()
+            return try await iterator.next()
+        }
+    }
+
+    let enable = try await waitForTargetMessage(backend, method: "Console.enable")
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("frame-target"),
+        method: "Console.messageAdded",
+        params: #"{"message":{"source":"javascript","level":"log","text":"frame","parameters":[{"objectId":"frame-object","type":"object"}],"networkRequestId":"frame-request"}}"#
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: enable.targetIdentifier,
+        messageID: try messageID(enable.message),
+        result: "{}"
+    )
+    let disable = try await waitForTargetMessage(backend, method: "Console.disable")
+    await receiveTargetReply(
+        transport,
+        targetID: disable.targetIdentifier,
+        messageID: try messageID(disable.message),
+        result: "{}"
+    )
+
+    guard case let .event(_, .messageAdded(message))? = try await throwingValue(of: scopeTask) else {
+        Issue.record("Expected a projected frame Console event.")
+        return
+    }
+    #expect(message.parameters.first?.id?.targetScopeRawValue == "frame-target")
+    #expect(message.networkRequestID?.targetScopeRawValue == "frame-target")
+}
+
+@Test
+func structuredNetworkScopesShareOneLeaseAndLateScopeIsFutureOnly() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let firstGate = CloseConnectionGate()
+    let secondGate = CloseConnectionGate()
+
+    let firstScope = Task {
+        try await proxy.page.network.withEvents { events in
+            var iterator = events.makeAsyncIterator()
+            let reset = try await iterator.next()
+            await firstGate.waitUntilReleased()
+            return reset
+        }
+    }
+
+    let enable = try await waitForTargetMessage(backend, method: "Network.enable")
+    await receiveTargetEvent(
+        transport,
+        targetID: enable.targetIdentifier,
+        method: "Network.loadingFinished",
+        params: #"{"requestId":"first-only","timestamp":1}"#
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: enable.targetIdentifier,
+        messageID: try messageID(enable.message),
+        result: "{}"
+    )
+    await firstGate.waitUntilStarted()
+
+    let secondScope = Task {
+        try await proxy.page.network.withEvents { events in
+            var iterator = events.makeAsyncIterator()
+            let reset = try await iterator.next()
+            await secondGate.waitUntilReleased()
+            let event = try await iterator.next()
+            return (reset, event)
+        }
+    }
+
+    await secondGate.waitUntilStarted()
+    await receiveTargetEvent(
+        transport,
+        targetID: enable.targetIdentifier,
+        method: "Network.loadingFinished",
+        params: #"{"requestId":"future","timestamp":2}"#
+    )
+    await secondGate.release()
+
+    let (secondReset, secondEvent) = try await throwingValue(of: secondScope)
+    guard case .reset? = secondReset else {
+        Issue.record("Expected the late scope's generation reset.")
+        return
+    }
+    guard case let .event(_, .loadingFinished(id, _, _, _))? = secondEvent else {
+        Issue.record("Expected the late scope's future event.")
+        return
+    }
+    #expect(id == Network.Request.ID("future"))
+
+    let sentMessages = await backend.sentTargetMessages()
+    let enableCount = try sentMessages.filter {
+        try messageMethod($0.message) == "Network.enable"
+    }.count
+    #expect(enableCount == 1)
+    let disableCountBeforeFinalRelease = try sentMessages.filter {
+        try messageMethod($0.message) == "Network.disable"
+    }.count
+    #expect(disableCountBeforeFinalRelease == 0)
+
+    await firstGate.release()
+    let disable = try await waitForTargetMessage(backend, method: "Network.disable")
+    await receiveTargetReply(
+        transport,
+        targetID: disable.targetIdentifier,
+        messageID: try messageID(disable.message),
+        result: "{}"
+    )
+    _ = try await throwingValue(of: firstScope)
+}
+
+@Test
+func structuredNetworkScopeCancellationDuringEnableWaitsAndBalancesLease() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let bodyProbe = CompletionProbe()
+    let completionProbe = CompletionProbe()
+
+    let scopeTask = Task {
+        let outcome: StructuredScopeOutcome
+        do {
+            try await proxy.page.network.withEvents { _ in
+                await bodyProbe.finish()
+            }
+            outcome = .succeeded
+        } catch is CancellationError {
+            outcome = .cancelled
+        } catch {
+            outcome = .other(String(describing: error))
+        }
+        await completionProbe.finish()
+        return outcome
+    }
+
+    let enable = try await waitForTargetMessage(backend, method: "Network.enable")
+    scopeTask.cancel()
+    await transport.waitForEventScopeCountForTesting(0)
+    #expect(await completionProbe.isFinished() == false)
+    await receiveTargetReply(
+        transport,
+        targetID: enable.targetIdentifier,
+        messageID: try messageID(enable.message),
+        result: "{}"
+    )
+    let disable = try await waitForTargetMessage(backend, method: "Network.disable")
+    #expect(await completionProbe.isFinished() == false)
+    await receiveTargetReply(
+        transport,
+        targetID: disable.targetIdentifier,
+        messageID: try messageID(disable.message),
+        result: "{}"
+    )
+
+    #expect(try await value(of: scopeTask) == .cancelled)
+    #expect(await completionProbe.isFinished())
+    #expect(await bodyProbe.isFinished() == false)
+}
+
+@Test
+func structuredNetworkScopeCancelledActivationIsNotTreatedAsPreviouslyActive() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let cancellationGate = CloseConnectionGate()
+    await transport.replaceEventScopeActivationCancellationActionForTesting {
+        await cancellationGate.waitUntilReleased()
+    }
+
+    let scopeTask = Task {
+        do {
+            try await proxy.page.network.withEvents { _ in }
+            return StructuredScopeOutcome.succeeded
+        } catch is CancellationError {
+            return .cancelled
+        } catch {
+            return .other(String(describing: error))
+        }
+    }
+
+    let enable = try await waitForTargetMessage(backend, method: "Network.enable")
+    scopeTask.cancel()
+    await cancellationGate.waitUntilStarted()
+
+    await receiveTargetError(
+        transport,
+        targetID: enable.targetIdentifier,
+        messageID: try messageID(enable.message),
+        message: "enable rejected"
+    )
+    #expect(await transport.terminalCause == nil)
+
+    await cancellationGate.release()
+    #expect(try await value(of: scopeTask) == .cancelled)
+    await transport.waitForEventScopeCountForTesting(0)
+    #expect(await transport.terminalCause == nil)
+
+    let messages = await backend.sentTargetMessages()
+    #expect(try messages.filter { try messageMethod($0.message) == "Network.enable" }.count == 1)
+    #expect(try messages.filter { try messageMethod($0.message) == "Network.disable" }.isEmpty)
+}
+
+@Test
+func structuredNetworkScopeCancellationDuringSharedEnableDoesNotCancelPeerLease() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let cancelledBodyProbe = CompletionProbe()
+    let peerGate = CloseConnectionGate()
+
+    let cancelledScope = Task {
+        do {
+            try await proxy.page.network.withEvents { _ in
+                await cancelledBodyProbe.finish()
+            }
+            return StructuredScopeOutcome.succeeded
+        } catch is CancellationError {
+            return .cancelled
+        } catch {
+            return .other(String(describing: error))
+        }
+    }
+    let peerScope = Task {
+        try await proxy.page.network.withEvents { events in
+            var iterator = events.makeAsyncIterator()
+            _ = try await iterator.next()
+            await peerGate.waitUntilReleased()
+        }
+    }
+
+    let enable = try await waitForTargetMessage(backend, method: "Network.enable")
+    await transport.waitForEventScopeCountForTesting(2)
+    cancelledScope.cancel()
+    await transport.waitForEventScopeCountForTesting(1)
+
+    #expect(try await value(of: cancelledScope) == .cancelled)
+    #expect(await cancelledBodyProbe.isFinished() == false)
+    var sentMessages = await backend.sentTargetMessages()
+    #expect(try sentMessages.filter { try messageMethod($0.message) == "Network.enable" }.count == 1)
+    #expect(try sentMessages.filter { try messageMethod($0.message) == "Network.disable" }.isEmpty)
+
+    await receiveTargetReply(
+        transport,
+        targetID: enable.targetIdentifier,
+        messageID: try messageID(enable.message),
+        result: "{}"
+    )
+    await peerGate.waitUntilStarted()
+
+    sentMessages = await backend.sentTargetMessages()
+    #expect(try sentMessages.filter { try messageMethod($0.message) == "Network.enable" }.count == 1)
+    #expect(try sentMessages.filter { try messageMethod($0.message) == "Network.disable" }.isEmpty)
+
+    await peerGate.release()
+    let disable = try await waitForTargetMessage(backend, method: "Network.disable")
+    await receiveTargetReply(
+        transport,
+        targetID: disable.targetIdentifier,
+        messageID: try messageID(disable.message),
+        result: "{}"
+    )
+    _ = try await throwingValue(of: peerScope)
+}
+
+@Test
+func structuredNetworkScopeCancellationDuringEnablePreservesCleanupFailure() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+
+    let scopeTask = Task {
+        do {
+            try await proxy.page.network.withEvents { _ in }
+            return StructuredScopeOutcome.succeeded
+        } catch let error as WebInspectorScopeError {
+            let operationIsCancellation = error.operationError is CancellationError
+            let cleanupIsExpected: Bool
+            if let cleanupError = error.cleanupError as? WebInspectorProxyError,
+               case WebInspectorProxyError.commandRejected(
+                method: "Network.disable",
+                message: "disable rejected"
+               ) = cleanupError {
+                cleanupIsExpected = true
+            } else {
+                cleanupIsExpected = false
+            }
+            return operationIsCancellation && cleanupIsExpected
+                ? .combinedFailure
+                : .other(String(describing: error))
+        } catch {
+            return .other(String(describing: error))
+        }
+    }
+
+    let enable = try await waitForTargetMessage(backend, method: "Network.enable")
+    scopeTask.cancel()
+    await transport.waitForEventScopeCountForTesting(0)
+    await receiveTargetReply(
+        transport,
+        targetID: enable.targetIdentifier,
+        messageID: try messageID(enable.message),
+        result: "{}"
+    )
+    let disable = try await waitForTargetMessage(backend, method: "Network.disable")
+    await receiveTargetError(
+        transport,
+        targetID: disable.targetIdentifier,
+        messageID: try messageID(disable.message),
+        message: "disable rejected"
+    )
+
+    #expect(try await value(of: scopeTask) == .combinedFailure)
+}
+
+@Test
+func structuredNetworkScopeEnableTimeoutTerminatesConnectionWithoutReenabling() async throws {
+    let backend = FakeTransportBackend()
+    let timeout = ManualResponseTimeout()
+    let transport = TransportSession(
+        backend: backend,
+        responseTimeout: .seconds(30),
+        timeoutSleep: { duration in
+            try await timeout.sleep(for: duration)
+        }
+    )
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+
+    let scopeTask = Task {
+        do {
+            try await proxy.page.network.withEvents { _ in }
+            return StructuredScopeOutcome.succeeded
+        } catch WebInspectorProxyError.timeout(domain: "Network", method: "enable") {
+            return .timeout
+        } catch {
+            return .other(String(describing: error))
+        }
+    }
+
+    _ = try await waitForTargetMessage(backend, method: "Network.enable")
+    await timeout.waitUntilSuspended()
+    await timeout.fireNext()
+
+    #expect(await scopeTask.value == .timeout)
+    do {
+        try await proxy.waitUntilClosed()
+        Issue.record("Expected uncertain enable timeout to terminate the connection.")
+    } catch WebInspectorProxyError.disconnected {
+        // A timed-out enable may have succeeded on the wire, so the connection
+        // is terminal after the initiating scope receives its timeout.
+    } catch {
+        Issue.record("Expected a disconnected terminal result, got \(error).")
+    }
+
+    let secondScope = Task {
+        do {
+            try await proxy.page.network.withEvents { _ in }
+            return StructuredScopeOutcome.succeeded
+        } catch WebInspectorProxyError.transportFailure {
+            return .transportFailure
+        } catch {
+            return .other(String(describing: error))
+        }
+    }
+    #expect(await secondScope.value == .transportFailure)
+
+    let messages = await backend.sentTargetMessages()
+    let enableCount = try messages.filter {
+        try messageMethod($0.message) == "Network.enable"
+    }.count
+    #expect(enableCount == 1)
+}
+
+@Test
+func structuredNetworkScopeDisableTimeoutTerminatesConnectionWithoutReusingWireState() async throws {
+    let backend = FakeTransportBackend()
+    let timeout = ManualResponseTimeout()
+    let transport = TransportSession(
+        backend: backend,
+        responseTimeout: .seconds(30),
+        timeoutSleep: { duration in
+            try await timeout.sleep(for: duration)
+        }
+    )
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+
+    let scopeTask = Task {
+        do {
+            try await proxy.page.network.withEvents { _ in }
+            return StructuredScopeOutcome.succeeded
+        } catch WebInspectorProxyError.timeout(domain: "Network", method: "disable") {
+            return .timeout
+        } catch {
+            return .other(String(describing: error))
+        }
+    }
+
+    let enable = try await waitForTargetMessage(backend, method: "Network.enable")
+    await receiveTargetReply(
+        transport,
+        targetID: enable.targetIdentifier,
+        messageID: try messageID(enable.message),
+        result: "{}"
+    )
+    _ = try await waitForTargetMessage(backend, method: "Network.disable")
+    await timeout.waitUntilSuspended()
+    await timeout.fireNext()
+
+    #expect(try await value(of: scopeTask) == .timeout)
+    do {
+        try await proxy.waitUntilClosed()
+        Issue.record("Expected uncertain disable timeout to terminate the connection.")
+    } catch WebInspectorProxyError.disconnected {
+        // A timed-out disable may have succeeded on the wire, so no later
+        // scope can safely reuse the connection's cached capability state.
+    } catch {
+        Issue.record("Expected a disconnected terminal result, got \(error).")
+    }
+
+    let secondScope = Task {
+        do {
+            try await proxy.page.network.withEvents { _ in }
+            return StructuredScopeOutcome.succeeded
+        } catch WebInspectorProxyError.transportFailure {
+            return .transportFailure
+        } catch {
+            return .other(String(describing: error))
+        }
+    }
+    #expect(try await value(of: secondScope) == .transportFailure)
+
+    let messages = await backend.sentTargetMessages()
+    #expect(try messages.filter { try messageMethod($0.message) == "Network.enable" }.count == 1)
+    #expect(try messages.filter { try messageMethod($0.message) == "Network.disable" }.count == 1)
+}
+
+@Test
+func structuredNetworkScopePreservesBodyAndCleanupFailures() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+
+    let scopeTask = Task {
+        do {
+            try await proxy.page.network.withEvents { _ -> Void in
+                throw StructuredScopeBodyFailure()
+            }
+            return StructuredScopeOutcome.succeeded
+        } catch let error as WebInspectorScopeError {
+            let operationIsExpected = error.operationError is StructuredScopeBodyFailure
+            let cleanupIsExpected: Bool
+            if let cleanupError = error.cleanupError as? WebInspectorProxyError,
+               case WebInspectorProxyError.commandRejected(
+                method: "Network.disable",
+                message: "disable rejected"
+               ) = cleanupError {
+                cleanupIsExpected = true
+            } else {
+                cleanupIsExpected = false
+            }
+            return operationIsExpected && cleanupIsExpected ? .combinedFailure : .other(String(describing: error))
+        } catch {
+            return .other(String(describing: error))
+        }
+    }
+
+    let enable = try await waitForTargetMessage(backend, method: "Network.enable")
+    await receiveTargetReply(
+        transport,
+        targetID: enable.targetIdentifier,
+        messageID: try messageID(enable.message),
+        result: "{}"
+    )
+    let disable = try await waitForTargetMessage(backend, method: "Network.disable")
+    await receiveTargetError(
+        transport,
+        targetID: disable.targetIdentifier,
+        messageID: try messageID(disable.message),
+        message: "disable rejected"
+    )
+
+    #expect(await scopeTask.value == StructuredScopeOutcome.combinedFailure)
+}
+
+@Test
+func structuredNetworkScopeThrowsCleanupFailureAfterSuccessfulBody() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+
+    let scopeTask = Task {
+        do {
+            try await proxy.page.network.withEvents { _ in }
+            return StructuredScopeOutcome.succeeded
+        } catch WebInspectorProxyError.commandRejected(
+            method: "Network.disable",
+            message: "disable rejected"
+        ) {
+            return .cleanupFailure
+        } catch {
+            return .other(String(describing: error))
+        }
+    }
+    let enable = try await waitForTargetMessage(backend, method: "Network.enable")
+    await receiveTargetReply(
+        transport,
+        targetID: enable.targetIdentifier,
+        messageID: try messageID(enable.message),
+        result: "{}"
+    )
+    let disable = try await waitForTargetMessage(backend, method: "Network.disable")
+    await receiveTargetError(
+        transport,
+        targetID: disable.targetIdentifier,
+        messageID: try messageID(disable.message),
+        message: "disable rejected"
+    )
+
+    #expect(await scopeTask.value == .cleanupFailure)
+}
+
+@Test
+func structuredNetworkScopeRethrowsBodyFailureAfterSuccessfulCleanup() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+
+    let scopeTask = Task {
+        do {
+            try await proxy.page.network.withEvents { _ -> Void in
+                throw StructuredScopeBodyFailure()
+            }
+            return StructuredScopeOutcome.succeeded
+        } catch is StructuredScopeBodyFailure {
+            return .bodyFailure
+        } catch {
+            return .other(String(describing: error))
+        }
+    }
+    let enable = try await waitForTargetMessage(backend, method: "Network.enable")
+    await receiveTargetReply(
+        transport,
+        targetID: enable.targetIdentifier,
+        messageID: try messageID(enable.message),
+        result: "{}"
+    )
+    let disable = try await waitForTargetMessage(backend, method: "Network.disable")
+    await receiveTargetReply(
+        transport,
+        targetID: disable.targetIdentifier,
+        messageID: try messageID(disable.message),
+        result: "{}"
+    )
+
+    #expect(await scopeTask.value == .bodyFailure)
+}
+
+@Test
+func structuredNetworkScopeEndsNormallyOnExplicitClose() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let closeGate = CloseConnectionGate()
+    let proxy = try await WebInspectorProxy(transport: transport, closeConnection: {
+        await closeGate.waitUntilReleased()
+    })
+    let bodyGate = CloseConnectionGate()
+    let bodyCompletion = CompletionProbe()
+
+    let scopeTask = Task {
+        do {
+            return try await proxy.page.network.withEvents { events in
+                var iterator = events.makeAsyncIterator()
+                _ = try await iterator.next()
+                await bodyGate.waitUntilReleased()
+                guard try await iterator.next() == nil else {
+                    return StructuredScopeOutcome.other(
+                        "Expected explicit close to finish the stream normally."
+                    )
+                }
+                await bodyCompletion.finish()
+                return StructuredScopeOutcome.succeeded
+            }
+        } catch {
+            return StructuredScopeOutcome.other(String(describing: error))
+        }
+    }
+    let enable = try await waitForTargetMessage(backend, method: "Network.enable")
+    await receiveTargetReply(
+        transport,
+        targetID: enable.targetIdentifier,
+        messageID: try messageID(enable.message),
+        result: "{}"
+    )
+    await bodyGate.waitUntilStarted()
+    await bodyGate.release()
+
+    let closeTask = Task {
+        await proxy.close()
+    }
+    await closeGate.waitUntilStarted()
+
+    #expect(await transport.activeEventScopeSubscriberCountForTesting() == 1)
+    #expect(await bodyCompletion.isFinished() == false)
+
+    await closeGate.release()
+    await closeTask.value
+
+    #expect(await scopeTask.value == .succeeded)
+    #expect(await bodyCompletion.isFinished())
+}
+
+@Test
+func structuredNetworkScopeThrowsTransportFailureOnNativeFatal() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let bodyGate = CloseConnectionGate()
+
+    let scopeTask = Task {
+        do {
+            try await proxy.page.network.withEvents { events in
+                var iterator = events.makeAsyncIterator()
+                _ = try await iterator.next()
+                await bodyGate.waitUntilReleased()
+                while try await iterator.next() != nil {}
+            }
+            return StructuredScopeOutcome.succeeded
+        } catch WebInspectorProxyError.transportFailure("native fatal") {
+            return .transportFailure
+        } catch {
+            return .other(String(describing: error))
+        }
+    }
+    let enable = try await waitForTargetMessage(backend, method: "Network.enable")
+    await receiveTargetReply(
+        transport,
+        targetID: enable.targetIdentifier,
+        messageID: try messageID(enable.message),
+        result: "{}"
+    )
+    await bodyGate.waitUntilStarted()
+    await bodyGate.release()
+
+    let fatalHandoff = try #require(transport.failFromNativeCallback("native fatal"))
+    await fatalHandoff.value
+
+    #expect(await scopeTask.value == .transportFailure)
+}
+
+@Test
+func structuredNetworkScopeMalformedKnownEventTerminatesWithProtocolViolation() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let bodyGate = CloseConnectionGate()
+
+    let scopeTask = Task {
+        do {
+            try await proxy.page.network.withEvents { events in
+                var iterator = events.makeAsyncIterator()
+                _ = try await iterator.next()
+                await bodyGate.waitUntilReleased()
+                while try await iterator.next() != nil {}
+            }
+            return StructuredScopeOutcome.succeeded
+        } catch is WebInspectorScopeError {
+            return .other("Connection termination must not also report a cleanup failure.")
+        } catch WebInspectorProxyError.protocolViolation {
+            return .protocolViolation
+        } catch {
+            return .other(String(describing: error))
+        }
+    }
+    let enable = try await waitForTargetMessage(backend, method: "Network.enable")
+    await receiveTargetReply(
+        transport,
+        targetID: enable.targetIdentifier,
+        messageID: try messageID(enable.message),
+        result: "{}"
+    )
+    await bodyGate.waitUntilStarted()
+    await bodyGate.release()
+
+    await receiveTargetEvent(
+        transport,
+        targetID: enable.targetIdentifier,
+        method: "Network.loadingFinished",
+        params: #"{"timestamp":1}"#
+    )
+
+    #expect(await scopeTask.value == .protocolViolation)
+}
+
+@Test
+func malformedTargetCreatedTerminatesBeforeRegistryCanDrift() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"type":"page","isProvisional":false}}}"#
+    )
+
+    do {
+        try await transport.waitUntilClosed()
+        Issue.record("Expected malformed Target.targetCreated to terminate the connection.")
+    } catch WebInspectorProxyError.protocolViolation {
+        // Registry-mutating known events are fail-fast at ingress.
+    } catch {
+        Issue.record("Expected protocol violation, got \(error).")
+    }
+    #expect(await transport.snapshot().targetsByID.isEmpty)
+}
+
+@Test
+func targetCommitWithoutRequiredOldTargetTerminatesWithProtocolViolation() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"newTargetId":"page-next"}}"#
+    )
+
+    do {
+        try await transport.waitUntilClosed()
+        Issue.record("Expected missing oldTargetId to terminate the connection.")
+    } catch WebInspectorProxyError.protocolViolation {
+        // iOS 18.4+ makes both commit identifiers required.
+    } catch {
+        Issue.record("Expected protocol violation, got \(error).")
+    }
+}
+
+@Test
+func structuredNetworkScopeKeepsUnknownMethodsAsRawEvents() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+
+    let scopeTask = Task {
+        try await proxy.page.network.withEvents { events in
+            var iterator = events.makeAsyncIterator()
+            _ = try await iterator.next()
+            return try await iterator.next()
+        }
+    }
+    let enable = try await waitForTargetMessage(backend, method: "Network.enable")
+    await receiveTargetEvent(
+        transport,
+        targetID: enable.targetIdentifier,
+        method: "Network.futureEvent",
+        params: #"{"value":42}"#
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: enable.targetIdentifier,
+        messageID: try messageID(enable.message),
+        result: "{}"
+    )
+    let disable = try await waitForTargetMessage(backend, method: "Network.disable")
+    await receiveTargetReply(
+        transport,
+        targetID: disable.targetIdentifier,
+        messageID: try messageID(disable.message),
+        result: "{}"
+    )
+
+    guard case let .event(_, .unknown(rawEvent))? = try await throwingValue(of: scopeTask) else {
+        Issue.record("Expected an unknown Network event.")
+        return
+    }
+    #expect(rawEvent.domain == "Network")
+    #expect(rawEvent.method == "futureEvent")
+}
+
+@Test
+func structuredNetworkScopeMalformedRootEnvelopeTerminatesWithProtocolViolation() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let bodyGate = CloseConnectionGate()
+
+    let scopeTask = Task {
+        do {
+            try await proxy.page.network.withEvents { events in
+                var iterator = events.makeAsyncIterator()
+                _ = try await iterator.next()
+                await bodyGate.waitUntilReleased()
+                while try await iterator.next() != nil {}
+            }
+            return StructuredScopeOutcome.succeeded
+        } catch WebInspectorProxyError.protocolViolation {
+            return .protocolViolation
+        } catch {
+            return .other(String(describing: error))
+        }
+    }
+    let enable = try await waitForTargetMessage(backend, method: "Network.enable")
+    await receiveTargetReply(
+        transport,
+        targetID: enable.targetIdentifier,
+        messageID: try messageID(enable.message),
+        result: "{}"
+    )
+    await bodyGate.waitUntilStarted()
+    await bodyGate.release()
+
+    await transport.receiveRootMessage("{")
+
+    #expect(await scopeTask.value == .protocolViolation)
+}
+
+@Test
+func structuredNetworkScopePreservesPendingEventBeforeRetargetResetAndNewReplay() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let gate = CloseConnectionGate()
+
+    let scopeTask = Task {
+        try await proxy.page.network.withEvents(buffering: .bounded(2)) { events in
+            var iterator = events.makeAsyncIterator()
+            let initialReset = try await iterator.next()
+            await gate.waitUntilReleased()
+            let precedingEvent = try await iterator.next()
+            let replacementReset = try await iterator.next()
+            let replay = try await iterator.next()
+            return (initialReset, precedingEvent, replacementReset, replay)
+        }
+    }
+
+    let initialEnable = try await waitForTargetMessage(backend, method: "Network.enable")
+    await receiveTargetReply(
+        transport,
+        targetID: initialEnable.targetIdentifier,
+        messageID: try messageID(initialEnable.message),
+        result: "{}"
+    )
+    await gate.waitUntilStarted()
+
+    await receiveTargetEvent(
+        transport,
+        targetID: initialEnable.targetIdentifier,
+        method: "Network.loadingFinished",
+        params: #"{"requestId":"preceding-event","timestamp":2}"#
+    )
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-next","type":"page","frameId":"main-frame","isProvisional":true}}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-main","newTargetId":"page-next"}}"#
+    )
+
+    let replacementEnable = try await waitForTargetMessage(
+        backend,
+        method: "Network.enable",
+        ordinal: 1
+    )
+    #expect(replacementEnable.targetIdentifier == ProtocolTarget.ID("page-next"))
+    await receiveTargetEvent(
+        transport,
+        targetID: replacementEnable.targetIdentifier,
+        method: "Network.loadingFinished",
+        params: #"{"requestId":"replacement-replay","timestamp":3}"#
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: replacementEnable.targetIdentifier,
+        messageID: try messageID(replacementEnable.message),
+        result: "{}"
+    )
+    await gate.release()
+
+    let disable = try await waitForTargetMessage(backend, method: "Network.disable")
+    #expect(disable.targetIdentifier == ProtocolTarget.ID("page-next"))
+    await receiveTargetReply(
+        transport,
+        targetID: disable.targetIdentifier,
+        messageID: try messageID(disable.message),
+        result: "{}"
+    )
+
+    let (initial, preceding, replacement, replay) = try await throwingValue(of: scopeTask)
+    guard case let .reset(initialGeneration)? = initial,
+          case let .reset(replacementGeneration)? = replacement else {
+        Issue.record("Expected initial and replacement reset markers.")
+        return
+    }
+    #expect(initialGeneration != replacementGeneration)
+    guard case let .event(precedingGeneration, .loadingFinished(precedingID, _, _, _))? = preceding else {
+        Issue.record("Expected the pending old-generation event before the replacement reset.")
+        return
+    }
+    #expect(precedingGeneration == initialGeneration)
+    #expect(precedingID == Network.Request.ID("preceding-event"))
+    guard case let .event(eventGeneration, .loadingFinished(id, _, _, _))? = replay else {
+        Issue.record("Expected replacement enable replay.")
+        return
+    }
+    #expect(eventGeneration == replacementGeneration)
+    #expect(id == Network.Request.ID("replacement-replay"))
+}
+
+@Test
+func structuredNetworkScopeCoalescesConsecutiveDirectReplacementResetsWithoutConsumingCapacity() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let gate = CloseConnectionGate()
+
+    let scopeTask = Task {
+        try await proxy.page.network.withEvents(buffering: .bounded(1)) { events in
+            var iterator = events.makeAsyncIterator()
+            let initialReset = try await iterator.next()
+            await gate.waitUntilReleased()
+            let replacementReset = try await iterator.next()
+            let replay = try await iterator.next()
+            return (initialReset, replacementReset, replay)
+        }
+    }
+
+    let initialEnable = try await waitForTargetMessage(backend, method: "Network.enable")
+    await receiveTargetReply(
+        transport,
+        targetID: initialEnable.targetIdentifier,
+        messageID: try messageID(initialEnable.message),
+        result: "{}"
+    )
+    await gate.waitUntilStarted()
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-next-1","type":"page","frameId":"main-frame","isProvisional":true}}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-main","newTargetId":"page-next-1"}}"#
+    )
+    let firstReplacementEnable = try await waitForTargetMessage(
+        backend,
+        method: "Network.enable",
+        ordinal: 1
+    )
+    #expect(firstReplacementEnable.targetIdentifier == ProtocolTarget.ID("page-next-1"))
+    let intermediateGeneration = try await proxy.page.generation
+    await receiveTargetReply(
+        transport,
+        targetID: firstReplacementEnable.targetIdentifier,
+        messageID: try messageID(firstReplacementEnable.message),
+        result: "{}"
+    )
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-next-2","type":"page","frameId":"main-frame","isProvisional":true}}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-next-1","newTargetId":"page-next-2"}}"#
+    )
+    let latestGeneration = try await proxy.page.generation
+    #expect(latestGeneration != intermediateGeneration)
+
+    let secondReplacementEnable = try await waitForTargetMessage(
+        backend,
+        method: "Network.enable",
+        ordinal: 2
+    )
+    #expect(secondReplacementEnable.targetIdentifier == ProtocolTarget.ID("page-next-2"))
+    await receiveTargetEvent(
+        transport,
+        targetID: secondReplacementEnable.targetIdentifier,
+        method: "Network.loadingFinished",
+        params: #"{"requestId":"latest-replay","timestamp":4}"#
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: secondReplacementEnable.targetIdentifier,
+        messageID: try messageID(secondReplacementEnable.message),
+        result: "{}"
+    )
+    await gate.release()
+
+    let disable = try await waitForTargetMessage(backend, method: "Network.disable")
+    #expect(disable.targetIdentifier == ProtocolTarget.ID("page-next-2"))
+    await receiveTargetReply(
+        transport,
+        targetID: disable.targetIdentifier,
+        messageID: try messageID(disable.message),
+        result: "{}"
+    )
+
+    let (initial, replacement, replay) = try await throwingValue(of: scopeTask)
+    guard case let .reset(initialGeneration)? = initial,
+          case let .reset(replacementGeneration)? = replacement else {
+        Issue.record("Expected one initial reset and one coalesced replacement reset.")
+        return
+    }
+    #expect(initialGeneration != replacementGeneration)
+    #expect(replacementGeneration == latestGeneration)
+    guard case let .event(eventGeneration, .loadingFinished(id, _, _, _))? = replay else {
+        Issue.record("Expected the latest generation replay immediately after the coalesced reset.")
+        return
+    }
+    #expect(eventGeneration == latestGeneration)
+    #expect(id == Network.Request.ID("latest-replay"))
+}
+
+@Test
+func structuredNetworkScopeSurvivesReplacementDestroyedDuringReenable() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let gate = CloseConnectionGate()
+
+    let scopeTask = Task {
+        try await proxy.page.network.withEvents(buffering: .bounded(1)) { events in
+            var iterator = events.makeAsyncIterator()
+            let initialReset = try await iterator.next()
+            await gate.waitUntilReleased()
+            let replacementReset = try await iterator.next()
+            let replay = try await iterator.next()
+            return (initialReset, replacementReset, replay)
+        }
+    }
+
+    let initialEnable = try await waitForTargetMessage(backend, method: "Network.enable")
+    await receiveTargetReply(
+        transport,
+        targetID: initialEnable.targetIdentifier,
+        messageID: try messageID(initialEnable.message),
+        result: "{}"
+    )
+    await gate.waitUntilStarted()
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-replacement-a","type":"page","frameId":"main-frame","isProvisional":true}}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-main","newTargetId":"page-replacement-a"}}"#
+    )
+    let abandonedEnable = try await waitForTargetMessage(
+        backend,
+        method: "Network.enable",
+        ordinal: 1
+    )
+    #expect(abandonedEnable.targetIdentifier == ProtocolTarget.ID("page-replacement-a"))
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetDestroyed","params":{"targetId":"page-replacement-a"}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-replacement-b","type":"page","frameId":"main-frame","isProvisional":false}}}"#
+    )
+    let latestGeneration = try await proxy.page.generation
+
+    let replacementEnable = try await waitForTargetMessage(
+        backend,
+        method: "Network.enable",
+        ordinal: 2
+    )
+    #expect(replacementEnable.targetIdentifier == ProtocolTarget.ID("page-replacement-b"))
+    await receiveTargetEvent(
+        transport,
+        targetID: replacementEnable.targetIdentifier,
+        method: "Network.loadingFinished",
+        params: #"{"requestId":"surviving-replay","timestamp":5}"#
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: replacementEnable.targetIdentifier,
+        messageID: try messageID(replacementEnable.message),
+        result: "{}"
+    )
+    await gate.release()
+
+    let disable = try await waitForTargetMessage(backend, method: "Network.disable")
+    #expect(disable.targetIdentifier == ProtocolTarget.ID("page-replacement-b"))
+    await receiveTargetReply(
+        transport,
+        targetID: disable.targetIdentifier,
+        messageID: try messageID(disable.message),
+        result: "{}"
+    )
+
+    let (initial, replacement, replay) = try await throwingValue(of: scopeTask)
+    guard case let .reset(initialGeneration)? = initial,
+          case let .reset(replacementGeneration)? = replacement else {
+        Issue.record("Expected initial and latest replacement resets.")
+        return
+    }
+    #expect(initialGeneration != replacementGeneration)
+    #expect(replacementGeneration == latestGeneration)
+    guard case let .event(eventGeneration, .loadingFinished(id, _, _, _))? = replay else {
+        Issue.record("Expected replay from the surviving replacement target.")
+        return
+    }
+    #expect(eventGeneration == latestGeneration)
+    #expect(id == Network.Request.ID("surviving-replay"))
+    #expect(await transport.terminalCause == nil)
+}
+
+@Test
+func structuredNetworkScopeCoalescesDestroyCreateIntoOneReplacementReset() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let gate = CloseConnectionGate()
+
+    let scopeTask = Task {
+        try await proxy.page.network.withEvents(buffering: .bounded(1)) { events in
+            var iterator = events.makeAsyncIterator()
+            let initialReset = try await iterator.next()
+            await gate.waitUntilReleased()
+            let replacementReset = try await iterator.next()
+            let replay = try await iterator.next()
+            return (initialReset, replacementReset, replay)
+        }
+    }
+
+    let initialEnable = try await waitForTargetMessage(backend, method: "Network.enable")
+    await receiveTargetReply(
+        transport,
+        targetID: initialEnable.targetIdentifier,
+        messageID: try messageID(initialEnable.message),
+        result: "{}"
+    )
+    await gate.waitUntilStarted()
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetDestroyed","params":{"targetId":"page-main"}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-next","type":"page","frameId":"main-frame","isProvisional":false}}}"#
+    )
+
+    let replacementEnable = try await waitForTargetMessage(
+        backend,
+        method: "Network.enable",
+        ordinal: 1
+    )
+    #expect(replacementEnable.targetIdentifier == ProtocolTarget.ID("page-next"))
+    await receiveTargetEvent(
+        transport,
+        targetID: replacementEnable.targetIdentifier,
+        method: "Network.loadingFinished",
+        params: #"{"requestId":"destroy-create-replay","timestamp":4}"#
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: replacementEnable.targetIdentifier,
+        messageID: try messageID(replacementEnable.message),
+        result: "{}"
+    )
+    await gate.release()
+
+    let disable = try await waitForTargetMessage(backend, method: "Network.disable")
+    #expect(disable.targetIdentifier == ProtocolTarget.ID("page-next"))
+    await receiveTargetReply(
+        transport,
+        targetID: disable.targetIdentifier,
+        messageID: try messageID(disable.message),
+        result: "{}"
+    )
+
+    let (initial, replacement, replay) = try await throwingValue(of: scopeTask)
+    guard case let .reset(initialGeneration)? = initial,
+          case let .reset(replacementGeneration)? = replacement else {
+        Issue.record("Expected exactly one reset for the replacement generation.")
+        return
+    }
+    #expect(initialGeneration != replacementGeneration)
+    guard case let .event(eventGeneration, .loadingFinished(id, _, _, _))? = replay else {
+        Issue.record("Expected replacement replay immediately after the reset.")
+        return
+    }
+    #expect(eventGeneration == replacementGeneration)
+    #expect(id == Network.Request.ID("destroy-create-replay"))
+}
+
+@Test
+func structuredNetworkScopeTreatsCurrentPageDestroyDuringDisableAsSuccessfulCleanup() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let bodyGate = CloseConnectionGate()
+
+    let scopeTask = Task {
+        do {
+            try await proxy.page.network.withEvents { events in
+                var iterator = events.makeAsyncIterator()
+                _ = try await iterator.next()
+                await bodyGate.waitUntilReleased()
+            }
+            return StructuredScopeOutcome.succeeded
+        } catch {
+            return .other(String(describing: error))
+        }
+    }
+
+    let enable = try await waitForTargetMessage(backend, method: "Network.enable")
+    await receiveTargetReply(
+        transport,
+        targetID: enable.targetIdentifier,
+        messageID: try messageID(enable.message),
+        result: "{}"
+    )
+    await bodyGate.waitUntilStarted()
+    await bodyGate.release()
+
+    let disable = try await waitForTargetMessage(backend, method: "Network.disable")
+    #expect(disable.targetIdentifier == ProtocolTarget.ID("page-main"))
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetDestroyed","params":{"targetId":"page-main"}}"#
+    )
+
+    #expect(await scopeTask.value == .succeeded)
+    #expect(await transport.terminalCause == nil)
+    let messages = await backend.sentTargetMessages()
+    let disableCount = try messages.filter {
+        try messageMethod($0.message) == "Network.disable"
+    }.count
+    #expect(disableCount == 1)
+}
+
+@Test
+func structuredPhysicalTargetScopeFinishesWithoutDisableWhenTargetIsDestroyed() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let frame = WebInspectorTarget(
+        id: WebInspectorTarget.ID("frame-target"),
+        kind: .frame,
+        frameID: FrameID("child-frame"),
+        isProvisional: false,
+        proxy: proxy,
+        route: RoutingTargetID("frame-target")
+    )
+    let bodyGate = CloseConnectionGate()
+
+    let scopeTask = Task {
+        do {
+            try await frame.network.withEvents { events in
+                var iterator = events.makeAsyncIterator()
+                _ = try await iterator.next()
+                await bodyGate.waitUntilReleased()
+                while try await iterator.next() != nil {}
+            }
+            return StructuredScopeOutcome.succeeded
+        } catch WebInspectorProxyError.pageUnavailable {
+            return .pageUnavailable
+        } catch {
+            return .other(String(describing: error))
+        }
+    }
+
+    let enable = try await waitForTargetMessage(backend, method: "Network.enable")
+    #expect(enable.targetIdentifier == ProtocolTarget.ID("frame-target"))
+    await receiveTargetReply(
+        transport,
+        targetID: enable.targetIdentifier,
+        messageID: try messageID(enable.message),
+        result: "{}"
+    )
+    await bodyGate.waitUntilStarted()
+    await bodyGate.release()
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetDestroyed","params":{"targetId":"frame-target"}}"#
+    )
+
+    #expect(await scopeTask.value == .pageUnavailable)
+    let messages = await backend.sentTargetMessages()
+    let disableCount = try messages.filter {
+        try messageMethod($0.message) == "Network.disable"
+    }.count
+    #expect(disableCount == 0)
+    #expect(await transport.terminalCause == nil)
+}
+
+@Test
+func structuredPhysicalTargetScopeFailsAcquisitionWhenTargetDiesDuringEnable() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let frame = WebInspectorTarget(
+        id: WebInspectorTarget.ID("frame-target"),
+        kind: .frame,
+        frameID: FrameID("child-frame"),
+        isProvisional: false,
+        proxy: proxy,
+        route: RoutingTargetID("frame-target")
+    )
+    let bodyProbe = CompletionProbe()
+
+    let scopeTask = Task {
+        do {
+            try await frame.network.withEvents { _ in
+                await bodyProbe.finish()
+            }
+            return StructuredScopeOutcome.succeeded
+        } catch WebInspectorProxyError.pageUnavailable {
+            return .pageUnavailable
+        } catch {
+            return .other(String(describing: error))
+        }
+    }
+
+    let enable = try await waitForTargetMessage(backend, method: "Network.enable")
+    #expect(enable.targetIdentifier == ProtocolTarget.ID("frame-target"))
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetDestroyed","params":{"targetId":"frame-target"}}"#
+    )
+
+    #expect(await scopeTask.value == .pageUnavailable)
+    #expect(await bodyProbe.isFinished() == false)
+    await transport.waitForEventScopeCountForTesting(0)
+    let messages = await backend.sentTargetMessages()
+    let disableCount = try messages.filter {
+        try messageMethod($0.message) == "Network.disable"
+    }.count
+    #expect(disableCount == 0)
+}
+
+@Test
+func structuredFixedTargetScopeFailsAtCommitWithoutRetargetingPendingEnable() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-next","type":"page","frameId":"main-frame","isProvisional":true}}}"#
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let fixedPage = WebInspectorTarget(
+        id: WebInspectorTarget.ID("page-main"),
+        kind: .page,
+        frameID: FrameID("main-frame"),
+        isProvisional: false,
+        proxy: proxy,
+        route: RoutingTargetID("page-main")
+    )
+    let bodyProbe = CompletionProbe()
+
+    let scopeTask = Task {
+        do {
+            try await fixedPage.network.withEvents { _ in
+                await bodyProbe.finish()
+            }
+            return StructuredScopeOutcome.succeeded
+        } catch WebInspectorProxyError.pageUnavailable {
+            return .pageUnavailable
+        } catch {
+            return .other(String(describing: error))
+        }
+    }
+
+    let enable = try await waitForTargetMessage(backend, method: "Network.enable")
+    #expect(enable.targetIdentifier == ProtocolTarget.ID("page-main"))
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-main","newTargetId":"page-next"}}"#
+    )
+
+    #expect(try await value(of: scopeTask) == .pageUnavailable)
+    #expect(await bodyProbe.isFinished() == false)
+    await transport.waitForEventScopeCountForTesting(0)
+    #expect(await transport.terminalCause == nil)
+
+    let messages = await backend.sentTargetMessages()
+    #expect(messages.count == 1)
+    #expect(messages[0].targetIdentifier == ProtocolTarget.ID("page-main"))
+    #expect(try messageMethod(messages[0].message) == "Network.enable")
+}
+
+@Test
+func structuredNetworkScopeLateAcquireDuringReenableDoesNotDisableLiveLease() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let firstGate = CloseConnectionGate()
+    let lateGate = CloseConnectionGate()
+
+    let firstScope = Task {
+        try await proxy.page.network.withEvents { events in
+            var iterator = events.makeAsyncIterator()
+            _ = try await iterator.next()
+            await firstGate.waitUntilReleased()
+        }
+    }
+
+    let initialEnable = try await waitForTargetMessage(backend, method: "Network.enable")
+    await receiveTargetReply(
+        transport,
+        targetID: initialEnable.targetIdentifier,
+        messageID: try messageID(initialEnable.message),
+        result: "{}"
+    )
+    await firstGate.waitUntilStarted()
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-next","type":"page","frameId":"main-frame","isProvisional":true}}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-main","newTargetId":"page-next"}}"#
+    )
+    let replacementEnable = try await waitForTargetMessage(
+        backend,
+        method: "Network.enable",
+        ordinal: 1
+    )
+
+    await firstGate.release()
+    await transport.waitForEventScopeCountForTesting(0)
+
+    let lateScope = Task {
+        try await proxy.page.network.withEvents { events in
+            var iterator = events.makeAsyncIterator()
+            _ = try await iterator.next()
+            await lateGate.waitUntilReleased()
+        }
+    }
+    await transport.waitForEventScopeCountForTesting(1)
+
+    await receiveTargetReply(
+        transport,
+        targetID: replacementEnable.targetIdentifier,
+        messageID: try messageID(replacementEnable.message),
+        result: "{}"
+    )
+    await lateGate.waitUntilStarted()
+    _ = try await throwingValue(of: firstScope)
+
+    let messagesBeforeLateRelease = await backend.sentTargetMessages()
+    let disableCount = try messagesBeforeLateRelease.filter {
+        try messageMethod($0.message) == "Network.disable"
+    }.count
+    #expect(disableCount == 0)
+
+    await lateGate.release()
+    let disable = try await waitForTargetMessage(backend, method: "Network.disable")
+    #expect(disable.targetIdentifier == ProtocolTarget.ID("page-next"))
+    await receiveTargetReply(
+        transport,
+        targetID: disable.targetIdentifier,
+        messageID: try messageID(disable.message),
+        result: "{}"
+    )
+    _ = try await throwingValue(of: lateScope)
+}
+
+@Test
+func structuredNetworkScopeLateAcquireDuringDisableReenablesAfterCleanup() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let firstGate = CloseConnectionGate()
+    let lateGate = CloseConnectionGate()
+
+    let firstScope = Task {
+        try await proxy.page.network.withEvents { events in
+            var iterator = events.makeAsyncIterator()
+            _ = try await iterator.next()
+            await firstGate.waitUntilReleased()
+        }
+    }
+    let firstEnable = try await waitForTargetMessage(backend, method: "Network.enable")
+    await receiveTargetReply(
+        transport,
+        targetID: firstEnable.targetIdentifier,
+        messageID: try messageID(firstEnable.message),
+        result: "{}"
+    )
+    await firstGate.waitUntilStarted()
+
+    await firstGate.release()
+    let firstDisable = try await waitForTargetMessage(backend, method: "Network.disable")
+    await transport.waitForEventScopeCountForTesting(0)
+
+    let lateScope = Task {
+        try await proxy.page.network.withEvents { events in
+            var iterator = events.makeAsyncIterator()
+            _ = try await iterator.next()
+            await lateGate.waitUntilReleased()
+        }
+    }
+    await transport.waitForEventScopeCountForTesting(1)
+
+    await receiveTargetReply(
+        transport,
+        targetID: firstDisable.targetIdentifier,
+        messageID: try messageID(firstDisable.message),
+        result: "{}"
+    )
+    _ = try await throwingValue(of: firstScope)
+
+    let secondEnable = try await waitForTargetMessage(
+        backend,
+        method: "Network.enable",
+        ordinal: 1
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: secondEnable.targetIdentifier,
+        messageID: try messageID(secondEnable.message),
+        result: "{}"
+    )
+    await lateGate.waitUntilStarted()
+
+    let messagesBeforeLateRelease = await backend.sentTargetMessages()
+    let disableCount = try messagesBeforeLateRelease.filter {
+        try messageMethod($0.message) == "Network.disable"
+    }.count
+    #expect(disableCount == 1)
+
+    await lateGate.release()
+    let finalDisable = try await waitForTargetMessage(
+        backend,
+        method: "Network.disable",
+        ordinal: 1
+    )
+    await receiveTargetReply(
+        transport,
+        targetID: finalDisable.targetIdentifier,
+        messageID: try messageID(finalDisable.message),
+        result: "{}"
+    )
+    _ = try await throwingValue(of: lateScope)
+}
+
+@Test
+func structuredNetworkScopeOverflowTerminatesOnlyStalledSubscriber() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let stalledGate = CloseConnectionGate()
+    let peerGate = CloseConnectionGate()
+    let peerConsumedGate = CloseConnectionGate()
+
+    let stalled = Task {
+        do {
+            try await proxy.page.network.withEvents(buffering: .bounded(2)) { events in
+                await stalledGate.waitUntilReleased()
+                for try await _ in events {}
+            }
+            return StructuredScopeOutcome.succeeded
+        } catch WebInspectorProxyError.eventBufferOverflow(capacity: 2) {
+            return .overflow
+        } catch {
+            return .other(String(describing: error))
+        }
+    }
+    let peer = Task {
+        try await proxy.page.network.withEvents(buffering: .bounded(2)) { events in
+            var iterator = events.makeAsyncIterator()
+            _ = try await iterator.next()
+            await peerGate.waitUntilReleased()
+            let first = try await iterator.next()
+            let second = try await iterator.next()
+            await peerConsumedGate.waitUntilReleased()
+            let third = try await iterator.next()
+            return (first, second, third)
+        }
+    }
+
+    let enable = try await waitForTargetMessage(backend, method: "Network.enable")
+    await receiveTargetReply(
+        transport,
+        targetID: enable.targetIdentifier,
+        messageID: try messageID(enable.message),
+        result: "{}"
+    )
+    await stalledGate.waitUntilStarted()
+    await peerGate.waitUntilStarted()
+
+    for ordinal in 1...2 {
+        await receiveTargetEvent(
+            transport,
+            targetID: enable.targetIdentifier,
+            method: "Network.loadingFinished",
+            params: #"{"requestId":"overflow-\#(ordinal)","timestamp":\#(ordinal)}"#
+        )
+    }
+    await peerGate.release()
+    await peerConsumedGate.waitUntilStarted()
+    await receiveTargetEvent(
+        transport,
+        targetID: enable.targetIdentifier,
+        method: "Network.loadingFinished",
+        params: #"{"requestId":"overflow-3","timestamp":3}"#
+    )
+    await peerConsumedGate.release()
+    await stalledGate.release()
+
+    let disable = try await waitForTargetMessage(backend, method: "Network.disable")
+    await receiveTargetReply(
+        transport,
+        targetID: disable.targetIdentifier,
+        messageID: try messageID(disable.message),
+        result: "{}"
+    )
+
+    #expect(await stalled.value == .overflow)
+    let (first, second, third) = try await throwingValue(of: peer)
+    guard case let .event(_, .loadingFinished(firstID, _, _, _))? = first,
+          case let .event(_, .loadingFinished(secondID, _, _, _))? = second,
+          case let .event(_, .loadingFinished(thirdID, _, _, _))? = third else {
+        Issue.record("Expected the peer subscriber to receive all events.")
+        return
+    }
+    #expect(firstID == Network.Request.ID("overflow-1"))
+    #expect(secondID == Network.Request.ID("overflow-2"))
+    #expect(thirdID == Network.Request.ID("overflow-3"))
+}
+
 private func pageTarget(proxy: WebInspectorProxy) -> WebInspectorTarget {
     WebInspectorTarget(
         id: WebInspectorTarget.ID("page-main"),
@@ -2156,6 +3254,37 @@ private func pageTarget(proxy: WebInspectorProxy) -> WebInspectorTarget {
         proxy: proxy,
         route: RoutingTargetID("page-main")
     )
+}
+
+private func requireCapabilityReplyPurpose(
+    in transport: TransportSession,
+    message: SentTargetMessage,
+    expectedGeneration: WebInspectorPage.Generation
+) async throws -> UInt64 {
+    let pendingKey = TransportSession.PendingKey.target(
+        TransportSession.ReplyKey(
+            targetID: message.targetIdentifier,
+            commandID: try messageID(message.message)
+        )
+    )
+    let purposes = await transport.pendingReplyPurposes()
+    #expect(purposes.count == 1)
+    let purpose = try #require(purposes[pendingKey])
+    switch purpose {
+    case .direct, .elementPickerMode, .modelCommand, .capabilityAuxiliary:
+        Issue.record("Expected a capability reply purpose.")
+        return 0
+    case .modelBootstrap:
+        Issue.record("Expected a capability reply purpose.")
+        return 0
+    case let .capability(key, generation, operationID):
+        #expect(key.route == .currentPage)
+        #expect(key.targetID == .currentPage)
+        #expect(key.domain == .network)
+        #expect(generation == expectedGeneration)
+        #expect(operationID > 0)
+        return operationID
+    }
 }
 
 private func installPageTarget(
@@ -2170,13 +3299,6 @@ private func installPageTarget(
     await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"\#(targetID)","type":"page"\#(frameIDField),"isProvisional":false}}}"#
     )
-}
-
-private func waitForEventSubscription(
-    _ target: WebInspectorTarget,
-    domain: WebInspectorProxyEventDomain
-) async {
-    await target.proxy.waitForEventSubscription(targetID: target.id, route: target.route, domain: domain)
 }
 
 private func receiveTargetEvent(
@@ -2229,6 +3351,19 @@ private func receiveTargetReply(
     ))
 }
 
+private func receiveTargetError(
+    _ transport: TransportSession,
+    targetID: ProtocolTarget.ID,
+    messageID: UInt64,
+    message: String
+) async {
+    let escapedMessage = jsonEscapedString(message)
+    await transport.receiveRootMessage(targetDispatchMessage(
+        targetID: targetID,
+        message: #"{"id":\#(messageID),"error":{"message":"\#(escapedMessage)"}}"#
+    ))
+}
+
 private func targetDispatchMessage(
     targetID: ProtocolTarget.ID,
     message: String
@@ -2270,6 +3405,44 @@ private func messageParameters(_ message: String) throws -> [String: Any] {
 private func messageObject(_ message: String) throws -> [String: Any] {
     let data = try #require(message.data(using: .utf8))
     return try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+}
+
+private actor SuspendedSendTransportBackend: TransportBackend {
+    private var sendStarted = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var sendContinuations: [CheckedContinuation<Void, Never>] = []
+
+    func sendJSONString(_ message: String) async throws {
+        _ = message
+        sendStarted = true
+        let waiters = startWaiters
+        startWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+        await withCheckedContinuation { continuation in
+            sendContinuations.append(continuation)
+        }
+    }
+
+    func detach() async {}
+
+    func waitUntilSendStarted() async {
+        guard sendStarted == false else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            startWaiters.append(continuation)
+        }
+    }
+
+    func releaseSend() {
+        let continuations = sendContinuations
+        sendContinuations.removeAll()
+        for continuation in continuations {
+            continuation.resume()
+        }
+    }
 }
 
 private actor CloseConnectionGate {
@@ -2367,6 +3540,22 @@ private actor EventDeliveryProbe {
 }
 
 private struct TimedOut: Error {}
+
+private struct StructuredScopeBodyFailure: Error {}
+
+private enum StructuredScopeOutcome: Equatable, Sendable {
+    case succeeded
+    case cancelled
+    case bodyFailure
+    case cleanupFailure
+    case combinedFailure
+    case overflow
+    case transportFailure
+    case protocolViolation
+    case pageUnavailable
+    case timeout
+    case other(String)
+}
 
 private func value<T: Sendable>(
     of task: Task<T, Never>,

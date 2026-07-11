@@ -672,46 +672,54 @@ extension NetworkDetailViewController {
 #endif
 
 #Preview("Network Detail") {
-    UINavigationController(
-        rootViewController: NetworkDetailViewController(
-            model: NetworkPreviewFixtures.makePanelModel(mode: .detail)
+    NetworkPreviewFixtures.makeViewController(mode: .detail) { model in
+        UINavigationController(
+            rootViewController: NetworkDetailViewController(model: model)
         )
-    )
+    }
 }
 
 #Preview("Network Detail Preview Response Only Short") {
-    UINavigationController(
-        rootViewController: NetworkDetailViewController(
-            model: NetworkPreviewFixtures.makePanelModel(mode: .detailResponseOnlyShort),
-            initialMode: .preview
+    NetworkPreviewFixtures.makeViewController(mode: .detailResponseOnlyShort) { model in
+        UINavigationController(
+            rootViewController: NetworkDetailViewController(
+                model: model,
+                initialMode: .preview
+            )
         )
-    )
+    }
 }
 
 #Preview("Network Detail Preview Request and Response Short") {
-    UINavigationController(
-        rootViewController: NetworkDetailViewController(
-            model: NetworkPreviewFixtures.makePanelModel(mode: .detailRequestAndResponseShort),
-            initialMode: .preview
+    NetworkPreviewFixtures.makeViewController(mode: .detailRequestAndResponseShort) { model in
+        UINavigationController(
+            rootViewController: NetworkDetailViewController(
+                model: model,
+                initialMode: .preview
+            )
         )
-    )
+    }
 }
 
 #Preview("Network Detail Preview Response Only Long") {
-    UINavigationController(
-        rootViewController: NetworkDetailViewController(
-            model: NetworkPreviewFixtures.makePanelModel(mode: .detailResponseOnlyLong),
-            initialMode: .preview
+    NetworkPreviewFixtures.makeViewController(mode: .detailResponseOnlyLong) { model in
+        UINavigationController(
+            rootViewController: NetworkDetailViewController(
+                model: model,
+                initialMode: .preview
+            )
         )
-    )
+    }
 }
 
 #Preview("Network Detail Preview Request and Response Long") {
-    UINavigationController(
-        rootViewController: NetworkDetailViewController(
-            model: NetworkPreviewFixtures.makePanelModel(mode: .detailRequestAndResponseLong),
-            initialMode: .preview
+    NetworkPreviewFixtures.makeViewController(mode: .detailRequestAndResponseLong) { model in
+        UINavigationController(
+            rootViewController: NetworkDetailViewController(
+                model: model,
+                initialMode: .preview
+            )
         )
-    )
+    }
 }
 #endif

@@ -46,9 +46,10 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private let model: NetworkPanelModel
-    private let fetchedResultsController: WebInspectorFetchedResultsController<NetworkRequest>
+    private let fetchedResults: WebInspectorFetchedResults<NetworkRequest>
     private var requestSelectionAction: RequestSelectionAction
-    private var fetchedResultsTransactionTask: Task<Void, Never>?
+    private var fetchedResultsUpdateTask: Task<Void, Never>?
+    private var lastFetchedResultsRevision: UInt64?
     private var searchTextObservation: PortableObservationTracking.Token?
     private var resourceFilterObservation: PortableObservationTracking.Token?
     private var selectedRequestObservation: PortableObservationTracking.Token?
@@ -57,7 +58,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private var isApplyingSearchPresentation = false
     private var activeSearchController: UISearchController?
 #if DEBUG
-    private struct FetchedResultsTransactionDeliveryWaiter {
+    private struct FetchedResultsUpdateDeliveryWaiter {
         var id: Int
         var baselineCount: Int
         var continuation: CheckedContinuation<Bool, Never>
@@ -66,9 +67,9 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
     private var deinitHandlerForTesting: (@MainActor () -> Void)?
     private var snapshotUpdateCompletionWaitersForTesting: [CheckedContinuation<Void, Never>] = []
-    private var fetchedResultsTransactionDeliveryWaitersForTesting: [FetchedResultsTransactionDeliveryWaiter] = []
-    private var fetchedResultsTransactionDeliveryWaiterIDStorageForTesting = 0
-    private var fetchedResultsTransactionDeliveryCountStorageForTesting = 0
+    private var fetchedResultsUpdateDeliveryWaitersForTesting: [FetchedResultsUpdateDeliveryWaiter] = []
+    private var fetchedResultsUpdateDeliveryWaiterIDStorageForTesting = 0
+    private var fetchedResultsUpdateDeliveryCountStorageForTesting = 0
     private var displayRequestIDsEvaluationCountStorageForTesting = 0
     private var snapshotApplyCountStorageForTesting = 0
     private var filterMenuBuildCountStorageForTesting = 0
@@ -92,7 +93,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
     package init(model: NetworkPanelModel) {
         self.model = model
-        self.fetchedResultsController = WebInspectorFetchedResultsController(fetchedResults: model.requests)
+        fetchedResults = model.requests
         requestSelectionAction = { [model] request in
             model.selectRequest(request)
         }
@@ -106,13 +107,13 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     isolated deinit {
-        fetchedResultsTransactionTask?.cancel()
+        fetchedResultsUpdateTask?.cancel()
         searchTextObservation?.cancel()
         resourceFilterObservation?.cancel()
         selectedRequestObservation?.cancel()
         detachSearchPresentation()
 #if DEBUG
-        resolveFetchedResultsTransactionDeliveryWaitersForTesting(result: false)
+        resolveFetchedResultsUpdateDeliveryWaitersForTesting(result: false)
         deinitHandlerForTesting?()
 #endif
     }
@@ -176,7 +177,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func startObservingModel() {
-        startObservingFetchedResultsTransactions()
+        startObservingFetchedResultsUpdates()
 
         searchTextObservation?.cancel()
         searchTextObservation = withPortableContinuousObservation { [weak self] _ in
@@ -203,12 +204,16 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         }
     }
 
-    private func startObservingFetchedResultsTransactions() {
-        fetchedResultsTransactionTask?.cancel()
-        let transactions = fetchedResultsController.transactions
-        fetchedResultsTransactionTask = Task { @MainActor [weak self] in
-            for await transaction in transactions {
-                self?.fetchedResultsDidPublish(transaction)
+    private func startObservingFetchedResultsUpdates() {
+        fetchedResultsUpdateTask?.cancel()
+        let updates = fetchedResults.updates()
+        // Initial appearance synchronously reloads from fetchedResults. Treat
+        // the subscription's current revision as the delivery baseline so the
+        // queued `.initial` cannot schedule a redundant later reload.
+        lastFetchedResultsRevision = fetchedResults.revision
+        fetchedResultsUpdateTask = Task { @MainActor [weak self] in
+            for await update in updates {
+                self?.fetchedResultsDidPublish(update)
             }
         }
     }
@@ -483,23 +488,59 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func fetchedResultsDidPublish(
-        _ transaction: WebInspectorFetchedResultsTransaction<NetworkRequest>
+        _ update: WebInspectorFetchedResultsUpdate<NetworkRequest.ID>
     ) {
-        guard transaction.hasNetworkListTopologyChanges else {
-            return
-        }
+        switch update {
+        case .initial(let revision, let snapshot):
+            guard lastFetchedResultsRevision != revision else {
+                return
+            }
+            lastFetchedResultsRevision = revision
 #if DEBUG
-        recordFetchedResultsTransactionDeliveryForTesting()
+            recordFetchedResultsUpdateDeliveryForTesting()
 #endif
-        guard snapshotCoordinator.isRenderingActive else {
-            snapshotCoordinator.markNeedsReloadOnNextAppearance()
-            return
+            guard snapshotCoordinator.isRenderingActive else {
+                if isViewLoaded == false
+                    || dataSource.snapshot().itemIdentifiers != snapshot.itemIDs {
+                    snapshotCoordinator.markNeedsReloadOnNextAppearance()
+                }
+                return
+            }
+            requestSnapshotUpdate(requestIDs: snapshot.itemIDs)
+            renderEmptyState(isEmpty: snapshot.itemIDs.isEmpty)
+
+        case .transaction(let revision, let transaction, _):
+            // NetworkListCell observes each stable NetworkRequest identity
+            // directly, so this consumer only applies collection topology.
+            let isContiguous = lastFetchedResultsRevision.map { previousRevision in
+                revision == previousRevision &+ 1
+            } ?? false
+            lastFetchedResultsRevision = revision
+#if DEBUG
+            recordFetchedResultsUpdateDeliveryForTesting()
+#endif
+            guard isContiguous else {
+                guard snapshotCoordinator.isRenderingActive else {
+                    snapshotCoordinator.markNeedsReloadOnNextAppearance()
+                    return
+                }
+                requestSnapshotUpdate(requestIDs: transaction.newSnapshot.itemIDs)
+                renderEmptyState(isEmpty: transaction.newSnapshot.itemIDs.isEmpty)
+                return
+            }
+            guard transaction.hasNetworkListTopologyChanges else {
+                return
+            }
+            guard snapshotCoordinator.isRenderingActive else {
+                snapshotCoordinator.markNeedsReloadOnNextAppearance()
+                return
+            }
+            applyTopologyTransaction(transaction)
         }
-        applyTopologyTransaction(transaction)
     }
 
     private func applyTopologyTransaction(
-        _ transaction: WebInspectorFetchedResultsTransaction<NetworkRequest>
+        _ transaction: WebInspectorFetchedResultsTransaction<NetworkRequest.ID>
     ) {
         let requestIDs = transaction.newSnapshot.itemIDs
         let topologyItemChanges = transaction.networkListTopologyItemChanges
@@ -715,7 +756,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 }
 
-private extension WebInspectorFetchedResultsTransaction where Model == NetworkRequest {
+private extension WebInspectorFetchedResultsTransaction where ItemID == NetworkRequest.ID {
     var hasNetworkListTopologyChanges: Bool {
         isReset || sectionChanges.isEmpty == false || networkListTopologyItemChanges.isEmpty == false
     }
@@ -761,8 +802,8 @@ extension NetworkListViewController {
         snapshotApplyCountStorageForTesting
     }
 
-    package var fetchedResultsTransactionDeliveryCountForTesting: Int {
-        fetchedResultsTransactionDeliveryCountStorageForTesting
+    package var fetchedResultsUpdateDeliveryCountForTesting: Int {
+        fetchedResultsUpdateDeliveryCountStorageForTesting
     }
 
     package var filterMenuBuildCountForTesting: Int {
@@ -813,25 +854,25 @@ extension NetworkListViewController {
         await waitForSnapshotUpdateCompletionForTesting()
     }
 
-    package func waitForFetchedResultsTransactionDeliveryForTesting(
+    package func waitForFetchedResultsUpdateDeliveryForTesting(
         after baselineCount: Int,
         timeout: Duration = .seconds(1)
     ) async -> Bool {
-        guard fetchedResultsTransactionDeliveryCountStorageForTesting <= baselineCount else {
+        guard fetchedResultsUpdateDeliveryCountStorageForTesting <= baselineCount else {
             return true
         }
         return await withCheckedContinuation { continuation in
-            let waiterID = fetchedResultsTransactionDeliveryWaiterIDStorageForTesting
-            fetchedResultsTransactionDeliveryWaiterIDStorageForTesting &+= 1
+            let waiterID = fetchedResultsUpdateDeliveryWaiterIDStorageForTesting
+            fetchedResultsUpdateDeliveryWaiterIDStorageForTesting &+= 1
             let timeoutTask = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: timeout)
-                self?.resolveFetchedResultsTransactionDeliveryWaiterForTesting(
+                self?.resolveFetchedResultsUpdateDeliveryWaiterForTesting(
                     id: waiterID,
                     result: false
                 )
             }
-            fetchedResultsTransactionDeliveryWaitersForTesting.append(
-                FetchedResultsTransactionDeliveryWaiter(
+            fetchedResultsUpdateDeliveryWaitersForTesting.append(
+                FetchedResultsUpdateDeliveryWaiter(
                     id: waiterID,
                     baselineCount: baselineCount,
                     continuation: continuation,
@@ -862,28 +903,28 @@ extension NetworkListViewController {
         }
     }
 
-    private func recordFetchedResultsTransactionDeliveryForTesting() {
-        fetchedResultsTransactionDeliveryCountStorageForTesting &+= 1
-        resolveFetchedResultsTransactionDeliveryWaitersForTesting(result: true)
+    private func recordFetchedResultsUpdateDeliveryForTesting() {
+        fetchedResultsUpdateDeliveryCountStorageForTesting &+= 1
+        resolveFetchedResultsUpdateDeliveryWaitersForTesting(result: true)
     }
 
-    private func resolveFetchedResultsTransactionDeliveryWaitersForTesting(result: Bool) {
-        let waiterIDs = fetchedResultsTransactionDeliveryWaitersForTesting.compactMap { waiter in
-            if result == false || fetchedResultsTransactionDeliveryCountStorageForTesting > waiter.baselineCount {
+    private func resolveFetchedResultsUpdateDeliveryWaitersForTesting(result: Bool) {
+        let waiterIDs = fetchedResultsUpdateDeliveryWaitersForTesting.compactMap { waiter in
+            if result == false || fetchedResultsUpdateDeliveryCountStorageForTesting > waiter.baselineCount {
                 return waiter.id
             }
             return nil
         }
         for waiterID in waiterIDs {
-            resolveFetchedResultsTransactionDeliveryWaiterForTesting(id: waiterID, result: result)
+            resolveFetchedResultsUpdateDeliveryWaiterForTesting(id: waiterID, result: result)
         }
     }
 
-    private func resolveFetchedResultsTransactionDeliveryWaiterForTesting(id: Int, result: Bool) {
-        guard let index = fetchedResultsTransactionDeliveryWaitersForTesting.firstIndex(where: { $0.id == id }) else {
+    private func resolveFetchedResultsUpdateDeliveryWaiterForTesting(id: Int, result: Bool) {
+        guard let index = fetchedResultsUpdateDeliveryWaitersForTesting.firstIndex(where: { $0.id == id }) else {
             return
         }
-        let waiter = fetchedResultsTransactionDeliveryWaitersForTesting.remove(at: index)
+        let waiter = fetchedResultsUpdateDeliveryWaitersForTesting.remove(at: index)
         waiter.timeoutTask.cancel()
         waiter.continuation.resume(returning: result)
     }
@@ -895,18 +936,18 @@ extension NetworkListViewController {
 #endif
 
 #Preview("Network List") {
-    UINavigationController(
-        rootViewController: NetworkListViewController(
-            model: NetworkPreviewFixtures.makePanelModel(mode: .root)
+    NetworkPreviewFixtures.makeViewController(mode: .root) { model in
+        UINavigationController(
+            rootViewController: NetworkListViewController(model: model)
         )
-    )
+    }
 }
 
 #Preview("Network List Long Title") {
-    UINavigationController(
-        rootViewController: NetworkListViewController(
-            model: NetworkPreviewFixtures.makePanelModel(mode: .rootLongTitle)
+    NetworkPreviewFixtures.makeViewController(mode: .rootLongTitle) { model in
+        UINavigationController(
+            rootViewController: NetworkListViewController(model: model)
         )
-    )
+    }
 }
 #endif

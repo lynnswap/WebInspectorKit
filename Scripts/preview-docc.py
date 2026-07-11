@@ -19,7 +19,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 BASE_PATH = "WebInspectorKit"
 HOST = "127.0.0.1"
-SIMULATOR_TRIPLE = "arm64-apple-ios18.0-simulator"
+SIMULATOR_TRIPLE = "arm64-apple-ios18.4-simulator"
 TARGETS = [
     "WebInspectorUI",
     "WebInspectorDataKit",

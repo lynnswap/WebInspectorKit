@@ -17,24 +17,39 @@ package struct NetworkTabController: WebInspectorTab.BuiltInController {
         static let detail = "detail"
     }
 
-    package func contentKeys(
-        for layout: WebInspectorTab.HostLayout,
-        displayItem: WebInspectorTab.DisplayItem
-    ) -> [WebInspectorTab.ContentKey] {
-        [
-            contentKey(ContentID.list),
-            contentKey(ContentID.detail),
-        ]
-    }
-
     package func makeViewController(
         for displayItem: WebInspectorTab.DisplayItem,
         session: WebInspectorSession,
+        contentStore: PresentationContentStore,
         layout: WebInspectorTab.HostLayout
     ) -> UIViewController {
-        let model = session.interface.networkPanelModel(for: session.context)
-        let listViewController = cachedListViewController(session: session, model: model)
-        let detailViewController = cachedDetailViewController(session: session, model: model)
+        return contentStore.networkViewController(
+            context: session.model
+        ) { [weak contentStore] model in
+            guard let contentStore else {
+                preconditionFailure("A Network resource lost its presentation content store.")
+            }
+            return readyViewController(
+                layout: layout,
+                contentStore: contentStore,
+                model: model
+            )
+        }
+    }
+
+    private func readyViewController(
+        layout: WebInspectorTab.HostLayout,
+        contentStore: PresentationContentStore,
+        model: NetworkPanelModel
+    ) -> UIViewController {
+        let listViewController = cachedListViewController(
+            contentStore: contentStore,
+            model: model
+        )
+        let detailViewController = cachedDetailViewController(
+            contentStore: contentStore,
+            model: model
+        )
 
         switch layout {
         case .compact:
@@ -55,19 +70,23 @@ package struct NetworkTabController: WebInspectorTab.BuiltInController {
     }
 
     private func cachedListViewController(
-        session: WebInspectorSession,
+        contentStore: PresentationContentStore,
         model: NetworkPanelModel
     ) -> NetworkListViewController {
-        session.interface.viewController(for: contentKey(ContentID.list)) {
+        contentStore.viewController(
+            for: contentKey(ContentID.list)
+        ) {
             NetworkListViewController(model: model)
         }
     }
 
     private func cachedDetailViewController(
-        session: WebInspectorSession,
+        contentStore: PresentationContentStore,
         model: NetworkPanelModel
     ) -> NetworkDetailViewController {
-        session.interface.viewController(for: contentKey(ContentID.detail)) {
+        contentStore.viewController(
+            for: contentKey(ContentID.detail)
+        ) {
             NetworkDetailViewController(
                 model: model,
                 makeBodyViewController: NetworkBodyPreviewFactory.make(scrollEdgeSink:)
