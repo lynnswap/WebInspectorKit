@@ -2247,28 +2247,9 @@ package actor ConnectionCore {
             return target.completedEpoch != modelDocumentEpoch(for: targetID)
         }
         guard let targetID = nextTargetID else {
-            guard bootstrap.needsCompletionMarker else {
-                return
-            }
-            guard enqueueModelFeedRecord(
-                .bootstrapComplete(
-                    generation: bootstrap.generation,
-                    domain: .dom,
-                    through: eventSequences.current.sequence
-                )
-            ) else {
-                return
-            }
-            bootstrap.needsCompletionMarker = false
-            let generation = bootstrap.generation
-            let domWasAlreadyComplete = registration.synchronization?
-                .completedDomains.contains(.dom) == true
-            registration.domBootstrap = bootstrap
-            modelFeed = registration
-            if !domWasAlreadyComplete {
-                _ = completeModelDomain(.dom, generation: generation)
-            }
-            reevaluateModelCommandReadinessWaiters()
+            _ = publishDOMBootstrapCompletionIfReady(
+                through: eventSequences.current.sequence
+            )
             return
         }
 
@@ -2334,6 +2315,66 @@ package actor ConnectionCore {
             feedID: feedID,
             generation: generation
         )
+    }
+
+    /// Publishes the final DOM bootstrap watermark in the same inbound slot as
+    /// the last document reply whenever possible. A later domain reply or
+    /// event must not overtake this older watermark while the bootstrap task's
+    /// continuation is waiting to resume.
+    private func publishDOMBootstrapCompletionIfReady(
+        through: UInt64
+    ) -> Bool {
+        guard var registration = modelFeed,
+              var bootstrap = registration.domBootstrap,
+              bootstrap.generation == currentPageGeneration,
+              bootstrap.needsCompletionMarker else {
+            return true
+        }
+        let allTargetsComplete = bootstrap.orderedTargetIDs.allSatisfy { targetID in
+            guard let target = bootstrap.targetsByID[targetID] else {
+                preconditionFailure("A DOM bootstrap order entry lost its target state.")
+            }
+            return target.completedEpoch == modelDocumentEpoch(for: targetID)
+        }
+        guard allTargetsComplete else {
+            return true
+        }
+        guard enqueueModelFeedRecord(
+            .bootstrapComplete(
+                generation: bootstrap.generation,
+                domain: .dom,
+                through: through
+            )
+        ) else {
+            markPublishedDOMBootstrapReplyTerminal()
+            return false
+        }
+        bootstrap.needsCompletionMarker = false
+        let generation = bootstrap.generation
+        let domWasAlreadyComplete = registration.synchronization?
+            .completedDomains.contains(.dom) == true
+        registration.domBootstrap = bootstrap
+        modelFeed = registration
+        if !domWasAlreadyComplete,
+           !completeModelDomain(.dom, generation: generation) {
+            markPublishedDOMBootstrapReplyTerminal()
+            return false
+        }
+        reevaluateModelCommandReadinessWaiters()
+        return isOpen
+    }
+
+    private func markPublishedDOMBootstrapReplyTerminal() {
+        guard var registration = modelFeed,
+              var bootstrap = registration.domBootstrap,
+              var active = bootstrap.activeOperation,
+              active.replyDisposition == .published else {
+            return
+        }
+        active.replyDisposition = .terminal
+        bootstrap.activeOperation = active
+        registration.domBootstrap = bootstrap
+        modelFeed = registration
     }
 
     private func makeDOMBootstrapCommandOperation(
@@ -4797,6 +4838,9 @@ package actor ConnectionCore {
         bootstrap.activeOperation = active
         registration.domBootstrap = bootstrap
         modelFeed = registration
+        _ = publishDOMBootstrapCompletionIfReady(
+            through: result.receivedSequence
+        )
     }
 
     private func publishCSSSnapshotIfCurrent(
