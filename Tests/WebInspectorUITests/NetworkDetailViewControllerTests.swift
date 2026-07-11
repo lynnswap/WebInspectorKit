@@ -1929,6 +1929,88 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func compactContainerDoesNotReplayDeferredDetailAfterUserPop() async throws {
+        let context = makeContext()
+        let request = try #require(
+            await applyRequest(to: context, requestID: "1", url: "https://example.com/app.js")
+        )
+        let model = try await NetworkPanelModel.make(context: context)
+        let listViewController = NetworkListViewController(model: model)
+        let detailViewController = makeNetworkDetailViewController(model: model)
+        let navigationController = NetworkCompactNavigationController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+        model.selectRequest(request)
+        navigationController.syncStackForTesting()
+        #expect(navigationController.viewControllers == [listViewController, detailViewController])
+
+        let poppedViewController = navigationController.popDetailFromUserNavigationForTesting {
+            navigationController.syncStackForTesting()
+        }
+
+        #expect(poppedViewController === detailViewController)
+        #expect(model.selectedRequest == nil)
+        #expect(navigationController.viewControllers == [listViewController])
+    }
+
+    @Test
+    func compactContainerKeepsDetailAfterCancelledUserPop() async throws {
+        let context = makeContext()
+        let request = try #require(
+            await applyRequest(to: context, requestID: "1", url: "https://example.com/app.js")
+        )
+        let model = try await NetworkPanelModel.make(context: context)
+        let listViewController = NetworkListViewController(model: model)
+        let detailViewController = makeNetworkDetailViewController(model: model)
+        let navigationController = NetworkCompactNavigationController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+        model.selectRequest(request)
+        navigationController.syncStackForTesting()
+
+        navigationController.cancelDetailPopFromUserNavigationForTesting {
+            navigationController.syncStackForTesting()
+        }
+
+        #expect(model.selectedRequest === request)
+        #expect(navigationController.viewControllers == [listViewController, detailViewController])
+    }
+
+    @Test
+    func compactContainerConvergesToReplacementSelectionAfterUserPop() async throws {
+        let context = makeContext()
+        let firstRequest = try #require(
+            await applyRequest(to: context, requestID: "1", url: "https://example.com/first.js")
+        )
+        let secondRequest = try #require(
+            await applyRequest(to: context, requestID: "2", url: "https://example.com/second.js")
+        )
+        let model = try await NetworkPanelModel.make(context: context)
+        let listViewController = NetworkListViewController(model: model)
+        let detailViewController = makeNetworkDetailViewController(model: model)
+        let navigationController = NetworkCompactNavigationController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+        model.selectRequest(firstRequest)
+        navigationController.syncStackForTesting()
+
+        let poppedViewController = navigationController.popDetailFromUserNavigationForTesting {
+            model.selectRequest(secondRequest)
+            navigationController.syncStackForTesting()
+        }
+
+        #expect(poppedViewController === detailViewController)
+        #expect(model.selectedRequest === secondRequest)
+        #expect(navigationController.viewControllers == [listViewController, detailViewController])
+    }
+
+    @Test
     func compactContainerReleasesDetailMediaPreviewResourcesWhenDetailIsRemoved() async throws {
         let context = makeContext()
         let request = try #require(
