@@ -2661,34 +2661,35 @@ public final class WebInspectorModelContext {
         isolation: isolated (any Actor) = #isolation
     ) async throws -> NetworkBody {
         let body = request.responseBody
-        let page: WebInspectorTarget?
         do {
             try requireConfigured(.network)
             guard networkRequests.request(for: request.id) === request else {
                 throw WebInspectorModelError.staleModel
             }
-            if case .available = body.phase {
-                guard request.canFetchResponseBody else {
-                    throw WebInspectorModelError.commandRejected(
-                        method: "Network.getResponseBody",
-                        message: "The response body is not available for this request."
-                    )
-                }
-                page = try currentPageOrThrow()
-            } else {
-                page = nil
-            }
         } catch {
-            switch body.phase {
-            case .available, .fetching:
-                body.failResponseFetch(
-                    Self.responseBodyFailure(from: error),
-                    completionError: error
-                )
-            case .loaded, .failed:
-                break
-            }
+            failResponseBodyPreflight(body, with: error)
             throw error
+        }
+
+        let page: WebInspectorTarget?
+        if case .available = body.phase {
+            guard request.canFetchResponseBody else {
+                // A response that has not reached loadingFinished is not a
+                // terminal body failure. Keep the stable body retryable so a
+                // later caller can fetch it after the request finishes.
+                throw WebInspectorModelError.commandRejected(
+                    method: "Network.getResponseBody",
+                    message: "The response body is not available for this request."
+                )
+            }
+            do {
+                page = try currentPageOrThrow()
+            } catch {
+                failResponseBodyPreflight(body, with: error)
+                throw error
+            }
+        } else {
+            page = nil
         }
 
         let lease: NetworkBody.ResponseFetchLease
@@ -2776,17 +2777,45 @@ public final class WebInspectorModelContext {
         }
     }
 
-    private nonisolated static func responseBodyFailure(
+    private func failResponseBodyPreflight(
+        _ body: NetworkBody,
+        with error: any Error
+    ) {
+        guard let failure = Self.terminalResponseBodyFailure(from: error) else {
+            return
+        }
+        switch body.phase {
+        case .available, .fetching:
+            body.failResponseFetch(
+                failure,
+                completionError: error
+            )
+        case .loaded, .failed:
+            break
+        }
+    }
+
+    private nonisolated static func terminalResponseBodyFailure(
         from error: any Error
-    ) -> NetworkBody.Failure {
+    ) -> NetworkBody.Failure? {
         if let error = error as? WebInspectorModelError {
-            return .model(error)
+            switch error {
+            case .detached, .synchronizing, .commandRejected:
+                return nil
+            case .domainNotConfigured, .staleModel:
+                return .model(error)
+            }
         }
         if let error = error as? Failure {
             return .context(error)
         }
         if let error = error as? TransitionError {
-            return .transition(error)
+            switch error {
+            case .superseded:
+                return nil
+            case .closed:
+                return .transition(error)
+            }
         }
         if let error = error as? WebInspectorProxyError {
             return .proxy(error)

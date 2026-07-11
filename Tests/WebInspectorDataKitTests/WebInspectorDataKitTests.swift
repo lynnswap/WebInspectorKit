@@ -468,6 +468,89 @@ func responseBodyPreflightFailurePublishesTypedBodyFailure() async {
 
 @MainActor
 @Test
+func unfinishedResponseBodyPreflightRemainsRetryableAfterLoadingFinishes() async throws {
+    try await withAttachedModelContext(
+        configuration: .init(domains: [.network])
+    ) { fixture in
+        let requestID = Network.Request.ID("retryable-body-preflight")
+        try await fixture.runtime.wire.emitRaw(
+            .requestWillBeSent(
+                id: requestID,
+                request: Network.Request(
+                    id: requestID,
+                    url: "https://example.com/retryable-body-preflight",
+                    method: "GET"
+                ),
+                initiator: Network.Initiator(kind: "other"),
+                resourceType: .fetch,
+                redirectResponse: nil,
+                timestamp: 1
+            ),
+            target: fixture.target
+        )
+        try await fixture.runtime.wire.emitRaw(
+            .responseReceived(
+                id: requestID,
+                response: Network.Response(
+                    url: "https://example.com/retryable-body-preflight",
+                    status: 200,
+                    mimeType: "text/plain"
+                ),
+                resourceType: .fetch,
+                timestamp: 2
+            ),
+            target: fixture.target
+        )
+        try await waitUntil {
+            try fixture.context.networkRequest(
+                id: NetworkRequest.ID(requestID)
+            )?.state == .responded
+        }
+        let request = try #require(
+            try fixture.context.networkRequest(id: NetworkRequest.ID(requestID))
+        )
+        let body = request.responseBody
+
+        await #expect(throws: WebInspectorModelError.commandRejected(
+            method: "Network.getResponseBody",
+            message: "The response body is not available for this request."
+        )) {
+            _ = try await fixture.context.responseBody(for: request)
+        }
+        #expect(body.phase == .available)
+        #expect(fixture.runtime.wire.observations.commands.contains {
+            $0.method == "Network.getResponseBody"
+        } == false)
+
+        await fixture.runtime.wire.respond(
+            to: "Network.getResponseBody",
+            with: try rawNetworkBodyResult(
+                Network.Body(data: "loaded after finish", base64Encoded: false)
+            )
+        )
+        try await fixture.runtime.wire.emitRaw(
+            .loadingFinished(
+                id: requestID,
+                timestamp: 3,
+                sourceMapURL: nil,
+                metrics: nil
+            ),
+            target: fixture.target
+        )
+        try await waitUntil { request.state == .finished }
+
+        let loadedBody = try await fixture.context.responseBody(for: request)
+        #expect(loadedBody === body)
+        #expect(body.phase == .loaded)
+        #expect(body.text == "loaded after finish")
+        #expect(fixture.runtime.wire.observations.commands.filter {
+            $0.method == "Network.getResponseBody"
+        }.count == 1)
+    }
+}
+
+@MainActor
+@Test
 func loadingFailureTerminatesResponseBodyWithWebKitReason() {
     let context = WebInspectorModelContext.preview(
         configuration: .init(domains: [.network])
