@@ -2839,7 +2839,7 @@ struct NetworkDetailViewControllerTests {
 
         let evaluationCountBeforeInsert = listViewController.entryIDsEvaluationCountForTesting
         let snapshotApplyCountBeforeInsert = listViewController.snapshotApplyCountForTesting
-        let updateDeliveryCountBeforeInsert = listViewController.fetchedResultsUpdateDeliveryCountForTesting
+        let fetchedResultsRevisionBeforeInsert = model.requests.revision
         let secondProxyID = Network.Request.ID("2")
         await context.apply(.requestWillBeSent(
             id: secondProxyID,
@@ -2860,7 +2860,7 @@ struct NetworkDetailViewControllerTests {
         let didRenderInsert = await waitUntilListShowsEntries(
             [secondEntryID, firstEntryID],
             in: listViewController,
-            afterUpdateDeliveryCount: updateDeliveryCountBeforeInsert
+            afterFetchedResultsRevision: fetchedResultsRevisionBeforeInsert
         )
         #expect(didRenderInsert)
         #expect(listViewController.entryIDsEvaluationCountForTesting == evaluationCountBeforeInsert)
@@ -2889,14 +2889,14 @@ struct NetworkDetailViewControllerTests {
 
         let evaluationCountBeforeUpdate = listViewController.entryIDsEvaluationCountForTesting
         let snapshotApplyCountBeforeUpdate = listViewController.snapshotApplyCountForTesting
-        let updateDeliveryCountBeforeUpdate = listViewController.fetchedResultsUpdateDeliveryCountForTesting
+        let fetchedResultsRevisionBeforeUpdate = model.requests.revision
 
         model.setSearchText("does-not-match")
         await model.waitForQueryUpdates()
         let didRenderReset = await waitUntilListShowsEntries(
             [],
             in: listViewController,
-            afterUpdateDeliveryCount: updateDeliveryCountBeforeUpdate
+            afterFetchedResultsRevision: fetchedResultsRevisionBeforeUpdate
         )
 
         #expect(didRenderReset)
@@ -2924,14 +2924,13 @@ struct NetworkDetailViewControllerTests {
         #expect(listViewController.displayedEntryIDsForTesting.count == 1)
 
         let evaluationCountBeforeHiddenUpdate = listViewController.entryIDsEvaluationCountForTesting
-        let updateDeliveryCountBeforeHiddenUpdate = listViewController
-            .fetchedResultsUpdateDeliveryCountForTesting
+        let fetchedResultsRevisionBeforeHiddenUpdate = model.requests.revision
 
         listViewController.suspendRenderingForTesting()
         model.setSearchText("does-not-match")
         await model.waitForQueryUpdates()
-        #expect(await listViewController.waitForFetchedResultsUpdateDeliveryForTesting(
-            after: updateDeliveryCountBeforeHiddenUpdate
+        #expect(await listViewController.waitForFetchedResultsRevisionForTesting(
+            fetchedResultsRevisionBeforeHiddenUpdate + 1
         ))
 
         #expect(listViewController.entryIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
@@ -2961,8 +2960,7 @@ struct NetworkDetailViewControllerTests {
         #expect(listViewController.displayedEntryIDsForTesting == [try #require(context.networkRequestGroupID(containing: request.id))])
 
         let evaluationCountBeforeHiddenUpdate = listViewController.entryIDsEvaluationCountForTesting
-        let updateDeliveryCountBeforeHiddenUpdate = listViewController
-            .fetchedResultsUpdateDeliveryCountForTesting
+        let fetchedResultsRevisionBeforeHiddenUpdate = model.requests.revision
         listViewController.beginSnapshotApplyForTesting()
         listViewController.queueSnapshotUpdateForTesting(entryIDs: [])
         #expect(listViewController.hasPendingSnapshotUpdateForTesting)
@@ -2972,8 +2970,8 @@ struct NetworkDetailViewControllerTests {
 
         model.setSearchText("does-not-match")
         await model.waitForQueryUpdates()
-        #expect(await listViewController.waitForFetchedResultsUpdateDeliveryForTesting(
-            after: updateDeliveryCountBeforeHiddenUpdate
+        #expect(await listViewController.waitForFetchedResultsRevisionForTesting(
+            fetchedResultsRevisionBeforeHiddenUpdate + 1
         ))
         #expect(listViewController.hasPendingSnapshotUpdateForTesting == false)
         listViewController.finishSnapshotApplyForTesting()
@@ -3426,10 +3424,10 @@ struct NetworkDetailViewControllerTests {
     private func waitUntilListShowsEntries(
         _ entryIDs: [WebInspectorFetchSectionID],
         in viewController: NetworkListViewController,
-        afterUpdateDeliveryCount updateDeliveryCount: Int
+        afterFetchedResultsRevision fetchedResultsRevision: UInt64
     ) async -> Bool {
-        guard await viewController.waitForFetchedResultsUpdateDeliveryForTesting(
-            after: updateDeliveryCount
+        guard await viewController.waitForFetchedResultsRevisionForTesting(
+            fetchedResultsRevision + 1
         ) else {
             return false
         }

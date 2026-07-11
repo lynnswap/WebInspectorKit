@@ -860,10 +860,6 @@ extension NetworkListViewController {
         snapshotApplyCountStorageForTesting
     }
 
-    package var fetchedResultsUpdateDeliveryCountForTesting: Int {
-        fetchedResultsUpdateDeliveryCountStorageForTesting
-    }
-
     package var filterMenuBuildCountForTesting: Int {
         filterMenuBuildCountStorageForTesting
     }
@@ -964,7 +960,7 @@ extension NetworkListViewController {
         await waitForSnapshotUpdateCompletionForTesting()
     }
 
-    package func waitForFetchedResultsUpdateDeliveryForTesting(
+    private func waitForFetchedResultsUpdateDeliveryForTesting(
         after baselineCount: Int,
         timeout: Duration = .seconds(1)
     ) async -> Bool {
