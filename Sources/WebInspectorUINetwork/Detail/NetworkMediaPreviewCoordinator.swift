@@ -101,7 +101,10 @@ package final class NetworkMediaPreviewCoordinator {
 
         if previewKind == .hlsPlaylist {
             if body.role == .response,
-               let remoteURL = playableRemoteMediaURL(metadata?.url) {
+               let remoteURL = NetworkDisplay.MediaPreviewSupport.remoteHLSURL(
+                   mimeType: metadata?.mimeType,
+                   url: metadata?.url
+               ) {
                 return .remoteMovie(remoteURL)
             }
             if body.role == .request {
@@ -334,18 +337,6 @@ private struct NetworkMediaTemporaryFile {
 
     func matches(input: NetworkMediaPreviewInput) -> Bool {
         self.input == input
-    }
-}
-
-private func playableRemoteMediaURL(_ url: String?) -> URL? {
-    guard let url = url.flatMap(URL.init(string:)) else {
-        return nil
-    }
-    switch url.scheme?.lowercased() {
-    case "http", "https":
-        return url
-    default:
-        return nil
     }
 }
 

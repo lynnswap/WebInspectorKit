@@ -479,8 +479,13 @@ package final class NetworkDetailViewController: UIViewController {
             unbindResponseBodyFetchObservation()
             return
         }
-        bodyViewController.setSurface(bodySurface(in: request, for: role))
-        bindResponseBodyFetchObservationIfNeeded(for: request, role: role)
+        let surface = bodySurface(in: request, for: role)
+        bodyViewController.setSurface(surface)
+        bindResponseBodyFetchObservationIfNeeded(
+            for: request,
+            role: role,
+            metadata: surface.metadata
+        )
     }
 
     private func availablePreviewRoles(in request: NetworkRequest) -> [NetworkBody.Role] {
@@ -520,13 +525,21 @@ package final class NetworkDetailViewController: UIViewController {
 
     private func bindResponseBodyFetchObservationIfNeeded(
         for request: NetworkRequest,
-        role: NetworkBody.Role
+        role: NetworkBody.Role,
+        metadata: NetworkMediaPreviewMetadata?
     ) {
         guard isRenderingActive else {
             unbindResponseBodyFetchObservation()
             return
         }
         guard role == .response else {
+            unbindResponseBodyFetchObservation()
+            return
+        }
+        guard NetworkDisplay.MediaPreviewSupport.remoteHLSURL(
+            mimeType: metadata?.mimeType,
+            url: metadata?.url
+        ) == nil else {
             unbindResponseBodyFetchObservation()
             return
         }

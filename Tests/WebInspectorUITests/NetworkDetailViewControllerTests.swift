@@ -964,6 +964,44 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func remoteHLSPreviewShowsPlayerWithoutFetchingResponseBody() async throws {
+        try await withLiveNetworkContext { fixture in
+            let playlistURL = "https://media.example.com/live/master.m3u8"
+            let request = try #require(await applyRequest(
+                to: fixture.context,
+                requestID: "playlist",
+                url: playlistURL,
+                responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
+                responseMimeType: "application/vnd.apple.mpegurl",
+                resourceType: .media
+            ))
+            #expect(request.responseBody.phase == .available)
+            let model = try await NetworkPanelModel.make(context: fixture.context)
+            model.selectRequest(request)
+            let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
+            var playerCreationCount = 0
+            viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting { _ in
+                playerCreationCount += 1
+                return StubMoviePreviewPlayer()
+            }
+            let window = showInWindow(viewController)
+            defer { window.isHidden = true }
+
+            let didShowPlayer = await waitUntilRendered(in: viewController) {
+                viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting?.absoluteString
+                    == playlistURL
+            }
+
+            #expect(didShowPlayer)
+            #expect(playerCreationCount == 1)
+            #expect(request.responseBody.phase == .available)
+            #expect(fixture.wire.observations.commands.filter {
+                $0.method == "Network.getResponseBody"
+            }.isEmpty)
+        }
+    }
+
+    @Test
     func groupedPreviewFollowsNewerPlaylist() async throws {
         let context = makeContext()
         let nodeID = DOM.Node.ID("unplayed-video")
