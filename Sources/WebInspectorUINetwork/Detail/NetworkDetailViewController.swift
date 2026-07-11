@@ -353,11 +353,14 @@ package final class NetworkDetailViewController: UIViewController {
     }
 
     private func renderSelectedRequests(_ requests: [NetworkRequest]) {
-        guard isRenderingActive, let request = requests.first else {
+        guard isRenderingActive else {
             return
         }
         switch mode {
         case .preview:
+            guard let request = previewRequest(in: requests) else {
+                return
+            }
             renderPreviewSurface(selectedRequest: request)
         case .headers:
             renderHeadersSurface(selectedRequests: requests)
@@ -365,6 +368,7 @@ package final class NetworkDetailViewController: UIViewController {
     }
 
     private func renderPreviewSurface(selectedRequest request: NetworkRequest) {
+        observedRequest = request
         title = request.displayName
         showPreview()
         renderPreview(selectedRequest: request)
@@ -375,6 +379,7 @@ package final class NetworkDetailViewController: UIViewController {
         guard let representativeRequest = requests.first else {
             preconditionFailure("A selected Network entry must contain at least one request.")
         }
+        observedRequest = representativeRequest
         title = representativeRequest.displayName
         showHeaders()
         headersTextView.render(requests: requests)
@@ -605,6 +610,36 @@ package final class NetworkDetailViewController: UIViewController {
         headers.first { $0.key.caseInsensitiveCompare(name) == .orderedSame }?.value
     }
 
+    private func previewRequest(in requests: [NetworkRequest]) -> NetworkRequest? {
+        var latestPreviewableRequest: NetworkRequest?
+        for request in requests.reversed() where isPartialMediaRequest(request) == false {
+            guard let kind = responseMediaPreviewKind(for: request) else {
+                continue
+            }
+            if kind == .hlsPlaylist {
+                return request
+            }
+            if latestPreviewableRequest == nil {
+                latestPreviewableRequest = request
+            }
+        }
+        return latestPreviewableRequest ?? requests.first
+    }
+
+    private func responseMediaPreviewKind(
+        for request: NetworkRequest
+    ) -> NetworkDisplay.MediaPreviewKind? {
+        NetworkDisplay.MediaPreviewSupport.previewKind(
+            mimeType: mimeType(from: request.mimeType, headers: request.responseHeaders),
+            url: request.responseURL ?? request.url
+        )
+    }
+
+    private func isPartialMediaRequest(_ request: NetworkRequest) -> Bool {
+        request.status == 206
+            || headerValue(named: "content-range", in: request.responseHeaders) != nil
+    }
+
 }
 
 #if DEBUG
@@ -655,6 +690,10 @@ extension NetworkDetailViewController {
 
     var responseBodyFetchObservationDeliveryForTesting: PortableObservationTracking.Token? {
         responseBodyFetchObservationBinding.observationDelivery
+    }
+
+    var previewRequestIDForTesting: NetworkRequest.ID? {
+        observedRequest?.id
     }
 
     func isDetailModeEnabledForTesting(_ mode: NetworkDetailViewController.Mode) -> Bool {

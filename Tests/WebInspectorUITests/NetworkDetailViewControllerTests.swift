@@ -933,6 +933,148 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func hlsPreviewShowsPlayerImmediately() async throws {
+        let context = makeContext()
+        let playlistURL = "https://media.example.com/live/master.m3u8"
+        let request = try #require(await applyRequest(
+            to: context,
+            requestID: "playlist",
+            url: playlistURL,
+            responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
+            responseMimeType: "application/vnd.apple.mpegurl",
+            resourceType: .media
+        ))
+        applyResponseBody(to: context, request: request, body: "#EXTM3U")
+        let model = try await NetworkPanelModel.make(context: context)
+        model.selectRequest(request)
+        let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
+        var playerCreationCount = 0
+        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting { _ in
+            playerCreationCount += 1
+            return StubMoviePreviewPlayer()
+        }
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didShowPlayer = await waitUntilRendered(in: viewController) {
+            viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting?.absoluteString == playlistURL
+        }
+        #expect(didShowPlayer)
+        #expect(playerCreationCount == 1)
+    }
+
+    @Test
+    func groupedPreviewFollowsNewerPlaylist() async throws {
+        let context = makeContext()
+        let nodeID = DOM.Node.ID("unplayed-video")
+        let firstRequest = try #require(await applyRequest(
+            to: context,
+            requestID: "first-unplayed-playlist",
+            url: "https://media.example.com/first-unplayed.m3u8",
+            responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
+            responseMimeType: "application/vnd.apple.mpegurl",
+            resourceType: .media,
+            timestamp: 1,
+            initiatorNodeID: nodeID
+        ))
+        applyResponseBody(to: context, request: firstRequest, body: "#EXTM3U")
+        let model = try await NetworkPanelModel.make(context: context)
+        model.selectRequest(firstRequest)
+        let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
+        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting { _ in
+            StubMoviePreviewPlayer()
+        }
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didShowFirstRequest = await waitUntilRendered(in: viewController) {
+            viewController.previewRequestIDForTesting == firstRequest.id
+                && viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting?.absoluteString
+                    == "https://media.example.com/first-unplayed.m3u8"
+        }
+        #expect(didShowFirstRequest)
+
+        let secondRequest = try #require(await applyRequest(
+            to: context,
+            requestID: "second-unplayed-playlist",
+            url: "https://media.example.com/second-unplayed.m3u8",
+            responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
+            responseMimeType: "application/vnd.apple.mpegurl",
+            resourceType: .media,
+            timestamp: 2,
+            initiatorNodeID: nodeID
+        ))
+        applyResponseBody(to: context, request: secondRequest, body: "#EXTM3U")
+
+        let didFollowSecondRequest = await waitUntilRendered(in: viewController) {
+            model.selectedRequests.count == 2
+                && viewController.previewRequestIDForTesting == secondRequest.id
+                && viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting?.absoluteString
+                    == "https://media.example.com/second-unplayed.m3u8"
+        }
+        #expect(didFollowSecondRequest)
+    }
+
+    @Test
+    func groupedPreviewUsesResponseEvidenceToSkipPartialMedia() async throws {
+        let context = makeContext()
+        let nodeID = DOM.Node.ID("audio")
+        let fullRequest = try #require(await applyRequest(
+            to: context,
+            requestID: "full",
+            url: "https://media.example.com/full.mp4",
+            responseHeaders: ["content-type": "video/mp4"],
+            responseMimeType: "video/mp4",
+            resourceType: .media,
+            timestamp: 1,
+            initiatorNodeID: nodeID
+        ))
+        let partialRequest = try #require(await applyRequest(
+            to: context,
+            requestID: "partial",
+            url: "https://media.example.com/partial.mp4",
+            requestHeaders: ["range": "bytes=0-1023"],
+            responseHeaders: [
+                "content-type": "video/mp4",
+                "content-range": "bytes 0-1023/4096",
+            ],
+            responseMimeType: "video/mp4",
+            responseStatus: 206,
+            resourceType: .media,
+            timestamp: 3,
+            initiatorNodeID: nodeID
+        ))
+        let ignoredRangeRequest = try #require(await applyRequest(
+            to: context,
+            requestID: "ignored-range",
+            url: "https://media.example.com/ignored-range.mp4",
+            requestHeaders: ["range": "bytes=0-1023"],
+            responseHeaders: ["content-type": "video/mp4"],
+            responseMimeType: "video/mp4",
+            responseStatus: 200,
+            resourceType: .media,
+            timestamp: 2,
+            initiatorNodeID: nodeID
+        ))
+        applyResponseBody(to: context, request: fullRequest, body: "AAAA", base64Encoded: true)
+        applyResponseBody(to: context, request: ignoredRangeRequest, body: "AAAA", base64Encoded: true)
+        applyResponseBody(to: context, request: partialRequest, body: "AAAA", base64Encoded: true)
+        let model = try await NetworkPanelModel.make(context: context)
+        model.selectRequest(partialRequest)
+        let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
+        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting { _ in
+            StubMoviePreviewPlayer()
+        }
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didSelectCompleteResponse = await waitUntilRendered(in: viewController) {
+            viewController.previewRequestIDForTesting == ignoredRangeRequest.id
+        }
+        #expect(didSelectCompleteResponse)
+    }
+
+    @Test
     func mediaResponsePreviewReleasesPlayerAndTemporaryFileWhenShowingHeaders() async throws {
         let context = makeContext()
         let request = try #require(
@@ -2188,6 +2330,10 @@ struct NetworkDetailViewControllerTests {
         postData: String? = nil,
         responseHeaders: [String: String] = ["content-type": "text/javascript"],
         responseMimeType: String = "text/javascript",
+        responseStatus: Int = 200,
+        resourceType: Network.ResourceType = .script,
+        timestamp: Double = 1,
+        initiatorNodeID: DOM.Node.ID? = nil,
         finishes: Bool = true
     ) async -> NetworkRequest? {
         let requestID = Network.Request.ID(rawRequestID)
@@ -2201,10 +2347,10 @@ struct NetworkDetailViewControllerTests {
                     headers: requestHeaders,
                     postData: postData
                 ),
-                initiator: Network.Initiator(kind: "other"),
-                resourceType: .script,
+                initiator: Network.Initiator(kind: "other", nodeID: initiatorNodeID),
+                resourceType: resourceType,
                 redirectResponse: nil,
-                timestamp: 1
+                timestamp: timestamp
             )
         )
         await context.apply(
@@ -2212,22 +2358,22 @@ struct NetworkDetailViewControllerTests {
                 id: requestID,
                 response: Network.Response(
                     url: url,
-                    status: 200,
-                    statusText: "OK",
+                    status: responseStatus,
+                    statusText: responseStatus == 206 ? "Partial Content" : "OK",
                     mimeType: responseMimeType,
                     headers: responseHeaders,
                     source: Network.Source(rawValue: "network"),
                     requestHeaders: requestHeaders
                 ),
-                resourceType: .script,
-                timestamp: 2
+                resourceType: resourceType,
+                timestamp: timestamp + 0.1
             )
         )
         if finishes {
             await context.apply(
                 .loadingFinished(
                     id: requestID,
-                    timestamp: 3,
+                    timestamp: timestamp + 0.2,
                     sourceMapURL: nil,
                     metrics: nil
                 )
