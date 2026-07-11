@@ -257,6 +257,13 @@ func consoleConcreteQueryPublishesUpdatesPartialDeletionAndReplacementAtomically
     }
     #expect(repeatUpdate.newSnapshot == results.snapshot)
     #expect(repeatReconfigure == [warningID])
+    #expect(repeatUpdate.sectionChanges.isEmpty)
+    #expect(repeatUpdate.itemChanges == [
+        .update(
+            itemID: warningID,
+            indexPath: WebInspectorFetchedResultsIndexPath(section: 1, item: 0)
+        ),
+    ])
 
     _ = await store.apply(
         .messagesCleared(reason: Console.ClearReason(rawValue: "console-api")),

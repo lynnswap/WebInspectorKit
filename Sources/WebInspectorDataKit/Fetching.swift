@@ -197,21 +197,36 @@ public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel
 
         let resetsSource = projection.sourceEpoch != currentSourceEpoch
         let shouldReset = isReplacement || resetsSource
+        let visibleReconfigureIDs = projection.reconfigureItemIDs
+        let topologyIsUnchanged = shouldReset == false && state.snapshot == projection.snapshot
+        if topologyIsUnchanged, visibleReconfigureIDs.isEmpty {
+            state.querySourceEpoch = projection.sourceEpoch
+            state.querySequence = projection.sequence
+            return true
+        }
+        if topologyIsUnchanged {
+            // A content-only update keeps the resolved identity graph intact.
+            // Reuse it instead of rebuilding every model and section in the query.
+            publish(
+                items: state.items,
+                sections: state.sections,
+                modelsByID: state.modelsByID,
+                snapshot: state.snapshot,
+                queryGeneration: generation,
+                querySourceEpoch: projection.sourceEpoch,
+                querySequence: projection.sequence,
+                isReset: false,
+                topologyIsUnchanged: true,
+                updatedItemIDs: visibleReconfigureIDs
+            )
+            return true
+        }
+
         let resolved = resolve(
             projection.snapshot,
             reusing: resetsSource ? [:] : state.modelsByID,
             lookup: lookup
         )
-        let visibleReconfigureIDs = projection.reconfigureItemIDs.intersection(
-            projection.snapshot.itemIDs
-        )
-        if shouldReset == false,
-           state.snapshot == projection.snapshot,
-           visibleReconfigureIDs.isEmpty {
-            state.querySourceEpoch = projection.sourceEpoch
-            state.querySequence = projection.sequence
-            return true
-        }
         publish(
             items: resolved.items,
             sections: resolved.sections,
@@ -221,6 +236,7 @@ public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel
             querySourceEpoch: projection.sourceEpoch,
             querySequence: projection.sequence,
             isReset: shouldReset,
+            topologyIsUnchanged: false,
             updatedItemIDs: visibleReconfigureIDs
         )
         return true
@@ -292,12 +308,13 @@ public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel
         querySourceEpoch: UInt64,
         querySequence: UInt64,
         isReset: Bool,
+        topologyIsUnchanged: Bool,
         updatedItemIDs: Set<Model.ID>
     ) {
         let oldState = state
-        let reconfigureItemIDs = updatedItemIDs.intersection(snapshot.itemIDs)
+        let reconfigureItemIDs = updatedItemIDs
         guard isReset
-            || oldState.snapshot != snapshot
+            || topologyIsUnchanged == false
             || reconfigureItemIDs.isEmpty == false else {
             return
         }
@@ -311,11 +328,18 @@ public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel
                 itemChanges: []
             )
         } else {
-            transaction = WebInspectorFetchedResultsTransaction(
-                oldSnapshot: oldState.snapshot,
-                newSnapshot: snapshot,
-                updatedItemIDs: reconfigureItemIDs
-            )
+            if topologyIsUnchanged {
+                transaction = WebInspectorFetchedResultsTransaction(
+                    unchangedSnapshot: snapshot,
+                    updatedItemIDs: reconfigureItemIDs
+                )
+            } else {
+                transaction = WebInspectorFetchedResultsTransaction(
+                    oldSnapshot: oldState.snapshot,
+                    newSnapshot: snapshot,
+                    updatedItemIDs: reconfigureItemIDs
+                )
+            }
         }
 
         precondition(

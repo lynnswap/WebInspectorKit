@@ -162,6 +162,10 @@ public struct WebInspectorFetchedResultsTransaction<ItemID: Hashable & Sendable>
         newSnapshot: WebInspectorFetchedResultsSnapshot<ItemID>,
         updatedItemIDs: Set<ItemID> = []
     ) {
+        if oldSnapshot == newSnapshot {
+            self.init(unchangedSnapshot: newSnapshot, updatedItemIDs: updatedItemIDs)
+            return
+        }
         self.init(
             oldSnapshot: oldSnapshot,
             newSnapshot: newSnapshot,
@@ -169,6 +173,48 @@ public struct WebInspectorFetchedResultsTransaction<ItemID: Hashable & Sendable>
             sectionChanges: Self.sectionChanges(from: oldSnapshot, to: newSnapshot),
             itemChanges: Self.itemChanges(from: oldSnapshot, to: newSnapshot, updatedItemIDs: updatedItemIDs)
         )
+    }
+
+    init(
+        unchangedSnapshot snapshot: WebInspectorFetchedResultsSnapshot<ItemID>,
+        updatedItemIDs: Set<ItemID>
+    ) {
+        // The publisher already proved that identity, order, and section
+        // membership are unchanged, so only update positions are meaningful.
+        self.init(
+            oldSnapshot: snapshot,
+            newSnapshot: snapshot,
+            isReset: false,
+            sectionChanges: [],
+            itemChanges: Self.updateChanges(
+                in: snapshot,
+                updatedItemIDs: updatedItemIDs
+            )
+        )
+    }
+
+    private static func updateChanges(
+        in snapshot: WebInspectorFetchedResultsSnapshot<ItemID>,
+        updatedItemIDs: Set<ItemID>
+    ) -> [WebInspectorFetchedResultsItemChange<ItemID>] {
+        guard updatedItemIDs.isEmpty == false else {
+            return []
+        }
+        var changes: [WebInspectorFetchedResultsItemChange<ItemID>] = []
+        changes.reserveCapacity(updatedItemIDs.count)
+        for (sectionIndex, section) in snapshot.sections.enumerated() {
+            for (itemIndex, itemID) in section.itemIDs.enumerated()
+                where updatedItemIDs.contains(itemID) {
+                changes.append(.update(
+                    itemID: itemID,
+                    indexPath: WebInspectorFetchedResultsIndexPath(
+                        section: sectionIndex,
+                        item: itemIndex
+                    )
+                ))
+            }
+        }
+        return changes
     }
 
     private static func sectionChanges(
