@@ -13,18 +13,15 @@ package final class NetworkCompactNavigationController: UINavigationController, 
 
     private enum SelectionCommit {
         case none
-        case clearIfStillSelected(NetworkRequest.ID)
+        case clearIfStillSelected(NetworkPanelSelectionToken)
 
         @MainActor
         func apply(to model: NetworkPanelModel) {
             switch self {
             case .none:
                 return
-            case .clearIfStillSelected(let requestID):
-                guard model.selectedRequestID == requestID else {
-                    return
-                }
-                model.selectRequest(nil)
+            case .clearIfStillSelected(let token):
+                model.clearSelection(ifStillSelected: token)
             }
         }
     }
@@ -61,8 +58,8 @@ package final class NetworkCompactNavigationController: UINavigationController, 
         navigationBar.compactScrollEdgeAppearance = navigationBar.compactAppearance ?? navigationBar.standardAppearance
         webInspectorApplyNavigationControllerBackground(to: self)
         delegate = self
-        listViewController.setRequestSelectionAction { [weak model] request in
-            model?.selectRequest(request)
+        listViewController.setEntrySelectionAction { [weak model] entryID in
+            model?.selectEntry(entryID)
         }
     }
 
@@ -252,7 +249,7 @@ package final class NetworkCompactNavigationController: UINavigationController, 
 
     private func finishUntrackedDetailRemovalIfNeeded(shownTarget: StackTarget?) {
         guard shownTarget == .list,
-              model.selectedRequestID != nil else {
+              model.hasAvailableSelection else {
             return
         }
         commit(
@@ -273,7 +270,7 @@ package final class NetworkCompactNavigationController: UINavigationController, 
     }
 
     private func desiredStackTarget() -> StackTarget {
-        model.selectedRequest == nil ? .list : .detail
+        model.hasAvailableSelection ? .detail : .list
     }
 
     private func currentStackTarget() -> StackTarget {
@@ -291,10 +288,10 @@ package final class NetworkCompactNavigationController: UINavigationController, 
     }
 
     private func userPopSelectionCommit() -> SelectionCommit {
-        guard let selectedRequestID = model.selectedRequestID else {
+        guard let selectionToken = model.selectionToken else {
             return .none
         }
-        return .clearIfStillSelected(selectedRequestID)
+        return .clearIfStillSelected(selectionToken)
     }
 
     private func applyBackgroundFromTraits() {
@@ -320,8 +317,8 @@ extension NetworkCompactNavigationController {
 
     @discardableResult
     package func popDetailFromUserNavigationForTesting(
-        beforeTransitionCompletion: () -> Void = {}
-    ) -> UIViewController? {
+        beforeTransitionCompletion: @MainActor () async -> Void = {}
+    ) async -> UIViewController? {
         guard viewControllers.last === detailViewController else {
             return nil
         }
@@ -332,7 +329,7 @@ extension NetworkCompactNavigationController {
             selectionCommit: userPopSelectionCommit()
         )
         let poppedViewController = popViewController(animated: false)
-        beforeTransitionCompletion()
+        await beforeTransitionCompletion()
         _ = finishActiveTransitionIfNeeded(shownTarget: .list)
         performDeferredStackSyncIfNeeded()
         return poppedViewController

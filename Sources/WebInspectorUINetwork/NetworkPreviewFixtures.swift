@@ -25,7 +25,7 @@ package enum NetworkPreviewFixtures {
              .detailRequestAndResponseShort,
              .detailResponseOnlyLong,
              .detailRequestAndResponseLong:
-            model.selectRequest(model.displayRequests.first)
+            model.selectEntry(model.requests.snapshot.sections.first?.id)
         case .root, .rootLongTitle:
             break
         }

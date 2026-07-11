@@ -44,7 +44,7 @@ func displayRequestsApplySearchFilterAndNewestFirstOrder() async throws {
     model.setResourceFilter(.script, enabled: true)
     await model.waitForQueryUpdates()
 
-    #expect(model.displayRequests.map(\.id) == [scriptID])
+    #expect(model.requests.snapshot.itemIDs == [scriptID])
 }
 
 @Test
@@ -78,11 +78,12 @@ func rapidCriteriaChangesPublishOnlyTheLatestConcreteQuery() async throws {
         model.query == NetworkQuery(
             search: "app.js",
             resourceCategories: [.script],
-            sort: .requestTimeDescending
+            sort: .requestTimeDescending,
+            section: .initiatorNode
         )
     )
     #expect(model.appliedQueryRevision == model.queryRevision)
-    #expect(model.displayRequestIDs == [scriptID])
+    #expect(model.requests.snapshot.itemIDs == [scriptID])
 }
 
 @Test
@@ -107,7 +108,7 @@ func queryScheduledAfterClearWaitsForClearAndRemainsActive() async throws {
     #expect(try context.networkRequest(id: clearedRequestID) == nil)
     #expect(model.query.search == "new-endpoint")
     #expect(model.appliedQueryRevision == model.queryRevision)
-    #expect(model.displayRequestIDs.isEmpty)
+    #expect(model.requests.snapshot.itemIDs.isEmpty)
 
     let newRequestID = await applyRequest(
         to: context,
@@ -118,7 +119,7 @@ func queryScheduledAfterClearWaitsForClearAndRemainsActive() async throws {
         timestamp: 2
     )
 
-    #expect(model.displayRequestIDs == [newRequestID])
+    #expect(model.requests.snapshot.itemIDs == [newRequestID])
 }
 
 @Test
@@ -170,7 +171,7 @@ func clearAvailabilityUsesUnfilteredRequestsWhenFiltersHideEveryRequest() async 
     await model.waitForQueryUpdates()
 
     #expect(model.isEmpty)
-    #expect(model.displayRequestIDs.isEmpty)
+    #expect(model.requests.snapshot.itemIDs.isEmpty)
     #expect(model.hasClearableRequests)
 
     model.clearRequests()
@@ -195,13 +196,14 @@ func selectedRequestUsesUnfilteredContextWhenFiltersHideRequest() async throws {
     )
     let request = try #require(try context.networkRequest(id: requestID))
     let model = try await NetworkPanelModel.make(context: context)
+    let groupID = try #require(context.networkRequestGroupID(containing: requestID))
 
     model.selectRequest(request)
     model.setSearchText("does-not-match")
     await model.waitForQueryUpdates()
 
-    #expect(model.displayRequestIDs.isEmpty)
-    #expect(model.selectedRequestID == requestID)
+    #expect(model.requests.snapshot.itemIDs.isEmpty)
+    #expect(model.selectedEntryID == groupID)
     #expect(model.selectedRequest === request)
 }
 
@@ -220,6 +222,7 @@ func selectedRequestInvalidatesWhenUnfilteredRequestDisappears() async throws {
     let request = try #require(try context.networkRequest(id: requestID))
     let model = try await NetworkPanelModel.make(context: context)
     model.selectRequest(request)
+    let selectionToken = try #require(model.selectionToken)
     model.setSearchText("does-not-match")
     await model.waitForQueryUpdates()
     let observation = withPortableContinuousObservation { _ in
@@ -233,12 +236,13 @@ func selectedRequestInvalidatesWhenUnfilteredRequestDisappears() async throws {
         observation.cancel()
     }
 
-    #expect(model.displayRequestIDs.isEmpty)
+    #expect(model.requests.snapshot.itemIDs.isEmpty)
     #expect(model.selectedRequest === request)
 
     await context.clearNetworkRequests()
 
-    #expect(model.selectedRequestID == requestID)
+    #expect(model.selectionToken == selectionToken)
+    #expect(model.selectedEntryID == nil)
     #expect(model.selectedRequest == nil)
     #expect(await observedValues.waitUntilValue(true))
 }
@@ -306,7 +310,7 @@ func requestDisplayUsesEncodingFallbackForURLDerivedLabelsAndFilters() async thr
 
     model.setResourceFilter(.media, enabled: true)
     await model.waitForQueryUpdates()
-    #expect(model.displayRequestIDs == [invalidEscapeRequestID, spacedURLRequestID])
+    #expect(model.requests.snapshot.itemIDs == [invalidEscapeRequestID, spacedURLRequestID])
 }
 
 @Test
@@ -470,7 +474,7 @@ func mediaFilterIncludesPreviewableMediaResponses() async throws {
     model.setResourceFilter(.media, enabled: true)
     await model.waitForQueryUpdates()
 
-    #expect(model.displayRequests.map(\.id) == [
+    #expect(model.requests.snapshot.itemIDs == [
         headerMediaID,
         apngURLID,
         svgID,
@@ -554,7 +558,7 @@ func displayResourceFilterUpdatesWhenResponseMIMEBecomesPreviewable() async thro
     model.setResourceFilter(.media, enabled: true)
     await model.waitForQueryUpdates()
 
-    #expect(model.displayRequestIDs.isEmpty)
+    #expect(model.requests.snapshot.itemIDs.isEmpty)
 
     await applyResponseReceived(
         to: context,
@@ -564,7 +568,7 @@ func displayResourceFilterUpdatesWhenResponseMIMEBecomesPreviewable() async thro
         mimeType: "image/png",
         timestamp: 1.1
     )
-    #expect(model.displayRequestIDs == [requestID])
+    #expect(model.requests.snapshot.itemIDs == [requestID])
     let request = try #require(try context.networkRequest(id: requestID))
     #expect(request.displayResourceFilter(mediaPreviewClassifier: { mimeType, url in
         NetworkDisplay.MediaPreviewSupport.classification(mimeType: mimeType, url: url)
@@ -618,7 +622,7 @@ func displaySearchFieldsUpdateWhenRequestChanges() async throws {
 
     model.setSearchText("new-endpoint")
     await model.waitForQueryUpdates()
-    #expect(model.displayRequestIDs.isEmpty)
+    #expect(model.requests.snapshot.itemIDs.isEmpty)
 
     await applyRedirectRequest(
         to: context,
@@ -629,17 +633,17 @@ func displaySearchFieldsUpdateWhenRequestChanges() async throws {
         redirectURL: "https://api.example.com/old",
         timestamp: 2
     )
-    #expect(model.displayRequestIDs == [requestID])
+    #expect(model.requests.snapshot.itemIDs == [requestID])
     model.setSearchText("PATCH")
     await model.waitForQueryUpdates()
-    #expect(model.displayRequestIDs == [requestID])
+    #expect(model.requests.snapshot.itemIDs == [requestID])
     model.setSearchText("/old")
     await model.waitForQueryUpdates()
-    #expect(model.displayRequestIDs == [requestID])
+    #expect(model.requests.snapshot.itemIDs == [requestID])
 
     model.setSearchText("json")
     await model.waitForQueryUpdates()
-    #expect(model.displayRequestIDs.isEmpty)
+    #expect(model.requests.snapshot.itemIDs.isEmpty)
 
     await applyResponseReceived(
         to: context,
@@ -651,10 +655,10 @@ func displaySearchFieldsUpdateWhenRequestChanges() async throws {
         statusText: "Created",
         timestamp: 2.1
     )
-    #expect(model.displayRequestIDs == [requestID])
+    #expect(model.requests.snapshot.itemIDs == [requestID])
     model.setSearchText("Created")
     await model.waitForQueryUpdates()
-    #expect(model.displayRequestIDs == [requestID])
+    #expect(model.requests.snapshot.itemIDs == [requestID])
 }
 
 @Test
@@ -683,7 +687,7 @@ func requestFileTypeAndSearchUpdateWhenRawMIMETypeAppears() async throws {
     #expect(request.fileTypeLabel == "xhr")
     model.setSearchText("json")
     await model.waitForQueryUpdates()
-    #expect(model.displayRequestIDs.isEmpty)
+    #expect(model.requests.snapshot.itemIDs.isEmpty)
 
     await applyResponseReceived(
         to: context,
@@ -695,7 +699,7 @@ func requestFileTypeAndSearchUpdateWhenRawMIMETypeAppears() async throws {
         timestamp: 1.2
     )
     #expect(request.fileTypeLabel == "json")
-    #expect(model.displayRequestIDs == [requestID])
+    #expect(model.requests.snapshot.itemIDs == [requestID])
 }
 
 @Test
@@ -715,12 +719,12 @@ func displayRequestsIgnoreContentOnlyUpdatesDuringActiveFiltering() async throws
     model.setResourceFilter(.media, enabled: true)
     await model.waitForQueryUpdates()
 
-    #expect(model.displayRequestIDs == [requestID])
+    #expect(model.requests.snapshot.itemIDs == [requestID])
 
     await applyDataReceived(to: context, requestID: "1", dataLength: 1024, encodedDataLength: 512, timestamp: 2)
     await applyLoadingFinished(to: context, requestID: "1", timestamp: 3)
 
-    #expect(model.displayRequestIDs == [requestID])
+    #expect(model.requests.snapshot.itemIDs == [requestID])
 }
 
 @Test
@@ -747,11 +751,11 @@ func displayRequestsUpdateWhenCriteriaChanges() async throws {
     model.setSearchText("cdn")
     await model.waitForQueryUpdates()
 
-    #expect(model.displayRequestIDs.count == 2)
+    #expect(model.requests.snapshot.itemIDs.count == 2)
 
     model.setResourceFilter(.script, enabled: true)
     await model.waitForQueryUpdates()
-    #expect(model.displayRequestIDs == [scriptID])
+    #expect(model.requests.snapshot.itemIDs == [scriptID])
 }
 
 @Test
@@ -770,11 +774,11 @@ func displayRequestsClearAfterReset() async throws {
     model.setSearchText("cdn")
     await model.waitForQueryUpdates()
 
-    #expect(model.displayRequestIDs.count == 1)
+    #expect(model.requests.snapshot.itemIDs.count == 1)
 
     await context.clearNetworkRequests()
 
-    #expect(model.displayRequestIDs.isEmpty)
+    #expect(model.requests.snapshot.itemIDs.isEmpty)
 }
 
 @Test
@@ -801,10 +805,10 @@ func displayRequestsUpdateWhenResourceCategoryChanges() async throws {
     model.setResourceFilter(.media, enabled: true)
     await model.waitForQueryUpdates()
 
-    #expect(model.displayRequestIDs == [mediaID])
+    #expect(model.requests.snapshot.itemIDs == [mediaID])
 
     await applyDataReceived(to: context, requestID: "1", dataLength: 1024, encodedDataLength: 512, timestamp: 3)
-    #expect(model.displayRequestIDs == [mediaID])
+    #expect(model.requests.snapshot.itemIDs == [mediaID])
 
     await applyResponseReceived(
         to: context,
@@ -814,7 +818,7 @@ func displayRequestsUpdateWhenResourceCategoryChanges() async throws {
         mimeType: "video/mp4",
         timestamp: 4
     )
-    #expect(model.displayRequestIDs == [mediaID, jsonID])
+    #expect(model.requests.snapshot.itemIDs == [mediaID, jsonID])
 }
 
 @Test
@@ -831,17 +835,17 @@ func displayRequestIDsUseDataKitClassificationForMediaFiltering() async throws {
     )
     let model = try await NetworkPanelModel.make(context: context)
 
-    #expect(model.displayRequestIDs == [requestID])
+    #expect(model.requests.snapshot.itemIDs == [requestID])
     let request = try #require(try context.networkRequest(id: requestID))
     #expect(request.displayName == "clip.mp4")
 
     model.setSearchText("clip")
     await model.waitForQueryUpdates()
-    #expect(model.displayRequestIDs == [requestID])
+    #expect(model.requests.snapshot.itemIDs == [requestID])
 
     model.setResourceFilter(.media, enabled: true)
     await model.waitForQueryUpdates()
-    #expect(model.displayRequestIDs == [requestID])
+    #expect(model.requests.snapshot.itemIDs == [requestID])
 }
 
 @Test
@@ -877,12 +881,15 @@ func requestsWithTheSameInitiatorNodeProjectAsOneEntry() async throws {
     )
 
     let model = try await NetworkPanelModel.make(context: context)
+    let groupedEntryID = try #require(context.networkRequestGroupID(containing: playlistID))
+    let unrelatedEntryID = try #require(context.networkRequestGroupID(containing: unrelatedID))
 
-    #expect(model.displayRequestIDs == [unrelatedID, playlistID])
-    #expect(model.displayEntries.last?.requests.map(\.id) == [playlistID, segmentID])
+    #expect(model.requests.snapshot.sectionIDs == [unrelatedEntryID, groupedEntryID])
+    #expect(model.requests.snapshot.itemIDs == [unrelatedID, playlistID, segmentID])
+    #expect(model.requests[section: groupedEntryID]?.items.map(\.id) == [playlistID, segmentID])
 
     model.selectRequest(try context.networkRequest(id: segmentID))
-    #expect(model.selectedRequestID == playlistID)
+    #expect(model.selectedEntryID == groupedEntryID)
     #expect(model.selectedRequests.map(\.id) == [playlistID, segmentID])
 }
 
@@ -910,12 +917,128 @@ func filteringOneGroupMemberKeepsTheWholeEntryForDetail() async throws {
         initiatorNodeID: nodeID
     )
     let model = try await NetworkPanelModel.make(context: context)
+    let groupedEntryID = try #require(context.networkRequestGroupID(containing: playlistID))
 
     model.setSearchText("unique-segment")
     await model.waitForQueryUpdates()
 
-    #expect(model.displayRequestIDs == [playlistID])
-    #expect(model.displayEntries.first?.requests.map(\.id) == [playlistID, segmentID])
+    #expect(model.requests.snapshot.sectionIDs == [groupedEntryID])
+    #expect(model.requests.snapshot.itemIDs == [playlistID, segmentID])
+    #expect(model.requests[section: groupedEntryID]?.items.map(\.id) == [playlistID, segmentID])
+}
+
+@Test
+@MainActor
+func filteredOutSelectionReceivesLaterMembersFromTheUnfilteredStore() async throws {
+    let context = makeContext()
+    let nodeID = DOM.Node.ID("video-selection")
+    let playlistID = await applyRequest(
+        to: context,
+        requestID: "playlist",
+        url: "https://media.example.com/master.m3u8",
+        resourceType: .media,
+        mimeType: "application/vnd.apple.mpegurl",
+        timestamp: 1,
+        initiatorNodeID: nodeID
+    )
+    let model = try await NetworkPanelModel.make(context: context)
+    let groupID = try #require(context.networkRequestGroupID(containing: playlistID))
+    model.selectEntry(groupID)
+    let selectionToken = try #require(model.selectionToken)
+
+    model.setSearchText("does-not-match")
+    await model.waitForQueryUpdates()
+    #expect(model.requests.snapshot.sections.isEmpty)
+    #expect(model.selectedRequests.map(\.id) == [playlistID])
+
+    let segmentID = await applyRequest(
+        to: context,
+        requestID: "segment",
+        url: "https://media.example.com/segment-1.ts",
+        resourceType: .media,
+        mimeType: "video/mp2t",
+        timestamp: 2,
+        initiatorNodeID: nodeID
+    )
+
+    #expect(model.requests.snapshot.sections.isEmpty)
+    #expect(model.selectionToken == selectionToken)
+    #expect(model.selectedEntryID == groupID)
+    #expect(model.selectedRequests.map(\.id) == [playlistID, segmentID])
+}
+
+@Test
+@MainActor
+func reseedingTheSameRawGroupCreatesANewSelectionEpoch() async throws {
+    let context = makeContext()
+    let nodeID = DOM.Node.ID("stable-node")
+    let firstID = await applyRequest(
+        to: context,
+        requestID: "first",
+        url: "https://media.example.com/first.ts",
+        resourceType: .media,
+        mimeType: "video/mp2t",
+        timestamp: 1,
+        initiatorNodeID: nodeID
+    )
+    let model = try await NetworkPanelModel.make(context: context)
+    model.selectRequest(try context.networkRequest(id: firstID))
+    let oldToken = try #require(model.selectionToken)
+
+    await context.clearNetworkRequests()
+    #expect(model.selectedEntryID == nil)
+
+    let replacementID = await applyRequest(
+        to: context,
+        requestID: "replacement",
+        url: "https://media.example.com/replacement.ts",
+        resourceType: .media,
+        mimeType: "video/mp2t",
+        timestamp: 2,
+        initiatorNodeID: nodeID
+    )
+    let replacementGroupID = try #require(context.networkRequestGroupID(containing: replacementID))
+    model.selectEntry(replacementGroupID)
+    let replacementToken = try #require(model.selectionToken)
+
+    #expect(replacementToken.groupID == oldToken.groupID)
+    #expect(replacementToken.sourceEpoch != oldToken.sourceEpoch)
+    #expect(replacementToken != oldToken)
+
+    model.clearSelection(ifStillSelected: oldToken)
+    #expect(model.selectionToken == replacementToken)
+    #expect(model.selectedEntryID == replacementGroupID)
+}
+
+@Test
+@MainActor
+func thousandMemberGroupRemainsOneEntryWithStoreBackedDetailMembers() async throws {
+    let context = makeContext()
+    let nodeID = DOM.Node.ID("large-media-group")
+    var requestIDs: [NetworkRequest.ID] = []
+    requestIDs.reserveCapacity(1_000)
+    for index in 0..<1_000 {
+        requestIDs.append(context.seedNetworkRequest(
+            requestID: "segment-\(index)",
+            url: "https://media.example.com/segment-\(index).ts",
+            resourceTypeRawValue: "Media",
+            responseMIMEType: "video/mp2t",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            initiator: Network.Initiator(kind: "other", nodeID: nodeID),
+            timestamp: Double(index)
+        ))
+    }
+    let model = try await NetworkPanelModel.make(context: context)
+    let groupID = try #require(context.networkRequestGroupID(containing: requestIDs[0]))
+
+    #expect(model.requests.snapshot.sectionIDs == [groupID])
+    #expect(model.requests[section: groupID]?.items.count == 1_000)
+    #expect(context.networkRequestGroup(id: groupID)?.items.count == 1_000)
+
+    model.selectEntry(groupID)
+    #expect(model.selectedRequests.count == 1_000)
+    #expect(model.selectedRequests.map(\.id) == requestIDs)
 }
 
 @Test
@@ -938,10 +1061,10 @@ func clearRequestsClearsSelectionButPreservesDisplayCriteria() async throws {
     model.clearRequests()
     await model.waitForQueryUpdates()
 
-    #expect(model.selectedRequestID == nil)
+    #expect(model.selectionToken == nil)
     #expect(model.searchText == "cdn")
     #expect(model.activeResourceFilters == [.script])
-    #expect(model.displayRequests.isEmpty)
+    #expect(model.requests.snapshot.sections.isEmpty)
     #expect(try context.networkRequest(id: requestID) == nil)
 }
 

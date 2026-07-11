@@ -673,7 +673,7 @@ struct ParentContainerTests {
         let model = try await NetworkPanelModel.make(context: session.model)
 
         #expect(try session.model.rootDOMNode?.nodeName == "#document")
-        #expect(model.displayRequests.count >= 2)
+        #expect(model.requests.snapshot.sections.count >= 2)
     }
 
     @Test

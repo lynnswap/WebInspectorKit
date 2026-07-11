@@ -141,16 +141,16 @@ struct NetworkDetailViewControllerTests {
 
         viewController.loadViewIfNeeded()
 
-        #expect(viewController.displayRequestIDsEvaluationCountForTesting == 0)
-        #expect(viewController.displayedRequestIDsForTesting.isEmpty)
+        #expect(viewController.entryIDsEvaluationCountForTesting == 0)
+        #expect(viewController.displayedEntryIDsForTesting.isEmpty)
 
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
         await viewController.flushPendingSnapshotUpdateForTesting()
 
-        #expect(viewController.displayedRequestIDsForTesting == model.displayRequestIDs)
-        #expect(viewController.displayRequestIDsEvaluationCountForTesting == 1)
+        #expect(viewController.displayedEntryIDsForTesting == model.requests.snapshot.sectionIDs)
+        #expect(viewController.entryIDsEvaluationCountForTesting == 1)
     }
 
     @Test
@@ -1054,6 +1054,58 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func filteredOutDetailSelectionRendersLaterMembersFromTheSameGroup() async throws {
+        let context = makeContext()
+        let nodeID = DOM.Node.ID("filtered-detail-video")
+        let playlist = try #require(await applyRequest(
+            to: context,
+            requestID: "playlist",
+            url: "https://media.example.com/master.m3u8",
+            responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
+            responseMimeType: "application/vnd.apple.mpegurl",
+            resourceType: .media,
+            timestamp: 1,
+            initiatorNodeID: nodeID
+        ))
+        let model = try await NetworkPanelModel.make(context: context)
+        model.selectRequest(playlist)
+        let viewController = makeNetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.headersTextViewForTesting.renderedTextForTesting.contains("master.m3u8")
+        })
+
+        model.setSearchText("does-not-match")
+        await model.waitForQueryUpdates()
+        #expect(model.requests.snapshot.sections.isEmpty)
+
+        let segmentProxyID = Network.Request.ID("segment")
+        await context.apply(.requestWillBeSent(
+            id: segmentProxyID,
+            request: Network.Request(
+                id: segmentProxyID,
+                url: "https://media.example.com/segment-1.ts",
+                method: "GET"
+            ),
+            initiator: Network.Initiator(kind: "other", nodeID: nodeID),
+            resourceType: .media,
+            redirectResponse: nil,
+            timestamp: 2
+        ))
+        _ = try #require(context.registeredRequest(forProxyID: segmentProxyID))
+
+        let didRenderLaterMember = await waitUntilRendered(in: viewController) {
+            let text = viewController.headersTextViewForTesting.renderedTextForTesting
+            return model.selectedRequests.count == 2
+                && text.contains("master.m3u8")
+                && text.contains("segment-1.ts")
+        }
+        #expect(didRenderLaterMember)
+        #expect(model.requests.snapshot.sections.isEmpty)
+    }
+
+    @Test
     func groupedPreviewUsesResponseEvidenceToSkipPartialMedia() async throws {
         let context = makeContext()
         let nodeID = DOM.Node.ID("audio")
@@ -1939,7 +1991,7 @@ struct NetworkDetailViewControllerTests {
         defer { window.isHidden = true }
 
         await listViewController.flushPendingSnapshotUpdateForTesting()
-        #expect(listViewController.displayedRequestIDsForTesting.count == 1)
+        #expect(listViewController.displayedEntryIDsForTesting.count == 1)
 
         selectListItem(at: IndexPath(item: 0, section: 0), in: listViewController)
         let didPush = await waitUntilNavigationStackSynced(in: navigationController) {
@@ -1948,9 +2000,7 @@ struct NetworkDetailViewControllerTests {
         #expect(didPush)
         await waitForNavigationTransitionToFinish(in: navigationController)
 
-        let poppedViewController = withUIKitAnimationsDisabled {
-            navigationController.popDetailFromUserNavigationForTesting()
-        }
+        let poppedViewController = await navigationController.popDetailFromUserNavigationForTesting()
         #expect(poppedViewController === detailViewController)
         let didReturnToList = await waitUntilNavigationStackSynced(in: navigationController) {
             navigationController.viewControllers == [listViewController]
@@ -1984,7 +2034,7 @@ struct NetworkDetailViewControllerTests {
         navigationController.syncStackForTesting()
         #expect(navigationController.viewControllers == [listViewController, detailViewController])
 
-        let poppedViewController = navigationController.popDetailFromUserNavigationForTesting {
+        let poppedViewController = await navigationController.popDetailFromUserNavigationForTesting {
             navigationController.syncStackForTesting()
         }
 
@@ -2038,13 +2088,63 @@ struct NetworkDetailViewControllerTests {
         model.selectRequest(firstRequest)
         navigationController.syncStackForTesting()
 
-        let poppedViewController = navigationController.popDetailFromUserNavigationForTesting {
+        let poppedViewController = await navigationController.popDetailFromUserNavigationForTesting {
             model.selectRequest(secondRequest)
             navigationController.syncStackForTesting()
         }
 
         #expect(poppedViewController === detailViewController)
         #expect(model.selectedRequest === secondRequest)
+        #expect(navigationController.viewControllers == [listViewController, detailViewController])
+    }
+
+    @Test
+    func compactUserPopDoesNotClearSameGroupSelectionFromANewerSourceEpoch() async throws {
+        let context = makeContext()
+        let nodeID = DOM.Node.ID("stable-media-node")
+        let firstRequest = try #require(await applyRequest(
+            to: context,
+            requestID: "first",
+            url: "https://media.example.com/first.ts",
+            resourceType: .media,
+            initiatorNodeID: nodeID
+        ))
+        let model = try await NetworkPanelModel.make(context: context)
+        let listViewController = NetworkListViewController(model: model)
+        let detailViewController = makeNetworkDetailViewController(model: model)
+        let navigationController = NetworkCompactNavigationController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+        model.selectRequest(firstRequest)
+        let oldToken = try #require(model.selectionToken)
+        navigationController.syncStackForTesting()
+
+        var capturedReplacementToken: NetworkPanelSelectionToken?
+        let poppedViewController = await navigationController.popDetailFromUserNavigationForTesting {
+            await context.clearNetworkRequests()
+            guard let replacementRequest = await applyRequest(
+                to: context,
+                requestID: "replacement",
+                url: "https://media.example.com/replacement.ts",
+                resourceType: .media,
+                timestamp: 2,
+                initiatorNodeID: nodeID
+            ) else {
+                Issue.record("Expected a replacement request")
+                return
+            }
+            model.selectRequest(replacementRequest)
+            capturedReplacementToken = model.selectionToken
+            navigationController.syncStackForTesting()
+        }
+
+        let replacementToken = try #require(capturedReplacementToken)
+        #expect(poppedViewController === detailViewController)
+        #expect(replacementToken.groupID == oldToken.groupID)
+        #expect(replacementToken.sourceEpoch != oldToken.sourceEpoch)
+        #expect(model.selectionToken == replacementToken)
         #expect(navigationController.viewControllers == [listViewController, detailViewController])
     }
 
@@ -2121,6 +2221,7 @@ struct NetworkDetailViewControllerTests {
         defer { window.isHidden = true }
 
         model.selectRequest(request)
+        let selectionToken = try #require(model.selectionToken)
         let didPush = await waitUntilNavigationStackSynced(in: navigationController) {
             navigationController.viewControllers.last === detailViewController
         }
@@ -2130,13 +2231,217 @@ struct NetworkDetailViewControllerTests {
         await withUIKitAnimationsDisabled {
             await context.clearNetworkRequests()
         }
-        #expect(model.selectedRequestID == request.id)
+        #expect(model.selectionToken == selectionToken)
+        #expect(model.selectedEntryID == nil)
         #expect(model.selectedRequest == nil)
 
         let didPop = await waitUntilNavigationStackSynced(in: navigationController) {
             navigationController.viewControllers == [listViewController]
         }
         #expect(didPop)
+    }
+
+    @Test
+    func pendingListUpdatesKeepLatestTopologyAndUnionDirtyEntries() async throws {
+        let model = try await NetworkPanelModel.make(context: makeContext())
+        let listViewController = NetworkListViewController(model: model)
+        let window = showInWindow(listViewController, makeVisible: true)
+        defer { window.isHidden = true }
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+
+        let first: WebInspectorFetchSectionID = "first"
+        let second: WebInspectorFetchSectionID = "second"
+        listViewController.beginSnapshotApplyForTesting()
+        listViewController.queueSnapshotUpdateForTesting(
+            entryIDs: [first],
+            reconfigureEntryIDs: [first]
+        )
+        listViewController.queueSnapshotUpdateForTesting(
+            entryIDs: [second],
+            reconfigureEntryIDs: [first, second],
+            requiresFullReconfigure: true
+        )
+        listViewController.queueSnapshotUpdateForTesting(
+            entryIDs: [first],
+            reconfigureEntryIDs: [first]
+        )
+
+        #expect(listViewController.pendingRowsForTesting == [first])
+        #expect(listViewController.pendingReconfigureEntryIDsForTesting == [first, second])
+        #expect(listViewController.pendingRequiresFullReconfigureForTesting)
+
+        listViewController.finishSnapshotApplyForTesting()
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+        #expect(listViewController.displayedEntryIDsForTesting == [first])
+        #expect(listViewController.displayedUIKitSectionCountForTesting == 1)
+    }
+
+    @Test
+    func suspendedListKeepsPendingProjectionUntilResumeWithoutFullReload() async throws {
+        let model = try await NetworkPanelModel.make(context: makeContext())
+        let listViewController = NetworkListViewController(model: model)
+        let window = showInWindow(listViewController, makeVisible: true)
+        defer { window.isHidden = true }
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+
+        let entryID: WebInspectorFetchSectionID = "pending"
+        let evaluationCount = listViewController.entryIDsEvaluationCountForTesting
+        listViewController.beginSnapshotApplyForTesting()
+        listViewController.queueSnapshotUpdateForTesting(entryIDs: [entryID])
+        listViewController.suspendRenderingForTesting()
+        listViewController.finishSnapshotApplyForTesting()
+
+        #expect(listViewController.hasPendingSnapshotUpdateForTesting)
+        #expect(listViewController.entryIDsEvaluationCountForTesting == evaluationCount)
+
+        listViewController.resumeRenderingForTesting()
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+        #expect(listViewController.displayedEntryIDsForTesting == [entryID])
+        #expect(listViewController.entryIDsEvaluationCountForTesting == evaluationCount)
+    }
+
+    @Test
+    func sectionReducerHandlesNontrivialMultipleMoveOrder() async throws {
+        let model = try await NetworkPanelModel.make(context: makeContext())
+        let listViewController = NetworkListViewController(model: model)
+        let old: [WebInspectorFetchSectionID] = ["0", "1", "2", "3"]
+        let new: [WebInspectorFetchSectionID] = ["2", "1", "3", "0"]
+
+        let reduced = listViewController.reduceSectionChangesForTesting(
+            oldEntryIDs: old,
+            newEntryIDs: new,
+            changes: [
+                .move(sectionID: "2", from: 2, to: 0),
+                .move(sectionID: "3", from: 3, to: 2),
+                .move(sectionID: "0", from: 0, to: 3),
+            ]
+        )
+
+        #expect(reduced == new)
+    }
+
+    @Test
+    func sectionReducerHandlesInsertDeleteAndMultipleMovesTogether() async throws {
+        let model = try await NetworkPanelModel.make(context: makeContext())
+        let listViewController = NetworkListViewController(model: model)
+        let old: [WebInspectorFetchSectionID] = ["0", "1", "2", "3"]
+        let new: [WebInspectorFetchSectionID] = ["2", "4", "1", "0"]
+
+        let reduced = listViewController.reduceSectionChangesForTesting(
+            oldEntryIDs: old,
+            newEntryIDs: new,
+            changes: [
+                .delete(sectionID: "3", index: 3),
+                .insert(sectionID: "4", index: 1),
+                .move(sectionID: "2", from: 2, to: 0),
+                .move(sectionID: "1", from: 1, to: 2),
+                .move(sectionID: "0", from: 0, to: 3),
+            ]
+        )
+
+        #expect(reduced == new)
+    }
+
+    @Test
+    func insertingSameGroupMemberReconfiguresOnlyItsSingleRow() async throws {
+        let context = makeContext()
+        let nodeID = DOM.Node.ID("video")
+        let firstRequest = try #require(await applyRequest(
+            to: context,
+            requestID: "playlist",
+            url: "https://media.example.com/master.m3u8",
+            responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
+            responseMimeType: "application/vnd.apple.mpegurl",
+            resourceType: .media,
+            timestamp: 1,
+            initiatorNodeID: nodeID
+        ))
+        let model = try await NetworkPanelModel.make(context: context)
+        let groupID = try #require(context.networkRequestGroupID(containing: firstRequest.id))
+        let listViewController = NetworkListViewController(model: model)
+        let window = showInWindow(listViewController, makeVisible: true)
+        defer { window.isHidden = true }
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+
+        #expect(listViewController.displayedEntryIDsForTesting == [groupID])
+        #expect(listViewController.displayedUIKitSectionCountForTesting == 1)
+        let evaluationCount = listViewController.entryIDsEvaluationCountForTesting
+        let applyCount = listViewController.snapshotApplyCountForTesting
+        let deliveryCount = listViewController.fetchedResultsUpdateDeliveryCountForTesting
+
+        let segmentProxyID = Network.Request.ID("segment")
+        await context.apply(.requestWillBeSent(
+            id: segmentProxyID,
+            request: Network.Request(
+                id: segmentProxyID,
+                url: "https://media.example.com/segment-1.ts",
+                method: "GET"
+            ),
+            initiator: Network.Initiator(kind: "other", nodeID: nodeID),
+            resourceType: .media,
+            redirectResponse: nil,
+            timestamp: 2
+        ))
+        _ = try #require(context.registeredRequest(forProxyID: segmentProxyID))
+
+        #expect(await waitUntilListShowsEntries(
+            [groupID],
+            in: listViewController,
+            afterUpdateDeliveryCount: deliveryCount
+        ))
+        #expect(listViewController.entryIDsEvaluationCountForTesting == evaluationCount)
+        #expect(listViewController.snapshotApplyCountForTesting == applyCount + 1)
+        #expect(listViewController.lastAppliedReconfigureEntryIDsForTesting == [groupID])
+
+        listViewController.collectionViewForTesting.layoutIfNeeded()
+        let cell = try #require(listViewController.networkListCellForTesting(
+            at: IndexPath(item: 0, section: 0)
+        ))
+        #expect(cell.fileTypeLabelForTesting?.hasSuffix("×2") == true)
+    }
+
+    @Test
+    func thousandMemberGroupUsesOneListRowAndRendersEveryDetailEntry() async throws {
+        let context = makeContext()
+        let nodeID = DOM.Node.ID("large-media-group")
+        for index in 0..<1_000 {
+            context.seedNetworkRequest(
+                requestID: "segment-\(index)",
+                url: "https://media.example.com/segment-\(index).ts",
+                resourceTypeRawValue: "Media",
+                responseMIMEType: "video/mp2t",
+                responseStatus: 200,
+                responseStatusText: "OK",
+                initiator: Network.Initiator(kind: "other", nodeID: nodeID),
+                timestamp: Double(index)
+            )
+        }
+        let model = try await NetworkPanelModel.make(context: context)
+        let groupID = try #require(model.requests.snapshot.sectionIDs.first)
+        let listViewController = NetworkListViewController(model: model)
+        let listWindow = showInWindow(listViewController, makeVisible: true)
+        defer { listWindow.isHidden = true }
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+
+        #expect(listViewController.displayedEntryIDsForTesting == [groupID])
+        #expect(listViewController.displayedUIKitSectionCountForTesting == 1)
+        listViewController.collectionViewForTesting.layoutIfNeeded()
+        let cell = try #require(listViewController.networkListCellForTesting(
+            at: IndexPath(item: 0, section: 0)
+        ))
+        #expect(cell.fileTypeLabelForTesting?.hasSuffix("×1000") == true)
+
+        model.selectEntry(groupID)
+        let detailViewController = makeNetworkDetailViewController(model: model)
+        let detailWindow = showInWindow(detailViewController)
+        defer { detailWindow.isHidden = true }
+        let didRenderAllMembers = await waitUntilRendered(in: detailViewController) {
+            let text = detailViewController.headersTextViewForTesting.renderedTextForTesting
+            return model.selectedRequests.count == 1_000
+                && text.contains("segment-0.ts")
+                && text.contains("segment-999.ts")
+        }
+        #expect(didRenderAllMembers)
     }
 
     @Test
@@ -2153,24 +2458,35 @@ struct NetworkDetailViewControllerTests {
         defer { window.isHidden = true }
 
         await listViewController.flushPendingSnapshotUpdateForTesting()
-        #expect(listViewController.displayedRequestIDsForTesting == [firstRequest.id])
+        #expect(listViewController.displayedEntryIDsForTesting == [try #require(context.networkRequestGroupID(containing: firstRequest.id))])
 
-        let evaluationCountBeforeInsert = listViewController.displayRequestIDsEvaluationCountForTesting
+        let evaluationCountBeforeInsert = listViewController.entryIDsEvaluationCountForTesting
         let snapshotApplyCountBeforeInsert = listViewController.snapshotApplyCountForTesting
         let updateDeliveryCountBeforeInsert = listViewController.fetchedResultsUpdateDeliveryCountForTesting
-        let secondRequest = try #require(await applyRequest(
-            to: context,
-            requestID: "2",
-            url: "https://example.com/second.js"
+        let secondProxyID = Network.Request.ID("2")
+        await context.apply(.requestWillBeSent(
+            id: secondProxyID,
+            request: Network.Request(
+                id: secondProxyID,
+                url: "https://example.com/second.js",
+                method: "GET"
+            ),
+            initiator: Network.Initiator(kind: "other"),
+            resourceType: .script,
+            redirectResponse: nil,
+            timestamp: 2
         ))
+        let secondRequest = try #require(context.registeredRequest(forProxyID: secondProxyID))
+        let secondEntryID = try #require(context.networkRequestGroupID(containing: secondRequest.id))
+        let firstEntryID = try #require(context.networkRequestGroupID(containing: firstRequest.id))
 
-        let didRenderInsert = await waitUntilListShows(
-            [secondRequest.id, firstRequest.id],
+        let didRenderInsert = await waitUntilListShowsEntries(
+            [secondEntryID, firstEntryID],
             in: listViewController,
             afterUpdateDeliveryCount: updateDeliveryCountBeforeInsert
         )
         #expect(didRenderInsert)
-        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeInsert)
+        #expect(listViewController.entryIDsEvaluationCountForTesting == evaluationCountBeforeInsert)
         #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeInsert + 1)
     }
 
@@ -2192,23 +2508,24 @@ struct NetworkDetailViewControllerTests {
         defer { window.isHidden = true }
 
         await listViewController.flushPendingSnapshotUpdateForTesting()
-        #expect(listViewController.displayedRequestIDsForTesting.count == 1)
+        #expect(listViewController.displayedEntryIDsForTesting.count == 1)
 
-        let evaluationCountBeforeUpdate = listViewController.displayRequestIDsEvaluationCountForTesting
+        let evaluationCountBeforeUpdate = listViewController.entryIDsEvaluationCountForTesting
         let snapshotApplyCountBeforeUpdate = listViewController.snapshotApplyCountForTesting
         let updateDeliveryCountBeforeUpdate = listViewController.fetchedResultsUpdateDeliveryCountForTesting
 
         model.setSearchText("does-not-match")
-        let didRenderReset = await waitUntilListShows(
+        await model.waitForQueryUpdates()
+        let didRenderReset = await waitUntilListShowsEntries(
             [],
             in: listViewController,
             afterUpdateDeliveryCount: updateDeliveryCountBeforeUpdate
         )
 
         #expect(didRenderReset)
-        #expect(model.displayRequestIDs.isEmpty)
-        #expect(listViewController.displayedRequestIDsForTesting.isEmpty)
-        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeUpdate)
+        #expect(model.requests.snapshot.sectionIDs.isEmpty)
+        #expect(listViewController.displayedEntryIDsForTesting.isEmpty)
+        #expect(listViewController.entryIDsEvaluationCountForTesting == evaluationCountBeforeUpdate)
         #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeUpdate + 1)
     }
 
@@ -2227,25 +2544,26 @@ struct NetworkDetailViewControllerTests {
         let window = showInWindow(listViewController)
         defer { window.isHidden = true }
         await listViewController.flushPendingSnapshotUpdateForTesting()
-        #expect(listViewController.displayedRequestIDsForTesting.count == 1)
+        #expect(listViewController.displayedEntryIDsForTesting.count == 1)
 
-        let evaluationCountBeforeHiddenUpdate = listViewController.displayRequestIDsEvaluationCountForTesting
+        let evaluationCountBeforeHiddenUpdate = listViewController.entryIDsEvaluationCountForTesting
         let updateDeliveryCountBeforeHiddenUpdate = listViewController
             .fetchedResultsUpdateDeliveryCountForTesting
 
         listViewController.suspendRenderingForTesting()
         model.setSearchText("does-not-match")
+        await model.waitForQueryUpdates()
         #expect(await listViewController.waitForFetchedResultsUpdateDeliveryForTesting(
             after: updateDeliveryCountBeforeHiddenUpdate
         ))
 
-        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
-        #expect(listViewController.displayedRequestIDsForTesting.count == 1)
+        #expect(listViewController.entryIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
+        #expect(listViewController.displayedEntryIDsForTesting.count == 1)
 
         listViewController.resumeRenderingForTesting()
         await listViewController.flushPendingSnapshotUpdateForTesting()
-        #expect(listViewController.displayedRequestIDsForTesting.isEmpty)
-        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate + 1)
+        #expect(listViewController.displayedEntryIDsForTesting.isEmpty)
+        #expect(listViewController.entryIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate + 1)
     }
 
     @Test
@@ -2263,36 +2581,38 @@ struct NetworkDetailViewControllerTests {
         let window = showInWindow(listViewController)
         defer { window.isHidden = true }
         await listViewController.flushPendingSnapshotUpdateForTesting()
-        #expect(listViewController.displayedRequestIDsForTesting == [request.id])
+        #expect(listViewController.displayedEntryIDsForTesting == [try #require(context.networkRequestGroupID(containing: request.id))])
 
-        let evaluationCountBeforeHiddenUpdate = listViewController.displayRequestIDsEvaluationCountForTesting
+        let evaluationCountBeforeHiddenUpdate = listViewController.entryIDsEvaluationCountForTesting
         let updateDeliveryCountBeforeHiddenUpdate = listViewController
             .fetchedResultsUpdateDeliveryCountForTesting
-        listViewController.beginSnapshotApplyForTesting(requestIDs: [request.id])
-        listViewController.queueSnapshotUpdateForTesting(requestIDs: [])
+        listViewController.beginSnapshotApplyForTesting()
+        listViewController.queueSnapshotUpdateForTesting(entryIDs: [])
         #expect(listViewController.hasPendingSnapshotUpdateForTesting)
 
         listViewController.suspendRenderingForTesting()
-        #expect(listViewController.hasPendingSnapshotUpdateForTesting == false)
+        #expect(listViewController.hasPendingSnapshotUpdateForTesting)
 
         model.setSearchText("does-not-match")
+        await model.waitForQueryUpdates()
         #expect(await listViewController.waitForFetchedResultsUpdateDeliveryForTesting(
             after: updateDeliveryCountBeforeHiddenUpdate
         ))
-        listViewController.finishSnapshotApplyForTesting(requestIDs: [request.id])
+        #expect(listViewController.hasPendingSnapshotUpdateForTesting == false)
+        listViewController.finishSnapshotApplyForTesting()
         await listViewController.flushPendingSnapshotUpdateForTesting()
 
-        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
-        #expect(listViewController.displayedRequestIDsForTesting == [request.id])
+        #expect(listViewController.entryIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
+        #expect(listViewController.displayedEntryIDsForTesting == [try #require(context.networkRequestGroupID(containing: request.id))])
 
         listViewController.resumeRenderingForTesting()
         await listViewController.flushPendingSnapshotUpdateForTesting()
-        #expect(listViewController.displayedRequestIDsForTesting.isEmpty)
-        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate + 1)
+        #expect(listViewController.displayedEntryIDsForTesting.isEmpty)
+        #expect(listViewController.entryIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate + 1)
     }
 
     @Test
-    func hiddenFilteredListSkipsSnapshotReloadWhenRowsRemainVisible() async throws {
+    func hiddenFilteredListReloadsOnceEvenWhenRowsRemainVisible() async throws {
         let context = makeContext()
         let request = try #require(await applyRequest(
             to: context,
@@ -2308,40 +2628,45 @@ struct NetworkDetailViewControllerTests {
         listViewController.loadViewIfNeeded()
         listViewController.resumeRenderingForTesting()
         await listViewController.flushPendingSnapshotUpdateForTesting()
-        #expect(listViewController.displayedRequestIDsForTesting == [request.id])
+        #expect(listViewController.displayedEntryIDsForTesting == [try #require(context.networkRequestGroupID(containing: request.id))])
 
-        let evaluationCountBeforeHiddenUpdate = listViewController.displayRequestIDsEvaluationCountForTesting
+        let evaluationCountBeforeHiddenUpdate = listViewController.entryIDsEvaluationCountForTesting
         let snapshotApplyCountBeforeHiddenUpdate = listViewController.snapshotApplyCountForTesting
-
         listViewController.suspendRenderingForTesting()
         await applyResponseReceived(
             to: context,
             requestID: "1",
             url: request.url,
-            responseHeaders: ["content-type": "image/png"],
-            responseMimeType: "image/png",
+            responseHeaders: [
+                "content-type": "video/mp4",
+                "x-hidden-update": "true",
+            ],
+            responseMimeType: "video/mp4",
             timestamp: 4
         )
+        #expect(await listViewController.waitForFetchedResultsRevisionForTesting(
+            model.requests.revision
+        ))
 
-        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
+        #expect(listViewController.entryIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
         #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeHiddenUpdate)
-        #expect(listViewController.displayedRequestIDsForTesting == [request.id])
+        #expect(listViewController.displayedEntryIDsForTesting == [try #require(context.networkRequestGroupID(containing: request.id))])
 
         listViewController.resumeRenderingForTesting()
 
-        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
-        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeHiddenUpdate)
-        #expect(listViewController.displayedRequestIDsForTesting == [request.id])
+        #expect(listViewController.entryIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate + 1)
+        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeHiddenUpdate + 1)
+        #expect(listViewController.displayedEntryIDsForTesting == [try #require(context.networkRequestGroupID(containing: request.id))])
 
         await listViewController.flushPendingSnapshotUpdateForTesting()
 
-        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
-        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeHiddenUpdate)
-        #expect(listViewController.displayedRequestIDsForTesting == [request.id])
+        #expect(listViewController.entryIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate + 1)
+        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeHiddenUpdate + 1)
+        #expect(listViewController.displayedEntryIDsForTesting == [try #require(context.networkRequestGroupID(containing: request.id))])
     }
 
     @Test
-    func networkListCellSuspendsBoundRenderingUntilReactivated() async throws {
+    func networkListCellRendersOnlyWhenConfigured() async throws {
         let context = makeContext()
         let request = try #require(await applyRequest(
             to: context,
@@ -2351,12 +2676,8 @@ struct NetworkDetailViewControllerTests {
             responseMimeType: "video/mp4"
         ))
         let cell = NetworkListCell(frame: CGRect(x: 0, y: 0, width: 390, height: 44))
-        cell.bind(request: request, renderingActive: true)
+        cell.configure(requests: [request])
         #expect(cell.fileTypeLabelForTesting == "mp4")
-        #expect(cell.hasActiveRequestObservationForTesting)
-
-        cell.setRenderingActive(false)
-        #expect(cell.hasActiveRequestObservationForTesting == false)
 
         await applyResponseReceived(
             to: context,
@@ -2369,9 +2690,8 @@ struct NetworkDetailViewControllerTests {
 
         #expect(cell.fileTypeLabelForTesting == "mp4")
 
-        cell.setRenderingActive(true)
+        cell.configure(requests: [request])
 
-        #expect(cell.hasActiveRequestObservationForTesting)
         #expect(cell.fileTypeLabelForTesting == "css")
     }
 
@@ -2708,8 +3028,8 @@ struct NetworkDetailViewControllerTests {
         return await waitUntilRendered(in: viewController, condition)
     }
 
-    private func waitUntilListShows(
-        _ requestIDs: [NetworkRequest.ID],
+    private func waitUntilListShowsEntries(
+        _ entryIDs: [WebInspectorFetchSectionID],
         in viewController: NetworkListViewController,
         afterUpdateDeliveryCount updateDeliveryCount: Int
     ) async -> Bool {
@@ -2719,7 +3039,7 @@ struct NetworkDetailViewControllerTests {
             return false
         }
         await viewController.flushPendingSnapshotUpdateForTesting()
-        return viewController.displayedRequestIDsForTesting == requestIDs
+        return viewController.displayedEntryIDsForTesting == entryIDs
     }
 
     private func waitUntilMediaPreviewPrepared(

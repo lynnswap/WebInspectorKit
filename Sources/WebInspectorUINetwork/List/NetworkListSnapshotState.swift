@@ -1,37 +1,33 @@
 #if canImport(UIKit)
-import WebInspectorUIBase
-import WebInspectorDataKit
-
 extension NetworkListViewController {
-    @MainActor
-    struct SnapshotRows: Equatable {
-        let requestIDs: [NetworkRequest.ID]
-
-        init(requestIDs: [NetworkRequest.ID]) {
-            precondition(
-                requestIDs.count == Set(requestIDs).count,
-                "Duplicate row IDs detected in NetworkListViewController"
-            )
-            self.requestIDs = requestIDs
-        }
-    }
-}
-
-extension NetworkListViewController {
-    @MainActor
     struct SnapshotState {
-        private(set) var applyingRows: NetworkListViewController.SnapshotRows?
+        private(set) var applyingGeneration: UInt64?
+        private var nextGeneration: UInt64 = 0
 
         var isApplying: Bool {
-            applyingRows != nil
+            applyingGeneration != nil
         }
 
-        mutating func beginApplying(_ rows: NetworkListViewController.SnapshotRows) {
-            applyingRows = rows
+        mutating func beginApplying() -> UInt64 {
+            precondition(
+                applyingGeneration == nil,
+                "Network list cannot start a second snapshot apply before completion."
+            )
+            precondition(
+                nextGeneration < .max,
+                "Network list snapshot apply generation overflowed."
+            )
+            nextGeneration += 1
+            applyingGeneration = nextGeneration
+            return nextGeneration
         }
 
-        mutating func finishApplying(_ rows: NetworkListViewController.SnapshotRows) {
-            applyingRows = nil
+        mutating func finishApplying(generation: UInt64) {
+            precondition(
+                applyingGeneration == generation,
+                "Network list snapshot completion must match the active apply generation."
+            )
+            applyingGeneration = nil
         }
     }
 }

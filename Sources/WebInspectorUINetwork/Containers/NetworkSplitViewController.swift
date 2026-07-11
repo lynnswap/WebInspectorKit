@@ -20,8 +20,8 @@ package final class NetworkSplitViewController: UISplitViewController {
             hidesNavigationBar: false
         )
         super.init(style: .doubleColumn)
-        listViewController.setRequestSelectionAction { [weak model] request in
-            model?.selectRequest(request)
+        listViewController.setEntrySelectionAction { [weak model] entryID in
+            model?.selectEntry(entryID)
         }
         configureSplitViewLayout()
     }
@@ -117,8 +117,10 @@ private func makeNetworkSplitPreviewController(
 ) -> UIViewController {
     NetworkPreviewFixtures.makeViewController(mode: .detail) { model in
         if let selectedDisplayName,
-           let request = model.displayRequests.first(where: { $0.displayName == selectedDisplayName }) {
-            model.selectRequest(request)
+           let entry = model.requests.sections.first(where: {
+               $0.items.first?.displayName == selectedDisplayName
+           }) {
+            model.selectEntry(entry.id)
         }
         return NetworkCompactNavigationController(
             model: model,
