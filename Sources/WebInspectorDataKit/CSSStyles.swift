@@ -23,6 +23,143 @@ private struct CSSPropertyInspectorBaseline: Equatable {
     }
 }
 
+private struct InspectorBaselineName: Hashable {
+    var styleID: CSS.Style.ID
+    var propertyName: String
+}
+
+/// Context-owned edit history for backend style declarations. `CSS.Style.ID`
+/// already carries the target scope added by ProxyKit, while the current-page
+/// scope is retired by document reset. Stylesheet rule IDs are shared by every
+/// DOM node matched by that rule, so node-owned `CSSStyles` resources must
+/// consult one baseline owner.
+final class CSSInspectorBaselineStore {
+    private var baselines: [CSSStyleProperty.ID: CSSPropertyInspectorBaseline] = [:]
+
+    func reset() {
+        baselines.removeAll()
+    }
+
+    func reset(targetID: WebInspectorTarget.ID) {
+        baselines = baselines.filter { _, baseline in
+            baseline.styleID.targetScopeRawValue != targetID.rawValue
+        }
+    }
+
+    func recordIfNeeded(
+        propertyID: CSSStyleProperty.ID,
+        styleID: CSS.Style.ID,
+        property: CSS.Property
+    ) {
+        guard baselines[propertyID] == nil else {
+            return
+        }
+        baselines[propertyID] = CSSPropertyInspectorBaseline(
+            styleID: styleID,
+            property: property
+        )
+    }
+
+    func reconcile(
+        styleIDs: Set<CSS.Style.ID>,
+        incomingSections: [CSSStyleSection]
+    ) {
+        guard styleIDs.isEmpty == false else {
+            return
+        }
+
+        let incomingPropertiesByStyleID = cssPropertiesByStyleID(in: incomingSections)
+        let baselineNameCounts = Dictionary(
+            grouping: baselines.values,
+            by: { baseline in
+                InspectorBaselineName(
+                    styleID: baseline.styleID,
+                    propertyName: baseline.name
+                )
+            }
+        ).mapValues(\.count)
+        var reconciledBaselines: [CSSStyleProperty.ID: CSSPropertyInspectorBaseline] = [:]
+
+        for (propertyID, baseline) in baselines {
+            guard styleIDs.contains(baseline.styleID) else {
+                reconciledBaselines[propertyID] = baseline
+                continue
+            }
+            let name = InspectorBaselineName(
+                styleID: baseline.styleID,
+                propertyName: baseline.name
+            )
+            guard baselineNameCounts[name] == 1,
+                  let incomingProperties = incomingPropertiesByStyleID[baseline.styleID] else {
+                continue
+            }
+            let matchingProperties = incomingProperties.filter { $0.name == baseline.name }
+            guard matchingProperties.count == 1,
+                  let incomingProperty = matchingProperties.first else {
+                continue
+            }
+            reconciledBaselines[incomingProperty.id] = baseline
+        }
+        baselines = reconciledBaselines
+    }
+
+    func applyingBaselines(
+        to style: CSS.Style,
+        clearsRestoredBaselines: Bool = false
+    ) -> CSS.Style {
+        guard baselines.isEmpty == false else {
+            return style
+        }
+        var style = style
+        style.properties = style.properties.map { property in
+            let propertyID = CSSStyleProperty.ID(property.id)
+            guard let baseline = baselines[propertyID],
+                  baseline.name == property.name else {
+                return property
+            }
+            let isModified = CSSPropertyInspectorBaseline(
+                styleID: style.id,
+                property: property
+            ) != baseline
+            if isModified == false, clearsRestoredBaselines {
+                baselines[propertyID] = nil
+            }
+            return CSS.Property(
+                id: property.id,
+                name: property.name,
+                value: property.value,
+                priority: property.priority,
+                text: property.text,
+                parsedOk: property.parsedOk,
+                status: property.status,
+                implicit: property.implicit,
+                range: property.range,
+                isEditable: property.isEditable,
+                isModifiedByInspector: isModified
+            )
+        }
+        return style
+    }
+}
+
+private func cssPropertiesByStyleID(
+    in sections: [CSSStyleSection]
+) -> [CSS.Style.ID: [CSSStyleProperty]] {
+    var result: [CSS.Style.ID: [CSSStyleProperty]] = [:]
+    for section in sections {
+        let styleID = section.proxyStyle.id
+        if let existing = result[styleID] {
+            precondition(
+                existing.map(\.name) == section.style.properties.map(\.name),
+                "Sections sharing a CSS style must agree on declaration topology."
+            )
+        } else {
+            result[styleID] = section.style.properties
+        }
+    }
+    return result
+}
+
 private actor CSSStylesOperationGate {
     private struct Waiter {
         var continuation: CheckedContinuation<Void, any Error>
@@ -136,7 +273,8 @@ public final class CSSStyles: WebInspectorPersistentModel {
     public private(set) var computedProperties: [CSSComputedProperty]
 
     @ObservationIgnored weak var modelContext: WebInspectorModelContext?
-    @ObservationIgnored private var inspectorBaselines: [CSSStyleProperty.ID: CSSPropertyInspectorBaseline]
+    @ObservationIgnored private let inspectorBaselineStore: CSSInspectorBaselineStore
+    @ObservationIgnored private var hasCompletedLoad: Bool
     @ObservationIgnored private let operationGate = CSSStylesOperationGate()
 
     init(nodeID: DOMNode.ID, modelContext: WebInspectorModelContext) {
@@ -144,7 +282,8 @@ public final class CSSStyles: WebInspectorPersistentModel {
         phase = .loading
         sections = []
         computedProperties = []
-        inspectorBaselines = [:]
+        inspectorBaselineStore = modelContext.cssInspectorBaselineStore
+        hasCompletedLoad = false
         self.modelContext = modelContext
     }
 
@@ -158,13 +297,11 @@ public final class CSSStyles: WebInspectorPersistentModel {
         computedProperties: [CSS.ComputedProperty]
     ) {
         let rawSections = CSSStyleSectionBuilder.makeSections(matched: matchedStyles, inline: inlineStyles)
-        invalidateInspectorBaselines(
-            for: styleIDsWithChangedPropertyTopology(in: rawSections)
-        )
         let incomingSections = rawSections
-            .map { section($0, replacingStyleWith: applyingInspectorBaselines(to: $0.proxyStyle)) }
+            .map { section($0, replacingStyleWith: inspectorBaselineStore.applyingBaselines(to: $0.proxyStyle)) }
         sections = reconciledSections(incomingSections)
         self.computedProperties = computedProperties.map(CSSComputedProperty.init)
+        hasCompletedLoad = true
         phase = .loaded
     }
 
@@ -175,15 +312,19 @@ public final class CSSStyles: WebInspectorPersistentModel {
     func markUnavailable() {
         sections = []
         computedProperties = []
-        inspectorBaselines = [:]
+        hasCompletedLoad = false
         phase = .unavailable
     }
 
     func fail(_ error: WebInspectorProxyError) {
         sections = []
         computedProperties = []
-        inspectorBaselines = [:]
+        hasCompletedLoad = false
         phase = .failed(error)
+    }
+
+    func cancelLoading() {
+        phase = hasCompletedLoad ? .needsRefresh : .unavailable
     }
 
     /// Synchronous validation for a property toggle: returns the backend
@@ -264,9 +405,9 @@ public final class CSSStyles: WebInspectorPersistentModel {
             .first { $0.id == propertyID }
         for index in sections.indices where sections[index].proxyStyle.id == result.id {
             let section = sections[index]
-            if inspectorBaselines[propertyID] == nil,
-               let property = section.proxyStyle.properties.first(where: { $0.id == propertyID.proxyID }) {
-                inspectorBaselines[propertyID] = CSSPropertyInspectorBaseline(
+            if let property = section.proxyStyle.properties.first(where: { $0.id == propertyID.proxyID }) {
+                inspectorBaselineStore.recordIfNeeded(
+                    propertyID: propertyID,
                     styleID: section.proxyStyle.id,
                     property: property
                 )
@@ -283,11 +424,18 @@ public final class CSSStyles: WebInspectorPersistentModel {
             didRewriteSection = true
         }
         if didRewriteSection {
-            invalidateInspectorBaselines(
-                for: styleIDsWithChangedPropertyTopology(in: updatedSections)
+            inspectorBaselineStore.reconcile(
+                styleIDs: styleIDsWithChangedPropertyTopology(in: updatedSections),
+                incomingSections: updatedSections
             )
             let normalizedSections = updatedSections.map {
-                section($0, replacingStyleWith: applyingInspectorBaselines(to: $0.proxyStyle))
+                section(
+                    $0,
+                    replacingStyleWith: inspectorBaselineStore.applyingBaselines(
+                        to: $0.proxyStyle,
+                        clearsRestoredBaselines: true
+                    )
+                )
             }
             sections = reconciledSections(
                 normalizedSections,
@@ -310,8 +458,16 @@ public final class CSSStyles: WebInspectorPersistentModel {
             return output
         } catch {
             await operationGate.release()
+            recoverLoadingPhaseAfterCancellation(error)
             throw error
         }
+    }
+
+    private func recoverLoadingPhaseAfterCancellation(_ error: any Error) {
+        guard error is CancellationError, phase == .loading else {
+            return
+        }
+        cancelLoading()
     }
 
     private func locateProperty(_ property: CSSStyleProperty) -> (sectionIndex: Int, propertyIndex: Int)? {
@@ -413,31 +569,10 @@ public final class CSSStyles: WebInspectorPersistentModel {
         })
     }
 
-    private func invalidateInspectorBaselines(for styleIDs: Set<CSS.Style.ID>) {
-        guard styleIDs.isEmpty == false else {
-            return
-        }
-        inspectorBaselines = inspectorBaselines.filter { _, baseline in
-            styleIDs.contains(baseline.styleID) == false
-        }
-    }
-
     private func propertiesByStyleID(
         in sections: [CSSStyleSection]
     ) -> [CSS.Style.ID: [CSSStyleProperty]] {
-        var result: [CSS.Style.ID: [CSSStyleProperty]] = [:]
-        for section in sections {
-            let styleID = section.proxyStyle.id
-            if let existing = result[styleID] {
-                precondition(
-                    existing.map(\.name) == section.style.properties.map(\.name),
-                    "Sections sharing a CSS style must agree on declaration topology."
-                )
-            } else {
-                result[styleID] = section.style.properties
-            }
-        }
-        return result
+        cssPropertiesByStyleID(in: sections)
     }
 
     private func hasEqualDeclarationContent(
@@ -456,37 +591,4 @@ public final class CSSStyles: WebInspectorPersistentModel {
             && lhs.isModifiedByInspector == rhs.isModifiedByInspector
     }
 
-    private func applyingInspectorBaselines(to style: CSS.Style) -> CSS.Style {
-        guard inspectorBaselines.isEmpty == false else {
-            return style
-        }
-        var style = style
-        style.properties = style.properties.map { property in
-            let propertyID = CSSStyleProperty.ID(property.id)
-            guard let baseline = inspectorBaselines[propertyID] else {
-                return property
-            }
-            let isModified = CSSPropertyInspectorBaseline(
-                styleID: style.id,
-                property: property
-            ) != baseline
-            if isModified == false {
-                inspectorBaselines[propertyID] = nil
-            }
-            return CSS.Property(
-                id: property.id,
-                name: property.name,
-                value: property.value,
-                priority: property.priority,
-                text: property.text,
-                parsedOk: property.parsedOk,
-                status: property.status,
-                implicit: property.implicit,
-                range: property.range,
-                isEditable: property.isEditable,
-                isModifiedByInspector: isModified
-            )
-        }
-        return style
-    }
 }

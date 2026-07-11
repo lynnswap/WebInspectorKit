@@ -1385,12 +1385,40 @@ continuity. Setters compare the incoming field before writing, so an accepted
 toggle publishes changes only from the affected declaration and unchanged
 sibling properties do not emit Observation invalidations.
 
+Inspector edit baselines are context-owned style state, not selected-node or
+positional-ID state. Every node-specific `CSSStyles` resource consults the same
+store using WebKit's target-scoped style ID, so a shared stylesheet rule keeps
+the same modified declarations when inspected through another matching DOM
+node. This follows Web Inspector's `CSSManager` ownership of modified styles by
+style ID. When a style's topology changes, a baseline follows its declaration
+to the new raw property ID only when both the recorded and incoming
+`(style ID, property name)` are unique. This preserves modified highlighting
+across shorthand expansion such as `inset` producing implicit longhands, while
+ambiguous duplicate declarations fail closed instead of attributing an edit to
+the wrong row. Only a successful inspector mutation may reconcile declaration
+topology or retire a baseline after returning to its original value; ordinary
+load responses are projections and cannot overwrite shared edit history. A
+main-document reset clears the whole context-owned baseline store, while child
+frame invalidation and target retirement clear only that target's scoped
+baselines.
+
 The UIKit property row observes its property directly. Its switch state,
 declaration text, modified background, and accessibility value update through
 that observation while the cell and property identities remain stable. A
 submitted mutation sets `isMutationPending` only on the submitted property, so
 only that switch becomes temporarily unavailable. Other declaration switches
 keep their declaration-specific enabled state.
+
+The selected-style observation callback is a dependency-sampling boundary, not
+the render pass. It reads the selected node's `elementStyles`, resource phase,
+section topology, and the property fields that determine CSS-variable row
+visibility, then coalesces rendering onto the next MainActor turn. Individual
+visible rows observe their own remaining property content. The deferred render
+reads the latest resource state after Observation has installed replacement
+tracking. Consequently, a `.loaded` commit arriving while the preceding
+`.loading` or `.needsRefresh` callback is running cannot be lost behind the
+empty placeholder. Selection/reuse generations cancel obsolete scheduled
+renders without introducing mirror state.
 
 The diffable collection snapshot is a topology artifact. It changes only when
 section/property membership or order changes (including selection replacement);

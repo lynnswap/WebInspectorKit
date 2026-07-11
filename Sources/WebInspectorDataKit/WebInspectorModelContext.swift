@@ -458,6 +458,7 @@ public final class WebInspectorModelContext {
     public private(set) var attachmentGeneration: UInt64
     public private(set) var pageGeneration: PageGeneration?
 
+    @ObservationIgnored let cssInspectorBaselineStore: CSSInspectorBaselineStore
     @ObservationIgnored private let domState: DOMStateStore
     @ObservationIgnored private let runtimeState: RuntimeStateStore
     @ObservationIgnored private let networkRequests: NetworkRequestStore
@@ -524,6 +525,7 @@ public final class WebInspectorModelContext {
 
     public init(configuration: Configuration = .init()) {
         configuredDomains = configuration.domains
+        cssInspectorBaselineStore = CSSInspectorBaselineStore()
         domState = DOMStateStore()
         runtimeState = RuntimeStateStore()
         networkRequests = NetworkRequestStore()
@@ -1248,9 +1250,7 @@ public final class WebInspectorModelContext {
     private func prepareSemanticReset(
     ) -> ReducerWork {
         domState.advanceDocumentEpoch()
-        applyDOMStateEffects(
-            domState.resetDocument()
-        )
+        resetDOM()
         runtimeState.reset()
         let consoleReset = consoleMessages.prepareClearForLifecycle(
             modelContext: self
@@ -1392,10 +1392,9 @@ public final class WebInspectorModelContext {
             self.binding = binding
             if target.id == binding.currentPageID {
                 domState.advanceDocumentEpoch()
-                applyDOMStateEffects(
-                    domState.resetDocument()
-                )
+                resetDOM()
             } else if let frameID = target.frameID {
+                cssInspectorBaselineStore.reset(targetID: target.id)
                 applyDOMStateEffects(
                     domState.detachProjectedFrameDocument(
                         forFrameID: frameID
@@ -1575,6 +1574,7 @@ public final class WebInspectorModelContext {
                     )?.work
                 }
                 binding.domAuthority.removeValue(forKey: target.id)
+                cssInspectorBaselineStore.reset(targetID: target.id)
                 if let frameID = target.frameID {
                     applyDOMStateEffects(
                         domState.detachProjectedFrameDocument(
@@ -1585,6 +1585,7 @@ public final class WebInspectorModelContext {
             case let .didCommitProvisionalTarget(oldTargetID, newTarget):
                 binding.targets.removeValue(forKey: oldTargetID)
                 binding.domAuthority.removeValue(forKey: oldTargetID)
+                cssInspectorBaselineStore.reset(targetID: oldTargetID)
                 binding.targets[newTarget.id] = newTarget
                 if configuredDomains.contains(.dom) {
                     binding.domAuthority[newTarget.id] = .awaiting(
@@ -3008,6 +3009,7 @@ extension WebInspectorModelContext {
     }
 
     private func resetDOM() {
+        cssInspectorBaselineStore.reset()
         let effects = domState.resetDocument()
         applyDOMStateEffects(effects)
     }
@@ -3083,6 +3085,10 @@ extension WebInspectorModelContext {
                 inlineStyles: inline,
                 computedProperties: computed
             )
+        } catch is CancellationError {
+            // Preserve task cancellation so CSSStyles' operation boundary can
+            // restore the last usable resource phase.
+            throw CancellationError()
         } catch let error as WebInspectorProxyError {
             styles.fail(error)
             throw error

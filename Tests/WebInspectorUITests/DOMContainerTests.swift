@@ -98,6 +98,27 @@ struct DOMContainerTests {
     }
 
     @Test
+    func elementViewControllerRendersStylesLoadedImmediatelyAfterSelection() async throws {
+        let context = makeElementContext()
+        let viewController = makeElementViewController(context: context)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        _ = try selectElement(named: "body", in: context)
+        applyBodyStyles(to: context)
+
+        let didRenderRows = await waitUntilRendered(in: viewController) {
+            viewController.contentUnavailableConfiguration == nil
+                && stylePropertyViews(in: viewController)
+                    .contains { $0.declarationTextForTesting == "margin: 0;" }
+        }
+
+        #expect(didRenderRows)
+        #expect(viewController.collectionView.numberOfSections == 1)
+        #expect(viewController.collectionView.numberOfItems(inSection: 0) == 3)
+    }
+
+    @Test
     func elementStyleSectionHeaderTextFormatsRuleOriginText() {
         let stylesheetLocation = DOMElementStyleSectionHeaderText.SourceLocation(
             sourceURL: "https://styles.example/assets/result-card.css",
