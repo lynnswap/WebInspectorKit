@@ -30,6 +30,9 @@ changes without scanning the complete collection or constructing a diff.
   missing from the implementation.
 - Add initiator grouping as a supported Network query projection. Do not
   restore arbitrary `Predicate<Model>` or `SortDescriptor<Model>` evaluation.
+- Adding a public `NetworkSection` case can break a consumer's exhaustive
+  switch when it recompiles. Record that source change in the Unreleased
+  migration notes; do not hide it behind an untyped or fallback grouping mode.
 - Do not restore the zero-state `WebInspectorFetchedResultsController` wrapper.
   `WebInspectorFetchedResults` remains the query registration, current state,
   revision, snapshot, and stream owner.
@@ -197,6 +200,18 @@ public extension WebInspectorFetchedResults where Model == ConsoleMessage {
 4. Members are chronological ascending. A group is ordered by its first member,
    so a later media segment does not move the row.
 5. Offset and limit apply to groups, not members.
+
+A group section ID is stable within one Network source epoch. Node-backed and
+singleton request identities use different namespaces; later members, filters,
+and representative content never change the ID. The raw section value is
+opaque to consumers: a singleton section deliberately cannot be decoded as a
+DOM node ID.
+
+The specialized `query` property is the last atomically committed and
+published query, not an in-flight candidate. Query, items, sections, snapshot,
+and revision change in the same `WebInspectorFetchedResults.State` replacement.
+Cancellation or supersession before candidate commit leaves all of them
+unchanged, so Observation never exposes a new query with old results.
 
 UIKit visually flattens these DataKit sections into items in one UIKit section.
 The DataKit section remains a semantic group, not a request for UIKit sectioned
