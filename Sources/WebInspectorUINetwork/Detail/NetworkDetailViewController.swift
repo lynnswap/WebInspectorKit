@@ -52,14 +52,23 @@ package final class NetworkDetailViewController: UIViewController {
         case remoteHLS(NetworkRequest)
         case bodyMedia(NetworkRequest)
         case unavailableMedia(NetworkRequest)
+        case standard(NetworkRequest)
 
         var request: NetworkRequest {
             switch self {
             case .remoteHLS(let request),
                  .bodyMedia(let request),
-                 .unavailableMedia(let request):
+                 .unavailableMedia(let request),
+                 .standard(let request):
                 request
             }
+        }
+
+        var allowsResponseBodySurface: Bool {
+            if case .unavailableMedia = self {
+                return false
+            }
+            return true
         }
     }
 
@@ -373,20 +382,21 @@ package final class NetworkDetailViewController: UIViewController {
         }
         switch mode {
         case .preview:
-            guard let request = previewRequest(in: requests) else {
+            guard let candidate = previewCandidate(in: requests) else {
                 return
             }
-            renderPreviewSurface(selectedRequest: request)
+            renderPreviewSurface(candidate: candidate)
         case .headers:
             renderHeadersSurface(selectedRequests: requests)
         }
     }
 
-    private func renderPreviewSurface(selectedRequest request: NetworkRequest) {
+    private func renderPreviewSurface(candidate: PreviewCandidate) {
+        let request = candidate.request
         observedRequest = request
         title = request.displayName
         showPreview()
-        renderPreview(selectedRequest: request)
+        renderPreview(candidate: candidate)
         updateBodyRenderingActiveForCurrentSurface()
     }
 
@@ -484,7 +494,8 @@ package final class NetworkDetailViewController: UIViewController {
         scrollEdgeController.contentScrollView = headersTextView.contentScrollView
     }
 
-    private func renderPreview(selectedRequest request: NetworkRequest) {
+    private func renderPreview(candidate: PreviewCandidate) {
+        let request = candidate.request
         let roles = availablePreviewRoles(in: request)
         let selectedRole = selectedPreviewRole(from: roles)
         renderPreviewRoleControl(roles: roles, selectedRole: selectedRole)
@@ -494,12 +505,12 @@ package final class NetworkDetailViewController: UIViewController {
             unbindResponseBodyFetchObservation()
             return
         }
-        let surface = bodySurface(in: request, for: role)
+        let surface = bodySurface(in: candidate, for: role)
         bodyViewController.setSurface(surface)
         bindResponseBodyFetchObservationIfNeeded(
             for: request,
             role: role,
-            metadata: surface.metadata
+            surface: surface
         )
     }
 
@@ -541,7 +552,7 @@ package final class NetworkDetailViewController: UIViewController {
     private func bindResponseBodyFetchObservationIfNeeded(
         for request: NetworkRequest,
         role: NetworkBody.Role,
-        metadata: NetworkMediaPreviewMetadata?
+        surface: NetworkBodySurface
     ) {
         guard isRenderingActive else {
             unbindResponseBodyFetchObservation()
@@ -551,9 +562,13 @@ package final class NetworkDetailViewController: UIViewController {
             unbindResponseBodyFetchObservation()
             return
         }
+        guard surface.body === request.responseBody else {
+            unbindResponseBodyFetchObservation()
+            return
+        }
         guard NetworkDisplay.MediaPreviewSupport.remoteHLSURL(
-            mimeType: metadata?.mimeType,
-            url: metadata?.url
+            mimeType: surface.metadata?.mimeType,
+            url: surface.metadata?.url
         ) == nil else {
             unbindResponseBodyFetchObservation()
             return
@@ -572,6 +587,7 @@ package final class NetworkDetailViewController: UIViewController {
               mode == .preview,
               observedRequest === request,
               selectedPreviewRole(from: availablePreviewRoles(in: request)) == .response,
+              (previewCandidate(for: request)?.allowsResponseBodySurface ?? true),
               request.canFetchResponseBody else {
             return
         }
@@ -588,9 +604,14 @@ package final class NetworkDetailViewController: UIViewController {
     }
 
     private func bodySurface(
-        in request: NetworkRequest,
+        in candidate: PreviewCandidate,
         for role: NetworkBody.Role
     ) -> NetworkBodySurface {
+        let request = candidate.request
+        if role == .response,
+           candidate.allowsResponseBodySurface == false {
+            return .unavailableBodyPlaceholder
+        }
         guard let body = body(in: request, for: role) else {
             return .unavailableBodyPlaceholder
         }
@@ -638,7 +659,7 @@ package final class NetworkDetailViewController: UIViewController {
         headers.first { $0.key.caseInsensitiveCompare(name) == .orderedSame }?.value
     }
 
-    private func previewRequest(in requests: [NetworkRequest]) -> NetworkRequest? {
+    private func previewCandidate(in requests: [NetworkRequest]) -> PreviewCandidate? {
         var latestBodyMedia: PreviewCandidate?
         var latestUnavailableMedia: PreviewCandidate?
         for request in requests.reversed() {
@@ -647,7 +668,7 @@ package final class NetworkDetailViewController: UIViewController {
             }
             switch candidate {
             case .remoteHLS:
-                return candidate.request
+                return candidate
             case .bodyMedia:
                 if latestBodyMedia == nil {
                     latestBodyMedia = candidate
@@ -656,17 +677,21 @@ package final class NetworkDetailViewController: UIViewController {
                 if latestUnavailableMedia == nil {
                     latestUnavailableMedia = candidate
                 }
+            case .standard:
+                preconditionFailure("A classified media request cannot be a standard preview candidate.")
             }
         }
-        return latestBodyMedia?.request
-            ?? latestUnavailableMedia?.request
-            ?? requests.first
+        return latestBodyMedia
+            ?? latestUnavailableMedia
+            ?? requests.first.map(PreviewCandidate.standard)
     }
 
     private func previewCandidate(for request: NetworkRequest) -> PreviewCandidate? {
-        guard isPartialMediaRequest(request) == false,
-              let kind = responseMediaPreviewKind(for: request) else {
+        guard let kind = responseMediaPreviewKind(for: request) else {
             return nil
+        }
+        guard isPartialMediaRequest(request) == false else {
+            return .unavailableMedia(request)
         }
         guard request.hasResponse,
               request.method.caseInsensitiveCompare("HEAD") != .orderedSame,

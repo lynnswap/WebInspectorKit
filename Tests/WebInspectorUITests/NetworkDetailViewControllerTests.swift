@@ -17,6 +17,15 @@ extension WebInspectorUIRenderingTests {
 @MainActor
 @Suite
 struct NetworkDetailViewControllerTests {
+    private struct UnavailableMediaPreviewCase: Sendable {
+        let name: String
+        let pathExtension: String
+        let mimeType: String
+        let method: String
+        let status: Int
+        let finishes: Bool
+    }
+
     @Test
     func resourceFilterSpecialistTitlesFollowWebInspectorLabels() {
         #expect(NetworkDisplay.ResourceFilter.stylesheet.localizedTitle == "CSS")
@@ -1081,6 +1090,173 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func unavailableMediaResponseDoesNotStartPlaybackOrFetch() async throws {
+        let inputs = [
+            UnavailableMediaPreviewCase(
+                name: "HLS HEAD",
+                pathExtension: "m3u8",
+                mimeType: "application/vnd.apple.mpegurl",
+                method: "HEAD",
+                status: 200,
+                finishes: true
+            ),
+            UnavailableMediaPreviewCase(
+                name: "HLS 204",
+                pathExtension: "m3u8",
+                mimeType: "application/vnd.apple.mpegurl",
+                method: "GET",
+                status: 204,
+                finishes: true
+            ),
+            UnavailableMediaPreviewCase(
+                name: "HLS 404",
+                pathExtension: "m3u8",
+                mimeType: "application/vnd.apple.mpegurl",
+                method: "GET",
+                status: 404,
+                finishes: true
+            ),
+            UnavailableMediaPreviewCase(
+                name: "HLS 206",
+                pathExtension: "m3u8",
+                mimeType: "application/vnd.apple.mpegurl",
+                method: "GET",
+                status: 206,
+                finishes: true
+            ),
+            UnavailableMediaPreviewCase(
+                name: "MP4 HEAD",
+                pathExtension: "mp4",
+                mimeType: "video/mp4",
+                method: "HEAD",
+                status: 200,
+                finishes: true
+            ),
+            UnavailableMediaPreviewCase(
+                name: "MP4 204",
+                pathExtension: "mp4",
+                mimeType: "video/mp4",
+                method: "GET",
+                status: 204,
+                finishes: true
+            ),
+            UnavailableMediaPreviewCase(
+                name: "MP4 404",
+                pathExtension: "mp4",
+                mimeType: "video/mp4",
+                method: "GET",
+                status: 404,
+                finishes: true
+            ),
+            UnavailableMediaPreviewCase(
+                name: "MP4 206",
+                pathExtension: "mp4",
+                mimeType: "video/mp4",
+                method: "GET",
+                status: 206,
+                finishes: true
+            ),
+            UnavailableMediaPreviewCase(
+                name: "MP4 incomplete",
+                pathExtension: "mp4",
+                mimeType: "video/mp4",
+                method: "GET",
+                status: 200,
+                finishes: false
+            ),
+        ]
+        try await withLiveNetworkContext { fixture in
+            for (index, input) in inputs.enumerated() {
+                var responseHeaders = ["content-type": input.mimeType]
+                if input.status == 206 {
+                    responseHeaders["content-range"] = "bytes 0-99/1000"
+                }
+                let request = try #require(await applyRequest(
+                    to: fixture.context,
+                    requestID: "unavailable-media-\(index)",
+                    url: "https://media.example.com/unavailable-\(index).\(input.pathExtension)",
+                    responseHeaders: responseHeaders,
+                    responseMimeType: input.mimeType,
+                    responseStatus: input.status,
+                    resourceType: .media,
+                    method: input.method,
+                    finishes: input.finishes
+                ))
+                let model = try await NetworkPanelModel.make(context: fixture.context)
+                model.selectRequest(request)
+                let viewController = makeNetworkDetailViewController(
+                    model: model,
+                    initialMode: .preview
+                )
+                var playerCreationCount = 0
+                viewController.syntaxBodyViewControllerForTesting
+                    .setMoviePreviewPlayerFactoryForTesting { _ in
+                        playerCreationCount += 1
+                        return StubMoviePreviewPlayer()
+                    }
+                let window = showInWindow(viewController)
+                defer { window.isHidden = true }
+
+                #expect(await waitUntilRendered(in: viewController) {
+                    viewController.currentModeForTesting == .preview
+                        && viewController.syntaxBodyViewControllerForTesting
+                            .syntaxViewForTesting.text.isEmpty == false
+                        && viewController.responseBodyFetchObservationDeliveryForTesting == nil
+                })
+                #expect(viewController.previewRequestIDForTesting == request.id)
+                #expect(
+                    viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting == nil,
+                    Comment(rawValue: input.name)
+                )
+                #expect(playerCreationCount == 0, Comment(rawValue: input.name))
+                #expect(request.responseBody.phase == .available, Comment(rawValue: input.name))
+                #expect(fixture.wire.observations.commands.filter {
+                    $0.method == "Network.getResponseBody"
+                }.isEmpty, Comment(rawValue: input.name))
+            }
+        }
+    }
+
+    @Test
+    func nonMediaErrorResponseStillFetchesItsInspectableBody() async throws {
+        try await withLiveNetworkContext { fixture in
+            let request = try #require(await applyRequest(
+                to: fixture.context,
+                requestID: "error-json",
+                url: "https://example.com/error.json",
+                responseHeaders: ["content-type": "application/json"],
+                responseMimeType: "application/json",
+                responseStatus: 404,
+                resourceType: .xhr
+            ))
+            let model = try await NetworkPanelModel.make(context: fixture.context)
+            model.selectRequest(request)
+            let viewController = makeNetworkDetailViewController(
+                model: model,
+                initialMode: .preview
+            )
+            let window = showInWindow(viewController)
+            defer { window.isHidden = true }
+            await fixture.wire.fail(
+                "Network.getResponseBody",
+                message: "Inspectable error body fetch reached the wire."
+            )
+
+            #expect(await waitUntilRendered(in: viewController) {
+                guard case .failed = request.responseBody.phase else {
+                    return false
+                }
+                return viewController.syntaxBodyViewControllerForTesting
+                    .syntaxViewForTesting.text
+                    .contains("Inspectable error body fetch reached the wire.")
+            })
+            #expect(fixture.wire.observations.commands.filter {
+                $0.method == "Network.getResponseBody"
+            }.count == 1)
+        }
+    }
+
+    @Test
     func groupedPreviewFollowsNewerPlaylist() async throws {
         let context = makeContext()
         let nodeID = DOM.Node.ID("unplayed-video")
@@ -1430,8 +1606,7 @@ struct NetworkDetailViewControllerTests {
                 requestID: "1",
                 url: "https://media.example.com/download.php",
                 responseHeaders: ["content-type": "video/mp4"],
-                responseMimeType: "video/mp4",
-                finishes: false
+                responseMimeType: "video/mp4"
             )
         )
         applyResponseBody(to: context, request: request, body: "not a real movie", base64Encoded: false)
@@ -2974,6 +3149,7 @@ struct NetworkDetailViewControllerTests {
         responseMimeType: String = "text/javascript",
         responseStatus: Int = 200,
         resourceType: Network.ResourceType = .script,
+        method: String? = nil,
         timestamp: Double = 1,
         initiatorNodeID: DOM.Node.ID? = nil,
         finishes: Bool = true
@@ -2985,7 +3161,7 @@ struct NetworkDetailViewControllerTests {
                 request: Network.Request(
                     id: requestID,
                     url: url,
-                    method: postData == nil ? "GET" : "POST",
+                    method: method ?? (postData == nil ? "GET" : "POST"),
                     headers: requestHeaders,
                     postData: postData
                 ),
