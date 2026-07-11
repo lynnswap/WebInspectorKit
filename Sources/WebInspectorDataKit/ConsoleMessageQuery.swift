@@ -1,6 +1,6 @@
 import Foundation
 
-package struct ConsoleMessageRecordInput: Hashable, Sendable {
+package struct ConsoleMessageRecordInput: Hashable, Sendable, Identifiable {
     package var id: ConsoleMessage.ID
     package var orderIndex: Int
     package var sourceRawValue: String
@@ -28,7 +28,7 @@ package struct ConsoleMessageRecordInput: Hashable, Sendable {
     }
 }
 
-package struct ConsoleMessageRecord: Hashable, Sendable {
+package struct ConsoleMessageRecord: Hashable, Sendable, Identifiable {
     package var id: ConsoleMessage.ID
     package var orderIndex: Int
     package var sourceRawValue: String

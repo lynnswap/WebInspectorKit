@@ -1,7 +1,7 @@
 import Foundation
 import WebInspectorProxyKit
 
-package struct NetworkRequestRecordInput: Hashable, Sendable {
+package struct NetworkRequestRecordInput: Hashable, Sendable, Identifiable {
     package var id: NetworkRequest.ID
     package var orderIndex: Int
     package var url: String
@@ -33,7 +33,7 @@ package struct NetworkRequestRecordInput: Hashable, Sendable {
     }
 }
 
-package struct NetworkRequestRecord: Hashable, Sendable {
+package struct NetworkRequestRecord: Hashable, Sendable, Identifiable {
     package var id: NetworkRequest.ID
     package var orderIndex: Int
     package var url: String
