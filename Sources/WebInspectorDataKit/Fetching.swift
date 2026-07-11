@@ -57,12 +57,19 @@ where Model.ID: Hashable & Sendable {
 /// Observable results for one closed Network or Console query.
 @Observable
 public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel> {
+    private enum ConcreteQuery {
+        case network(NetworkQuery)
+        case console(ConsoleQuery)
+    }
+
     private struct State {
         var items: [Model]
         var sections: [WebInspectorFetchSection<Model>]
         var modelsByID: [Model.ID: Model]
+        var sectionsByID: [WebInspectorFetchSectionID: WebInspectorFetchSection<Model>]
         var snapshot: WebInspectorFetchedResultsSnapshot<Model.ID>
         var revision: UInt64
+        var query: ConcreteQuery?
         var queryGeneration: UInt64?
         var querySourceEpoch: UInt64?
         var querySequence: UInt64
@@ -99,13 +106,27 @@ public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel
         return state.revision
     }
 
+    /// Returns a model by identity from the current published result.
+    public subscript(id id: Model.ID) -> Model? {
+        modelContext?.preconditionOwnerIsolation()
+        return state.modelsByID[id]
+    }
+
+    /// Returns a section by identity from the current published result.
+    public subscript(section id: WebInspectorFetchSectionID) -> WebInspectorFetchSection<Model>? {
+        modelContext?.preconditionOwnerIsolation()
+        return state.sectionsByID[id]
+    }
+
     init(modelContext: WebInspectorModelContext) {
         state = State(
             items: [],
             sections: [],
             modelsByID: [:],
+            sectionsByID: [:],
             snapshot: WebInspectorFetchedResultsSnapshot(),
             revision: 0,
+            query: nil,
             queryGeneration: nil,
             querySourceEpoch: nil,
             querySequence: 0
@@ -147,6 +168,7 @@ public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel
     }
 
     private func installInitialConcreteState(
+        query: ConcreteQuery,
         generation: UInt64,
         projection: WebInspectorIndexedQueryProjection<Model.ID>,
         lookup: (Model.ID) -> Model?
@@ -160,8 +182,10 @@ public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel
             items: resolved.items,
             sections: resolved.sections,
             modelsByID: resolved.modelsByID,
+            sectionsByID: resolved.sectionsByID,
             snapshot: projection.snapshot,
             revision: 0,
+            query: query,
             queryGeneration: generation,
             querySourceEpoch: projection.sourceEpoch,
             querySequence: projection.sequence
@@ -170,6 +194,7 @@ public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel
 
     @discardableResult
     private func applyConcreteProjection(
+        query: ConcreteQuery,
         generation: UInt64,
         projection: WebInspectorIndexedQueryProjection<Model.ID>,
         isReplacement: Bool,
@@ -211,7 +236,9 @@ public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel
                 items: state.items,
                 sections: state.sections,
                 modelsByID: state.modelsByID,
+                sectionsByID: state.sectionsByID,
                 snapshot: state.snapshot,
+                query: query,
                 queryGeneration: generation,
                 querySourceEpoch: projection.sourceEpoch,
                 querySequence: projection.sequence,
@@ -231,7 +258,9 @@ public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel
             items: resolved.items,
             sections: resolved.sections,
             modelsByID: resolved.modelsByID,
+            sectionsByID: resolved.sectionsByID,
             snapshot: projection.snapshot,
+            query: query,
             queryGeneration: generation,
             querySourceEpoch: projection.sourceEpoch,
             querySequence: projection.sequence,
@@ -249,7 +278,8 @@ public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel
     ) -> (
         items: [Model],
         sections: [WebInspectorFetchSection<Model>],
-        modelsByID: [Model.ID: Model]
+        modelsByID: [Model.ID: Model],
+        sectionsByID: [WebInspectorFetchSectionID: WebInspectorFetchSection<Model>]
     ) {
         var modelsByID: [Model.ID: Model] = [:]
         modelsByID.reserveCapacity(snapshot.itemIDs.count)
@@ -281,7 +311,15 @@ public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel
                 }
             )
         }
-        return (items, sections, modelsByID)
+        var sectionsByID: [WebInspectorFetchSectionID: WebInspectorFetchSection<Model>] = [:]
+        sectionsByID.reserveCapacity(sections.count)
+        for section in sections {
+            precondition(
+                sectionsByID.updateValue(section, forKey: section.id) == nil,
+                "A fetched-results snapshot cannot contain duplicate section IDs."
+            )
+        }
+        return (items, sections, modelsByID, sectionsByID)
     }
 
     /// Returns an atomic bounded stream beginning with the current result state.
@@ -303,7 +341,9 @@ public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel
         items: [Model],
         sections: [WebInspectorFetchSection<Model>],
         modelsByID: [Model.ID: Model],
+        sectionsByID: [WebInspectorFetchSectionID: WebInspectorFetchSection<Model>],
         snapshot: WebInspectorFetchedResultsSnapshot<Model.ID>,
+        query: ConcreteQuery,
         queryGeneration: UInt64,
         querySourceEpoch: UInt64,
         querySequence: UInt64,
@@ -351,8 +391,10 @@ public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel
             items: items,
             sections: sections,
             modelsByID: modelsByID,
+            sectionsByID: sectionsByID,
             snapshot: snapshot,
             revision: revision,
+            query: query,
             queryGeneration: queryGeneration,
             querySourceEpoch: querySourceEpoch,
             querySequence: querySequence
@@ -373,6 +415,7 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
         lookup: (NetworkRequest.ID) -> NetworkRequest?
     ) {
         installInitialConcreteState(
+            query: .network(query),
             generation: generation,
             projection: projection,
             lookup: lookup
@@ -388,11 +431,27 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
         lookup: (NetworkRequest.ID) -> NetworkRequest?
     ) -> Bool {
         applyConcreteProjection(
+            query: .network(query),
             generation: generation,
             projection: projection,
             isReplacement: isReplacement,
             lookup: lookup
         )
+    }
+
+    /// The Network query that produced the current published result.
+    ///
+    /// An in-flight replacement does not change this value. It changes
+    /// atomically with the replacement's items, sections, snapshot, and
+    /// revision when that replacement publishes.
+    public var query: NetworkQuery {
+        modelContext?.preconditionOwnerIsolation()
+        guard case let .network(query) = state.query else {
+            preconditionFailure(
+                "Network fetched results require an installed Network query."
+            )
+        }
+        return query
     }
 
     /// Replaces this result's Network query atomically.
@@ -417,6 +476,7 @@ extension WebInspectorFetchedResults where Model == ConsoleMessage {
         lookup: (ConsoleMessage.ID) -> ConsoleMessage?
     ) {
         installInitialConcreteState(
+            query: .console(query),
             generation: generation,
             projection: projection,
             lookup: lookup
@@ -432,11 +492,27 @@ extension WebInspectorFetchedResults where Model == ConsoleMessage {
         lookup: (ConsoleMessage.ID) -> ConsoleMessage?
     ) -> Bool {
         applyConcreteProjection(
+            query: .console(query),
             generation: generation,
             projection: projection,
             isReplacement: isReplacement,
             lookup: lookup
         )
+    }
+
+    /// The Console query that produced the current published result.
+    ///
+    /// An in-flight replacement does not change this value. It changes
+    /// atomically with the replacement's items, sections, snapshot, and
+    /// revision when that replacement publishes.
+    public var query: ConsoleQuery {
+        modelContext?.preconditionOwnerIsolation()
+        guard case let .console(query) = state.query else {
+            preconditionFailure(
+                "Console fetched results require an installed Console query."
+            )
+        }
+        return query
     }
 
     /// Replaces this result's Console query atomically.

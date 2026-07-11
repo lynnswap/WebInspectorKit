@@ -1572,13 +1572,14 @@ public enum WebInspectorFetchedResultsUpdate<
 }
 
 @Observable
-public final class WebInspectorFetchedResults<Model: Identifiable>
-where Model.ID: Hashable & Sendable {
+public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel> {
     public var items: [Model] { get }
     public var sections: [WebInspectorFetchSection<Model>] { get }
     public var snapshot: WebInspectorFetchedResultsSnapshot<Model.ID> { get }
     public var revision: UInt64 { get }
     public subscript(id id: Model.ID) -> Model? { get }
+    public subscript(section id: WebInspectorFetchSectionID)
+        -> WebInspectorFetchSection<Model>? { get }
 
     public func updates()
         -> AsyncStream<WebInspectorFetchedResultsUpdate<Model.ID>>
@@ -1599,10 +1600,13 @@ Empty Network category/method sets and an empty Console level set mean â€œall.â€
 Query initializers normalize an empty or whitespace-only Network search to
 `nil`, and fail fast for negative offsets or limits. Unsupported predicates,
 sort keys, and sections are unrepresentable.
-`WebInspectorFetchedResults` stores items, sections,
+`WebInspectorFetchedResults` stores items, sections, their identity maps,
 snapshot, revision, and its concrete query in one private state value and
 replaces that value once per publication. Its public properties are computed
 projections, so Observation cannot expose a mixed revision/snapshot state.
+The specialized `query` property always reports the last committed and
+published query; an in-flight, cancelled, or superseded candidate does not
+change it. Item and section identity subscripts read the same state in O(1).
 `WebInspectorFetchSection` and `WebInspectorFetchedResultsTransaction` change
 from the deleted `WebInspectorFetchableModel` constraint to `Identifiable` and
 `ItemID` constraints respectively; their existing section/item delta vocabulary

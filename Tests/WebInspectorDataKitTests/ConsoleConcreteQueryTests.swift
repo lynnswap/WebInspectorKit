@@ -222,21 +222,25 @@ func consoleConcreteQueryPublishesUpdatesPartialDeletionAndReplacementAtomically
     let errorID = ConsoleMessage.ID(2)
     let registeredWarning = store.message(for: warningID)
     let warningIdentity = try #require(registeredWarning)
+    let initialQuery = ConsoleQuery(
+        levels: [
+            Console.Level(rawValue: "warning"),
+            Console.Level(rawValue: "error"),
+        ],
+        sort: .insertionDescending,
+        section: .level,
+        limit: 2
+    )
     let results = try await store.results(
-        matching: ConsoleQuery(
-            levels: [
-                Console.Level(rawValue: "warning"),
-                Console.Level(rawValue: "error"),
-            ],
-            sort: .insertionDescending,
-            section: .level,
-            limit: 2
-        ),
+        matching: initialQuery,
         modelContext: context,
     )
     #expect(results.items.map(\.id) == [errorID, warningID])
     #expect(results.sections.map(\.id.rawValue) == ["error", "warning"])
     #expect(results.items.last === warningIdentity)
+    #expect(results.query == initialQuery)
+    #expect(results[id: warningID] === warningIdentity)
+    #expect(results[section: "warning"]?.items == [warningIdentity])
     var updates = results.updates().makeAsyncIterator()
     guard case .initial? = await updates.next() else {
         Issue.record("Expected an initial concrete Console query state.")
@@ -278,17 +282,25 @@ func consoleConcreteQueryPublishesUpdatesPartialDeletionAndReplacementAtomically
     }
     #expect(clear.isReset)
 
+    let replacementQuery = ConsoleQuery(
+        levels: [Console.Level(rawValue: "log")],
+        sort: .insertionAscending,
+        offset: 0,
+        limit: 1
+    )
+    let revisionBeforeReplacement = results.revision
     try await store.update(
-        ConsoleQuery(
-            levels: [Console.Level(rawValue: "log")],
-            sort: .insertionAscending,
-            offset: 0,
-            limit: 1
-        ),
+        replacementQuery,
         for: results,
     )
     #expect(results.items.map(\.id) == [logID])
     #expect(results.sections.map(\.id) == [.defaultSection])
+    #expect(results.query == replacementQuery)
+    #expect(results.revision == revisionBeforeReplacement + 1)
+    #expect(results[id: warningID] == nil)
+    #expect(results[id: logID]?.id == logID)
+    #expect(results[section: .defaultSection]?.items.map(\.id) == [logID])
+    #expect(results[section: "warning"] == nil)
 }
 
 @MainActor

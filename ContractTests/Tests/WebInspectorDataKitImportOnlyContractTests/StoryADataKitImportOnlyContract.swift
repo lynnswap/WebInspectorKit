@@ -61,8 +61,15 @@ private actor DataKitImportOnlyActor {
         _ = requests.items.first?.hasResponseBody
         _ = requests.items.first?.metrics
         _ = requests.sections.first?.title
+        _ = requests.query
         let requestSnapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID> =
             requests.snapshot
+        if let requestID = requestSnapshot.itemIDs.first {
+            _ = requests[id: requestID]
+        }
+        if let sectionID = requestSnapshot.sectionIDs.first {
+            _ = requests[section: sectionID]
+        }
         let requestTransaction = WebInspectorFetchedResultsTransaction<NetworkRequest.ID>(
             oldSnapshot: requestSnapshot,
             newSnapshot: requestSnapshot,
@@ -79,7 +86,14 @@ private actor DataKitImportOnlyActor {
         _ = messages.items.first?.text
         _ = messages.items.first?.parameters.first?.description
         _ = messages.sections.first?.id
+        _ = messages.query
         _ = messages.snapshot
+        if let messageID = messages.snapshot.itemIDs.first {
+            _ = messages[id: messageID]
+        }
+        if let sectionID = messages.snapshot.sectionIDs.first {
+            _ = messages[section: sectionID]
+        }
         _ = messages.revision
         _ = messages.updates()
         try await messages.update(ConsoleQuery())

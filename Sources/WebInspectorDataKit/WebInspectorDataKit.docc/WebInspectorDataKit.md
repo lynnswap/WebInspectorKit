@@ -85,10 +85,24 @@ try await requests.update(NetworkQuery(
     sort: .requestTimeAscending
 ))
 
+let committedQuery = requests.query
+if let requestID = requests.snapshot.itemIDs.first {
+    let request = requests[id: requestID]
+}
+if let sectionID = requests.snapshot.sectionIDs.first {
+    let section = requests[section: sectionID]
+}
+
 for await update in requests.updates() {
     apply(update)
 }
 ```
+
+The specialized `query` property is the last query whose result was committed
+and published. An in-flight, cancelled, or superseded replacement does not
+change it. Query, items, sections, identity lookups, snapshot, and revision
+advance as one observable state. The identity subscripts perform constant-time
+lookups in that current published state.
 
 ## Topics
 

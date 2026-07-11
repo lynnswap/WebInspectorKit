@@ -360,8 +360,9 @@ func concreteFetchedResultsNeverRegressTheirSourceEpoch() throws {
     }
     let models = [first.id: firstModel, second.id: secondModel]
     let results = WebInspectorFetchedResults<NetworkRequest>(modelContext: context)
+    let initialQuery = NetworkQuery(sort: .requestTimeAscending)
     results.installInitialNetworkQuery(
-        NetworkQuery(),
+        initialQuery,
         generation: 1,
         projection: NetworkRequestIndex.QueryProjection(
             sourceEpoch: 1,
@@ -371,6 +372,9 @@ func concreteFetchedResultsNeverRegressTheirSourceEpoch() throws {
         ),
         lookup: { models[$0] }
     )
+    #expect(results.query == initialQuery)
+    #expect(results[id: first.id] === firstModel)
+    #expect(results[section: .defaultSection]?.items.first === firstModel)
 
     let resetApplied = results.applyNetworkQueryProjection(
         NetworkRequestIndex.QueryProjection(
@@ -379,11 +383,12 @@ func concreteFetchedResultsNeverRegressTheirSourceEpoch() throws {
             snapshot: WebInspectorFetchedResultsSnapshot(),
             reconfigureItemIDs: []
         ),
-        query: NetworkQuery(),
+        query: initialQuery,
         generation: 1,
         isReplacement: false,
         lookup: { models[$0] }
     )
+    let revisionAfterReset = results.revision
     let staleNewGenerationApplied = results.applyNetworkQueryProjection(
         NetworkRequestIndex.QueryProjection(
             sourceEpoch: 1,
@@ -401,6 +406,10 @@ func concreteFetchedResultsNeverRegressTheirSourceEpoch() throws {
     #expect(staleNewGenerationApplied == false)
     #expect(results.items.isEmpty)
     #expect(results.snapshot.itemIDs.isEmpty)
+    #expect(results.query == initialQuery)
+    #expect(results.revision == revisionAfterReset)
+    #expect(results[id: first.id] == nil)
+    #expect(results[section: .defaultSection] == nil)
 }
 
 @MainActor
@@ -429,12 +438,13 @@ func networkConcreteQueryPublishesSameIdentityMoveSectionsWindowAndClear() async
     )
     await finishNetworkRequest(secondProxyID, timestamp: 2.5, store: store, context: context)
 
+    let initialQuery = NetworkQuery(
+        sort: .requestTimeAscending,
+        section: .method,
+        limit: 2
+    )
     let results = try await store.results(
-        matching: NetworkQuery(
-            sort: .requestTimeAscending,
-            section: .method,
-            limit: 2
-        ),
+        matching: initialQuery,
         modelContext: context,
     )
     let firstID = NetworkRequest.ID(firstProxyID)
@@ -445,6 +455,9 @@ func networkConcreteQueryPublishesSameIdentityMoveSectionsWindowAndClear() async
     let firstIdentity = try #require(registeredFirst)
     #expect(results.items.map(\.id) == [firstID, secondID])
     #expect(results.sections.map(\.id.rawValue) == ["GET", "POST"])
+    #expect(results.query == initialQuery)
+    #expect(results[id: firstID] === firstIdentity)
+    #expect(results[section: "GET"]?.items == [firstIdentity])
     var updates = results.updates().makeAsyncIterator()
     guard case .initial? = await updates.next() else {
         Issue.record("Expected an initial concrete Network query state.")
@@ -469,22 +482,33 @@ func networkConcreteQueryPublishesSameIdentityMoveSectionsWindowAndClear() async
     #expect(move.newSnapshot == results.snapshot)
     #expect(reconfigure == [firstID])
 
+    let replacementQuery = NetworkQuery(
+        sort: .requestTimeAscending,
+        section: .method,
+        offset: 1,
+        limit: 1
+    )
+    let revisionBeforeReplacement = results.revision
     try await store.update(
-        NetworkQuery(
-            sort: .requestTimeAscending,
-            section: .method,
-            offset: 1,
-            limit: 1
-        ),
+        replacementQuery,
         for: results,
     )
     #expect(results.items.map(\.id) == [firstID])
     #expect(results.sections.map(\.id.rawValue) == ["PUT"])
+    #expect(results.query == replacementQuery)
+    #expect(results.revision == revisionBeforeReplacement + 1)
+    #expect(results[id: firstID] === firstIdentity)
+    #expect(results[id: secondID] == nil)
+    #expect(results[section: "PUT"]?.items == [firstIdentity])
+    #expect(results[section: "POST"] == nil)
 
     await store.clear()
     #expect(results.items.isEmpty)
     #expect(results.sections.isEmpty)
     #expect(results.snapshot.itemIDs.isEmpty)
+    #expect(results.query == replacementQuery)
+    #expect(results[id: firstID] == nil)
+    #expect(results[section: "PUT"] == nil)
 }
 
 @MainActor
