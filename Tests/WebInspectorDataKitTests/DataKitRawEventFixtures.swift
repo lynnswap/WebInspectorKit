@@ -220,12 +220,13 @@ private func rawCSSEvent(_ event: CSS.Event) throws -> RawWireEvent {
 
 private func rawNetworkEvent(_ event: Network.Event) throws -> RawWireEvent {
     switch event {
-    case let .requestWillBeSent(id, request, resourceType, redirectResponse, timestamp):
+    case let .requestWillBeSent(id, request, initiator, resourceType, redirectResponse, timestamp):
         return try rawEvent(
             "Network.requestWillBeSent",
             NetworkRequestWillBeSentWire(
                 requestId: id.rawValue,
                 request: NetworkRequestWire(request),
+                initiator: NetworkInitiatorWire(initiator),
                 type: resourceType?.rawValue,
                 redirectResponse: redirectResponse.map(NetworkResponseWire.init),
                 timestamp: timestamp,
@@ -272,7 +273,7 @@ private func rawNetworkEvent(_ event: Network.Event) throws -> RawWireEvent {
                 canceled: cancelled
             )
         )
-    case let .requestServedFromMemoryCache(id, response, resourceType, timestamp):
+    case let .requestServedFromMemoryCache(id, response, initiator, resourceType, timestamp):
         guard let url = response.url else {
             throw RawWireFixtureError.missingRequiredField(
                 method: "Network.requestServedFromMemoryCache",
@@ -284,6 +285,7 @@ private func rawNetworkEvent(_ event: Network.Event) throws -> RawWireEvent {
             NetworkMemoryCacheWire(
                 requestId: id.rawValue,
                 timestamp: timestamp,
+                initiator: NetworkInitiatorWire(initiator),
                 resource: NetworkCachedResourceWire(
                     url: url,
                     type: resourceType?.rawValue ?? Network.ResourceType.other.rawValue,
@@ -556,10 +558,25 @@ private struct CSSStyleSheetHeaderWire: Encodable {
 private struct NetworkRequestWillBeSentWire: Encodable {
     let requestId: String
     let request: NetworkRequestWire
+    let initiator: NetworkInitiatorWire
     let type: String?
     let redirectResponse: NetworkResponseWire?
     let timestamp: Double
     let backendResourceIdentifier: NetworkBackendResourceWire?
+}
+
+private struct NetworkInitiatorWire: Encodable {
+    let type: String
+    let url: String?
+    let lineNumber: Int?
+    let nodeId: String?
+
+    init(_ initiator: Network.Initiator) {
+        type = initiator.kind
+        url = initiator.url
+        lineNumber = initiator.line
+        nodeId = initiator.nodeID?.rawValue
+    }
 }
 
 private struct NetworkRequestWire: Encodable {
@@ -662,6 +679,7 @@ private struct NetworkLoadingFailedWire: Encodable {
 private struct NetworkMemoryCacheWire: Encodable {
     let requestId: String
     let timestamp: Double
+    let initiator: NetworkInitiatorWire
     let resource: NetworkCachedResourceWire
 }
 

@@ -809,6 +809,12 @@ public final class NetworkRequest: WebInspectorPersistentModel {
     /// The resource type reported by WebKit.
     public private(set) var resourceType: Network.ResourceType?
 
+    /// Information about what initiated the first request in this redirect chain.
+    ///
+    /// Redirects preserve the original initiator because WebKit treats the
+    /// complete redirect chain as one logical resource.
+    public private(set) var initiator: Network.Initiator?
+
     /// The current request lifecycle state.
     public private(set) var state: State
 
@@ -900,6 +906,7 @@ public final class NetworkRequest: WebInspectorPersistentModel {
 
     init(
         request: Network.Request,
+        initiator: Network.Initiator?,
         resourceType: Network.ResourceType?,
         timestamp: Double?,
         modelContext: WebInspectorModelContext
@@ -907,6 +914,7 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         id = ID(request.id)
         url = request.url
         method = request.method
+        self.initiator = initiator
         self.resourceType = resourceType
         state = .pending
         status = nil
@@ -990,12 +998,14 @@ public final class NetworkRequest: WebInspectorPersistentModel {
 
     func applyRequestWillBeSent(
         request: Network.Request,
+        initiator: Network.Initiator?,
         resourceType: Network.ResourceType?,
         timestamp: Double
     ) {
         currentRequest = request
         url = request.url
         method = request.method
+        self.initiator = initiator
         self.resourceType = resourceType
         requestHeaders = request.headers
         status = nil

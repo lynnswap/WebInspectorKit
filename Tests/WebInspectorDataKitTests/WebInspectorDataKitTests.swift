@@ -92,6 +92,7 @@ func attachmentPublishesDOMSnapshotAndAcceptsFilteredSequenceGaps() async throws
                     url: "https://example.com/gap",
                     method: "GET"
                 ),
+                initiator: Network.Initiator(kind: "other"),
                 resourceType: .fetch,
                 redirectResponse: nil,
                 timestamp: 1
@@ -163,6 +164,7 @@ func attachmentDrainsLargeEnableReplayBeforePublishingReadiness() async throws {
                         url: "https://example.com/\(index)",
                         method: "GET"
                     ),
+                    initiator: Network.Initiator(kind: "other"),
                     resourceType: .fetch,
                     redirectResponse: nil,
                     timestamp: Double(index)
@@ -1427,6 +1429,7 @@ private func emitFinishedRequest(
                 url: "https://example.com/\(id.rawValue)",
                 method: "GET"
             ),
+            initiator: Network.Initiator(kind: "other"),
             resourceType: .fetch,
             redirectResponse: nil,
             timestamp: 1

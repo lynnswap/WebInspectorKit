@@ -169,7 +169,7 @@ func targetReplyCarriesPerDomainSequenceWatermarks() async throws {
     await receiveTargetDispatch(
         session,
         targetID: .init("page-main"),
-        message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-1","request":{"url":"https://example.com/"},"timestamp":1}}"#
+        message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-1","request":{"url":"https://example.com/"},"initiator":{"type":"other"},"timestamp":1}}"#
     )
     await receiveTargetDispatch(
         session,

@@ -1453,6 +1453,7 @@ struct ParentContainerTests {
                     url: url,
                     method: "GET"
                 ),
+                initiator: WebInspectorProxyKit.Network.Initiator(kind: "other"),
                 resourceType: .script,
                 redirectResponse: nil,
                 timestamp: 1

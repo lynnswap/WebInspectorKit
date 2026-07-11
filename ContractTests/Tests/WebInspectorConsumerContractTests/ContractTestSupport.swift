@@ -49,6 +49,7 @@ enum ContractTestSupport {
                 "method": "GET",
                 "headers": ["Accept": "application/json"],
             ],
+            "initiator": ["type": "other"],
             "type": "Fetch",
             "timestamp": 1,
         ])

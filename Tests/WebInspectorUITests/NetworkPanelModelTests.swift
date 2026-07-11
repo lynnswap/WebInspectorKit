@@ -927,6 +927,7 @@ private func applyPendingRequest(
         .requestWillBeSent(
             id: requestID,
             request: Network.Request(id: requestID, url: url, method: method),
+            initiator: Network.Initiator(kind: "other"),
             resourceType: resourceType,
             redirectResponse: nil,
             timestamp: timestamp
@@ -950,6 +951,7 @@ private func applyRedirectRequest(
         .requestWillBeSent(
             id: requestID,
             request: Network.Request(id: requestID, url: url, method: method),
+            initiator: Network.Initiator(kind: "other"),
             resourceType: resourceType,
             redirectResponse: Network.Response(url: redirectURL, status: 302),
             timestamp: timestamp

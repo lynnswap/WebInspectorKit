@@ -584,6 +584,7 @@ private actor ScenarioDriver {
                         method: request.method,
                         headers: request.requestHeaders
                     ),
+                    initiator: .init(type: "other"),
                     timestamp: 1,
                     type: request.resourceType.rawValue
                 )
@@ -672,8 +673,13 @@ private struct RequestWillBeSentParameters: Encodable {
         let headers: [String: String]
     }
 
+    struct Initiator: Encodable {
+        let type: String
+    }
+
     let requestId: String
     let request: Request
+    let initiator: Initiator
     let timestamp: Double
     let type: String
 }

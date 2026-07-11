@@ -608,6 +608,7 @@ private func addNetworkRequest(
         .requestWillBeSent(
             id: id,
             request: Network.Request(id: id, url: url, method: method),
+            initiator: Network.Initiator(kind: "other"),
             resourceType: .fetch,
             redirectResponse: nil,
             timestamp: timestamp

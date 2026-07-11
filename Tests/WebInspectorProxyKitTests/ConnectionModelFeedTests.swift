@@ -624,7 +624,7 @@ func modelFeedPublishesFutureTargetAndConfiguredDomainEventsAfterSnapshotWaterma
         #"{"method":"DOM.documentUpdated","params":{}}"#
     )
     let networkSequence = await core.receiveRootMessage(
-        #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-1","request":{"url":"https://example.test","method":"GET"},"timestamp":1,"type":"Document"}}"#
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-1","request":{"url":"https://example.test","method":"GET"},"initiator":{"type":"other"},"timestamp":1,"type":"Document"}}"#
     )
     let networkEvent = try await modelFeedRequireEvent(iterator.next())
     #expect(networkEvent.sequence == networkSequence)
@@ -633,7 +633,7 @@ func modelFeedPublishesFutureTargetAndConfiguredDomainEventsAfterSnapshotWaterma
         return
     }
     #expect(target.id == WebInspectorTarget.ID("page-main"))
-    guard case let .requestWillBeSent(id, _, _, _, _) = event else {
+    guard case let .requestWillBeSent(id, _, _, _, _, _) = event else {
         Issue.record("Expected Network.requestWillBeSent.")
         return
     }
@@ -669,7 +669,7 @@ func modelFeedReplayCompletionFollowsEnableTimeEventsBeforeOpenReturns() async t
     let replayedEventSequence = await core.receiveRootMessage(
         modelFeedTargetDispatchMessage(
             targetID: "page-main",
-            message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"enable-replay","request":{"url":"https://example.test/replay","method":"GET"},"timestamp":1,"type":"Document"}}"#
+            message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"enable-replay","request":{"url":"https://example.test/replay","method":"GET"},"initiator":{"type":"other"},"timestamp":1,"type":"Document"}}"#
         )
     )
     await modelFeedRespond(to: enable, core: core)
@@ -685,7 +685,7 @@ func modelFeedReplayCompletionFollowsEnableTimeEventsBeforeOpenReturns() async t
     #expect(replayedEvent.sequence == replayedEventSequence)
     #expect(replayedEvent.sequence > snapshot.through)
     guard case let .network(_, event) = replayedEvent.payload,
-          case let .requestWillBeSent(id, _, _, _, _) = event else {
+          case let .requestWillBeSent(id, _, _, _, _, _) = event else {
         Issue.record("Expected the enable-time Network event before replay completion.")
         return
     }
@@ -1236,7 +1236,7 @@ func registeredModelFeedConsumerDrainsEnableReplayBeforeOpenReturns() async thro
         _ = await core.receiveRootMessage(
             modelFeedTargetDispatchMessage(
                 targetID: "page-main",
-                message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-\#(index)","request":{"url":"https://example.test/\#(index)","method":"GET"},"timestamp":\#(index),"type":"Fetch"}}"#
+                message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-\#(index)","request":{"url":"https://example.test/\#(index)","method":"GET"},"initiator":{"type":"other"},"timestamp":\#(index),"type":"Fetch"}}"#
             )
         )
     }
@@ -1676,7 +1676,7 @@ func activeModelFeedLeaseReconcilesOntoReplacementTarget() async throws {
     let replacementEventSequence = await core.receiveRootMessage(
         modelFeedTargetDispatchMessage(
             targetID: "page-new",
-            message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"replacement-replay","request":{"url":"https://example.test/replacement","method":"GET"},"timestamp":2,"type":"Document"}}"#
+            message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"replacement-replay","request":{"url":"https://example.test/replacement","method":"GET"},"initiator":{"type":"other"},"timestamp":2,"type":"Document"}}"#
         )
     )
     await modelFeedRespond(to: replacementEnable, core: core)

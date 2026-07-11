@@ -375,6 +375,7 @@ package final class NetworkRequestStore {
             request = existing
             request.applyRequestWillBeSent(
                 request: payload,
+                initiator: nil,
                 resourceType: resourceType,
                 timestamp: timestamp
             )
@@ -382,6 +383,7 @@ package final class NetworkRequestStore {
         } else {
             request = NetworkRequest(
                 request: payload,
+                initiator: nil,
                 resourceType: resourceType,
                 timestamp: timestamp,
                 modelContext: modelContext
@@ -466,10 +468,11 @@ package final class NetworkRequestStore {
     ) -> IndexWork? {
         let change: ModelChange?
         switch event {
-        case let .requestWillBeSent(id, payload, resourceType, redirectResponse, timestamp):
+        case let .requestWillBeSent(id, payload, initiator, resourceType, redirectResponse, timestamp):
             change = prepareRequestWillBeSent(
                 id: id,
                 request: payload,
+                initiator: initiator,
                 resourceType: resourceType,
                 redirectResponse: redirectResponse,
                 timestamp: timestamp,
@@ -507,10 +510,11 @@ package final class NetworkRequestStore {
             change = ModelChange(request: request, inserted: false)
         case let .webSocket(event):
             change = prepareWebSocketEvent(event, modelContext: modelContext)
-        case let .requestServedFromMemoryCache(id, response, resourceType, timestamp):
+        case let .requestServedFromMemoryCache(id, response, initiator, resourceType, timestamp):
             change = prepareRequestServedFromMemoryCache(
                 id: id,
                 response: response,
+                initiator: initiator,
                 resourceType: resourceType,
                 timestamp: timestamp,
                 modelContext: modelContext
@@ -551,6 +555,7 @@ package final class NetworkRequestStore {
     private func prepareRequestWillBeSent(
         id proxyID: Network.Request.ID,
         request payload: Network.Request,
+        initiator: Network.Initiator,
         resourceType: Network.ResourceType?,
         redirectResponse: Network.Response?,
         timestamp: Double,
@@ -576,6 +581,7 @@ package final class NetworkRequestStore {
             }
             request.applyRequestWillBeSent(
                 request: payload,
+                initiator: initiator,
                 resourceType: resourceType,
                 timestamp: timestamp
             )
@@ -583,6 +589,7 @@ package final class NetworkRequestStore {
         }
         let request = NetworkRequest(
             request: payload,
+            initiator: initiator,
             resourceType: resourceType,
             timestamp: timestamp,
             modelContext: modelContext
@@ -620,6 +627,7 @@ package final class NetworkRequestStore {
                     method: "GET",
                     headers: response.requestHeaders ?? [:]
                 ),
+                initiator: nil,
                 resourceType: resourceType,
                 timestamp: timestamp,
                 modelContext: modelContext
@@ -635,6 +643,7 @@ package final class NetworkRequestStore {
     private func prepareRequestServedFromMemoryCache(
         id proxyID: Network.Request.ID,
         response: Network.Response,
+        initiator: Network.Initiator,
         resourceType: Network.ResourceType?,
         timestamp: Double,
         modelContext: WebInspectorModelContext
@@ -660,6 +669,7 @@ package final class NetworkRequestStore {
                     method: "GET",
                     headers: response.requestHeaders ?? [:]
                 ),
+                initiator: initiator,
                 resourceType: resourceType,
                 timestamp: timestamp,
                 modelContext: modelContext
@@ -688,6 +698,7 @@ package final class NetworkRequestStore {
             } else {
                 request = NetworkRequest(
                     request: Network.Request(id: proxyID, url: url, method: "GET"),
+                    initiator: nil,
                     resourceType: .webSocket,
                     timestamp: nil,
                     modelContext: modelContext
@@ -744,10 +755,11 @@ package final class NetworkRequestStore {
         modelContext: WebInspectorModelContext
     ) async {
         switch event {
-        case let .requestWillBeSent(id, request, resourceType, redirectResponse, timestamp):
+        case let .requestWillBeSent(id, request, initiator, resourceType, redirectResponse, timestamp):
             await applyRequestWillBeSent(
                 id: id,
                 request: request,
+                initiator: initiator,
                 resourceType: resourceType,
                 redirectResponse: redirectResponse,
                 timestamp: timestamp,
@@ -785,10 +797,11 @@ package final class NetworkRequestStore {
             await notifyRequestMutated(request, modelContext: modelContext)
         case let .webSocket(event):
             await apply(event, modelContext: modelContext)
-        case let .requestServedFromMemoryCache(id, response, resourceType, timestamp):
+        case let .requestServedFromMemoryCache(id, response, initiator, resourceType, timestamp):
             await applyRequestServedFromMemoryCache(
                 id: id,
                 response: response,
+                initiator: initiator,
                 resourceType: resourceType,
                 timestamp: timestamp,
                 modelContext: modelContext
@@ -801,6 +814,7 @@ package final class NetworkRequestStore {
     private nonisolated(nonsending) func applyRequestWillBeSent(
         id proxyID: Network.Request.ID,
         request payload: Network.Request,
+        initiator: Network.Initiator,
         resourceType: Network.ResourceType?,
         redirectResponse: Network.Response?,
         timestamp: Double,
@@ -825,12 +839,18 @@ package final class NetworkRequestStore {
                 )
                 topologyMayHaveChanged = true
             } else if existing.isActive == false {
-                request.applyRequestWillBeSent(request: payload, resourceType: resourceType, timestamp: timestamp)
+                request.applyRequestWillBeSent(
+                    request: payload,
+                    initiator: initiator,
+                    resourceType: resourceType,
+                    timestamp: timestamp
+                )
                 topologyMayHaveChanged = true
             }
         } else {
             request = NetworkRequest(
                 request: payload,
+                initiator: initiator,
                 resourceType: resourceType,
                 timestamp: timestamp,
                 modelContext: modelContext
@@ -849,6 +869,7 @@ package final class NetworkRequestStore {
     private nonisolated(nonsending) func applyRequestServedFromMemoryCache(
         id proxyID: Network.Request.ID,
         response: Network.Response,
+        initiator: Network.Initiator,
         resourceType: Network.ResourceType?,
         timestamp: Double,
         modelContext: WebInspectorModelContext
@@ -873,6 +894,7 @@ package final class NetworkRequestStore {
             )
             request = NetworkRequest(
                 request: payload,
+                initiator: initiator,
                 resourceType: resourceType,
                 timestamp: timestamp,
                 modelContext: modelContext
@@ -919,6 +941,7 @@ package final class NetworkRequestStore {
             )
             request = NetworkRequest(
                 request: payload,
+                initiator: nil,
                 resourceType: resourceType,
                 timestamp: timestamp,
                 modelContext: modelContext
@@ -1020,6 +1043,7 @@ package final class NetworkRequestStore {
             let payload = Network.Request(id: proxyID, url: url, method: "GET")
             request = NetworkRequest(
                 request: payload,
+                initiator: nil,
                 resourceType: .webSocket,
                 timestamp: nil,
                 modelContext: modelContext

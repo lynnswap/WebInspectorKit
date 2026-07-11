@@ -2119,6 +2119,7 @@ struct NetworkDetailViewControllerTests {
                     headers: requestHeaders,
                     postData: postData
                 ),
+                initiator: Network.Initiator(kind: "other"),
                 resourceType: .script,
                 redirectResponse: nil,
                 timestamp: 1
@@ -2171,6 +2172,7 @@ struct NetworkDetailViewControllerTests {
                     headers: requestHeaders,
                     postData: postData
                 ),
+                initiator: Network.Initiator(kind: "other"),
                 resourceType: .xhr,
                 redirectResponse: nil,
                 timestamp: 1

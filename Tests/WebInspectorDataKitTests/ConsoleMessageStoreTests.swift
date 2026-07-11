@@ -15,6 +15,7 @@ private actor StoreIsolationProbe {
                     url: "https://example.com/custom-actor",
                     method: "GET"
                 ),
+                initiator: Network.Initiator(kind: "other"),
                 resourceType: .fetch,
                 redirectResponse: nil,
                 timestamp: 1

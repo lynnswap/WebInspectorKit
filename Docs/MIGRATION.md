@@ -8,6 +8,24 @@ when upgrading WebInspectorKit. Sections are grouped by release, newest first.
 Unreleased builds require Swift 6.3+ and a minimum deployment target of iOS
 18.4+ or macOS 15.4+. The built-in UIKit inspector remains iOS-only.
 
+### Read Network request initiators from request events
+
+`Network.Event.requestWillBeSent` and
+`Network.Event.requestServedFromMemoryCache` now include a
+`Network.Initiator` associated value. The initiator exposes WebKit's kind and
+source location together with an optional, target-scoped `DOM.Node.ID`:
+
+```swift
+case let .requestWillBeSent(_, request, initiator, _, _, _):
+    if let nodeID = initiator.nodeID {
+        associate(request, with: nodeID)
+    }
+```
+
+WebKit can omit the node association. In particular, an unbound protocol
+`nodeId` of zero is normalized to `nil` rather than exposed as a usable DOM
+identity.
+
 ### Make custom tab factories asynchronous
 
 `WebInspectorTab` factories are now `async throws` and declare the model

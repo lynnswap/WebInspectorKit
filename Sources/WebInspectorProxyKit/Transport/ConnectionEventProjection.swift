@@ -426,10 +426,11 @@ package enum ConnectionEventProjection {
         targetRawValue: String
     ) -> Network.Event {
         switch event {
-        case let .requestWillBeSent(id, request, resourceType, redirectResponse, timestamp):
+        case let .requestWillBeSent(id, request, initiator, resourceType, redirectResponse, timestamp):
             .requestWillBeSent(
                 id: scopedNetworkRequestID(id, targetRawValue: targetRawValue),
                 request: scopedNetworkRequest(request, targetRawValue: targetRawValue),
+                initiator: scopedNetworkInitiator(initiator, targetRawValue: targetRawValue),
                 resourceType: resourceType,
                 redirectResponse: redirectResponse,
                 timestamp: timestamp
@@ -462,10 +463,11 @@ package enum ConnectionEventProjection {
                 canceled: canceled,
                 timestamp: timestamp
             )
-        case let .requestServedFromMemoryCache(id, response, resourceType, timestamp):
+        case let .requestServedFromMemoryCache(id, response, initiator, resourceType, timestamp):
             .requestServedFromMemoryCache(
                 id: scopedNetworkRequestID(id, targetRawValue: targetRawValue),
                 response: response,
+                initiator: scopedNetworkInitiator(initiator, targetRawValue: targetRawValue),
                 resourceType: resourceType,
                 timestamp: timestamp
             )
@@ -521,6 +523,21 @@ package enum ConnectionEventProjection {
             referrerPolicy: request.referrerPolicy,
             integrity: request.integrity,
             backendResourceIdentifier: request.backendResourceIdentifier
+        )
+    }
+
+    private nonisolated static func scopedNetworkInitiator(
+        _ initiator: Network.Initiator,
+        targetRawValue: String
+    ) -> Network.Initiator {
+        Network.Initiator(
+            kind: initiator.kind,
+            url: initiator.url,
+            line: initiator.line,
+            column: initiator.column,
+            nodeID: initiator.nodeID.map {
+                scopedDOMNodeID($0, targetRawValue: targetRawValue)
+            }
         )
     }
 

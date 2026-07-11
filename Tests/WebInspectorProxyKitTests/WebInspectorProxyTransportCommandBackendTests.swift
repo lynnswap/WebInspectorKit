@@ -1517,7 +1517,7 @@ func structuredNetworkScopePreservesFrameScopedIdentifiers() async throws {
         transport,
         targetID: ProtocolTarget.ID("frame-target"),
         method: "Network.requestWillBeSent",
-        params: #"{"requestId":"frame-request","request":{"url":"https://frame.example.test/","method":"GET"},"timestamp":1}"#
+        params: #"{"requestId":"frame-request","request":{"url":"https://frame.example.test/","method":"GET"},"initiator":{"type":"other","nodeId":7},"timestamp":1}"#
     )
     await receiveTargetReply(
         transport,
@@ -1533,12 +1533,35 @@ func structuredNetworkScopePreservesFrameScopedIdentifiers() async throws {
         result: "{}"
     )
 
-    guard case let .event(_, .requestWillBeSent(id, request, _, _, _))? = try await throwingValue(of: scopeTask) else {
+    guard case let .event(_, .requestWillBeSent(id, request, initiator, _, _, _))? = try await throwingValue(of: scopeTask) else {
         Issue.record("Expected a projected frame Network event.")
         return
     }
     #expect(id.targetScopeRawValue == "frame-target")
     #expect(request.id.targetScopeRawValue == "frame-target")
+    #expect(initiator.nodeID?.targetScopeRawValue == "frame-target")
+    #expect(initiator.nodeID?.unscopedRawValue == "7")
+}
+
+@Test
+func networkInitiatorTreatsUnboundDOMNodeSentinelAsMissing() throws {
+    let event = ProtocolEvent(
+        sequence: 1,
+        domain: .network,
+        method: "Network.requestWillBeSent",
+        targetID: nil,
+        paramsData: Data(#"{"requestId":"zero-node","request":{"url":"https://example.test/","method":"GET"},"initiator":{"type":"other","nodeId":0},"timestamp":1}"#.utf8)
+    )
+
+    guard case let .network(.requestWillBeSent(_, _, initiator, _, _, _)) = try LiveProxyEventDecoder.proxyEvent(
+        from: event,
+        targetID: WebInspectorTarget.ID("page-main")
+    ) else {
+        Issue.record("Expected a decoded Network request event.")
+        return
+    }
+
+    #expect(initiator.nodeID == nil)
 }
 
 @Test
