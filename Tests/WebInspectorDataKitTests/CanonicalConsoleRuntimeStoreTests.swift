@@ -329,6 +329,50 @@ func canonicalRuntimeDestroyRejectsSameGenerationReuseButResetPermitsNewIdentity
 }
 
 @Test
+func canonicalRuntimeIgnoresDelayedDestroyForATombstonedContext() throws {
+    var fixture = try CanonicalConsoleRuntimeFixture()
+    let initialScope = fixture.scope(
+        semanticTargetID: "frame",
+        agentTargetID: "runtime-agent",
+        runtimeBindingEpoch: 1
+    )
+    _ = try fixture.store.reduceRuntime(
+        .executionContextCreated(canonicalRuntimeContext(id: "late-destroy")),
+        scope: initialScope
+    )
+    let clearedScope = fixture.scope(
+        semanticTargetID: "frame",
+        agentTargetID: "runtime-agent",
+        runtimeBindingEpoch: 2
+    )
+    _ = try fixture.store.reduceRuntime(
+        .executionContextsCleared,
+        scope: clearedScope
+    )
+
+    let afterClear = fixture.store
+    #expect(
+        try fixture.store.reduceRuntime(
+            .executionContextDestroyed(
+                Runtime.ExecutionContext.ID("late-destroy")
+            ),
+            scope: clearedScope
+        ) == nil
+    )
+    #expect(fixture.store == afterClear)
+
+    #expect(throws: CanonicalConsoleRuntimeProtocolViolation.self) {
+        try fixture.store.reduceRuntime(
+            .executionContextDestroyed(
+                Runtime.ExecutionContext.ID("never-observed")
+            ),
+            scope: clearedScope
+        )
+    }
+    #expect(fixture.store == afterClear)
+}
+
+@Test
 func canonicalSemanticNavigationDeletesOnlyPriorMembershipForThatTarget() throws {
     var fixture = try CanonicalConsoleRuntimeFixture()
     for semanticTarget in ["frame-a", "frame-b"] {
@@ -358,12 +402,68 @@ func canonicalSemanticNavigationDeletesOnlyPriorMembershipForThatTarget() throws
     #expect(fixture.store.runtimeContextCount == 1)
     #expect(
         transaction.resourceInvalidations == [
+            .runtimeBinding(
+                agentTargetID: WebInspectorTarget.ID("root-agent"),
+                epoch: ModelRuntimeBindingEpoch(rawValue: 2)
+            ),
             .semanticNavigation(
                 semanticTargetID: WebInspectorTarget.ID("frame-a"),
-                agentTargetID: WebInspectorTarget.ID("root-agent"),
-                navigationEpoch: ModelNavigationEpoch(rawValue: 2),
-                runtimeBindingEpoch: ModelRuntimeBindingEpoch(rawValue: 2)
+                navigationEpoch: ModelNavigationEpoch(rawValue: 2)
             )
+        ]
+    )
+}
+
+@Test
+func canonicalSemanticNavigationInvalidatesEveryAgentThroughSemanticAuthority() throws {
+    var fixture = try CanonicalConsoleRuntimeFixture()
+    for agentTargetID in ["page-agent", "frame-agent"] {
+        let scope = fixture.scope(
+            semanticTargetID: "shared-frame",
+            agentTargetID: agentTargetID,
+            navigationEpoch: 1,
+            runtimeBindingEpoch: 1,
+            consoleBindingEpoch: 1
+        )
+        _ = try fixture.store.reduceRuntime(
+            .executionContextCreated(
+                canonicalRuntimeContext(id: "context-\(agentTargetID)")
+            ),
+            scope: scope
+        )
+        _ = try fixture.store.reduceConsole(
+            .messageAdded(
+                canonicalConsoleMessage(text: "message-\(agentTargetID)")
+            ),
+            scope: scope
+        )
+    }
+
+    let transaction = try #require(
+        try fixture.store.semanticTargetNavigated(
+            scope: fixture.scope(
+                semanticTargetID: "shared-frame",
+                agentTargetID: "page-agent",
+                navigationEpoch: 2,
+                runtimeBindingEpoch: 2,
+                consoleBindingEpoch: 1
+            )
+        )
+    )
+
+    #expect(transaction.runtimeContextChanges.count == 2)
+    #expect(fixture.store.runtimeContextCount == 0)
+    #expect(fixture.store.consoleMessageCount == 2)
+    #expect(
+        transaction.resourceInvalidations == [
+            .runtimeBinding(
+                agentTargetID: WebInspectorTarget.ID("page-agent"),
+                epoch: ModelRuntimeBindingEpoch(rawValue: 2)
+            ),
+            .semanticNavigation(
+                semanticTargetID: WebInspectorTarget.ID("shared-frame"),
+                navigationEpoch: ModelNavigationEpoch(rawValue: 2)
+            ),
         ]
     )
 }

@@ -282,9 +282,7 @@ package enum CanonicalConsoleRuntimeResourceInvalidation: Equatable, Sendable {
     )
     case semanticNavigation(
         semanticTargetID: WebInspectorTarget.ID,
-        agentTargetID: WebInspectorTarget.ID,
-        navigationEpoch: ModelNavigationEpoch,
-        runtimeBindingEpoch: ModelRuntimeBindingEpoch
+        navigationEpoch: ModelNavigationEpoch
     )
     case targetLost(WebInspectorTarget.ID)
     case attachmentReset(

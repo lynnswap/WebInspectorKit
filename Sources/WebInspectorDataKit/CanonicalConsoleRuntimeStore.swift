@@ -411,11 +411,13 @@ package struct CanonicalConsoleRuntimeStore: Equatable, Sendable {
         return CanonicalConsoleRuntimeTransaction(
             runtimeContextChanges: removedIDs.map(CanonicalRuntimeContextChange.delete),
             resourceInvalidations: [
+                .runtimeBinding(
+                    agentTargetID: scope.agentTarget.id,
+                    epoch: runtimeBindingEpoch
+                ),
                 .semanticNavigation(
                     semanticTargetID: scope.target.id,
-                    agentTargetID: scope.agentTarget.id,
-                    navigationEpoch: scope.navigationEpoch,
-                    runtimeBindingEpoch: runtimeBindingEpoch
+                    navigationEpoch: scope.navigationEpoch
                 )
             ]
         )
@@ -618,7 +620,7 @@ private extension CanonicalConsoleRuntimeStore {
     mutating func destroyRuntimeContext(
         _ rawContextID: Runtime.ExecutionContext.ID,
         scope: ModelEventScope
-    ) throws -> CanonicalConsoleRuntimeTransaction {
+    ) throws -> CanonicalConsoleRuntimeTransaction? {
         _ = try requireRuntimeBindingEpoch(
             scope,
             event: "Runtime.executionContextDestroyed"
@@ -628,6 +630,13 @@ private extension CanonicalConsoleRuntimeStore {
             rawContextID: rawContextID
         )
         guard let id = runtimeContextIDByLookupKey[lookupKey] else {
+            let tombstonedID = canonicalRuntimeContextID(
+                rawContextID: rawContextID,
+                scope: scope
+            )
+            if runtimeContextTombstones.contains(tombstonedID) {
+                return nil
+            }
             throw CanonicalConsoleRuntimeProtocolViolation.missingRuntimeContext(
                 agentTargetID: scope.agentTarget.id,
                 rawContextID: rawContextID
