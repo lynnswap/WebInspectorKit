@@ -379,15 +379,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
     private func makeDataSource() -> UICollectionViewDiffableDataSource<SectionIdentifier, WebInspectorFetchSectionID> {
         let listCellRegistration = UICollectionView.CellRegistration<NetworkListCell, WebInspectorFetchSectionID> { [weak self] cell, _, id in
-            guard let requests = self?.fetchedResults[section: id]?.items,
-                  requests.isEmpty == false else {
-                cell.unbind()
-                return
-            }
-            cell.bind(
-                requests: requests,
-                renderingActive: self?.snapshotCoordinator.isRenderingActive == true
-            )
+            self?.bind(cell, to: id)
         }
         return UICollectionViewDiffableDataSource<SectionIdentifier, WebInspectorFetchSectionID>(
             collectionView: collectionView
@@ -485,23 +477,18 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         snapshotCoordinator.pendingUpdate = nil
 
         let currentSnapshot = dataSource.snapshot()
-        if update.requiresFullReconfigure == false,
-           currentSnapshot.sectionIdentifiers == update.snapshot.sectionIdentifiers,
+        if currentSnapshot.sectionIdentifiers == update.snapshot.sectionIdentifiers,
            currentSnapshot.itemIdentifiers == update.snapshot.itemIdentifiers {
-            let indexPaths = update.reconfigureEntryIDs.compactMap { entryID in
-                dataSource.indexPath(for: entryID)
-            }
+            let entryIDsToRebind = update.requiresFullReconfigure
+                ? Set(update.snapshot.itemIdentifiers)
+                : update.reconfigureEntryIDs
+            let reboundEntryIDs = rebindVisibleCells(entryIDs: entryIDsToRebind)
 #if DEBUG
-            lastAppliedReconfigureEntryIDsStorageForTesting = Set(
-                indexPaths.compactMap { dataSource.itemIdentifier(for: $0) }
-            )
-            if indexPaths.isEmpty == false {
+            lastAppliedReconfigureEntryIDsStorageForTesting = reboundEntryIDs
+            if reboundEntryIDs.isEmpty == false {
                 cellReconfigureCountStorageForTesting += 1
             }
 #endif
-            if indexPaths.isEmpty == false {
-                collectionView.reconfigureItems(at: indexPaths)
-            }
 #if DEBUG
             resumeSnapshotUpdateCompletionWaitersForTesting()
 #endif
@@ -535,6 +522,36 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         snapshotApplyCountStorageForTesting += 1
 #endif
         dataSource.apply(snapshot, animatingDifferences: false, completion: completion)
+    }
+
+    private func rebindVisibleCells(
+        entryIDs: Set<WebInspectorFetchSectionID>
+    ) -> Set<WebInspectorFetchSectionID> {
+        var reboundEntryIDs: Set<WebInspectorFetchSectionID> = []
+        for entryID in entryIDs {
+            guard let indexPath = dataSource.indexPath(for: entryID),
+                  let cell = collectionView.cellForItem(at: indexPath) as? NetworkListCell else {
+                continue
+            }
+            bind(cell, to: entryID)
+            reboundEntryIDs.insert(entryID)
+        }
+        return reboundEntryIDs
+    }
+
+    private func bind(
+        _ cell: NetworkListCell,
+        to entryID: WebInspectorFetchSectionID
+    ) {
+        guard let requests = fetchedResults[section: entryID]?.items,
+              requests.isEmpty == false else {
+            cell.unbind()
+            return
+        }
+        cell.bind(
+            requests: requests,
+            renderingActive: snapshotCoordinator.isRenderingActive
+        )
     }
 
     private func snapshotUpdateDidFinish(

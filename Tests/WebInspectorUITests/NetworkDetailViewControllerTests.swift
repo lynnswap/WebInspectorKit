@@ -2739,6 +2739,10 @@ struct NetworkDetailViewControllerTests {
         let window = showInWindow(listViewController, makeVisible: true)
         defer { window.isHidden = true }
         await listViewController.flushPendingSnapshotUpdateForTesting()
+        listViewController.collectionViewForTesting.layoutIfNeeded()
+        let cell = try #require(listViewController.networkListCellForTesting(
+            at: IndexPath(item: 0, section: 0)
+        ))
 
         #expect(listViewController.displayedEntryIDsForTesting == [groupID])
         #expect(listViewController.displayedUIKitSectionCountForTesting == 1)
@@ -2772,10 +2776,6 @@ struct NetworkDetailViewControllerTests {
         #expect(listViewController.cellReconfigureCountForTesting == cellReconfigureCount + 1)
         #expect(listViewController.lastAppliedReconfigureEntryIDsForTesting == [groupID])
 
-        listViewController.collectionViewForTesting.layoutIfNeeded()
-        let cell = try #require(listViewController.networkListCellForTesting(
-            at: IndexPath(item: 0, section: 0)
-        ))
         #expect(cell.fileTypeLabelForTesting?.hasSuffix("×2") == true)
     }
 
@@ -3056,7 +3056,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func hiddenFilteredListReloadsOnceEvenWhenRowsRemainVisible() async throws {
+    func hiddenFilteredListDoesNotReapplyUnchangedRowTopology() async throws {
         let context = makeContext()
         let request = try #require(await applyRequest(
             to: context,
@@ -3099,13 +3099,13 @@ struct NetworkDetailViewControllerTests {
         listViewController.resumeRenderingForTesting()
 
         #expect(listViewController.entryIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate + 1)
-        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeHiddenUpdate + 1)
+        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeHiddenUpdate)
         #expect(listViewController.displayedEntryIDsForTesting == [try #require(context.networkRequestGroupID(containing: request.id))])
 
         await listViewController.flushPendingSnapshotUpdateForTesting()
 
         #expect(listViewController.entryIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate + 1)
-        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeHiddenUpdate + 1)
+        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeHiddenUpdate)
         #expect(listViewController.displayedEntryIDsForTesting == [try #require(context.networkRequestGroupID(containing: request.id))])
     }
 
