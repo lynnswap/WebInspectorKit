@@ -40,7 +40,7 @@ private struct ConnectionOwnedCommandOperation: Sendable {
 
 private struct ConnectionDirectCommandAdmission: Sendable {
     let bindingGeneration: WebInspectorPage.Generation?
-    let documentEpoch: ModelDocumentEpoch?
+    let documentEpoch: ModelDOMBindingEpoch?
 }
 
 private enum ConnectionTargetCommandOwner: Sendable {
@@ -48,7 +48,7 @@ private enum ConnectionTargetCommandOwner: Sendable {
     case elementPickerMode(
         key: ConnectionCapabilityKey,
         generation: WebInspectorPage.Generation,
-        documentEpoch: ModelDocumentEpoch,
+        documentEpoch: ModelDOMBindingEpoch,
         enabled: Bool
     )
 }
@@ -200,10 +200,15 @@ private struct ConnectionCapabilityTask: Sendable {
         case replayRefresh
     }
 
+    enum CancellationReason: Equatable, Sendable {
+        case modelFeedTeardown
+    }
+
     let task: Task<Void, Never>
     var pendingReplyOwnership: ConnectionPendingReplyOwnership?
     var startingWireState: StartingWireState?
     var policy: Policy
+    var cancellationReason: CancellationReason?
 }
 
 private enum RememberedCurrentPageCapabilityState: Equatable, Sendable {
@@ -244,13 +249,14 @@ private struct ConnectionDOMBootstrapState: Sendable {
 
     struct TargetState: Sendable {
         let target: ModelTarget
-        var completedEpoch: ModelDocumentEpoch?
+        var completedEpoch: ModelDOMBindingEpoch?
     }
 
     struct ActiveOperation: Sendable {
         let id: UInt64
         let targetID: ProtocolTarget.ID
-        let documentEpoch: ModelDocumentEpoch
+        let navigationEpoch: ModelNavigationEpoch
+        let documentEpoch: ModelDOMBindingEpoch
         var replyDisposition: ReplyDisposition?
     }
 
@@ -259,6 +265,25 @@ private struct ConnectionDOMBootstrapState: Sendable {
     var targetsByID: [ProtocolTarget.ID: TargetState]
     var activeOperation: ActiveOperation?
     var needsCompletionMarker: Bool
+}
+
+private struct ConnectionCSSBootstrapState: Sendable {
+    enum ReplyDisposition: Equatable, Sendable {
+        case published
+        case stale
+    }
+
+    struct ActiveOperation: Sendable {
+        let id: UInt64
+        let targetID: ProtocolTarget.ID
+        let targetStates: [ProtocolTarget.ID: ModelTargetState]
+        var replyDisposition: ReplyDisposition?
+    }
+
+    let generation: WebInspectorPage.Generation
+    var activeOperation: ActiveOperation?
+    var needsSnapshot: Bool
+    var publishedThrough: UInt64?
 }
 
 private enum ConnectionModelFeedLifecycle: Sendable {
@@ -279,6 +304,7 @@ private struct ConnectionModelFeedRegistration: Sendable {
     var resetGeneration: WebInspectorPage.Generation
     var synchronization: ConnectionModelFeedSynchronizationState?
     var domBootstrap: ConnectionDOMBootstrapState?
+    var cssBootstrap: ConnectionCSSBootstrapState?
 }
 
 private struct CurrentPageBindingChangeEffects: Sendable {
@@ -490,7 +516,9 @@ package actor ConnectionCore {
         expectedCount: Int,
         continuation: CheckedContinuation<Void, Never>
     )]
-    private var modelDocumentEpochs: [ProtocolTarget.ID: ModelDocumentEpoch]
+    private var modelNavigationEpochs: [ProtocolTarget.ID: ModelNavigationEpoch]
+    private var modelNavigationLoaderIDs: [ProtocolTarget.ID: String]
+    private var modelDOMBindingEpochs: [ProtocolTarget.ID: ModelDOMBindingEpoch]
     private var currentPageGeneration: WebInspectorPage.Generation
     private var currentPageBindingGapIsOpen: Bool
     private var eventScopeRegistrationWaiters: [(
@@ -548,7 +576,9 @@ package actor ConnectionCore {
         modelCommandTasks = [:]
         modelCommandOwnerCountWaiters = []
         modelCommandReadinessCountWaiters = []
-        modelDocumentEpochs = [:]
+        modelNavigationEpochs = [:]
+        modelNavigationLoaderIDs = [:]
+        modelDOMBindingEpochs = [:]
         currentPageGeneration = WebInspectorPage.Generation(rawValue: 0)
         currentPageBindingGapIsOpen = false
         eventScopeRegistrationWaiters = []
@@ -671,7 +701,8 @@ package actor ConnectionCore {
             targetSnapshotThrough: nil,
             resetGeneration: resetGeneration,
             synchronization: nil,
-            domBootstrap: nil
+            domBootstrap: nil,
+            cssBootstrap: nil
         )
 
         guard enqueueModelFeedRecord(.reset(resetGeneration)) else {
@@ -687,12 +718,34 @@ package actor ConnectionCore {
                !(await onRegistered(feed)) {
                 throw ConnectionModelFeedError.consumerTerminated
             }
+            let navigationLeaseOwner = ConnectionCapabilityLeaseOwner
+                .modelFeedNavigation(id)
+            let navigationKey = ConnectionCapabilityKey(
+                route: .currentPage,
+                targetID: .currentPage,
+                domain: .page
+            )
+            let navigationLease = ConnectionModelFeedCapabilityLease(
+                owner: navigationLeaseOwner,
+                key: navigationKey
+            )
+            let navigationActivation = beginCapabilityLease(
+                navigationLeaseOwner,
+                for: navigationKey,
+                generation: currentPageGeneration
+            )
+            appendModelFeedCapabilityLease(navigationLease, feedID: id)
+            try await activateCapabilityLease(
+                navigationLeaseOwner,
+                for: navigationKey,
+                activation: navigationActivation
+            )
             for domain in ModelDomain.ordered(configuredDomains) {
                 do {
                     let leaseOwner = ConnectionCapabilityLeaseOwner.modelFeed(id, domain)
                     let capabilityDomains = ConnectionCapabilityActivationPlan.domains(
                         for: domain.capabilityDependencies,
-                        includePageDependencyForCSS: true
+                        includePageDependencyForCSS: false
                     )
                     for capabilityDomain in capabilityDomains {
                         try Task.checkCancellation()
@@ -1072,22 +1125,45 @@ package actor ConnectionCore {
     private func cancelAndAwaitModelBootstrapTasks(
         feedID: ConnectionModelFeedID
     ) async {
+        let cssTask = cancellableCSSBootstrapTask(feedID: feedID)
         if var registration = modelFeed,
            registration.id == feedID {
             registration.domBootstrap = nil
+            registration.cssBootstrap = nil
             modelFeed = registration
         }
-        let tasks = modelBootstrapTasks.values.filter { $0.feedID == feedID }
-        for task in tasks {
+        let domTasks = modelBootstrapTasks.values.filter { $0.feedID == feedID }
+        for task in domTasks {
             task.task.cancel()
         }
-        for task in tasks {
+        cssTask?.cancel()
+        for task in domTasks {
             await task.task.value
         }
+        await cssTask?.value
         precondition(
             modelBootstrapTasks.values.allSatisfy { $0.feedID != feedID },
             "A model feed stopped before its DOM bootstrap tasks completed."
         )
+    }
+
+    private func cancellableCSSBootstrapTask(
+        feedID: ConnectionModelFeedID
+    ) -> Task<Void, Never>? {
+        guard let registration = modelFeed,
+              registration.id == feedID,
+              let operationID = registration.cssBootstrap?.activeOperation?.id,
+              var task = capabilityTasks[operationID],
+              task.policy == .cssSnapshot else {
+            return nil
+        }
+        precondition(
+            task.startingWireState == .enabled,
+            "Only a read-only CSS snapshot on a known enabled agent can be cancelled."
+        )
+        task.cancellationReason = .modelFeedTeardown
+        capabilityTasks[operationID] = task
+        return task.task
     }
 
     package func pageGeneration() throws -> WebInspectorPage.Generation {
@@ -1285,7 +1361,7 @@ package actor ConnectionCore {
                 command.domain,
                 method: command.method
             )
-                ? modelDocumentEpoch(for: targetID)
+                ? modelDOMBindingEpoch(for: targetID)
                 : nil
         )
         if let result = transportLocalResult(for: command, targetID: targetID) {
@@ -1485,7 +1561,7 @@ package actor ConnectionCore {
             guard let targetID,
                   let document = authorization.document,
                   ProtocolTarget.ID(document.targetID.rawValue) == targetID,
-                  modelDocumentEpoch(for: targetID) == document.epoch else {
+                  modelDOMBindingEpoch(for: targetID) == document.epoch else {
                 throw WebInspectorProxyError.staleIdentifier
             }
         }
@@ -2080,9 +2156,13 @@ package actor ConnectionCore {
         guard var registration = modelFeed else {
             return true
         }
-        guard let snapshot = targetRegistry.modelTargetSnapshot() else {
+        guard let targetGraph = targetRegistry.modelTargetGraphSnapshot() else {
             preconditionFailure("A current page binding has no model target snapshot.")
         }
+        let snapshot = ModelTargetSnapshot(
+            currentPageID: targetGraph.currentPageID,
+            targets: targetGraph.targets.map(modelTargetState)
+        )
         let through = eventSequences.current.sequence
         guard enqueueModelFeedRecord(
             .targetSnapshot(
@@ -2105,12 +2185,23 @@ package actor ConnectionCore {
         } else {
             registration.domBootstrap = nil
         }
+        if registration.configuredDomains.contains(.css) {
+            registration.cssBootstrap = ConnectionCSSBootstrapState(
+                generation: currentPageGeneration,
+                activeOperation: nil,
+                needsSnapshot: true,
+                publishedThrough: nil
+            )
+        } else {
+            registration.cssBootstrap = nil
+        }
         modelFeed = registration
 
         guard publishModelSynchronizationIfReady() else {
             return false
         }
         startNextDOMBootstrapIfNeeded()
+        startCSSBootstrapIfNeeded()
         return isOpen
     }
 
@@ -2179,17 +2270,21 @@ package actor ConnectionCore {
         generation: WebInspectorPage.Generation
     ) -> ConnectionDOMBootstrapState {
         var targetsByID: [ProtocolTarget.ID: ConnectionDOMBootstrapState.TargetState] = [:]
-        let orderedTargetIDs = snapshot.targets.map { target in
+        let orderedTargetIDs = snapshot.targets.map { state in
+            let target = state.target
             let targetID = ProtocolTarget.ID(target.id.rawValue)
             precondition(
                 !targetsByID.keys.contains(targetID),
                 "A model target snapshot contains duplicate physical targets."
             )
+            precondition(
+                state.domBindingEpoch == modelDOMBindingEpoch(for: targetID),
+                "A DOM model target snapshot omitted its exact binding epoch."
+            )
             targetsByID[targetID] = ConnectionDOMBootstrapState.TargetState(
                 target: target,
                 completedEpoch: nil
             )
-            _ = modelDocumentEpoch(for: targetID)
             return targetID
         }
         return ConnectionDOMBootstrapState(
@@ -2201,28 +2296,116 @@ package actor ConnectionCore {
         )
     }
 
-    private func modelDocumentEpoch(
+    private func modelNavigationEpoch(
         for targetID: ProtocolTarget.ID
-    ) -> ModelDocumentEpoch {
-        if let epoch = modelDocumentEpochs[targetID] {
+    ) -> ModelNavigationEpoch {
+        if let epoch = modelNavigationEpochs[targetID] {
             return epoch
         }
-        let epoch = ModelDocumentEpoch(rawValue: 0)
-        modelDocumentEpochs[targetID] = epoch
+        let epoch = ModelNavigationEpoch(rawValue: 0)
+        modelNavigationEpochs[targetID] = epoch
         return epoch
     }
 
-    private func advanceModelDocumentEpoch(
+    private func advanceModelNavigationEpoch(
+        for targetID: ProtocolTarget.ID,
+        loaderID: String
+    ) -> ModelNavigationEpoch {
+        let current = modelNavigationEpoch(for: targetID)
+        if modelNavigationLoaderIDs[targetID] == loaderID {
+            return current
+        }
+        precondition(
+            current.rawValue < UInt64.max,
+            "A model navigation epoch exhausted UInt64."
+        )
+        let next = ModelNavigationEpoch(rawValue: current.rawValue + 1)
+        modelNavigationLoaderIDs[targetID] = loaderID
+        modelNavigationEpochs[targetID] = next
+        return next
+    }
+
+    private func modelDOMBindingEpoch(
         for targetID: ProtocolTarget.ID
-    ) -> ModelDocumentEpoch {
-        let current = modelDocumentEpoch(for: targetID)
+    ) -> ModelDOMBindingEpoch {
+        if let epoch = modelDOMBindingEpochs[targetID] {
+            return epoch
+        }
+        let epoch = ModelDOMBindingEpoch(rawValue: 0)
+        modelDOMBindingEpochs[targetID] = epoch
+        return epoch
+    }
+
+    private func advanceModelDOMBindingEpoch(
+        for targetID: ProtocolTarget.ID
+    ) -> ModelDOMBindingEpoch {
+        let current = modelDOMBindingEpoch(for: targetID)
         precondition(
             current.rawValue < UInt64.max,
             "A DOM document epoch exhausted UInt64."
         )
-        let next = ModelDocumentEpoch(rawValue: current.rawValue + 1)
-        modelDocumentEpochs[targetID] = next
+        let next = ModelDOMBindingEpoch(rawValue: current.rawValue + 1)
+        modelDOMBindingEpochs[targetID] = next
         return next
+    }
+
+    private func modelTargetState(_ target: ModelTarget) -> ModelTargetState {
+        let targetID = ProtocolTarget.ID(target.id.rawValue)
+        return ModelTargetState(
+            target: target,
+            navigationEpoch: modelNavigationEpoch(for: targetID),
+            domBindingEpoch: modelFeed?.configuredDomains.contains(.dom) == true
+                ? modelDOMBindingEpoch(for: targetID)
+                : nil
+        )
+    }
+
+    private func modelEventScope(
+        targetID: ProtocolTarget.ID,
+        target: ModelTarget
+    ) -> ModelEventScope {
+        precondition(
+            target.id.rawValue == targetID.rawValue,
+            "A model event scope target does not match its physical target identifier."
+        )
+        return ModelEventScope(
+            generation: currentPageGeneration,
+            target: target,
+            navigationEpoch: modelNavigationEpoch(for: targetID),
+            domBindingEpoch: modelFeed?.configuredDomains.contains(.dom) == true
+                ? modelDOMBindingEpoch(for: targetID)
+                : nil
+        )
+    }
+
+    private func modelEventScope(
+        targetID: ProtocolTarget.ID,
+        target: ModelTarget,
+        navigationEpoch: ModelNavigationEpoch,
+        domBindingEpoch: ModelDOMBindingEpoch
+    ) -> ModelEventScope {
+        precondition(
+            target.id.rawValue == targetID.rawValue,
+            "A model event scope target does not match its physical target identifier."
+        )
+        precondition(
+            modelFeed?.configuredDomains.contains(.dom) == true,
+            "An exact DOM-binding scope requires configured DOM delivery."
+        )
+        precondition(
+            modelNavigationEpoch(for: targetID) == navigationEpoch,
+            "An exact navigation scope is stale."
+        )
+        precondition(
+            modelDOMBindingEpoch(for: targetID) == domBindingEpoch,
+            "An exact DOM-binding scope is stale."
+        )
+        return ModelEventScope(
+            generation: currentPageGeneration,
+            target: target,
+            navigationEpoch: navigationEpoch,
+            domBindingEpoch: domBindingEpoch
+        )
     }
 
     private func startNextDOMBootstrapIfNeeded() {
@@ -2244,7 +2427,7 @@ package actor ConnectionCore {
             guard let target = bootstrap.targetsByID[targetID] else {
                 preconditionFailure("A DOM bootstrap order entry lost its target state.")
             }
-            return target.completedEpoch != modelDocumentEpoch(for: targetID)
+            return target.completedEpoch != modelDOMBindingEpoch(for: targetID)
         }
         guard let targetID = nextTargetID else {
             _ = publishDOMBootstrapCompletionIfReady(
@@ -2259,10 +2442,12 @@ package actor ConnectionCore {
         )
         nextModelBootstrapOperationID += 1
         let operationID = nextModelBootstrapOperationID
-        let documentEpoch = modelDocumentEpoch(for: targetID)
+        let navigationEpoch = modelNavigationEpoch(for: targetID)
+        let documentEpoch = modelDOMBindingEpoch(for: targetID)
         bootstrap.activeOperation = ConnectionDOMBootstrapState.ActiveOperation(
             id: operationID,
             targetID: targetID,
+            navigationEpoch: navigationEpoch,
             documentEpoch: documentEpoch,
             replyDisposition: nil
         )
@@ -2334,7 +2519,7 @@ package actor ConnectionCore {
             guard let target = bootstrap.targetsByID[targetID] else {
                 preconditionFailure("A DOM bootstrap order entry lost its target state.")
             }
-            return target.completedEpoch == modelDocumentEpoch(for: targetID)
+            return target.completedEpoch == modelDOMBindingEpoch(for: targetID)
         }
         guard allTargetsComplete else {
             return true
@@ -2381,7 +2566,7 @@ package actor ConnectionCore {
         feedID: ConnectionModelFeedID,
         generation: WebInspectorPage.Generation,
         targetID: ProtocolTarget.ID,
-        documentEpoch: ModelDocumentEpoch,
+        documentEpoch: ModelDOMBindingEpoch,
         operationID: UInt64
     ) throws -> ConnectionOwnedCommandOperation {
         guard targetRegistry.containsTarget(targetID) else {
@@ -2460,7 +2645,7 @@ package actor ConnectionCore {
         feedID: ConnectionModelFeedID,
         generation: WebInspectorPage.Generation,
         targetID: ProtocolTarget.ID,
-        documentEpoch: ModelDocumentEpoch,
+        documentEpoch: ModelDOMBindingEpoch,
         result: Result<Void, any Swift.Error>
     ) {
         if let ownership = modelBootstrapTasks.removeValue(forKey: id)?.pendingReplyOwnership,
@@ -2512,7 +2697,8 @@ package actor ConnectionCore {
             }
         case let .failure(error):
             let targetIsStillRequired = bootstrap.targetsByID[targetID] != nil
-                && modelDocumentEpoch(for: targetID) == documentEpoch
+                && modelNavigationEpoch(for: targetID) == active.navigationEpoch
+                && modelDOMBindingEpoch(for: targetID) == documentEpoch
                 && targetRegistry.target(for: targetID).map(
                     targetRegistry.isCurrentPageModelTarget
                 ) == true
@@ -2539,7 +2725,7 @@ package actor ConnectionCore {
         guard var registration = modelFeed,
               var bootstrap = registration.domBootstrap,
               bootstrap.generation == currentPageGeneration,
-              let snapshot = targetRegistry.modelTargetSnapshot() else {
+              let snapshot = targetRegistry.modelTargetGraphSnapshot() else {
             return
         }
 
@@ -2551,7 +2737,7 @@ package actor ConnectionCore {
                 !targetsByID.keys.contains(targetID),
                 "A reconciled model target snapshot contains duplicate physical targets."
             )
-            let currentEpoch = modelDocumentEpoch(for: targetID)
+            let currentEpoch = modelDOMBindingEpoch(for: targetID)
             if var existing = bootstrap.targetsByID[targetID] {
                 existing = ConnectionDOMBootstrapState.TargetState(
                     target: target,
@@ -2594,8 +2780,8 @@ package actor ConnectionCore {
               targetRegistry.isCurrentPageModelTarget(targetRecord) else {
             return ConnectionCommandInvalidationEffects()
         }
-        let oldEpoch = modelDocumentEpoch(for: targetID)
-        let documentEpoch = advanceModelDocumentEpoch(for: targetID)
+        let oldEpoch = modelDOMBindingEpoch(for: targetID)
+        let documentEpoch = advanceModelDOMBindingEpoch(for: targetID)
 
         if var registration = modelFeed,
            var bootstrap = registration.domBootstrap,
@@ -2605,6 +2791,7 @@ package actor ConnectionCore {
             registration.domBootstrap = bootstrap
             modelFeed = registration
         }
+        invalidateCSSBootstrapForModelFeed()
 
         var effects = invalidateModelCommands(
             where: { task in
@@ -2625,7 +2812,7 @@ package actor ConnectionCore {
                 return false
             }
             let bindingGeneration: WebInspectorPage.Generation?
-            let documentEpoch: ModelDocumentEpoch?
+            let documentEpoch: ModelDOMBindingEpoch?
             switch pending.purpose {
             case let .direct(generation, epoch):
                 bindingGeneration = generation
@@ -2653,10 +2840,13 @@ package actor ConnectionCore {
             }
             _ = enqueueModelFeedRecord(
                 .domDocumentInvalidated(
-                    generation: currentPageGeneration,
                     sequence: event.sequence,
-                    target: target,
-                    documentEpoch: documentEpoch
+                    scope: modelEventScope(
+                        targetID: targetID,
+                        target: target,
+                        navigationEpoch: modelNavigationEpoch(for: targetID),
+                        domBindingEpoch: documentEpoch
+                    )
                 )
             )
         }
@@ -2665,6 +2855,7 @@ package actor ConnectionCore {
 
     private func publishModelTargetLifecycleEvent(
         _ event: ModelTargetLifecycleEvent,
+        scope: ModelEventScope,
         sequence: UInt64
     ) {
         guard let registration = modelFeed,
@@ -2675,8 +2866,8 @@ package actor ConnectionCore {
         }
         _ = enqueueModelFeedRecord(
             .event(
-                generation: currentPageGeneration,
                 sequence: sequence,
+                scope: scope,
                 payload: .target(event)
             )
         )
@@ -3060,7 +3251,7 @@ package actor ConnectionCore {
             owner: .elementPickerMode(
                 key: key,
                 generation: generation,
-                documentEpoch: modelDocumentEpoch(for: targetID),
+                documentEpoch: modelDOMBindingEpoch(for: targetID),
                 enabled: enabled
             )
         )
@@ -3154,7 +3345,15 @@ package actor ConnectionCore {
                 capabilities.states[key] = capability
                 return
             }
-            startCapabilityEnable(for: key, generation: expectedGeneration)
+            if key.domain == .css, cssRequiresModelSnapshot(capability) {
+                startCSSCapabilitySnapshot(
+                    for: key,
+                    generation: expectedGeneration,
+                    ensuringEnabled: true
+                )
+            } else {
+                startCapabilityEnable(for: key, generation: expectedGeneration)
+            }
         case .unknown where capability.desiredCount > 0:
             guard (try? requireAvailableTarget(for: key.route)) != nil else {
                 capabilities.states[key] = capability
@@ -3226,6 +3425,9 @@ package actor ConnectionCore {
             let waiters = Array(capability.activationWaiters.values)
             capability.activationWaiters.removeAll()
             capabilities.states[key] = capability
+            if key.domain == .css {
+                startCSSBootstrapIfNeeded()
+            }
             if key.domain == .inspector {
                 await reconcileElementPickerMode(for: key)
             }
@@ -3390,10 +3592,19 @@ package actor ConnectionCore {
         guard var capability = capabilities.states[key] else {
             return
         }
-        let startingWireState = capabilityEnableStartingWireState(
-            capability.physical
-        )
+        let startingWireState: ConnectionCapabilityTask.StartingWireState
+        if case .enabled(generation) = capability.physical {
+            startingWireState = .enabled
+        } else {
+            startingWireState = capabilityEnableStartingWireState(
+                capability.physical
+            )
+        }
         let operationID = capabilities.allocateOperationID()
+        prepareCSSBootstrapOperation(
+            id: operationID,
+            generation: generation
+        )
         capability.physical = .enabling(
             generation: generation,
             operationID: operationID,
@@ -3409,6 +3620,103 @@ package actor ConnectionCore {
             startingWireState: startingWireState,
             method: ensuringEnabled ? "CSS.enable" : "CSS.getAllStyleSheets"
         )
+    }
+
+    private func prepareCSSBootstrapOperation(
+        id: UInt64,
+        generation: WebInspectorPage.Generation
+    ) {
+        guard var registration = modelFeed,
+              var bootstrap = registration.cssBootstrap,
+              bootstrap.generation == generation,
+              let targetID = targetRegistry.currentMainPageTargetID,
+              let targetGraph = targetRegistry.modelTargetGraphSnapshot() else {
+            preconditionFailure(
+                "A configured CSS snapshot has no current model scope owner."
+            )
+        }
+        precondition(
+            bootstrap.activeOperation == nil,
+            "A CSS bootstrap started while another snapshot was active."
+        )
+        let targetStates = Dictionary(
+            uniqueKeysWithValues: targetGraph.targets.map { target in
+                let targetID = ProtocolTarget.ID(target.id.rawValue)
+                return (targetID, modelTargetState(target))
+            }
+        )
+        bootstrap.activeOperation = ConnectionCSSBootstrapState.ActiveOperation(
+            id: id,
+            targetID: targetID,
+            targetStates: targetStates,
+            replyDisposition: nil
+        )
+        bootstrap.needsSnapshot = true
+        bootstrap.publishedThrough = nil
+        registration.cssBootstrap = bootstrap
+        modelFeed = registration
+    }
+
+    private func invalidateCSSBootstrapForModelFeed() {
+        guard var registration = modelFeed,
+              var bootstrap = registration.cssBootstrap,
+              bootstrap.generation == currentPageGeneration else {
+            return
+        }
+        bootstrap.needsSnapshot = true
+        bootstrap.publishedThrough = nil
+        registration.cssBootstrap = bootstrap
+        modelFeed = registration
+        startCSSBootstrapIfNeeded()
+    }
+
+    private func startCSSBootstrapIfNeeded() {
+        guard isOpen,
+              let registration = modelFeed,
+              let bootstrap = registration.cssBootstrap,
+              bootstrap.generation == currentPageGeneration,
+              bootstrap.needsSnapshot,
+              bootstrap.activeOperation == nil else {
+            return
+        }
+        switch registration.lifecycle {
+        case .acquiring, .active:
+            break
+        case .rollingBack, .closing:
+            return
+        }
+        let key = ConnectionCapabilityKey(
+            route: .currentPage,
+            targetID: .currentPage,
+            domain: .css
+        )
+        guard let capability = capabilities.states[key],
+              capability.desiredLeaseOwners.contains(
+                  .modelFeed(registration.id, .css)
+              ),
+              case .enabled(currentPageGeneration) = capability.physical else {
+            return
+        }
+        startCSSCapabilitySnapshot(
+            for: key,
+            generation: currentPageGeneration,
+            ensuringEnabled: false
+        )
+    }
+
+    private func finishCSSBootstrapOperation(
+        id: UInt64,
+        generation: WebInspectorPage.Generation
+    ) {
+        guard var registration = modelFeed,
+              var bootstrap = registration.cssBootstrap,
+              bootstrap.generation == generation,
+              bootstrap.activeOperation?.id == id else {
+            return
+        }
+        bootstrap.activeOperation = nil
+        registration.cssBootstrap = bootstrap
+        modelFeed = registration
     }
 
     private func capabilityEnableStartingWireState(
@@ -3487,7 +3795,8 @@ package actor ConnectionCore {
                 task: task,
                 pendingReplyOwnership: nil,
                 startingWireState: startingWireState,
-                policy: policy
+                policy: policy,
+                cancellationReason: nil
             )
             return
         }
@@ -3537,7 +3846,8 @@ package actor ConnectionCore {
             task: task,
             pendingReplyOwnership: operation.pendingReplyOwnership,
             startingWireState: startingWireState,
-            policy: policy
+            policy: policy,
+            cancellationReason: nil
         )
     }
 
@@ -3788,20 +4098,33 @@ package actor ConnectionCore {
                 "A capability task attempted to remove a reply owned by another purpose."
             )
         }
+        finishCSSBootstrapOperation(id: id, generation: generation)
         guard isOpen, var capability = capabilities.states[key] else {
             return
         }
-        let result = Self.normalizeCapabilityResult(
-            result,
-            action: action,
-            domain: key.domain,
-            policy: task?.policy ?? .standard
-        )
+        let normalizedResult: Result<Void, any Swift.Error>
+        if task?.cancellationReason == .modelFeedTeardown {
+            precondition(
+                action == .enable
+                    && key.domain == .css
+                    && task?.policy == .cssSnapshot
+                    && task?.startingWireState == .enabled,
+                "Only a read-only CSS snapshot can be cancelled for model-feed teardown."
+            )
+            normalizedResult = .success(())
+        } else {
+            normalizedResult = Self.normalizeCapabilityResult(
+                result,
+                action: action,
+                domain: key.domain,
+                policy: task?.policy ?? .standard
+            )
+        }
 
         switch (action, capability.physical) {
         case let (.enable, .enabling(activeGeneration, operationID, mustDisableAfterEnable))
             where activeGeneration == generation && operationID == id:
-            switch result {
+            switch normalizedResult {
             case .success:
                 capability.physical = .enabled(generation: generation)
                 capabilities.states[key] = capability
@@ -3825,6 +4148,7 @@ package actor ConnectionCore {
                 for waiter in releaseWaiters {
                     waiter.fulfill(.success(()))
                 }
+                startCSSBootstrapIfNeeded()
             case let .failure(error):
                 let activeLeaseFailed = capability.hasActivatedDesiredLease
                 let startingWireState = task?.startingWireState ?? .unknown
@@ -3922,7 +4246,7 @@ package actor ConnectionCore {
 
         case let (.disable, .disabling(activeGeneration, operationID))
             where activeGeneration == generation && operationID == id:
-            switch result {
+            switch normalizedResult {
             case .success:
                 capability.physical = .inactive(generation: generation)
                 let releaseWaiters = Array(capability.releaseWaiters.values)
@@ -4775,7 +5099,7 @@ package actor ConnectionCore {
         feedID: ConnectionModelFeedID,
         generation: WebInspectorPage.Generation,
         targetID: ProtocolTarget.ID,
-        documentEpoch: ModelDocumentEpoch,
+        documentEpoch: ModelDOMBindingEpoch,
         operationID: UInt64
     ) throws {
         guard var registration = modelFeed,
@@ -4792,7 +5116,8 @@ package actor ConnectionCore {
         }
 
         guard generation == currentPageGeneration,
-              modelDocumentEpoch(for: targetID) == documentEpoch,
+              modelNavigationEpoch(for: targetID) == active.navigationEpoch,
+              modelDOMBindingEpoch(for: targetID) == documentEpoch,
               let targetState = bootstrap.targetsByID[targetID],
               let physicalRecord = targetRegistry.target(for: targetID),
               targetRegistry.isCurrentPageModelTarget(physicalRecord) else {
@@ -4821,8 +5146,12 @@ package actor ConnectionCore {
                 domain: .dom,
                 sequence: result.receivedSequence,
                 payload: .domDocument(
-                    target: targetState.target,
-                    documentEpoch: documentEpoch,
+                    scope: modelEventScope(
+                        targetID: targetID,
+                        target: targetState.target,
+                        navigationEpoch: active.navigationEpoch,
+                        domBindingEpoch: documentEpoch
+                    ),
                     root: projectedDocument
                 )
             )
@@ -4851,11 +5180,38 @@ package actor ConnectionCore {
     ) throws {
         guard isOpen,
               generation == currentPageGeneration,
-              result.targetID == targetRegistry.currentMainPageTargetID,
               let capability = capabilities.states[key],
               case let .enabling(activeGeneration, activeOperationID, _) = capability.physical,
               activeGeneration == generation,
-              activeOperationID == operationID else {
+              activeOperationID == operationID,
+              var registration = modelFeed,
+              var bootstrap = registration.cssBootstrap,
+              bootstrap.generation == generation,
+              var active = bootstrap.activeOperation,
+              active.id == operationID else {
+            return
+        }
+        precondition(
+            result.targetID == active.targetID,
+            "A CSS bootstrap reply does not belong to its physical target."
+        )
+        guard let targetSnapshot = targetRegistry.modelTargetGraphSnapshot() else {
+            preconditionFailure("A CSS snapshot has no current model target snapshot.")
+        }
+        let currentTargetStates = Dictionary(
+            uniqueKeysWithValues: targetSnapshot.targets.map { target in
+                let targetID = ProtocolTarget.ID(target.id.rawValue)
+                return (targetID, modelTargetState(target))
+            }
+        )
+        let scopeIsCurrent = currentTargetStates == active.targetStates
+        guard scopeIsCurrent else {
+            active.replyDisposition = .stale
+            bootstrap.activeOperation = active
+            bootstrap.needsSnapshot = true
+            bootstrap.publishedThrough = nil
+            registration.cssBootstrap = bootstrap
+            modelFeed = registration
             return
         }
         let resultPayload: CSSAllStyleSheetsResult
@@ -4868,9 +5224,6 @@ package actor ConnectionCore {
             throw WebInspectorProxyError.protocolViolation(
                 "Failed to decode CSS.getAllStyleSheets reply: \(error)"
             )
-        }
-        guard let targetSnapshot = targetRegistry.modelTargetSnapshot() else {
-            preconditionFailure("A CSS snapshot has no current model target snapshot.")
         }
         let currentTarget = targetSnapshot.targets.first {
             $0.id == targetSnapshot.currentPageID
@@ -4887,8 +5240,24 @@ package actor ConnectionCore {
             let header = payload.proxyHeader
             let target = header.frameID.flatMap { targetsByFrameID[$0] }
                 ?? currentTarget
+            let targetID = ProtocolTarget.ID(target.id.rawValue)
+            guard let targetState = active.targetStates[targetID] else {
+                preconditionFailure(
+                    "A current CSS stylesheet target has no captured scope state."
+                )
+            }
+            guard let domBindingEpoch = targetState.domBindingEpoch else {
+                preconditionFailure(
+                    "A CSS stylesheet scope has no captured DOM binding epoch."
+                )
+            }
             return ModelCSSStyleSheet(
-                target: target,
+                scope: modelEventScope(
+                    targetID: targetID,
+                    target: target,
+                    navigationEpoch: targetState.navigationEpoch,
+                    domBindingEpoch: domBindingEpoch
+                ),
                 header: ConnectionEventProjection.projectedCSSStyleSheetHeader(
                     header,
                     target: target
@@ -4904,18 +5273,27 @@ package actor ConnectionCore {
                 styleSheetID: payload.styleSheetId,
                 frameID: payload.frameId.map { ProtocolFrame.ID($0) },
                 paramsData: Data(),
-                resolvedTargetID: ProtocolTarget.ID(styleSheet.target.id.rawValue)
+                resolvedTargetID: ProtocolTarget.ID(
+                    styleSheet.scope.target.id.rawValue
+                )
             )
         }
 
-        guard let registration = modelFeed,
-              registration.configuredDomains.contains(.css),
+        guard registration.configuredDomains.contains(.css),
               registration.synchronization?.generation == generation,
               capability.desiredLeaseOwners.contains(
                   .modelFeed(registration.id, .css)
               ) else {
             return
         }
+        let cssWasAlreadyComplete = registration.synchronization?
+            .completedDomains.contains(.css) == true
+        active.replyDisposition = .published
+        bootstrap.activeOperation = active
+        bootstrap.needsSnapshot = false
+        bootstrap.publishedThrough = result.receivedSequence
+        registration.cssBootstrap = bootstrap
+        modelFeed = registration
         guard enqueueModelFeedRecord(
             .bootstrapSnapshot(
                 generation: generation,
@@ -4935,7 +5313,9 @@ package actor ConnectionCore {
         ) else {
             return
         }
-        _ = completeModelDomain(.css, generation: generation)
+        if !cssWasAlreadyComplete {
+            _ = completeModelDomain(.css, generation: generation)
+        }
     }
 
     private func publishModelReplayCompletionIfNeeded(
@@ -5116,14 +5496,19 @@ package actor ConnectionCore {
             from: previousMainPageTargetID,
             to: targetRegistry.currentMainPageTargetID
         )
-        if targetRegistry.isCurrentPageModelTarget(record),
+        let changedModelTargetGraph = targetRegistry.isCurrentPageModelTarget(record)
+        if changedModelTargetGraph,
            let target = ModelTarget(record: record) {
             publishModelTargetLifecycleEvent(
-                .targetCreated(target),
+                .targetCreated,
+                scope: modelEventScope(targetID: record.id, target: target),
                 sequence: eventSequence
             )
         }
-        reconcileDOMBootstrapTargets()
+        if changedModelTargetGraph {
+            reconcileDOMBootstrapTargets()
+            invalidateCSSBootstrapForModelFeed()
+        }
         return RootEventMutation(
             pendingStyleSheetEvents: isOpen ? resolvePendingStyleSheets(for: resolution) : [],
             bindingEffects: bindingEffects
@@ -5161,8 +5546,17 @@ package actor ConnectionCore {
         let destroyedTargetWasCurrent = destroyedRecord.map(
             targetRegistry.isCurrentPageModelTarget
         ) ?? false
+        let destroyedScope = destroyedRecord.flatMap { record -> ModelEventScope? in
+            guard destroyedTargetWasCurrent,
+                  let target = ModelTarget(record: record) else {
+                return nil
+            }
+            return modelEventScope(targetID: targetID, target: target)
+        }
         targetRegistry.removeTarget(targetID)
-        modelDocumentEpochs.removeValue(forKey: targetID)
+        modelNavigationEpochs.removeValue(forKey: targetID)
+        modelNavigationLoaderIDs.removeValue(forKey: targetID)
+        modelDOMBindingEpochs.removeValue(forKey: targetID)
         modelTargetMutationActionForTesting?()
         let capabilityWaiters = physicalTargetDidDisappear(targetID)
         provisionalTargetMessageStore.removeTarget(targetID)
@@ -5173,15 +5567,17 @@ package actor ConnectionCore {
             to: targetRegistry.currentMainPageTargetID
         )
         let pendingReplies = replyStore.removeTargetReplies(for: targetID)
-        if destroyedTargetWasCurrent,
-           let destroyedRecord,
-           let target = ModelTarget(record: destroyedRecord) {
+        if let destroyedScope {
             publishModelTargetLifecycleEvent(
-                .targetDestroyed(target),
+                .targetDestroyed,
+                scope: destroyedScope,
                 sequence: eventSequence
             )
         }
-        reconcileDOMBootstrapTargets()
+        if destroyedTargetWasCurrent {
+            reconcileDOMBootstrapTargets()
+            invalidateCSSBootstrapForModelFeed()
+        }
         return RootEventMutation(
             bindingEffects: bindingEffects,
             physicalTargetWaiters: capabilityWaiters,
@@ -5228,14 +5624,20 @@ package actor ConnectionCore {
            let newTarget = ModelTarget(record: newRecord) {
             publishModelTargetLifecycleEvent(
                 .didCommitProvisionalTarget(
-                    oldTargetID: WebInspectorTarget.ID(oldTargetID.rawValue),
-                    newTarget: newTarget
+                    oldTargetID: WebInspectorTarget.ID(oldTargetID.rawValue)
+                ),
+                scope: modelEventScope(
+                    targetID: newTargetID,
+                    target: newTarget
                 ),
                 sequence: eventSequence
             )
         }
-        modelDocumentEpochs.removeValue(forKey: oldTargetID)
+        modelNavigationEpochs.removeValue(forKey: oldTargetID)
+        modelNavigationLoaderIDs.removeValue(forKey: oldTargetID)
+        modelDOMBindingEpochs.removeValue(forKey: oldTargetID)
         reconcileDOMBootstrapTargets()
+        invalidateCSSBootstrapForModelFeed()
         return RootEventMutation(
             pendingStyleSheetEvents: isOpen
                 ? resolvePendingStyleSheets(for: mutation.resolvedFrameTarget)
@@ -5314,6 +5716,9 @@ package actor ConnectionCore {
         currentPageGeneration = WebInspectorPage.Generation(
             rawValue: currentPageGeneration.rawValue &+ 1
         )
+        modelNavigationEpochs.removeAll(keepingCapacity: true)
+        modelNavigationLoaderIDs.removeAll(keepingCapacity: true)
+        modelDOMBindingEpochs.removeAll(keepingCapacity: true)
         for key in elementPickerModes.keys where key.route == .currentPage {
             guard var mode = elementPickerModes[key] else {
                 continue
@@ -5611,6 +6016,7 @@ package actor ConnectionCore {
             registration.resetGeneration = currentPageGeneration
             registration.synchronization = nil
             registration.domBootstrap = nil
+            registration.cssBootstrap = nil
             modelFeed = registration
             guard enqueueModelFeedRecord(.reset(currentPageGeneration)) else {
                 return
@@ -6000,6 +6406,7 @@ package actor ConnectionCore {
             return EventEmissionEffects(commandInvalidation: commandInvalidation)
         }
         startNextDOMBootstrapIfNeeded()
+        startCSSBootstrapIfNeeded()
         guard isOpen else {
             return EventEmissionEffects(commandInvalidation: commandInvalidation)
         }
@@ -6045,6 +6452,24 @@ package actor ConnectionCore {
            modelReplaySuppressedDomains[configuredDomain] == currentPageGeneration {
             return
         }
+        if configuredDomain == .dom {
+            let targetID = event.targetID
+                ?? event.sourceTargetID
+                ?? targetRegistry.currentMainPageTargetID
+            guard let targetID,
+                  let bootstrap = registration.domBootstrap,
+                  bootstrap.generation == currentPageGeneration,
+                  bootstrap.targetsByID[targetID]?.completedEpoch
+                    == modelDOMBindingEpoch(for: targetID) else {
+                return
+            }
+        }
+        if configuredDomain == .css {
+            guard let cssBootstrapThrough = registration.cssBootstrap?.publishedThrough,
+                  event.sequence > cssBootstrapThrough else {
+                return
+            }
+        }
         let elementPickerOwner = ConnectionCapabilityLeaseOwner.modelElementPicker(
             registration.id
         )
@@ -6074,14 +6499,6 @@ package actor ConnectionCore {
             return
         }
 
-        let physicalTargetID = event.targetID ?? targetRegistry.currentMainPageTargetID
-        guard let physicalTargetID,
-              let physicalRecord = targetRegistry.target(for: physicalTargetID),
-              targetRegistry.isCurrentPageModelTarget(physicalRecord),
-              let target = ModelTarget(record: physicalRecord) else {
-            return
-        }
-
         let semanticTargetID = WebInspectorTarget.ID.currentPage
         let decodedEvent = try LiveProxyEventDecoder.proxyEvent(
             from: event,
@@ -6100,59 +6517,127 @@ package actor ConnectionCore {
             in: targetSnapshot
         )
 
+        let defaultPhysicalTargetID = event.targetID
+            ?? targetRegistry.currentMainPageTargetID
+        guard let defaultPhysicalTargetID,
+              let defaultPhysicalRecord = targetRegistry.target(
+                  for: defaultPhysicalTargetID
+              ),
+              targetRegistry.isCurrentPageModelTarget(defaultPhysicalRecord),
+              let defaultTarget = ModelTarget(record: defaultPhysicalRecord) else {
+            return
+        }
+
+        let physicalTargetID: ProtocolTarget.ID
+        let target: ModelTarget
         let payload: ModelProtocolEvent?
         switch projectedEvent {
         case let .targetLifecycle(lifecycle):
             switch lifecycle {
             case let .frameNavigated(frame):
+                guard let loaderID = frame.loaderID else {
+                    throw TransportSession.Error.malformedMessage
+                }
+                (physicalTargetID, target) = try modelTarget(for: frame.id)
+                _ = advanceModelNavigationEpoch(
+                    for: physicalTargetID,
+                    loaderID: loaderID
+                )
                 payload = .target(.frameNavigated(frame))
             case let .frameDetached(frameID):
+                (physicalTargetID, target) = try modelTarget(for: frameID)
                 payload = .target(.frameDetached(frameID: frameID))
             case .didCommitProvisionalTarget, .targetDestroyed, .unknown:
+                physicalTargetID = defaultPhysicalTargetID
+                target = defaultTarget
                 payload = nil
             }
         case let .dom(value):
+            physicalTargetID = defaultPhysicalTargetID
+            target = defaultTarget
             guard configuredDomain == .dom else {
                 throw TransportSession.Error.malformedMessage
             }
-            payload = .dom(target: target, event: value)
+            payload = .dom(value)
         case let .css(value):
+            physicalTargetID = defaultPhysicalTargetID
+            target = defaultTarget
             guard configuredDomain == .css else {
                 throw TransportSession.Error.malformedMessage
             }
-            payload = .css(target: target, event: value)
+            payload = .css(value)
         case let .network(value):
+            physicalTargetID = defaultPhysicalTargetID
+            target = defaultTarget
             guard configuredDomain == .network else {
                 throw TransportSession.Error.malformedMessage
             }
-            payload = .network(target: target, event: value)
+            payload = .network(value)
         case let .console(value):
+            physicalTargetID = defaultPhysicalTargetID
+            target = defaultTarget
             guard configuredDomain == .console else {
                 throw TransportSession.Error.malformedMessage
             }
-            payload = .console(target: target, event: value.event)
+            payload = .console(value.event)
         case let .runtime(value):
+            physicalTargetID = defaultPhysicalTargetID
+            target = defaultTarget
             guard configuredDomain == .runtime else {
                 throw TransportSession.Error.malformedMessage
             }
-            payload = .runtime(target: target, event: value)
+            payload = .runtime(value)
         case let .inspector(value):
+            physicalTargetID = defaultPhysicalTargetID
+            target = defaultTarget
             guard isElementPickerEvent else {
                 return
             }
-            payload = .inspector(target: target, event: value)
+            payload = .inspector(value)
         }
 
         guard let payload else {
             return
         }
+        let scope = modelEventScope(
+            targetID: physicalTargetID,
+            target: target
+        )
+        switch payload {
+        case .dom, .css:
+            precondition(
+                scope.domBindingEpoch != nil,
+                "A DOM/CSS model event has no exact DOM-binding epoch."
+            )
+        case .target, .inspector, .network, .console, .runtime:
+            break
+        }
         _ = enqueueModelFeedRecord(
             .event(
-                generation: currentPageGeneration,
                 sequence: event.sequence,
+                scope: scope,
                 payload: payload
             )
         )
+    }
+
+    private func modelTarget(
+        for frameID: FrameID
+    ) throws -> (ProtocolTarget.ID, ModelTarget) {
+        let protocolFrameID = ProtocolFrame.ID(frameID.rawValue)
+        let targetID: ProtocolTarget.ID?
+        if protocolFrameID == targetRegistry.currentMainFrameID {
+            targetID = targetRegistry.currentMainPageTargetID
+        } else {
+            targetID = targetRegistry.targetID(forFrameID: protocolFrameID)
+        }
+        guard let targetID,
+              let record = targetRegistry.target(for: targetID),
+              targetRegistry.isCurrentPageModelTarget(record),
+              let target = ModelTarget(record: record) else {
+            throw TransportSession.Error.malformedMessage
+        }
+        return (targetID, target)
     }
 
     private func modelDomain(for domain: ProtocolDomain) -> ModelDomain? {

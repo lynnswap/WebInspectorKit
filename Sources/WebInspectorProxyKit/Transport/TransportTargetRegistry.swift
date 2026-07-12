@@ -158,7 +158,7 @@ struct TransportTargetRegistry: Sendable {
         )
     }
 
-    func modelTargetSnapshot() -> ModelTargetSnapshot? {
+    func modelTargetGraphSnapshot() -> TransportModelTargetGraphSnapshot? {
         guard let currentMainPageTargetID,
               let currentPageRecord = targetsByID[currentMainPageTargetID],
               !currentPageRecord.isProvisional,
@@ -182,7 +182,7 @@ struct TransportTargetRegistry: Sendable {
             return lhs.target.id.rawValue < rhs.target.id.rawValue
         }.map(\.target)
 
-        return ModelTargetSnapshot(
+        return TransportModelTargetGraphSnapshot(
             currentPageID: currentPageTarget.id,
             targets: [currentPageTarget] + frames
         )
@@ -244,6 +244,11 @@ struct TransportTargetRegistry: Sendable {
         }
         return TransportFrameTargetResolution(frameID: frameID, targetID: record.id)
     }
+}
+
+struct TransportModelTargetGraphSnapshot: Sendable {
+    let currentPageID: WebInspectorTarget.ID
+    let targets: [ModelTarget]
 }
 
 private extension ProtocolTarget.Record {

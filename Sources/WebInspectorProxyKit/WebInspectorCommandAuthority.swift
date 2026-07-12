@@ -9,11 +9,11 @@ package enum WebInspectorCommandAuthority: Equatable, Sendable {
 package struct ConnectionModelCommandAuthorization: Equatable, Sendable {
     package struct Document: Equatable, Sendable {
         package let targetID: WebInspectorTarget.ID
-        package let epoch: ModelDocumentEpoch
+        package let epoch: ModelDOMBindingEpoch
 
         package init(
             targetID: WebInspectorTarget.ID,
-            epoch: ModelDocumentEpoch
+            epoch: ModelDOMBindingEpoch
         ) {
             self.targetID = targetID
             self.epoch = epoch

@@ -3195,6 +3195,7 @@ struct NetworkDetailViewControllerTests {
         let runtime = try await WebInspectorProxyTestRuntime.start()
         let wire = WebInspectorRawWireDriver(peer: runtime.peer)
         await wire.start()
+        await wire.respond(to: "Page.enable")
         await wire.respond(to: "Network.enable")
         let context = WebInspectorModelContext(
             configuration: .init(domains: [.network])
@@ -3220,6 +3221,7 @@ struct NetworkDetailViewControllerTests {
         }
 
         await wire.respond(to: "Network.disable")
+        await wire.respond(to: "Page.disable")
         await context.close()
         await runtime.close()
         await wire.stop()

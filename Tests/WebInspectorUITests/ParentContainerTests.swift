@@ -1528,6 +1528,32 @@ struct ParentContainerTests {
 
     private func makeFakeProxy() async throws -> WebInspectorProxy {
         let runtime = try await WebInspectorProxyTestRuntime.start()
+        let peer = runtime.peer
+        let commands = peer.commands
+        Task.detached {
+            while !Task.isCancelled {
+                do {
+                    let command = try await commands.next()
+                    switch command.method {
+                    case "Page.enable", "Page.disable":
+                        try await peer.reply(to: command)
+                    default:
+                        try await peer.fail(
+                            command,
+                            message: "The attachment fixture supports only the model feed Page lease."
+                        )
+                    }
+                } catch is CancellationError {
+                    return
+                } catch WebInspectorTestPeerError.connectionClosed,
+                        WebInspectorTestPeerError.staleCommand {
+                    return
+                } catch {
+                    Issue.record("Attachment fixture peer failed: \(error)")
+                    return
+                }
+            }
+        }
         return runtime.proxy
     }
 

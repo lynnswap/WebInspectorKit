@@ -27,8 +27,10 @@ func modelContextInheritsACustomCallerActorAndDoesNotRetainIt() async throws {
         var probe: ModelContextActorProbe? = ModelContextActorProbe()
         weak let releasedProbe = probe
 
+        await runtime.wire.respond(to: "Page.enable")
         let attachedState = try await probe?.attach(to: runtime.proxy)
         #expect(attachedState == .attached)
+        await runtime.wire.respond(to: "Page.disable")
         #expect(await probe?.close() == .closed)
 
         probe = nil
@@ -131,6 +133,73 @@ func attachmentPublishesDOMSnapshotAndAcceptsFilteredSequenceGaps() async throws
 
 @MainActor
 @Test
+func attachmentAcceptsDOMAndCSSRefreshBeforeInitialSynchronization() async throws {
+    try await withDataKitTestRuntime { runtime in
+        let target = try await runtime.proxy.waitForCurrentPage()
+        let configuration = WebInspectorModelContext.Configuration(
+            domains: [.css, .network]
+        )
+        let context = WebInspectorModelContext(configuration: configuration)
+        await runtime.wire.respond(to: "Page.enable")
+        await runtime.wire.respond(
+            to: "DOM.getDocument",
+            with: try emptyDocumentResult(nodeID: "initial-document")
+        )
+        await runtime.wire.respond(to: "CSS.enable")
+        await runtime.wire.respond(
+            to: "CSS.getAllStyleSheets",
+            with: try testJSONObject(#"{"headers":[]}"#)
+        )
+        let networkEnableGate = await runtime.wire.deferReply(
+            to: "Network.enable"
+        )
+        let attachment = Task {
+            try await context.attach(
+                to: runtime.proxy,
+                isolation: MainActor.shared
+            )
+        }
+        _ = await runtime.wire.observations.waitForCommands(
+            method: "Network.enable",
+            count: 1
+        )
+
+        await runtime.wire.respond(
+            to: "DOM.getDocument",
+            with: try emptyDocumentResult(nodeID: "refreshed-document")
+        )
+        await runtime.wire.respond(
+            to: "CSS.getAllStyleSheets",
+            with: try testJSONObject(#"{"headers":[]}"#)
+        )
+        try await runtime.wire.emitRaw(.documentUpdated, target: target)
+        _ = await runtime.wire.observations.waitForCompletedCommands(
+            method: "DOM.getDocument",
+            count: 2
+        )
+        _ = await runtime.wire.observations.waitForCompletedCommands(
+            method: "CSS.getAllStyleSheets",
+            count: 2
+        )
+
+        networkEnableGate.open()
+        try await attachment.value
+
+        #expect(context.state == .attached)
+        #expect(
+            try context.rootDOMNode?.id
+                == DOMNode.ID(DOM.Node.ID("refreshed-document"))
+        )
+        await enqueueShutdownReplies(
+            on: runtime.wire,
+            configuration: configuration
+        )
+        await context.close()
+    }
+}
+
+@MainActor
+@Test
 func restoredPageReusesCSSAgentAndKeepsModelContextAttached() async throws {
     let pageADocument = DOM.Node(
         id: DOM.Node.ID("page-a-document"),
@@ -178,11 +247,12 @@ func restoredPageReusesCSSAgentAndKeepsModelContextAttached() async throws {
             fixture.runtime.wire.observations.commands.dropFirst(pageBBaseline)
         )
         let pageBMethods = pageBCommands.map(\.method)
-        #expect(pageBCommands.count == 3)
+        #expect(pageBCommands.count == 4)
         #expect(Set(pageBMethods) == Set([
             "DOM.getDocument",
             "Page.enable",
             "CSS.enable",
+            "CSS.getAllStyleSheets",
         ]))
         let pageEnableIndex = try #require(
             pageBMethods.firstIndex(of: "Page.enable")
@@ -258,6 +328,7 @@ func attachmentDrainsLargeEnableReplayBeforePublishingReadiness() async throws {
             domains: [.network]
         )
         let context = WebInspectorModelContext(configuration: configuration)
+        await runtime.wire.respond(to: "Page.enable")
         let enableGate = await runtime.wire.deferReply(
             to: "Network.enable",
             with: try testJSONObject(#"{}"#)
@@ -301,6 +372,7 @@ func attachmentDrainsLargeEnableReplayBeforePublishingReadiness() async throws {
         ) != nil)
 
         await runtime.wire.respond(to: "Network.disable")
+        await runtime.wire.respond(to: "Page.disable")
         await context.close()
     }
 }
@@ -1783,9 +1855,13 @@ private func enqueueStartupReplies(
     configuration: WebInspectorModelContext.Configuration,
     document: DOM.Node
 ) async {
+    await wire.respond(to: "Page.enable")
     if configuration.domains.contains(.css) {
-        await wire.respond(to: "Page.enable")
         await wire.respond(to: "CSS.enable")
+        await wire.respond(
+            to: "CSS.getAllStyleSheets",
+            with: try! testJSONObject(#"{"headers":[]}"#)
+        )
     }
     if configuration.domains.contains(.network) {
         await wire.respond(to: "Network.enable")
@@ -1819,8 +1895,8 @@ private func enqueueShutdownReplies(
     }
     if configuration.domains.contains(.css) {
         await wire.respond(to: "CSS.disable")
-        await wire.respond(to: "Page.disable")
     }
+    await wire.respond(to: "Page.disable")
 }
 
 private func emitFinishedRequest(

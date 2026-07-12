@@ -89,6 +89,8 @@ package enum ConnectionEventProjection {
                 return Self.isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
             case .runtime:
                 return Self.isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
+            case .page:
+                return Self.isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
             default:
                 return false
             }

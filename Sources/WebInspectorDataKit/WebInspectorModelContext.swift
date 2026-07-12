@@ -262,10 +262,10 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
     }
 
     private enum DOMTargetAuthority {
-        case awaiting(ModelDocumentEpoch)
-        case ready(ModelDocumentEpoch)
+        case awaiting(ModelDOMBindingEpoch)
+        case ready(ModelDOMBindingEpoch)
 
-        var epoch: ModelDocumentEpoch {
+        var epoch: ModelDOMBindingEpoch {
             switch self {
             case let .awaiting(epoch), let .ready(epoch):
                 epoch
@@ -279,8 +279,10 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         var targetSnapshotWasApplied: Bool
         var currentPageID: WebInspectorTarget.ID?
         var targets: [WebInspectorTarget.ID: ModelTarget]
+        var navigationEpochs: [WebInspectorTarget.ID: ModelNavigationEpoch]
         var domAuthority: [WebInspectorTarget.ID: DOMTargetAuthority]
-        var bootstrapSnapshotDomains: Set<ModelDomain>
+        var bootstrapSnapshotThrough: [ModelDomain: UInt64]
+        var bootstrapCompletionThrough: [ModelDomain: UInt64]
         var completedDomains: Set<ModelDomain>
         var didSynchronize: Bool
     }
@@ -1378,8 +1380,10 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
                 targetSnapshotWasApplied: false,
                 currentPageID: nil,
                 targets: [:],
+                navigationEpochs: [:],
                 domAuthority: [:],
-                bootstrapSnapshotDomains: [],
+                bootstrapSnapshotThrough: [:],
+                bootstrapCompletionThrough: [:],
                 completedDomains: [],
                 didSynchronize: false
             )
@@ -1394,8 +1398,16 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         case let .targetSnapshot(generation, through, snapshot):
             guard var binding = bindingForRecord(generation),
                   !binding.targetSnapshotWasApplied,
-                  snapshot.targets.contains(where: { $0.id == snapshot.currentPageID }),
-                  Set(snapshot.targets.map(\.id)).count == snapshot.targets.count else {
+                  snapshot.targets.contains(where: {
+                      $0.target.id == snapshot.currentPageID
+                  }),
+                  Set(snapshot.targets.map(\.target.id)).count
+                    == snapshot.targets.count,
+                  snapshot.targets.allSatisfy({ state in
+                      configuredDomains.contains(.dom)
+                        ? state.domBindingEpoch != nil
+                        : state.domBindingEpoch == nil
+                  }) else {
                 return prepareProtocolFailure(
                     "Model target snapshot was stale, duplicated, or missing its current page.",
                     token: token
@@ -1410,12 +1422,24 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
             binding.targetSnapshotWasApplied = true
             binding.currentPageID = snapshot.currentPageID
             binding.targets = Dictionary(
-                uniqueKeysWithValues: snapshot.targets.map { ($0.id, $0) }
+                uniqueKeysWithValues: snapshot.targets.map {
+                    ($0.target.id, $0.target)
+                }
+            )
+            binding.navigationEpochs = Dictionary(
+                uniqueKeysWithValues: snapshot.targets.map {
+                    ($0.target.id, $0.navigationEpoch)
+                }
             )
             if configuredDomains.contains(.dom) {
                 binding.domAuthority = Dictionary(
-                    uniqueKeysWithValues: snapshot.targets.map {
-                        ($0.id, .awaiting(ModelDocumentEpoch(rawValue: 0)))
+                    uniqueKeysWithValues: snapshot.targets.map { state in
+                        guard let epoch = state.domBindingEpoch else {
+                            preconditionFailure(
+                                "A validated DOM target state lost its binding epoch."
+                            )
+                        }
+                        return (state.target.id, .awaiting(epoch))
                     }
                 )
             }
@@ -1430,13 +1454,16 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
             currentPage = target
             return PreparedReducerStep(work: .none, commit: .record(token: token))
 
-        case let .domDocumentInvalidated(generation, sequence, target, documentEpoch):
+        case let .domDocumentInvalidated(sequence, scope):
+            let target = scope.target
             guard var binding = bindingForSequencedRecord(
-                generation,
+                scope.generation,
                 sequence: sequence
             ),
                   configuredDomains.contains(.dom),
                   binding.targets[target.id] == target,
+                  binding.navigationEpochs[target.id] == scope.navigationEpoch,
+                  let documentEpoch = scope.domBindingEpoch,
                   let previousAuthority = binding.domAuthority[target.id],
                   documentEpoch.rawValue == previousAuthority.epoch.rawValue + 1 else {
                 return prepareProtocolFailure(
@@ -1470,9 +1497,9 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
             }
             return PreparedReducerStep(work: work, commit: .record(token: token))
 
-        case let .event(generation, sequence, payload):
+        case let .event(sequence, scope, payload):
             guard var binding = bindingForSequencedRecord(
-                generation,
+                scope.generation,
                 sequence: sequence
             ), binding.targetSnapshotWasApplied else {
                 return prepareProtocolFailure(
@@ -1483,6 +1510,7 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
             self.binding = binding
             let work = prepare(
                 payload,
+                scope: scope,
                 binding: &binding,
                 token: token
             )
@@ -1514,18 +1542,26 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
 
         case let .bootstrapSnapshot(generation, domain, sequence, payload):
             switch (domain, payload) {
-            case let (.dom, .domDocument(target, documentEpoch, root)):
+            case let (.dom, .domDocument(scope, root)):
+                let target = scope.target
                 guard configuredDomains.contains(.dom),
+                      scope.generation == generation,
+                      let documentEpoch = scope.domBindingEpoch,
                       var binding = bindingForWatermarkedRecord(
                           generation,
                           sequence: sequence
-                      ) else {
+                      ),
+                      binding.bootstrapSnapshotThrough[.dom].map({
+                          sequence > $0
+                      }) ?? true else {
                     return prepareProtocolFailure(
                         "A DOM bootstrap snapshot was stale or unconfigured.",
                         token: token
                     )
                 }
                 guard binding.targets[target.id] == target,
+                      binding.navigationEpochs[target.id]
+                        == scope.navigationEpoch,
                       case let .awaiting(expectedEpoch)? = binding.domAuthority[target.id],
                       expectedEpoch == documentEpoch else {
                     return prepareProtocolFailure(
@@ -1557,6 +1593,7 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
                 }
                 applyDOMStateEffects(effects)
                 binding.domAuthority[target.id] = .ready(documentEpoch)
+                binding.bootstrapSnapshotThrough[.dom] = sequence
                 self.binding = binding
                 return PreparedReducerStep(work: .none, commit: .record(token: token))
 
@@ -1566,15 +1603,25 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
                           generation,
                           sequence: sequence
                       ),
-                      binding.bootstrapSnapshotDomains.insert(.css).inserted,
-                      styleSheets.allSatisfy({
-                          binding.targets[$0.target.id] == $0.target
+                      binding.bootstrapSnapshotThrough[.css].map({
+                          sequence > $0
+                      }) ?? true,
+                      styleSheets.allSatisfy({ styleSheet in
+                          let scope = styleSheet.scope
+                          return scope.generation == generation
+                            && binding.targets[scope.target.id]
+                                == scope.target
+                            && binding.navigationEpochs[scope.target.id]
+                                == scope.navigationEpoch
+                            && scope.domBindingEpoch
+                                == binding.domAuthority[scope.target.id]?.epoch
                       }) else {
                     return prepareProtocolFailure(
                         "A CSS bootstrap snapshot was stale, duplicated, or unconfigured.",
                         token: token
                     )
                 }
+                binding.bootstrapSnapshotThrough[.css] = sequence
                 domState.markAllStylesNeedsRefresh()
                 self.binding = binding
                 return PreparedReducerStep(work: .none, commit: .record(token: token))
@@ -1609,7 +1656,7 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
                 }
             case .css:
                 guard configuredModelDomains.contains(.css),
-                      binding.bootstrapSnapshotDomains.contains(.css) else {
+                      binding.bootstrapSnapshotThrough[.css] != nil else {
                     return prepareProtocolFailure(
                         "A CSS bootstrap completed before its snapshot was applied.",
                         token: token
@@ -1621,13 +1668,17 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
                     token: token
                 )
             }
+            guard binding.bootstrapCompletionThrough[domain].map({
+                through > $0
+            }) ?? true else {
+                return prepareProtocolFailure(
+                    "A model bootstrap completion marker was duplicated.",
+                    token: token
+                )
+            }
+            binding.bootstrapCompletionThrough[domain] = through
             if !binding.didSynchronize {
-                guard binding.completedDomains.insert(domain).inserted else {
-                    return prepareProtocolFailure(
-                        "A model bootstrap completed more than once.",
-                        token: token
-                    )
-                }
+                binding.completedDomains.insert(domain)
             }
             self.binding = binding
             return PreparedReducerStep(work: .none, commit: .record(token: token))
@@ -1654,32 +1705,48 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
 
     private func prepare(
         _ payload: ModelProtocolEvent,
+        scope: ModelEventScope,
         binding: inout BindingState,
         token: UInt64
     ) -> ReducerWork? {
+        let target = scope.target
         switch payload {
         case let .target(event):
             switch event {
-            case let .targetCreated(target):
-                guard binding.targets[target.id] == nil else {
+            case .targetCreated:
+                guard binding.targets[target.id] == nil,
+                      binding.navigationEpochs[target.id] == nil,
+                      configuredDomains.contains(.dom)
+                        ? scope.domBindingEpoch != nil
+                        : scope.domBindingEpoch == nil else {
                     return prepareProtocolFailure(
-                        "A model target was created twice.",
+                        "A model target was created twice or with an invalid scope.",
                         token: token
                     )?.work
                 }
                 binding.targets[target.id] = target
+                binding.navigationEpochs[target.id] = scope.navigationEpoch
                 if configuredDomains.contains(.dom) {
-                    binding.domAuthority[target.id] = .awaiting(
-                        ModelDocumentEpoch(rawValue: 0)
-                    )
+                    guard let epoch = scope.domBindingEpoch else {
+                        preconditionFailure(
+                            "A validated DOM target creation lost its binding epoch."
+                        )
+                    }
+                    binding.domAuthority[target.id] = .awaiting(epoch)
                 }
-            case let .targetDestroyed(target):
-                guard binding.targets.removeValue(forKey: target.id) != nil else {
+            case .targetDestroyed:
+                guard binding.targets[target.id] == target,
+                      binding.navigationEpochs[target.id]
+                        == scope.navigationEpoch,
+                      scope.domBindingEpoch
+                        == binding.domAuthority[target.id]?.epoch else {
                     return prepareProtocolFailure(
-                        "A model target was destroyed without membership.",
+                        "A model target was destroyed without matching scope membership.",
                         token: token
                     )?.work
                 }
+                binding.targets.removeValue(forKey: target.id)
+                binding.navigationEpochs.removeValue(forKey: target.id)
                 binding.domAuthority.removeValue(forKey: target.id)
                 cssInspectorBaselineStore.reset(targetID: target.id)
                 if let frameID = target.frameID {
@@ -1689,19 +1756,55 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
                         )
                     )
                 }
-            case let .didCommitProvisionalTarget(oldTargetID, newTarget):
+            case let .didCommitProvisionalTarget(oldTargetID):
                 binding.targets.removeValue(forKey: oldTargetID)
+                binding.navigationEpochs.removeValue(forKey: oldTargetID)
                 binding.domAuthority.removeValue(forKey: oldTargetID)
                 cssInspectorBaselineStore.reset(targetID: oldTargetID)
-                binding.targets[newTarget.id] = newTarget
+                guard binding.targets[target.id] == nil,
+                      configuredDomains.contains(.dom)
+                        ? scope.domBindingEpoch != nil
+                        : scope.domBindingEpoch == nil else {
+                    return prepareProtocolFailure(
+                        "A committed model target conflicted with existing scope membership.",
+                        token: token
+                    )?.work
+                }
+                binding.targets[target.id] = target
+                binding.navigationEpochs[target.id] = scope.navigationEpoch
                 if configuredDomains.contains(.dom) {
-                    binding.domAuthority[newTarget.id] = .awaiting(
-                        ModelDocumentEpoch(rawValue: 0)
-                    )
+                    guard let epoch = scope.domBindingEpoch else {
+                        preconditionFailure(
+                            "A validated committed DOM target lost its binding epoch."
+                        )
+                    }
+                    binding.domAuthority[target.id] = .awaiting(epoch)
                 }
             case .frameNavigated:
-                break
+                guard binding.targets[target.id] == target,
+                      let previousEpoch = binding.navigationEpochs[target.id],
+                      scope.domBindingEpoch
+                        == binding.domAuthority[target.id]?.epoch,
+                      scope.navigationEpoch.rawValue == previousEpoch.rawValue
+                        || scope.navigationEpoch.rawValue
+                            == previousEpoch.rawValue + 1 else {
+                    return prepareProtocolFailure(
+                        "A frame navigation did not preserve or advance its registered scope exactly once.",
+                        token: token
+                    )?.work
+                }
+                binding.navigationEpochs[target.id] = scope.navigationEpoch
             case let .frameDetached(frameID):
+                guard binding.targets[target.id] == target,
+                      binding.navigationEpochs[target.id]
+                        == scope.navigationEpoch,
+                      scope.domBindingEpoch
+                        == binding.domAuthority[target.id]?.epoch else {
+                    return prepareProtocolFailure(
+                        "A frame detach referenced a foreign navigation scope.",
+                        token: token
+                    )?.work
+                }
                 applyDOMStateEffects(
                     domState.detachProjectedFrameDocument(
                         forFrameID: frameID
@@ -1710,9 +1813,11 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
             }
             return ReducerWork.none
 
-        case let .dom(target, event):
+        case let .dom(event):
             guard configuredDomains.contains(.dom),
                   binding.targets[target.id] == target,
+                  binding.navigationEpochs[target.id] == scope.navigationEpoch,
+                  scope.domBindingEpoch == binding.domAuthority[target.id]?.epoch,
                   let authority = binding.domAuthority[target.id] else {
                 return prepareProtocolFailure(
                     "A DOM event referenced an unconfigured or foreign target.",
@@ -1720,7 +1825,10 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
                 )?.work
             }
             guard case .ready = authority else {
-                return ReducerWork.none
+                return prepareProtocolFailure(
+                    "A DOM event arrived before its authoritative target bootstrap.",
+                    token: token
+                )?.work
             }
             if case .documentUpdated = event {
                 return prepareProtocolFailure(
@@ -1733,12 +1841,14 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
             )
             return ReducerWork.none
 
-        case let .inspector(target, event):
+        case let .inspector(event):
             guard ownsElementPickerLease else {
                 return ReducerWork.none
             }
             guard configuredDomains.contains(.dom),
                   binding.targets[target.id] == target,
+                  binding.navigationEpochs[target.id] == scope.navigationEpoch,
+                  scope.domBindingEpoch == binding.domAuthority[target.id]?.epoch,
                   target.id == binding.currentPageID,
                   case let .ready(documentEpoch)? = binding.domAuthority[target.id],
                   let authorizedTarget = authorizedTarget(
@@ -1766,14 +1876,12 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
                 expectedSelectionRevision: domState.selectionRevision
             )
 
-        case let .css(target, event):
+        case let .css(event):
             guard configuredDomains.contains(.css),
                   binding.targets[target.id] == target,
-                  case .ready? = binding.domAuthority[target.id] else {
-                if binding.targets[target.id] == target,
-                   case .awaiting? = binding.domAuthority[target.id] {
-                    return ReducerWork.none
-                }
+                  binding.navigationEpochs[target.id] == scope.navigationEpoch,
+                  scope.domBindingEpoch == binding.domAuthority[target.id]?.epoch,
+                  binding.domAuthority[target.id] != nil else {
                 return prepareProtocolFailure(
                     "A CSS event referenced an unconfigured or foreign target.",
                     token: token
@@ -1782,9 +1890,12 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
             apply(event)
             return ReducerWork.none
 
-        case let .network(target, event):
+        case let .network(event):
             guard configuredDomains.contains(.network),
-                  binding.targets[target.id] == target else {
+                  binding.targets[target.id] == target,
+                  binding.navigationEpochs[target.id] == scope.navigationEpoch,
+                  scope.domBindingEpoch
+                    == binding.domAuthority[target.id]?.epoch else {
                 return prepareProtocolFailure(
                     "A Network event referenced an unconfigured or foreign target.",
                     token: token
@@ -1795,9 +1906,12 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
                 modelContext: self
             ).map(ReducerWork.network) ?? ReducerWork.none
 
-        case let .console(target, event):
+        case let .console(event):
             guard configuredDomains.contains(.console),
-                  binding.targets[target.id] == target else {
+                  binding.targets[target.id] == target,
+                  binding.navigationEpochs[target.id] == scope.navigationEpoch,
+                  scope.domBindingEpoch
+                    == binding.domAuthority[target.id]?.epoch else {
                 return prepareProtocolFailure(
                     "A Console event referenced an unconfigured or foreign target.",
                     token: token
@@ -1816,9 +1930,12 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
             applyConsoleMessageEffects(prepared.effects)
             return prepared.indexWork.map(ReducerWork.console) ?? ReducerWork.none
 
-        case let .runtime(target, event):
+        case let .runtime(event):
             guard configuredDomains.contains(.runtime),
-                  binding.targets[target.id] == target else {
+                  binding.targets[target.id] == target,
+                  binding.navigationEpochs[target.id] == scope.navigationEpoch,
+                  scope.domBindingEpoch
+                    == binding.domAuthority[target.id]?.epoch else {
                 return prepareProtocolFailure(
                     "A Runtime event referenced an unconfigured or foreign target.",
                     token: token
@@ -1923,7 +2040,7 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
 
     private func authorizedTarget(
         _ target: ModelTarget,
-        documentEpoch: ModelDocumentEpoch?
+        documentEpoch: ModelDOMBindingEpoch?
     ) -> WebInspectorTarget? {
         guard let activeProxy, let activeFeed, let binding else {
             return nil

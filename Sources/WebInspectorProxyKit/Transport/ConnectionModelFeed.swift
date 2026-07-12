@@ -53,7 +53,7 @@ package enum ModelDomain: Hashable, Sendable {
         case .dom:
             nil
         case .css:
-            .css
+            nil
         case .network:
             .network
         case .console:
@@ -97,45 +97,7 @@ extension ModelTarget {
     }
 }
 
-package struct ModelTargetSnapshot: Equatable, Sendable {
-    /// The physical target currently bound to the semantic current-page feed.
-    package let currentPageID: WebInspectorTarget.ID
-
-    /// The physical main page followed by its frame targets in deterministic
-    /// parent-before-child order.
-    package let targets: [ModelTarget]
-
-    package init(
-        currentPageID: WebInspectorTarget.ID,
-        targets: [ModelTarget]
-    ) {
-        self.currentPageID = currentPageID
-        self.targets = targets
-    }
-}
-
-package enum ModelTargetLifecycleEvent: Sendable {
-    case targetCreated(ModelTarget)
-    case targetDestroyed(ModelTarget)
-    case didCommitProvisionalTarget(
-        oldTargetID: WebInspectorTarget.ID,
-        newTarget: ModelTarget
-    )
-    case frameNavigated(WebInspectorPageFrameLifecycle)
-    case frameDetached(frameID: FrameID)
-}
-
-package enum ModelProtocolEvent: Sendable {
-    case target(ModelTargetLifecycleEvent)
-    case dom(target: ModelTarget, event: DOM.Event)
-    case inspector(target: ModelTarget, event: Inspector.Event)
-    case css(target: ModelTarget, event: CSS.Event)
-    case network(target: ModelTarget, event: Network.Event)
-    case console(target: ModelTarget, event: Console.Event)
-    case runtime(target: ModelTarget, event: Runtime.Event)
-}
-
-package struct ModelDocumentEpoch: Hashable, Sendable {
+package struct ModelNavigationEpoch: Hashable, Sendable {
     package let rawValue: UInt64
 
     package init(rawValue: UInt64) {
@@ -143,20 +105,97 @@ package struct ModelDocumentEpoch: Hashable, Sendable {
     }
 }
 
-package struct ModelCSSStyleSheet: Sendable {
+package struct ModelDOMBindingEpoch: Hashable, Sendable {
+    package let rawValue: UInt64
+
+    package init(rawValue: UInt64) {
+        self.rawValue = rawValue
+    }
+}
+
+package struct ModelEventScope: Equatable, Sendable {
+    package let generation: WebInspectorPage.Generation
     package let target: ModelTarget
+    package let navigationEpoch: ModelNavigationEpoch
+    package let domBindingEpoch: ModelDOMBindingEpoch?
+
+    package init(
+        generation: WebInspectorPage.Generation,
+        target: ModelTarget,
+        navigationEpoch: ModelNavigationEpoch,
+        domBindingEpoch: ModelDOMBindingEpoch?
+    ) {
+        self.generation = generation
+        self.target = target
+        self.navigationEpoch = navigationEpoch
+        self.domBindingEpoch = domBindingEpoch
+    }
+}
+
+package struct ModelTargetState: Equatable, Sendable {
+    package let target: ModelTarget
+    package let navigationEpoch: ModelNavigationEpoch
+    package let domBindingEpoch: ModelDOMBindingEpoch?
+
+    package init(
+        target: ModelTarget,
+        navigationEpoch: ModelNavigationEpoch,
+        domBindingEpoch: ModelDOMBindingEpoch?
+    ) {
+        self.target = target
+        self.navigationEpoch = navigationEpoch
+        self.domBindingEpoch = domBindingEpoch
+    }
+}
+
+package struct ModelTargetSnapshot: Equatable, Sendable {
+    /// The physical target currently bound to the semantic current-page feed.
+    package let currentPageID: WebInspectorTarget.ID
+
+    /// The physical main page followed by its frame targets in deterministic
+    /// parent-before-child order.
+    package let targets: [ModelTargetState]
+
+    package init(
+        currentPageID: WebInspectorTarget.ID,
+        targets: [ModelTargetState]
+    ) {
+        self.currentPageID = currentPageID
+        self.targets = targets
+    }
+}
+
+package enum ModelTargetLifecycleEvent: Sendable {
+    case targetCreated
+    case targetDestroyed
+    case didCommitProvisionalTarget(oldTargetID: WebInspectorTarget.ID)
+    case frameNavigated(WebInspectorPageFrameLifecycle)
+    case frameDetached(frameID: FrameID)
+}
+
+package enum ModelProtocolEvent: Sendable {
+    case target(ModelTargetLifecycleEvent)
+    case dom(DOM.Event)
+    case inspector(Inspector.Event)
+    case css(CSS.Event)
+    case network(Network.Event)
+    case console(Console.Event)
+    case runtime(Runtime.Event)
+}
+
+package struct ModelCSSStyleSheet: Sendable {
+    package let scope: ModelEventScope
     package let header: CSS.StyleSheetHeader
 
-    package init(target: ModelTarget, header: CSS.StyleSheetHeader) {
-        self.target = target
+    package init(scope: ModelEventScope, header: CSS.StyleSheetHeader) {
+        self.scope = scope
         self.header = header
     }
 }
 
 package enum ModelBootstrapSnapshot: Sendable {
     case domDocument(
-        target: ModelTarget,
-        documentEpoch: ModelDocumentEpoch,
+        scope: ModelEventScope,
         root: DOM.Node
     )
     case cssStyleSheets([ModelCSSStyleSheet])
@@ -169,20 +208,18 @@ package enum ConnectionModelFeedRecord: Sendable {
         through: UInt64,
         snapshot: ModelTargetSnapshot
     )
-    /// The authoritative document-identity boundary for one physical target.
+    /// The authoritative DOM-binding boundary for one physical target.
     ///
-    /// Core publishes this after advancing `documentEpoch`, and before the
+    /// Core publishes this after advancing `domBindingEpoch`, and before the
     /// replacement DOM bootstrap or any later DOM/CSS delta for that target.
     /// `DOM.documentUpdated` is not also projected as a model protocol event.
     case domDocumentInvalidated(
-        generation: WebInspectorPage.Generation,
         sequence: UInt64,
-        target: ModelTarget,
-        documentEpoch: ModelDocumentEpoch
+        scope: ModelEventScope
     )
     case event(
-        generation: WebInspectorPage.Generation,
         sequence: UInt64,
+        scope: ModelEventScope,
         payload: ModelProtocolEvent
     )
     case replayComplete(

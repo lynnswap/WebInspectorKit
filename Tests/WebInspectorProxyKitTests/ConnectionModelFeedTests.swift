@@ -44,7 +44,7 @@ func modelTargetSnapshotOrdersMainAndCommittedFramesDeterministically() throws {
         isProvisional: true
     ))
 
-    let snapshot = try #require(registry.modelTargetSnapshot())
+    let snapshot = try #require(registry.modelTargetGraphSnapshot())
 
     #expect(snapshot.currentPageID == WebInspectorTarget.ID("page-main"))
     #expect(snapshot.targets.map(\.id) == [
@@ -424,12 +424,12 @@ func modelFeedElementPickerPublishesOnlyActivatedInspectAndClosesInWireOrder() a
         message: modelFeedInspectorInspectMessage(objectID: "after-activation")
     ))
     let record = try modelFeedRequireEvent(try await iterator.next())
-    guard case let .inspector(target, event) = record.payload,
+    guard case let .inspector(event) = record.payload,
           case let .inspect(object, _) = event else {
         Issue.record("Expected the activated Inspector.inspect model record.")
         return
     }
-    #expect(target.id == WebInspectorTarget.ID("page-main"))
+    #expect(record.target.id == WebInspectorTarget.ID("page-main"))
     #expect(object.id == Runtime.RemoteObject.ID("after-activation"))
 
     let closeBaseline = await backend.sentTargetMessages().count
@@ -442,6 +442,11 @@ func modelFeedElementPickerPublishesOnlyActivatedInspectAndClosesInWireOrder() a
         targetID: "page-main",
         after: closeBaseline
     )
+    let pageDisable = try await backend.waitForTargetMessage(
+        method: "Page.disable",
+        after: closeBaseline
+    )
+    await modelFeedRespond(to: pageDisable, core: core)
     try await closeTask.value
     #expect(try await iterator.next() == nil)
     await core.close()
@@ -467,27 +472,18 @@ func cssModelFeedUsesNormalizedDOMBootstrapAndOneSynchronization() async throws 
     let reset = try await modelFeedRequireReset(iterator.next())
     _ = try await modelFeedRequireTargetSnapshot(iterator.next())
     let bootstrap = try await modelFeedRequireDOMBootstrapSnapshot(iterator.next())
-    var sawDOMCompletion = false
-    var sawCSSReplay = false
-    for _ in 0..<2 {
-        let record = try #require(await iterator.next())
-        switch record {
-        case .bootstrapComplete:
-            let completion = try modelFeedRequireBootstrapCompletion(record)
-            #expect(completion.domain == .dom)
-            sawDOMCompletion = true
-        case .replayComplete:
-            let replay = try modelFeedRequireReplayCompletion(record)
-            #expect(replay.domain == .css)
-            sawCSSReplay = true
-        default:
-            Issue.record("Expected normalized DOM and CSS completion boundaries.")
-        }
-    }
+    let domCompletion = try await modelFeedRequireBootstrapCompletion(iterator.next())
+    let cssSnapshot = try await modelFeedRequireCSSBootstrapSnapshot(iterator.next())
+    let cssCompletion = try await modelFeedRequireBootstrapCompletion(iterator.next())
     let synchronization = try await modelFeedRequireSynchronization(iterator.next())
     #expect(bootstrap.generation == reset)
-    #expect(sawDOMCompletion)
-    #expect(sawCSSReplay)
+    #expect(domCompletion.domain == .dom)
+    #expect(cssSnapshot.count == 1)
+    #expect(cssSnapshot.first?.scope.generation == reset)
+    #expect(cssSnapshot.first?.scope.target.id == WebInspectorTarget.ID("page-main"))
+    #expect(cssSnapshot.first?.scope.navigationEpoch == ModelNavigationEpoch(rawValue: 0))
+    #expect(cssSnapshot.first?.scope.domBindingEpoch == ModelDOMBindingEpoch(rawValue: 0))
+    #expect(cssCompletion.domain == .css)
     #expect(synchronization.generation == reset)
 
     let domKey = ConnectionCapabilityKey(
@@ -526,6 +522,8 @@ func multiDomainSynchronizationAcceptsReplayBeforeDOMBootstrap() async throws {
         )
     }
     let getDocument = try await backend.waitForTargetMessage(method: "DOM.getDocument")
+    let pageEnable = try await backend.waitForTargetMessage(method: "Page.enable")
+    await modelFeedRespond(to: pageEnable, core: core)
     let networkEnable = try await backend.waitForTargetMessage(method: "Network.enable")
     await modelFeedRespond(to: networkEnable, core: core)
     let feed = try await openTask.value
@@ -551,19 +549,21 @@ func multiDomainSynchronizationAcceptsReplayBeforeDOMBootstrap() async throws {
     #expect(synchronization.generation == reset)
     #expect(synchronization.through >= targetSnapshot.through)
 
-    let closeTask = Task {
-        try await feed.close()
-    }
-    let networkDisable = try await backend.waitForTargetMessage(method: "Network.disable")
-    await modelFeedRespond(to: networkDisable, core: core)
-    try await closeTask.value
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Page.enable", "Network.enable"]
+    )
     #expect(try await iterator.next() == nil)
     await core.close()
 }
 
 @Test
 func modelFeedAtomicallyStartsWithResetTargetSnapshotAndEmptySynchronization() async throws {
-    let core = ConnectionCore(backend: FakeTransportBackend(), responseTimeout: nil)
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
     _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
         id: "page-main",
         type: "page",
@@ -588,7 +588,12 @@ func modelFeedAtomicallyStartsWithResetTargetSnapshotAndEmptySynchronization() a
         parentFrameID: "frame-a"
     ))
 
-    let feed = try await core.openModelFeed(configuredDomains: [])
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [],
+        targetID: "page-main"
+    )
     var iterator = feed.records.makeAsyncIterator()
     let reset = try await modelFeedRequireReset(iterator.next())
     let snapshot = try await modelFeedRequireTargetSnapshot(iterator.next())
@@ -598,7 +603,7 @@ func modelFeedAtomicallyStartsWithResetTargetSnapshotAndEmptySynchronization() a
     #expect(snapshot.generation == reset)
     #expect(snapshot.through == through)
     #expect(snapshot.snapshot.currentPageID == WebInspectorTarget.ID("page-main"))
-    #expect(snapshot.snapshot.targets.map(\.id) == [
+    #expect(snapshot.snapshot.targets.map(\.target.id) == [
         WebInspectorTarget.ID("page-main"),
         WebInspectorTarget.ID("frame-a"),
         WebInspectorTarget.ID("frame-b"),
@@ -607,25 +612,36 @@ func modelFeedAtomicallyStartsWithResetTargetSnapshotAndEmptySynchronization() a
     #expect(synchronization.generation == reset)
     #expect(synchronization.through == through)
 
-    try await feed.close()
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Page.enable"]
+    )
     #expect(try await iterator.next() == nil)
     await core.close()
 }
 
 @Test
 func modelFeedUnavailableBindingUsesOneGenerationForResetSnapshotAndSynchronization() async throws {
-    let core = ConnectionCore(backend: FakeTransportBackend(), responseTimeout: nil)
-    let feed = try await core.openModelFeed(configuredDomains: [])
-    var iterator = feed.records.makeAsyncIterator()
-
-    let reset = try await modelFeedRequireReset(iterator.next())
-    #expect(reset.rawValue == 1)
-
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    let openTask = Task {
+        try await core.openModelFeed(configuredDomains: [])
+    }
     let through = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
         id: "page-main",
         type: "page",
         frameID: "main-frame"
     ))
+    let pageEnable = try await backend.waitForTargetMessage(method: "Page.enable")
+    await modelFeedRespond(to: pageEnable, core: core)
+    let feed = try await openTask.value
+    var iterator = feed.records.makeAsyncIterator()
+
+    let reset = try await modelFeedRequireReset(iterator.next())
+    #expect(reset.rawValue == 1)
     let snapshot = try await modelFeedRequireTargetSnapshot(iterator.next())
     let synchronization = try await modelFeedRequireSynchronization(iterator.next())
 
@@ -637,7 +653,13 @@ func modelFeedUnavailableBindingUsesOneGenerationForResetSnapshotAndSynchronizat
     // The snapshot watermark subsumes the Target.targetCreated event that
     // established the binding. Closing immediately must not expose a duplicate
     // lifecycle delta at that same sequence.
-    try await feed.close()
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Page.enable"]
+    )
     #expect(try await iterator.next() == nil)
     await core.close()
 }
@@ -654,6 +676,8 @@ func modelFeedPublishesFutureTargetAndConfiguredDomainEventsAfterSnapshotWaterma
     let openTask = Task {
         try await core.openModelFeed(configuredDomains: [.network])
     }
+    let pageEnable = try await backend.waitForTargetMessage(method: "Page.enable")
+    await modelFeedRespond(to: pageEnable, core: core)
     let enable = try await backend.waitForTargetMessage(method: "Network.enable")
     let enableID = try modelFeedMessageID(enable.message)
     _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
@@ -674,6 +698,9 @@ func modelFeedPublishesFutureTargetAndConfiguredDomainEventsAfterSnapshotWaterma
     #expect(initialReplay.through == initialSnapshot.through)
     #expect(initialSynchronization.generation == initialSnapshot.generation)
     #expect(initialSynchronization.through == initialSnapshot.through)
+    let initialTargetState = try #require(initialSnapshot.snapshot.targets.first)
+    #expect(initialTargetState.navigationEpoch == ModelNavigationEpoch(rawValue: 0))
+    #expect(initialTargetState.domBindingEpoch == nil)
 
     let targetSequence = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
         id: "frame-a",
@@ -684,42 +711,291 @@ func modelFeedPublishesFutureTargetAndConfiguredDomainEventsAfterSnapshotWaterma
     let targetEvent = try await modelFeedRequireEvent(iterator.next())
     #expect(targetEvent.sequence == targetSequence)
     #expect(targetEvent.sequence > initialSnapshot.through)
-    guard case let .target(.targetCreated(target)) = targetEvent.payload else {
+    guard case .target(.targetCreated) = targetEvent.payload else {
         Issue.record("Expected a model targetCreated delta.")
         return
     }
-    #expect(target.id == WebInspectorTarget.ID("frame-a"))
+    #expect(targetEvent.target.id == WebInspectorTarget.ID("frame-a"))
+    #expect(targetEvent.navigationEpoch == ModelNavigationEpoch(rawValue: 0))
+    #expect(targetEvent.domBindingEpoch == nil)
 
-    _ = await core.receiveRootMessage(
-        #"{"method":"DOM.documentUpdated","params":{}}"#
+    let navigationSequence = await core.receiveRootMessage(
+        modelFeedTargetDispatchMessage(
+            targetID: "page-main",
+            message: #"{"method":"Page.frameNavigated","params":{"frame":{"id":"main-frame","loaderId":"loader-2","url":"https://example.test/next","securityOrigin":"https://example.test","mimeType":"text/html"}}}"#
+        )
     )
+    let navigationEvent = try await modelFeedRequireEvent(iterator.next())
+    #expect(navigationEvent.sequence == navigationSequence)
+    #expect(navigationEvent.target.id == WebInspectorTarget.ID("page-main"))
+    #expect(navigationEvent.navigationEpoch == ModelNavigationEpoch(rawValue: 1))
+    #expect(navigationEvent.domBindingEpoch == nil)
+    guard case .target(.frameNavigated) = navigationEvent.payload else {
+        Issue.record("Expected a scoped Page.frameNavigated event.")
+        return
+    }
     let networkSequence = await core.receiveRootMessage(
         #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-1","request":{"url":"https://example.test","method":"GET"},"initiator":{"type":"other"},"timestamp":1,"type":"Document"}}"#
     )
     let networkEvent = try await modelFeedRequireEvent(iterator.next())
     #expect(networkEvent.sequence == networkSequence)
-    guard case let .network(target, event) = networkEvent.payload else {
+    guard case let .network(event) = networkEvent.payload else {
         Issue.record("Expected a physical-target Network event.")
         return
     }
-    #expect(target.id == WebInspectorTarget.ID("page-main"))
+    #expect(networkEvent.target.id == WebInspectorTarget.ID("page-main"))
+    #expect(networkEvent.navigationEpoch == ModelNavigationEpoch(rawValue: 1))
+    #expect(networkEvent.domBindingEpoch == nil)
     guard case let .requestWillBeSent(id, _, _, _, _, _) = event else {
         Issue.record("Expected Network.requestWillBeSent.")
         return
     }
     #expect(id == Network.Request.ID("request-1"))
 
-    let closeTask = Task {
-        try await feed.close()
-    }
-    let disable = try await backend.waitForTargetMessage(method: "Network.disable")
-    let disableID = try modelFeedMessageID(disable.message)
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Page.enable", "Network.enable"]
+    )
+    await core.close()
+}
+
+@Test
+func modelEventScopeSeparatesPhysicalTargetsAndTracksParentlessFrameNavigationEpochs() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "frame-a",
+        type: "page",
+        frameID: "frame-a"
+    ))
+
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [.network],
+        targetID: "page-main"
+    )
+    var iterator = feed.records.makeAsyncIterator()
+    _ = try await modelFeedRequireReset(iterator.next())
+    _ = try await modelFeedRequireTargetSnapshot(iterator.next())
+    _ = try await modelFeedRequireReplayCompletion(iterator.next())
+    _ = try await modelFeedRequireSynchronization(iterator.next())
+
     _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
         targetID: "page-main",
-        message: #"{"id":\#(disableID),"result":{}}"#
+        message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"shared-request","request":{"url":"https://example.test/main","method":"GET"},"initiator":{"type":"other"},"timestamp":1,"type":"Fetch"}}"#
     ))
-    try await closeTask.value
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "frame-a",
+        message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"shared-request","request":{"url":"https://example.test/frame","method":"GET"},"initiator":{"type":"other"},"timestamp":2,"type":"Fetch"}}"#
+    ))
+    let mainRequest = try await modelFeedRequireEvent(iterator.next())
+    let frameRequest = try await modelFeedRequireEvent(iterator.next())
+    #expect(mainRequest.target.id == WebInspectorTarget.ID("page-main"))
+    #expect(frameRequest.target.id == WebInspectorTarget.ID("frame-a"))
+    #expect(mainRequest.navigationEpoch == ModelNavigationEpoch(rawValue: 0))
+    #expect(frameRequest.navigationEpoch == ModelNavigationEpoch(rawValue: 0))
+    guard case let .network(.requestWillBeSent(mainID, _, _, _, _, _)) = mainRequest.payload,
+          case let .network(.requestWillBeSent(frameID, _, _, _, _, _)) = frameRequest.payload else {
+        Issue.record("Expected the same raw Network request from both physical targets.")
+        return
+    }
+    #expect(mainID.targetScopeRawValue == nil)
+    #expect(frameID.targetScopeRawValue == "frame-a")
+
+    for (loaderID, expectedEpoch) in [
+        ("frame-loader-a", UInt64(1)),
+        ("frame-loader-a", UInt64(1)),
+        ("frame-loader-b", UInt64(2)),
+    ] {
+        _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+            targetID: "frame-a",
+            message: #"{"method":"Page.frameNavigated","params":{"frame":{"id":"frame-a","loaderId":"\#(loaderID)","url":"https://example.test/frame","securityOrigin":"https://example.test","mimeType":"text/html"}}}"#
+        ))
+        let navigation = try await modelFeedRequireEvent(iterator.next())
+        #expect(navigation.target.id == WebInspectorTarget.ID("frame-a"))
+        #expect(navigation.navigationEpoch == ModelNavigationEpoch(rawValue: expectedEpoch))
+        #expect(navigation.domBindingEpoch == nil)
+        guard case .target(.frameNavigated) = navigation.payload else {
+            Issue.record("Expected a frame-scoped navigation event.")
+            return
+        }
+    }
+
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Page.enable", "Network.enable"]
+    )
+    #expect(try await iterator.next() == nil)
+
+    let lateFeed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [.network],
+        targetID: "page-main"
+    )
+    var lateIterator = lateFeed.records.makeAsyncIterator()
+    _ = try await modelFeedRequireReset(lateIterator.next())
+    let lateSnapshot = try await modelFeedRequireTargetSnapshot(lateIterator.next())
+    let lateFrame = try #require(lateSnapshot.snapshot.targets.first {
+        $0.target.id == WebInspectorTarget.ID("frame-a")
+    })
+    #expect(lateFrame.navigationEpoch == ModelNavigationEpoch(rawValue: 2))
+    #expect(lateFrame.domBindingEpoch == nil)
+    _ = try await modelFeedRequireReplayCompletion(lateIterator.next())
+    _ = try await modelFeedRequireSynchronization(lateIterator.next())
+    try await modelFeedCloseSuccessfully(
+        lateFeed,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Page.enable", "Network.enable"]
+    )
     await core.close()
+}
+
+@Test
+func navigationEpochRejectsInflightDOMAndCSSBootstrapReplies() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let openTask = Task {
+        try await core.openModelFeed(configuredDomains: [.css])
+    }
+    let staleDOM = try await backend.waitForTargetMessage(
+        method: "DOM.getDocument",
+        ordinal: 0
+    )
+    let pageEnable = try await backend.waitForTargetMessage(method: "Page.enable")
+    await modelFeedRespond(to: pageEnable, core: core)
+    let cssEnable = try await backend.waitForTargetMessage(method: "CSS.enable")
+    await modelFeedRespond(to: cssEnable, core: core)
+    let staleCSS = try await backend.waitForTargetMessage(
+        method: "CSS.getAllStyleSheets",
+        ordinal: 0
+    )
+
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "page-main",
+        message: #"{"method":"Page.frameNavigated","params":{"frame":{"id":"main-frame","loaderId":"new-loader","url":"https://example.test/new","securityOrigin":"https://example.test","mimeType":"text/html"}}}"#
+    ))
+    await modelFeedRespondWithDocument(
+        to: staleDOM,
+        core: core,
+        nodeID: "stale-document"
+    )
+    let freshDOM = try await backend.waitForTargetMessage(
+        method: "DOM.getDocument",
+        ordinal: 1
+    )
+    await modelFeedRespondWithStyleSheets(
+        to: staleCSS,
+        core: core,
+        styleSheetID: "stale-sheet"
+    )
+    let freshCSS = try await backend.waitForTargetMessage(
+        method: "CSS.getAllStyleSheets",
+        ordinal: 1
+    )
+    await modelFeedRespondWithDocument(
+        to: freshDOM,
+        core: core,
+        nodeID: "fresh-document"
+    )
+    await modelFeedRespondWithStyleSheets(
+        to: freshCSS,
+        core: core,
+        styleSheetID: "fresh-sheet"
+    )
+
+    let feed = try await openTask.value
+    var iterator = feed.records.makeAsyncIterator()
+    let generation = try await modelFeedRequireReset(iterator.next())
+    _ = try await modelFeedRequireTargetSnapshot(iterator.next())
+    let navigation = try await modelFeedRequireEvent(iterator.next())
+    #expect(navigation.navigationEpoch == ModelNavigationEpoch(rawValue: 1))
+    guard case .target(.frameNavigated) = navigation.payload else {
+        Issue.record("Expected the navigation boundary before fresh bootstraps.")
+        return
+    }
+    let domSnapshot = try await modelFeedRequireDOMBootstrapSnapshot(iterator.next())
+    #expect(domSnapshot.generation == generation)
+    #expect(domSnapshot.navigationEpoch == ModelNavigationEpoch(rawValue: 1))
+    #expect(domSnapshot.root.id == DOM.Node.ID("fresh-document"))
+    #expect(try await modelFeedRequireBootstrapCompletion(iterator.next()).domain == .dom)
+    let styleSheets = try await modelFeedRequireCSSBootstrapSnapshot(iterator.next())
+    #expect(styleSheets.count == 1)
+    let styleSheet = try #require(styleSheets.first)
+    #expect(styleSheet.scope.navigationEpoch == ModelNavigationEpoch(rawValue: 1))
+    #expect(styleSheet.header.styleSheetID.rawValue == "fresh-sheet")
+    #expect(try await modelFeedRequireBootstrapCompletion(iterator.next()).domain == .css)
+    _ = try await modelFeedRequireSynchronization(iterator.next())
+
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Page.enable", "CSS.enable"]
+    )
+    #expect(try await iterator.next() == nil)
+    await core.close()
+}
+
+@Test
+func modelNavigationWithoutLoaderIDTerminatesAsProtocolViolation() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [.network],
+        targetID: "page-main"
+    )
+    var iterator = feed.records.makeAsyncIterator()
+    _ = try await modelFeedRequireReset(iterator.next())
+    _ = try await modelFeedRequireTargetSnapshot(iterator.next())
+    _ = try await modelFeedRequireReplayCompletion(iterator.next())
+    _ = try await modelFeedRequireSynchronization(iterator.next())
+
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "page-main",
+        message: #"{"method":"Page.frameNavigated","params":{"frame":{"id":"main-frame","url":"https://example.test/missing-loader","securityOrigin":"https://example.test","mimeType":"text/html"}}}"#
+    ))
+
+    await #expect(throws: WebInspectorProxyError.self) {
+        try await core.waitUntilClosed()
+    }
+    guard case let .protocolViolation(message) = await core.terminalCause else {
+        Issue.record("Expected a loader-less navigation to terminate the model feed.")
+        return
+    }
+    #expect(message.contains("Page.frameNavigated"))
+    await #expect(throws: WebInspectorProxyError.self) {
+        try await iterator.next()
+    }
+    #expect(await backend.isDetached())
+    _ = feed
 }
 
 @Test
@@ -734,6 +1010,8 @@ func modelFeedReplayCompletionFollowsEnableTimeEventsBeforeOpenReturns() async t
     let openTask = Task {
         try await core.openModelFeed(configuredDomains: [.network])
     }
+    let pageEnable = try await backend.waitForTargetMessage(method: "Page.enable")
+    await modelFeedRespond(to: pageEnable, core: core)
     let enable = try await backend.waitForTargetMessage(method: "Network.enable")
 
     let replayedEventSequence = await core.receiveRootMessage(
@@ -754,7 +1032,7 @@ func modelFeedReplayCompletionFollowsEnableTimeEventsBeforeOpenReturns() async t
 
     #expect(replayedEvent.sequence == replayedEventSequence)
     #expect(replayedEvent.sequence > snapshot.through)
-    guard case let .network(_, event) = replayedEvent.payload,
+    guard case let .network(event) = replayedEvent.payload,
           case let .requestWillBeSent(id, _, _, _, _, _) = event else {
         Issue.record("Expected the enable-time Network event before replay completion.")
         return
@@ -771,7 +1049,7 @@ func modelFeedReplayCompletionFollowsEnableTimeEventsBeforeOpenReturns() async t
         core: core,
         backend: backend,
         targetID: "page-main",
-        enableMethods: ["Network.enable"]
+        enableMethods: ["Page.enable", "Network.enable"]
     )
     #expect(try await iterator.next() == nil)
     await core.close()
@@ -779,40 +1057,69 @@ func modelFeedReplayCompletionFollowsEnableTimeEventsBeforeOpenReturns() async t
 
 @Test
 func cleanModelFeedCloseReleasesClaimForAReplacementFeed() async throws {
-    let core = ConnectionCore(backend: FakeTransportBackend(), responseTimeout: nil)
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
     _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
         id: "page-main",
         type: "page",
         frameID: "main-frame"
     ))
 
-    let firstFeed = try await core.openModelFeed(configuredDomains: [])
+    let firstFeed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [],
+        targetID: "page-main"
+    )
     var firstIterator = firstFeed.records.makeAsyncIterator()
     _ = try await firstIterator.next()
     _ = try await firstIterator.next()
     _ = try await firstIterator.next()
-    try await firstFeed.close()
+    try await modelFeedCloseSuccessfully(
+        firstFeed,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Page.enable"]
+    )
     #expect(try await firstIterator.next() == nil)
 
-    let replacementFeed = try await core.openModelFeed(configuredDomains: [])
+    let replacementFeed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [],
+        targetID: "page-main"
+    )
     var replacementIterator = replacementFeed.records.makeAsyncIterator()
     _ = try await modelFeedRequireReset(replacementIterator.next())
     _ = try await modelFeedRequireTargetSnapshot(replacementIterator.next())
     _ = try await modelFeedRequireSynchronization(replacementIterator.next())
-    try await replacementFeed.close()
+    try await modelFeedCloseSuccessfully(
+        replacementFeed,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Page.enable"]
+    )
     #expect(try await replacementIterator.next() == nil)
     await core.close()
 }
 
 @Test
 func cancelledIteratorRequiresExplicitFeedCloseBeforeReplacement() async throws {
-    let core = ConnectionCore(backend: FakeTransportBackend(), responseTimeout: nil)
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
     _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
         id: "page-main",
         type: "page",
         frameID: "main-frame"
     ))
-    let feed = try await core.openModelFeed(configuredDomains: [])
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [],
+        targetID: "page-main"
+    )
     let ready = ModelFeedProbe()
     let consumer = Task {
         var iterator = feed.records.makeAsyncIterator()
@@ -832,13 +1139,30 @@ func cancelledIteratorRequiresExplicitFeedCloseBeforeReplacement() async throws 
         try await core.openModelFeed(configuredDomains: [])
     }
 
-    try await feed.close()
-    let replacementFeed = try await core.openModelFeed(configuredDomains: [])
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Page.enable"]
+    )
+    let replacementFeed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [],
+        targetID: "page-main"
+    )
     var replacementIterator = replacementFeed.records.makeAsyncIterator()
     _ = try await replacementIterator.next()
     _ = try await replacementIterator.next()
     _ = try await replacementIterator.next()
-    try await replacementFeed.close()
+    try await modelFeedCloseSuccessfully(
+        replacementFeed,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Page.enable"]
+    )
     #expect(try await replacementIterator.next() == nil)
     await core.close()
 }
@@ -887,13 +1211,22 @@ func modelFeedAndDirectConsumersClaimConnectionExclusivelyInBothOrders() async t
     }
     await directFirstCore.close()
 
-    let feedFirstCore = ConnectionCore(backend: FakeTransportBackend(), responseTimeout: nil)
+    let feedFirstBackend = FakeTransportBackend()
+    let feedFirstCore = ConnectionCore(
+        backend: feedFirstBackend,
+        responseTimeout: nil
+    )
     _ = await feedFirstCore.receiveRootMessage(modelFeedTargetCreatedMessage(
         id: "page-main",
         type: "page",
         frameID: "main-frame"
     ))
-    let feed = try await feedFirstCore.openModelFeed(configuredDomains: [])
+    let feed = try await modelFeedOpenSuccessfully(
+        core: feedFirstCore,
+        backend: feedFirstBackend,
+        configuredDomains: [],
+        targetID: "page-main"
+    )
     await #expect(throws: ConnectionModelFeedError.alreadyOpen) {
         try await feedFirstCore.openModelFeed(configuredDomains: [])
     }
@@ -919,7 +1252,13 @@ func modelFeedAndDirectConsumersClaimConnectionExclusivelyInBothOrders() async t
         )
     }
 
-    try await feed.close()
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: feedFirstCore,
+        backend: feedFirstBackend,
+        targetID: "page-main",
+        enableMethods: ["Page.enable"]
+    )
     try await feed.close()
     await feedFirstCore.close()
 }
@@ -927,8 +1266,9 @@ func modelFeedAndDirectConsumersClaimConnectionExclusivelyInBothOrders() async t
 @Test
 func explicitConnectionCloseFinishesModelFeedOnlyAfterCloseQuiescence() async throws {
     let closeGate = ModelFeedAsyncGate()
+    let backend = FakeTransportBackend()
     let core = ConnectionCore(
-        backend: FakeTransportBackend(),
+        backend: backend,
         responseTimeout: nil,
         closeAction: {
             await closeGate.waitUntilReleased()
@@ -939,7 +1279,12 @@ func explicitConnectionCloseFinishesModelFeedOnlyAfterCloseQuiescence() async th
         type: "page",
         frameID: "main-frame"
     ))
-    let feed = try await core.openModelFeed(configuredDomains: [])
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [],
+        targetID: "page-main"
+    )
     let observerReady = ModelFeedProbe()
     let observerFinished = ModelFeedProbe()
     let observer = Task {
@@ -967,13 +1312,19 @@ func explicitConnectionCloseFinishesModelFeedOnlyAfterCloseQuiescence() async th
 
 @Test
 func fatalAndProtocolTerminationFailModelFeed() async throws {
-    let fatalCore = ConnectionCore(backend: FakeTransportBackend(), responseTimeout: nil)
+    let fatalBackend = FakeTransportBackend()
+    let fatalCore = ConnectionCore(backend: fatalBackend, responseTimeout: nil)
     _ = await fatalCore.receiveRootMessage(modelFeedTargetCreatedMessage(
         id: "page-main",
         type: "page",
         frameID: "main-frame"
     ))
-    let fatalFeed = try await fatalCore.openModelFeed(configuredDomains: [])
+    let fatalFeed = try await modelFeedOpenSuccessfully(
+        core: fatalCore,
+        backend: fatalBackend,
+        configuredDomains: [],
+        targetID: "page-main"
+    )
     var fatalIterator = fatalFeed.records.makeAsyncIterator()
     _ = try await fatalIterator.next()
     _ = try await fatalIterator.next()
@@ -984,13 +1335,22 @@ func fatalAndProtocolTerminationFailModelFeed() async throws {
         try await fatalIterator.next()
     }
 
-    let protocolCore = ConnectionCore(backend: FakeTransportBackend(), responseTimeout: nil)
+    let protocolBackend = FakeTransportBackend()
+    let protocolCore = ConnectionCore(
+        backend: protocolBackend,
+        responseTimeout: nil
+    )
     _ = await protocolCore.receiveRootMessage(modelFeedTargetCreatedMessage(
         id: "page-main",
         type: "page",
         frameID: "main-frame"
     ))
-    let protocolFeed = try await protocolCore.openModelFeed(configuredDomains: [])
+    let protocolFeed = try await modelFeedOpenSuccessfully(
+        core: protocolCore,
+        backend: protocolBackend,
+        configuredDomains: [],
+        targetID: "page-main"
+    )
     var protocolIterator = protocolFeed.records.makeAsyncIterator()
     _ = try await protocolIterator.next()
     _ = try await protocolIterator.next()
@@ -1003,14 +1363,18 @@ func fatalAndProtocolTerminationFailModelFeed() async throws {
 
 @Test
 func droppingModelFeedFinishesMailboxButKeepsConnectionClaimedUntilClose() async throws {
-    let core = ConnectionCore(backend: FakeTransportBackend(), responseTimeout: nil)
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
     _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
         id: "page-main",
         type: "page",
         frameID: "main-frame"
     ))
-    var feed: ConnectionModelFeed? = try await core.openModelFeed(
-        configuredDomains: []
+    var feed: ConnectionModelFeed? = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [],
+        targetID: "page-main"
     )
     weak let weakFeed = feed
     let records = try #require(feed).records
@@ -1037,8 +1401,22 @@ func droppingModelFeedFinishesMailboxButKeepsConnectionClaimedUntilClose() async
 
 @Test
 func targetMutationCannotReenterBeforeSnapshotPublication() async throws {
-    let core = ConnectionCore(backend: FakeTransportBackend(), responseTimeout: nil)
-    let feed = try await core.openModelFeed(configuredDomains: [])
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    let registeredFeed = Mutex<ConnectionModelFeed?>(nil)
+    let feedRegistered = ModelFeedProbe()
+    let openTask = Task {
+        try await core.openModelFeed(
+            configuredDomains: [],
+            onRegistered: { feed in
+                registeredFeed.withLock { $0 = feed }
+                await feedRegistered.finish()
+                return true
+            }
+        )
+    }
+    await feedRegistered.waitUntilFinished()
+    let feed = try #require(registeredFeed.withLock { $0 })
     var iterator = feed.records.makeAsyncIterator()
     let reset = try await modelFeedRequireReset(iterator.next())
     let mutationGate = ModelFeedSynchronousGate()
@@ -1068,6 +1446,9 @@ func targetMutationCannotReenterBeforeSnapshotPublication() async throws {
 
     mutationGate.release()
     let eventSequence = await receiveTask.value
+    let pageEnable = try await backend.waitForTargetMessage(method: "Page.enable")
+    await modelFeedRespond(to: pageEnable, core: core)
+    _ = try await openTask.value
     let generation = try await generationTask.value
     let snapshot = try await modelFeedRequireTargetSnapshot(iterator.next())
 
@@ -1076,7 +1457,13 @@ func targetMutationCannotReenterBeforeSnapshotPublication() async throws {
     #expect(snapshot.through == eventSequence)
 
     await core.replaceModelTargetMutationActionForTesting(nil)
-    try await feed.close()
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Page.enable"]
+    )
     await core.close()
 }
 
@@ -1190,22 +1577,26 @@ func modelFeedAcquiresAndReleasesConfiguredCapabilitiesInDeterministicOrder() as
     let snapshot = try await modelFeedRequireTargetSnapshot(iterator.next())
     #expect(snapshot.generation == reset)
     let bootstrapSnapshot = try await modelFeedRequireDOMBootstrapSnapshot(iterator.next())
-    var bootstrapCompletion: ModelFeedBootstrapCompletionRecord?
+    var bootstrapCompletions: [ModelFeedBootstrapCompletionRecord] = []
+    var cssSnapshot: [ModelCSSStyleSheet]?
     var replayCompletions: [ModelFeedReplayCompletionRecord] = []
-    for _ in 0..<5 {
+    for _ in 0..<6 {
         let record = try #require(await iterator.next())
         switch record {
         case .bootstrapComplete:
-            #expect(bootstrapCompletion == nil)
-            bootstrapCompletion = try modelFeedRequireBootstrapCompletion(record)
+            bootstrapCompletions.append(
+                try modelFeedRequireBootstrapCompletion(record)
+            )
+        case .bootstrapSnapshot:
+            #expect(cssSnapshot == nil)
+            cssSnapshot = try modelFeedRequireCSSBootstrapSnapshot(record)
         case .replayComplete:
             replayCompletions.append(try modelFeedRequireReplayCompletion(record))
         default:
-            Issue.record("Expected one DOM bootstrap completion or replay completion.")
+            Issue.record("Expected DOM/CSS bootstrap or replay completion.")
         }
     }
     #expect(replayCompletions.map(\.domain) == [
-        .css,
         .network,
         .console,
         .runtime,
@@ -1216,9 +1607,10 @@ func modelFeedAcquiresAndReleasesConfiguredCapabilitiesInDeterministicOrder() as
     let synchronization = try await modelFeedRequireSynchronization(iterator.next())
     #expect(bootstrapSnapshot.generation == reset)
     #expect(bootstrapSnapshot.target.id == WebInspectorTarget.ID("page-main"))
-    #expect(bootstrapSnapshot.documentEpoch == ModelDocumentEpoch(rawValue: 0))
-    #expect(bootstrapCompletion?.generation == reset)
-    #expect(bootstrapCompletion?.domain == .dom)
+    #expect(bootstrapSnapshot.documentEpoch == ModelDOMBindingEpoch(rawValue: 0))
+    #expect(cssSnapshot?.count == 1)
+    #expect(bootstrapCompletions.map(\.domain) == [.dom, .css])
+    #expect(bootstrapCompletions.allSatisfy { $0.generation == reset })
     #expect(synchronization.generation == reset)
 
     let owners = await core.capabilityLeaseOwnersForTesting()
@@ -1231,6 +1623,12 @@ func modelFeedAcquiresAndReleasesConfiguredCapabilitiesInDeterministicOrder() as
         .modelFeed(feed.id, .dom),
         .modelFeed(feed.id, .css),
     ]))
+    let pageKey = ConnectionCapabilityKey(
+        route: .currentPage,
+        targetID: .currentPage,
+        domain: .page
+    )
+    #expect(owners[pageKey] == Set([.modelFeedNavigation(feed.id)]))
     for domain in [
         WebInspectorProxyEventDomain.css,
         .network,
@@ -1259,8 +1657,8 @@ func modelFeedAcquiresAndReleasesConfiguredCapabilitiesInDeterministicOrder() as
         "CSS.disable",
         "Page.disable",
     ])
-    // The shared local DOM lease emits no replay marker, and each physical
-    // wire capability emits exactly one marker.
+    // Page is observation-only, DOM/CSS use authoritative bootstrap records,
+    // and replay-only domains each emit exactly one marker.
     #expect(try await iterator.next() == nil)
     #expect(await modelFeedAllCapabilityLeaseOwners(core).isEmpty)
     await core.close()
@@ -1299,6 +1697,8 @@ func registeredModelFeedConsumerDrainsEnableReplayBeforeOpenReturns() async thro
             }
         )
     }
+    let pageEnable = try await backend.waitForTargetMessage(method: "Page.enable")
+    await modelFeedRespond(to: pageEnable, core: core)
     let enable = try await backend.waitForTargetMessage(method: "Network.enable")
 
     let replayEventCount = 512
@@ -1329,7 +1729,7 @@ func registeredModelFeedConsumerDrainsEnableReplayBeforeOpenReturns() async thro
         core: core,
         backend: backend,
         targetID: "page-main",
-        enableMethods: ["Network.enable"]
+        enableMethods: ["Page.enable", "Network.enable"]
     )
     await core.close()
 }
@@ -1348,12 +1748,16 @@ func rejectedEnableDoesNotPublishReplayMarkerOrPoisonFullFeed() async throws {
             configuredDomains: [.network]
         )
     }
+    let pageEnable = try await backend.waitForTargetMessage(method: "Page.enable")
+    await modelFeedRespond(to: pageEnable, core: core)
     let enable = try await backend.waitForTargetMessage(method: "Network.enable")
     await modelFeedRespond(
         to: enable,
         core: core,
         errorMessage: "enable rejected"
     )
+    let pageDisable = try await backend.waitForTargetMessage(method: "Page.disable")
+    await modelFeedRespond(to: pageDisable, core: core)
 
     await #expect(throws: ConnectionModelFeedError.bootstrapFailed(
         domain: .network,
@@ -1364,10 +1768,19 @@ func rejectedEnableDoesNotPublishReplayMarkerOrPoisonFullFeed() async throws {
     #expect(await core.terminalCause == nil)
     #expect(await backend.isDetached() == false)
 
-    let replacement = try await core.openModelFeed(
-        configuredDomains: []
+    let replacement = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [],
+        targetID: "page-main"
     )
-    try await replacement.close()
+    try await modelFeedCloseSuccessfully(
+        replacement,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Page.enable"]
+    )
     await core.close()
 }
 
@@ -1389,8 +1802,19 @@ func modelFeedActivationPageUnavailableRemainsConnectionLifecycleError() async t
     #expect(await backend.isDetached() == false)
 
     await backend.setSendError(nil)
-    let replacement = try await core.openModelFeed(configuredDomains: [])
-    try await replacement.close()
+    let replacement = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [],
+        targetID: "page-main"
+    )
+    try await modelFeedCloseSuccessfully(
+        replacement,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Page.enable"]
+    )
     await core.close()
 }
 
@@ -1445,6 +1869,8 @@ func cancelledActivationDoesNotPublishReplayMarkerAfterOwnerStopsBeingDesired() 
             configuredDomains: [.network]
         )
     }
+    let pageEnable = try await backend.waitForTargetMessage(method: "Page.enable")
+    await modelFeedRespond(to: pageEnable, core: core)
     let enable = try await backend.waitForTargetMessage(method: "Network.enable")
 
     openTask.cancel()
@@ -1452,6 +1878,8 @@ func cancelledActivationDoesNotPublishReplayMarkerAfterOwnerStopsBeingDesired() 
     await modelFeedRespond(to: enable, core: core)
     let disable = try await backend.waitForTargetMessage(method: "Network.disable")
     await modelFeedRespond(to: disable, core: core)
+    let pageDisable = try await backend.waitForTargetMessage(method: "Page.disable")
+    await modelFeedRespond(to: pageDisable, core: core)
 
     await #expect(throws: CancellationError.self) {
         try await openTask.value
@@ -1460,14 +1888,23 @@ func cancelledActivationDoesNotPublishReplayMarkerAfterOwnerStopsBeingDesired() 
     #expect(await backend.isDetached() == false)
     #expect(await modelFeedAllCapabilityLeaseOwners(core).isEmpty)
 
-    let replacement = try await core.openModelFeed(
-        configuredDomains: []
+    let replacement = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [],
+        targetID: "page-main"
     )
-    try await replacement.close()
+    try await modelFeedCloseSuccessfully(
+        replacement,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Page.enable"]
+    )
     await core.close()
 }
 
-@Test(arguments: [0, 1, 2, 3, 4])
+@Test(arguments: [1, 2, 3, 4])
 func modelFeedCapabilityFailureRollsBackSuccessfulPrefixInReverseOrder(
     failureIndex: Int
 ) async throws {
@@ -1506,6 +1943,15 @@ func modelFeedCapabilityFailureRollsBackSuccessfulPrefixInReverseOrder(
             )
         } else {
             await modelFeedRespond(to: message, core: core)
+            if enableMethods[index] == "CSS.enable" {
+                let snapshot = try await backend.waitForTargetMessage(
+                    method: "CSS.getAllStyleSheets"
+                )
+                await modelFeedRespondWithStyleSheets(
+                    to: snapshot,
+                    core: core
+                )
+            }
         }
     }
 
@@ -1534,10 +1980,83 @@ func modelFeedCapabilityFailureRollsBackSuccessfulPrefixInReverseOrder(
     ) + rollbackMethods)
     #expect(await modelFeedAllCapabilityLeaseOwners(core).isEmpty)
 
-    let replacementFeed = try await core.openModelFeed(
-        configuredDomains: []
+    let replacementFeed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [],
+        targetID: "page-main"
     )
-    try await replacementFeed.close()
+    try await modelFeedCloseSuccessfully(
+        replacementFeed,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Page.enable"]
+    )
+    await core.close()
+}
+
+@Test
+func modelFeedRollbackCancelsPendingCSSAuthoritativeSnapshot() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let openTask = Task {
+        try await core.openModelFeed(configuredDomains: [.css, .network])
+    }
+
+    let initialDocument = try await backend.waitForTargetMessage(
+        method: "DOM.getDocument",
+        ordinal: 0
+    )
+    await modelFeedRespondWithDocument(to: initialDocument, core: core)
+    let pageEnable = try await backend.waitForTargetMessage(method: "Page.enable")
+    await modelFeedRespond(to: pageEnable, core: core)
+    let cssEnable = try await backend.waitForTargetMessage(method: "CSS.enable")
+    await modelFeedRespond(to: cssEnable, core: core)
+    let initialCSSSnapshot = try await backend.waitForTargetMessage(
+        method: "CSS.getAllStyleSheets",
+        ordinal: 0
+    )
+    await modelFeedRespondWithStyleSheets(to: initialCSSSnapshot, core: core)
+    let networkEnable = try await backend.waitForTargetMessage(method: "Network.enable")
+
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "page-main",
+        message: #"{"method":"DOM.documentUpdated","params":{}}"#
+    ))
+    _ = try await backend.waitForTargetMessage(
+        method: "DOM.getDocument",
+        ordinal: 1
+    )
+    _ = try await backend.waitForTargetMessage(
+        method: "CSS.getAllStyleSheets",
+        ordinal: 1
+    )
+
+    await modelFeedRespond(
+        to: networkEnable,
+        core: core,
+        errorMessage: "network rejected"
+    )
+    let cssDisable = try await backend.waitForTargetMessage(method: "CSS.disable")
+    await modelFeedRespond(to: cssDisable, core: core)
+    let pageDisable = try await backend.waitForTargetMessage(method: "Page.disable")
+    await modelFeedRespond(to: pageDisable, core: core)
+
+    await #expect(throws: ConnectionModelFeedError.bootstrapFailed(
+        domain: .network,
+        message: "network rejected"
+    )) {
+        try await openTask.value
+    }
+    #expect(await core.pendingReplyPurposes().isEmpty)
+    #expect(await modelFeedAllCapabilityLeaseOwners(core).isEmpty)
+    #expect(await backend.isDetached() == false)
     await core.close()
 }
 
@@ -1555,25 +2074,40 @@ func modelFeedActivationCancellationRollsBackAfterEnableAndDisableQuiesce() asyn
             configuredDomains: [.network]
         )
     }
+    let pageEnable = try await backend.waitForTargetMessage(method: "Page.enable")
+    await modelFeedRespond(to: pageEnable, core: core)
     let enable = try await backend.waitForTargetMessage(method: "Network.enable")
 
     openTask.cancel()
     await modelFeedRespond(to: enable, core: core)
     let disable = try await backend.waitForTargetMessage(method: "Network.disable")
     await modelFeedRespond(to: disable, core: core)
+    let pageDisable = try await backend.waitForTargetMessage(method: "Page.disable")
+    await modelFeedRespond(to: pageDisable, core: core)
 
     await #expect(throws: CancellationError.self) {
         try await openTask.value
     }
     #expect(try await modelFeedSentTargetMethods(backend) == [
+        "Page.enable",
         "Network.enable",
         "Network.disable",
+        "Page.disable",
     ])
     #expect(await modelFeedAllCapabilityLeaseOwners(core).isEmpty)
-    let replacementFeed = try await core.openModelFeed(
-        configuredDomains: []
+    let replacementFeed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [],
+        targetID: "page-main"
     )
-    try await replacementFeed.close()
+    try await modelFeedCloseSuccessfully(
+        replacementFeed,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Page.enable"]
+    )
     await core.close()
 }
 
@@ -1616,14 +2150,26 @@ func modelFeedCloseKeepsClaimUntilDisableAndSharesDuplicateCloseCompletion() asy
     #expect(await duplicateFinished.isFinished == false)
 
     await modelFeedRespond(to: disable, core: core)
+    let pageDisable = try await backend.waitForTargetMessage(method: "Page.disable")
+    #expect(await duplicateFinished.isFinished == false)
+    await modelFeedRespond(to: pageDisable, core: core)
     try await firstClose.value
     try await duplicateClose.value
     try await feed.close()
 
-    let replacementFeed = try await core.openModelFeed(
-        configuredDomains: []
+    let replacementFeed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [],
+        targetID: "page-main"
     )
-    try await replacementFeed.close()
+    try await modelFeedCloseSuccessfully(
+        replacementFeed,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Page.enable"]
+    )
 
     let sentCount = await backend.sentMessages().count
     let directCommand = Task {
@@ -1654,6 +2200,9 @@ func modelFeedRetargetDuringAcquisitionMovesPendingCapabilityToReplacement() asy
             configuredDomains: [.network]
         )
     }
+    let oldPageEnable = try await backend.waitForTargetMessage(method: "Page.enable")
+    #expect(oldPageEnable.targetIdentifier == ProtocolTarget.ID("page-old"))
+    await modelFeedRespond(to: oldPageEnable, core: core)
     let oldEnable = try await backend.waitForTargetMessage(method: "Network.enable")
     #expect(oldEnable.targetIdentifier == ProtocolTarget.ID("page-old"))
 
@@ -1665,10 +2214,15 @@ func modelFeedRetargetDuringAcquisitionMovesPendingCapabilityToReplacement() asy
         type: "page",
         frameID: "main-frame"
     ))
+    let newPageEnable = try await backend.waitForTargetMessage(
+        method: "Page.enable",
+        ordinal: 1
+    )
+    #expect(newPageEnable.targetIdentifier == ProtocolTarget.ID("page-new"))
+    await modelFeedRespond(to: newPageEnable, core: core)
     let newEnable = try await backend.waitForTargetMessage(
         method: "Network.enable",
-        ordinal: 0,
-        after: 1
+        ordinal: 1
     )
     #expect(newEnable.targetIdentifier == ProtocolTarget.ID("page-new"))
     let pendingPurposes = await core.pendingReplyPurposes()
@@ -1682,6 +2236,7 @@ func modelFeedRetargetDuringAcquisitionMovesPendingCapabilityToReplacement() asy
     await modelFeedRespond(to: newEnable, core: core)
     let feed = try await openTask.value
     #expect(await modelFeedAllCapabilityLeaseOwners(core) == Set([
+        .modelFeedNavigation(feed.id),
         .modelFeed(feed.id, .network),
     ]))
     try await modelFeedCloseSuccessfully(
@@ -1689,7 +2244,7 @@ func modelFeedRetargetDuringAcquisitionMovesPendingCapabilityToReplacement() asy
         core: core,
         backend: backend,
         targetID: "page-new",
-        enableMethods: ["Network.enable"]
+        enableMethods: ["Page.enable", "Network.enable"]
     )
     await core.close()
 }
@@ -1727,10 +2282,15 @@ func activeModelFeedLeaseReconcilesOntoReplacementTarget() async throws {
         type: "page",
         frameID: "main-frame"
     ))
+    let replacementPageEnable = try await backend.waitForTargetMessage(
+        method: "Page.enable",
+        ordinal: 1
+    )
+    #expect(replacementPageEnable.targetIdentifier == ProtocolTarget.ID("page-new"))
+    await modelFeedRespond(to: replacementPageEnable, core: core)
     let replacementEnable = try await backend.waitForTargetMessage(
         method: "Network.enable",
-        ordinal: 0,
-        after: 1
+        ordinal: 1
     )
     #expect(replacementEnable.targetIdentifier == ProtocolTarget.ID("page-new"))
     let pendingPurposes = await core.pendingReplyPurposes()
@@ -1741,6 +2301,7 @@ func activeModelFeedLeaseReconcilesOntoReplacementTarget() async throws {
         return replyKey.targetID == ProtocolTarget.ID("page-new")
     })
     #expect(await modelFeedAllCapabilityLeaseOwners(core) == Set([
+        .modelFeedNavigation(feed.id),
         .modelFeed(feed.id, .network),
     ]))
     let replacementEventSequence = await core.receiveRootMessage(
@@ -1772,7 +2333,7 @@ func activeModelFeedLeaseReconcilesOntoReplacementTarget() async throws {
         core: core,
         backend: backend,
         targetID: "page-new",
-        enableMethods: ["Network.enable"]
+        enableMethods: ["Page.enable", "Network.enable"]
     )
     #expect(try await iterator.next() == nil)
     await core.close()
@@ -1805,7 +2366,9 @@ func restoredPageTargetReusesPageAgentAndRefreshesReplayDomains() async throws {
     _ = try await modelFeedRequireTargetSnapshot(iterator.next())
     _ = try await modelFeedRequireDOMBootstrapSnapshot(iterator.next())
     _ = try await modelFeedRequireBootstrapCompletion(iterator.next())
-    for domain in [ModelDomain.css, .network, .console, .runtime] {
+    _ = try await modelFeedRequireCSSBootstrapSnapshot(iterator.next())
+    #expect(try await modelFeedRequireBootstrapCompletion(iterator.next()).domain == .css)
+    for domain in [ModelDomain.network, .console, .runtime] {
         #expect(try await modelFeedRequireReplayCompletion(iterator.next()).domain == domain)
     }
     _ = try await modelFeedRequireSynchronization(iterator.next())
@@ -1839,13 +2402,22 @@ func restoredPageTargetReusesPageAgentAndRefreshesReplayDomains() async throws {
         )
         #expect(message.targetIdentifier == ProtocolTarget.ID("page-b"))
         await modelFeedRespond(to: message, core: core)
+        if method == "CSS.enable" {
+            let snapshot = try await backend.waitForTargetMessage(
+                method: "CSS.getAllStyleSheets",
+                after: pageBCommitBaseline
+            )
+            await modelFeedRespondWithStyleSheets(to: snapshot, core: core)
+        }
     }
 
     _ = try await modelFeedRequireReset(iterator.next())
     _ = try await modelFeedRequireTargetSnapshot(iterator.next())
     _ = try await modelFeedRequireDOMBootstrapSnapshot(iterator.next())
     _ = try await modelFeedRequireBootstrapCompletion(iterator.next())
-    for domain in [ModelDomain.css, .network, .console, .runtime] {
+    _ = try await modelFeedRequireCSSBootstrapSnapshot(iterator.next())
+    #expect(try await modelFeedRequireBootstrapCompletion(iterator.next()).domain == .css)
+    for domain in [ModelDomain.network, .console, .runtime] {
         #expect(try await modelFeedRequireReplayCompletion(iterator.next()).domain == domain)
     }
     _ = try await modelFeedRequireSynchronization(iterator.next())
@@ -1995,6 +2567,13 @@ func restoredCSSSnapshotRejectionDuringCloseCleansKnownEnabledWireState() async 
             after: pageBCommitBaseline
         )
         await modelFeedRespond(to: command, core: core)
+        if method == "CSS.enable" {
+            let snapshot = try await backend.waitForTargetMessage(
+                method: "CSS.getAllStyleSheets",
+                after: pageBCommitBaseline
+            )
+            await modelFeedRespondWithStyleSheets(to: snapshot, core: core)
+        }
     }
 
     _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
@@ -2085,6 +2664,11 @@ func restoredNetworkReplayRejectionDuringCloseDisablesKnownEnabledAgent() async 
     _ = await core.receiveRootMessage(
         #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-a","newTargetId":"page-b"}}"#
     )
+    let pageBPageEnable = try await backend.waitForTargetMessage(
+        method: "Page.enable",
+        after: pageBCommitBaseline
+    )
+    await modelFeedRespond(to: pageBPageEnable, core: core)
     let pageBEnable = try await backend.waitForTargetMessage(
         method: "Network.enable",
         after: pageBCommitBaseline
@@ -2126,12 +2710,21 @@ func restoredNetworkReplayRejectionDuringCloseDisablesKnownEnabledAgent() async 
     )
     #expect(disable.targetIdentifier == ProtocolTarget.ID("page-a"))
     await modelFeedRespond(to: disable, core: core)
+    let pageDisable = try await backend.waitForTargetMessage(
+        method: "Page.disable",
+        after: restorationBaseline
+    )
+    await modelFeedRespond(to: pageDisable, core: core)
 
     try await closeTask.value
     let restorationMethods = try await backend.sentTargetMessages()
         .dropFirst(restorationBaseline)
         .map { try modelFeedMessageMethod($0.message) }
-    #expect(restorationMethods == ["Network.enable", "Network.disable"])
+    #expect(restorationMethods == [
+        "Network.enable",
+        "Network.disable",
+        "Page.disable",
+    ])
     #expect(await core.terminalCause == nil)
     await core.close()
 }
@@ -2178,6 +2771,11 @@ func uncertainRestoredPageAcceptsOnlyTheAlreadyEnabledPostcondition() async thro
         after: pageBCommitBaseline
     )
     await modelFeedRespond(to: pageBCSSEnable, core: core)
+    let pageBCSSSnapshot = try await backend.waitForTargetMessage(
+        method: "CSS.getAllStyleSheets",
+        after: pageBCommitBaseline
+    )
+    await modelFeedRespondWithStyleSheets(to: pageBCSSSnapshot, core: core)
     let feed = try await openTask.value
 
     _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
@@ -2211,6 +2809,11 @@ func uncertainRestoredPageAcceptsOnlyTheAlreadyEnabledPostcondition() async thro
     )
     #expect(restoredCSSEnable.targetIdentifier == ProtocolTarget.ID("page-a"))
     await modelFeedRespond(to: restoredCSSEnable, core: core)
+    let restoredCSSSnapshot = try await backend.waitForTargetMessage(
+        method: "CSS.getAllStyleSheets",
+        after: restorationBaseline
+    )
+    await modelFeedRespondWithStyleSheets(to: restoredCSSSnapshot, core: core)
 
     #expect(await core.terminalCause == nil)
     try await modelFeedCloseSuccessfully(
@@ -2254,6 +2857,11 @@ func restoredConsoleReplaySubsumesBufferedProvisionalMessages() async throws {
     _ = await core.receiveRootMessage(
         #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-a","newTargetId":"page-b"}}"#
     )
+    let pageBPageEnable = try await backend.waitForTargetMessage(
+        method: "Page.enable",
+        after: pageBCommitBaseline
+    )
+    await modelFeedRespond(to: pageBPageEnable, core: core)
     let pageBEnable = try await backend.waitForTargetMessage(
         method: "Console.enable",
         after: pageBCommitBaseline
@@ -2298,7 +2906,7 @@ func restoredConsoleReplaySubsumesBufferedProvisionalMessages() async throws {
     _ = try await modelFeedRequireReset(iterator.next())
     _ = try await modelFeedRequireTargetSnapshot(iterator.next())
     let replayedMessage = try await modelFeedRequireEvent(iterator.next())
-    guard case let .console(_, .messageAdded(consoleMessage)) = replayedMessage.payload else {
+    guard case let .console(.messageAdded(consoleMessage)) = replayedMessage.payload else {
         Issue.record("Expected the authoritative Console replay message.")
         return
     }
@@ -2311,7 +2919,7 @@ func restoredConsoleReplaySubsumesBufferedProvisionalMessages() async throws {
         core: core,
         backend: backend,
         targetID: "page-a",
-        enableMethods: ["Console.enable"]
+        enableMethods: ["Page.enable", "Console.enable"]
     )
     #expect(try await iterator.next() == nil)
     await core.close()
@@ -2354,6 +2962,13 @@ func parkedCSSAgentDisablesBeforeItsPageDependencyWhenNoOwnerReturns() async thr
             after: pageBCommitBaseline
         )
         await modelFeedRespond(to: command, core: core)
+        if method == "CSS.enable" {
+            let snapshot = try await backend.waitForTargetMessage(
+                method: "CSS.getAllStyleSheets",
+                after: pageBCommitBaseline
+            )
+            await modelFeedRespondWithStyleSheets(to: snapshot, core: core)
+        }
     }
     try await modelFeedCloseSuccessfully(
         feed,
@@ -2410,8 +3025,9 @@ func domModelFeedCapabilityIsLocalButParticipatesInLeaseTransaction() async thro
         configuredDomains: [.dom],
         targetID: "page-main"
     )
-    #expect(try await modelFeedSentTargetMethods(backend).isEmpty)
+    #expect(try await modelFeedSentTargetMethods(backend) == ["Page.enable"])
     #expect(await modelFeedAllCapabilityLeaseOwners(core) == Set([
+        .modelFeedNavigation(feed.id),
         .modelFeed(feed.id, .dom),
     ]))
 
@@ -2422,8 +3038,17 @@ func domModelFeedCapabilityIsLocalButParticipatesInLeaseTransaction() async thro
     _ = try await modelFeedRequireBootstrapCompletion(iterator.next())
     _ = try await modelFeedRequireSynchronization(iterator.next())
 
-    try await feed.close()
-    #expect(try await modelFeedSentTargetMethods(backend).isEmpty)
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Page.enable"]
+    )
+    #expect(try await modelFeedSentTargetMethods(backend) == [
+        "Page.enable",
+        "Page.disable",
+    ])
     #expect(await modelFeedAllCapabilityLeaseOwners(core).isEmpty)
     await core.close()
 }
@@ -2450,13 +3075,17 @@ func domBootstrapRequestsMainAndCommittedFramesInSnapshotOrder() async throws {
         parentFrameID: "main-frame"
     ))
 
-    let feed = try await core.openModelFeed(configuredDomains: [.dom])
+    let openTask = Task {
+        try await core.openModelFeed(configuredDomains: [.dom])
+    }
+    let pageEnable = try await backend.waitForTargetMessage(method: "Page.enable")
+    await modelFeedRespond(to: pageEnable, core: core)
     let mainDocument = try await backend.waitForTargetMessage(
         method: "DOM.getDocument",
         ordinal: 0
     )
     #expect(mainDocument.targetIdentifier == ProtocolTarget.ID("page-main"))
-    #expect(await backend.sentTargetMessages().count == 1)
+    #expect(try await modelFeedDOMGetDocumentMessages(backend).count == 1)
     await modelFeedRespondWithDocument(to: mainDocument, core: core, nodeID: "1")
 
     let firstFrameDocument = try await backend.waitForTargetMessage(
@@ -2464,7 +3093,7 @@ func domBootstrapRequestsMainAndCommittedFramesInSnapshotOrder() async throws {
         ordinal: 1
     )
     #expect(firstFrameDocument.targetIdentifier == ProtocolTarget.ID("frame-a"))
-    #expect(await backend.sentTargetMessages().count == 2)
+    #expect(try await modelFeedDOMGetDocumentMessages(backend).count == 2)
     await modelFeedRespondWithDocument(to: firstFrameDocument, core: core, nodeID: "1")
 
     let secondFrameDocument = try await backend.waitForTargetMessage(
@@ -2473,6 +3102,7 @@ func domBootstrapRequestsMainAndCommittedFramesInSnapshotOrder() async throws {
     )
     #expect(secondFrameDocument.targetIdentifier == ProtocolTarget.ID("frame-b"))
     await modelFeedRespondWithDocument(to: secondFrameDocument, core: core, nodeID: "1")
+    let feed = try await openTask.value
 
     var iterator = feed.records.makeAsyncIterator()
     let reset = try await modelFeedRequireReset(iterator.next())
@@ -2488,7 +3118,7 @@ func domBootstrapRequestsMainAndCommittedFramesInSnapshotOrder() async throws {
         WebInspectorTarget.ID("frame-b"),
     ])
     #expect(snapshots.allSatisfy {
-        $0.generation == reset && $0.documentEpoch == ModelDocumentEpoch(rawValue: 0)
+        $0.generation == reset && $0.documentEpoch == ModelDOMBindingEpoch(rawValue: 0)
     })
     #expect(snapshots[0].root.id == DOM.Node.ID("1"))
     #expect(snapshots[1].root.id != DOM.Node.ID("1"))
@@ -2496,7 +3126,13 @@ func domBootstrapRequestsMainAndCommittedFramesInSnapshotOrder() async throws {
     _ = try await modelFeedRequireBootstrapCompletion(iterator.next())
     _ = try await modelFeedRequireSynchronization(iterator.next())
 
-    try await feed.close()
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Page.enable"]
+    )
     #expect(try await iterator.next() == nil)
     await core.close()
 }
@@ -2522,19 +3158,27 @@ func domDocumentInvalidationPrecedesMainTargetDeltasAndFreshBootstrap() async th
     await modelFeedRespond(to: pageEnable, core: core)
     let cssEnable = try await backend.waitForTargetMessage(method: "CSS.enable")
     await modelFeedRespond(to: cssEnable, core: core)
+    let initialCSSSnapshotCommand = try await backend.waitForTargetMessage(
+        method: "CSS.getAllStyleSheets",
+        ordinal: 0
+    )
+    await modelFeedRespondWithStyleSheets(
+        to: initialCSSSnapshotCommand,
+        core: core
+    )
     let feed = try await openTask.value
     var iterator = feed.records.makeAsyncIterator()
     let reset = try await modelFeedRequireReset(iterator.next())
     let targetSnapshot = try await modelFeedRequireTargetSnapshot(iterator.next())
-    let cssReplay = try await modelFeedRequireReplayCompletion(iterator.next())
-    #expect(cssReplay.domain == .css)
+    _ = try await modelFeedRequireCSSBootstrapSnapshot(iterator.next())
+    #expect(try await modelFeedRequireBootstrapCompletion(iterator.next()).domain == .css)
 
     let oldAuthorization = ConnectionModelCommandAuthorization(
         feedID: feed.id,
         generation: reset,
         document: ConnectionModelCommandAuthorization.Document(
             targetID: WebInspectorTarget.ID("page-main"),
-            epoch: ModelDocumentEpoch(rawValue: 0)
+            epoch: ModelDOMBindingEpoch(rawValue: 0)
         )
     )
     let oldCommand = Task {
@@ -2559,29 +3203,38 @@ func domDocumentInvalidationPrecedesMainTargetDeltasAndFreshBootstrap() async th
     #expect(invalidation.generation == reset)
     #expect(invalidation.sequence == invalidationSequence)
     #expect(invalidation.target.id == WebInspectorTarget.ID("page-main"))
-    #expect(invalidation.documentEpoch == ModelDocumentEpoch(rawValue: 1))
+    #expect(invalidation.documentEpoch == ModelDOMBindingEpoch(rawValue: 1))
 
-    let domSequence = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+    let refreshedCSSCommand = try await backend.waitForTargetMessage(
+        method: "CSS.getAllStyleSheets",
+        ordinal: 1
+    )
+    let suppressedDOMSequence = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
         targetID: "page-main",
         message: #"{"method":"DOM.childNodeCountUpdated","params":{"nodeId":1,"childNodeCount":2}}"#
     ))
-    let cssSequence = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+    let suppressedCSSSequence = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
         targetID: "page-main",
         message: #"{"method":"CSS.styleSheetAdded","params":{"header":{"styleSheetId":"sheet-main","origin":"author"}}}"#
     ))
-    let domEvent = try await modelFeedRequireEvent(iterator.next())
-    let cssEvent = try await modelFeedRequireEvent(iterator.next())
-    #expect(invalidation.sequence < domEvent.sequence)
-    #expect(domEvent.sequence == domSequence)
-    #expect(domEvent.sequence < cssEvent.sequence)
-    #expect(cssEvent.sequence == cssSequence)
-    guard case let .dom(domTarget, _) = domEvent.payload,
-          case let .css(cssTarget, _) = cssEvent.payload else {
-        Issue.record("Expected ordered DOM and CSS deltas after invalidation.")
+
+    await modelFeedRespondWithStyleSheets(to: refreshedCSSCommand, core: core)
+    let refreshedCSSRecord = try #require(await iterator.next())
+    guard case let .bootstrapSnapshot(_, .css, cssSnapshotSequence, _) = refreshedCSSRecord else {
+        Issue.record("Expected the refreshed authoritative CSS snapshot.")
         return
     }
-    #expect(domTarget.id == WebInspectorTarget.ID("page-main"))
-    #expect(cssTarget.id == WebInspectorTarget.ID("page-main"))
+    let refreshedStyleSheets = try modelFeedRequireCSSBootstrapSnapshot(
+        refreshedCSSRecord
+    )
+    #expect(refreshedStyleSheets.allSatisfy {
+        $0.scope.domBindingEpoch == ModelDOMBindingEpoch(rawValue: 1)
+    })
+    let refreshedCSSCompletion = try await modelFeedRequireBootstrapCompletion(
+        iterator.next()
+    )
+    #expect(suppressedCSSSequence <= cssSnapshotSequence)
+    #expect(refreshedCSSCompletion.through == cssSnapshotSequence)
 
     await modelFeedRespondWithDocument(to: staleDocument, core: core, nodeID: "stale")
     let retryDocument = try await backend.waitForTargetMessage(
@@ -2594,13 +3247,145 @@ func domDocumentInvalidationPrecedesMainTargetDeltasAndFreshBootstrap() async th
     let initialBootstrap = try await modelFeedRequireDOMBootstrapSnapshot(iterator.next())
     #expect(initialBootstrap.generation == reset)
     #expect(initialBootstrap.target.id == WebInspectorTarget.ID("page-main"))
-    #expect(initialBootstrap.documentEpoch == ModelDocumentEpoch(rawValue: 1))
+    #expect(initialBootstrap.documentEpoch == ModelDOMBindingEpoch(rawValue: 1))
     #expect(initialBootstrap.root.id == DOM.Node.ID("fresh"))
-    #expect(initialBootstrap.sequence == cssSequence)
+    #expect(suppressedDOMSequence < initialBootstrap.sequence)
     let initialCompletion = try await modelFeedRequireBootstrapCompletion(iterator.next())
     let initialSync = try await modelFeedRequireSynchronization(iterator.next())
     #expect(initialCompletion.through == initialBootstrap.sequence)
     #expect(initialSync.generation == targetSnapshot.generation)
+
+    let domSequence = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "page-main",
+        message: #"{"method":"DOM.childNodeCountUpdated","params":{"nodeId":1,"childNodeCount":3}}"#
+    ))
+    let cssSequence = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "page-main",
+        message: #"{"method":"CSS.styleSheetChanged","params":{"styleSheetId":"restored-sheet"}}"#
+    ))
+    let domEvent = try await modelFeedRequireEvent(iterator.next())
+    let cssEvent = try await modelFeedRequireEvent(iterator.next())
+    #expect(domEvent.sequence == domSequence)
+    #expect(cssEvent.sequence == cssSequence)
+    #expect(domEvent.domBindingEpoch == ModelDOMBindingEpoch(rawValue: 1))
+    #expect(cssEvent.domBindingEpoch == ModelDOMBindingEpoch(rawValue: 1))
+    guard case .dom = domEvent.payload, case .css = cssEvent.payload else {
+        Issue.record("Expected only post-bootstrap DOM/CSS deltas.")
+        return
+    }
+
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Page.enable", "CSS.enable"]
+    )
+    #expect(try await iterator.next() == nil)
+    await core.close()
+}
+
+@Test
+func cssBootstrapRetriesStaleScopeAndPublishesOnlyTheLatestBinding() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [.css],
+        targetID: "page-main"
+    )
+    var iterator = feed.records.makeAsyncIterator()
+    let generation = try await modelFeedRequireReset(iterator.next())
+    _ = try await modelFeedRequireTargetSnapshot(iterator.next())
+    _ = try await modelFeedRequireDOMBootstrapSnapshot(iterator.next())
+    #expect(try await modelFeedRequireBootstrapCompletion(iterator.next()).domain == .dom)
+    _ = try await modelFeedRequireCSSBootstrapSnapshot(iterator.next())
+    #expect(try await modelFeedRequireBootstrapCompletion(iterator.next()).domain == .css)
+    _ = try await modelFeedRequireSynchronization(iterator.next())
+
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "page-main",
+        message: #"{"method":"DOM.documentUpdated","params":{}}"#
+    ))
+    let firstInvalidation = try await modelFeedRequireDOMDocumentInvalidation(iterator.next())
+    #expect(firstInvalidation.documentEpoch == ModelDOMBindingEpoch(rawValue: 1))
+    let firstDOMSnapshot = try await backend.waitForTargetMessage(
+        method: "DOM.getDocument",
+        ordinal: 1
+    )
+    let firstCSSSnapshot = try await backend.waitForTargetMessage(
+        method: "CSS.getAllStyleSheets",
+        ordinal: 1
+    )
+
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "page-main",
+        message: #"{"method":"DOM.documentUpdated","params":{}}"#
+    ))
+    let secondInvalidation = try await modelFeedRequireDOMDocumentInvalidation(iterator.next())
+    #expect(secondInvalidation.documentEpoch == ModelDOMBindingEpoch(rawValue: 2))
+    let subsumedCSSSequence = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "page-main",
+        message: #"{"method":"CSS.styleSheetAdded","params":{"header":{"styleSheetId":"subsumed-sheet","frameId":"main-frame","origin":"author"}}}"#
+    ))
+
+    await modelFeedRespondWithStyleSheets(to: firstCSSSnapshot, core: core)
+    let secondCSSSnapshot = try await backend.waitForTargetMessage(
+        method: "CSS.getAllStyleSheets",
+        ordinal: 2
+    )
+    await modelFeedRespondWithStyleSheets(to: secondCSSSnapshot, core: core)
+    let currentCSSRecord = try #require(await iterator.next())
+    guard case let .bootstrapSnapshot(
+        recordGeneration,
+        .css,
+        snapshotSequence,
+        _
+    ) = currentCSSRecord else {
+        Issue.record("Expected only the retried CSS bootstrap to publish.")
+        return
+    }
+    #expect(recordGeneration == generation)
+    #expect(subsumedCSSSequence <= snapshotSequence)
+    let currentStyleSheets = try modelFeedRequireCSSBootstrapSnapshot(currentCSSRecord)
+    #expect(currentStyleSheets.count == 1)
+    #expect(currentStyleSheets.first?.scope.generation == generation)
+    #expect(currentStyleSheets.first?.scope.navigationEpoch == ModelNavigationEpoch(rawValue: 0))
+    #expect(currentStyleSheets.first?.scope.domBindingEpoch == ModelDOMBindingEpoch(rawValue: 2))
+    let cssCompletion = try await modelFeedRequireBootstrapCompletion(iterator.next())
+    #expect(cssCompletion.domain == .css)
+    #expect(cssCompletion.through == snapshotSequence)
+
+    let postSnapshotSequence = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "page-main",
+        message: #"{"method":"CSS.styleSheetChanged","params":{"styleSheetId":"restored-sheet"}}"#
+    ))
+    let postSnapshotEvent = try await modelFeedRequireEvent(iterator.next())
+    #expect(postSnapshotEvent.sequence == postSnapshotSequence)
+    #expect(postSnapshotEvent.sequence > snapshotSequence)
+    #expect(postSnapshotEvent.domBindingEpoch == ModelDOMBindingEpoch(rawValue: 2))
+    guard case .css = postSnapshotEvent.payload else {
+        Issue.record("Expected the post-snapshot CSS delta.")
+        return
+    }
+
+    await modelFeedRespondWithDocument(to: firstDOMSnapshot, core: core, nodeID: "stale")
+    let secondDOMSnapshot = try await backend.waitForTargetMessage(
+        method: "DOM.getDocument",
+        ordinal: 2
+    )
+    await modelFeedRespondWithDocument(to: secondDOMSnapshot, core: core, nodeID: "current")
+    let domSnapshot = try await modelFeedRequireDOMBootstrapSnapshot(iterator.next())
+    #expect(domSnapshot.generation == generation)
+    #expect(domSnapshot.documentEpoch == ModelDOMBindingEpoch(rawValue: 2))
+    #expect(domSnapshot.root.id == DOM.Node.ID("current"))
+    #expect(try await modelFeedRequireBootstrapCompletion(iterator.next()).domain == .dom)
 
     try await modelFeedCloseSuccessfully(
         feed,
@@ -2629,10 +3414,11 @@ func frameDocumentUpdatedBypassesPublicFilterWithOneModelInvalidationBoundary() 
         parentFrameID: "main-frame"
     ))
 
-    let feed = try await core.openModelFeed(configuredDomains: [.dom])
-    var iterator = feed.records.makeAsyncIterator()
-    let generation = try await modelFeedRequireReset(iterator.next())
-    _ = try await modelFeedRequireTargetSnapshot(iterator.next())
+    let openTask = Task {
+        try await core.openModelFeed(configuredDomains: [.dom])
+    }
+    let pageEnable = try await backend.waitForTargetMessage(method: "Page.enable")
+    await modelFeedRespond(to: pageEnable, core: core)
 
     let mainDocument = try await backend.waitForTargetMessage(
         method: "DOM.getDocument",
@@ -2644,10 +3430,14 @@ func frameDocumentUpdatedBypassesPublicFilterWithOneModelInvalidationBoundary() 
         ordinal: 1
     )
     await modelFeedRespondWithDocument(to: frameDocument, core: core, nodeID: "frame")
+    let feed = try await openTask.value
+    var iterator = feed.records.makeAsyncIterator()
+    let generation = try await modelFeedRequireReset(iterator.next())
+    _ = try await modelFeedRequireTargetSnapshot(iterator.next())
     _ = try await modelFeedRequireDOMBootstrapSnapshot(iterator.next())
     let initialFrameBootstrap = try await modelFeedRequireDOMBootstrapSnapshot(iterator.next())
     #expect(initialFrameBootstrap.target.id == WebInspectorTarget.ID("frame-a"))
-    #expect(initialFrameBootstrap.documentEpoch == ModelDocumentEpoch(rawValue: 0))
+    #expect(initialFrameBootstrap.documentEpoch == ModelDOMBindingEpoch(rawValue: 0))
     _ = try await modelFeedRequireBootstrapCompletion(iterator.next())
     _ = try await modelFeedRequireSynchronization(iterator.next())
 
@@ -2669,7 +3459,7 @@ func frameDocumentUpdatedBypassesPublicFilterWithOneModelInvalidationBoundary() 
         generation: generation,
         document: ConnectionModelCommandAuthorization.Document(
             targetID: WebInspectorTarget.ID("frame-a"),
-            epoch: ModelDocumentEpoch(rawValue: 0)
+            epoch: ModelDOMBindingEpoch(rawValue: 0)
         )
     )
     let oldCommand = Task {
@@ -2697,24 +3487,15 @@ func frameDocumentUpdatedBypassesPublicFilterWithOneModelInvalidationBoundary() 
     #expect(invalidation.generation == generation)
     #expect(invalidation.sequence == invalidationSequence)
     #expect(invalidation.target.id == WebInspectorTarget.ID("frame-a"))
-    #expect(invalidation.documentEpoch == ModelDocumentEpoch(rawValue: 1))
+    #expect(invalidation.documentEpoch == ModelDOMBindingEpoch(rawValue: 1))
     await modelFeedRespond(to: oldCommandMessage, core: core)
 
-    let laterDOMSequence = await core.receiveRootMessage(
+    let suppressedDOMSequence = await core.receiveRootMessage(
         modelFeedTargetDispatchMessage(
             targetID: "frame-a",
             message: #"{"method":"DOM.childNodeCountUpdated","params":{"nodeId":7,"childNodeCount":1}}"#
         )
     )
-    let laterDOMEvent = try await modelFeedRequireEvent(iterator.next())
-    #expect(invalidation.sequence < laterDOMEvent.sequence)
-    #expect(laterDOMEvent.sequence == laterDOMSequence)
-    guard case let .dom(target, _) = laterDOMEvent.payload else {
-        Issue.record("Expected a frame DOM delta after its invalidation boundary.")
-        return
-    }
-    #expect(target.id == WebInspectorTarget.ID("frame-a"))
-
     let refreshedFrameDocument = try await backend.waitForTargetMessage(
         method: "DOM.getDocument",
         ordinal: 2
@@ -2727,13 +3508,33 @@ func frameDocumentUpdatedBypassesPublicFilterWithOneModelInvalidationBoundary() 
     )
     let refreshedFrameBootstrap = try await modelFeedRequireDOMBootstrapSnapshot(iterator.next())
     #expect(refreshedFrameBootstrap.generation == generation)
-    #expect(refreshedFrameBootstrap.sequence == laterDOMSequence)
+    #expect(refreshedFrameBootstrap.sequence == suppressedDOMSequence)
     #expect(refreshedFrameBootstrap.target.id == WebInspectorTarget.ID("frame-a"))
-    #expect(refreshedFrameBootstrap.documentEpoch == ModelDocumentEpoch(rawValue: 1))
+    #expect(refreshedFrameBootstrap.documentEpoch == ModelDOMBindingEpoch(rawValue: 1))
     #expect(refreshedFrameBootstrap.root.id.targetScopeRawValue == "frame-a")
     _ = try await modelFeedRequireBootstrapCompletion(iterator.next())
 
-    try await feed.close()
+    let laterDOMSequence = await core.receiveRootMessage(
+        modelFeedTargetDispatchMessage(
+            targetID: "frame-a",
+            message: #"{"method":"DOM.childNodeCountUpdated","params":{"nodeId":7,"childNodeCount":2}}"#
+        )
+    )
+    let laterDOMEvent = try await modelFeedRequireEvent(iterator.next())
+    #expect(laterDOMEvent.sequence == laterDOMSequence)
+    #expect(laterDOMEvent.domBindingEpoch == ModelDOMBindingEpoch(rawValue: 1))
+    guard case .dom = laterDOMEvent.payload else {
+        Issue.record("Expected only the post-bootstrap frame DOM delta.")
+        return
+    }
+
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Page.enable"]
+    )
     #expect(try await iterator.next() == nil)
     await core.close()
 }
@@ -2748,7 +3549,12 @@ func domBootstrapTracksTargetsAddedAndDestroyedBeforeInitialSync() async throws 
         frameID: "main-frame"
     ))
 
-    let feed = try await core.openModelFeed(configuredDomains: [.dom])
+    let openTask = Task {
+        try await core.openModelFeed(configuredDomains: [.dom])
+    }
+    let pageEnable = try await backend.waitForTargetMessage(method: "Page.enable")
+    await modelFeedRespond(to: pageEnable, core: core)
+    let feed = try await openTask.value
     let mainDocument = try await backend.waitForTargetMessage(
         method: "DOM.getDocument",
         ordinal: 0
@@ -2771,13 +3577,13 @@ func domBootstrapTracksTargetsAddedAndDestroyedBeforeInitialSync() async throws 
     ))
     let frameAEvent = try await modelFeedRequireEvent(iterator.next())
     let frameBEvent = try await modelFeedRequireEvent(iterator.next())
-    guard case let .target(.targetCreated(frameA)) = frameAEvent.payload,
-          case let .target(.targetCreated(frameB)) = frameBEvent.payload else {
+    guard case .target(.targetCreated) = frameAEvent.payload,
+          case .target(.targetCreated) = frameBEvent.payload else {
         Issue.record("Expected targetCreated deltas before bootstrap completion.")
         return
     }
-    #expect(frameA.id == WebInspectorTarget.ID("frame-a"))
-    #expect(frameB.id == WebInspectorTarget.ID("frame-b"))
+    #expect(frameAEvent.target.id == WebInspectorTarget.ID("frame-a"))
+    #expect(frameBEvent.target.id == WebInspectorTarget.ID("frame-b"))
 
     await modelFeedRespondWithDocument(to: mainDocument, core: core, nodeID: "main")
     let frameADocument = try await backend.waitForTargetMessage(
@@ -2798,11 +3604,11 @@ func domBootstrapTracksTargetsAddedAndDestroyedBeforeInitialSync() async throws 
     let mainBootstrap = try await modelFeedRequireDOMBootstrapSnapshot(iterator.next())
     let frameABootstrap = try await modelFeedRequireDOMBootstrapSnapshot(iterator.next())
     let frameBDestroyed = try await modelFeedRequireEvent(iterator.next())
-    guard case let .target(.targetDestroyed(target)) = frameBDestroyed.payload else {
+    guard case .target(.targetDestroyed) = frameBDestroyed.payload else {
         Issue.record("Expected the removed frame target delta.")
         return
     }
-    #expect(target.id == WebInspectorTarget.ID("frame-b"))
+    #expect(frameBDestroyed.target.id == WebInspectorTarget.ID("frame-b"))
     // This late reply no longer owns a pending operation and cannot publish.
     await modelFeedRespondWithDocument(to: frameBDocument, core: core, nodeID: "stale-b")
 
@@ -2814,7 +3620,13 @@ func domBootstrapTracksTargetsAddedAndDestroyedBeforeInitialSync() async throws 
         (try? modelFeedMessageMethod($0.message)) == "DOM.getDocument"
     }.count == 3)
 
-    try await feed.close()
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Page.enable"]
+    )
     #expect(try await iterator.next() == nil)
     await core.close()
 }
@@ -2841,7 +3653,7 @@ func domBootstrapRestartsWithFreshEpochAndSyncAfterRetarget() async throws {
     _ = try await modelFeedRequireBootstrapCompletion(iterator.next())
     _ = try await modelFeedRequireSynchronization(iterator.next())
     #expect(initialBootstrap.target.id == WebInspectorTarget.ID("page-old"))
-    #expect(initialBootstrap.documentEpoch == ModelDocumentEpoch(rawValue: 0))
+    #expect(initialBootstrap.documentEpoch == ModelDOMBindingEpoch(rawValue: 0))
 
     _ = await core.receiveRootMessage(
         #"{"method":"Target.targetDestroyed","params":{"targetId":"page-old"}}"#
@@ -2860,6 +3672,11 @@ func domBootstrapRestartsWithFreshEpochAndSyncAfterRetarget() async throws {
         ordinal: 1
     )
     #expect(replacementDocument.targetIdentifier == ProtocolTarget.ID("page-new"))
+    let replacementPageEnable = try await backend.waitForTargetMessage(
+        method: "Page.enable",
+        ordinal: 1
+    )
+    await modelFeedRespond(to: replacementPageEnable, core: core)
     await modelFeedRespondWithDocument(to: replacementDocument, core: core, nodeID: "new")
     let replacementBootstrap = try await modelFeedRequireDOMBootstrapSnapshot(iterator.next())
     let replacementCompletion = try await modelFeedRequireBootstrapCompletion(iterator.next())
@@ -2867,11 +3684,17 @@ func domBootstrapRestartsWithFreshEpochAndSyncAfterRetarget() async throws {
     #expect(replacementSnapshot.generation == replacementReset)
     #expect(replacementBootstrap.generation == replacementReset)
     #expect(replacementBootstrap.target.id == WebInspectorTarget.ID("page-new"))
-    #expect(replacementBootstrap.documentEpoch == ModelDocumentEpoch(rawValue: 0))
+    #expect(replacementBootstrap.documentEpoch == ModelDOMBindingEpoch(rawValue: 0))
     #expect(replacementCompletion.generation == replacementReset)
     #expect(replacementSync.generation == replacementReset)
 
-    try await feed.close()
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-new",
+        enableMethods: ["Page.enable"]
+    )
     #expect(try await iterator.next() == nil)
     await core.close()
 }
@@ -2885,11 +3708,16 @@ func pendingDOMBootstrapReplyFromSupersededBindingCannotPublish() async throws {
         type: "page",
         frameID: "main-frame"
     ))
-    let feed = try await core.openModelFeed(configuredDomains: [.dom])
+    let openTask = Task {
+        try await core.openModelFeed(configuredDomains: [.dom])
+    }
     let oldDocument = try await backend.waitForTargetMessage(
         method: "DOM.getDocument",
         ordinal: 0
     )
+    let oldPageEnable = try await backend.waitForTargetMessage(method: "Page.enable")
+    await modelFeedRespond(to: oldPageEnable, core: core)
+    let feed = try await openTask.value
     var iterator = feed.records.makeAsyncIterator()
     let initialReset = try await modelFeedRequireReset(iterator.next())
     _ = try await modelFeedRequireTargetSnapshot(iterator.next())
@@ -2910,6 +3738,11 @@ func pendingDOMBootstrapReplyFromSupersededBindingCannotPublish() async throws {
         ordinal: 1
     )
     #expect(newDocument.targetIdentifier == ProtocolTarget.ID("page-new"))
+    let newPageEnable = try await backend.waitForTargetMessage(
+        method: "Page.enable",
+        ordinal: 1
+    )
+    await modelFeedRespond(to: newPageEnable, core: core)
 
     await modelFeedRespondWithDocument(to: oldDocument, core: core, nodeID: "stale-old")
     await modelFeedRespondWithDocument(to: newDocument, core: core, nodeID: "fresh-new")
@@ -2920,7 +3753,13 @@ func pendingDOMBootstrapReplyFromSupersededBindingCannotPublish() async throws {
     _ = try await modelFeedRequireBootstrapCompletion(iterator.next())
     _ = try await modelFeedRequireSynchronization(iterator.next())
 
-    try await feed.close()
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-new",
+        enableMethods: ["Page.enable"]
+    )
     #expect(try await iterator.next() == nil)
     await core.close()
 }
@@ -2940,9 +3779,13 @@ func terminatedDOMFeedCannotAdvanceBootstrapQueue() async throws {
         frameID: "frame-a",
         parentFrameID: "main-frame"
     ))
-    var feed: ConnectionModelFeed? = try await core.openModelFeed(
-        configuredDomains: [.dom]
-    )
+    var openTask: Task<ConnectionModelFeed, any Error>? = Task {
+        try await core.openModelFeed(configuredDomains: [.dom])
+    }
+    let pageEnable = try await backend.waitForTargetMessage(method: "Page.enable")
+    await modelFeedRespond(to: pageEnable, core: core)
+    var feed: ConnectionModelFeed? = try await #require(openTask).value
+    openTask = nil
     let records = try #require(feed).records
     let getDocument = try await backend.waitForTargetMessage(method: "DOM.getDocument")
     feed = nil
@@ -2968,7 +3811,12 @@ func requiredDOMBootstrapFailureTerminatesTheFeed() async throws {
         type: "page",
         frameID: "main-frame"
     ))
-    let feed = try await core.openModelFeed(configuredDomains: [.dom])
+    let openTask = Task {
+        try await core.openModelFeed(configuredDomains: [.dom])
+    }
+    let pageEnable = try await backend.waitForTargetMessage(method: "Page.enable")
+    await modelFeedRespond(to: pageEnable, core: core)
+    let feed = try await openTask.value
     var iterator = feed.records.makeAsyncIterator()
     _ = try await modelFeedRequireReset(iterator.next())
     _ = try await modelFeedRequireTargetSnapshot(iterator.next())
@@ -3021,7 +3869,7 @@ func requiredDOMRefreshFailurePreservesTypedDomainInMailbox() async throws {
         message: #"{"method":"DOM.documentUpdated","params":{}}"#
     ))
     let invalidation = try await modelFeedRequireDOMDocumentInvalidation(iterator.next())
-    #expect(invalidation.documentEpoch == ModelDocumentEpoch(rawValue: 1))
+    #expect(invalidation.documentEpoch == ModelDOMBindingEpoch(rawValue: 1))
     let refresh = try await backend.waitForTargetMessage(
         method: "DOM.getDocument",
         ordinal: 1
@@ -3056,7 +3904,12 @@ func malformedRequiredDOMBootstrapReplyTerminatesWithoutTaskLeak() async throws 
         type: "page",
         frameID: "main-frame"
     ))
-    let feed = try await core.openModelFeed(configuredDomains: [.dom])
+    let openTask = Task {
+        try await core.openModelFeed(configuredDomains: [.dom])
+    }
+    let pageEnable = try await backend.waitForTargetMessage(method: "Page.enable")
+    await modelFeedRespond(to: pageEnable, core: core)
+    let feed = try await openTask.value
     var iterator = feed.records.makeAsyncIterator()
     _ = try await modelFeedRequireReset(iterator.next())
     _ = try await modelFeedRequireTargetSnapshot(iterator.next())
@@ -3093,24 +3946,95 @@ func closingDOMModelFeedCancelsAndAwaitsPendingBootstrap() async throws {
         type: "page",
         frameID: "main-frame"
     ))
-    let feed = try await core.openModelFeed(configuredDomains: [.dom])
+    let openTask = Task {
+        try await core.openModelFeed(configuredDomains: [.dom])
+    }
+    let pageEnable = try await backend.waitForTargetMessage(method: "Page.enable")
+    await modelFeedRespond(to: pageEnable, core: core)
+    let feed = try await openTask.value
     _ = try await backend.waitForTargetMessage(method: "DOM.getDocument")
     var iterator = feed.records.makeAsyncIterator()
     _ = try await modelFeedRequireReset(iterator.next())
     _ = try await modelFeedRequireTargetSnapshot(iterator.next())
 
-    try await feed.close()
+    let closeTask = Task {
+        try await feed.close()
+    }
+    let pageDisable = try await backend.waitForTargetMessage(method: "Page.disable")
+    await modelFeedRespond(to: pageDisable, core: core)
+    try await closeTask.value
     #expect(await core.pendingReplyPurposes().isEmpty)
     #expect(try await iterator.next() == nil)
     #expect(await backend.isDetached() == false)
 
-    let replacement = try await core.openModelFeed(configuredDomains: [])
+    let replacement = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [],
+        targetID: "page-main"
+    )
     var replacementIterator = replacement.records.makeAsyncIterator()
     _ = try await modelFeedRequireReset(replacementIterator.next())
     _ = try await modelFeedRequireTargetSnapshot(replacementIterator.next())
     _ = try await modelFeedRequireSynchronization(replacementIterator.next())
-    try await replacement.close()
+    try await modelFeedCloseSuccessfully(
+        replacement,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Page.enable"]
+    )
     #expect(try await replacementIterator.next() == nil)
+    await core.close()
+}
+
+@Test
+func closingCSSModelFeedCancelsPendingAuthoritativeSnapshot() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [.css],
+        targetID: "page-main"
+    )
+    let baseline = await backend.sentTargetMessages().count
+
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "page-main",
+        message: #"{"method":"DOM.documentUpdated","params":{}}"#
+    ))
+    _ = try await backend.waitForTargetMessage(
+        method: "DOM.getDocument",
+        after: baseline
+    )
+    _ = try await backend.waitForTargetMessage(
+        method: "CSS.getAllStyleSheets",
+        after: baseline
+    )
+
+    let closeTask = Task {
+        try await feed.close()
+    }
+    let cssDisable = try await backend.waitForTargetMessage(
+        method: "CSS.disable",
+        after: baseline
+    )
+    await modelFeedRespond(to: cssDisable, core: core)
+    let pageDisable = try await backend.waitForTargetMessage(
+        method: "Page.disable",
+        after: baseline
+    )
+    await modelFeedRespond(to: pageDisable, core: core)
+
+    try await closeTask.value
+    #expect(await core.pendingReplyPurposes().isEmpty)
+    #expect(await backend.isDetached() == false)
     await core.close()
 }
 
@@ -3143,6 +4067,15 @@ func closingModelFeedDoesNotReadmitDOMBootstrapDuringCommit() async throws {
     _ = await core.receiveRootMessage(
         #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-old","newTargetId":"page-new"}}"#
     )
+    let replacementPageEnable = try await backend.waitForTargetMessage(
+        method: "Page.enable",
+        ordinal: 1
+    )
+    await modelFeedRespond(to: replacementPageEnable, core: core)
+    let replacementPageDisable = try await backend.waitForTargetMessage(
+        method: "Page.disable"
+    )
+    await modelFeedRespond(to: replacementPageDisable, core: core)
     try await closeTask.value
 
     #expect(try await modelFeedDOMGetDocumentMessages(backend).map(\.targetIdentifier) == [
@@ -3168,6 +4101,8 @@ func rollingBackModelFeedDoesNotReadmitDOMBootstrapDuringCommit() async throws {
     }
     let getDocument = try await backend.waitForTargetMessage(method: "DOM.getDocument")
     await modelFeedRespondWithDocument(to: getDocument, core: core)
+    let pageEnable = try await backend.waitForTargetMessage(method: "Page.enable")
+    await modelFeedRespond(to: pageEnable, core: core)
     let networkEnable = try await backend.waitForTargetMessage(method: "Network.enable")
     await modelFeedRespond(to: networkEnable, core: core)
     _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
@@ -3187,6 +4122,15 @@ func rollingBackModelFeedDoesNotReadmitDOMBootstrapDuringCommit() async throws {
     _ = await core.receiveRootMessage(
         #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-old","newTargetId":"page-new"}}"#
     )
+    let replacementPageEnable = try await backend.waitForTargetMessage(
+        method: "Page.enable",
+        ordinal: 1
+    )
+    await modelFeedRespond(to: replacementPageEnable, core: core)
+    let replacementPageDisable = try await backend.waitForTargetMessage(
+        method: "Page.disable"
+    )
+    await modelFeedRespond(to: replacementPageDisable, core: core)
     await #expect(throws: ConnectionModelFeedError.bootstrapFailed(
         domain: .console,
         message: "console rejected"
@@ -3215,6 +4159,8 @@ func terminalDuringModelFeedRollbackCompletesWithoutLeakingClaim() async throws 
             configuredDomains: [.network, .console]
         )
     }
+    let pageEnable = try await backend.waitForTargetMessage(method: "Page.enable")
+    await modelFeedRespond(to: pageEnable, core: core)
     let networkEnable = try await backend.waitForTargetMessage(method: "Network.enable")
     await modelFeedRespond(to: networkEnable, core: core)
     let consoleEnable = try await backend.waitForTargetMessage(method: "Console.enable")
@@ -3249,6 +4195,8 @@ func explicitCloseDuringModelFeedRollbackLetsTerminalOwnerRetireRegistration() a
             configuredDomains: [.network, .console]
         )
     }
+    let pageEnable = try await backend.waitForTargetMessage(method: "Page.enable")
+    await modelFeedRespond(to: pageEnable, core: core)
     let networkEnable = try await backend.waitForTargetMessage(method: "Network.enable")
     await modelFeedRespond(to: networkEnable, core: core)
     let consoleEnable = try await backend.waitForTargetMessage(method: "Console.enable")
@@ -3286,6 +4234,8 @@ func modelFeedRollbackDisableRejectionTerminatesInsteadOfReusingEnabledState() a
             configuredDomains: [.network, .console]
         )
     }
+    let pageEnable = try await backend.waitForTargetMessage(method: "Page.enable")
+    await modelFeedRespond(to: pageEnable, core: core)
     let networkEnable = try await backend.waitForTargetMessage(method: "Network.enable")
     await modelFeedRespond(to: networkEnable, core: core)
     let consoleEnable = try await backend.waitForTargetMessage(method: "Console.enable")
@@ -3300,6 +4250,8 @@ func modelFeedRollbackDisableRejectionTerminatesInsteadOfReusingEnabledState() a
         core: core,
         errorMessage: "disable rejected"
     )
+    let pageDisable = try await backend.waitForTargetMessage(method: "Page.disable")
+    await modelFeedRespond(to: pageDisable, core: core)
 
     do {
         _ = try await openTask.value
@@ -3356,6 +4308,8 @@ func modelFeedCloseDisableRejectionPoisonsMailboxAndTerminatesConnection() async
         core: core,
         errorMessage: "disable rejected"
     )
+    let pageDisable = try await backend.waitForTargetMessage(method: "Page.disable")
+    await modelFeedRespond(to: pageDisable, core: core)
     let expectedError = WebInspectorProxyError.commandRejected(
         method: "Network.disable",
         message: "disable rejected"
@@ -3393,6 +4347,8 @@ func modelBindingCommandWaitsForInitialSynchronizationBeforeWire() async throws 
         )
     }
     let bootstrap = try await backend.waitForTargetMessage(method: "DOM.getDocument")
+    let pageEnable = try await backend.waitForTargetMessage(method: "Page.enable")
+    await modelFeedRespond(to: pageEnable, core: core)
     let networkEnable = try await backend.waitForTargetMessage(method: "Network.enable")
     await modelFeedRespond(to: networkEnable, core: core)
     let feed = try await openTask.value
@@ -3425,7 +4381,7 @@ func modelBindingCommandWaitsForInitialSynchronizationBeforeWire() async throws 
         core: core,
         backend: backend,
         targetID: "page-main",
-        enableMethods: ["Network.enable"]
+        enableMethods: ["Page.enable", "Network.enable"]
     )
     await core.close()
 }
@@ -3448,7 +4404,7 @@ func documentRefreshInvalidatesDocumentCommandsButPreservesBindingCommands() asy
     let generation = try await core.pageGeneration()
     let oldDocument = ConnectionModelCommandAuthorization.Document(
         targetID: WebInspectorTarget.ID("page-main"),
-        epoch: ModelDocumentEpoch(rawValue: 0)
+        epoch: ModelDOMBindingEpoch(rawValue: 0)
     )
     let documentAuthorization = ConnectionModelCommandAuthorization(
         feedID: feed.id,
@@ -3500,6 +4456,10 @@ func documentRefreshInvalidatesDocumentCommandsButPreservesBindingCommands() asy
         targetID: "page-main",
         message: #"{"method":"DOM.documentUpdated","params":{}}"#
     ))
+    let refreshedCSSSnapshot = try await backend.waitForTargetMessage(
+        method: "CSS.getAllStyleSheets",
+        ordinal: 1
+    )
     await #expect(throws: WebInspectorProxyError.staleIdentifier) {
         try await domTask.value
     }
@@ -3509,6 +4469,7 @@ func documentRefreshInvalidatesDocumentCommandsButPreservesBindingCommands() asy
     await modelFeedRespond(to: domMessage, core: core)
     await modelFeedRespond(to: cssMessage, core: core)
     await modelFeedRespond(to: networkMessage, core: core)
+    await modelFeedRespondWithStyleSheets(to: refreshedCSSSnapshot, core: core)
     _ = try await networkTask.value
 
     let countBeforeOldAuthority = await backend.sentTargetMessages().count
@@ -3540,7 +4501,7 @@ func documentRefreshInvalidatesDocumentCommandsButPreservesBindingCommands() asy
         generation: generation,
         document: ConnectionModelCommandAuthorization.Document(
             targetID: WebInspectorTarget.ID("page-main"),
-            epoch: ModelDocumentEpoch(rawValue: 1)
+            epoch: ModelDOMBindingEpoch(rawValue: 1)
         )
     )
     let freshDOMTask = Task {
@@ -3611,13 +4572,18 @@ func modelAuthorityRejectsForeignUnconfiguredAndConnectionOwnedCommandsWithoutWi
         type: "page",
         frameID: "main-frame"
     ))
-    let feed = try await core.openModelFeed(configuredDomains: [])
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [],
+        targetID: "page-main"
+    )
     let authorization = ConnectionModelCommandAuthorization(
         feedID: feed.id,
         generation: try await core.pageGeneration(),
         document: ConnectionModelCommandAuthorization.Document(
             targetID: WebInspectorTarget.ID("page-main"),
-            epoch: ModelDocumentEpoch(rawValue: 0)
+            epoch: ModelDOMBindingEpoch(rawValue: 0)
         )
     )
     let baseline = await backend.sentTargetMessages().count
@@ -3657,7 +4623,13 @@ func modelAuthorityRejectsForeignUnconfiguredAndConnectionOwnedCommandsWithoutWi
     }
     #expect(await backend.sentTargetMessages().count == baseline)
 
-    try await feed.close()
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Page.enable"]
+    )
     await #expect(throws: ConnectionModelCommandError.notActive) {
         _ = try await core.send(modelFeedCommand(
             domain: .page,
@@ -3678,7 +4650,12 @@ func modelPageHandlePropagatesAuthorizationThroughTypedDomainDispatch() async th
         type: "page",
         frameID: "main-frame"
     ))
-    let feed = try await core.openModelFeed(configuredDomains: [])
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [],
+        targetID: "page-main"
+    )
     let proxy = try await WebInspectorProxy(transport: core)
     let modelPage = WebInspectorPage(
         proxy: proxy,
@@ -3695,7 +4672,13 @@ func modelPageHandlePropagatesAuthorizationThroughTypedDomainDispatch() async th
     await modelFeedRespond(to: reload, core: core)
     try await commandTask.value
 
-    try await feed.close()
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Page.enable"]
+    )
     await proxy.close()
 }
 
@@ -3724,7 +4707,7 @@ func modelCommandCancellationAndFeedCloseDrainAllCommandOwnersBeforeDisable() as
         generation: generation,
         document: ConnectionModelCommandAuthorization.Document(
             targetID: WebInspectorTarget.ID("page-main"),
-            epoch: ModelDocumentEpoch(rawValue: 1)
+            epoch: ModelDOMBindingEpoch(rawValue: 1)
         )
     )
     let bindingAuthorization = ConnectionModelCommandAuthorization(
@@ -3776,6 +4759,8 @@ func modelCommandCancellationAndFeedCloseDrainAllCommandOwnersBeforeDisable() as
     #expect(await core.modelCommandOwnerCountForTesting() == 0)
     #expect(await core.modelCommandReadinessWaiterCountForTesting() == 0)
     await modelFeedRespond(to: disable, core: core)
+    let pageDisable = try await backend.waitForTargetMessage(method: "Page.disable")
+    await modelFeedRespond(to: pageDisable, core: core)
     try await closeTask.value
     await core.close()
 }
@@ -3801,7 +4786,12 @@ func retargetFailsModelCommandsForOldMainAndFrameBinding() async throws {
         frameID: "main-frame",
         isProvisional: true
     ))
-    let feed = try await core.openModelFeed(configuredDomains: [])
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [],
+        targetID: "page-main"
+    )
     let authorization = ConnectionModelCommandAuthorization(
         feedID: feed.id,
         generation: try await core.pageGeneration()
@@ -3844,9 +4834,20 @@ func retargetFailsModelCommandsForOldMainAndFrameBinding() async throws {
         try await frameTask.value
     }
     #expect(await core.modelCommandOwnerCountForTesting() == 0)
-    #expect(await core.snapshot().pendingTargetReplyKeys.isEmpty)
 
-    try await feed.close()
+    let replacementPageEnable = try await backend.waitForTargetMessage(
+        method: "Page.enable",
+        ordinal: 1
+    )
+    await modelFeedRespond(to: replacementPageEnable, core: core)
+    #expect(await core.snapshot().pendingTargetReplyKeys.isEmpty)
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-next",
+        enableMethods: ["Page.enable"]
+    )
     await core.close()
 }
 
@@ -3859,7 +4860,12 @@ func generationReadinessWaiterDoesNotChaseReplacementSynchronization() async thr
         type: "page",
         frameID: "main-frame"
     ))
-    let feed = try await core.openModelFeed(configuredDomains: [.dom])
+    let openTask = Task {
+        try await core.openModelFeed(configuredDomains: [.dom])
+    }
+    let pageEnable = try await backend.waitForTargetMessage(method: "Page.enable")
+    await modelFeedRespond(to: pageEnable, core: core)
+    let feed = try await openTask.value
     let oldBootstrap = try await backend.waitForTargetMessage(method: "DOM.getDocument")
     let oldAuthorization = ConnectionModelCommandAuthorization(
         feedID: feed.id,
@@ -3892,6 +4898,11 @@ func generationReadinessWaiterDoesNotChaseReplacementSynchronization() async thr
         method: "DOM.getDocument",
         ordinal: 1
     )
+    let replacementPageEnable = try await backend.waitForTargetMessage(
+        method: "Page.enable",
+        ordinal: 1
+    )
+    await modelFeedRespond(to: replacementPageEnable, core: core)
     await modelFeedRespondWithDocument(to: newBootstrap, core: core, nodeID: "new")
     #expect(await backend.sentTargetMessages().allSatisfy {
         (try? modelFeedMessageMethod($0.message)) != "Page.reload"
@@ -3912,7 +4923,13 @@ func generationReadinessWaiterDoesNotChaseReplacementSynchronization() async thr
     await modelFeedRespond(to: reload, core: core)
     _ = try await newTask.value
 
-    try await feed.close()
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-next",
+        enableMethods: ["Page.enable"]
+    )
     await core.close()
 }
 
@@ -3925,7 +4942,12 @@ func terminalCloseDrainsPendingModelCommandTasks() async throws {
         type: "page",
         frameID: "main-frame"
     ))
-    let feed = try await core.openModelFeed(configuredDomains: [])
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [],
+        targetID: "page-main"
+    )
     let authorization = ConnectionModelCommandAuthorization(
         feedID: feed.id,
         generation: try await core.pageGeneration()
@@ -3960,9 +4982,13 @@ func readinessWaitingModelCommandRunnerDoesNotKeepCoreAlive() async throws {
         frameID: "main-frame"
     ))
 
-    var feed: ConnectionModelFeed? = try await core?.openModelFeed(
-        configuredDomains: [.dom]
-    )
+    var openTask: Task<ConnectionModelFeed?, any Error>? = Task { [weak core] in
+        try await core?.openModelFeed(configuredDomains: [.dom])
+    }
+    let pageEnable = try await backend.waitForTargetMessage(method: "Page.enable")
+    await modelFeedRespond(to: pageEnable, core: try #require(core))
+    var feed: ConnectionModelFeed? = try await #require(openTask).value
+    openTask = nil
     _ = try await backend.waitForTargetMessage(method: "DOM.getDocument")
     let authorization = ConnectionModelCommandAuthorization(
         feedID: try #require(feed?.id),
@@ -3999,9 +5025,13 @@ func replyWaitingModelCommandRunnerDoesNotKeepCoreAlive() async throws {
         frameID: "main-frame"
     ))
 
-    var feed: ConnectionModelFeed? = try await core?.openModelFeed(
-        configuredDomains: []
-    )
+    var openTask: Task<ConnectionModelFeed?, any Error>? = Task { [weak core] in
+        try await core?.openModelFeed(configuredDomains: [])
+    }
+    let pageEnable = try await backend.waitForTargetMessage(method: "Page.enable")
+    await modelFeedRespond(to: pageEnable, core: try #require(core))
+    var feed: ConnectionModelFeed? = try await #require(openTask).value
+    openTask = nil
     let authorization = ConnectionModelCommandAuthorization(
         feedID: try #require(feed?.id),
         generation: try await #require(core).pageGeneration()
@@ -4043,12 +5073,12 @@ private func modelFeedCommand(
 private func modelFeedExpectedEnableMethods(
     _ configuredDomains: Set<ModelDomain>
 ) -> [String] {
-    var seenDomains: Set<WebInspectorProxyEventDomain> = []
-    var methods: [String] = []
+    var seenDomains: Set<WebInspectorProxyEventDomain> = [.page]
+    var methods: [String] = ["Page.enable"]
     for domain in ModelDomain.ordered(configuredDomains) {
         let capabilityDomains = ConnectionCapabilityActivationPlan.domains(
             for: domain.capabilityDependencies,
-            includePageDependencyForCSS: true
+            includePageDependencyForCSS: false
         )
         for dependency in capabilityDomains where dependency != .dom {
             guard seenDomains.insert(dependency).inserted else {
@@ -4183,6 +5213,14 @@ private func modelFeedOpenSuccessfully(
         #expect(try modelFeedMessageMethod(message.message) == expectedMethod)
         #expect(message.targetIdentifier == ProtocolTarget.ID(targetID))
         await modelFeedRespond(to: message, core: core)
+        if expectedMethod == "CSS.enable" {
+            let snapshot = try await backend.waitForTargetMessage(
+                method: "CSS.getAllStyleSheets",
+                after: targetMessageCount
+            )
+            #expect(snapshot.targetIdentifier == ProtocolTarget.ID(targetID))
+            await modelFeedRespondWithStyleSheets(to: snapshot, core: core)
+        }
     }
     return try await openTask.value
 }
@@ -4218,7 +5256,9 @@ private func modelFeedSentTargetMethods(
 ) async throws -> [String] {
     try await backend.sentTargetMessages().compactMap {
         let method = try modelFeedMessageMethod($0.message)
-        return method == "DOM.getDocument" ? nil : method
+        return method == "DOM.getDocument" || method == "CSS.getAllStyleSheets"
+            ? nil
+            : method
     }
 }
 
@@ -4311,7 +5351,8 @@ private func modelFeedRespondWithDocument(
 
 private func modelFeedRespondWithStyleSheets(
     to message: SentTargetMessage,
-    core: ConnectionCore
+    core: ConnectionCore,
+    styleSheetID: String = "restored-sheet"
 ) async {
     let messageID = try! modelFeedMessageID(message.message)
     let reply: [String: Any] = [
@@ -4319,7 +5360,7 @@ private func modelFeedRespondWithStyleSheets(
         "result": [
             "headers": [
                 [
-                    "styleSheetId": "restored-sheet",
+                    "styleSheetId": styleSheetID,
                     "frameId": "main-frame",
                     "origin": "author",
                     "sourceURL": "https://example.test/restored.css",
@@ -4335,9 +5376,14 @@ private func modelFeedRespondWithStyleSheets(
 }
 
 private struct ModelFeedEventRecord {
-    let generation: WebInspectorPage.Generation
+    let scope: ModelEventScope
     let sequence: UInt64
     let payload: ModelProtocolEvent
+
+    var generation: WebInspectorPage.Generation { scope.generation }
+    var target: ModelTarget { scope.target }
+    var navigationEpoch: ModelNavigationEpoch { scope.navigationEpoch }
+    var domBindingEpoch: ModelDOMBindingEpoch? { scope.domBindingEpoch }
 }
 
 private struct ModelFeedTargetSnapshotRecord {
@@ -4347,10 +5393,17 @@ private struct ModelFeedTargetSnapshotRecord {
 }
 
 private struct ModelFeedDOMDocumentInvalidationRecord {
-    let generation: WebInspectorPage.Generation
+    let scope: ModelEventScope
     let sequence: UInt64
-    let target: ModelTarget
-    let documentEpoch: ModelDocumentEpoch
+
+    var generation: WebInspectorPage.Generation { scope.generation }
+    var target: ModelTarget { scope.target }
+    var documentEpoch: ModelDOMBindingEpoch {
+        guard let epoch = scope.domBindingEpoch else {
+            preconditionFailure("A DOM invalidation test record has no binding epoch.")
+        }
+        return epoch
+    }
 }
 
 private struct ModelFeedSynchronizationRecord {
@@ -4367,9 +5420,17 @@ private struct ModelFeedReplayCompletionRecord {
 private struct ModelFeedDOMBootstrapSnapshotRecord {
     let generation: WebInspectorPage.Generation
     let sequence: UInt64
-    let target: ModelTarget
-    let documentEpoch: ModelDocumentEpoch
+    let scope: ModelEventScope
     let root: DOM.Node
+
+    var target: ModelTarget { scope.target }
+    var navigationEpoch: ModelNavigationEpoch { scope.navigationEpoch }
+    var documentEpoch: ModelDOMBindingEpoch {
+        guard let epoch = scope.domBindingEpoch else {
+            preconditionFailure("A DOM bootstrap test record has no binding epoch.")
+        }
+        return epoch
+    }
 }
 
 private struct ModelFeedBootstrapCompletionRecord {
@@ -4409,20 +5470,13 @@ private func modelFeedRequireTargetSnapshot(
 private func modelFeedRequireDOMDocumentInvalidation(
     _ record: ConnectionModelFeedRecord?
 ) throws -> ModelFeedDOMDocumentInvalidationRecord {
-    guard case let .domDocumentInvalidated(
-        generation,
-        sequence,
-        target,
-        documentEpoch
-    ) = try #require(record) else {
+    guard case let .domDocumentInvalidated(sequence, scope) = try #require(record) else {
         Issue.record("Expected a DOM document invalidation boundary.")
         throw ModelFeedTestError.unexpectedRecord
     }
     return ModelFeedDOMDocumentInvalidationRecord(
-        generation: generation,
+        scope: scope,
         sequence: sequence,
-        target: target,
-        documentEpoch: documentEpoch
     )
 }
 
@@ -4455,15 +5509,14 @@ private func modelFeedRequireDOMBootstrapSnapshot(
 ) throws -> ModelFeedDOMBootstrapSnapshotRecord {
     guard case let .bootstrapSnapshot(generation, domain, sequence, payload) = try #require(record),
           domain == .dom,
-          case let .domDocument(target, documentEpoch, root) = payload else {
+          case let .domDocument(scope, root) = payload else {
         Issue.record("Expected a DOM bootstrap snapshot.")
         throw ModelFeedTestError.unexpectedRecord
     }
     return ModelFeedDOMBootstrapSnapshotRecord(
         generation: generation,
         sequence: sequence,
-        target: target,
-        documentEpoch: documentEpoch,
+        scope: scope,
         root: root
     )
 }
@@ -4474,7 +5527,7 @@ private func modelFeedRequireCSSBootstrapSnapshot(
     guard case let .bootstrapSnapshot(_, domain, _, payload) = try #require(record),
           domain == .css,
           case let .cssStyleSheets(styleSheets) = payload else {
-        Issue.record("Expected a CSS bootstrap snapshot.")
+        Issue.record("Expected a CSS bootstrap snapshot, got \(String(describing: record)).")
         throw ModelFeedTestError.unexpectedRecord
     }
     return styleSheets
@@ -4497,12 +5550,12 @@ private func modelFeedRequireBootstrapCompletion(
 private func modelFeedRequireEvent(
     _ record: ConnectionModelFeedRecord?
 ) throws -> ModelFeedEventRecord {
-    guard case let .event(generation, sequence, payload) = try #require(record) else {
+    guard case let .event(sequence, scope, payload) = try #require(record) else {
         Issue.record("Expected model feed event.")
         throw ModelFeedTestError.unexpectedRecord
     }
     return ModelFeedEventRecord(
-        generation: generation,
+        scope: scope,
         sequence: sequence,
         payload: payload
     )

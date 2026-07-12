@@ -5,12 +5,12 @@ extension TransportSession {
         enum Purpose: Equatable, Sendable {
             case direct(
                 bindingGeneration: WebInspectorPage.Generation?,
-                documentEpoch: ModelDocumentEpoch?
+                documentEpoch: ModelDOMBindingEpoch?
             )
             case elementPickerMode(
                 key: ConnectionCapabilityKey,
                 generation: WebInspectorPage.Generation,
-                documentEpoch: ModelDocumentEpoch,
+                documentEpoch: ModelDOMBindingEpoch,
                 enabled: Bool
             )
             case modelCommand(
@@ -31,7 +31,7 @@ extension TransportSession {
                 feedID: ConnectionModelFeedID,
                 generation: WebInspectorPage.Generation,
                 targetID: ProtocolTarget.ID,
-                documentEpoch: ModelDocumentEpoch,
+                documentEpoch: ModelDOMBindingEpoch,
                 operationID: UInt64
             )
         }
@@ -64,7 +64,7 @@ extension TransportSession {
             targetID: ProtocolTarget.ID?,
             promise: ReplyPromise<ProtocolCommand.Result>,
             bindingGeneration: WebInspectorPage.Generation?,
-            documentEpoch: ModelDocumentEpoch?
+            documentEpoch: ModelDOMBindingEpoch?
         ) -> PendingReply {
             PendingReply(
                 purpose: .direct(
@@ -103,7 +103,7 @@ extension TransportSession {
             promise: ReplyPromise<ProtocolCommand.Result>,
             key: ConnectionCapabilityKey,
             generation: WebInspectorPage.Generation,
-            documentEpoch: ModelDocumentEpoch,
+            documentEpoch: ModelDOMBindingEpoch,
             enabled: Bool
         ) -> PendingReply {
             PendingReply(
@@ -169,7 +169,7 @@ extension TransportSession {
             promise: ReplyPromise<ProtocolCommand.Result>,
             feedID: ConnectionModelFeedID,
             generation: WebInspectorPage.Generation,
-            documentEpoch: ModelDocumentEpoch,
+            documentEpoch: ModelDOMBindingEpoch,
             operationID: UInt64
         ) -> PendingReply {
             PendingReply(
