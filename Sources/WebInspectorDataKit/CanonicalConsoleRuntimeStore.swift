@@ -85,6 +85,7 @@ package struct CanonicalConsoleRuntimeStore: Equatable, Sendable {
     private var runtimeContextIDByLookupKey: [RuntimeLookupKey: CanonicalRuntimeContextIDStorage]
     private var runtimeContextIDsByAgentTargetID: [WebInspectorTarget.ID: Set<CanonicalRuntimeContextIDStorage>]
     private var runtimeContextIDsBySemanticTargetID: [WebInspectorTarget.ID: Set<CanonicalRuntimeContextIDStorage>]
+    private var runtimeContextIDsByFrameID: [FrameID: Set<CanonicalRuntimeContextIDStorage>]
     private var runtimeContextTombstones: Set<CanonicalRuntimeContextIDStorage>
 
     private var consoleMessagesByID: [CanonicalConsoleMessageIDStorage: CanonicalConsoleMessageRecord]
@@ -117,6 +118,7 @@ package struct CanonicalConsoleRuntimeStore: Equatable, Sendable {
         runtimeContextIDByLookupKey = [:]
         runtimeContextIDsByAgentTargetID = [:]
         runtimeContextIDsBySemanticTargetID = [:]
+        runtimeContextIDsByFrameID = [:]
         runtimeContextTombstones = []
         consoleMessagesByID = [:]
         consoleMessageIDsByAgentTargetID = [:]
@@ -242,6 +244,7 @@ package struct CanonicalConsoleRuntimeStore: Equatable, Sendable {
         runtimeContextIDByLookupKey.removeAll(keepingCapacity: true)
         runtimeContextIDsByAgentTargetID.removeAll(keepingCapacity: true)
         runtimeContextIDsBySemanticTargetID.removeAll(keepingCapacity: true)
+        runtimeContextIDsByFrameID.removeAll(keepingCapacity: true)
         runtimeContextTombstones.removeAll(keepingCapacity: true)
         consoleMessagesByID.removeAll(keepingCapacity: true)
         consoleMessageIDsByAgentTargetID.removeAll(keepingCapacity: true)
@@ -418,7 +421,7 @@ package struct CanonicalConsoleRuntimeStore: Equatable, Sendable {
                 .semanticNavigation(
                     semanticTargetID: scope.target.id,
                     navigationEpoch: scope.navigationEpoch
-                )
+                ),
             ]
         )
     }
@@ -467,6 +470,30 @@ package struct CanonicalConsoleRuntimeStore: Equatable, Sendable {
                 CanonicalConsoleMessageChange.delete
             ),
             resourceInvalidations: [.targetLost(targetID)]
+        )
+    }
+
+    /// Removes Runtime contexts whose protocol payload names an ordinary
+    /// frame that detached without a dedicated target-destroyed event.
+    @discardableResult
+    package mutating func frameWasDetached(
+        _ frameID: FrameID
+    ) -> CanonicalConsoleRuntimeTransaction {
+        let ids = (runtimeContextIDsByFrameID[frameID] ?? []).sorted(
+            by: Self.runtimeContextPrecedes
+        )
+        for id in ids {
+            guard runtimeContextsByID[id]?.frameID == frameID else {
+                preconditionFailure("Canonical Runtime frame index lost record authority.")
+            }
+        }
+        for id in ids {
+            removeRuntimeContext(id, tombstone: true)
+        }
+        recordIncrementalVisits(ids.count)
+        return CanonicalConsoleRuntimeTransaction(
+            runtimeContextChanges: ids.map(CanonicalRuntimeContextChange.delete),
+            resourceInvalidations: [.frameDetached(frameID)]
         )
     }
 }
@@ -609,6 +636,9 @@ private extension CanonicalConsoleRuntimeStore {
         runtimeContextIDByLookupKey[lookupKey] = id
         runtimeContextIDsByAgentTargetID[scope.agentTarget.id, default: []].insert(id)
         runtimeContextIDsBySemanticTargetID[scope.target.id, default: []].insert(id)
+        if let frameID = context.frameID {
+            runtimeContextIDsByFrameID[frameID, default: []].insert(id)
+        }
         recordIncrementalVisits(1)
         return CanonicalConsoleRuntimeTransaction(
             runtimeContextChanges: [
@@ -715,6 +745,13 @@ private extension CanonicalConsoleRuntimeStore {
             from: &runtimeContextIDsBySemanticTargetID,
             key: record.membership.semanticTargetID
         )
+        if let frameID = record.frameID {
+            remove(
+                id,
+                from: &runtimeContextIDsByFrameID,
+                key: frameID
+            )
+        }
         if tombstone {
             runtimeContextTombstones.insert(id)
         }

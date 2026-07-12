@@ -78,6 +78,7 @@ package struct WebInspectorCanonicalCSSReducer: Sendable {
     private var recordsByID: [WebInspectorCSSStyleSheetIdentityStorage: WebInspectorCanonicalCSSStyleSheetRecord] = [:]
     private var styleSheetIDsByScope:
         [WebInspectorDOMDocumentScopeStorage: Set<WebInspectorCSSStyleSheetIdentityStorage>] = [:]
+    private var styleSheetIDsByFrameID: [FrameID: Set<WebInspectorCSSStyleSheetIdentityStorage>] = [:]
     private var retiredStyleSheetIDsByScope: [WebInspectorDOMDocumentScopeStorage: Set<CSS.StyleSheet.ID>] = [:]
     private var cascadeRevisionByScope: [WebInspectorDOMDocumentScopeStorage: UInt64] = [:]
     private var activeScopeByTargetRoute: [WebInspectorDOMTargetRouteStorage: WebInspectorDOMDocumentScopeStorage] =
@@ -182,16 +183,23 @@ package struct WebInspectorCanonicalCSSReducer: Sendable {
         }
 
         for id in removedIDs {
-            recordsByID.removeValue(forKey: id)
+            guard let removed = recordsByID.removeValue(forKey: id) else {
+                preconditionFailure("Canonical CSS bootstrap lost a removed record.")
+            }
             styleSheetIDsByScope[id.documentScope]?.remove(id)
+            removeFromFrameIndex(removed)
             retiredStyleSheetIDsByScope[id.documentScope, default: []].insert(id.rawStyleSheetID)
         }
         for id in incomingOrder {
             guard let record = incomingByID[id] else {
                 continue
             }
+            if let previous = recordsByID[id], previous.frameID != record.frameID {
+                removeFromFrameIndex(previous)
+            }
             recordsByID[id] = record
             styleSheetIDsByScope[id.documentScope, default: []].insert(id)
+            insertIntoFrameIndex(record)
         }
         for (targetRoute, scope) in incomingScopesByRoute {
             activeScopeByTargetRoute[targetRoute] = scope
@@ -253,6 +261,7 @@ package struct WebInspectorCanonicalCSSReducer: Sendable {
             transaction.resourceInvalidations.insert(.target(scope))
             recordsByID[record.id] = record
             styleSheetIDsByScope[scope, default: []].insert(record.id)
+            insertIntoFrameIndex(record)
             establish(scope, semanticTarget: eventScope.modelScope.target)
             performanceCounters.incrementalLookupCount += 1
             performanceCounters.recordMutationCount += 1
@@ -266,8 +275,11 @@ package struct WebInspectorCanonicalCSSReducer: Sendable {
             transaction.deletedRecordIDs = [id]
             advanceCascadeRevision(scope, transaction: &transaction)
             transaction.resourceInvalidations.insert(.target(scope))
-            recordsByID.removeValue(forKey: id)
+            guard let removed = recordsByID.removeValue(forKey: id) else {
+                preconditionFailure("Canonical CSS removal lost its validated record.")
+            }
             styleSheetIDsByScope[scope]?.remove(id)
+            removeFromFrameIndex(removed)
             retiredStyleSheetIDsByScope[scope, default: []].insert(rawID)
             establish(scope, semanticTarget: eventScope.modelScope.target)
             performanceCounters.incrementalLookupCount += 1
@@ -332,6 +344,45 @@ package struct WebInspectorCanonicalCSSReducer: Sendable {
         return transaction
     }
 
+    /// Removes style sheets allocated for an ordinary frame that has no
+    /// dedicated model target. Site-isolated frame sheets are removed with
+    /// their document scope by `targetLost(scope:)`.
+    package mutating func frameWasDetached(
+        _ frameID: FrameID
+    ) -> WebInspectorCanonicalCSSTransaction {
+        let ids = styleSheetIDsByFrameID[frameID] ?? []
+        guard !ids.isEmpty else {
+            return WebInspectorCanonicalCSSTransaction()
+        }
+
+        var affectedScopes = Set<WebInspectorDOMDocumentScopeStorage>()
+        for id in ids {
+            guard let record = recordsByID.removeValue(forKey: id),
+                record.frameID == frameID
+            else {
+                preconditionFailure("Canonical CSS frame index lost record authority.")
+            }
+            styleSheetIDsByScope[id.documentScope]?.remove(id)
+            retiredStyleSheetIDsByScope[id.documentScope, default: []].insert(
+                id.rawStyleSheetID
+            )
+            affectedScopes.insert(id.documentScope)
+        }
+        styleSheetIDsByFrameID[frameID] = nil
+
+        var transaction = WebInspectorCanonicalCSSTransaction(
+            deletedRecordIDs: ids
+        )
+        for scope in affectedScopes.sorted(
+            by: WebInspectorDOMDocumentScopeStorage.precedesInCanonicalOrder
+        ) {
+            advanceCascadeRevision(scope, transaction: &transaction)
+            transaction.resourceInvalidations.insert(.target(scope))
+        }
+        performanceCounters.recordMutationCount += ids.count
+        return transaction
+    }
+
     package mutating func reset() -> WebInspectorCanonicalCSSTransaction {
         var transaction = WebInspectorCanonicalCSSTransaction()
         transaction.deletedRecordIDs = Set(recordsByID.keys)
@@ -342,6 +393,7 @@ package struct WebInspectorCanonicalCSSReducer: Sendable {
         performanceCounters.recordMutationCount += recordsByID.count
         recordsByID.removeAll(keepingCapacity: true)
         styleSheetIDsByScope.removeAll(keepingCapacity: true)
+        styleSheetIDsByFrameID.removeAll(keepingCapacity: true)
         retiredStyleSheetIDsByScope.removeAll(keepingCapacity: true)
         cascadeRevisionByScope.removeAll(keepingCapacity: true)
         activeScopeByTargetRoute.removeAll(keepingCapacity: true)
@@ -443,10 +495,37 @@ private extension WebInspectorCanonicalCSSReducer {
     ) -> WebInspectorCanonicalCSSTransaction {
         let ids = styleSheetIDsByScope.removeValue(forKey: scope) ?? []
         for id in ids {
-            recordsByID.removeValue(forKey: id)
+            guard let record = recordsByID.removeValue(forKey: id) else {
+                preconditionFailure("Canonical CSS scope index lost record authority.")
+            }
+            removeFromFrameIndex(record)
         }
         performanceCounters.recordMutationCount += ids.count
         return WebInspectorCanonicalCSSTransaction(deletedRecordIDs: ids)
+    }
+
+    mutating func insertIntoFrameIndex(
+        _ record: WebInspectorCanonicalCSSStyleSheetRecord
+    ) {
+        guard let frameID = record.frameID else {
+            return
+        }
+        styleSheetIDsByFrameID[frameID, default: []].insert(record.id)
+    }
+
+    mutating func removeFromFrameIndex(
+        _ record: WebInspectorCanonicalCSSStyleSheetRecord
+    ) {
+        guard let frameID = record.frameID,
+            var ids = styleSheetIDsByFrameID[frameID],
+            ids.remove(record.id) != nil
+        else {
+            if record.frameID != nil {
+                preconditionFailure("Canonical CSS frame index lost membership.")
+            }
+            return
+        }
+        styleSheetIDsByFrameID[frameID] = ids.isEmpty ? nil : ids
     }
 
 }

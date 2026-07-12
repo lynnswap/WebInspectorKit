@@ -147,6 +147,8 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
     private var memberIndexByRequestID: [CanonicalNetworkRequestIDStorage: Int]
     private var groupKeyByRequestID: [CanonicalNetworkRequestIDStorage: CanonicalNetworkGroupKey]
     private var scopedRequestIDByRawRequestID: [Network.Request.ID: CanonicalNetworkRequestIDStorage]
+    private var requestIDsByAgentTargetID: [WebInspectorTarget.ID: Set<CanonicalNetworkRequestIDStorage>]
+    private var requestIDsBySemanticTargetID: [WebInspectorTarget.ID: Set<CanonicalNetworkRequestIDStorage>]
     private var pendingWebSocketByID: [CanonicalNetworkRequestIDStorage: PendingWebSocket]
     private var tombstones: Set<CanonicalNetworkRequestIDStorage>
     private var lastRequestOrdinal: UInt64
@@ -156,6 +158,8 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
             package var entryFullRebuildCount = 0
             package var entryIncrementalUpdateCount = 0
             package var entryQueryRebuildCount = 0
+            package var targetLossIndexLookupCount = 0
+            package var targetLossFullScanCount = 0
         }
 
         private var performanceCounters: PerformanceCounters
@@ -175,6 +179,8 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
         memberIndexByRequestID = [:]
         groupKeyByRequestID = [:]
         scopedRequestIDByRawRequestID = [:]
+        requestIDsByAgentTargetID = [:]
+        requestIDsBySemanticTargetID = [:]
         pendingWebSocketByID = [:]
         tombstones = []
         lastRequestOrdinal = 0
@@ -326,6 +332,8 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
         memberIndexByRequestID.removeAll(keepingCapacity: true)
         groupKeyByRequestID.removeAll(keepingCapacity: true)
         scopedRequestIDByRawRequestID.removeAll(keepingCapacity: true)
+        requestIDsByAgentTargetID.removeAll(keepingCapacity: true)
+        requestIDsBySemanticTargetID.removeAll(keepingCapacity: true)
         pendingWebSocketByID.removeAll(keepingCapacity: true)
         tombstones.removeAll(keepingCapacity: true)
         return transaction
@@ -349,23 +357,27 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
         memberIndexByRequestID.removeAll(keepingCapacity: true)
         groupKeyByRequestID.removeAll(keepingCapacity: true)
         scopedRequestIDByRawRequestID.removeAll(keepingCapacity: true)
+        requestIDsByAgentTargetID.removeAll(keepingCapacity: true)
+        requestIDsBySemanticTargetID.removeAll(keepingCapacity: true)
         pendingWebSocketByID.removeAll(keepingCapacity: true)
         return transaction
     }
 
-    /// Removes one physical target without weakening tombstone authority.
+    /// Removes membership owned by a lost physical agent or semantic target
+    /// without weakening tombstone authority.
     @discardableResult
     package mutating func targetWasLost(
-        _ agentTargetID: WebInspectorTarget.ID
+        _ targetID: WebInspectorTarget.ID
     ) throws -> CanonicalNetworkTransaction? {
-        let removedIDs = Set(
-            requestsByID.keys.filter {
-                $0.agentTargetID == agentTargetID
-            })
+        let indexedIDs = (requestIDsByAgentTargetID[targetID] ?? [])
+            .union(requestIDsBySemanticTargetID[targetID] ?? [])
+        let removedIDs = Set(indexedIDs.filter { requestsByID[$0] != nil })
         let removedPendingWebSocketIDs = Set(
-            pendingWebSocketByID.keys.filter {
-                $0.agentTargetID == agentTargetID
-            })
+            indexedIDs.filter { pendingWebSocketByID[$0] != nil }
+        )
+        #if DEBUG
+            performanceCounters.targetLossIndexLookupCount += 2
+        #endif
         guard !removedIDs.isEmpty || !removedPendingWebSocketIDs.isEmpty else {
             return nil
         }
@@ -382,7 +394,7 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
                 entry.requestIDs.allSatisfy(removedIDs.contains)
             else {
                 preconditionFailure(
-                    "A target-scoped Network entry crossed physical targets."
+                    "A target-scoped Network entry crossed target-loss membership."
                 )
             }
         }
@@ -401,10 +413,26 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
             scopedRequestIDByRawRequestID[requestID.rawRequestID] = nil
         }
         for requestID in removedPendingWebSocketIDs {
-            pendingWebSocketByID[requestID] = nil
+            guard let pending = pendingWebSocketByID.removeValue(forKey: requestID) else {
+                preconditionFailure(
+                    "Canonical Network pending target index lost membership."
+                )
+            }
+            removeFromTargetIndexes(
+                requestID,
+                membership: pending.membership
+            )
         }
         for requestID in removedIDs {
-            requestsByID[requestID] = nil
+            guard let record = requestsByID.removeValue(forKey: requestID) else {
+                preconditionFailure(
+                    "Canonical Network target index lost request membership."
+                )
+            }
+            removeFromTargetIndexes(
+                requestID,
+                membership: record.membership
+            )
             requestQueriesByID[requestID] = nil
             entryIDByRequestID[requestID] = nil
             memberIndexByRequestID[requestID] = nil
@@ -1427,10 +1455,12 @@ private extension CanonicalNetworkStore {
 
         try validateRawRequestIDReservation(id)
         scopedRequestIDByRawRequestID[rawID] = id
-        pendingWebSocketByID[id] = PendingWebSocket(
+        let pending = PendingWebSocket(
             creationURL: url,
             membership: requestMembership(for: scope)
         )
+        pendingWebSocketByID[id] = pending
+        insertIntoTargetIndexes(id, membership: pending.membership)
         return nil
     }
 
@@ -2072,6 +2102,10 @@ private extension CanonicalNetworkStore {
             lastEntryOrdinal = entryOrdinal
         }
         requestsByID[insertion.request.id] = insertion.request
+        insertIntoTargetIndexes(
+            insertion.request.id,
+            membership: insertion.request.membership
+        )
         scopedRequestIDByRawRequestID[
             insertion.request.id.rawRequestID
         ] = insertion.request.id
@@ -2114,6 +2148,44 @@ private extension CanonicalNetworkStore {
             requestChanges: [update.requestChange],
             entryChanges: update.entry.map { [$0.change] } ?? []
         )
+    }
+
+    private mutating func insertIntoTargetIndexes(
+        _ id: CanonicalNetworkRequestIDStorage,
+        membership: CanonicalNetworkRequestMembership
+    ) {
+        requestIDsByAgentTargetID[id.agentTargetID, default: []].insert(id)
+        requestIDsBySemanticTargetID[
+            membership.semanticTargetID,
+            default: []
+        ].insert(id)
+    }
+
+    private mutating func removeFromTargetIndexes(
+        _ id: CanonicalNetworkRequestIDStorage,
+        membership: CanonicalNetworkRequestMembership
+    ) {
+        remove(
+            id,
+            from: &requestIDsByAgentTargetID,
+            targetID: id.agentTargetID
+        )
+        remove(
+            id,
+            from: &requestIDsBySemanticTargetID,
+            targetID: membership.semanticTargetID
+        )
+    }
+
+    private func remove(
+        _ id: CanonicalNetworkRequestIDStorage,
+        from index: inout [WebInspectorTarget.ID: Set<CanonicalNetworkRequestIDStorage>],
+        targetID: WebInspectorTarget.ID
+    ) {
+        guard var ids = index[targetID], ids.remove(id) != nil else {
+            preconditionFailure("Canonical Network target index lost membership.")
+        }
+        index[targetID] = ids.isEmpty ? nil : ids
     }
 
     #if DEBUG

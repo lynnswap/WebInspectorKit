@@ -471,6 +471,42 @@ package struct WebInspectorCanonicalDOMReducer: Sendable {
         return transaction
     }
 
+    /// Removes an ordinary frame's embedded document while retaining the
+    /// frame-owner element in its enclosing document.
+    ///
+    /// A site-isolated frame has a distinct document scope and is removed by
+    /// `targetLost(scope:)`. `Page.frameDetached` can also describe an
+    /// ordinary frame whose document was allocated by its parent Page agent;
+    /// that case has no dedicated model target to destroy.
+    package mutating func frameWasDetached(
+        _ frameID: FrameID
+    ) throws -> WebInspectorCanonicalDOMTransaction {
+        guard let ownerID = frameOwnerByFrameID[frameID],
+            var owner = recordsByID[ownerID],
+            let documentID = owner.contentDocumentID,
+            documentID.documentScope == ownerID.documentScope,
+            frameRootByFrameID[frameID] == nil
+        else {
+            return WebInspectorCanonicalDOMTransaction()
+        }
+
+        let deletedIDs = try collectSubtrees([documentID])
+        owner.contentDocumentID = nil
+        let plan = MutationPlan(
+            upserts: [ownerID: owner],
+            upsertOrder: [ownerID],
+            parentAssignments: [
+                ownerID: parentByNodeID[ownerID].map(ParentAssignment.parent)
+                    ?? ParentAssignment.none
+            ],
+            deletes: deletedIDs,
+            tombstones: deletedIDs,
+            deletionVisits: deletedIDs.count,
+            resourceInvalidations: [.subtree(ownerID)]
+        )
+        return try commit(plan)
+    }
+
     package mutating func reset() -> WebInspectorCanonicalDOMTransaction {
         var transaction = WebInspectorCanonicalDOMTransaction()
         transaction.deletedRecordIDs = Set(recordsByID.keys)

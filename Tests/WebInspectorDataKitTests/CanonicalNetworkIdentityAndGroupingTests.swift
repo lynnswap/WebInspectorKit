@@ -653,3 +653,67 @@ func canonicalNetworkTargetLossDeletesWholeTargetScopedGroups() throws {
     #expect(fixture.store.entries.count == 1)
     #expect(fixture.store.tombstonedRequestIDs.count == 3)
 }
+
+@Test
+func canonicalNetworkTargetLossUsesSemanticAndAgentIndexesWithoutScanningAllRequests() throws {
+    var fixture = try CanonicalNetworkTestFixture()
+    let semanticA = fixture.scope(
+        targetID: "semantic-a",
+        agentTargetID: "root-agent"
+    )
+    let semanticB = fixture.scope(
+        targetID: "semantic-b",
+        agentTargetID: "root-agent"
+    )
+    _ = try fixture.store.reduce(
+        canonicalRequestWillBeSent(
+            id: "a-request",
+            url: "https://a.example.test/",
+            timestamp: 1
+        ),
+        scope: semanticA
+    )
+    _ = try fixture.store.reduce(
+        canonicalRequestWillBeSent(
+            id: "b-request",
+            url: "https://b.example.test/",
+            timestamp: 2
+        ),
+        scope: semanticB
+    )
+    _ = try fixture.store.reduce(
+        .webSocket(
+            .created(
+                id: Network.Request.ID("a-socket"),
+                url: "wss://a.example.test/socket"
+            )
+        ),
+        scope: semanticA
+    )
+
+    let transaction = try #require(
+        try fixture.store.targetWasLost(
+            WebInspectorTarget.ID("semantic-a")
+        )
+    )
+    #expect(transaction.requestChanges.count == 1)
+    #expect(
+        fixture.store.requests.map(\.id.rawRequestID) == [
+            Network.Request.ID("b-request")
+        ]
+    )
+    #expect(
+        fixture.store.requestID(
+            forRawRequestID: Network.Request.ID("a-socket")
+        ) == nil
+    )
+    #expect(fixture.store.tombstonedRequestIDs.count == 2)
+    #expect(
+        fixture.store.performanceCountersForTesting.targetLossIndexLookupCount
+            == 2
+    )
+    #expect(
+        fixture.store.performanceCountersForTesting.targetLossFullScanCount
+            == 0
+    )
+}
