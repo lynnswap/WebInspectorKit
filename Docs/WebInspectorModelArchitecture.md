@@ -273,6 +273,7 @@ learn about persistent models or queries.
 | Responsibility | Owner | Contract |
 | --- | --- | --- |
 | Inspection-session attach/detach/reattach | `WebInspectorModelContainer` / its Core actor | The stable container owns every adopted or pending Proxy and feed replacement; only native WKWebView operations are `@MainActor`. |
+| Public connection lifecycle state | `WebInspectorModelContainer` current-value publication | Synchronous `state` and each `stateUpdates` sequence read one owner; page navigation does not change Container state. |
 | Physical targets, replies, capabilities | ProxyKit connection core | One source of transport truth. |
 | Structured model-event scope | ProxyKit model feed | Generation, best-available semantic target, protocol-agent target, navigation epoch, and optional exact DOM-, Runtime-, and Console-binding epochs travel separately from raw IDs. |
 | Persistent-model and context-resource command admission | `WebInspectorModelContainerCore` command gateway plus ProxyKit connection core | The Core atomically claims owner-valid operations before suspension; ProxyKit revalidates transport-visible binding authority at actual wire admission. |
@@ -288,6 +289,7 @@ learn about persistent models or queries.
 | FRC descriptor/revision/subscribers | `WebInspectorFetchedResultsController` | One lifecycle owner, no domain switch. |
 | Network logical grouping | Network record reducer | Produces `NetworkEntry` records and member request IDs. |
 | Selection | UIKit panel/navigation model | Stores stable `NetworkEntry.ID`, never a section wrapper. |
+| Element-picker operation | container command gateway plus the UI-owned operation Task | The Core owns the command lease; the UI derives presentation state from its one operation instead of storing lifecycle in the Context. |
 | Rendering | UIKit controllers/views | Resolves IDs, observes models, installs native artifacts. |
 
 `WebInspectorModelContainerCore` is the single cross-domain canonical actor.
@@ -653,10 +655,43 @@ public final class WebInspectorModelContainer: Equatable, Sendable {
         )
     }
 
-    public enum Failure: Error, Sendable {
+    public enum ConnectionFailure: Equatable, Sendable {
+        case closed
+        case pageUnavailable
+        case protocolViolation(String)
+        case transport(String)
+    }
+
+    public enum Failure: Error, LocalizedError, Equatable, Sendable {
         case closed
         case attachmentSuperseded
+        case bootstrap(domain: Domain, message: String)
+        case connection(ConnectionFailure)
     }
+
+    public enum State: Equatable, Sendable {
+        case detached
+        case attaching
+        case attached
+        case detaching
+        case failed(Failure)
+        case closing
+        case closed
+    }
+
+    public struct StateUpdateSequence: AsyncSequence, Sendable {
+        public typealias Element = State
+
+        public struct AsyncIterator: AsyncIteratorProtocol {
+            public mutating func next() async -> State?
+        }
+
+        public func makeAsyncIterator() -> AsyncIterator
+    }
+
+    public nonisolated let configuration: Configuration
+    public nonisolated var state: State { get }
+    public nonisolated var stateUpdates: StateUpdateSequence { get }
 
     public nonisolated init(
         configuration: Configuration = .init()
@@ -720,6 +755,23 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
 )
 extension WebInspectorModelContext: @unchecked Sendable {}
 ```
+
+Connection lifecycle belongs only to the Container. `state` and every
+`stateUpdates` sequence are two reads of the same current-value publication;
+each sequence atomically starts with the current state, retains at most the
+newest unconsumed value, delivers `.closed`, and then finishes. It is not an
+operation log. Bootstrap remains `.attaching`, and in-page navigation leaves
+the Container `.attached`; there is no public `.synchronizing` state. A failed
+attach with no adopted attachment publishes `.failed`, a later attach may
+retry, and `detach()` converges it to `.detached`.
+
+Connection `Failure`, `ConnectionFailure`, `Configuration`, and `Domain` are
+Container contracts. The Context exposes none of them and has no public
+`state`, `status`, `statusUpdates`, configured-domain, page-generation,
+selection, or element-picker mirror. DOM and Network selection belong to their
+UIKit panel/navigation models. The UI owns the one picker operation Task and
+commits its resulting stable ID once; the command lease remains in the
+Container Core.
 
 `WebInspectorModelContext` equality is reference/context identity (`===`), not
 equality of current records. `SendableMetatype` permits its type metadata in
@@ -1249,14 +1301,15 @@ Container detach is idempotent and nonterminal:
 2. enqueue detach after the prior lifecycle operation, then reject old
    feed/command/adoption completions and atomically reset the canonical store
    to empty;
-3. publish that reset with one acknowledgement obligation for every currently
-   registered context;
+3. publish that reset with one acknowledgement obligation for every active,
+   materialized context;
 4. each materialized context applies the reset through its context core and
    owner actor, removes the old registry membership, marks old models stale,
    and commits every FRC snapshot to empty without terminating its update
-   sequence. Closing/unregistering the context satisfies its obligation; an
-   unmaterialized main-context seed advances its stored base revision and
-   acknowledges without creating an Observable wrapper;
+   sequence. Closing/unregistering the context satisfies its obligation. An
+   unmaterialized main-context seed is reserved rather than active, never
+   enters the barrier, and claims the current owner-atomic rebase when first
+   materialized;
 5. stop/close the model feed and ProxyKit connection, then await the feed
    driver/native detach, every context acknowledgement, and every attachment
    attempt captured at step 1's creation/cleanup quiescence;
@@ -1388,6 +1441,9 @@ integrated.
 
 - A Container can be constructed off MainActor without touching a native
   `WKWebView`, Observable model, or UI owner.
+- Container state and each update sequence share one atomic current value;
+  slow consumers receive only the newest state, `.closed` is delivered before
+  sequence termination, and in-page navigation remains `.attached`.
 - One container creates contexts owned by MainActor and a custom actor.
 - `mainContext` is stable, custom contexts compare by context identity, and a
   closed container rejects new context creation.
