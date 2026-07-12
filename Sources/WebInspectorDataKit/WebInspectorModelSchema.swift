@@ -876,9 +876,12 @@ package final class WebInspectorModelSchemaTransactionCommit: Sendable {
     ) -> Bool {
         registry.requireContextIdentity(contextIdentity)
         registry.requireOwnerIdentity(owner)
-        let didPublish = combined.publish { mutations in
+        let didPublish = combined.publish { mutations, controllerMutations in
             registry.apply(effects: effects, owner: owner)
             registry.apply(mutations: mutations, owner: owner)
+            owner.applyFetchedResultsControllerOwnerMutations(
+                controllerMutations
+            )
         }
         if didPublish {
             finishTransactionIfNeeded(.published)

@@ -45,15 +45,15 @@ package enum WebInspectorFetchedResultsSourceChange<
     case reset([WebInspectorFetchedResultsSourceRecord<Model>])
 }
 
-final class _WebInspectorModelContextIdentity: Hashable, Sendable {
-    static func == (
+package final class _WebInspectorModelContextIdentity: Hashable, Sendable {
+    package static func == (
         lhs: _WebInspectorModelContextIdentity,
         rhs: _WebInspectorModelContextIdentity
     ) -> Bool {
         lhs === rhs
     }
 
-    func hash(into hasher: inout Hasher) {
+    package func hash(into hasher: inout Hasher) {
         hasher.combine(ObjectIdentifier(self))
     }
 }
@@ -63,7 +63,7 @@ package struct WebInspectorFetchedResultsQueryRegistrationToken<
     SectionName: Hashable & Sendable
 >: Hashable, Sendable {
     fileprivate let contextIdentity: _WebInspectorModelContextIdentity
-    fileprivate let publicationIdentity: ObjectIdentifier
+    package let publicationIdentity: ObjectIdentifier
     fileprivate let rawValue: UInt64
 }
 
@@ -134,11 +134,11 @@ package struct WebInspectorFetchedResultsQueryRegistration<
     Model: WebInspectorPersistentModel,
     SectionName: Hashable & Sendable
 >: Sendable {
-    typealias Snapshot =
+    package typealias Snapshot =
         WebInspectorFetchedResultsSnapshot<Model.ID, SectionName>
-    typealias Changes =
+    package typealias Changes =
         WebInspectorFetchedResultsChanges<Model.ID, SectionName>
-    typealias Publication =
+    package typealias Publication =
         WebInspectorRevisionedSnapshotPublication<Snapshot, Changes, any Error>
 
     private let contextCore: WebInspectorModelContextCore
@@ -227,7 +227,55 @@ protocol _WebInspectorAnyQueryEngine: AnyObject {
     var registrationCount: Int { get }
     func close(
         throwing error: (any Error)?
-    ) -> [_WebInspectorModelContextPendingQueryPublication]
+    ) -> _WebInspectorModelContextStagedQueryWork
+}
+
+enum _WebInspectorFetchedResultsDeliveryMode {
+    case raw
+    case controller(
+        ownerID: WebInspectorFetchedResultsControllerOwnerID,
+        lease: WebInspectorFetchedResultsControllerRegistrationLease
+    )
+}
+
+struct _WebInspectorModelContextStagedQueryWork: Sendable {
+    var controllerOwnerBatches: [WebInspectorFetchedResultsControllerOwnerMutationBatch] = []
+    var controllerPublications: [_WebInspectorModelContextPendingQueryPublication] = []
+    var rawPublications: [_WebInspectorModelContextPendingQueryPublication] = []
+
+    mutating func append(
+        _ delivery: _WebInspectorModelContextStagedQueryDelivery?
+    ) {
+        guard let delivery else {
+            return
+        }
+        if let ownerBatch = delivery.ownerBatch {
+            controllerOwnerBatches.append(ownerBatch)
+        }
+        guard let publication = delivery.publication else {
+            return
+        }
+        switch delivery.mode {
+        case .raw:
+            rawPublications.append(publication)
+        case .controller:
+            controllerPublications.append(publication)
+        }
+    }
+
+    mutating func append(
+        contentsOf other: _WebInspectorModelContextStagedQueryWork
+    ) {
+        controllerOwnerBatches.append(contentsOf: other.controllerOwnerBatches)
+        controllerPublications.append(contentsOf: other.controllerPublications)
+        rawPublications.append(contentsOf: other.rawPublications)
+    }
+}
+
+struct _WebInspectorModelContextStagedQueryDelivery {
+    let mode: _WebInspectorFetchedResultsDeliveryMode
+    let ownerBatch: WebInspectorFetchedResultsControllerOwnerMutationBatch?
+    let publication: _WebInspectorModelContextPendingQueryPublication?
 }
 
 /// One type-erased query publication prepared by a context-core transaction.
@@ -236,18 +284,31 @@ protocol _WebInspectorAnyQueryEngine: AnyObject {
 /// payload values. Query engines and registration boxes remain isolated to
 /// `WebInspectorModelContextCore`.
 struct _WebInspectorModelContextPendingQueryPublication: Sendable {
+    private enum Admission: Sendable {
+        case unconditional
+        case whileActive(WebInspectorFetchedResultsControllerRegistrationLease)
+    }
+
+    private let admission: Admission
     private let publishBody: @Sendable () -> Void
     private let abortBody: @Sendable (any Error) -> Void
 
     init(
+        whileActive lease: WebInspectorFetchedResultsControllerRegistrationLease? = nil,
         publish: @escaping @Sendable () -> Void,
         abort: @escaping @Sendable (any Error) -> Void
     ) {
+        admission = lease.map(Admission.whileActive) ?? .unconditional
         publishBody = publish
         abortBody = abort
     }
 
     func publish() {
+        if case let .whileActive(lease) = admission,
+            lease.isActive == false
+        {
+            return
+        }
         publishBody()
     }
 
@@ -293,7 +354,8 @@ final class _WebInspectorFetchedResultsQueryEngine<
             descriptor: fetchDescriptor,
             recordsByID: recordsByID,
             canonicalItemIDs: canonicalItemIDs,
-            publication: publication
+            publication: publication,
+            deliveryMode: .raw
         )
         return install(box)
     }
@@ -309,16 +371,53 @@ final class _WebInspectorFetchedResultsQueryEngine<
             sectionBy: sectionBy,
             recordsByID: recordsByID,
             canonicalItemIDs: canonicalItemIDs,
-            publication: publication
+            publication: publication,
+            deliveryMode: .raw
+        )
+        return install(box)
+    }
+
+    func registerController(
+        fetchDescriptor: WebInspectorFetchDescriptor<Model>,
+        publication: WebInspectorFetchedResultsQueryRegistration<Model, Never>.Publication,
+        ownerID: WebInspectorFetchedResultsControllerOwnerID,
+        lease: WebInspectorFetchedResultsControllerRegistrationLease
+    ) throws -> WebInspectorFetchedResultsQueryRegistrationToken<Model, Never> {
+        try ensureOpen()
+        let box = try _WebInspectorFetchedResultsFlatRegistrationBox<Model>(
+            descriptor: fetchDescriptor,
+            recordsByID: recordsByID,
+            canonicalItemIDs: canonicalItemIDs,
+            publication: publication,
+            deliveryMode: .controller(ownerID: ownerID, lease: lease)
+        )
+        return install(box)
+    }
+
+    func registerController<SectionName: Hashable & Sendable>(
+        fetchDescriptor: WebInspectorFetchDescriptor<Model>,
+        sectionBy: Expression<Model.QueryValue, SectionName>,
+        publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication,
+        ownerID: WebInspectorFetchedResultsControllerOwnerID,
+        lease: WebInspectorFetchedResultsControllerRegistrationLease
+    ) throws -> WebInspectorFetchedResultsQueryRegistrationToken<Model, SectionName> {
+        try ensureOpen()
+        let box = try _WebInspectorFetchedResultsSectionedRegistrationBox<Model, SectionName>(
+            descriptor: fetchDescriptor,
+            sectionBy: sectionBy,
+            recordsByID: recordsByID,
+            canonicalItemIDs: canonicalItemIDs,
+            publication: publication,
+            deliveryMode: .controller(ownerID: ownerID, lease: lease)
         )
         return install(box)
     }
 
     func applyBatch(
         _ batch: WebInspectorFetchedResultsSourceBatch<Model>
-    ) -> [_WebInspectorModelContextPendingQueryPublication] {
+    ) -> _WebInspectorModelContextStagedQueryWork {
         guard isClosed == false else {
-            return []
+            return _WebInspectorModelContextStagedQueryWork()
         }
         if let lastCanonicalRevision {
             precondition(
@@ -327,6 +426,18 @@ final class _WebInspectorFetchedResultsQueryEngine<
             )
         }
 
+        var stagedWork = _WebInspectorModelContextStagedQueryWork()
+        let cancelledControllerIDs = registrations.compactMap { id, entry in
+            entry.controllerLeaseIsCancelled() ? id : nil
+        }
+        for id in cancelledControllerIDs {
+            guard let entry = registrations.removeValue(forKey: id) else {
+                preconditionFailure(
+                    "A cancelled fetched-results controller registration disappeared before pruning."
+                )
+            }
+            stagedWork.append(entry.stagedFinish(nil))
+        }
         let registrationIDs = Array(registrations.keys)
         let onlyContentChanges =
             batch.changes.count > 1
@@ -338,8 +449,6 @@ final class _WebInspectorFetchedResultsQueryEngine<
             )
         }
 
-        var pendingPublications: [_WebInspectorModelContextPendingQueryPublication] = []
-        pendingPublications.reserveCapacity(registrationIDs.count)
         for change in batch.changes {
             let mutation = applyToSource(change)
             for id in registrationIDs {
@@ -354,17 +463,15 @@ final class _WebInspectorFetchedResultsQueryEngine<
                     )
                 } catch {
                     registrations.removeValue(forKey: id)
-                    pendingPublications.append(entry.stagedFinish(error))
+                    stagedWork.append(entry.stagedFinish(error))
                 }
             }
         }
         for id in registrationIDs {
-            if let pendingPublication = registrations[id]?.finishBatch() {
-                pendingPublications.append(pendingPublication)
-            }
+            stagedWork.append(registrations[id]?.finishBatch())
         }
         lastCanonicalRevision = batch.canonicalRevision
-        return pendingPublications
+        return stagedWork
     }
 
     var registrationCount: Int {
@@ -373,9 +480,9 @@ final class _WebInspectorFetchedResultsQueryEngine<
 
     func close(
         throwing error: (any Error)?
-    ) -> [_WebInspectorModelContextPendingQueryPublication] {
+    ) -> _WebInspectorModelContextStagedQueryWork {
         guard isClosed == false else {
-            return []
+            return _WebInspectorModelContextStagedQueryWork()
         }
         isClosed = true
         let entries = registrations.values
@@ -383,7 +490,11 @@ final class _WebInspectorFetchedResultsQueryEngine<
         recordsByID.removeAll(keepingCapacity: false)
         canonicalItemIDs.removeAll(keepingCapacity: false)
         itemIDByCanonicalRank.removeAll(keepingCapacity: false)
-        return entries.map { $0.stagedFinish(error) }
+        var stagedWork = _WebInspectorModelContextStagedQueryWork()
+        for entry in entries {
+            stagedWork.append(entry.stagedFinish(error))
+        }
+        return stagedWork
     }
 
     func performanceCounters<SectionName: Hashable & Sendable>(
@@ -450,7 +561,9 @@ final class _WebInspectorFetchedResultsQueryEngine<
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            terminateRegistration(token.rawValue, with: error).publish()
+            terminateRegistration(token.rawValue, with: error)
+                .publication?
+                .publish()
             throw error
         }
     }
@@ -461,7 +574,7 @@ final class _WebInspectorFetchedResultsQueryEngine<
         publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication
     ) throws -> (
         WebInspectorFetchedResultsQueryState<Model.ID, SectionName>,
-        _WebInspectorModelContextPendingQueryPublication?
+        _WebInspectorModelContextStagedQueryDelivery?
     ) {
         guard candidateToken.registrationToken == token else {
             throw WebInspectorFetchedResultsQueryError.staleCandidate
@@ -486,7 +599,7 @@ final class _WebInspectorFetchedResultsQueryEngine<
     func close<SectionName: Hashable & Sendable>(
         _ token: WebInspectorFetchedResultsQueryRegistrationToken<Model, SectionName>,
         publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication
-    ) -> _WebInspectorModelContextPendingQueryPublication? {
+    ) -> _WebInspectorModelContextStagedQueryDelivery? {
         guard (try? box(for: token, publication: publication)) != nil else {
             return nil
         }
@@ -546,7 +659,7 @@ final class _WebInspectorFetchedResultsQueryEngine<
     private func terminateRegistration(
         _ id: UInt64,
         with error: any Error
-    ) -> _WebInspectorModelContextPendingQueryPublication {
+    ) -> _WebInspectorModelContextStagedQueryDelivery {
         guard let entry = registrations.removeValue(forKey: id) else {
             preconditionFailure("A failing query registration disappeared before termination.")
         }
@@ -794,18 +907,21 @@ private class _WebInspectorFetchedResultsRegistrationBox<
     var nextCandidateGeneration: UInt64 = 0
     var performanceCounters: WebInspectorFetchedResultsQueryPerformanceCounters
     let publication: Publication
+    let deliveryMode: _WebInspectorFetchedResultsDeliveryMode
     private var pendingBatch: PendingBatch?
 
     init(
         descriptor: WebInspectorFetchDescriptor<Model>,
         initial: Evaluation,
         performanceCounters: WebInspectorFetchedResultsQueryPerformanceCounters,
-        publication: Publication
+        publication: Publication,
+        deliveryMode: _WebInspectorFetchedResultsDeliveryMode
     ) {
         self.descriptor = descriptor
         active = initial
         self.performanceCounters = performanceCounters
         self.publication = publication
+        self.deliveryMode = deliveryMode
     }
 
     func state() -> WebInspectorFetchedResultsQueryState<Model.ID, SectionName> {
@@ -937,7 +1053,7 @@ private class _WebInspectorFetchedResultsRegistrationBox<
         }
     }
 
-    func finishBatch() -> _WebInspectorModelContextPendingQueryPublication? {
+    func finishBatch() -> _WebInspectorModelContextStagedQueryDelivery? {
         guard let pendingBatch else {
             preconditionFailure("A fetched-results source batch was finished twice.")
         }
@@ -1012,7 +1128,7 @@ private class _WebInspectorFetchedResultsRegistrationBox<
         _ candidateToken: WebInspectorFetchedResultsQueryCandidateToken<Model, SectionName>
     ) throws -> (
         WebInspectorFetchedResultsQueryState<Model.ID, SectionName>,
-        _WebInspectorModelContextPendingQueryPublication?
+        _WebInspectorModelContextStagedQueryDelivery?
     ) {
         guard var candidate, candidate.token == candidateToken else {
             throw WebInspectorFetchedResultsQueryError.staleCandidate
@@ -1030,8 +1146,11 @@ private class _WebInspectorFetchedResultsRegistrationBox<
             to: nextSnapshot,
             updatedItemIDs: []
         )
-        let pendingPublication = stage(changes)
-        return (state(), pendingPublication)
+        let stagedDelivery = stage(
+            changes,
+            forceControllerOwnerMutation: true
+        )
+        return (state(), stagedDelivery)
     }
 
     func discardReplacement(
@@ -1043,10 +1162,10 @@ private class _WebInspectorFetchedResultsRegistrationBox<
         candidate = nil
     }
 
-    func stagedFinish(_ error: (any Error)?) -> _WebInspectorModelContextPendingQueryPublication {
+    func stagedFinish(_ error: (any Error)?) -> _WebInspectorModelContextStagedQueryDelivery {
         candidate = nil
         pendingBatch = nil
-        return _WebInspectorModelContextPendingQueryPublication(
+        let publication = _WebInspectorModelContextPendingQueryPublication(
             publish: { [publication] in
                 if let error {
                     publication.finish(throwing: error)
@@ -1057,6 +1176,11 @@ private class _WebInspectorFetchedResultsRegistrationBox<
             abort: { [publication] error in
                 publication.finish(throwing: error)
             }
+        )
+        return _WebInspectorModelContextStagedQueryDelivery(
+            mode: deliveryMode,
+            ownerBatch: nil,
+            publication: publication
         )
     }
 
@@ -1525,10 +1649,28 @@ private class _WebInspectorFetchedResultsRegistrationBox<
     }
 
     private func stage(
-        _ changes: Changes
-    ) -> _WebInspectorModelContextPendingQueryPublication? {
+        _ changes: Changes,
+        forceControllerOwnerMutation: Bool = false
+    ) -> _WebInspectorModelContextStagedQueryDelivery? {
         guard changes.isEmpty == false else {
-            return nil
+            guard forceControllerOwnerMutation,
+                case let .controller(ownerID, lease) = deliveryMode
+            else {
+                return nil
+            }
+            return _WebInspectorModelContextStagedQueryDelivery(
+                mode: deliveryMode,
+                ownerBatch: WebInspectorFetchedResultsControllerOwnerMutationBatch(
+                    ownerID: ownerID,
+                    lease: lease,
+                    backing: WebInspectorFetchedResultsControllerBacking(
+                        fetchDescriptor: descriptor,
+                        revision: revision,
+                        snapshot: currentSnapshot()
+                    )
+                ),
+                publication: nil
+            )
         }
         precondition(
             revision < UInt64.max,
@@ -1538,17 +1680,40 @@ private class _WebInspectorFetchedResultsRegistrationBox<
         let previousRevision = revision
         revision = nextRevision
         performanceCounters.publicationCount += 1
-        return _WebInspectorModelContextPendingQueryPublication(
-            publish: { [publication] in
-                publication.publish(
-                    from: previousRevision,
-                    to: nextRevision,
-                    changes: changes
+        let lease: WebInspectorFetchedResultsControllerRegistrationLease?
+        let ownerBatch: WebInspectorFetchedResultsControllerOwnerMutationBatch?
+        switch deliveryMode {
+        case .raw:
+            lease = nil
+            ownerBatch = nil
+        case let .controller(ownerID, controllerLease):
+            lease = controllerLease
+            ownerBatch = WebInspectorFetchedResultsControllerOwnerMutationBatch(
+                ownerID: ownerID,
+                lease: controllerLease,
+                backing: WebInspectorFetchedResultsControllerBacking(
+                    fetchDescriptor: descriptor,
+                    revision: revision,
+                    snapshot: currentSnapshot()
                 )
-            },
-            abort: { [publication] error in
-                publication.finish(throwing: error)
-            }
+            )
+        }
+        return _WebInspectorModelContextStagedQueryDelivery(
+            mode: deliveryMode,
+            ownerBatch: ownerBatch,
+            publication: _WebInspectorModelContextPendingQueryPublication(
+                whileActive: lease,
+                publish: { [publication] in
+                    publication.publish(
+                        from: previousRevision,
+                        to: nextRevision,
+                        changes: changes
+                    )
+                },
+                abort: { [publication] error in
+                    publication.finish(throwing: error)
+                }
+            )
         )
     }
 }
@@ -1566,7 +1731,8 @@ private final class _WebInspectorFetchedResultsFlatRegistrationBox<
         descriptor: WebInspectorFetchDescriptor<Model>,
         recordsByID: [Model.ID: SourceRecord],
         canonicalItemIDs: [Model.ID],
-        publication: Publication
+        publication: Publication,
+        deliveryMode: _WebInspectorFetchedResultsDeliveryMode
     ) throws {
         let placeholder = WebInspectorFetchedResultsSnapshot<Model.ID, Never>()
         super.init(
@@ -1578,7 +1744,8 @@ private final class _WebInspectorFetchedResultsFlatRegistrationBox<
                 snapshot: placeholder
             ),
             performanceCounters: .init(),
-            publication: publication
+            publication: publication,
+            deliveryMode: deliveryMode
         )
         var counters = WebInspectorFetchedResultsQueryPerformanceCounters()
         active = try evaluateAll(
@@ -1625,7 +1792,8 @@ private final class _WebInspectorFetchedResultsSectionedRegistrationBox<
         sectionBy expression: Expression<Model.QueryValue, SectionName>,
         recordsByID: [Model.ID: SourceRecord],
         canonicalItemIDs: [Model.ID],
-        publication: Publication
+        publication: Publication,
+        deliveryMode: _WebInspectorFetchedResultsDeliveryMode
     ) throws {
         self.expression = expression
         let placeholder = WebInspectorFetchedResultsSnapshot<Model.ID, SectionName>(
@@ -1640,7 +1808,8 @@ private final class _WebInspectorFetchedResultsSectionedRegistrationBox<
                 snapshot: placeholder
             ),
             performanceCounters: .init(),
-            publication: publication
+            publication: publication,
+            deliveryMode: deliveryMode
         )
         var counters = WebInspectorFetchedResultsQueryPerformanceCounters()
         active = try evaluateAll(
@@ -1680,8 +1849,9 @@ private struct _WebInspectorFetchedResultsAnyRegistrationEntry<
             [Model.ID: WebInspectorFetchedResultsSourceRecord<Model>],
             [Model.ID]
         ) throws -> Void
-    let finishBatch: () -> _WebInspectorModelContextPendingQueryPublication?
-    let stagedFinish: ((any Error)?) -> _WebInspectorModelContextPendingQueryPublication
+    let finishBatch: () -> _WebInspectorModelContextStagedQueryDelivery?
+    let stagedFinish: ((any Error)?) -> _WebInspectorModelContextStagedQueryDelivery
+    let controllerLeaseIsCancelled: () -> Bool
 
     init<SectionName: Hashable & Sendable>(
         _ box: _WebInspectorFetchedResultsRegistrationBox<Model, SectionName>
@@ -1705,6 +1875,12 @@ private struct _WebInspectorFetchedResultsAnyRegistrationEntry<
         }
         stagedFinish = { error in
             box.stagedFinish(error)
+        }
+        controllerLeaseIsCancelled = {
+            if case let .controller(_, lease) = box.deliveryMode {
+                return lease.isCancelled
+            }
+            return false
         }
     }
 }

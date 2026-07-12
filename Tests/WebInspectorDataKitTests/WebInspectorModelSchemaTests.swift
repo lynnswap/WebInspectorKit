@@ -4,6 +4,65 @@ import Synchronization
 import Testing
 @testable import WebInspectorDataKit
 
+@MainActor
+@Test
+func schemaCommitPatchesModelThenFetchedResultsBackingBeforePublication() async throws {
+    let fixture = SchemaTestFixture()
+    fixture.source.setSnapshot(primary: [1: 10], secondary: [:])
+    let context = WebInspectorModelContext(
+        configuredFetchedResultsModelTypes: [
+            SchemaPrimaryModel.self,
+            SchemaSecondaryModel.self,
+        ],
+        isolation: MainActor.shared
+    )
+    let schemas = fixture.registry.makeContext(owner: context)
+    let initial = try await schemas.core.initial(
+        at: 0,
+        snapshot: emptySchemaCanonicalSnapshot()
+    ).stage(on: context.fetchedResultsQueryCore)
+    #expect(initial.publish(on: schemas.owner, owner: context))
+
+    let model: SchemaPrimaryModel = try #require(
+        schemas.owner.model(
+            for: SchemaPrimaryID(rawValue: 1),
+            owner: context
+        )
+    )
+    let controller = try await WebInspectorFetchedResultsController<
+        SchemaPrimaryModel,
+        Never
+    >(
+        modelContext: context,
+        isolation: MainActor.shared
+    )
+    var iterator = controller.updates().makeAsyncIterator()
+    _ = try await iterator.next()
+
+    fixture.source.setDelta(primary: [.set(id: 1, value: 11)])
+    let change = try await schemas.core.changes(
+        at: 1,
+        transaction: .init()
+    ).stage(on: context.fetchedResultsQueryCore)
+    #expect(model.value == 10)
+    #expect(controller.revision == 0)
+    #expect(change.publish(on: schemas.owner, owner: context))
+    #expect(model.value == 11)
+    #expect(controller.revision == 1)
+    #expect(controller.publicationRevisionForTesting == 1)
+    guard case let .changes(from, to, _, _, updatedIDs) = try await iterator.next() else {
+        Issue.record("Expected one schema-backed controller update.")
+        return
+    }
+    #expect(from == 0)
+    #expect(to == 1)
+    #expect(updatedIDs == [.init(rawValue: 1)])
+
+    await controller.close()
+    schemas.core.close().apply(on: schemas.owner, owner: context)
+    await context.close()
+}
+
 @Test
 func schemaRegistryPreservesSameContextIdentityWithoutEagerMaterialization() async throws {
     let fixture = SchemaTestFixture()

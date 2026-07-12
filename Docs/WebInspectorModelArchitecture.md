@@ -217,8 +217,9 @@ contracts:
   `NSFetchedResultsController` bind one observed result set to a specific model
   context. The context is part of query identity, not a global model cache.
 - SwiftData `ResultsObserver` additionally offers `modelContainer:`
-  convenience initializers. Each creates a new context from that container and
-  exposes it through the observer's `modelContext` property.
+  convenience initializers. DataKit deliberately keeps context creation and
+  close authority at the container call site instead of transferring an
+  implicitly created context to a results observer.
 - SwiftData exposes identifier-only fetch and context-local
   `model(for:)`/`registeredModel(for:)` operations.
 
@@ -230,8 +231,9 @@ ProxyKit model feed while attached; registration, replacement, detach, and
 close must be awaited. A public free-standing context initializer would either
 obscure that connection lifecycle and close authority or permit a second
 consumer of the single-consumer feed. Contexts therefore come only from
-`mainContext`, `makeContext(isolation:)`, or a fetched-results controller that
-explicitly asks that same container to create and own its child context.
+`mainContext` or `makeContext(isolation:)`. A fetched-results controller
+receives one of those already-vended contexts and never creates or closes a
+context itself.
 
 The container is constructed before native attachment, like a persistent-stack
 owner that exists before a store is loaded. This deliberate live-session
@@ -278,7 +280,7 @@ learn about persistent models or queries.
 | Structured model-event scope | ProxyKit model feed | Generation, best-available semantic target, protocol-agent target, navigation epoch, and optional exact DOM-, Runtime-, and Console-binding epochs travel separately from raw IDs. |
 | Persistent-model and context-resource command admission | `WebInspectorModelContainerCore` command gateway plus ProxyKit connection core | The Core atomically claims owner-valid operations before suspension; ProxyKit revalidates transport-visible binding authority at actual wire admission. |
 | Model-feed iteration and final Proxy close | `WebInspectorModelContainerCore` actor | Exactly one feed consumer and close authority. |
-| Context creation and registration | `WebInspectorModelContainer` | `mainContext`, `makeContext(isolation:)`, and the FRC container convenience all use the same factory transaction; there is no standalone context initializer. |
+| Context creation and registration | `WebInspectorModelContainer` | `mainContext` and `makeContext(isolation:)` use the same factory transaction; there is no standalone context initializer, and an FRC never becomes a context owner. |
 | Canonical current records and revision | `WebInspectorModelContainerCore` actor | Owns one pure-value `WebInspectorCanonicalModelStore`; no Observable models. |
 | Context subscription fan-out | container publication broker | Atomic initial snapshot plus ordered delta/reset. |
 | Context record mirror and query execution | one context-core actor per context | Immutable Sendable records only. |
@@ -987,23 +989,10 @@ where
         isolation: isolated (any Actor) = #isolation
     ) async throws where SectionName == Never
 
-    public convenience init(
-        fetchDescriptor: WebInspectorFetchDescriptor<Model> = .init(),
-        modelContainer: WebInspectorModelContainer,
-        isolation: isolated (any Actor) = #isolation
-    ) async throws where SectionName == Never
-
     public init(
         fetchDescriptor: WebInspectorFetchDescriptor<Model> = .init(),
         sectionBy: Expression<Model.QueryValue, SectionName>,
         modelContext: WebInspectorModelContext,
-        isolation: isolated (any Actor) = #isolation
-    ) async throws
-
-    public convenience init(
-        fetchDescriptor: WebInspectorFetchDescriptor<Model> = .init(),
-        sectionBy: Expression<Model.QueryValue, SectionName>,
-        modelContainer: WebInspectorModelContainer,
         isolation: isolated (any Actor) = #isolation
     ) async throws
 
@@ -1020,19 +1009,19 @@ where
 
 The controller stores IDs and section names only. A UI resolves a visible or
 selected ID with `modelContext`. The descriptor and that specific context
-together define the registration. A caller that passes `modelContext` retains
-context close authority; closing the controller unregisters only its query. A
-caller that passes `modelContainer` explicitly asks the controller to create
-and own one child context on `isolation`; closing that controller also closes
-its child context. In both cases the public `modelContext` property makes model
-identity and command ownership observable rather than hidden.
+together define the registration. The caller retains context close authority;
+closing the controller unregisters only its query and never closes its context.
+The public `modelContext` property makes model identity and command ownership
+observable rather than hidden.
 
 The built-in UIKit inspector passes the stable container `mainContext` so list,
-selection, and Detail share one context-local identity graph. The container
-convenience is the progressive-disclosure path for an independent observer.
-Both shapes follow SwiftData `ResultsObserver`; the explicit-context shape also
-matches Core Data `NSFetchedResultsController`. The context itself does not
-grow a parallel controller-factory API.
+selection, and Detail share one context-local identity graph. An independent
+observer first calls `makeContext(isolation:)`, then passes that context to its
+controllers and closes the context when the observer ends. This explicit
+context shape follows both SwiftData `ResultsObserver` and Core Data
+`NSFetchedResultsController` without giving the controller a second lifecycle
+responsibility. The context itself does not grow a parallel controller-factory
+API.
 
 #### Registration and owner delivery
 
@@ -1519,7 +1508,7 @@ New public declarations justified by the consumer code above:
 - `WebInspectorPersistentModel.QueryValue` — Sendable query boundary.
 - `WebInspectorFetchDescriptor` — generic query value.
 - `WebInspectorFetchedResultsController` — query lifecycle and current state,
-  with explicit-context and container-created-context initializers.
+  bound to one explicit container-vended context that it never closes.
 - Snapshot, update, change, and update-sequence values — UIKit/custom consumer
   application of initial/delta/reset.
 - `NetworkEntry` — the semantic Network list item.
@@ -1595,8 +1584,8 @@ integrated.
   closed container rejects new context creation.
 - First `mainContext` access after Container close returns the closed stable
   registration and does not create a live child.
-- An FRC initialized with a container owns and exposes one child context; an
-  FRC initialized with an existing context never closes that context.
+- An FRC initialized with `mainContext` or a custom container-vended context
+  exposes that same context and never closes it.
 - Contexts may be created while detached and receive the next attachment's
   initial state through the same registration.
 - Detach empties results with reset but does not terminate the same contexts,

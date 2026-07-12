@@ -11,7 +11,7 @@ package struct WebInspectorModelContextQueryBatch: Sendable {
     private let stageBody:
         @Sendable (
             isolated WebInspectorModelContextCore,
-            inout [_WebInspectorModelContextPendingQueryPublication]
+            inout _WebInspectorModelContextStagedQueryWork
         ) -> Void
 
     package init<Model: WebInspectorPersistentModel>(
@@ -19,16 +19,16 @@ package struct WebInspectorModelContextQueryBatch: Sendable {
     ) {
         canonicalRevision = batch.canonicalRevision
         modelTypeID = ObjectIdentifier(Model.self)
-        stageBody = { core, publications in
-            publications.append(contentsOf: core.stage(batch))
+        stageBody = { core, work in
+            work.append(contentsOf: core.stage(batch))
         }
     }
 
     fileprivate func stage(
         on core: isolated WebInspectorModelContextCore,
-        into publications: inout [_WebInspectorModelContextPendingQueryPublication]
+        into work: inout _WebInspectorModelContextStagedQueryWork
     ) {
-        stageBody(core, &publications)
+        stageBody(core, &work)
     }
 }
 
@@ -53,7 +53,7 @@ package final class WebInspectorModelContextQueryCommit: Sendable {
 
     private enum State: Sendable {
         case pending(
-            publications: [_WebInspectorModelContextPendingQueryPublication],
+            work: _WebInspectorModelContextStagedQueryWork,
             abort: AbortOperation,
             waiters: [Waiter]
         )
@@ -65,14 +65,14 @@ package final class WebInspectorModelContextQueryCommit: Sendable {
     }
 
     private enum PublishAction {
-        case publish([_WebInspectorModelContextPendingQueryPublication])
+        case publish(_WebInspectorModelContextStagedQueryWork)
         case lostToAbort
         case repeatedPublish
     }
 
     private enum AbortAction {
         case abort(
-            [_WebInspectorModelContextPendingQueryPublication],
+            _WebInspectorModelContextStagedQueryWork,
             AbortOperation
         )
         case awaitResolution
@@ -86,14 +86,14 @@ package final class WebInspectorModelContextQueryCommit: Sendable {
     fileprivate init(
         canonicalRevision: UInt64,
         token: UInt64,
-        publications: [_WebInspectorModelContextPendingQueryPublication],
+        work: _WebInspectorModelContextStagedQueryWork,
         abort: @escaping AbortOperation
     ) {
         self.canonicalRevision = canonicalRevision
         self.token = token
         state = Mutex(
             .pending(
-                publications: publications,
+                work: work,
                 abort: abort,
                 waiters: []
             )
@@ -106,12 +106,15 @@ package final class WebInspectorModelContextQueryCommit: Sendable {
     /// `canonicalRevision`. Returns `false` when an abort already won the
     /// transaction's terminal race.
     @discardableResult
-    package func publish() -> Bool {
+    package func publish(
+        applyingControllerOwnerMutations body:
+            ([WebInspectorFetchedResultsControllerOwnerMutationBatch]) -> Void
+    ) -> Bool {
         let action = state.withLock { state -> PublishAction in
             switch state {
-            case let .pending(publications, _, waiters):
+            case let .pending(work, _, waiters):
                 state = .resolving(.published, waiters: waiters)
-                return .publish(publications)
+                return .publish(work)
             case .resolving(.aborted, _), .resolved(.aborted):
                 return .lostToAbort
             case .resolving(.published, _), .resolved(.published):
@@ -120,8 +123,16 @@ package final class WebInspectorModelContextQueryCommit: Sendable {
         }
 
         switch action {
-        case let .publish(publications):
-            for publication in publications {
+        case let .publish(work):
+            body(work.controllerOwnerBatches)
+            precondition(
+                work.controllerOwnerBatches.allSatisfy(\.isConsumed),
+                "Every fetched-results controller owner batch must be consumed before publication."
+            )
+            for publication in work.controllerPublications {
+                publication.publish()
+            }
+            for publication in work.rawPublications {
                 publication.publish()
             }
             finish(.published)
@@ -135,6 +146,17 @@ package final class WebInspectorModelContextQueryCommit: Sendable {
         }
     }
 
+    /// Publishes a raw-query-only transaction.
+    @discardableResult
+    package func publish() -> Bool {
+        publish { batches in
+            precondition(
+                batches.isEmpty,
+                "A controller-mode query transaction requires owner delivery."
+            )
+        }
+    }
+
     /// Terminates every affected registration without exposing staged source.
     ///
     /// The context driver calls this when the materialization owner disappears
@@ -144,9 +166,9 @@ package final class WebInspectorModelContextQueryCommit: Sendable {
     ) async -> WebInspectorModelContextQueryCommitResolution {
         let action = state.withLock { state -> AbortAction in
             switch state {
-            case let .pending(publications, abort, waiters):
+            case let .pending(work, abort, waiters):
                 state = .resolving(.aborted, waiters: waiters)
-                return .abort(publications, abort)
+                return .abort(work, abort)
             case .resolving:
                 return .awaitResolution
             case let .resolved(resolution):
@@ -155,8 +177,14 @@ package final class WebInspectorModelContextQueryCommit: Sendable {
         }
 
         switch action {
-        case let .abort(publications, abort):
-            for publication in publications {
+        case let .abort(work, abort):
+            for batch in work.controllerOwnerBatches {
+                batch.discard()
+            }
+            for publication in work.controllerPublications {
+                publication.abort(throwing: error)
+            }
+            for publication in work.rawPublications {
                 publication.abort(throwing: error)
             }
             await abort(error)
@@ -194,9 +222,9 @@ package final class WebInspectorModelContextQueryCommit: Sendable {
             let resolution = state.withLock {
                 state -> WebInspectorModelContextQueryCommitResolution? in
                 switch state {
-                case let .pending(publications, abort, waiters):
+                case let .pending(work, abort, waiters):
                     state = .pending(
-                        publications: publications,
+                        work: work,
                         abort: abort,
                         waiters: waiters + [continuation]
                     )
@@ -259,22 +287,42 @@ package actor WebInspectorModelContextCore {
         case modelSources([ConfiguredModelSource])
     }
 
-    private let identity = _WebInspectorModelContextIdentity()
+    private struct OutstandingControllerAdmission {
+        let ownerID: WebInspectorFetchedResultsControllerOwnerID
+        let gate: WebInspectorFetchedResultsControllerAdmissionGate
+        let abandon:
+            @Sendable (
+                isolated WebInspectorModelContextCore
+            ) -> _WebInspectorModelContextStagedQueryDelivery?
+    }
+
+    private enum OutstandingOwnerDelivery {
+        case query(WebInspectorModelContextQueryCommit)
+        case replacement(WebInspectorFetchedResultsControllerReplacementCommit)
+    }
+
+    package let identity = _WebInspectorModelContextIdentity()
+    private let configuredModelTypeIDs: Set<ObjectIdentifier>?
     private var queryEngines: [ObjectIdentifier: any _WebInspectorAnyQueryEngine] = [:]
     private var lastCanonicalRevision: UInt64?
-    private var outstandingQueryCommit: WebInspectorModelContextQueryCommit?
+    private var outstandingOwnerDelivery: OutstandingOwnerDelivery?
     private var nextQueryCommitToken: UInt64 = 0
+    private var nextControllerOwnerID: UInt64 = 0
+    private var outstandingControllerAdmission: OutstandingControllerAdmission?
     private var sourceMode = SourceMode.undecided
     private var lifecycle = Lifecycle.open
 
-    package init() {}
+    package init(configuredModelTypeIDs: Set<ObjectIdentifier>? = nil) {
+        self.configuredModelTypeIDs = configuredModelTypeIDs
+    }
 
     package func register<Model: WebInspectorPersistentModel>(
         _ model: Model.Type,
         fetchDescriptor: WebInspectorFetchDescriptor<Model> = .init()
     ) async throws -> WebInspectorFetchedResultsQueryRegistration<Model, Never> {
         try ensureOpen()
-        await waitForOutstandingQueryCommit()
+        await waitForOutstandingControllerAdmission()
+        await waitForOutstandingOwnerDelivery()
         try ensureOpen()
         let publication = WebInspectorFetchedResultsQueryRegistration<
             Model,
@@ -300,7 +348,8 @@ package actor WebInspectorModelContextCore {
         sectionBy: Expression<Model.QueryValue, SectionName>
     ) async throws -> WebInspectorFetchedResultsQueryRegistration<Model, SectionName> {
         try ensureOpen()
-        await waitForOutstandingQueryCommit()
+        await waitForOutstandingControllerAdmission()
+        await waitForOutstandingOwnerDelivery()
         try ensureOpen()
         let publication = WebInspectorFetchedResultsQueryRegistration<
             Model,
@@ -318,6 +367,133 @@ package actor WebInspectorModelContextCore {
         )
     }
 
+    package func prepareControllerRegistration<
+        Model: WebInspectorPersistentModel
+    >(
+        _ model: Model.Type,
+        fetchDescriptor: WebInspectorFetchDescriptor<Model> = .init()
+    ) async throws -> WebInspectorFetchedResultsControllerRegistrationClaim<
+        Model,
+        Never
+    > {
+        let publication = WebInspectorFetchedResultsQueryRegistration<
+            Model,
+            Never
+        >.Publication()
+        return try await prepareControllerRegistration(
+            model,
+            fetchDescriptor: fetchDescriptor,
+            publication: publication
+        ) { engine, ownerID, lease in
+            try engine.registerController(
+                fetchDescriptor: fetchDescriptor,
+                publication: publication,
+                ownerID: ownerID,
+                lease: lease
+            )
+        }
+    }
+
+    package func prepareControllerRegistration<
+        Model: WebInspectorPersistentModel,
+        SectionName: Hashable & Sendable
+    >(
+        _ model: Model.Type,
+        fetchDescriptor: WebInspectorFetchDescriptor<Model> = .init(),
+        sectionBy: Expression<Model.QueryValue, SectionName>
+    ) async throws -> WebInspectorFetchedResultsControllerRegistrationClaim<
+        Model,
+        SectionName
+    > {
+        let publication = WebInspectorFetchedResultsQueryRegistration<
+            Model,
+            SectionName
+        >.Publication()
+        return try await prepareControllerRegistration(
+            model,
+            fetchDescriptor: fetchDescriptor,
+            publication: publication
+        ) { engine, ownerID, lease in
+            try engine.registerController(
+                fetchDescriptor: fetchDescriptor,
+                sectionBy: sectionBy,
+                publication: publication,
+                ownerID: ownerID,
+                lease: lease
+            )
+        }
+    }
+
+    private func prepareControllerRegistration<
+        Model: WebInspectorPersistentModel,
+        SectionName: Hashable & Sendable
+    >(
+        _ model: Model.Type,
+        fetchDescriptor: WebInspectorFetchDescriptor<Model>,
+        publication: WebInspectorFetchedResultsQueryRegistration<
+            Model,
+            SectionName
+        >.Publication,
+        install:
+            (
+                _WebInspectorFetchedResultsQueryEngine<Model>,
+                WebInspectorFetchedResultsControllerOwnerID,
+                WebInspectorFetchedResultsControllerRegistrationLease
+            ) throws -> WebInspectorFetchedResultsQueryRegistrationToken<
+                Model,
+                SectionName
+            >
+    ) async throws -> WebInspectorFetchedResultsControllerRegistrationClaim<
+        Model,
+        SectionName
+    > {
+        try ensureOpen()
+        await waitForOutstandingControllerAdmission()
+        await waitForOutstandingOwnerDelivery()
+        try ensureOpen()
+        try ensureControllerModelConfigured(model)
+        precondition(
+            nextControllerOwnerID < UInt64.max,
+            "A model context exhausted its fetched-results controller owner identity space."
+        )
+        nextControllerOwnerID += 1
+        let ownerID = WebInspectorFetchedResultsControllerOwnerID(
+            contextIdentity: identity,
+            rawValue: nextControllerOwnerID
+        )
+        let lease = WebInspectorFetchedResultsControllerRegistrationLease()
+        let engine = engine(for: model)
+        let token = try install(engine, ownerID, lease)
+        let state = try engine.state(
+            for: token,
+            publication: publication
+        )
+        let admission = WebInspectorFetchedResultsControllerAdmissionGate(
+            ownerID: ownerID
+        )
+        outstandingControllerAdmission = OutstandingControllerAdmission(
+            ownerID: ownerID,
+            gate: admission,
+            abandon: { core in
+                core.typedEngine(for: Model.self)?
+                    .close(token, publication: publication)
+            }
+        )
+        return WebInspectorFetchedResultsControllerRegistrationClaim(
+            contextCore: self,
+            token: token,
+            publication: publication,
+            ownerID: ownerID,
+            lease: lease,
+            initialBacking: WebInspectorFetchedResultsControllerBacking(
+                fetchDescriptor: fetchDescriptor,
+                revision: state.revision,
+                snapshot: state.snapshot
+            ),
+            admission: admission
+        )
+    }
+
     package func applyBatch<Model: WebInspectorPersistentModel>(
         _ batch: WebInspectorFetchedResultsSourceBatch<Model>
     ) async throws -> WebInspectorModelContextQueryCommit {
@@ -328,7 +504,8 @@ package actor WebInspectorModelContextCore {
         _ batches: [WebInspectorModelContextQueryBatch]
     ) async throws -> WebInspectorModelContextQueryCommit {
         try ensureOpen()
-        await waitForOutstandingQueryCommit()
+        await waitForOutstandingControllerAdmission()
+        await waitForOutstandingOwnerDelivery()
         try ensureOpen()
         switch sourceMode {
         case .undecided:
@@ -363,7 +540,8 @@ package actor WebInspectorModelContextCore {
         _ batches: [AnyWebInspectorModelSourceBatch]
     ) async throws -> WebInspectorModelContextTransactionCommit {
         try ensureOpen()
-        await waitForOutstandingQueryCommit()
+        await waitForOutstandingControllerAdmission()
+        await waitForOutstandingOwnerDelivery()
         try ensureOpen()
 
         let proposedSources = validatedModelSources(
@@ -441,9 +619,9 @@ package actor WebInspectorModelContextCore {
             "One context query transaction can stage each model type only once."
         )
 
-        var publications: [_WebInspectorModelContextPendingQueryPublication] = []
+        var work = _WebInspectorModelContextStagedQueryWork()
         for batch in batches {
-            batch.stage(on: self, into: &publications)
+            batch.stage(on: self, into: &work)
         }
         lastCanonicalRevision = canonicalRevision
 
@@ -457,7 +635,7 @@ package actor WebInspectorModelContextCore {
         let commit = WebInspectorModelContextQueryCommit(
             canonicalRevision: canonicalRevision,
             token: token,
-            publications: publications,
+            work: work,
             abort: { [weak self] error in
                 await self?.abortQueryCommit(
                     token: token,
@@ -465,7 +643,7 @@ package actor WebInspectorModelContextCore {
                 )
             }
         )
-        outstandingQueryCommit = commit
+        outstandingOwnerDelivery = .query(commit)
         return commit
     }
 
@@ -479,7 +657,9 @@ package actor WebInspectorModelContextCore {
             return
         }
 
-        await waitForOutstandingQueryCommit()
+        outstandingControllerAdmission?.gate.abandon()
+        await waitForOutstandingControllerAdmission()
+        await waitForOutstandingOwnerDelivery()
         guard lifecycle == .closing else {
             return
         }
@@ -488,6 +668,14 @@ package actor WebInspectorModelContextCore {
 
     package func isClosingForTesting() -> Bool {
         lifecycle == .closing
+    }
+
+    package func outstandingControllerAdmissionWaiterCountForTesting() -> Int {
+        outstandingControllerAdmission?.gate.waiterCountForTesting ?? 0
+    }
+
+    package func hasOutstandingControllerAdmissionForTesting() -> Bool {
+        outstandingControllerAdmission != nil
     }
 
     package func registrationCountForTesting<Model: WebInspectorPersistentModel>(
@@ -572,7 +760,8 @@ package actor WebInspectorModelContextCore {
         publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication
     ) async throws -> WebInspectorFetchedResultsQueryState<Model.ID, SectionName> {
         try ensureOpen()
-        await waitForOutstandingQueryCommit()
+        await waitForOutstandingControllerAdmission()
+        await waitForOutstandingOwnerDelivery()
         try ensureOpen()
         return try requiredEngine(for: Model.self).state(
             for: token,
@@ -588,7 +777,8 @@ package actor WebInspectorModelContextCore {
         publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication
     ) async throws -> WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication.UpdateSequence {
         try ensureOpen()
-        await waitForOutstandingQueryCommit()
+        await waitForOutstandingControllerAdmission()
+        await waitForOutstandingOwnerDelivery()
         try ensureOpen()
         return try requiredEngine(for: Model.self).subscribe(
             to: token,
@@ -607,7 +797,8 @@ package actor WebInspectorModelContextCore {
         WebInspectorFetchedResultsSnapshot<Model.ID, SectionName>
     > {
         try ensureOpen()
-        await waitForOutstandingQueryCommit()
+        await waitForOutstandingControllerAdmission()
+        await waitForOutstandingOwnerDelivery()
         try ensureOpen()
         return try requiredEngine(for: Model.self).rebase(
             rebaseToken,
@@ -625,7 +816,8 @@ package actor WebInspectorModelContextCore {
         publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication
     ) async throws -> WebInspectorFetchedResultsQueryCandidateToken<Model, SectionName> {
         try ensureOpen()
-        await waitForOutstandingQueryCommit()
+        await waitForOutstandingControllerAdmission()
+        await waitForOutstandingOwnerDelivery()
         try ensureOpen()
         return try requiredEngine(for: Model.self).prepareReplacement(
             descriptor,
@@ -643,16 +835,58 @@ package actor WebInspectorModelContextCore {
         publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication
     ) async throws -> WebInspectorFetchedResultsQueryState<Model.ID, SectionName> {
         try ensureOpen()
-        await waitForOutstandingQueryCommit()
+        await waitForOutstandingControllerAdmission()
+        await waitForOutstandingOwnerDelivery()
         try ensureOpen()
-        let (state, pendingPublication) = try requiredEngine(for: Model.self)
+        let (state, stagedDelivery) = try requiredEngine(for: Model.self)
             .commitReplacement(
                 candidateToken,
                 for: token,
                 publication: publication
             )
-        pendingPublication?.publish()
+        if let stagedDelivery {
+            precondition(
+                stagedDelivery.ownerBatch == nil,
+                "Raw query replacement cannot stage controller owner state."
+            )
+            stagedDelivery.publication?.publish()
+        }
         return state
+    }
+
+    func commitControllerReplacement<
+        Model: WebInspectorPersistentModel,
+        SectionName: Hashable & Sendable
+    >(
+        _ candidateToken: WebInspectorFetchedResultsQueryCandidateToken<Model, SectionName>,
+        for token: WebInspectorFetchedResultsQueryRegistrationToken<Model, SectionName>,
+        publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication
+    ) async throws -> WebInspectorFetchedResultsControllerReplacementCommit {
+        try ensureOpen()
+        await waitForOutstandingControllerAdmission()
+        await waitForOutstandingOwnerDelivery()
+        try ensureOpen()
+        try Task.checkCancellation()
+        let (_, stagedDelivery) = try requiredEngine(for: Model.self)
+            .commitReplacement(
+                candidateToken,
+                for: token,
+                publication: publication
+            )
+        guard let stagedDelivery,
+            case .controller = stagedDelivery.mode,
+            let ownerBatch = stagedDelivery.ownerBatch
+        else {
+            preconditionFailure(
+                "A controller descriptor replacement must stage one owner backing value."
+            )
+        }
+        let commit = WebInspectorFetchedResultsControllerReplacementCommit(
+            ownerBatch: ownerBatch,
+            publication: stagedDelivery.publication
+        )
+        outstandingOwnerDelivery = .replacement(commit)
+        return commit
     }
 
     func discardReplacement<
@@ -666,7 +900,8 @@ package actor WebInspectorModelContextCore {
         guard lifecycle == .open else {
             return
         }
-        await waitForOutstandingQueryCommit()
+        await waitForOutstandingControllerAdmission()
+        await waitForOutstandingOwnerDelivery()
         guard lifecycle == .open else {
             return
         }
@@ -690,18 +925,25 @@ package actor WebInspectorModelContextCore {
         guard lifecycle == .open else {
             return
         }
-        await waitForOutstandingQueryCommit()
+        await waitForOutstandingControllerAdmission()
+        await waitForOutstandingOwnerDelivery()
         guard lifecycle == .open else {
             return
         }
-        typedEngine(for: Model.self)?
-            .close(token, publication: publication)?
-            .publish()
+        if let stagedDelivery = typedEngine(for: Model.self)?
+            .close(token, publication: publication)
+        {
+            precondition(
+                stagedDelivery.ownerBatch == nil,
+                "Closing a query cannot stage controller owner state."
+            )
+            stagedDelivery.publication?.publish()
+        }
     }
 
     fileprivate func stage<Model: WebInspectorPersistentModel>(
         _ batch: WebInspectorFetchedResultsSourceBatch<Model>
-    ) -> [_WebInspectorModelContextPendingQueryPublication] {
+    ) -> _WebInspectorModelContextStagedQueryWork {
         engine(for: Model.self).applyBatch(batch)
     }
 
@@ -747,11 +989,85 @@ package actor WebInspectorModelContextCore {
         }
     }
 
-    private func waitForOutstandingQueryCommit() async {
-        while let commit = outstandingQueryCommit {
-            _ = await commit.waitUntilResolved()
-            if outstandingQueryCommit === commit {
-                outstandingQueryCommit = nil
+    package func resolveControllerAdmission(
+        _ ownerID: WebInspectorFetchedResultsControllerOwnerID,
+        admission: WebInspectorFetchedResultsControllerAdmissionGate
+    ) async -> WebInspectorFetchedResultsControllerAdmissionResolution {
+        precondition(
+            admission.ownerID == ownerID
+                && ownerID.contextIdentity === identity,
+            "A fetched-results controller admission carried a foreign owner identity."
+        )
+        guard let outstanding = outstandingControllerAdmission else {
+            admission.acknowledgeCoreResolution()
+            return await admission.value()
+        }
+        guard outstanding.ownerID == ownerID,
+            outstanding.gate === admission
+        else {
+            preconditionFailure(
+                "A fetched-results controller admission cannot resolve a different outstanding gate."
+            )
+        }
+        let resolution = await admission.value()
+        resolveOutstandingControllerAdmission(
+            outstanding,
+            resolution: resolution
+        )
+        admission.acknowledgeCoreResolution()
+        return resolution
+    }
+
+    private func waitForOutstandingControllerAdmission() async {
+        while let admission = outstandingControllerAdmission {
+            let resolution = await admission.gate.value()
+            resolveOutstandingControllerAdmission(
+                admission,
+                resolution: resolution
+            )
+        }
+    }
+
+    private func resolveOutstandingControllerAdmission(
+        _ admission: OutstandingControllerAdmission,
+        resolution: WebInspectorFetchedResultsControllerAdmissionResolution
+    ) {
+        guard let outstandingControllerAdmission,
+            outstandingControllerAdmission.ownerID == admission.ownerID,
+            outstandingControllerAdmission.gate === admission.gate
+        else {
+            return
+        }
+        self.outstandingControllerAdmission = nil
+        admission.gate.recordCoreResolution()
+        if resolution == .abandoned {
+            if let delivery = admission.abandon(self) {
+                precondition(
+                    delivery.ownerBatch == nil,
+                    "Abandoning an unactivated controller cannot stage owner state."
+                )
+                delivery.publication?.publish()
+            }
+        }
+    }
+
+    private func waitForOutstandingOwnerDelivery() async {
+        while let delivery = outstandingOwnerDelivery {
+            switch delivery {
+            case let .query(commit):
+                _ = await commit.waitUntilResolved()
+                if case let .query(current)? = outstandingOwnerDelivery,
+                    current === commit
+                {
+                    outstandingOwnerDelivery = nil
+                }
+            case let .replacement(commit):
+                await commit.waitUntilResolved()
+                if case let .replacement(current)? = outstandingOwnerDelivery,
+                    current === commit
+                {
+                    outstandingOwnerDelivery = nil
+                }
             }
         }
     }
@@ -760,7 +1076,7 @@ package actor WebInspectorModelContextCore {
         token: UInt64,
         throwing error: any Error
     ) {
-        guard let outstandingQueryCommit,
+        guard case let .query(outstandingQueryCommit)? = outstandingOwnerDelivery,
             outstandingQueryCommit.token == token
         else {
             preconditionFailure(
@@ -774,9 +1090,14 @@ package actor WebInspectorModelContextCore {
         throwing error: (any Error)?
     ) {
         lifecycle = .closed
-        outstandingQueryCommit = nil
-        let publications = queryEngines.values.flatMap {
-            $0.close(throwing: error)
+        outstandingOwnerDelivery = nil
+        let publications = queryEngines.values.flatMap { engine in
+            let work = engine.close(throwing: error)
+            precondition(
+                work.controllerOwnerBatches.isEmpty,
+                "Closing query engines cannot stage controller owner values."
+            )
+            return work.controllerPublications + work.rawPublications
         }
         queryEngines.removeAll(keepingCapacity: false)
         for publication in publications {
@@ -830,6 +1151,19 @@ package actor WebInspectorModelContextCore {
     private func ensureOpen() throws {
         if lifecycle != .open {
             throw WebInspectorFetchedResultsQueryError.closedRegistration
+        }
+    }
+
+    private func ensureControllerModelConfigured<
+        Model: WebInspectorPersistentModel
+    >(
+        _ model: Model.Type
+    ) throws {
+        guard let configuredModelTypeIDs else {
+            return
+        }
+        guard configuredModelTypeIDs.contains(ObjectIdentifier(model)) else {
+            throw WebInspectorFetchedResultsControllerError.unsupportedModel
         }
     }
 }

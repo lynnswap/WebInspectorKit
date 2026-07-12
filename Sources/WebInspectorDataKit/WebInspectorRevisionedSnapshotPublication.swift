@@ -192,6 +192,10 @@ package final class WebInspectorRevisionedSnapshotPublication<
         }
     }
 
+    var currentRevisionForTesting: UInt64 {
+        state.withLock { $0.revision }
+    }
+
     /// Registers one owner-supplied snapshot at the publisher's current revision.
     ///
     /// The semantic owner must capture `snapshot` and call this method in the

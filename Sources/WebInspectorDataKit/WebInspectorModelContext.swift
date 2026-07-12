@@ -590,8 +590,46 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
     @ObservationIgnored private var currentPage: WebInspectorTarget?
 
     @ObservationIgnored private let statusRelay: WebInspectorAsyncStreamRelay<Status>
+    @ObservationIgnored package let fetchedResultsQueryCore: WebInspectorModelContextCore
+    @ObservationIgnored private let fetchedResultsControllerRegistry:
+        WebInspectorFetchedResultsControllerOwnerRegistry
+    @ObservationIgnored private var fetchedResultsProjectionIsClosed: Bool
 
-    public init(configuration: Configuration = .init()) {
+    public convenience init(configuration: Configuration = .init()) {
+        self.init(
+            configuration: configuration,
+            fetchedResultsQueryCore: WebInspectorModelContextCore(
+                configuredModelTypeIDs: []
+            )
+        )
+    }
+
+    package convenience init(
+        configuration: Configuration = .init(),
+        configuredFetchedResultsModelTypes: [any WebInspectorPersistentModel.Type],
+        isolation: isolated (any Actor) = #isolation
+    ) {
+        self.init(
+            configuration: configuration,
+            fetchedResultsQueryCore: WebInspectorModelContextCore(
+                configuredModelTypeIDs: Set(
+                    configuredFetchedResultsModelTypes.map(ObjectIdentifier.init)
+                )
+            )
+        )
+        bindOwner(isolation)
+    }
+
+    private init(
+        configuration: Configuration,
+        fetchedResultsQueryCore: WebInspectorModelContextCore
+    ) {
+        self.fetchedResultsQueryCore = fetchedResultsQueryCore
+        fetchedResultsControllerRegistry =
+            WebInspectorFetchedResultsControllerOwnerRegistry(
+                contextIdentity: fetchedResultsQueryCore.identity
+            )
+        fetchedResultsProjectionIsClosed = false
         configuredDomains = configuration.domains
         cssInspectorBaselineStore = CSSInspectorBaselineStore()
         domState = DOMStateStore()
@@ -623,6 +661,65 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         isElementPickerTransitioning = false
         currentPage = nil
         statusRelay = WebInspectorAsyncStreamRelay()
+    }
+
+    package func applyFetchedResultsControllerOwnerMutations(
+        _ mutations: [WebInspectorFetchedResultsControllerOwnerMutationBatch]
+    ) {
+        preconditionOwnerIsolation()
+        fetchedResultsControllerRegistry.apply(mutations)
+    }
+
+    package func installFetchedResultsController<
+        Model: WebInspectorPersistentModel,
+        SectionName: Hashable & Sendable
+    >(
+        _ controller: WebInspectorFetchedResultsController<Model, SectionName>,
+        ownerID: WebInspectorFetchedResultsControllerOwnerID,
+        lease: WebInspectorFetchedResultsControllerRegistrationLease
+    ) throws {
+        preconditionOwnerIsolation()
+        guard fetchedResultsProjectionIsClosed == false else {
+            throw WebInspectorFetchedResultsControllerError.closed
+        }
+        fetchedResultsControllerRegistry.install(
+            controller,
+            ownerID: ownerID,
+            lease: lease
+        )
+    }
+
+    package var isFetchedResultsProjectionClosed: Bool {
+        preconditionOwnerIsolation()
+        return fetchedResultsProjectionIsClosed
+    }
+
+    package var fetchedResultsControllerOwnerCountForTesting: Int {
+        preconditionOwnerIsolation()
+        return fetchedResultsControllerRegistry.countForTesting
+    }
+
+    package func markFetchedResultsControllerClosing(
+        _ ownerID: WebInspectorFetchedResultsControllerOwnerID
+    ) {
+        preconditionOwnerIsolation()
+        fetchedResultsControllerRegistry.markClosing(ownerID)
+    }
+
+    package func removeFetchedResultsController(
+        _ ownerID: WebInspectorFetchedResultsControllerOwnerID
+    ) {
+        preconditionOwnerIsolation()
+        fetchedResultsControllerRegistry.remove(ownerID)
+    }
+
+    private nonisolated(nonsending) func closeFetchedResultsProjection() async {
+        guard fetchedResultsProjectionIsClosed == false else {
+            return
+        }
+        fetchedResultsProjectionIsClosed = true
+        fetchedResultsControllerRegistry.closeAll()
+        await fetchedResultsQueryCore.close()
     }
 
     @MainActor
@@ -802,6 +899,7 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
     public nonisolated(nonsending) func detach() async {
         preconditionOwnerIsolation()
         if containerRegistrationBinding != nil {
+            await closeFetchedResultsProjection()
             await closeContainerRegistration()
             return
         }
@@ -820,6 +918,7 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
 
     public nonisolated(nonsending) func close() async {
         preconditionOwnerIsolation()
+        await closeFetchedResultsProjection()
         if containerRegistrationBinding != nil {
             await closeContainerRegistration()
             return

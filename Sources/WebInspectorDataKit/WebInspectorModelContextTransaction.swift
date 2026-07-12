@@ -354,7 +354,10 @@ package final class WebInspectorModelContextTransactionCommit: Sendable {
     /// must consume each batch exactly once and must not reenter this commit.
     @discardableResult
     package func publish(
-        applyingOwnerMutations body: ([WebInspectorModelRecordOwnerMutationBatch]) -> Void
+        applyingOwnerMutations body: (
+            [WebInspectorModelRecordOwnerMutationBatch],
+            [WebInspectorFetchedResultsControllerOwnerMutationBatch]
+        ) -> Void
     ) -> Bool {
         state.withLock { state in
             switch state {
@@ -368,13 +371,14 @@ package final class WebInspectorModelContextTransactionCommit: Sendable {
                         )
                     }
                 }
-                body(mutations)
                 precondition(
-                    mutations.allSatisfy { $0.consumption.isConsumed },
-                    "Every model-record owner mutation batch must be consumed before query publication."
-                )
-                precondition(
-                    queryCommit.publish(),
+                    queryCommit.publish { controllerMutations in
+                        body(mutations, controllerMutations)
+                        precondition(
+                            mutations.allSatisfy { $0.consumption.isConsumed },
+                            "Every model-record owner mutation batch must be consumed before query publication."
+                        )
+                    },
                     "A query abort cannot interleave with the exclusive owner publication phase."
                 )
                 state = .resolved(.published)
@@ -388,6 +392,21 @@ package final class WebInspectorModelContextTransactionCommit: Sendable {
                     "A model-context transaction can be published only once."
                 )
             }
+        }
+    }
+
+    /// Publishes a transaction whose registrations are all package raw queries.
+    @discardableResult
+    package func publish(
+        applyingOwnerMutations body:
+            ([WebInspectorModelRecordOwnerMutationBatch]) -> Void
+    ) -> Bool {
+        publish { recordMutations, controllerMutations in
+            precondition(
+                controllerMutations.isEmpty,
+                "A controller-mode transaction requires fetched-results owner routing."
+            )
+            body(recordMutations)
         }
     }
 
