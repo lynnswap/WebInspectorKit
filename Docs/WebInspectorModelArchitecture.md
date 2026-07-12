@@ -1033,6 +1033,104 @@ Both shapes follow SwiftData `ResultsObserver`; the explicit-context shape also
 matches Core Data `NSFetchedResultsController`. The context itself does not
 grow a parallel controller-factory API.
 
+#### Registration and owner delivery
+
+The FRC owns one backing value containing its descriptor, revision, and current
+ID snapshot and is the public lifecycle owner of one revisioned publication.
+Its query box retains that same publication endpoint; a controller-mode
+registration never creates an internal query publication plus a second FRC
+broker. The context owner keeps only a weak heterogeneous routing registry; it
+does not mirror query or controller state.
+
+The context query core stages synchronous type-erased FRC owner-mutation
+batches in the same two-phase transaction as record work. An owner batch carries
+only the already-evaluated descriptor, revision, and ID snapshot needed to
+assign one controller's backing value. The query commit separately carries the
+delta for the shared controller-mode publication. Filtering, sorting,
+sectioning, windowing, and difference construction remain in the context-core
+actor. The context owner only assigns model/controller state; after every
+controller assignment, the query commit publishes its staged deltas through
+the corresponding shared publications. There is no per-FRC application Task,
+receipt, forwarding stream, second broker, or detached mutation Task.
+
+Async initialization uses an admission/activation gate. The context core first
+serializes with any outstanding owner transaction, creates the query
+registration and its initial state, and installs an outstanding admission gate
+before returning the claim. Later source revisions wait at that gate. On the
+context owner actor, initialization constructs the FRC, installs its weak owner
+registry entry, and then activates the claim. The core removes an abandoned
+claim before admitting later work. Consequently, a source revision ordered
+before registration is included in the initial snapshot, while one ordered
+after registration is delivered as the first contiguous delta; no pending
+controller-state buffer is required.
+
+For one canonical context transaction, publication order is fixed:
+
+1. install record-access state, invalidate resources, and patch materialized
+   models;
+2. assign every affected FRC's descriptor, revision, and ID snapshot;
+3. let the query commit publish all controller-mode deltas through the
+   publications shared by their query boxes and FRCs;
+4. publish the separate publications owned by any controller-free,
+   package-only raw query registrations;
+5. resolve the owner transaction and acknowledge the canonical revision to the
+   Container Core.
+
+The complete sequence is one synchronous context-owner turn followed by the
+Container acknowledgement. External update-sequence consumption is never an
+acknowledgement obligation; a waiting or slow subscriber cannot delay context,
+detach, attach, or close progress.
+
+`updates()` synchronously subscribes to the shared publication with the FRC
+backing value's current revision and snapshot in the same owner turn. Its slow-
+subscriber rebase closure returns to that registration in the context query
+core; it does not read a second controller snapshot or publication.
+
+#### Descriptor replacement
+
+Descriptor preparation and all predicate/sort/diff work remain in the context
+query core. A candidate continues to absorb source revisions until commit. Its
+commit creates an owner-delivery claim, blocks later registration, replacement,
+state reads, and source revisions, then updates the FRC backing value before any
+public delta is offered. A replacement whose descriptor changes but whose
+result does not keeps the existing FRC revision and snapshot and emits no public
+update.
+
+Cancellation or supersession before commit admission discards the candidate
+and publishes nothing. Once the owner-delivery claim is admitted, cancellation
+cannot roll back the committed query state; owner application and any public
+delta complete normally. A newer candidate can supersede only a prepared,
+unadmitted candidate. FRC or context close after admission marks the
+registration closing and consumes the outstanding owner-state batch without
+assigning it. The cancelled lease makes the query commit finish rather than
+publish that controller-mode value, so neither close nor the context-core
+transaction waits indefinitely.
+
+#### Retention and close authority
+
+```text
+FRC -> model context, registration lease, public publication
+model context -> context core, subscription driver, weak FRC routing entries
+context core -> query registration, lease state, the same publication endpoint
+```
+
+The context and context core never retain the FRC object. An explicit FRC close
+first cancels its lease, marks its weak routing entry as a closing tombstone,
+and terminates public subscribers. The tombstone remains until context-core
+unregistration has resolved any already-staged owner batch, then it is removed.
+An already-staged query commit recognizes the cancelled lease and suppresses
+that registration's shared-publication value after consuming its owner batch.
+Unexpected loss of an active, noncancelled owner is a context transaction
+failure rather than a silently dropped update. `deinit` may send synchronous
+cancellation as a backstop but does not own async unregister completion.
+
+An FRC initialized with an existing context unregisters only its query and
+never closes that context. The Container convenience owns the child context it
+created and closes that child only after its query has unregistered. Context
+close marks every registration closing before awaiting the context core, keeps
+the tombstones available to outstanding owner batches, then terminates all FRC
+registrations as part of the context's close completion.
+
 ### Snapshot and delta
 
 ```swift
@@ -1105,10 +1203,16 @@ without a snapshot. Only when the consumer actually dequeues that marker does
 it ask that publication edge's owner to rebase its opaque subscription token.
 In one owner-actor turn, the owner captures its current revision, snapshot, and
 where applicable query source cursor; it then rebases the subscriber to that
-revision and returns the snapshot directly. The edge driver exposes the result
-as `.initial` if it had not published one yet, or as `.reset` otherwise.
+revision and returns the snapshot directly. The update-sequence iterator
+exposes the result as `.initial` if it had not published one yet, or as `.reset`
+otherwise.
 Publications ordered after that owner turn are contiguous with the returned
 snapshot.
+
+For an FRC edge, the query core accepts a public rebase token only after any
+outstanding owner-delivery claim has resolved. The controller backing state is
+therefore already at the revision captured by the query core before the
+subscriber can observe the resulting public `.initial` or `.reset`.
 
 The two edges do not forward reset markers to one another. A slow FRC can lose
 query-update continuity while its context continues to consume every canonical
@@ -1282,15 +1386,21 @@ without exposing either through synchronous lookup or a fetched-results
 mailbox. While that transaction is outstanding, later query registration,
 descriptor replacement, state reads, and source revisions wait at the context
 core. The resulting commit is Sendable but contains no query engine or model;
-it carries the next record-access state, owner-model mutations, and one-shot
-publication values only.
+it carries the next record-access state, owner-model mutations, type-erased FRC
+owner-mutation batches, controller-mode shared-publication values, and
+package-only raw-publication values only.
 
 The context owner then commits the record-access gate, applies resource
-invalidation and materialized-model deletion or patching, and publishes the
-staged fetched-results values in one synchronous owner turn. A MainActor
-subscriber therefore cannot observe a new ID snapshot before the corresponding
-context-local model state is current. Only after that owner turn completes does
-the subscription driver acknowledge the canonical revision to the container.
+invalidation and materialized-model deletion or patching, assigns every staged
+FRC backing state, lets the query commit publish the corresponding shared
+controller-mode publications, and finally publishes the separate package-only
+raw publications in one synchronous owner turn. A MainActor subscriber
+therefore cannot observe a new ID snapshot before the corresponding
+context-local model and controller state are current. Only after that owner
+turn completes does the subscription driver acknowledge the canonical revision
+to the container. No FRC driver or async application receipt participates in
+this boundary, and a subscriber pulling its public sequence is not part of the
+acknowledgement.
 If materialization wins the synchronized record-gate race before a source
 commit, that commit includes the model mutation; if the source commit wins,
 materialization reads the final record. No update is lost in either order.
@@ -1589,6 +1699,14 @@ integrated.
   offset, and limit are correct.
 - Descriptor replacement is atomic; cancelled or superseded candidates never
   publish.
+- Registration admission can be paused between core claim and FRC installation;
+  source application waits, then begins with one contiguous initial/delta
+  boundary after activation.
+- An FRC public subscriber cannot receive a revision before the controller and
+  materialized models have applied it; package-only raw query publication and
+  Container acknowledgement occur afterward.
+- A descriptor-only replacement changes the controller descriptor without
+  advancing revision or publishing an empty update.
 - Predicate failure terminates only that registration.
 - A fast subscriber receives contiguous deltas without full snapshots.
 - A slow subscriber receives exactly one latest reset.
@@ -1597,6 +1715,8 @@ integrated.
   requests an owner-atomic rebase. Container and FRC publication edges exercise
   this contract independently with their respective snapshot owners.
 - Closing FRC unregisters immediately and terminates subscribers.
+- Closing an FRC or context with an outstanding owner batch consumes it through
+  the closing tombstone and does not strand query or Container acknowledgements.
 
 ### Network/UI contracts
 
