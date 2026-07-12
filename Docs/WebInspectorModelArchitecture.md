@@ -274,7 +274,8 @@ learn about persistent models or queries.
 | --- | --- | --- |
 | Inspection-session attach/detach/reattach | `WebInspectorModelContainer` / its Core actor | The stable container owns every adopted or pending Proxy and feed replacement; only native WKWebView operations are `@MainActor`. |
 | Physical targets, replies, capabilities | ProxyKit connection core | One source of transport truth. |
-| Structured model-event scope | ProxyKit model feed | Generation, target, navigation epoch, and optional exact DOM-binding epoch travel separately from raw IDs. |
+| Structured model-event scope | ProxyKit model feed | Generation, best-available semantic target, protocol-agent target, navigation epoch, and optional exact DOM-, Runtime-, and Console-binding epochs travel separately from raw IDs. |
+| Persistent-model and context-resource command admission | `WebInspectorModelContainerCore` command gateway plus ProxyKit connection core | The Core atomically claims owner-valid operations before suspension; ProxyKit revalidates transport-visible binding authority at actual wire admission. |
 | Model-feed iteration and final Proxy close | `WebInspectorModelContainerCore` actor | Exactly one feed consumer and close authority. |
 | Context creation and registration | `WebInspectorModelContainer` | `mainContext`, `makeContext(isolation:)`, and the FRC container convenience all use the same factory transaction; there is no standalone context initializer. |
 | Canonical current records and revision | `WebInspectorModelContainerCore` actor | Owns one pure-value `WebInspectorCanonicalModelStore`; no Observable models. |
@@ -309,6 +310,18 @@ and `RuntimeContext`; `NetworkEntry` joins them during the Network migration.
 
 - `RuntimeObject` is retained by a `RuntimeObjectGroup` or a Console message and
   represents a remote handle whose command lifetime belongs to that context.
+  Its resource owner captures the attachment, page generation, Runtime-agent
+  target, semantic navigation epoch, ProxyKit-issued Runtime-binding epoch, and
+  a command-gateway resource lease. The binding epoch advances on any observed
+  navigation that can discard a context owned by that agent and on agent-wide
+  execution-context clear; target/page changes establish a new binding. A
+  group bound to a `RuntimeContext.ID` also validates that the context is still
+  canonical before every command. A Console-owned object additionally captures
+  ProxyKit's Console-agent binding epoch and validates its owning
+  `ConsoleMessage.ID`; `Console.messagesCleared` advances only that Console
+  epoch, so it invalidates Console resources without releasing unrelated
+  evaluation groups. Runtime resources never reconstruct command authority
+  from an execution-context or object ID.
 - `CSSStyles` is loaded on demand by one context and its loading/failure/refresh
   phase belongs to the owning `DOMNode`.
 
@@ -316,6 +329,27 @@ Those resource types remain Observable, identifiable reference types where
 their consumers require it, but do not conform to
 `WebInspectorPersistentModel`, do not expose `QueryValue`, and are not accepted
 by generic fetch or `model(for:)`.
+
+Runtime-resource validation is not a preflight followed by an unprotected
+`await`. The existing `WebInspectorModelContainerCore` actor's command gateway
+validates the resource lease and atomically claims a tokenized command
+operation in one actor turn before its first suspension; it is not a second
+state actor. Navigation/clear/target invalidation, Console-owner deletion, and
+explicit object-group release are serialized through that same Core.
+An operation ordered before invalidation may reach transport as the earlier
+admission, but its completion remains subject to the owner check below; a later
+operation is rejected. Object-group release first invalidates the group token
+and then waits for already claimed operations before sending or completing the
+backend release.
+
+The claimed operation also carries transport-visible feed, page, agent-target,
+semantic-navigation, and Runtime-binding authority in ProxyKit's model-command
+authorization, plus Console-binding authority when the object is Console-owned.
+The ProxyKit connection core validates that authorization at actual command
+admission, closing the gap between the gateway claim and wire dispatch. On
+reply, the gateway consumes the operation token and revalidates its owner
+before exposing or materializing a result; an invalidated completion is
+reported as stale and cannot repopulate context resources.
 
 ## Stable identity contract
 
@@ -350,7 +384,9 @@ prevent aliasing and reject stale commands:
 - model-container/store identity;
 - container-assigned attachment generation;
 - ProxyKit page generation;
-- physical target where the WebKit ID is target-local;
+- physical protocol-agent target where the WebKit ID is allocated;
+- semantic target where frame/document content belongs when it differs from
+  that agent target;
 - exact DOM-binding epoch for DOM/CSS identities;
 - the domain's canonical raw identity or canonical container-assigned ordinal.
 
@@ -358,10 +394,10 @@ The concrete persistent identities are scoped as follows:
 
 | Model | Identity scope after container/store ID |
 | --- | --- |
-| `DOMNode` | attachment generation, Proxy page generation, physical target, exact DOM-binding epoch, raw node ID |
-| `NetworkRequest` | attachment generation, Proxy page generation, physical target, raw request ID |
+| `DOMNode` | attachment generation, Proxy page generation, semantic document target, protocol-agent target, exact DOM-binding epoch, raw node ID |
+| `NetworkRequest` | attachment generation, Proxy page generation, protocol-agent target, raw request ID |
 | `ConsoleMessage` | attachment generation, canonical container-assigned message ordinal |
-| `RuntimeContext` | attachment generation, Proxy page generation, physical target, raw execution-context ID |
+| `RuntimeContext` | attachment generation, Proxy page generation, Runtime-agent target, raw execution-context ID |
 | `NetworkEntry` | attachment generation, canonical container-assigned entry ID |
 
 ProxyKit supplies a structured model-event scope instead of encoding target
@@ -370,11 +406,49 @@ scope into raw IDs:
 ```swift
 package struct ModelEventScope: Sendable {
     let generation: WebInspectorPage.Generation
+    // The best semantic target carried by the event. Agent-wide or ID-only
+    // events use agentTarget and let the reducer resolve prior membership.
     let target: ModelTarget
+    // The physical agent that allocated raw IDs and accepts commands.
+    let agentTarget: ModelTarget
     let navigationEpoch: ModelNavigationEpoch
     let domBindingEpoch: ModelDOMBindingEpoch?
+    let runtimeBindingEpoch: ModelRuntimeBindingEpoch?
+    let consoleBindingEpoch: ModelConsoleBindingEpoch?
 }
 ```
+
+`target` and `agentTarget` are intentionally distinct. For example,
+`Runtime.executionContextCreated` can resolve its frame to one semantic target
+while the Runtime agent that allocated the context ID is the root page target.
+Destroy/clear events do not carry enough frame information to reconstruct that
+relationship later. ProxyKit therefore resolves the physical owner as
+`sourceTargetID ?? targetID ?? currentMainPageTargetID` before registry
+mutation and requires it to be a live model target before publishing. Root
+current-page events use that actual physical main-page target, not the direct
+API's prefix-omitting compatibility representation. Runtime identity and
+command routing use `agentTarget`; frame membership and navigation invalidation
+use `target` when the event carries that semantic information. Runtime
+destroy/clear events are ID-only or agent-wide, so their `target` is the agent
+target and the reducer resolves prior semantic membership from its canonical
+agent-target/raw-ID index. A Console message's `networkRequestId` is different:
+the protocol carries only the raw cross-domain reference and does not identify
+the allocating Network agent. The Console reducer therefore retains that raw
+reference, and the canonical Network owner resolves it through its
+attachment/page-wide raw-request index to the already scoped request ID. It
+never substitutes the Console event's `agentTarget`. A duplicate raw request
+ID in two live Network-agent scopes within one attachment/page violates that
+cross-domain protocol invariant and fails at the Network index owner. DataKit
+never infers either event target from a projected raw ID or from a later event.
+
+For `Network.requestWillBeSent`, the semantic request origin comes from the raw
+protocol `targetId` when present, otherwise from its `frameId` mapping, and only
+then from the event's best-available target. Later response/data/terminal
+events retain that stored membership by the agent-target/request-ID index;
+they do not overwrite it with a less specific event target. This matches
+WebKit's protocol definition of `targetId` as the context where the load
+originated while keeping response-body commands routed to the allocating
+Network agent.
 
 `ModelEventScope.generation` is the generation of one Proxy connection. A new
 Proxy may reuse the same raw value. On every attach attempt, the Container Core
@@ -391,6 +465,29 @@ target. ProxyKit maintains the exact DOM-binding epoch from
 that value. It does not issue a hidden `DOM.getDocument` merely to manufacture
 a DOM epoch for Network, Console, or Runtime.
 
+ProxyKit maintains one exact `ModelRuntimeBindingEpoch` per Runtime agent when
+either Runtime or Console is configured. Console messages can carry Runtime
+remote objects even when the public Runtime model domain is not requested, so
+`.console` has this Runtime lifecycle observation as an operational transport
+dependency; it does not implicitly expose persistent `RuntimeContext` models
+or Runtime queries. Agent-wide execution-context clear and any frame
+navigation that can discard an execution context owned by that agent advance
+the epoch; target/page replacement establishes a new binding. This
+conservative agent-wide advance also protects Console remote objects when
+their event did not identify a finer semantic frame. Runtime events and Runtime
+model-command authorization carry the value. This is transport command
+authority, not persistent `RuntimeContext.ID` scope: WebKit's context counter
+remains monotonic, while the binding epoch prevents a remote-object command
+from crossing a context-destruction boundary.
+
+While Console delivery is armed, ProxyKit similarly maintains one
+`ModelConsoleBindingEpoch` per Console agent and advances it before publishing
+`Console.messagesCleared`. Console message records and their remote-object
+resources capture that exact value. Only Console-owned Runtime command
+authorization carries it, so ConnectionCore can reject a command that races
+behind backend Console-group release without invalidating independent Runtime
+object groups.
+
 This distinction follows WebKit's own agent contracts. `Page.frameNavigated`
 reports that a frame is associated with a new loader. By contrast,
 `InspectorDOMAgent::setDocument` and `FrameDOMAgent::setDocument` suppress
@@ -402,7 +499,8 @@ The model feed establishes initial authority in this order:
 
 ```text
 reset(generation)
--> target snapshot containing each target's current navigation/DOM scope
+-> target snapshot containing each target's current
+   navigation/DOM/Runtime/Console scope
 -> per-domain replay or authoritative bootstrap boundary
 -> synchronization complete after every configured domain is authoritative
 ```
@@ -430,11 +528,13 @@ removal. A domain stops receiving projected IDs only in the same change that
 makes its DataKit reducer construct persistent IDs from structured scope.
 
 A Network initiator node becomes a resolvable `DOMNode.ID` only when its event
-scope carries an exact DOM-binding epoch. Otherwise the Network reducer may use
-an internal opaque grouping key made from generation, target, navigation epoch,
-and raw node ID, but it must not manufacture a persistent DOM identity or pass
-that key to `model(for:)`. The canonical store never decodes a target prefix
-from a raw protocol ID.
+scope carries an exact DOM-binding epoch. That identity includes both the
+semantic document target and the protocol agent that allocated the raw node
+ID. Otherwise the Network reducer may use an internal opaque grouping key made
+from generation, both targets, navigation epoch, and raw node ID, but it must
+not manufacture a persistent DOM identity or pass that key to `model(for:)`.
+`NetworkRequest.ID` independently uses the protocol-agent target. The canonical
+store never decodes a target prefix from a raw protocol ID.
 
 Navigation epoch is not part of `NetworkRequest.ID`: WebKit request IDs are
 monotonic within their generation/target scope and redirects deliberately keep
@@ -448,8 +548,8 @@ Current WebKit's `InjectedScriptManager::discardInjectedScripts()` clears its
 maps without resetting `m_nextInjectedScriptId`, and the current Runtime
 protocol publishes only context creation. ProxyKit may decode legacy
 destroy/clear events, but a later reuse of the same execution-context ID within
-one generation and physical target is still a protocol violation. A target or
-page-generation change already produces a distinct `RuntimeContext.ID`.
+one generation and Runtime-agent target is still a protocol violation. A target
+or page-generation change already produces a distinct `RuntimeContext.ID`.
 
 Consequences:
 
@@ -498,10 +598,15 @@ and close replay preserves the original chronology. Frames and errors are live
 append deltas rather than replay state.
 
 The model-feed Console-to-Network reference migrates in the same change as the
-Network ID. Console constructs `NetworkRequest.ID` from its raw request ID and
-the same structured generation/physical-target scope; it never parses the old
-target prefix. ProxyKit's direct typed APIs may keep their independent
-target-prefixed compatibility projection.
+Network ID. Console stores the protocol's raw `networkRequestId`; the canonical
+Network reducer resolves it through its attachment/page-wide raw-ID index and
+publishes the exact `NetworkRequest.ID`, including the allocating Network-agent
+scope. A message that arrives before its request keeps an unresolved canonical
+reference that the Network insert resolves in the same Core; no context-local
+model guesses the route. This mirrors WebKit's session-wide
+`NetworkManager._resourceRequestIdentifierMap` and never parses the old target
+prefix. ProxyKit's direct typed APIs may keep their independent target-prefixed
+compatibility projection.
 
 The context strongly retains materialized active models until deletion,
 generation reset, or context close. This makes same-context identity an actual
@@ -768,6 +873,15 @@ let descriptor = WebInspectorFetchDescriptor<NetworkEntry>(
 Predicate evaluation errors fail initial registration or terminate that query
 registration. They never fall back to evaluating on the model-context actor.
 
+An empty `sortBy` preserves the canonical model order supplied by the schema.
+When explicit descriptors compare equal, that same order is the implicit final
+tiebreaker. The query core decorates records with their stable canonical rank;
+it does not depend on sort stability or require every model ID to be
+`Comparable`. Section names are evaluated after that stable ordering and
+sections appear in first-occurrence order, matching SwiftData's
+`ResultsObserver` collection semantics without restricting `SectionName` to
+`String`.
+
 ### Fetched-results controller
 
 The controller is the actual query-registration and publication owner, not a
@@ -1031,7 +1145,7 @@ public final class NetworkEntry: WebInspectorPersistentModel {
         public let startedAt: Double
         public let resourceCategories:
             Set<NetworkRequest.ResourceCategory>
-        public let searchText: String
+        public let searchTexts: [String]
     }
 
     public let id: ID
@@ -1041,11 +1155,19 @@ public final class NetworkEntry: WebInspectorPersistentModel {
 
 The Network reducer owns entry membership and chronology. Redirect hops that
 WebKit reports under one request remain content of that request. Related media
-or initiator requests become multiple request IDs in one entry. Filters match
-entry query values; they do not mutate membership.
+or initiator requests become multiple request IDs in one entry. `searchTexts`
+stays aligned with those members, so a filter can use `contains(where:)` and
+does not rebuild one ever-growing concatenated String on every segment
+response. Filters match entry query values; they do not mutate membership.
 
 Adding or updating a member updates the existing `NetworkEntry` instance in
 place in every context where it has been materialized.
+
+This follows WebInspectorUI's incremental shape: resources are updated in
+place, DOM-node groups use sorted insertion, pending insert/update work is
+batched before layout, and query text is cached per resource. The canonical
+store likewise updates entry counters and member-local query values
+incrementally; normal transfer/frame updates never rescan or resort a group.
 
 ## Data flow and execution
 
@@ -1103,6 +1225,8 @@ one object on the context owner. It does not scan or sort a collection.
 | Context reset acknowledgement | canonical reset/terminal | container core until each obligation completes | context apply or unregister | detach/attach/close barrier |
 | Query registration | FRC creation | FRC + context core | FRC/context | unregister acknowledgement; a container-created child context closes with its FRC |
 | Update subscriber | `updates()` | subscriber sequence | iterator/subscriber | mailbox terminal |
+| Runtime command operation | command-gateway lease claim | container gateway + ProxyKit command task | gateway invalidation or reply | transport admission/reply and stale-result validation complete |
+| Runtime object group | context resource creation | owning context model/resource | owning context or explicit release | token invalidated, admitted commands quiesced, backend release completed |
 | Media player | Network Detail | Detail controller | Detail controller | player teardown on rebind/dismiss |
 
 Container detach is idempotent and nonterminal:
@@ -1308,6 +1432,15 @@ integrated.
   the first delivered delta is ordered after the authoritative snapshot.
 - Network/Console/Runtime replay events remain ordered before their replay
   completion marker and are not overwritten by later bootstrap state.
+- A Runtime event whose execution target differs from its agent target retains
+  both identities; create/destroy/clear and command routing use the same agent
+  target without parsing a projected raw ID.
+- A Network request whose protocol `targetId` origin differs from its Network
+  agent retains both; later ID-only events preserve the original semantic
+  membership and response-body commands use the agent target.
+- A DOM node whose semantic document target differs from its allocating agent
+  retains both targets in its persistent identity; equal raw IDs from distinct
+  agents never alias.
 - A loader navigation advances that target's navigation epoch without
   surfacing transient context failure; physical current-page replacement
   advances page generation.
@@ -1327,6 +1460,18 @@ integrated.
 - `registeredModel(for:)` does not materialize.
 - `model(for:)` materializes once and applies later record changes in place.
 - Deleted/reset models are rejected by command ownership checks.
+- Runtime remote objects are rejected after semantic navigation, execution-
+  context clear/destroy, target loss, explicit group release, or attachment
+  reset before a command reaches ProxyKit. Console-owned remote objects are
+  also rejected after their owning message is cleared.
+- Adversarial suspension between Runtime gateway claim and ProxyKit admission
+  cannot admit a command behind navigation, Runtime clear, Console clear, or
+  explicit group release. An earlier claimed operation either quiesces before
+  backend group release or returns a stale completion that cannot materialize
+  new resources.
+- A `.console`-only configuration still observes Runtime binding invalidation;
+  `executionContextsCleared` makes existing Console-owned remote objects stale
+  without exposing the persistent Runtime model domain.
 - Unmaterialized record updates do not mutate the context owner actor.
 - Runtime objects and loaded CSS styles are absent from generic fetch and
   `model(for:)` at compile time.
@@ -1358,9 +1503,13 @@ integrated.
   still invalid.
 - Clear tombstones suppress late request/WebSocket events until generation
   reset and reject a new live start with the same scoped identity.
-- A Console network-request reference resolves to the same scoped
-  `NetworkRequest.ID` without target-prefix parsing.
+- A Console network-request reference resolves through the canonical Network
+  raw-ID index to the same scoped `NetworkRequest.ID` even when the Console and
+  Network agents differ, without target-prefix parsing. A live cross-agent raw
+  ID collision fails at that index instead of selecting either request.
 - Related media/initiator requests form one stable `NetworkEntry`.
+- Group membership, member-local `searchTexts`, and category counters update
+  incrementally; transfer/WebSocket-frame updates do not rescan the group.
 - The Network diffable list has one item per entry and one UIKit section.
 - Detail displays all request members in chronological order.
 - The player controller is present from initial Detail rendering when preview
