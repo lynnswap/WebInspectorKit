@@ -2749,6 +2749,33 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func compactContainerDoesNotRepushDetailWhenUserPopOvertakesPushCompletion() async throws {
+        let context = makeContext()
+        let request = try #require(
+            await applyRequest(to: context, requestID: "1", url: "https://example.com/app.js")
+        )
+        let model = try await NetworkPanelModel.make(context: context)
+        let listViewController = NetworkListViewController(model: model)
+        let detailViewController = makeNetworkDetailViewController(model: model)
+        let navigationController = NetworkCompactNavigationController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+        model.selectRequest(request)
+        navigationController.syncStackForTesting()
+        #expect(navigationController.viewControllers == [listViewController, detailViewController])
+
+        let poppedViewController =
+            navigationController.popDetailWhilePushTransitionIsStillTrackedForTesting()
+        navigationController.syncStackForTesting()
+
+        #expect(poppedViewController === detailViewController)
+        #expect(model.selectedRequest == nil)
+        #expect(navigationController.viewControllers == [listViewController])
+    }
+
+    @Test
     func compactContainerKeepsDetailAfterCancelledUserPop() async throws {
         let context = makeContext()
         let request = try #require(

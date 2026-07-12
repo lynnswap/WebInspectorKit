@@ -240,7 +240,7 @@ package final class NetworkCompactNavigationController: UINavigationController, 
         }
         activeTransition = nil
         guard shownTarget == transition.target else {
-            return true
+            return false
         }
 
         commit(transition)
@@ -313,6 +313,33 @@ extension NetworkCompactNavigationController {
 
     package func syncStackForTesting() {
         syncStack(to: desiredStackTarget(), animated: false)
+    }
+
+    @discardableResult
+    package func popDetailWhilePushTransitionIsStillTrackedForTesting()
+        -> UIViewController?
+    {
+        guard viewControllers.last === detailViewController else {
+            return nil
+        }
+
+        activeTransition = StackTransition(
+            target: .detail,
+            removesDetail: false,
+            selectionCommit: .none
+        )
+        navigationController(
+            self,
+            willShow: listViewController,
+            animated: false
+        )
+        let poppedViewController = popViewController(animated: false)
+        navigationController(
+            self,
+            didShow: listViewController,
+            animated: false
+        )
+        return poppedViewController
     }
 
     @discardableResult
