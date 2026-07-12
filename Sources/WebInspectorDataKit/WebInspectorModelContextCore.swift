@@ -296,6 +296,13 @@ package actor WebInspectorModelContextCore {
             ) -> _WebInspectorModelContextStagedQueryDelivery?
     }
 
+    private struct OutstandingModelFetchAdmission {
+        let ownerID: WebInspectorModelFetchOwnerID
+        let gate: WebInspectorModelContextOwnerAdmissionGate<
+            WebInspectorModelFetchOwnerID
+        >
+    }
+
     private enum OutstandingOwnerDelivery {
         case query(WebInspectorModelContextQueryCommit)
         case replacement(WebInspectorFetchedResultsControllerReplacementCommit)
@@ -309,6 +316,8 @@ package actor WebInspectorModelContextCore {
     private var nextQueryCommitToken: UInt64 = 0
     private var nextControllerOwnerID: UInt64 = 0
     private var outstandingControllerAdmission: OutstandingControllerAdmission?
+    private var nextModelFetchOwnerID: UInt64 = 0
+    private var outstandingModelFetchAdmission: OutstandingModelFetchAdmission?
     private var sourceMode = SourceMode.undecided
     private var lifecycle = Lifecycle.open
 
@@ -321,7 +330,7 @@ package actor WebInspectorModelContextCore {
         fetchDescriptor: WebInspectorFetchDescriptor<Model> = .init()
     ) async throws -> WebInspectorFetchedResultsQueryRegistration<Model, Never> {
         try ensureOpen()
-        await waitForOutstandingControllerAdmission()
+        await waitForOutstandingOwnerAdmission()
         await waitForOutstandingOwnerDelivery()
         try ensureOpen()
         let publication = WebInspectorFetchedResultsQueryRegistration<
@@ -348,7 +357,7 @@ package actor WebInspectorModelContextCore {
         sectionBy: Expression<Model.QueryValue, SectionName>
     ) async throws -> WebInspectorFetchedResultsQueryRegistration<Model, SectionName> {
         try ensureOpen()
-        await waitForOutstandingControllerAdmission()
+        await waitForOutstandingOwnerAdmission()
         await waitForOutstandingOwnerDelivery()
         try ensureOpen()
         let publication = WebInspectorFetchedResultsQueryRegistration<
@@ -448,10 +457,10 @@ package actor WebInspectorModelContextCore {
         SectionName
     > {
         try ensureOpen()
-        await waitForOutstandingControllerAdmission()
+        await waitForOutstandingOwnerAdmission()
         await waitForOutstandingOwnerDelivery()
         try ensureOpen()
-        try ensureControllerModelConfigured(model)
+        try ensureModelConfigured(model)
         precondition(
             nextControllerOwnerID < UInt64.max,
             "A model context exhausted its fetched-results controller owner identity space."
@@ -494,6 +503,56 @@ package actor WebInspectorModelContextCore {
         )
     }
 
+    package func fetchIdentifiers<Model: WebInspectorPersistentModel>(
+        _ model: Model.Type,
+        fetchDescriptor: WebInspectorFetchDescriptor<Model>
+    ) async throws -> [Model.ID] {
+        try ensureOpen()
+        await waitForOutstandingOwnerAdmission()
+        await waitForOutstandingOwnerDelivery()
+        try ensureOpen()
+        try ensureModelConfigured(model)
+        return try engine(for: model).fetchIdentifiers(
+            fetchDescriptor: fetchDescriptor
+        )
+    }
+
+    package func prepareModelFetch<Model: WebInspectorPersistentModel>(
+        _ model: Model.Type,
+        fetchDescriptor: WebInspectorFetchDescriptor<Model>
+    ) async throws -> WebInspectorModelFetchClaim<Model> {
+        try ensureOpen()
+        await waitForOutstandingOwnerAdmission()
+        await waitForOutstandingOwnerDelivery()
+        try ensureOpen()
+        try ensureModelConfigured(model)
+        let ids = try engine(for: model).fetchIdentifiers(
+            fetchDescriptor: fetchDescriptor
+        )
+        precondition(
+            nextModelFetchOwnerID < UInt64.max,
+            "A model context exhausted its one-shot fetch identity space."
+        )
+        nextModelFetchOwnerID += 1
+        let ownerID = WebInspectorModelFetchOwnerID(
+            contextIdentity: identity,
+            rawValue: nextModelFetchOwnerID
+        )
+        let admission = WebInspectorModelContextOwnerAdmissionGate(
+            ownerID: ownerID
+        )
+        outstandingModelFetchAdmission = OutstandingModelFetchAdmission(
+            ownerID: ownerID,
+            gate: admission
+        )
+        return WebInspectorModelFetchClaim(
+            contextCore: self,
+            ownerID: ownerID,
+            admission: admission,
+            ids: ids
+        )
+    }
+
     package func applyBatch<Model: WebInspectorPersistentModel>(
         _ batch: WebInspectorFetchedResultsSourceBatch<Model>
     ) async throws -> WebInspectorModelContextQueryCommit {
@@ -504,7 +563,7 @@ package actor WebInspectorModelContextCore {
         _ batches: [WebInspectorModelContextQueryBatch]
     ) async throws -> WebInspectorModelContextQueryCommit {
         try ensureOpen()
-        await waitForOutstandingControllerAdmission()
+        await waitForOutstandingOwnerAdmission()
         await waitForOutstandingOwnerDelivery()
         try ensureOpen()
         switch sourceMode {
@@ -540,7 +599,7 @@ package actor WebInspectorModelContextCore {
         _ batches: [AnyWebInspectorModelSourceBatch]
     ) async throws -> WebInspectorModelContextTransactionCommit {
         try ensureOpen()
-        await waitForOutstandingControllerAdmission()
+        await waitForOutstandingOwnerAdmission()
         await waitForOutstandingOwnerDelivery()
         try ensureOpen()
 
@@ -658,7 +717,8 @@ package actor WebInspectorModelContextCore {
         }
 
         outstandingControllerAdmission?.gate.abandon()
-        await waitForOutstandingControllerAdmission()
+        outstandingModelFetchAdmission?.gate.abandon()
+        await waitForOutstandingOwnerAdmission()
         await waitForOutstandingOwnerDelivery()
         guard lifecycle == .closing else {
             return
@@ -676,6 +736,10 @@ package actor WebInspectorModelContextCore {
 
     package func hasOutstandingControllerAdmissionForTesting() -> Bool {
         outstandingControllerAdmission != nil
+    }
+
+    package func hasOutstandingModelFetchAdmissionForTesting() -> Bool {
+        outstandingModelFetchAdmission != nil
     }
 
     package func registrationCountForTesting<Model: WebInspectorPersistentModel>(
@@ -760,7 +824,7 @@ package actor WebInspectorModelContextCore {
         publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication
     ) async throws -> WebInspectorFetchedResultsQueryState<Model.ID, SectionName> {
         try ensureOpen()
-        await waitForOutstandingControllerAdmission()
+        await waitForOutstandingOwnerAdmission()
         await waitForOutstandingOwnerDelivery()
         try ensureOpen()
         return try requiredEngine(for: Model.self).state(
@@ -777,7 +841,7 @@ package actor WebInspectorModelContextCore {
         publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication
     ) async throws -> WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication.UpdateSequence {
         try ensureOpen()
-        await waitForOutstandingControllerAdmission()
+        await waitForOutstandingOwnerAdmission()
         await waitForOutstandingOwnerDelivery()
         try ensureOpen()
         return try requiredEngine(for: Model.self).subscribe(
@@ -797,7 +861,7 @@ package actor WebInspectorModelContextCore {
         WebInspectorFetchedResultsSnapshot<Model.ID, SectionName>
     > {
         try ensureOpen()
-        await waitForOutstandingControllerAdmission()
+        await waitForOutstandingOwnerAdmission()
         await waitForOutstandingOwnerDelivery()
         try ensureOpen()
         return try requiredEngine(for: Model.self).rebase(
@@ -816,7 +880,7 @@ package actor WebInspectorModelContextCore {
         publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication
     ) async throws -> WebInspectorFetchedResultsQueryCandidateToken<Model, SectionName> {
         try ensureOpen()
-        await waitForOutstandingControllerAdmission()
+        await waitForOutstandingOwnerAdmission()
         await waitForOutstandingOwnerDelivery()
         try ensureOpen()
         return try requiredEngine(for: Model.self).prepareReplacement(
@@ -835,7 +899,7 @@ package actor WebInspectorModelContextCore {
         publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication
     ) async throws -> WebInspectorFetchedResultsQueryState<Model.ID, SectionName> {
         try ensureOpen()
-        await waitForOutstandingControllerAdmission()
+        await waitForOutstandingOwnerAdmission()
         await waitForOutstandingOwnerDelivery()
         try ensureOpen()
         let (state, stagedDelivery) = try requiredEngine(for: Model.self)
@@ -863,7 +927,7 @@ package actor WebInspectorModelContextCore {
         publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication
     ) async throws -> WebInspectorFetchedResultsControllerReplacementCommit {
         try ensureOpen()
-        await waitForOutstandingControllerAdmission()
+        await waitForOutstandingOwnerAdmission()
         await waitForOutstandingOwnerDelivery()
         try ensureOpen()
         try Task.checkCancellation()
@@ -900,7 +964,7 @@ package actor WebInspectorModelContextCore {
         guard lifecycle == .open else {
             return
         }
-        await waitForOutstandingControllerAdmission()
+        await waitForOutstandingOwnerAdmission()
         await waitForOutstandingOwnerDelivery()
         guard lifecycle == .open else {
             return
@@ -925,7 +989,7 @@ package actor WebInspectorModelContextCore {
         guard lifecycle == .open else {
             return
         }
-        await waitForOutstandingControllerAdmission()
+        await waitForOutstandingOwnerAdmission()
         await waitForOutstandingOwnerDelivery()
         guard lifecycle == .open else {
             return
@@ -1018,13 +1082,55 @@ package actor WebInspectorModelContextCore {
         return resolution
     }
 
-    private func waitForOutstandingControllerAdmission() async {
-        while let admission = outstandingControllerAdmission {
-            let resolution = await admission.gate.value()
-            resolveOutstandingControllerAdmission(
-                admission,
-                resolution: resolution
+    package func resolveModelFetchAdmission(
+        _ ownerID: WebInspectorModelFetchOwnerID,
+        admission:
+            WebInspectorModelContextOwnerAdmissionGate<WebInspectorModelFetchOwnerID>
+    ) async -> WebInspectorModelContextOwnerAdmissionResolution {
+        precondition(
+            admission.ownerID == ownerID
+                && ownerID.contextIdentity === identity,
+            "A one-shot model fetch admission carried a foreign owner identity."
+        )
+        guard let outstanding = outstandingModelFetchAdmission else {
+            admission.acknowledgeCoreResolution()
+            return await admission.value()
+        }
+        guard outstanding.ownerID == ownerID,
+            outstanding.gate === admission
+        else {
+            preconditionFailure(
+                "A one-shot model fetch cannot resolve a different outstanding admission."
             )
+        }
+        let resolution = await admission.value()
+        resolveOutstandingModelFetchAdmission(
+            outstanding,
+            resolution: resolution
+        )
+        admission.acknowledgeCoreResolution()
+        return resolution
+    }
+
+    private func waitForOutstandingOwnerAdmission() async {
+        while true {
+            if let admission = outstandingControllerAdmission {
+                let resolution = await admission.gate.value()
+                resolveOutstandingControllerAdmission(
+                    admission,
+                    resolution: resolution
+                )
+                continue
+            }
+            if let admission = outstandingModelFetchAdmission {
+                let resolution = await admission.gate.value()
+                resolveOutstandingModelFetchAdmission(
+                    admission,
+                    resolution: resolution
+                )
+                continue
+            }
+            return
         }
     }
 
@@ -1049,6 +1155,20 @@ package actor WebInspectorModelContextCore {
                 delivery.publication?.publish()
             }
         }
+    }
+
+    private func resolveOutstandingModelFetchAdmission(
+        _ admission: OutstandingModelFetchAdmission,
+        resolution _: WebInspectorModelContextOwnerAdmissionResolution
+    ) {
+        guard let outstandingModelFetchAdmission,
+            outstandingModelFetchAdmission.ownerID == admission.ownerID,
+            outstandingModelFetchAdmission.gate === admission.gate
+        else {
+            return
+        }
+        self.outstandingModelFetchAdmission = nil
+        admission.gate.recordCoreResolution()
     }
 
     private func waitForOutstandingOwnerDelivery() async {
@@ -1154,7 +1274,7 @@ package actor WebInspectorModelContextCore {
         }
     }
 
-    private func ensureControllerModelConfigured<
+    private func ensureModelConfigured<
         Model: WebInspectorPersistentModel
     >(
         _ model: Model.Type
@@ -1163,7 +1283,7 @@ package actor WebInspectorModelContextCore {
             return
         }
         guard configuredModelTypeIDs.contains(ObjectIdentifier(model)) else {
-            throw WebInspectorFetchedResultsControllerError.unsupportedModel
+            throw WebInspectorModelContextQueryError.unsupportedModel
         }
     }
 }

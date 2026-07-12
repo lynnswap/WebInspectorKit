@@ -51,116 +51,17 @@ package struct WebInspectorFetchedResultsControllerBacking<
 }
 
 public enum WebInspectorFetchedResultsControllerError: Error, Equatable, Sendable {
-    /// The context's schema inventory does not include the requested model.
-    case unsupportedModel
     /// The controller has begun or completed closing.
     case closed
 }
 
-package enum WebInspectorFetchedResultsControllerAdmissionResolution: Equatable, Sendable {
-    case activated
-    case abandoned
-}
+package typealias WebInspectorFetchedResultsControllerAdmissionResolution =
+    WebInspectorModelContextOwnerAdmissionResolution
 
-package final class WebInspectorFetchedResultsControllerAdmissionGate: Sendable {
-    private typealias Waiter = CheckedContinuation<
-        WebInspectorFetchedResultsControllerAdmissionResolution,
-        Never
+package typealias WebInspectorFetchedResultsControllerAdmissionGate =
+    WebInspectorModelContextOwnerAdmissionGate<
+        WebInspectorFetchedResultsControllerOwnerID
     >
-
-    private struct State: Sendable {
-        var resolution: WebInspectorFetchedResultsControllerAdmissionResolution?
-        var waiters: [Waiter] = []
-        var coreResolutionWasRecorded = false
-        var claimantAcknowledgedCoreResolution = false
-    }
-
-    private let state = Mutex(State())
-    package let ownerID: WebInspectorFetchedResultsControllerOwnerID
-
-    package init(ownerID: WebInspectorFetchedResultsControllerOwnerID) {
-        self.ownerID = ownerID
-    }
-
-    @discardableResult
-    package func activate() -> Bool {
-        resolve(.activated)
-    }
-
-    @discardableResult
-    package func abandon() -> Bool {
-        resolve(.abandoned)
-    }
-
-    package func value() async -> WebInspectorFetchedResultsControllerAdmissionResolution {
-        await withCheckedContinuation { continuation in
-            let resolution = state.withLock {
-                state -> WebInspectorFetchedResultsControllerAdmissionResolution? in
-                if let resolution = state.resolution {
-                    return resolution
-                }
-                state.waiters.append(continuation)
-                return nil
-            }
-            if let resolution {
-                continuation.resume(returning: resolution)
-            }
-        }
-    }
-
-    package var waiterCountForTesting: Int {
-        state.withLock { $0.waiters.count }
-    }
-
-    package func recordCoreResolution() {
-        state.withLock { state in
-            precondition(
-                state.resolution != nil,
-                "Core cannot record an unresolved fetched-results admission."
-            )
-            precondition(
-                state.coreResolutionWasRecorded == false,
-                "Core can record one fetched-results admission resolution only once."
-            )
-            state.coreResolutionWasRecorded = true
-        }
-    }
-
-    package func acknowledgeCoreResolution() {
-        state.withLock { state in
-            precondition(
-                state.coreResolutionWasRecorded,
-                "A fetched-results admission claimant cannot acknowledge a foreign gate."
-            )
-            precondition(
-                state.claimantAcknowledgedCoreResolution == false,
-                "A fetched-results admission claimant can acknowledge Core only once."
-            )
-            state.claimantAcknowledgedCoreResolution = true
-        }
-    }
-
-    private func resolve(
-        _ resolution: WebInspectorFetchedResultsControllerAdmissionResolution
-    ) -> Bool {
-        let waiters = state.withLock { state -> [Waiter]? in
-            guard state.resolution == nil else {
-                return nil
-            }
-            state.resolution = resolution
-            let waiters = state.waiters
-            state.waiters.removeAll(keepingCapacity: false)
-            return waiters
-        }
-        guard let waiters else {
-            return false
-        }
-        for waiter in waiters {
-            waiter.resume(returning: resolution)
-        }
-        return true
-    }
-}
 
 package final class WebInspectorFetchedResultsControllerRegistrationClaim<
     Model: WebInspectorPersistentModel,

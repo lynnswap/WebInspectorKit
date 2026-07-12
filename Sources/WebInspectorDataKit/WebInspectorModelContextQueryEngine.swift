@@ -413,6 +413,24 @@ final class _WebInspectorFetchedResultsQueryEngine<
         return install(box)
     }
 
+    func fetchIdentifiers(
+        fetchDescriptor: WebInspectorFetchDescriptor<Model>
+    ) throws -> [Model.ID] {
+        try ensureOpen()
+        let publication = WebInspectorFetchedResultsQueryRegistration<
+            Model,
+            Never
+        >.Publication()
+        let box = try _WebInspectorFetchedResultsFlatRegistrationBox<Model>(
+            descriptor: fetchDescriptor,
+            recordsByID: recordsByID,
+            canonicalItemIDs: canonicalItemIDs,
+            publication: publication,
+            deliveryMode: .raw
+        )
+        return box.state().snapshot.itemIDs
+    }
+
     func applyBatch(
         _ batch: WebInspectorFetchedResultsSourceBatch<Model>
     ) -> _WebInspectorModelContextStagedQueryWork {

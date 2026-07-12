@@ -223,7 +223,7 @@ func fetchedResultsControllerCanBeConfinedToACustomActor() async throws {
 @Test
 func unsupportedControllerModelFailsBeforeInstallingAQuery() async throws {
     let context = WebInspectorModelContext()
-    await #expect(throws: WebInspectorFetchedResultsControllerError.unsupportedModel) {
+    await #expect(throws: WebInspectorModelContextQueryError.unsupportedModel) {
         _ = try await WebInspectorFetchedResultsController<
             ControllerTestModel,
             Never

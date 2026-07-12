@@ -797,6 +797,18 @@ SwiftData. The instance remains in the caller isolation supplied to the
 container factory; its internal context core and record cache are separate
 Sendable owners.
 
+`fetchIdentifiers(_:)` evaluates one immutable query-value snapshot entirely
+in the context core and does not materialize Observable models.
+`fetch(_:)` additionally claims owner delivery for those IDs: later source
+revisions wait while the caller actor resolves every ID through that Context's
+RecordGate-backed identity graph. Missing materialization at that boundary is
+an invariant violation, not a row to drop with `compactMap`. Cancellation may
+abandon the claim before owner materialization begins; after that point the
+owner turn and claim resolution complete before queued source work resumes.
+Requests for model types absent from the Context's configured schema inventory
+fail with `WebInspectorModelContextQueryError.unsupportedModel` rather than
+creating an empty query engine.
+
 Container initialization is synchronous and nonisolated. It creates the
 Sendable Core and installs the stable main-context registration seed in that
 Core's initial empty state; it does not create Observable models or touch

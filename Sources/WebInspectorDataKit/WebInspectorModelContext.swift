@@ -710,6 +710,77 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         )
     }
 
+    /// Returns one actor-evaluated snapshot of matching persistent IDs.
+    public nonisolated(nonsending) func fetchIdentifiers<
+        Model: WebInspectorPersistentModel
+    >(
+        _ descriptor: WebInspectorFetchDescriptor<Model>
+    ) async throws -> [Model.ID] {
+        preconditionOwnerIsolation()
+        try await waitUntilContainerReady()
+        guard persistentModelProjectionIsClosed == false else {
+            throw WebInspectorModelContextQueryError.closed
+        }
+        do {
+            return try await fetchedResultsQueryCore.fetchIdentifiers(
+                Model.self,
+                fetchDescriptor: descriptor
+            )
+        } catch WebInspectorFetchedResultsQueryError.closedRegistration {
+            throw WebInspectorModelContextQueryError.closed
+        }
+    }
+
+    /// Materializes one complete query snapshot in this context's identity
+    /// graph before later source revisions can enter the query core.
+    public nonisolated(nonsending) func fetch<
+        Model: WebInspectorPersistentModel
+    >(
+        _ descriptor: WebInspectorFetchDescriptor<Model>
+    ) async throws -> [Model] {
+        preconditionOwnerIsolation()
+        try await waitUntilContainerReady()
+        guard persistentModelProjectionIsClosed == false else {
+            throw WebInspectorModelContextQueryError.closed
+        }
+
+        let claim: WebInspectorModelFetchClaim<Model>
+        do {
+            claim = try await fetchedResultsQueryCore.prepareModelFetch(
+                Model.self,
+                fetchDescriptor: descriptor
+            )
+        } catch WebInspectorFetchedResultsQueryError.closedRegistration {
+            throw WebInspectorModelContextQueryError.closed
+        }
+        do {
+            try Task.checkCancellation()
+        } catch {
+            await claim.abandon()
+            throw error
+        }
+        guard persistentModelProjectionIsClosed == false,
+            claim.wasAbandoned == false
+        else {
+            await claim.abandon()
+            throw WebInspectorModelContextQueryError.closed
+        }
+
+        let models = claim.ids.map { id -> Model in
+            guard let model = model(for: id) else {
+                preconditionFailure(
+                    "A one-shot fetch ID must resolve before its owner admission is released."
+                )
+            }
+            return model
+        }
+        let resolution = await claim.complete()
+        guard resolution == .activated else {
+            throw WebInspectorModelContextQueryError.closed
+        }
+        return models
+    }
+
     @discardableResult
     package func publish(
         _ commit: WebInspectorModelSchemaTransactionCommit

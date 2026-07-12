@@ -72,6 +72,157 @@ func modelContextSchemaGraphRunsOnACustomActor() async throws {
 
 @MainActor
 @Test
+func modelContextOneShotFetchEvaluatesIDsBeforeMaterializingModels() async throws {
+    let fixture = SchemaTestFixture()
+    fixture.source.setSnapshot(
+        primary: [1: 10, 2: 20, 3: 30, 4: 40],
+        secondary: [:]
+    )
+    let context = WebInspectorModelContext(
+        modelSchemaRegistry: fixture.registry,
+        isolation: MainActor.shared
+    )
+    try await applyContextSchemaInitial(to: context)
+    var descriptor = WebInspectorFetchDescriptor<SchemaPrimaryModel>(
+        predicate: #Predicate { $0.value >= 20 },
+        sortBy: [SortDescriptor(\.value, order: .reverse)]
+    )
+    descriptor.fetchOffset = 1
+    descriptor.fetchLimit = 2
+
+    let ids = try await context.fetchIdentifiers(descriptor)
+    #expect(ids == [.init(rawValue: 3), .init(rawValue: 2)])
+    #expect(fixture.probe.makeCount == 0)
+    let models = try await context.fetch(descriptor)
+    #expect(models.map(\.id) == ids)
+    #expect(models.map(\.value) == [30, 20])
+    #expect(fixture.probe.makeCount == 2)
+    #expect(
+        await context.fetchedResultsQueryCore.registrationCountForTesting(
+            SchemaPrimaryModel.self
+        ) == 0
+    )
+    await context.close()
+}
+
+@MainActor
+@Test
+func oneShotFetchClaimQueuesDeleteUntilOwnerMaterializationCompletes() async throws {
+    let fixture = SchemaTestFixture()
+    fixture.source.setSnapshot(primary: [1: 10, 2: 20], secondary: [:])
+    let context = WebInspectorModelContext(
+        modelSchemaRegistry: fixture.registry,
+        isolation: MainActor.shared
+    )
+    try await applyContextSchemaInitial(to: context)
+    let core = context.fetchedResultsQueryCore
+    let claim = try await core.prepareModelFetch(
+        SchemaPrimaryModel.self,
+        fetchDescriptor: .init()
+    )
+    fixture.source.setDelta(primary: [.delete(id: 1)])
+    let sourceTransaction = context.modelSchemaContextCore.changes(
+        at: 1,
+        transaction: .init()
+    )
+    let source = Task {
+        try await sourceTransaction.stage(on: core)
+    }
+    #expect(await core.hasOutstandingModelFetchAdmissionForTesting())
+
+    let fetched = claim.ids.map { id -> SchemaPrimaryModel in
+        guard let model = context.model(for: id) else {
+            preconditionFailure("A claimed fetch ID must remain materializable.")
+        }
+        return model
+    }
+    #expect(fetched.map(\.id) == [.init(rawValue: 1), .init(rawValue: 2)])
+    #expect(fetched.allSatisfy { $0.isInvalidated == false })
+    #expect(await claim.complete() == .activated)
+
+    let sourceCommit = try await source.value
+    #expect(context.publish(sourceCommit))
+    #expect(fetched[0].isInvalidated)
+    #expect(fetched[1].isInvalidated == false)
+    #expect(context.model(for: SchemaPrimaryID(rawValue: 1)) == nil)
+    await context.close()
+}
+
+@MainActor
+@Test
+func unsupportedOneShotFetchFailsWithoutCreatingAQueryEngine() async throws {
+    let context = WebInspectorModelContext()
+    let descriptor = WebInspectorFetchDescriptor<SchemaPrimaryModel>()
+    await #expect(throws: WebInspectorModelContextQueryError.unsupportedModel) {
+        _ = try await context.fetchIdentifiers(descriptor)
+    }
+    await #expect(throws: WebInspectorModelContextQueryError.unsupportedModel) {
+        _ = try await context.fetch(descriptor)
+    }
+    #expect(await context.fetchedResultsQueryCore.queryEngineCountForTesting() == 0)
+    await context.close()
+}
+
+@MainActor
+@Test
+func contextCloseAbandonsAPendingOneShotFetchClaim() async throws {
+    let fixture = SchemaTestFixture()
+    fixture.source.setSnapshot(primary: [1: 10], secondary: [:])
+    let context = WebInspectorModelContext(
+        modelSchemaRegistry: fixture.registry,
+        isolation: MainActor.shared
+    )
+    try await applyContextSchemaInitial(to: context)
+    let core = context.fetchedResultsQueryCore
+    let claim = try await core.prepareModelFetch(
+        SchemaPrimaryModel.self,
+        fetchDescriptor: .init()
+    )
+    await context.close()
+    #expect(claim.wasAbandoned)
+    await claim.abandon()
+    #expect(await core.hasOutstandingModelFetchAdmissionForTesting() == false)
+}
+
+@MainActor
+@Test
+func deinitializedOneShotFetchClaimUnblocksQueuedSourceWork() async throws {
+    let fixture = SchemaTestFixture()
+    fixture.source.setSnapshot(primary: [1: 10], secondary: [:])
+    let context = WebInspectorModelContext(
+        modelSchemaRegistry: fixture.registry,
+        isolation: MainActor.shared
+    )
+    try await applyContextSchemaInitial(to: context)
+    let core = context.fetchedResultsQueryCore
+    var claim: WebInspectorModelFetchClaim<SchemaPrimaryModel>? =
+        try await core.prepareModelFetch(
+            SchemaPrimaryModel.self,
+            fetchDescriptor: .init()
+        )
+    fixture.source.setDelta(primary: [.set(id: 1, value: 11)])
+    let sourceTransaction = context.modelSchemaContextCore.changes(
+        at: 1,
+        transaction: .init()
+    )
+    let source = Task {
+        try await sourceTransaction.stage(on: core)
+    }
+    #expect(claim?.ids == [.init(rawValue: 1)])
+    claim = nil
+
+    let sourceCommit = try await source.value
+    #expect(context.publish(sourceCommit))
+    #expect(await core.hasOutstandingModelFetchAdmissionForTesting() == false)
+    let ids = try await context.fetchIdentifiers(
+        WebInspectorFetchDescriptor<SchemaPrimaryModel>()
+    )
+    #expect(ids == [.init(rawValue: 1)])
+    await context.close()
+}
+
+@MainActor
+@Test
 func schemaCommitPatchesModelThenFetchedResultsBackingBeforePublication() async throws {
     let fixture = SchemaTestFixture()
     fixture.source.setSnapshot(primary: [1: 10], secondary: [:])
@@ -1227,8 +1378,16 @@ private actor SchemaContextOwnerActor {
         )
         precondition(context.publish(commit))
         let id = SchemaPrimaryID(rawValue: 1)
-        let model = context.model(for: id)
-        let result = model?.value == 10
+        let ids = try await context.fetchIdentifiers(
+            WebInspectorFetchDescriptor<SchemaPrimaryModel>()
+        )
+        let models = try await context.fetch(
+            WebInspectorFetchDescriptor<SchemaPrimaryModel>()
+        )
+        let model = models.first
+        let result = ids == [id]
+            && models.count == 1
+            && model?.value == 10
             && model === context.registeredModel(for: id)
         await context.close()
         return result && model?.isInvalidated == true
