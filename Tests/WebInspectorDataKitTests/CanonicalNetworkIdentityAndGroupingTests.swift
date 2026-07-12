@@ -200,22 +200,26 @@ func canonicalNetworkInitiatorKeysSeparateSemanticAndAgentTargets() {
     let firstAgentTargetID = WebInspectorTarget.ID("agent-a")
     let secondAgentTargetID = WebInspectorTarget.ID("agent-b")
 
-    let firstDOMKey = CanonicalNetworkDOMInitiatorKey(
-        storeID: storeID,
-        attachmentGeneration: attachmentGeneration,
-        pageGeneration: pageGeneration,
-        semanticTargetID: semanticTargetID,
-        agentTargetID: firstAgentTargetID,
-        domBindingEpoch: .init(rawValue: 1),
+    let firstDOMKey = WebInspectorDOMNodeIdentityStorage(
+        documentScope: WebInspectorDOMDocumentScopeStorage(
+            storeID: storeID,
+            attachmentGeneration: attachmentGeneration,
+            pageGeneration: pageGeneration,
+            semanticTargetID: semanticTargetID,
+            agentTargetID: firstAgentTargetID,
+            domBindingEpoch: .init(rawValue: 1)
+        ),
         rawNodeID: DOM.Node.ID("node")
     )
-    let secondDOMKey = CanonicalNetworkDOMInitiatorKey(
-        storeID: storeID,
-        attachmentGeneration: attachmentGeneration,
-        pageGeneration: pageGeneration,
-        semanticTargetID: semanticTargetID,
-        agentTargetID: secondAgentTargetID,
-        domBindingEpoch: .init(rawValue: 1),
+    let secondDOMKey = WebInspectorDOMNodeIdentityStorage(
+        documentScope: WebInspectorDOMDocumentScopeStorage(
+            storeID: storeID,
+            attachmentGeneration: attachmentGeneration,
+            pageGeneration: pageGeneration,
+            semanticTargetID: semanticTargetID,
+            agentTargetID: secondAgentTargetID,
+            domBindingEpoch: .init(rawValue: 1)
+        ),
         rawNodeID: DOM.Node.ID("node")
     )
     #expect(firstDOMKey != secondDOMKey)
@@ -303,8 +307,14 @@ func canonicalNetworkGroupingSeparatesAgentsAndKeepsInitialSemanticMembership() 
         Issue.record("Expected a DOM-backed initiator group.")
         return
     }
-    #expect(initialGroupKey.semanticTargetID == WebInspectorTarget.ID("worker"))
-    #expect(initialGroupKey.agentTargetID == WebInspectorTarget.ID("agent-a"))
+    #expect(
+        initialGroupKey.documentScope.semanticTargetID
+            == WebInspectorTarget.ID("worker")
+    )
+    #expect(
+        initialGroupKey.documentScope.agentTargetID
+            == WebInspectorTarget.ID("agent-a")
+    )
 
     let laterScope = fixture.scope(
         targetID: "different-semantic-target",
@@ -474,7 +484,7 @@ func canonicalNetworkGroupingUsesExactScopeAndChronology() throws {
         Issue.record("Expected an exact DOM-backed group key.")
         return
     }
-    #expect(domKey.domBindingEpoch == .init(rawValue: 1))
+    #expect(domKey.documentScope.domBindingEpoch == .init(rawValue: 1))
 
     _ = try fixture.store.reduce(
         canonicalRequestWillBeSent(

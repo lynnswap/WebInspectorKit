@@ -101,6 +101,22 @@ package struct WebInspectorDOMDocumentScopeStorage: Hashable, Sendable {
         )
     }
 
+    package init(
+        storeID: WebInspectorContainerStoreID,
+        attachmentGeneration: WebInspectorContainerAttachmentGeneration,
+        pageGeneration: WebInspectorPage.Generation,
+        semanticTargetID: WebInspectorTarget.ID,
+        agentTargetID: WebInspectorTarget.ID,
+        domBindingEpoch: ModelDOMBindingEpoch
+    ) {
+        self.storeID = storeID
+        self.attachmentGeneration = attachmentGeneration
+        self.pageGeneration = pageGeneration
+        self.semanticTargetID = semanticTargetID
+        self.agentTargetID = agentTargetID
+        self.domBindingEpoch = domBindingEpoch
+    }
+
     package init?(
         storeID: WebInspectorContainerStoreID,
         attachmentGeneration: WebInspectorContainerAttachmentGeneration,
@@ -109,12 +125,14 @@ package struct WebInspectorDOMDocumentScopeStorage: Hashable, Sendable {
         guard let domBindingEpoch = eventScope.modelScope.domBindingEpoch else {
             return nil
         }
-        self.storeID = storeID
-        self.attachmentGeneration = attachmentGeneration
-        pageGeneration = eventScope.modelScope.generation
-        semanticTargetID = eventScope.semanticTargetID
-        agentTargetID = eventScope.agentTargetID
-        self.domBindingEpoch = domBindingEpoch
+        self.init(
+            storeID: storeID,
+            attachmentGeneration: attachmentGeneration,
+            pageGeneration: eventScope.modelScope.generation,
+            semanticTargetID: eventScope.semanticTargetID,
+            agentTargetID: eventScope.agentTargetID,
+            domBindingEpoch: domBindingEpoch
+        )
     }
 
     package static func precedesInCanonicalOrder(
@@ -210,36 +228,6 @@ package struct CanonicalNetworkEntryIDStorage: Hashable, Sendable {
     }
 }
 
-/// Canonical DOM identity used only when a Network event carries the exact DOM
-/// binding epoch that owns its initiator node.
-package struct CanonicalNetworkDOMInitiatorKey: Hashable, Sendable {
-    package let storeID: WebInspectorContainerStoreID
-    package let attachmentGeneration: WebInspectorContainerAttachmentGeneration
-    package let pageGeneration: WebInspectorPage.Generation
-    package let semanticTargetID: WebInspectorTarget.ID
-    package let agentTargetID: WebInspectorTarget.ID
-    package let domBindingEpoch: ModelDOMBindingEpoch
-    package let rawNodeID: DOM.Node.ID
-
-    package init(
-        storeID: WebInspectorContainerStoreID,
-        attachmentGeneration: WebInspectorContainerAttachmentGeneration,
-        pageGeneration: WebInspectorPage.Generation,
-        semanticTargetID: WebInspectorTarget.ID,
-        agentTargetID: WebInspectorTarget.ID,
-        domBindingEpoch: ModelDOMBindingEpoch,
-        rawNodeID: DOM.Node.ID
-    ) {
-        self.storeID = storeID
-        self.attachmentGeneration = attachmentGeneration
-        self.pageGeneration = pageGeneration
-        self.semanticTargetID = semanticTargetID
-        self.agentTargetID = agentTargetID
-        self.domBindingEpoch = domBindingEpoch
-        self.rawNodeID = rawNodeID
-    }
-}
-
 /// Opaque grouping identity used when Network knows an initiator node but does
 /// not have an exact DOM binding from which a persistent DOM identity can be
 /// constructed.
@@ -274,7 +262,7 @@ package struct CanonicalNetworkOpaqueInitiatorKey: Hashable, Sendable {
 /// Canonical Network grouping identity.
 package enum CanonicalNetworkGroupKey: Hashable, Sendable {
     /// A node with an exact resolvable DOM binding.
-    case dom(CanonicalNetworkDOMInitiatorKey)
+    case dom(WebInspectorDOMNodeIdentityStorage)
 
     /// A node that is related only within one navigation epoch.
     case opaqueInitiator(CanonicalNetworkOpaqueInitiatorKey)

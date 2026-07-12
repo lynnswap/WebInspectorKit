@@ -2183,13 +2183,15 @@ private extension CanonicalNetworkStore {
         }
         if let domBindingEpoch = membership.domBindingEpoch {
             return .dom(
-                CanonicalNetworkDOMInitiatorKey(
-                    storeID: requestID.storeID,
-                    attachmentGeneration: requestID.attachmentGeneration,
-                    pageGeneration: requestID.pageGeneration,
-                    semanticTargetID: membership.semanticTargetID,
-                    agentTargetID: requestID.agentTargetID,
-                    domBindingEpoch: domBindingEpoch,
+                WebInspectorDOMNodeIdentityStorage(
+                    documentScope: WebInspectorDOMDocumentScopeStorage(
+                        storeID: requestID.storeID,
+                        attachmentGeneration: requestID.attachmentGeneration,
+                        pageGeneration: requestID.pageGeneration,
+                        semanticTargetID: membership.semanticTargetID,
+                        agentTargetID: requestID.agentTargetID,
+                        domBindingEpoch: domBindingEpoch
+                    ),
                     rawNodeID: rawNodeID
                 ))
         }
