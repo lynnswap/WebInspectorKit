@@ -89,6 +89,10 @@ enum ContractTestSupport {
         try jsonObject(["outerHTML": html])
     }
 
+    static func styleSheetsResult() throws -> WebInspectorTestJSONObject {
+        try jsonObject(["headers": []])
+    }
+
     static func responseBodyResult(
         _ body: String,
         base64Encoded: Bool
@@ -170,13 +174,18 @@ actor ContractDataKitActor {
             try await context.attach(to: runtime.proxy, isolation: self)
         }
         var observedMethods: Set<String> = []
-        for _ in 0..<6 {
+        for _ in 0..<7 {
             let command = try await runtime.peer.commands.next()
             commands.append(command)
             try #require(command.destination == .target("page-main"))
             observedMethods.insert(command.method)
             if command.method == "DOM.getDocument" {
                 try await runtime.peer.reply(to: command, with: documentResult)
+            } else if command.method == "CSS.getAllStyleSheets" {
+                try await runtime.peer.reply(
+                    to: command,
+                    with: ContractTestSupport.styleSheetsResult()
+                )
             } else {
                 try await runtime.peer.reply(to: command)
             }
@@ -184,6 +193,7 @@ actor ContractDataKitActor {
         #expect(observedMethods == [
             "Page.enable",
             "CSS.enable",
+            "CSS.getAllStyleSheets",
             "Network.enable",
             "Console.enable",
             "Runtime.enable",
@@ -406,8 +416,8 @@ actor ContractDataKitActor {
             await context.close()
         }
         for expectedMethod in [
-            "Runtime.disable",
             "Console.disable",
+            "Runtime.disable",
             "Network.disable",
             "CSS.disable",
             "Page.disable",
