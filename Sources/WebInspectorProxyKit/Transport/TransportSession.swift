@@ -6773,7 +6773,10 @@ package actor ConnectionCore {
                 guard let loaderID = frame.loaderID else {
                     throw TransportSession.Error.malformedMessage
                 }
-                (physicalTargetID, target) = try modelTarget(for: frame.id)
+                (physicalTargetID, target) = try modelTarget(
+                    for: frame.id,
+                    owningAgentTargetID: agentTargetID
+                )
                 let previousNavigationEpoch = modelNavigationEpoch(
                     for: physicalTargetID
                 )
@@ -6791,7 +6794,10 @@ package actor ConnectionCore {
                 }
                 payload = .target(.frameNavigated(frame))
             case let .frameDetached(frameID):
-                (physicalTargetID, target) = try modelTarget(for: frameID)
+                (physicalTargetID, target) = try modelTarget(
+                    for: frameID,
+                    owningAgentTargetID: agentTargetID
+                )
                 payload = .target(.frameDetached(frameID: frameID))
             case .didCommitProvisionalTarget, .targetDestroyed, .unknown:
                 physicalTargetID = defaultPhysicalTargetID
@@ -6900,7 +6906,8 @@ package actor ConnectionCore {
     }
 
     private func modelTarget(
-        for frameID: FrameID
+        for frameID: FrameID,
+        owningAgentTargetID: ProtocolTarget.ID
     ) throws -> (ProtocolTarget.ID, ModelTarget) {
         let protocolFrameID = ProtocolFrame.ID(frameID.rawValue)
         let targetID: ProtocolTarget.ID?
@@ -6909,11 +6916,11 @@ package actor ConnectionCore {
         } else {
             // Most subframes are not site-isolated protocol targets. Their
             // Page lifecycle is delivered by the owning page agent, so the
-            // current page is the exact model target available for that
+            // agent target is the exact semantic target available for that
             // event. A registered FrameTarget remains the more specific
             // semantic target when WebKit supplies one.
             targetID = targetRegistry.targetID(forFrameID: protocolFrameID)
-                ?? targetRegistry.currentMainPageTargetID
+                ?? owningAgentTargetID
         }
         guard let targetID,
               let record = targetRegistry.target(for: targetID),

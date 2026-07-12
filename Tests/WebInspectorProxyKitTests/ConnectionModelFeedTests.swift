@@ -875,13 +875,19 @@ func modelEventScopeSeparatesPhysicalTargetsAndTracksParentlessFrameNavigationEp
 }
 
 @Test
-func modelFeedMapsOrdinarySubframeLifecycleToTheOwningPageTarget() async throws {
+func modelFeedMapsOrdinarySubframeLifecycleToOwningPageAgents() async throws {
     let backend = FakeTransportBackend()
     let core = ConnectionCore(backend: backend, responseTimeout: nil)
     _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
         id: "page-main",
         type: "page",
         frameID: "main-frame"
+    ))
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "frame-agent",
+        type: "frame",
+        frameID: "isolated-frame",
+        parentFrameID: "main-frame"
     ))
 
     let feed = try await modelFeedOpenSuccessfully(
@@ -920,6 +926,36 @@ func modelFeedMapsOrdinarySubframeLifecycleToTheOwningPageTarget() async throws 
         .frameDetached(frameID: FrameID("ordinary-subframe"))
     ) = detached.payload else {
         Issue.record("Expected an ordinary-subframe detach event.")
+        return
+    }
+    #expect(await core.terminalCause == nil)
+
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "frame-agent",
+        message: #"{"method":"Page.frameNavigated","params":{"frame":{"id":"nested-ordinary-subframe","parentId":"isolated-frame","loaderId":"nested-loader","url":"https://example.test/nested","securityOrigin":"https://example.test","mimeType":"text/html"}}}"#
+    ))
+    let nestedNavigation = try await modelFeedRequireEvent(iterator.next())
+    #expect(nestedNavigation.target.id == WebInspectorTarget.ID("frame-agent"))
+    #expect(nestedNavigation.agentTarget.id == WebInspectorTarget.ID("frame-agent"))
+    #expect(nestedNavigation.navigationEpoch == ModelNavigationEpoch(rawValue: 1))
+    guard case let .target(.frameNavigated(nestedFrame)) = nestedNavigation.payload else {
+        Issue.record("Expected a nested ordinary-subframe navigation event.")
+        return
+    }
+    #expect(nestedFrame.id == FrameID("nested-ordinary-subframe"))
+
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "frame-agent",
+        message: #"{"method":"Page.frameDetached","params":{"frameId":"nested-ordinary-subframe"}}"#
+    ))
+    let nestedDetached = try await modelFeedRequireEvent(iterator.next())
+    #expect(nestedDetached.target.id == WebInspectorTarget.ID("frame-agent"))
+    #expect(nestedDetached.agentTarget.id == WebInspectorTarget.ID("frame-agent"))
+    #expect(nestedDetached.navigationEpoch == nestedNavigation.navigationEpoch)
+    guard case .target(
+        .frameDetached(frameID: FrameID("nested-ordinary-subframe"))
+    ) = nestedDetached.payload else {
+        Issue.record("Expected a nested ordinary-subframe detach event.")
         return
     }
     #expect(await core.terminalCause == nil)
