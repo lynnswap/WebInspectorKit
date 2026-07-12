@@ -16,7 +16,7 @@ Data:
 
 ```text
 WebInspectorModelContainer
-  -> zero or one active ProxyKit connection and one canonical Sendable record store
+  -> zero or one adopted ProxyKit connection/feed and one canonical Sendable record store
   -> one or more actor-confined WebInspectorModelContext instances
        -> context-local identity registry
        -> context-local Observable model instances
@@ -37,7 +37,7 @@ compatibility layers.
 
 ### Outcomes
 
-1. One inspection session has one stable model container, at most one active
+1. One inspection session has one stable model container, at most one adopted
    ProxyKit model feed, and multiple model contexts that independently consume
    the same canonical page state. The container, contexts, and fetched-results
    controllers survive nonterminal detach/reattach transitions.
@@ -272,7 +272,7 @@ learn about persistent models or queries.
 
 | Responsibility | Owner | Contract |
 | --- | --- | --- |
-| Inspection-session attach/detach/reattach | `WebInspectorModelContainer` / its Core actor | The stable container owns every active Proxy/feed replacement; only native WKWebView operations are `@MainActor`. |
+| Inspection-session attach/detach/reattach | `WebInspectorModelContainer` / its Core actor | The stable container owns every adopted or pending Proxy and feed replacement; only native WKWebView operations are `@MainActor`. |
 | Physical targets, replies, capabilities | ProxyKit connection core | One source of transport truth. |
 | Structured model-event scope | ProxyKit model feed | Generation, target, navigation epoch, and optional exact DOM-binding epoch travel separately from raw IDs. |
 | Model-feed iteration and final Proxy close | `WebInspectorModelContainerCore` actor | Exactly one feed consumer and close authority. |
@@ -537,6 +537,11 @@ public final class WebInspectorModelContainer: Equatable, Sendable {
         )
     }
 
+    public enum Failure: Error, Sendable {
+        case closed
+        case attachmentSuperseded
+    }
+
     public nonisolated init(
         configuration: Configuration = .init()
     )
@@ -627,9 +632,10 @@ retains `mainContext`, so this owner graph has no container/context reference
 cycle. Custom contexts retain their own subscriptions and may close
 independently.
 
-One container is one reusable inspection session and owns at most one active
-`WKWebView` attachment. Multiple contexts that observe that attachment use the
-same container and therefore share one canonical store and feed. Reattaching
+One container is one reusable inspection session and owns at most one adopted
+`WKWebView` attachment, plus any transient pending Proxy whose attempt it must
+either adopt or close. Multiple contexts that observe the adopted attachment
+use the same container and therefore share one canonical store and feed. Reattaching
 the container preserves context/FRC identity but assigns a new attachment
 generation, invalidating old persistent IDs. A separately created container is
 a separate session with different store identity; its IDs and models never
@@ -645,12 +651,59 @@ context it vended, including externally retained context objects. Closing one
 custom context only unregisters that child. This makes the container the
 unambiguous owner when one inspected view is observed from multiple actors.
 
+Context registration participates in the same Core lifecycle gate. A
+`makeContext` ordered before a reset contributes an acknowledgement; one
+requested during detach waits and receives the post-detach empty initial
+state; one ordered after close fails. Within a context core, FRC registration
+is likewise serialized with reset application, so a newly created controller
+either acknowledges that reset or starts from its already committed result.
+
 Public `attach(to:)` creates the native Proxy at the `WKWebView` MainActor
-boundary, then transfers ownership to non-main `attach(owning:)`. DataKitTesting
-uses that same package ownership-transfer seam with an already connected test
-Proxy. Feed bootstrap, canonical reduction, publication, detach, and close all
-continue in the Container Core; test composition does not introduce a second
-lifecycle implementation.
+boundary only after the Container Core has reserved that attachment attempt,
+then transfers ownership to non-main adoption. DataKitTesting uses the same
+package ownership-transfer seam with an already connected test Proxy. Feed
+bootstrap, canonical reduction, publication, detach, and close all continue in
+the Container Core; test composition does not introduce a second lifecycle
+implementation.
+
+### Attachment transaction
+
+The Container Core serializes attach, detach, and close state transitions. A
+public attach is one tokenized resource transaction:
+
+1. Before native Proxy creation, the Core reserves a monotonically increasing
+   attachment generation and returns an opaque attempt token. Reservation
+   invalidates every older pending attempt and orders the request against
+   detach/close, while leaving the currently adopted attachment authoritative
+   until a token-valid replacement reaches adoption.
+2. MainActor creates only the native Proxy. A successfully created Proxy is
+   immediately placed under pending-attachment close authority; cancellation
+   or every path that does not call adoption must close and await it.
+3. Core adoption takes ownership at method entry. It validates the attempt
+   token before touching the current attachment. For a valid replacement it
+   invalidates the old attachment, completes its canonical/context reset and
+   Proxy teardown barrier, and only then registers the new single model-feed
+   consumer. A stale, closed, rejected, or bootstrap-failed adoption closes
+   and awaits the new Proxy before returning failure.
+4. Successful adoption publishes the new attachment's authoritative initial
+   state and awaits the context-application acknowledgement barrier before the
+   attach call returns.
+
+A newer reservation makes every older still-pending attempt finish with
+`WebInspectorModelContainer.Failure.attachmentSuperseded`; it can never commit
+after the newer intent. An older transaction whose adoption and context
+acknowledgements already committed remains a successful earlier linearization,
+even if its caller resumes later. A native-creation failure completes only its
+still-current reservation and leaves the previously adopted attachment
+unchanged, or leaves the Container detached when none existed. Detach or close
+invalidates all pending tokens, so a Proxy that finishes creation afterward is
+closed rather than adopted. Cancellation before adoption likewise preserves
+the previous attachment; cancellation after replacement teardown has begun
+closes the new Proxy and leaves the Container detached. The current attempt
+returns `CancellationError`, while a token already invalidated by a newer
+intent reports `attachmentSuperseded`. Package `attach(owning:)` transfers
+close authority at method entry and performs reservation plus adoption through
+the same Core transaction.
 
 ### Fetch descriptor
 
@@ -1013,37 +1066,57 @@ one object on the context owner. It does not scan or sort a collection.
 | Resource | Acquire | Retaining owner | Close authority | Completion |
 | --- | --- | --- | --- | --- |
 | Container session | container init | public container + core | container | terminal `close()` |
-| Native attachment | `container.attach(to:)` | ProxyKit core | container core | `detach()` or `close()` awaits native detach |
+| Attachment reservation | Core before native creation | container core | container core | adopted, superseded, failed, cancelled, detached, or closed |
+| Pending native Proxy | successful native creation / package ownership transfer | pending attachment transaction, then Core at adoption entry | transaction/container core | adopted or close awaited on every failure path |
+| Native attachment | successful token-validated adoption | ProxyKit core | container core | `detach()` or `close()` awaits native detach |
 | Model feed | successful attach | container core | container core | feed terminal plus driver Task value |
 | Canonical store | container init | container core | container core | detach reset or close terminal |
 | Context subscription | main seed at container init; custom context factory | context core | context/container | subscription driver Task value |
+| Context reset acknowledgement | canonical reset/terminal | container core until each obligation completes | context apply or unregister | detach/attach/close barrier |
 | Query registration | FRC creation | FRC + context core | FRC/context | unregister acknowledgement; a container-created child context closes with its FRC |
 | Update subscriber | `updates()` | subscriber sequence | iterator/subscriber | mailbox terminal |
 | Media player | Network Detail | Detail controller | Detail controller | player teardown on rebind/dismiss |
 
 Container detach is idempotent and nonterminal:
 
-1. invalidate the active attachment token and reject old feed/command
-   completions;
+1. invalidate the active attachment token and every pending attempt token, and
+   reject old feed/command/adoption completions;
 2. atomically reset the canonical store to empty;
-3. invalidate materialized models in every context and publish an empty FRC
-   reset without terminating those contexts or sequences;
-4. stop/close the model feed and ProxyKit connection;
-5. cancel and await the feed driver and native detach;
-6. enter detached state and permit a later attach.
+3. publish that reset with one acknowledgement obligation for every currently
+   registered context;
+4. each materialized context applies the reset through its context core and
+   owner actor, removes the old registry membership, marks old models stale,
+   and commits every FRC snapshot to empty without terminating its update
+   sequence. Closing/unregistering the context satisfies its obligation; an
+   unmaterialized main-context seed advances its stored base revision and
+   acknowledges without creating an Observable wrapper;
+5. stop/close the model feed and ProxyKit connection, then await both the feed
+   driver/native detach and every context acknowledgement;
+6. only after both barriers complete, enter detached state and return.
+
+Consequently, after `await container.detach()` returns, synchronous
+`model(for:)`/`registeredModel(for:)` lookup cannot resolve an old ID and every
+retained FRC's current snapshot is empty. A subscriber may not yet have pulled
+its reset sequence element, but the controller state that element describes is
+already committed. A later attach may reserve a token only after this detach
+transition passes its lifecycle gate.
 
 Container close is idempotent and terminal:
 
-1. reject new attach operations, contexts, and commands;
+1. invalidate active and pending attachment tokens, and reject new attach
+   operations, contexts, and commands;
 2. stop/close the model feed and ProxyKit connection;
-3. terminate context publication;
-4. cancel and await the feed driver;
-5. await native detach;
-6. enter closed state.
+3. terminate context publication with one close acknowledgement per registered
+   context;
+4. invalidate each context registry, terminate its FRCs, and satisfy the
+   acknowledgement by completing or unregistering that context;
+5. cancel and await the feed driver, every context driver/acknowledgement, and
+   native detach;
+6. enter closed state only after all barriers complete.
 
-Context close unregisters only that context, terminates its FRCs, cancels and
-awaits its driver, invalidates its model registry, and leaves the container and
-other contexts running.
+Context close unregisters only that context, terminates and awaits its FRC
+unregistration acknowledgements, cancels and awaits its driver, invalidates
+its model registry, and leaves the container and other contexts running.
 
 Cancellation is a stop signal. Neither container nor context reports closed
 until the relevant Tasks and underlying resource completion have been awaited.
@@ -1153,7 +1226,21 @@ integrated.
 - Contexts may be created while detached and receive the next attachment's
   initial state through the same registration.
 - Detach empties results with reset but does not terminate the same contexts,
-  FRC objects, controllers, or update sequences.
+  FRC objects, controllers, or update sequences; immediately after detach
+  returns, registry lookup is stale and every current FRC snapshot is empty.
+- Two concurrent attaches reserve distinct generations; only the newer intent
+  may adopt if the older transaction is still pending, that older waiter
+  receives `attachmentSuperseded`, and every non-adopted native Proxy is closed
+  and awaited exactly once.
+- Detach/close during native creation invalidates that attempt and closes its
+  eventual Proxy; cancellation of the current attempt does the same before
+  returning `CancellationError`.
+- Native creation failure preserves the previously adopted attachment (or the
+  detached state when none existed). Feed-claim/bootstrap failure after valid
+  adoption teardown leaves the Container detached. Neither path leaks a
+  pending Proxy or model-feed consumer.
+- Successful attach returns only after every registered Context/FRC has
+  acknowledged the new authoritative initial state.
 - Reattach preserves those owner identities while old model IDs resolve to
   `nil` and new IDs include a distinct attachment generation.
 - Two Proxy connections that both report the same raw page-generation value
@@ -1314,7 +1401,7 @@ require the implementation-phase tests listed above.
 | F8 | `NetworkEntry`; one-item-per-entry UIKit test. |
 | F9 | Old docs marked superseded; this document is canonical. |
 | F10 | Selection owner stores entry ID; transition test. |
-| F11 | Page generation belongs to container store; navigation failure test. |
+| F11 | Container owns attachment generation while Proxy scope supplies page generation; navigation and reattach failure tests. |
 | F12 | Detail resolves entry/request IDs; preview tests. |
 | F13 | Structured navigation plus optional DOM-binding epochs; Network-only Page observation and opaque-initiator tests. |
 | F14 | No persistent-ID parser for target-prefixed raw strings; structured-scope tests. |
@@ -1342,7 +1429,7 @@ the same change series.
    records to the core. Migrate each domain to structured IDs and remove its
    dependency on projected raw-ID prefixes in the same step.
 5. **Container ownership** — introduce the stable public container, physically
-   move attach/detach/reattach and the single active Proxy/feed lifecycle into
+   move attach/detach/reattach and the single adopted Proxy/feed lifecycle into
    the existing core, and restore multiple contexts. Remove public context
    initialization/attach/detach in this step while preserving UIKit's stable
    main-context and controller identity.
@@ -1365,6 +1452,9 @@ the same change series.
 - At least two contexts can share one container in production-path tests.
 - The same container/main context/FRC survive detach/reattach, while persistent
   IDs from equal raw Proxy generations do not alias across attachments.
+- Attach/detach/close completion is linearizable: superseded/pending Proxies
+  are closed, and all retained Context/FRC state has acknowledged the committed
+  attachment revision before the lifecycle call returns.
 - No generic fetched-results implementation references `NetworkQuery`,
   `ConsoleQuery`, `NetworkRequest`, or `ConsoleMessage`.
 - Network and Console stores no longer own query registrations.
