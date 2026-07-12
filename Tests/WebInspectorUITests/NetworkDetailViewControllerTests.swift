@@ -897,7 +897,10 @@ struct NetworkDetailViewControllerTests {
             for: body,
             metadata: NetworkMediaPreviewMetadata(
                 mimeType: "application/vnd.apple.mpegurl",
-                url: playlistURL
+                url: playlistURL,
+                sourcePolicy: .preferredRemotePlayback(
+                    try #require(URL(string: playlistURL))
+                )
             )
         ) { _ in
             Issue.record("HLS response preview should not require body payload preparation")
@@ -926,7 +929,10 @@ struct NetworkDetailViewControllerTests {
             for: body,
             metadata: NetworkMediaPreviewMetadata(
                 mimeType: "application/vnd.apple.mpegurl",
-                url: playlistURL
+                url: playlistURL,
+                sourcePolicy: .preferredRemotePlayback(
+                    try #require(URL(string: playlistURL))
+                )
             )
         ) { _ in
             Issue.record("HLS response preview should not fetch or prepare body payloads")
@@ -958,7 +964,8 @@ struct NetworkDetailViewControllerTests {
             for: body,
             metadata: NetworkMediaPreviewMetadata(
                 mimeType: nil,
-                url: "https://media.example.com/upload.m3u8"
+                url: "https://media.example.com/upload.m3u8",
+                sourcePolicy: .body
             )
         ) { _ in
             Issue.record("HLS request bodies should stay on the syntax preview path")
@@ -987,7 +994,7 @@ struct NetworkDetailViewControllerTests {
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
         var playerCreationCount = 0
-        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting { _ in
+        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting {
             playerCreationCount += 1
             return StubMoviePreviewPlayer()
         }
@@ -1002,7 +1009,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func hlsPlaybackFailureReplacesPlayerWithVisibleErrorAndTearsDownObservers() async throws {
+    func hlsPlaybackFailureKeepsPlayerSurfaceUntilSurfaceTeardown() async throws {
         let playlistURL = "https://media.example.com/live/failing.m3u8"
         let body = NetworkBody(
             role: .response,
@@ -1015,7 +1022,10 @@ struct NetworkDetailViewControllerTests {
             body,
             metadata: NetworkMediaPreviewMetadata(
                 mimeType: "application/vnd.apple.mpegurl",
-                url: playlistURL
+                url: playlistURL,
+                sourcePolicy: .preferredRemotePlayback(
+                    try #require(URL(string: playlistURL))
+                )
             )
         ))
         let window = showInWindow(viewController)
@@ -1025,12 +1035,18 @@ struct NetworkDetailViewControllerTests {
         let item = try #require(viewController.mediaPlayerItemForTesting)
         #expect(viewController.mediaPlayerURLForTesting?.absoluteString == playlistURL)
         #expect(viewController.hasMoviePreviewObservationForTesting)
+        let playerViewControllerIdentity = try #require(
+            viewController.mediaPlayerViewControllerIdentityForTesting
+        )
         let observation = try #require(viewController.previewRenderObservationDeliveryForTesting)
         let renderedFailure = await observation.values {
-            viewController.mediaPlayerURLForTesting == nil
-                && viewController.syntaxViewForTesting.text.contains("Simulated HLS playback failure.")
+            let configuration = viewController.mediaPlayerStatusConfigurationForTesting
+            return viewController.isMoviePreviewStatusVisibleForTesting
+                && configuration?.secondaryText == "Simulated HLS playback failure."
         }
         defer { renderedFailure.cancel() }
+
+        viewController.suspendKeepingSurface()
 
         NotificationCenter.default.post(
             name: AVPlayerItem.failedToPlayToEndTimeNotification,
@@ -1046,9 +1062,30 @@ struct NetworkDetailViewControllerTests {
             ]
         )
 
+        for _ in 0..<100 {
+            if viewController.hasMoviePreviewFailureForTesting {
+                break
+            }
+            await Task.yield()
+        }
+        #expect(viewController.hasMoviePreviewFailureForTesting)
+        #expect(viewController.isMoviePreviewStatusVisibleForTesting == false)
+        #expect(viewController.mediaPlayerViewControllerIdentityForTesting == playerViewControllerIdentity)
+
+        viewController.resumeRendering()
+
         #expect(await renderedFailure.waitUntil { $0 } != nil)
-        #expect(viewController.hasMoviePreviewObservationForTesting == false)
+        #expect(viewController.mediaPlayerViewControllerIdentityForTesting == playerViewControllerIdentity)
         #expect(viewController.mediaPlayerItemForTesting == nil)
+        #expect(viewController.hasMoviePreviewObservationForTesting == false)
+        #expect(viewController.isMoviePreviewStatusHostedInPlayerOverlayForTesting)
+
+        viewController.setSurface(.unavailableBodyPlaceholder)
+
+        #expect(viewController.mediaPlayerViewControllerForTesting == nil)
+        #expect(viewController.mediaPlayerSurfaceBodyIDForTesting == nil)
+        #expect(viewController.mediaPlayerItemForTesting == nil)
+        #expect(viewController.hasMoviePreviewObservationForTesting == false)
     }
 
     @Test
@@ -1068,7 +1105,7 @@ struct NetworkDetailViewControllerTests {
             model.selectRequest(request)
             let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
             var playerCreationCount = 0
-            viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting { _ in
+            viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting {
                 playerCreationCount += 1
                 return StubMoviePreviewPlayer()
             }
@@ -1090,7 +1127,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func unavailableMediaResponseDoesNotStartPlaybackOrFetch() async throws {
+    func nonBodyMediaResponseDoesNotStartPlaybackOrFetch() async throws {
         let inputs = [
             UnavailableMediaPreviewCase(
                 name: "HLS HEAD",
@@ -1114,14 +1151,6 @@ struct NetworkDetailViewControllerTests {
                 mimeType: "application/vnd.apple.mpegurl",
                 method: "GET",
                 status: 404,
-                finishes: true
-            ),
-            UnavailableMediaPreviewCase(
-                name: "HLS 206",
-                pathExtension: "m3u8",
-                mimeType: "application/vnd.apple.mpegurl",
-                method: "GET",
-                status: 206,
                 finishes: true
             ),
             UnavailableMediaPreviewCase(
@@ -1149,14 +1178,6 @@ struct NetworkDetailViewControllerTests {
                 finishes: true
             ),
             UnavailableMediaPreviewCase(
-                name: "MP4 206",
-                pathExtension: "mp4",
-                mimeType: "video/mp4",
-                method: "GET",
-                status: 206,
-                finishes: true
-            ),
-            UnavailableMediaPreviewCase(
                 name: "MP4 incomplete",
                 pathExtension: "mp4",
                 mimeType: "video/mp4",
@@ -1167,15 +1188,11 @@ struct NetworkDetailViewControllerTests {
         ]
         try await withLiveNetworkContext { fixture in
             for (index, input) in inputs.enumerated() {
-                var responseHeaders = ["content-type": input.mimeType]
-                if input.status == 206 {
-                    responseHeaders["content-range"] = "bytes 0-99/1000"
-                }
                 let request = try #require(await applyRequest(
                     to: fixture.context,
                     requestID: "unavailable-media-\(index)",
                     url: "https://media.example.com/unavailable-\(index).\(input.pathExtension)",
-                    responseHeaders: responseHeaders,
+                    responseHeaders: ["content-type": input.mimeType],
                     responseMimeType: input.mimeType,
                     responseStatus: input.status,
                     resourceType: .media,
@@ -1190,7 +1207,7 @@ struct NetworkDetailViewControllerTests {
                 )
                 var playerCreationCount = 0
                 viewController.syntaxBodyViewControllerForTesting
-                    .setMoviePreviewPlayerFactoryForTesting { _ in
+                    .setMoviePreviewPlayerFactoryForTesting {
                         playerCreationCount += 1
                         return StubMoviePreviewPlayer()
                     }
@@ -1213,6 +1230,184 @@ struct NetworkDetailViewControllerTests {
                 #expect(fixture.wire.observations.commands.filter {
                     $0.method == "Network.getResponseBody"
                 }.isEmpty, Comment(rawValue: input.name))
+            }
+        }
+    }
+
+    @Test
+    func movieInstallsVisiblePlayerSurfaceBeforeResponseBodyLoads() async throws {
+        try await withLiveNetworkContext { fixture in
+            let request = try #require(await applyRequest(
+                to: fixture.context,
+                requestID: "full-movie",
+                url: "https://media.example.com/full.mp4",
+                responseHeaders: ["content-type": "video/mp4"],
+                responseMimeType: "video/mp4",
+                resourceType: .media
+            ))
+            let bodyReplyGate = await fixture.wire.deferReply(
+                to: "Network.getResponseBody",
+                with: try webInspectorTestJSONObject(
+                    #"{"body":"not a real movie","base64Encoded":false}"#
+                )
+            )
+            let model = try await NetworkPanelModel.make(context: fixture.context)
+            model.selectRequest(request)
+            let viewController = makeNetworkDetailViewController(
+                model: model,
+                initialMode: .preview
+            )
+            let playerFactory = MoviePreviewPlayerFactorySpy()
+            let bodyViewController = viewController.syntaxBodyViewControllerForTesting
+            bodyViewController.setMoviePreviewPlayerFactoryForTesting(playerFactory.makePlayer)
+            let window = showInWindow(viewController)
+            defer { window.isHidden = true }
+
+            _ = await fixture.wire.observations.waitForCommands(
+                method: "Network.getResponseBody",
+                count: 1
+            )
+
+            let playerViewController = try #require(
+                bodyViewController.mediaPlayerViewControllerForTesting
+            )
+            let playerViewControllerIdentity = ObjectIdentifier(playerViewController)
+            let playerIdentity = try #require(bodyViewController.mediaPlayerIdentityForTesting)
+            #expect(playerFactory.players.count == 1)
+            #expect(playerViewController.parent === bodyViewController)
+            #expect(playerViewController.view.superview != nil)
+            #expect(playerViewController.view.isHidden == false)
+            #expect(bodyViewController.contentUnavailableConfiguration == nil)
+            #expect(bodyViewController.isMoviePreviewStatusVisibleForTesting)
+            #expect(bodyViewController.isMoviePreviewStatusHostedInPlayerOverlayForTesting)
+            #expect(bodyViewController.mediaPlayerURLForTesting == nil)
+            #expect(bodyViewController.mediaPlayerItemForTesting == nil)
+            #expect(request.responseBody.phase == .fetching)
+
+            bodyReplyGate.open()
+            #expect(await waitForNetworkBodyPhase(in: request.responseBody) { phase in
+                phase == .loaded
+            } != nil)
+            await waitUntilMediaPreviewPrepared(in: viewController)
+            #expect(await waitUntilRendered(in: viewController) {
+                bodyViewController.mediaPlayerURLForTesting?.pathExtension == "mp4"
+                    && bodyViewController.mediaPlayerItemForTesting != nil
+                    && bodyViewController.isMoviePreviewStatusVisibleForTesting == false
+            })
+
+            #expect(
+                bodyViewController.mediaPlayerViewControllerIdentityForTesting
+                    == playerViewControllerIdentity
+            )
+            #expect(bodyViewController.mediaPlayerIdentityForTesting == playerIdentity)
+            let temporaryFileURL = try #require(bodyViewController.mediaPlayerURLForTesting)
+            #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
+
+            viewController.setModeForTesting(.headers)
+
+            #expect(bodyViewController.mediaPlayerViewControllerForTesting == nil)
+            #expect(bodyViewController.mediaPlayerSurfaceBodyIDForTesting == nil)
+            #expect(playerViewController.parent == nil)
+            #expect(playerViewController.view.superview == nil)
+            #expect(playerViewController.player == nil)
+            #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path) == false)
+        }
+    }
+
+    @Test
+    func partialMoviesUseOriginalRemoteURLWithoutFetchingResponseBody() async throws {
+        let inputs: [(id: String, status: Int, headers: [String: String])] = [
+            (
+                id: "status-206",
+                status: 206,
+                headers: ["content-type": "video/mp4"]
+            ),
+            (
+                id: "content-range",
+                status: 200,
+                headers: [
+                    "content-type": "video/mp4",
+                    "content-range": "bytes 0-15/1000",
+                ]
+            ),
+        ]
+
+        try await withLiveNetworkContext { fixture in
+            for (index, input) in inputs.enumerated() {
+                let remoteURL = try #require(URL(
+                    string: "https://media.example.com/partial-\(index).mp4"
+                ))
+                let request = try #require(await applyRequest(
+                    to: fixture.context,
+                    requestID: input.id,
+                    url: remoteURL.absoluteString,
+                    responseHeaders: input.headers,
+                    responseMimeType: "video/mp4",
+                    responseStatus: input.status,
+                    resourceType: .media
+                ))
+                let model = try await NetworkPanelModel.make(context: fixture.context)
+                model.selectRequest(request)
+                let viewController = makeNetworkDetailViewController(
+                    model: model,
+                    initialMode: .preview
+                )
+                let playerFactory = MoviePreviewPlayerFactorySpy()
+                let bodyViewController = viewController.syntaxBodyViewControllerForTesting
+                bodyViewController.setMoviePreviewPlayerFactoryForTesting(playerFactory.makePlayer)
+                let window = showInWindow(viewController)
+
+                #expect(await waitUntilRendered(in: viewController) {
+                    bodyViewController.mediaPlayerURLForTesting == remoteURL
+                        && bodyViewController.mediaPlayerItemForTesting != nil
+                })
+                let playerViewControllerIdentity = try #require(
+                    bodyViewController.mediaPlayerViewControllerIdentityForTesting
+                )
+                let playerIdentity = try #require(bodyViewController.mediaPlayerIdentityForTesting)
+                let item = try #require(bodyViewController.mediaPlayerItemForTesting)
+                let itemIdentity = ObjectIdentifier(item)
+                #expect((item.asset as? AVURLAsset)?.url == remoteURL)
+                #expect(playerFactory.players.count == 1)
+                #expect(request.responseBody.phase == .available)
+                #expect(bodyViewController.isMoviePreviewStatusVisibleForTesting == false)
+
+                let updatedRemoteURL = try #require(URL(
+                    string: "https://media.example.com/updated-partial-\(index).mp4"
+                ))
+                await applyResponseReceived(
+                    to: fixture.context,
+                    requestID: input.id,
+                    url: updatedRemoteURL.absoluteString,
+                    responseHeaders: input.headers,
+                    responseMimeType: "video/mp4",
+                    responseStatus: input.status,
+                    resourceType: .media,
+                    timestamp: 4
+                )
+
+                #expect(await waitUntilRendered(in: viewController) {
+                    bodyViewController.mediaPlayerURLForTesting == updatedRemoteURL
+                        && bodyViewController.mediaPlayerItemForTesting.map(ObjectIdentifier.init)
+                            != itemIdentity
+                })
+                #expect(
+                    bodyViewController.mediaPlayerViewControllerIdentityForTesting
+                        == playerViewControllerIdentity
+                )
+                #expect(bodyViewController.mediaPlayerIdentityForTesting == playerIdentity)
+                #expect(
+                    (bodyViewController.mediaPlayerItemForTesting?.asset as? AVURLAsset)?.url
+                        == updatedRemoteURL
+                )
+                #expect(fixture.wire.observations.commands.filter {
+                    $0.method == "Network.getResponseBody"
+                }.isEmpty)
+
+                viewController.setModeForTesting(.headers)
+                #expect(bodyViewController.mediaPlayerViewControllerForTesting == nil)
+                #expect(bodyViewController.mediaPlayerSurfaceBodyIDForTesting == nil)
+                window.isHidden = true
             }
         }
     }
@@ -1274,7 +1469,7 @@ struct NetworkDetailViewControllerTests {
         let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(firstRequest)
         let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
-        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting { _ in
+        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting {
             StubMoviePreviewPlayer()
         }
         let window = showInWindow(viewController)
@@ -1306,6 +1501,52 @@ struct NetworkDetailViewControllerTests {
                     == "https://media.example.com/second-unplayed.m3u8"
         }
         #expect(didFollowSecondRequest)
+    }
+
+    @Test
+    func groupedPreviewKeepsMasterPlaylistAheadOfNewerPartialSegment() async throws {
+        let context = makeContext()
+        let nodeID = DOM.Node.ID("hls-with-partial-segment")
+        let playlistURL = "https://media.example.com/master.m3u8"
+        let playlist = try #require(await applyRequest(
+            to: context,
+            requestID: "master-playlist",
+            url: playlistURL,
+            responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
+            responseMimeType: "application/vnd.apple.mpegurl",
+            resourceType: .media,
+            timestamp: 1,
+            initiatorNodeID: nodeID
+        ))
+        let partialSegment = try #require(await applyRequest(
+            to: context,
+            requestID: "partial-segment",
+            url: "https://media.example.com/segment.mp4",
+            responseHeaders: [
+                "content-type": "video/mp4",
+                "content-range": "bytes 0-1023/4096",
+            ],
+            responseMimeType: "video/mp4",
+            responseStatus: 206,
+            resourceType: .media,
+            timestamp: 2,
+            initiatorNodeID: nodeID
+        ))
+        let model = try await NetworkPanelModel.make(context: context)
+        model.selectRequest(partialSegment)
+        let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
+        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting {
+            StubMoviePreviewPlayer()
+        }
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        #expect(await waitUntilRendered(in: viewController) {
+            model.selectedRequests.count == 2
+                && viewController.previewRequestIDForTesting == playlist.id
+                && viewController.syntaxBodyViewControllerForTesting
+                    .mediaPlayerURLForTesting?.absoluteString == playlistURL
+        })
     }
 
     @Test
@@ -1354,7 +1595,7 @@ struct NetworkDetailViewControllerTests {
         let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(noContentRequest)
         let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
-        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting { _ in
+        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting {
             StubMoviePreviewPlayer()
         }
         let window = showInWindow(viewController)
@@ -1392,7 +1633,7 @@ struct NetworkDetailViewControllerTests {
         let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
         let playerFactory = MoviePreviewPlayerFactorySpy()
         viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
-            playerFactory.makePlayer(for:)
+            playerFactory.makePlayer
         )
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
@@ -1424,11 +1665,7 @@ struct NetworkDetailViewControllerTests {
             viewController.syntaxBodyViewControllerForTesting.mediaPlayerIdentityForTesting
                 != firstPlayerID
         )
-        let expectedPlaylistURL = try #require(URL(string: playlistURL))
-        #expect(playerFactory.requestedURLs == [
-            expectedPlaylistURL,
-            expectedPlaylistURL,
-        ])
+        #expect(playerFactory.players.count == 2)
     }
 
     @Test
@@ -1484,7 +1721,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func groupedPreviewUsesResponseEvidenceToSkipPartialMedia() async throws {
+    func groupedPreviewTreatsPartialMediaAsAnOrdinaryMovieCandidate() async throws {
         let context = makeContext()
         let nodeID = DOM.Node.ID("audio")
         let fullRequest = try #require(await applyRequest(
@@ -1530,16 +1767,16 @@ struct NetworkDetailViewControllerTests {
         let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(partialRequest)
         let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
-        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting { _ in
+        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting {
             StubMoviePreviewPlayer()
         }
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        let didSelectCompleteResponse = await waitUntilRendered(in: viewController) {
-            viewController.previewRequestIDForTesting == ignoredRangeRequest.id
+        let didSelectPartialResponse = await waitUntilRendered(in: viewController) {
+            viewController.previewRequestIDForTesting == partialRequest.id
         }
-        #expect(didSelectCompleteResponse)
+        #expect(didSelectPartialResponse)
     }
 
     @Test
@@ -1560,7 +1797,7 @@ struct NetworkDetailViewControllerTests {
         let viewController = makeNetworkDetailViewController(model: model)
         let playerFactory = MoviePreviewPlayerFactorySpy()
         viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
-            playerFactory.makePlayer(for:)
+            playerFactory.makePlayer
         )
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
@@ -1572,7 +1809,7 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(didRenderMediaPreview)
         let temporaryFileURL = try #require(viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting)
-        #expect(playerFactory.requestedURLs == [temporaryFileURL])
+        #expect(playerFactory.players.count == 1)
         #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
 
         viewController.setModeForTesting(.headers)
@@ -1583,7 +1820,7 @@ struct NetworkDetailViewControllerTests {
                 && FileManager.default.fileExists(atPath: temporaryFileURL.path) == false
         }
         #expect(didReleaseMediaPreview)
-        #expect(playerFactory.requestedURLs == [temporaryFileURL])
+        #expect(playerFactory.players.count == 1)
 
         viewController.setModeForTesting(.preview)
         await waitUntilMediaPreviewPrepared(in: viewController)
@@ -1593,8 +1830,7 @@ struct NetworkDetailViewControllerTests {
                 && viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
         }
         #expect(didRestoreMediaPreview)
-        #expect(playerFactory.requestedURLs.count == 2)
-        #expect(playerFactory.requestedURLs.allSatisfy { $0.pathExtension == "mp4" })
+        #expect(playerFactory.players.count == 2)
     }
 
     @Test
@@ -1615,7 +1851,7 @@ struct NetworkDetailViewControllerTests {
         let viewController = makeNetworkDetailViewController(model: model)
         let playerFactory = MoviePreviewPlayerFactorySpy()
         viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
-            playerFactory.makePlayer(for:)
+            playerFactory.makePlayer
         )
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
@@ -1629,7 +1865,7 @@ struct NetworkDetailViewControllerTests {
         #expect(didRenderMediaPreview)
         let temporaryFileURL = try #require(viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting)
         let playerIdentity = try #require(viewController.syntaxBodyViewControllerForTesting.mediaPlayerIdentityForTesting)
-        #expect(playerFactory.requestedURLs == [temporaryFileURL])
+        #expect(playerFactory.players.count == 1)
 
         await applyDataReceived(
             to: context,
@@ -1643,7 +1879,99 @@ struct NetworkDetailViewControllerTests {
         #expect(viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting == temporaryFileURL)
         #expect(viewController.syntaxBodyViewControllerForTesting.mediaPlayerIdentityForTesting == playerIdentity)
         #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
-        #expect(playerFactory.requestedURLs == [temporaryFileURL])
+        #expect(playerFactory.players.count == 1)
+    }
+
+    @Test
+    func movieBodyRevisionClearsSourceWithoutReplacingPlayerSurface() async throws {
+        let context = makeContext()
+        let request = try #require(await applyRequest(
+            to: context,
+            requestID: "revisioned-movie",
+            url: "https://media.example.com/revisioned.mp4",
+            responseHeaders: ["content-type": "video/mp4"],
+            responseMimeType: "video/mp4",
+            resourceType: .media
+        ))
+        let responseBody = request.responseBody
+        applyResponseBody(
+            to: context,
+            request: request,
+            body: "first movie payload",
+            base64Encoded: false
+        )
+        let playerFactory = MoviePreviewPlayerFactorySpy()
+        let viewController = NetworkBodyViewController(
+            moviePreviewPlayerFactory: playerFactory.makePlayer
+        )
+        viewController.setSurface(.body(
+            responseBody,
+            metadata: NetworkMediaPreviewMetadata(
+                mimeType: "video/mp4",
+                url: request.url,
+                sourcePolicy: .body
+            )
+        ))
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.resumeRendering()
+        await viewController.waitUntilMediaPreviewPreparationFinishedForTesting()
+
+        let firstTemporaryFileURL = try #require(viewController.mediaPlayerURLForTesting)
+        let playerViewControllerIdentity = try #require(
+            viewController.mediaPlayerViewControllerIdentityForTesting
+        )
+        let playerIdentity = try #require(viewController.mediaPlayerIdentityForTesting)
+        let firstItemIdentity = ObjectIdentifier(
+            try #require(viewController.mediaPlayerItemForTesting)
+        )
+        #expect(FileManager.default.fileExists(atPath: firstTemporaryFileURL.path))
+        #expect(playerFactory.players.count == 1)
+        let observation = try #require(viewController.previewRenderObservationDeliveryForTesting)
+        let renderedLoading = await observation.values {
+            viewController.isMoviePreviewStatusVisibleForTesting
+                && viewController.mediaPlayerItemForTesting == nil
+                && viewController.mediaPlayerURLForTesting == nil
+                && FileManager.default.fileExists(atPath: firstTemporaryFileURL.path) == false
+        }
+        defer { renderedLoading.cancel() }
+
+        await applyResponseReceived(
+            to: context,
+            requestID: "revisioned-movie",
+            url: request.url,
+            responseHeaders: ["content-type": "video/mp4"],
+            responseMimeType: "video/mp4",
+            timestamp: 4
+        )
+
+        #expect(await renderedLoading.waitUntil { $0 } != nil)
+        #expect(responseBody === request.responseBody)
+        #expect(viewController.mediaPlayerViewControllerIdentityForTesting == playerViewControllerIdentity)
+        #expect(viewController.mediaPlayerIdentityForTesting == playerIdentity)
+        #expect(playerFactory.players.count == 1)
+
+        let renderedReplacement = await observation.values {
+            guard let url = viewController.mediaPlayerURLForTesting else {
+                return false
+            }
+            return url != firstTemporaryFileURL
+                && viewController.mediaPlayerItemForTesting != nil
+                && viewController.isMoviePreviewStatusVisibleForTesting == false
+        }
+        defer { renderedReplacement.cancel() }
+        applyResponseBody(
+            to: context,
+            request: request,
+            body: "second movie payload",
+            base64Encoded: false
+        )
+
+        #expect(await renderedReplacement.waitUntil { $0 } != nil)
+        #expect(viewController.mediaPlayerViewControllerIdentityForTesting == playerViewControllerIdentity)
+        #expect(viewController.mediaPlayerIdentityForTesting == playerIdentity)
+        #expect(viewController.mediaPlayerItemForTesting.map(ObjectIdentifier.init) != firstItemIdentity)
+        #expect(playerFactory.players.count == 1)
     }
 
     @Test
@@ -1664,7 +1992,7 @@ struct NetworkDetailViewControllerTests {
         let viewController = makeNetworkDetailViewController(model: model)
         let playerFactory = MoviePreviewPlayerFactorySpy()
         viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
-            playerFactory.makePlayer(for:)
+            playerFactory.makePlayer
         )
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
@@ -1715,7 +2043,7 @@ struct NetworkDetailViewControllerTests {
         let viewController = makeNetworkDetailViewController(model: model)
         let playerFactory = MoviePreviewPlayerFactorySpy()
         viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
-            playerFactory.makePlayer(for:)
+            playerFactory.makePlayer
         )
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
@@ -1727,7 +2055,7 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(didRenderMediaPreview)
         let temporaryFileURL = try #require(viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting)
-        #expect(playerFactory.requestedURLs == [temporaryFileURL])
+        #expect(playerFactory.players.count == 1)
         #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
 
         model.selectRequest(nil)
@@ -1739,7 +2067,7 @@ struct NetworkDetailViewControllerTests {
                 && FileManager.default.fileExists(atPath: temporaryFileURL.path) == false
         }
         #expect(didReleaseMediaPreview)
-        #expect(playerFactory.requestedURLs == [temporaryFileURL])
+        #expect(playerFactory.players.count == 1)
     }
 
     @Test
@@ -1760,7 +2088,7 @@ struct NetworkDetailViewControllerTests {
         let viewController = makeNetworkDetailViewController(model: model)
         let playerFactory = MoviePreviewPlayerFactorySpy()
         viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
-            playerFactory.makePlayer(for:)
+            playerFactory.makePlayer
         )
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
@@ -1772,7 +2100,7 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(didRenderMediaPreview)
         let temporaryFileURL = try #require(viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting)
-        #expect(playerFactory.requestedURLs == [temporaryFileURL])
+        #expect(playerFactory.players.count == 1)
         #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
 
         viewController.beginAppearanceTransition(false, animated: false)
@@ -1792,7 +2120,7 @@ struct NetworkDetailViewControllerTests {
                 && FileManager.default.fileExists(atPath: temporaryFileURL.path) == false
         }
         #expect(didReleaseMediaPreview)
-        #expect(playerFactory.requestedURLs == [temporaryFileURL])
+        #expect(playerFactory.players.count == 1)
     }
 
     @Test
@@ -2544,7 +2872,7 @@ struct NetworkDetailViewControllerTests {
         detailViewController.setModeForTesting(.preview)
         let playerFactory = MoviePreviewPlayerFactorySpy()
         detailViewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
-            playerFactory.makePlayer(for:)
+            playerFactory.makePlayer
         )
         let navigationController = NetworkCompactNavigationController(
             model: model,
@@ -2567,7 +2895,7 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(didRenderMediaPreview)
         let temporaryFileURL = try #require(detailViewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting)
-        #expect(playerFactory.requestedURLs == [temporaryFileURL])
+        #expect(playerFactory.players.count == 1)
         #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
 
         model.selectRequest(nil)
@@ -2579,7 +2907,7 @@ struct NetworkDetailViewControllerTests {
                 && FileManager.default.fileExists(atPath: temporaryFileURL.path) == false
         }
         #expect(didReturnToListAndReleasePreview)
-        #expect(playerFactory.requestedURLs == [temporaryFileURL])
+        #expect(playerFactory.players.count == 1)
     }
 
     @Test
@@ -3322,6 +3650,8 @@ struct NetworkDetailViewControllerTests {
         url: String,
         responseHeaders: [String: String],
         responseMimeType: String,
+        responseStatus: Int = 200,
+        resourceType: Network.ResourceType = .script,
         timestamp: Double
     ) async {
         let requestID = Network.Request.ID(rawRequestID)
@@ -3330,13 +3660,13 @@ struct NetworkDetailViewControllerTests {
                 id: requestID,
                 response: Network.Response(
                     url: url,
-                    status: 200,
-                    statusText: "OK",
+                    status: responseStatus,
+                    statusText: responseStatus == 206 ? "Partial Content" : "OK",
                     mimeType: responseMimeType,
                     headers: responseHeaders,
                     source: Network.Source(rawValue: "network")
                 ),
-                resourceType: .script,
+                resourceType: resourceType,
                 timestamp: timestamp
             )
         )
@@ -3624,12 +3954,10 @@ struct NetworkDetailViewControllerTests {
 
     @MainActor
     private final class MoviePreviewPlayerFactorySpy {
-        private(set) var requestedURLs: [URL] = []
         private(set) var players: [StubMoviePreviewPlayer] = []
 
-        func makePlayer(for url: URL) -> AVPlayer {
+        func makePlayer() -> AVPlayer {
             let player = StubMoviePreviewPlayer()
-            requestedURLs.append(url)
             players.append(player)
             return player
         }

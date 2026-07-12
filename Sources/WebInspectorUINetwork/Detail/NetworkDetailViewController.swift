@@ -50,6 +50,7 @@ private final class NetworkResponseBodyFetchObservationBinding {
 package final class NetworkDetailViewController: UIViewController {
     private enum PreviewCandidate {
         case remoteHLS(NetworkRequest)
+        case remotePartialMovie(NetworkRequest)
         case bodyMedia(NetworkRequest)
         case unavailableMedia(NetworkRequest)
         case standard(NetworkRequest)
@@ -57,6 +58,7 @@ package final class NetworkDetailViewController: UIViewController {
         var request: NetworkRequest {
             switch self {
             case .remoteHLS(let request),
+                 .remotePartialMovie(let request),
                  .bodyMedia(let request),
                  .unavailableMedia(let request),
                  .standard(let request):
@@ -566,10 +568,8 @@ package final class NetworkDetailViewController: UIViewController {
             unbindResponseBodyFetchObservation()
             return
         }
-        guard NetworkDisplay.MediaPreviewSupport.remoteHLSURL(
-            mimeType: surface.metadata?.mimeType,
-            url: surface.metadata?.url
-        ) == nil else {
+        if let metadata = surface.metadata,
+           case .preferredRemotePlayback = metadata.sourcePolicy {
             unbindResponseBodyFetchObservation()
             return
         }
@@ -629,12 +629,21 @@ package final class NetworkDetailViewController: UIViewController {
         case .request:
             return NetworkMediaPreviewMetadata(
                 mimeType: mimeType(from: nil, headers: request.requestHeaders),
-                url: request.url
+                url: request.url,
+                sourcePolicy: .body
             )
         case .response:
+            let mimeType = mimeType(from: request.mimeType, headers: request.responseHeaders)
+            let url = request.responseURL ?? request.url
             return NetworkMediaPreviewMetadata(
-                mimeType: mimeType(from: request.mimeType, headers: request.responseHeaders),
-                url: request.responseURL ?? request.url
+                mimeType: mimeType,
+                url: url,
+                sourcePolicy: preferredRemotePlaybackURL(
+                    for: request,
+                    mimeType: mimeType,
+                    url: url
+                ).map(NetworkMediaPreviewSourcePolicy.preferredRemotePlayback)
+                    ?? .body
             )
         }
     }
@@ -669,7 +678,7 @@ package final class NetworkDetailViewController: UIViewController {
             switch candidate {
             case .remoteHLS:
                 return candidate
-            case .bodyMedia:
+            case .remotePartialMovie, .bodyMedia:
                 if latestBodyMedia == nil {
                     latestBodyMedia = candidate
                 }
@@ -690,9 +699,6 @@ package final class NetworkDetailViewController: UIViewController {
         guard let kind = responseMediaPreviewKind(for: request) else {
             return nil
         }
-        guard isPartialMediaRequest(request) == false else {
-            return .unavailableMedia(request)
-        }
         guard request.hasResponse,
               request.method.caseInsensitiveCompare("HEAD") != .orderedSame,
               request.status.map({ status in
@@ -705,16 +711,17 @@ package final class NetworkDetailViewController: UIViewController {
         if case .failed = request.state {
             return .unavailableMedia(request)
         }
+        if preferredRemotePlaybackURL(
+            for: request,
+            kind: kind
+        ) != nil,
+           request.state == .responded || request.state == .finished {
+            return kind == .hlsPlaylist
+                ? .remoteHLS(request)
+                : .remotePartialMovie(request)
+        }
         if case .failed = request.responseBody.phase {
             return .unavailableMedia(request)
-        }
-        if kind == .hlsPlaylist,
-           NetworkDisplay.MediaPreviewSupport.remoteHLSURL(
-               mimeType: mimeType(from: request.mimeType, headers: request.responseHeaders),
-               url: request.responseURL ?? request.url
-           ) != nil,
-           request.state == .responded || request.state == .finished {
-            return .remoteHLS(request)
         }
         guard request.state == .finished,
               request.hasResponseBody else {
@@ -741,9 +748,38 @@ package final class NetworkDetailViewController: UIViewController {
         )
     }
 
-    private func isPartialMediaRequest(_ request: NetworkRequest) -> Bool {
-        request.status == 206
-            || headerValue(named: "content-range", in: request.responseHeaders) != nil
+    private func preferredRemotePlaybackURL(
+        for request: NetworkRequest,
+        kind: NetworkDisplay.MediaPreviewKind? = nil,
+        mimeType: String? = nil,
+        url: String? = nil
+    ) -> URL? {
+        let mimeType = mimeType
+            ?? self.mimeType(from: request.mimeType, headers: request.responseHeaders)
+        let urlString = url ?? request.responseURL ?? request.url
+        let kind = kind ?? NetworkDisplay.MediaPreviewSupport.previewKind(
+            mimeType: mimeType,
+            url: urlString
+        )
+        guard let kind else {
+            return nil
+        }
+        if kind == .hlsPlaylist {
+            return NetworkDisplay.MediaPreviewSupport.remoteHLSURL(
+                mimeType: mimeType,
+                url: urlString
+            )
+        }
+        guard kind == .movie,
+              (request.status == 206
+                || headerValue(named: "content-range", in: request.responseHeaders) != nil),
+              let remoteURL = URL(string: urlString),
+              let scheme = remoteURL.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              remoteURL.host?.isEmpty == false else {
+            return nil
+        }
+        return remoteURL
     }
 
 }

@@ -4,13 +4,24 @@ import Foundation
 import UIKit
 import WebInspectorDataKit
 
+package enum NetworkMediaPreviewSourcePolicy: Equatable, Sendable {
+    case body
+    case preferredRemotePlayback(URL)
+}
+
 package struct NetworkMediaPreviewMetadata: Equatable, Sendable {
     package var mimeType: String?
     package var url: String?
+    package var sourcePolicy: NetworkMediaPreviewSourcePolicy
 
-    package init(mimeType: String?, url: String?) {
+    package init(
+        mimeType: String?,
+        url: String?,
+        sourcePolicy: NetworkMediaPreviewSourcePolicy
+    ) {
         self.mimeType = mimeType
         self.url = url
+        self.sourcePolicy = sourcePolicy
     }
 }
 
@@ -30,6 +41,8 @@ package enum NetworkMediaPreviewPreparationAction {
     case active
     case remoteMovie(NetworkMoviePreview)
     case cachedMovie(NetworkMoviePreview)
+    case loadingMovie(bodyID: ObjectIdentifier)
+    case unavailableMovie(bodyID: ObjectIdentifier)
     case startedLoading
 }
 
@@ -56,9 +69,6 @@ package final class NetworkMediaPreviewCoordinator {
         metadata: NetworkMediaPreviewMetadata?,
         completion: @escaping @MainActor (NetworkMediaPreviewResultAction) -> Void
     ) -> NetworkMediaPreviewPreparationAction {
-        if case .failed = body.phase {
-            return .unavailable
-        }
         guard let source = mediaPreviewSource(for: body, metadata: metadata) else {
             return .unavailable
         }
@@ -67,6 +77,12 @@ package final class NetworkMediaPreviewCoordinator {
         case .remoteMovie(let preview):
             prepareRemoteMovie(preview)
             return .remoteMovie(preview)
+        case .loadingMovie(let bodyID):
+            prepareMovieWithoutSource()
+            return .loadingMovie(bodyID: bodyID)
+        case .unavailableMovie(let bodyID):
+            prepareMovieWithoutSource()
+            return .unavailableMovie(bodyID: bodyID)
         case .body(let input):
             return prepareBodyPreview(for: input, completion: completion)
         }
@@ -111,32 +127,45 @@ package final class NetworkMediaPreviewCoordinator {
         ) else {
             return nil
         }
+        let bodyID = ObjectIdentifier(body)
+        let isMovie = previewKind == .movie || previewKind == .hlsPlaylist
 
-        if previewKind == .hlsPlaylist {
-            if body.role == .response,
-               let remoteURL = NetworkDisplay.MediaPreviewSupport.remoteHLSURL(
-                   mimeType: metadata?.mimeType,
-                   url: metadata?.url
-               ) {
-                return .remoteMovie(
-                    NetworkMoviePreview(
-                        bodyID: ObjectIdentifier(body),
-                        url: remoteURL
-                    )
+        if isMovie,
+           body.role == .response,
+           let metadata,
+           case .preferredRemotePlayback(let remoteURL) = metadata.sourcePolicy {
+            return .remoteMovie(
+                NetworkMoviePreview(
+                    bodyID: bodyID,
+                    url: remoteURL
                 )
-            }
-            if body.role == .request {
-                return nil
-            }
+            )
+        }
+
+        if case .failed = body.phase {
+            return isMovie ? .unavailableMovie(bodyID) : nil
+        }
+
+        if previewKind == .hlsPlaylist,
+           body.role == .request {
+            return nil
         }
 
         guard let rawBody = body.full else {
+            if isMovie {
+                switch body.phase {
+                case .available, .fetching:
+                    return .loadingMovie(bodyID)
+                case .loaded, .failed:
+                    return .unavailableMovie(bodyID)
+                }
+            }
             return nil
         }
         return .body(
             NetworkMediaPreviewInput(
                 previewKind: previewKind,
-                bodyID: ObjectIdentifier(body),
+                bodyID: bodyID,
                 role: body.role,
                 rawBody: rawBody,
                 isBase64Encoded: body.isBase64Encoded,
@@ -151,7 +180,9 @@ package final class NetworkMediaPreviewCoordinator {
         completion: @escaping @MainActor (NetworkMediaPreviewResultAction) -> Void
     ) -> NetworkMediaPreviewPreparationAction {
         guard failedInput != input else {
-            return .failed
+            return input.isMovie
+                ? .unavailableMovie(bodyID: input.bodyID)
+                : .failed
         }
         if displayedIdentity == .body(input) || pendingInput == input {
             return .active
@@ -165,14 +196,24 @@ package final class NetworkMediaPreviewCoordinator {
             )
         }
 
+        removeCachedTemporaryFile()
         startPreparation(for: input, completion: completion)
-        return .startedLoading
+        return input.isMovie
+            ? .loadingMovie(bodyID: input.bodyID)
+            : .startedLoading
     }
 
     private func prepareRemoteMovie(_ preview: NetworkMoviePreview) {
         cancelPending()
         failedInput = nil
         displayedIdentity = .remoteMovie(preview)
+        removeCachedTemporaryFile()
+    }
+
+    private func prepareMovieWithoutSource() {
+        cancelPending()
+        failedInput = nil
+        displayedIdentity = nil
         removeCachedTemporaryFile()
     }
 
@@ -320,6 +361,8 @@ package final class NetworkMediaPreviewCoordinator {
 
 private enum NetworkMediaPreviewSource {
     case remoteMovie(NetworkMoviePreview)
+    case loadingMovie(ObjectIdentifier)
+    case unavailableMovie(ObjectIdentifier)
     case body(NetworkMediaPreviewInput)
 }
 
@@ -336,6 +379,10 @@ private struct NetworkMediaPreviewInput: Equatable, Sendable {
     var isBase64Encoded: Bool
     var mimeType: String?
     var url: String?
+
+    var isMovie: Bool {
+        previewKind == .movie || previewKind == .hlsPlaylist
+    }
 
     func data() -> Data? {
         if isBase64Encoded {
