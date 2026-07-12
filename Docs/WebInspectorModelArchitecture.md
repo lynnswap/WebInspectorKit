@@ -359,7 +359,8 @@ Every public persistent-model ID is an opaque concrete value conforming to
 `WebInspectorPersistentIdentifier`.
 
 ```swift
-public protocol WebInspectorPersistentIdentifier: Hashable, Sendable {
+public protocol WebInspectorPersistentIdentifier: Hashable, Sendable
+where Model.ID == Self {
     associatedtype Model: WebInspectorPersistentModel
 }
 

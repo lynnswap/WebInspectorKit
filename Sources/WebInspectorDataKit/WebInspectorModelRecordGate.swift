@@ -1,27 +1,62 @@
 import Synchronization
 
-/// One authoritative change to a persistent model's immutable record.
+/// A context-core value record with one authoritative mechanical patch
+/// operation shared by record lookup and materialized model projection.
+package protocol WebInspectorModelRecord: Sendable {
+    associatedtype Patch: Sendable
+
+    mutating func apply(_ patch: Patch)
+}
+
+/// A nonempty ordered patch sequence for one persistent identity.
+package struct WebInspectorModelRecordPatchBatch<
+    Record: WebInspectorModelRecord
+>: Sendable {
+    package let patches: [Record.Patch]
+
+    package init(_ patches: [Record.Patch]) {
+        precondition(
+            patches.isEmpty == false,
+            "A model-record update must carry at least one authoritative patch."
+        )
+        self.patches = patches
+    }
+}
+
+extension WebInspectorModelRecordPatchBatch: Equatable
+where Record.Patch: Equatable {}
+
+/// One authoritative change to a persistent model's value record.
 package enum WebInspectorModelRecordChange<
     Model: WebInspectorPersistentModel,
-    Record: Sendable
+    Record: WebInspectorModelRecord
 >: Sendable {
     case insert(id: Model.ID, record: Record)
-    case update(id: Model.ID, record: Record)
+    case update(
+        id: Model.ID,
+        patches: WebInspectorModelRecordPatchBatch<Record>
+    )
     case delete(id: Model.ID)
 }
 
-extension WebInspectorModelRecordChange: Equatable where Record: Equatable {}
+extension WebInspectorModelRecordChange: Equatable
+where Record: Equatable, Record.Patch: Equatable {}
 
 /// One mutation that the context owner must apply to an already materialized model.
 package enum WebInspectorModelRecordOwnerMutation<
     Model: WebInspectorPersistentModel,
-    Record: Sendable
+    Record: WebInspectorModelRecord
 >: Sendable {
-    case update(id: Model.ID, record: Record)
+    case replace(id: Model.ID, record: Record)
+    case applyPatches(
+        id: Model.ID,
+        patches: WebInspectorModelRecordPatchBatch<Record>
+    )
     case invalidate(id: Model.ID)
 }
 
-extension WebInspectorModelRecordOwnerMutation: Equatable where Record: Equatable {}
+extension WebInspectorModelRecordOwnerMutation: Equatable
+where Record: Equatable, Record.Patch: Equatable {}
 
 /// A rejected model-record transaction or lifecycle operation.
 package enum WebInspectorModelRecordGateError: Error, Equatable, Sendable {
@@ -41,7 +76,7 @@ private final class _WebInspectorModelRecordGateCommitIdentity: Sendable {}
 
 private enum _WebInspectorModelRecordGatePreparedPayload<
     Model: WebInspectorPersistentModel,
-    Record: Sendable
+    Record: WebInspectorModelRecord
 >: Sendable {
     case reset(records: [Model.ID: Record])
     case changes([WebInspectorModelRecordChange<Model, Record>])
@@ -55,7 +90,7 @@ private enum _WebInspectorModelRecordGatePreparedPayload<
 /// synchronous owner turn. A failed context transaction must call ``discard()``.
 package final class WebInspectorModelRecordGateCommit<
     Model: WebInspectorPersistentModel,
-    Record: Sendable
+    Record: WebInspectorModelRecord
 >: Sendable {
     package let revision: UInt64
 
@@ -102,7 +137,7 @@ package final class WebInspectorModelRecordGateCommit<
 /// the owner receives a mutation or the later claim receives the final record.
 package final class WebInspectorModelRecordGate<
     Model: WebInspectorPersistentModel,
-    Record: Sendable
+    Record: WebInspectorModelRecord
 >: Sendable {
     private struct OutstandingCommit: Sendable {
         let identity: _WebInspectorModelRecordGateCommitIdentity
@@ -291,7 +326,7 @@ package final class WebInspectorModelRecordGate<
             case let .reset(records):
                 mutations = state.claimedIDs.map { id in
                     if let record = records[id] {
-                        return .update(id: id, record: record)
+                        return .replace(id: id, record: record)
                     }
                     return .invalidate(id: id)
                 }
@@ -312,14 +347,20 @@ package final class WebInspectorModelRecordGate<
                             "A prepared model-record insertion became invalid before apply."
                         )
 
-                    case let .update(id, record):
-                        let previous = state.records.updateValue(record, forKey: id)
-                        precondition(
-                            previous != nil,
-                            "A prepared model-record update became invalid before apply."
-                        )
+                    case let .update(id, patches):
+                        guard var record = state.records[id] else {
+                            preconditionFailure(
+                                "A prepared model-record update became invalid before apply."
+                            )
+                        }
+                        for patch in patches.patches {
+                            record.apply(patch)
+                        }
+                        state.records[id] = record
                         if state.claimedIDs.contains(id) {
-                            deltaMutations.append(.update(id: id, record: record))
+                            deltaMutations.append(
+                                .applyPatches(id: id, patches: patches)
+                            )
                         }
 
                     case let .delete(id):

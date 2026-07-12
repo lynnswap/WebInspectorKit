@@ -345,23 +345,31 @@ package actor WebInspectorModelContextCore {
 
     package func applySourceBatch<
         Model: WebInspectorPersistentModel,
-        Record: Sendable
+        Record: WebInspectorModelRecord
     >(
         _ batch: WebInspectorModelSourceBatch<Model, Record>
     ) async throws -> WebInspectorModelContextTransactionCommit {
-        try await applySourceBatches([AnyWebInspectorModelSourceBatch(batch)])
+        try await applySourceBatches(
+            at: batch.canonicalRevision,
+            [AnyWebInspectorModelSourceBatch(batch)]
+        )
     }
 
     /// Stages one complete canonical revision across every configured model
-    /// source owned by this context.
+    /// source owned by this context. An empty configured source set still
+    /// stages and resolves the explicit revision through the same commit path.
     package func applySourceBatches(
+        at canonicalRevision: UInt64,
         _ batches: [AnyWebInspectorModelSourceBatch]
     ) async throws -> WebInspectorModelContextTransactionCommit {
         try ensureOpen()
         await waitForOutstandingQueryCommit()
         try ensureOpen()
 
-        let proposedSources = validatedModelSources(in: batches)
+        let proposedSources = validatedModelSources(
+            in: batches,
+            at: canonicalRevision
+        )
         switch sourceMode {
         case .undecided:
             break
@@ -387,7 +395,10 @@ package actor WebInspectorModelContextCore {
             throw error
         }
 
-        let queryCommit = stageQueryBatches(batches.map(\.queryBatch))
+        let queryCommit = stageQueryBatches(
+            batches.map(\.queryBatch),
+            at: canonicalRevision
+        )
         if case .undecided = sourceMode {
             sourceMode = .modelSources(proposedSources)
         }
@@ -405,8 +416,16 @@ package actor WebInspectorModelContextCore {
             batches.isEmpty == false,
             "A model-context query transaction must contain source work."
         )
+        return stageQueryBatches(
+            batches,
+            at: batches[0].canonicalRevision
+        )
+    }
 
-        let canonicalRevision = batches[0].canonicalRevision
+    private func stageQueryBatches(
+        _ batches: [WebInspectorModelContextQueryBatch],
+        at canonicalRevision: UInt64
+    ) -> WebInspectorModelContextQueryCommit {
         if let lastCanonicalRevision {
             precondition(
                 lastCanonicalRevision < canonicalRevision,
@@ -687,16 +706,12 @@ package actor WebInspectorModelContextCore {
     }
 
     private func validatedModelSources(
-        in batches: [AnyWebInspectorModelSourceBatch]
+        in batches: [AnyWebInspectorModelSourceBatch],
+        at canonicalRevision: UInt64
     ) -> [ConfiguredModelSource] {
         precondition(
-            batches.isEmpty == false,
-            "A model-context source transaction must contain source work."
-        )
-        let canonicalRevision = batches[0].canonicalRevision
-        precondition(
             batches.allSatisfy { $0.canonicalRevision == canonicalRevision },
-            "One model-context source transaction must carry one canonical revision."
+            "Every model-context source batch must match the explicit canonical revision."
         )
 
         var seenModelTypeIDs: Set<ObjectIdentifier> = []

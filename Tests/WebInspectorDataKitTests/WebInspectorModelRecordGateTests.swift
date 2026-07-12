@@ -17,7 +17,7 @@ func modelRecordLookupDoesNotClaimMissingOrExistingRecords() throws {
 
     let update = try gate.prepareChanges(
         at: 5,
-        changes: [.update(id: .init(1), record: .init(value: 11))]
+        changes: [.update(id: .init(1), patches: setPatch(11))]
     )
     #expect(try update.apply().isEmpty)
     #expect(gate.record(for: .init(1)) == .init(value: 11))
@@ -42,14 +42,14 @@ func modelRecordClaimBeforeApplyReturnsFinalOwnerMutation() throws {
     )
     let commit = try gate.prepareChanges(
         at: 11,
-        changes: [.update(id: .init(1), record: .init(value: 99))]
+        changes: [.update(id: .init(1), patches: setPatch(99))]
     )
 
     #expect(gate.record(for: .init(1)) == .init(value: 10))
     #expect(gate.claim(.init(1)) == .init(value: 10))
     #expect(
         try commit.apply()
-            == [.update(id: .init(1), record: .init(value: 99))]
+            == [.applyPatches(id: .init(1), patches: setPatch(99))]
     )
     #expect(gate.record(for: .init(1)) == .init(value: 99))
 }
@@ -62,7 +62,7 @@ func modelRecordApplyBeforeClaimExposesOnlyTheFinalRecord() throws {
     )
     let commit = try gate.prepareChanges(
         at: 11,
-        changes: [.update(id: .init(1), record: .init(value: 99))]
+        changes: [.update(id: .init(1), patches: setPatch(99))]
     )
 
     #expect(try commit.apply().isEmpty)
@@ -70,11 +70,11 @@ func modelRecordApplyBeforeClaimExposesOnlyTheFinalRecord() throws {
 
     let next = try gate.prepareChanges(
         at: 12,
-        changes: [.update(id: .init(1), record: .init(value: 100))]
+        changes: [.update(id: .init(1), patches: setPatch(100))]
     )
     #expect(
         try next.apply()
-            == [.update(id: .init(1), record: .init(value: 100))]
+            == [.applyPatches(id: .init(1), patches: setPatch(100))]
     )
 }
 
@@ -122,18 +122,18 @@ func modelRecordResetUpdatesSurvivorsAndInvalidatesRemovedClaims() throws {
     )
     let mutations = try reset.apply()
     #expect(mutations.count == 2)
-    #expect(mutations.contains(.update(id: .init(1), record: .init(value: 11))))
+    #expect(mutations.contains(.replace(id: .init(1), record: .init(value: 11))))
     #expect(mutations.contains(.invalidate(id: .init(2))))
     #expect(gate.record(for: .init(2)) == nil)
     #expect(gate.record(for: .init(3)) == .init(value: 30))
 
     let survivorUpdate = try gate.prepareChanges(
         at: 21,
-        changes: [.update(id: .init(1), record: .init(value: 12))]
+        changes: [.update(id: .init(1), patches: setPatch(12))]
     )
     #expect(
         try survivorUpdate.apply()
-            == [.update(id: .init(1), record: .init(value: 12))]
+            == [.applyPatches(id: .init(1), patches: setPatch(12))]
     )
     let removedReinsert = try gate.prepareChanges(
         at: 22,
@@ -150,7 +150,7 @@ func modelRecordDiscardLeavesStateAndRevisionUnchanged() throws {
     )
     let discarded = try gate.prepareChanges(
         at: 11,
-        changes: [.update(id: .init(1), record: .init(value: 11))]
+        changes: [.update(id: .init(1), patches: setPatch(11))]
     )
     try discarded.discard()
 
@@ -165,7 +165,7 @@ func modelRecordDiscardLeavesStateAndRevisionUnchanged() throws {
 
     let replacement = try gate.prepareChanges(
         at: 11,
-        changes: [.update(id: .init(1), record: .init(value: 11))]
+        changes: [.update(id: .init(1), patches: setPatch(11))]
     )
     #expect(try replacement.apply().isEmpty)
     #expect(gate.revision == 11)
@@ -225,7 +225,7 @@ func modelRecordGateRejectsInvalidAuthoritativeChanges() throws {
     #expect(throws: WebInspectorModelRecordGateError.invalidUpdate) {
         _ = try gate.prepareChanges(
             at: 2,
-            changes: [.update(id: .init(2), record: .init(value: 20))]
+            changes: [.update(id: .init(2), patches: setPatch(20))]
         )
     }
     #expect(throws: WebInspectorModelRecordGateError.invalidDelete) {
@@ -238,7 +238,7 @@ func modelRecordGateRejectsInvalidAuthoritativeChanges() throws {
         _ = try gate.prepareChanges(
             at: 2,
             changes: [
-                .update(id: .init(1), record: .init(value: 11)),
+                .update(id: .init(1), patches: setPatch(11)),
                 .delete(id: .init(1)),
             ]
         )
@@ -260,7 +260,7 @@ func modelRecordGateCloseInvalidatesClaimsAndResolvesPreparedCommit() throws {
     #expect(gate.claim(.init(2)) != nil)
     let prepared = try gate.prepareChanges(
         at: 2,
-        changes: [.update(id: .init(1), record: .init(value: 11))]
+        changes: [.update(id: .init(1), patches: setPatch(11))]
     )
 
     let invalidations = gate.close()
@@ -289,7 +289,7 @@ func modelRecordCommitApplyAndDiscardRaceResolvesExactlyOnce() async throws {
     )
     let commit = try gate.prepareChanges(
         at: 2,
-        changes: [.update(id: .init(1), record: .init(value: 20))]
+        changes: [.update(id: .init(1), patches: setPatch(20))]
     )
 
     async let applySucceeded = attemptApply(commit)
@@ -303,6 +303,55 @@ func modelRecordCommitApplyAndDiscardRaceResolvesExactlyOnce() async throws {
     } else {
         #expect(gate.revision == 1)
         #expect(gate.record(for: .init(1)) == .init(value: 10))
+    }
+}
+
+@Test
+func modelRecordGatePreservesTheSameOrderedAppendPatchesForClaimedAndUnclaimedRecords() throws {
+    let claimedGate = try initializedRecordGate(
+        revision: 1,
+        records: [.init(1): .init(value: 10)]
+    )
+    #expect(claimedGate.claim(.init(1)) != nil)
+    let patches = WebInspectorModelRecordPatchBatch<TestRecord>([
+        .append(1),
+        .append(2),
+        .append(3),
+    ])
+    let claimedMutations = try claimedGate.prepareChanges(
+        at: 2,
+        changes: [.update(id: .init(1), patches: patches)]
+    ).apply()
+    #expect(
+        claimedMutations == [
+            .applyPatches(id: .init(1), patches: patches)
+        ]
+    )
+    #expect(
+        claimedGate.record(for: .init(1))
+            == .init(value: 10, appendedValues: [1, 2, 3])
+    )
+
+    let unclaimedGate = try initializedRecordGate(
+        revision: 1,
+        records: [.init(1): .init(value: 10)]
+    )
+    #expect(
+        try unclaimedGate.prepareChanges(
+            at: 2,
+            changes: [.update(id: .init(1), patches: patches)]
+        ).apply().isEmpty
+    )
+    #expect(
+        unclaimedGate.claim(.init(1))
+            == .init(value: 10, appendedValues: [1, 2, 3])
+    )
+}
+
+@Test
+func modelRecordPatchBatchRejectsAnEmptyUpdate() async {
+    await #expect(processExitsWith: .failure) {
+        _ = WebInspectorModelRecordPatchBatch<TestRecord>([])
     }
 }
 
@@ -337,8 +386,27 @@ private final class RecordGateTestModel: WebInspectorPersistentModel {
     }
 }
 
-private struct TestRecord: Equatable, Sendable {
-    let value: Int
+private enum TestRecordPatch: Equatable, Sendable {
+    case set(Int)
+    case append(Int)
+}
+
+private struct TestRecord: Equatable, WebInspectorModelRecord {
+    var value: Int
+    var appendedValues: [Int] = []
+
+    mutating func apply(_ patch: TestRecordPatch) {
+        switch patch {
+        case let .set(value):
+            self.value = value
+        case let .append(value):
+            appendedValues.append(value)
+        }
+    }
+}
+
+private func setPatch(_ value: Int) -> WebInspectorModelRecordPatchBatch<TestRecord> {
+    WebInspectorModelRecordPatchBatch([.set(value)])
 }
 
 private func initializedRecordGate(

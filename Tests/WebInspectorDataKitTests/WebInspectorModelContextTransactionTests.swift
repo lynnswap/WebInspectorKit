@@ -14,38 +14,42 @@ func heterogeneousModelSourceTransactionCommitsEveryRecordGateBeforePublication(
         secondaryGate: secondaryGate
     )
 
-    let initial = try await core.applySourceBatches([
-        primaryResetBatch(
-            gate: primaryGate,
-            revision: 0,
-            records: [(1, 10, 1)]
-        ),
-        secondaryResetBatch(
-            gate: secondaryGate,
-            revision: 0,
-            records: [(10, 100, 1)]
-        ),
-    ])
+    let initial = try await core.applySourceBatches(
+        at: 0,
+        [
+            primaryResetBatch(
+                gate: primaryGate,
+                revision: 0,
+                records: [(1, 10, 1)]
+            ),
+            secondaryResetBatch(
+                gate: secondaryGate,
+                revision: 0,
+                records: [(10, 100, 1)]
+            ),
+        ])
     #expect(await owner.commit(initial))
     #expect(await owner.claimPrimary(1))
     #expect(await owner.claimSecondary(10))
 
     let primaryQuery = try await core.register(TransactionPrimaryModel.self)
     let secondaryQuery = try await core.register(TransactionSecondaryModel.self)
-    let commit = try await core.applySourceBatches([
-        primaryChangesBatch(
-            gate: primaryGate,
-            revision: 1,
-            records: [.update(id: .init(1), record: .init(value: 11))],
-            query: [.update(primaryQueryRecord(id: 1, value: 11, rank: 1))]
-        ),
-        secondaryChangesBatch(
-            gate: secondaryGate,
-            revision: 1,
-            records: [.update(id: .init(10), record: .init(value: 101))],
-            query: [.update(secondaryQueryRecord(id: 10, value: 101, rank: 1))]
-        ),
-    ])
+    let commit = try await core.applySourceBatches(
+        at: 1,
+        [
+            primaryChangesBatch(
+                gate: primaryGate,
+                revision: 1,
+                records: [.update(id: .init(1), patches: primaryPatch(11))],
+                query: [.update(primaryQueryRecord(id: 1, value: 11, rank: 1))]
+            ),
+            secondaryChangesBatch(
+                gate: secondaryGate,
+                revision: 1,
+                records: [.update(id: .init(10), patches: secondaryPatch(101))],
+                query: [.update(secondaryQueryRecord(id: 10, value: 101, rank: 1))]
+            ),
+        ])
 
     #expect(primaryGate.revision == 0)
     #expect(secondaryGate.revision == 0)
@@ -68,37 +72,41 @@ func recordPreparationFailureDiscardsEveryPreparedGateBeforeQueryStaging()
     let primaryGate = TransactionPrimaryRecordGate()
     let secondaryGate = TransactionSecondaryRecordGate()
     let core = WebInspectorModelContextCore()
-    let initial = try await core.applySourceBatches([
-        primaryResetBatch(
-            gate: primaryGate,
-            revision: 0,
-            records: [(1, 10, 1)]
-        ),
-        secondaryResetBatch(
-            gate: secondaryGate,
-            revision: 0,
-            records: [(10, 100, 1)]
-        ),
-    ])
+    let initial = try await core.applySourceBatches(
+        at: 0,
+        [
+            primaryResetBatch(
+                gate: primaryGate,
+                revision: 0,
+                records: [(1, 10, 1)]
+            ),
+            secondaryResetBatch(
+                gate: secondaryGate,
+                revision: 0,
+                records: [(10, 100, 1)]
+            ),
+        ])
     #expect(publishConsumingEmptyOwnerMutations(initial))
     let primaryQuery = try await core.register(TransactionPrimaryModel.self)
     let secondaryQuery = try await core.register(TransactionSecondaryModel.self)
 
     await #expect(throws: WebInspectorModelRecordGateError.invalidUpdate) {
-        _ = try await core.applySourceBatches([
-            primaryChangesBatch(
-                gate: primaryGate,
-                revision: 1,
-                records: [.update(id: .init(1), record: .init(value: 11))],
-                query: [.update(primaryQueryRecord(id: 1, value: 11, rank: 1))]
-            ),
-            secondaryChangesBatch(
-                gate: secondaryGate,
-                revision: 1,
-                records: [.update(id: .init(99), record: .init(value: 999))],
-                query: [.update(secondaryQueryRecord(id: 99, value: 999, rank: 99))]
-            ),
-        ])
+        _ = try await core.applySourceBatches(
+            at: 1,
+            [
+                primaryChangesBatch(
+                    gate: primaryGate,
+                    revision: 1,
+                    records: [.update(id: .init(1), patches: primaryPatch(11))],
+                    query: [.update(primaryQueryRecord(id: 1, value: 11, rank: 1))]
+                ),
+                secondaryChangesBatch(
+                    gate: secondaryGate,
+                    revision: 1,
+                    records: [.update(id: .init(99), patches: secondaryPatch(999))],
+                    query: [.update(secondaryQueryRecord(id: 99, value: 999, rank: 99))]
+                ),
+            ])
     }
 
     #expect(primaryGate.revision == 0)
@@ -107,20 +115,22 @@ func recordPreparationFailureDiscardsEveryPreparedGateBeforeQueryStaging()
     #expect(try await primaryQuery.state().snapshot.itemIDs == [.init(1)])
     #expect(try await secondaryQuery.state().snapshot.itemIDs == [.init(10)])
 
-    let corrected = try await core.applySourceBatches([
-        primaryChangesBatch(
-            gate: primaryGate,
-            revision: 1,
-            records: [.update(id: .init(1), record: .init(value: 11))],
-            query: [.update(primaryQueryRecord(id: 1, value: 11, rank: 1))]
-        ),
-        secondaryChangesBatch(
-            gate: secondaryGate,
-            revision: 1,
-            records: [.update(id: .init(10), record: .init(value: 101))],
-            query: [.update(secondaryQueryRecord(id: 10, value: 101, rank: 1))]
-        ),
-    ])
+    let corrected = try await core.applySourceBatches(
+        at: 1,
+        [
+            primaryChangesBatch(
+                gate: primaryGate,
+                revision: 1,
+                records: [.update(id: .init(1), patches: primaryPatch(11))],
+                query: [.update(primaryQueryRecord(id: 1, value: 11, rank: 1))]
+            ),
+            secondaryChangesBatch(
+                gate: secondaryGate,
+                revision: 1,
+                records: [.update(id: .init(10), patches: secondaryPatch(101))],
+                query: [.update(secondaryQueryRecord(id: 10, value: 101, rank: 1))]
+            ),
+        ])
     #expect(publishConsumingEmptyOwnerMutations(corrected))
     #expect(primaryGate.record(for: .init(1)) == .init(value: 11))
     #expect(secondaryGate.record(for: .init(10)) == .init(value: 101))
@@ -147,8 +157,8 @@ func transactionRecordGatePreservesClaimBeforeAndApplyBeforeRaces() async throws
             gate: gate,
             revision: 1,
             records: [
-                .update(id: .init(1), record: .init(value: 11)),
-                .update(id: .init(2), record: .init(value: 21)),
+                .update(id: .init(1), patches: primaryPatch(11)),
+                .update(id: .init(2), patches: primaryPatch(21)),
             ],
             query: [
                 .update(primaryQueryRecord(id: 1, value: 11, rank: 1)),
@@ -175,7 +185,7 @@ func transactionRecordGatePreservesClaimBeforeAndApplyBeforeRaces() async throws
     #expect(ownerBatchCount == 1)
     #expect(
         mutations
-            == [.update(id: .init(1), record: .init(value: 11))]
+            == [.applyPatches(id: .init(1), patches: primaryPatch(11))]
     )
     #expect(gate.claim(.init(2)) == .init(value: 21))
 }
@@ -189,18 +199,20 @@ func queryDeliveryObservesCommittedRecordsAndConsumedOwnerMutations() async thro
         primaryGate: primaryGate,
         secondaryGate: secondaryGate
     )
-    let initial = try await core.applySourceBatches([
-        primaryResetBatch(
-            gate: primaryGate,
-            revision: 0,
-            records: [(1, 10, 1)]
-        ),
-        secondaryResetBatch(
-            gate: secondaryGate,
-            revision: 0,
-            records: [(10, 100, 1)]
-        ),
-    ])
+    let initial = try await core.applySourceBatches(
+        at: 0,
+        [
+            primaryResetBatch(
+                gate: primaryGate,
+                revision: 0,
+                records: [(1, 10, 1)]
+            ),
+            secondaryResetBatch(
+                gate: secondaryGate,
+                revision: 0,
+                records: [(10, 100, 1)]
+            ),
+        ])
     #expect(await owner.commit(initial))
     #expect(await owner.claimPrimary(1))
     #expect(await owner.claimSecondary(10))
@@ -217,20 +229,22 @@ func queryDeliveryObservesCommittedRecordsAndConsumedOwnerMutations() async thro
         await Task.yield()
     }
 
-    let commit = try await core.applySourceBatches([
-        primaryChangesBatch(
-            gate: primaryGate,
-            revision: 1,
-            records: [.update(id: .init(1), record: .init(value: 11))],
-            query: [.update(primaryQueryRecord(id: 1, value: 11, rank: 1))]
-        ),
-        secondaryChangesBatch(
-            gate: secondaryGate,
-            revision: 1,
-            records: [.update(id: .init(10), record: .init(value: 101))],
-            query: [.update(secondaryQueryRecord(id: 10, value: 101, rank: 1))]
-        ),
-    ])
+    let commit = try await core.applySourceBatches(
+        at: 1,
+        [
+            primaryChangesBatch(
+                gate: primaryGate,
+                revision: 1,
+                records: [.update(id: .init(1), patches: primaryPatch(11))],
+                query: [.update(primaryQueryRecord(id: 1, value: 11, rank: 1))]
+            ),
+            secondaryChangesBatch(
+                gate: secondaryGate,
+                revision: 1,
+                records: [.update(id: .init(10), patches: secondaryPatch(101))],
+                query: [.update(secondaryQueryRecord(id: 10, value: 101, rank: 1))]
+            ),
+        ])
     #expect(commit.isPublishedForTesting == false)
     #expect(primaryGate.record(for: .init(1)) == .init(value: 10))
     #expect(secondaryGate.record(for: .init(10)) == .init(value: 100))
@@ -267,7 +281,7 @@ func abortResolvesPreparedRecordsAndUnblocksConcurrentClose() async throws {
         primaryTypedChangesBatch(
             gate: gate,
             revision: 1,
-            records: [.update(id: .init(1), record: .init(value: 11))],
+            records: [.update(id: .init(1), patches: primaryPatch(11))],
             query: [.update(primaryQueryRecord(id: 1, value: 11, rank: 1))]
         )
     )
@@ -290,7 +304,7 @@ func abortResolvesPreparedRecordsAndUnblocksConcurrentClose() async throws {
 
     let replacement = try gate.prepareChanges(
         at: 1,
-        changes: [.update(id: .init(1), record: .init(value: 11))]
+        changes: [.update(id: .init(1), patches: primaryPatch(11))]
     )
     try replacement.discard()
 }
@@ -319,7 +333,7 @@ func ownerPublicationAndAbortRaceHasOnlyAtomicTerminalOutcomes() async throws {
             gate: primaryGate,
             revision: 1,
             records: [
-                .update(id: .init(1), record: .init(value: 11)),
+                .update(id: .init(1), patches: primaryPatch(11)),
                 .insert(id: .init(2), record: .init(value: 20)),
             ],
             query: [
@@ -368,27 +382,31 @@ func emptyDeltaAdvancesEveryConfiguredRecordSourceRevision() async throws {
     let primaryGate = TransactionPrimaryRecordGate()
     let secondaryGate = TransactionSecondaryRecordGate()
     let core = WebInspectorModelContextCore()
-    let initial = try await core.applySourceBatches([
-        primaryResetBatch(gate: primaryGate, revision: 5, records: []),
-        secondaryResetBatch(gate: secondaryGate, revision: 5, records: []),
-    ])
+    let initial = try await core.applySourceBatches(
+        at: 5,
+        [
+            primaryResetBatch(gate: primaryGate, revision: 5, records: []),
+            secondaryResetBatch(gate: secondaryGate, revision: 5, records: []),
+        ])
     #expect(publishConsumingEmptyOwnerMutations(initial))
 
     for revision in 6...7 {
-        let commit = try await core.applySourceBatches([
-            primaryChangesBatch(
-                gate: primaryGate,
-                revision: UInt64(revision),
-                records: [],
-                query: []
-            ),
-            secondaryChangesBatch(
-                gate: secondaryGate,
-                revision: UInt64(revision),
-                records: [],
-                query: []
-            ),
-        ])
+        let commit = try await core.applySourceBatches(
+            at: UInt64(revision),
+            [
+                primaryChangesBatch(
+                    gate: primaryGate,
+                    revision: UInt64(revision),
+                    records: [],
+                    query: []
+                ),
+                secondaryChangesBatch(
+                    gate: secondaryGate,
+                    revision: UInt64(revision),
+                    records: [],
+                    query: []
+                ),
+            ])
         var mutationBatchCount = 0
         var everyMutationBatchWasEmpty = false
         let didPublish = commit.publish { mutations in
@@ -407,46 +425,65 @@ func emptyDeltaAdvancesEveryConfiguredRecordSourceRevision() async throws {
 }
 
 @Test
+func modelSourceBatchesRejectAnExplicitRevisionMismatch() async {
+    await #expect(processExitsWith: .failure) {
+        let gate = TransactionPrimaryRecordGate()
+        let core = WebInspectorModelContextCore()
+        _ = try await core.applySourceBatches(
+            at: 1,
+            [
+                primaryResetBatch(gate: gate, revision: 0, records: [])
+            ])
+    }
+}
+
+@Test
 func authoritativeResetBridgesCanonicalRevisionGapForEveryModelSource() async throws {
     let primaryGate = TransactionPrimaryRecordGate()
     let secondaryGate = TransactionSecondaryRecordGate()
     let core = WebInspectorModelContextCore()
-    let initial = try await core.applySourceBatches([
-        primaryResetBatch(gate: primaryGate, revision: 1, records: []),
-        secondaryResetBatch(gate: secondaryGate, revision: 1, records: []),
-    ])
+    let initial = try await core.applySourceBatches(
+        at: 1,
+        [
+            primaryResetBatch(gate: primaryGate, revision: 1, records: []),
+            secondaryResetBatch(gate: secondaryGate, revision: 1, records: []),
+        ])
     #expect(publishConsumingEmptyOwnerMutations(initial))
 
-    let reset = try await core.applySourceBatches([
-        primaryResetBatch(
-            gate: primaryGate,
-            revision: 10,
-            records: [(1, 10, 1)]
-        ),
-        secondaryResetBatch(
-            gate: secondaryGate,
-            revision: 10,
-            records: [(10, 100, 1)]
-        ),
-    ])
+    let reset = try await core.applySourceBatches(
+        at: 10,
+        [
+            primaryResetBatch(
+                gate: primaryGate,
+                revision: 10,
+                records: [(1, 10, 1)]
+            ),
+            secondaryResetBatch(
+                gate: secondaryGate,
+                revision: 10,
+                records: [(10, 100, 1)]
+            ),
+        ])
     #expect(publishConsumingEmptyOwnerMutations(reset))
     #expect(primaryGate.revision == 10)
     #expect(secondaryGate.revision == 10)
 
-    let contiguous = try await core.applySourceBatches([
-        primaryChangesBatch(
-            gate: primaryGate,
-            revision: 11,
-            records: [],
-            query: []
-        ),
-        secondaryChangesBatch(
-            gate: secondaryGate,
-            revision: 11,
-            records: [],
-            query: []
-        ),
-    ])
+    let contiguous = try await core.applySourceBatches(
+        at: 11,
+        [
+            primaryChangesBatch(
+                gate: primaryGate,
+                revision: 11,
+                records: [],
+                query: []
+            ),
+            secondaryChangesBatch(
+                gate: secondaryGate,
+                revision: 11,
+                records: [],
+                query: []
+            ),
+        ])
     #expect(publishConsumingEmptyOwnerMutations(contiguous))
 }
 
@@ -508,25 +545,29 @@ func modelContextTransactionRunsFromANonMainActorOwner() async throws {
             let primaryGate = TransactionPrimaryRecordGate()
             let secondaryGate = TransactionSecondaryRecordGate()
             let core = WebInspectorModelContextCore()
-            let initial = try await core.applySourceBatches([
-                primaryResetBatch(gate: primaryGate, revision: 0, records: []),
-                secondaryResetBatch(gate: secondaryGate, revision: 0, records: []),
-            ])
+            let initial = try await core.applySourceBatches(
+                at: 0,
+                [
+                    primaryResetBatch(gate: primaryGate, revision: 0, records: []),
+                    secondaryResetBatch(gate: secondaryGate, revision: 0, records: []),
+                ])
             _ = publishConsumingEmptyOwnerMutations(initial)
-            _ = try await core.applySourceBatches([
-                secondaryChangesBatch(
-                    gate: secondaryGate,
-                    revision: 1,
-                    records: [],
-                    query: []
-                ),
-                primaryChangesBatch(
-                    gate: primaryGate,
-                    revision: 1,
-                    records: [],
-                    query: []
-                ),
-            ])
+            _ = try await core.applySourceBatches(
+                at: 1,
+                [
+                    secondaryChangesBatch(
+                        gate: secondaryGate,
+                        revision: 1,
+                        records: [],
+                        query: []
+                    ),
+                    primaryChangesBatch(
+                        gate: primaryGate,
+                        revision: 1,
+                        records: [],
+                        query: []
+                    ),
+                ])
         }
     }
 
@@ -560,7 +601,7 @@ func modelContextTransactionRunsFromANonMainActorOwner() async throws {
                 recordGate: TransactionPrimaryRecordGate(),
                 canonicalRevision: 1,
                 records: .changes([
-                    .update(id: .init(1), record: .init(value: 11))
+                    .update(id: .init(1), patches: primaryPatch(11))
                 ]),
                 fetchedResults: WebInspectorFetchedResultsSourceBatch(
                     canonicalRevision: 1,
@@ -606,8 +647,16 @@ private final class TransactionPrimaryModel: WebInspectorPersistentModel {
     }
 }
 
-private struct TransactionPrimaryRecord: Equatable, Sendable {
+private struct TransactionRecordPatch: Equatable, Sendable {
     let value: Int
+}
+
+private struct TransactionPrimaryRecord: Equatable, WebInspectorModelRecord {
+    var value: Int
+
+    mutating func apply(_ patch: TransactionRecordPatch) {
+        value = patch.value
+    }
 }
 
 private struct TransactionSecondaryID: WebInspectorPersistentIdentifier {
@@ -636,8 +685,24 @@ private final class TransactionSecondaryModel: WebInspectorPersistentModel {
     }
 }
 
-private struct TransactionSecondaryRecord: Equatable, Sendable {
-    let value: Int
+private struct TransactionSecondaryRecord: Equatable, WebInspectorModelRecord {
+    var value: Int
+
+    mutating func apply(_ patch: TransactionRecordPatch) {
+        value = patch.value
+    }
+}
+
+private func primaryPatch(
+    _ value: Int
+) -> WebInspectorModelRecordPatchBatch<TransactionPrimaryRecord> {
+    WebInspectorModelRecordPatchBatch([.init(value: value)])
+}
+
+private func secondaryPatch(
+    _ value: Int
+) -> WebInspectorModelRecordPatchBatch<TransactionSecondaryRecord> {
+    WebInspectorModelRecordPatchBatch([.init(value: value)])
 }
 
 private actor TransactionTestOwner {
@@ -686,8 +751,12 @@ private actor TransactionTestOwner {
                     ) { mutations in
                         for mutation in mutations {
                             switch mutation {
-                            case let .update(id, record):
+                            case let .replace(id, record):
                                 current.primary[id] = record.value
+                            case let .applyPatches(id, patches):
+                                for patch in patches.patches {
+                                    current.primary[id] = patch.value
+                                }
                             case let .invalidate(id):
                                 current.primary[id] = nil
                             }
@@ -702,8 +771,12 @@ private actor TransactionTestOwner {
                     ) { mutations in
                         for mutation in mutations {
                             switch mutation {
-                            case let .update(id, record):
+                            case let .replace(id, record):
                                 current.secondary[id] = record.value
+                            case let .applyPatches(id, patches):
+                                for patch in patches.patches {
+                                    current.secondary[id] = patch.value
+                                }
                             case let .invalidate(id):
                                 current.secondary[id] = nil
                             }

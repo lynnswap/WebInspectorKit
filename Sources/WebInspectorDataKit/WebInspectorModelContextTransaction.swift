@@ -4,7 +4,7 @@ import Synchronization
 /// canonical revision.
 package struct WebInspectorModelSourceBatch<
     Model: WebInspectorPersistentModel,
-    Record: Sendable
+    Record: WebInspectorModelRecord
 >: Sendable {
     /// The authoritative record work represented by this source batch.
     package enum Records: Sendable {
@@ -146,6 +146,7 @@ package struct AnyWebInspectorModelSourceBatch: Sendable {
     struct SourceIdentity: Equatable, Sendable {
         let recordGate: ObjectIdentifier
         let recordType: ObjectIdentifier
+        let patchType: ObjectIdentifier
     }
 
     let canonicalRevision: UInt64
@@ -156,7 +157,7 @@ package struct AnyWebInspectorModelSourceBatch: Sendable {
 
     package init<
         Model: WebInspectorPersistentModel,
-        Record: Sendable
+        Record: WebInspectorModelRecord
     >(
         _ batch: WebInspectorModelSourceBatch<Model, Record>
     ) {
@@ -164,7 +165,8 @@ package struct AnyWebInspectorModelSourceBatch: Sendable {
         modelTypeID = ObjectIdentifier(Model.self)
         sourceIdentity = SourceIdentity(
             recordGate: ObjectIdentifier(batch.recordGate),
-            recordType: ObjectIdentifier(Record.self)
+            recordType: ObjectIdentifier(Record.self),
+            patchType: ObjectIdentifier(Record.Patch.self)
         )
         queryBatch = WebInspectorModelContextQueryBatch(batch.fetchedResults)
         prepareBody = {
@@ -204,9 +206,9 @@ package struct WebInspectorModelRecordOwnerMutationBatch: Sendable {
     private let payload: any Sendable
     let consumption = _WebInspectorModelRecordOwnerMutationConsumption()
 
-    fileprivate init<
+    package init<
         Model: WebInspectorPersistentModel,
-        Record: Sendable
+        Record: WebInspectorModelRecord
     >(
         _ mutations: [WebInspectorModelRecordOwnerMutation<Model, Record>]
     ) {
@@ -217,7 +219,7 @@ package struct WebInspectorModelRecordOwnerMutationBatch: Sendable {
 
     package func consume<
         Model: WebInspectorPersistentModel,
-        Record: Sendable,
+        Record: WebInspectorModelRecord,
         Output
     >(
         as model: Model.Type,
@@ -286,7 +288,7 @@ struct _WebInspectorAnyPreparedModelRecordCommit: Sendable {
 
     init<
         Model: WebInspectorPersistentModel,
-        Record: Sendable
+        Record: WebInspectorModelRecord
     >(
         _ commit: WebInspectorModelRecordGateCommit<Model, Record>
     ) {
