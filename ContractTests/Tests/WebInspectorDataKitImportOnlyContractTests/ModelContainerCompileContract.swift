@@ -1,8 +1,9 @@
 import Testing
 import WebInspectorDataKit
 
+@MainActor
 @Test
-func modelContainerPublicLifecycleSurfaceCompilesWithoutProxyKitImport() async {
+func modelContainerPublicLifecycleSurfaceCompilesWithoutProxyKitImport() async throws {
     let container = WebInspectorModelContainer(
         configuration: .init(domains: [.css, .network])
     )
@@ -15,6 +16,14 @@ func modelContainerPublicLifecycleSurfaceCompilesWithoutProxyKitImport() async {
 
     var states = container.stateUpdates.makeAsyncIterator()
     #expect(await states.next() == .detached)
+
+    let mainContext = container.mainContext
+    #expect(mainContext === container.mainContext)
+    let customContext = try await container.makeContext(
+        isolation: MainActor.shared
+    )
+    #expect(customContext != mainContext)
+    await customContext.close()
 
     await container.detach()
     await container.close()

@@ -26,6 +26,8 @@ private final class WebInspectorModelDeliveryBridge: @unchecked Sendable {
         case prepareAttachment(token: UInt64)
         case prepareRecord(ConnectionModelFeedRecord, token: UInt64)
         case commit(WebInspectorModelContext.ReducerWorkResult, token: UInt64)
+        case commitContainerRevision(UInt64)
+        case closeContainerProjection
         case accept(
             feed: ConnectionModelFeed,
             proxy: WebInspectorProxy,
@@ -108,6 +110,12 @@ private final class WebInspectorModelDeliveryBridge: @unchecked Sendable {
             return .prepared(context.prepare(record, token: token))
         case let .commit(result, token):
             return .committed(context.commit(result, token: token))
+        case let .commitContainerRevision(revision):
+            return .accepted(
+                context.commitContainerRevision(revision)
+            )
+        case .closeContainerProjection:
+            return .accepted(context.closeContainerProjection())
         case let .accept(feed, proxy, token):
             return .accepted(
                 context.accept(feed: feed, proxy: proxy, token: token)
@@ -302,6 +310,16 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         let token: UInt64
         let proxy: WebInspectorProxy
         let completion: ReplyPromise<Void>
+    }
+
+    private struct ContainerRegistrationBinding {
+        let core: WebInspectorModelContainerCore
+        let registrationID: WebInspectorModelContextRegistrationID
+    }
+
+    private struct PreparedContainerContext {
+        let context: WebInspectorModelContext
+        let startGate: ReplyPromise<Bool>
     }
 
     fileprivate enum InspectorSelectionOutcome: Sendable {
@@ -516,6 +534,12 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
     @ObservationIgnored private var attachmentTask: Task<Failure?, Never>?
     @ObservationIgnored private var cleanupTask: Task<Failure?, Never>?
     @ObservationIgnored private var driverTask: Task<Void, Never>?
+    @ObservationIgnored private var containerRegistrationBinding:
+        ContainerRegistrationBinding?
+    @ObservationIgnored private var containerDriverTask: Task<Void, Never>?
+    @ObservationIgnored private var containerReadiness: ReplyPromise<Void>?
+    @ObservationIgnored private var appliedContainerRevision: UInt64?
+    @ObservationIgnored private var containerProjectionIsClosing: Bool
     @ObservationIgnored private var didPrepareAttachmentReset: Bool
     @ObservationIgnored private var isTerminallyClosed: Bool
     @ObservationIgnored private var pendingReducerCommitAction: PendingReducerCommitAction
@@ -586,6 +610,11 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         attachmentTask = nil
         cleanupTask = nil
         driverTask = nil
+        containerRegistrationBinding = nil
+        containerDriverTask = nil
+        containerReadiness = nil
+        appliedContainerRevision = nil
+        containerProjectionIsClosing = false
         didPrepareAttachmentReset = false
         isTerminallyClosed = false
         pendingReducerCommitAction = .none
@@ -623,10 +652,101 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         return context
     }
 
+    package static func mainContext(
+        for core: WebInspectorModelContainerCore,
+        isolation: isolated (any Actor)
+    ) -> WebInspectorModelContext {
+        let seed = core.mainContextSeed
+        let prepared = prepareContainerContext(
+            core: core,
+            registrationID: seed.id,
+            updates: seed.updates,
+            isolation: isolation
+        )
+        switch seed.claimForMaterialization() {
+        case .admitted:
+            prepared.startGate.fulfill(.success(true))
+        case .closed:
+            prepared.context.containerProjectionIsClosing = true
+            prepared.context.isTerminallyClosed = true
+            prepared.context.state = .closed
+            prepared.startGate.fulfill(.success(false))
+        }
+        return prepared.context
+    }
+
+    package static func customContext(
+        for core: WebInspectorModelContainerCore,
+        registration: WebInspectorModelContextRegistration,
+        isolation: isolated (any Actor)
+    ) -> WebInspectorModelContext? {
+        let prepared = prepareContainerContext(
+            core: core,
+            registrationID: registration.id,
+            updates: registration.updates,
+            isolation: isolation
+        )
+        guard registration.claimForMaterialization() == .admitted else {
+            prepared.context.containerProjectionIsClosing = true
+            prepared.context.isTerminallyClosed = true
+            prepared.context.state = .closed
+            prepared.startGate.fulfill(.success(false))
+            return nil
+        }
+        prepared.startGate.fulfill(.success(true))
+        return prepared.context
+    }
+
+    private static func prepareContainerContext(
+        core: WebInspectorModelContainerCore,
+        registrationID: WebInspectorModelContextRegistrationID,
+        updates: WebInspectorCanonicalModelUpdateSequence,
+        isolation: isolated (any Actor)
+    ) -> PreparedContainerContext {
+        let domains = Set(core.configuredDomains.map(Self.domain))
+        let context = WebInspectorModelContext(
+            configuration: Configuration(domains: domains)
+        )
+        context.bindOwner(isolation)
+        context.containerRegistrationBinding = ContainerRegistrationBinding(
+            core: core,
+            registrationID: registrationID
+        )
+        let readiness = ReplyPromise<Void>()
+        context.containerReadiness = readiness
+        let startGate = ReplyPromise<Bool>()
+        context.containerDriverTask = makeContainerDriverTask(
+            core: core,
+            registrationID: registrationID,
+            updates: updates,
+            startGate: startGate,
+            readiness: readiness,
+            bridge: context.deliveryBridge
+        )
+        return PreparedContainerContext(
+            context: context,
+            startGate: startGate
+        )
+    }
+
+    package nonisolated(nonsending) func waitUntilContainerReady() async throws {
+        preconditionOwnerIsolation()
+        guard let containerReadiness else {
+            return
+        }
+        try await containerReadiness.valueIgnoringCancellation()
+    }
+
+    package var appliedContainerRevisionForTesting: UInt64? {
+        preconditionOwnerIsolation()
+        return appliedContainerRevision
+    }
+
     deinit {
         attachmentTask?.cancel()
         cleanupTask?.cancel()
         driverTask?.cancel()
+        containerDriverTask?.cancel()
     }
 
     package var status: Status {
@@ -651,6 +771,10 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         to proxy: WebInspectorProxy,
         isolation: isolated (any Actor) = #isolation
     ) async throws {
+        precondition(
+            containerRegistrationBinding == nil,
+            "A container-vended context cannot own a Proxy connection."
+        )
         bindOwner(isolation)
         switch state {
         case .closed:
@@ -676,6 +800,11 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
     }
 
     public nonisolated(nonsending) func detach() async {
+        preconditionOwnerIsolation()
+        if containerRegistrationBinding != nil {
+            await closeContainerRegistration()
+            return
+        }
         await tearDown(terminal: false)
     }
 
@@ -690,7 +819,35 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
     }
 
     public nonisolated(nonsending) func close() async {
+        preconditionOwnerIsolation()
+        if containerRegistrationBinding != nil {
+            await closeContainerRegistration()
+            return
+        }
         await tearDown(terminal: true)
+    }
+
+    private nonisolated(nonsending) func closeContainerRegistration() async {
+        guard let binding = containerRegistrationBinding else {
+            return
+        }
+        let task = containerDriverTask
+        if containerProjectionIsClosing == false {
+            containerProjectionIsClosing = true
+            do {
+                _ = try await binding.core.beginContextClose(
+                    binding.registrationID
+                )
+            } catch WebInspectorModelContainerCoreError.closed {
+                // The Container already completed the same terminal teardown.
+            } catch {
+                preconditionFailure(
+                    "A model context close lost its Core registration: \(error)"
+                )
+            }
+        }
+        await task?.value
+        containerDriverTask = nil
     }
 
     private func bindOwner(_ isolation: isolated (any Actor)) {
@@ -699,6 +856,38 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
 
     package func preconditionOwnerIsolation() {
         deliveryBridge.preconditionOwnerIsolation()
+    }
+
+    fileprivate func commitContainerRevision(_ revision: UInt64) -> Bool {
+        guard
+            containerRegistrationBinding != nil,
+            containerProjectionIsClosing == false,
+            isTerminallyClosed == false
+        else {
+            return false
+        }
+        if let appliedContainerRevision {
+            precondition(
+                appliedContainerRevision < revision,
+                "A model context must apply canonical revisions monotonically."
+            )
+        }
+        appliedContainerRevision = revision
+        return true
+    }
+
+    fileprivate func closeContainerProjection() -> Bool {
+        guard containerRegistrationBinding != nil else {
+            return false
+        }
+        guard isTerminallyClosed == false else {
+            return true
+        }
+        containerProjectionIsClosing = true
+        isTerminallyClosed = true
+        containerDriverTask = nil
+        transition(to: .closed)
+        return true
     }
 
     private func beginAttachment(
@@ -1018,6 +1207,116 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         }
         attachmentTask = nil
         return true
+    }
+
+    private nonisolated static func makeContainerDriverTask(
+        core: WebInspectorModelContainerCore,
+        registrationID: WebInspectorModelContextRegistrationID,
+        updates: WebInspectorCanonicalModelUpdateSequence,
+        startGate: ReplyPromise<Bool>,
+        readiness: ReplyPromise<Void>,
+        bridge: WebInspectorModelDeliveryBridge
+    ) -> Task<Void, Never> {
+        Task.detached(priority: .userInitiated) {
+            await driveContainerRegistration(
+                core: core,
+                registrationID: registrationID,
+                updates: updates,
+                startGate: startGate,
+                readiness: readiness,
+                bridge: bridge
+            )
+        }
+    }
+
+    private static func driveContainerRegistration(
+        core: WebInspectorModelContainerCore,
+        registrationID: WebInspectorModelContextRegistrationID,
+        updates: WebInspectorCanonicalModelUpdateSequence,
+        startGate: ReplyPromise<Bool>,
+        readiness: ReplyPromise<Void>,
+        bridge: WebInspectorModelDeliveryBridge
+    ) async {
+        guard
+            (try? await startGate.valueIgnoringCancellation()) == true
+        else {
+            readiness.fulfill(.success(()))
+            return
+        }
+        var terminalFailure: (any Error)?
+        do {
+            try await core.activateContext(registrationID)
+            var iterator = updates.makeAsyncIterator()
+            while let update = await iterator.next() {
+                let revision: UInt64
+                switch update {
+                case let .initial(initialRevision, _):
+                    revision = initialRevision
+                case let .changes(_, toRevision, _):
+                    revision = toRevision
+                case let .resetRequired(_, token):
+                    let rebase = try await core.rebaseContext(
+                        token,
+                        for: registrationID
+                    )
+                    revision = rebase.revision
+                }
+
+                guard await commitContainerRevision(
+                    revision,
+                    bridge: bridge
+                ) else {
+                    break
+                }
+                try await core.acknowledgeContext(
+                    registrationID,
+                    through: revision
+                )
+                readiness.fulfill(.success(()))
+            }
+        } catch let error {
+            if error != .closed {
+                terminalFailure = error
+            }
+        }
+
+        await closeContainerProjection(bridge: bridge)
+        _ = await core.unregisterContext(registrationID)
+        if let terminalFailure {
+            readiness.fulfill(.failure(terminalFailure))
+            preconditionFailure(
+                "A model context subscription violated its Core contract: \(terminalFailure)"
+            )
+        }
+        readiness.fulfill(.success(()))
+    }
+
+    private static func commitContainerRevision(
+        _ revision: UInt64,
+        bridge: WebInspectorModelDeliveryBridge
+    ) async -> Bool {
+        guard let owner = bridge.resolveActor() else {
+            return false
+        }
+        guard case let .accepted(accepted)? = await bridge.deliver(
+            .commitContainerRevision(revision),
+            isolation: owner
+        ) else {
+            return false
+        }
+        return accepted
+    }
+
+    private static func closeContainerProjection(
+        bridge: WebInspectorModelDeliveryBridge
+    ) async {
+        guard let owner = bridge.resolveActor() else {
+            return
+        }
+        _ = await bridge.deliver(
+            .closeContainerProjection,
+            isolation: owner
+        )
     }
 
     private nonisolated static func makeDriverTask(

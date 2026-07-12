@@ -156,6 +156,8 @@ public final class WebInspectorModelContainer: Equatable, Sendable {
 
     package let core: WebInspectorModelContainerCore
 
+    @MainActor private var cachedMainContext: WebInspectorModelContext? = nil
+
     /// The current connection lifecycle state.
     public nonisolated var state: State {
         core.connectionState
@@ -164,6 +166,20 @@ public final class WebInspectorModelContainer: Equatable, Sendable {
     /// A new current-value connection-state subscription.
     public nonisolated var stateUpdates: StateUpdateSequence {
         core.connectionStateUpdates
+    }
+
+    /// The stable main-actor model context for UI consumers.
+    @MainActor
+    public var mainContext: WebInspectorModelContext {
+        if let cachedMainContext {
+            return cachedMainContext
+        }
+        let context = WebInspectorModelContext.mainContext(
+            for: core,
+            isolation: MainActor.shared
+        )
+        cachedMainContext = context
+        return context
     }
 
     /// Creates a detached reusable model container.
@@ -229,6 +245,43 @@ public final class WebInspectorModelContainer: Equatable, Sendable {
     /// Adopts exclusive ownership of an already connected ProxyKit connection.
     package func attach(owning proxy: WebInspectorProxy) async throws {
         try await core.attach(owning: proxy)
+    }
+
+    /// Creates an independently owned context on the caller's actor.
+    public func makeContext(
+        isolation: isolated (any Actor) = #isolation
+    ) async throws -> WebInspectorModelContext {
+        let registration: WebInspectorModelContextRegistration
+        do {
+            registration = try await core.registerContext()
+        } catch WebInspectorModelContainerCoreError.closed {
+            throw Failure.closed
+        } catch {
+            preconditionFailure(
+                "Model context registration failed outside its public contract: \(error)"
+            )
+        }
+
+        do {
+            try Task.checkCancellation()
+        } catch {
+            _ = await core.abandonContext(registration.id)
+            throw error
+        }
+
+        guard
+            let context = WebInspectorModelContext.customContext(
+                for: core,
+                registration: registration,
+                isolation: isolation
+            )
+        else {
+            _ = await core.abandonContext(registration.id)
+            throw Failure.closed
+        }
+
+        try await context.waitUntilContainerReady()
+        return context
     }
 
     /// Detaches the current connection while preserving this container.
