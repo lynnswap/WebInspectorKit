@@ -58,7 +58,9 @@ struct CanonicalNetworkTestFixture {
             ),
             domBindingEpoch: domBindingEpoch.map {
                 ModelDOMBindingEpoch(rawValue: $0)
-            }
+            },
+            runtimeBindingEpoch: nil,
+            consoleBindingEpoch: nil
         )
         return WebInspectorCanonicalNetworkEventScope(
             modelScope: modelScope

@@ -892,7 +892,9 @@ private func canonicalDOMScope(
             parentFrameID: nil
         ),
         navigationEpoch: ModelNavigationEpoch(rawValue: 1),
-        domBindingEpoch: domEpoch.map(ModelDOMBindingEpoch.init(rawValue:))
+        domBindingEpoch: domEpoch.map(ModelDOMBindingEpoch.init(rawValue:)),
+        runtimeBindingEpoch: nil,
+        consoleBindingEpoch: nil
     )
     return WebInspectorCanonicalDOMEventScope(modelScope: modelScope)
 }
