@@ -10,169 +10,240 @@ private typealias TestPublication = WebInspectorRevisionedSnapshotPublication<
     String,
     RevisionedSnapshotTestFailure
 >
+private typealias TestSequence = TestPublication.UpdateSequence
+private typealias TestUpdate = TestPublication.Update
+private typealias TestRebaseToken = TestPublication.RebaseToken
 
 @Test
-func revisionedSnapshotSubscriptionStartsWithOneAtomicInitialState() async throws {
-    let publication = TestPublication(revision: 7, snapshot: [1, 2])
-    let sequence = publication.subscribe()
-    #expect(publication.activeSubscriberCount == 1)
+func revisionedSnapshotSubscriptionStartsWithOneOwnerAtomicInitialState() async throws {
+    let owner = RevisionedSnapshotTestOwner(revision: 7, snapshot: [1, 2])
+    let sequence = await owner.subscribe()
+    #expect(owner.publication.activeSubscriberCount == 1)
 
     var iterator = sequence.makeAsyncIterator()
     let update = try await iterator.next()
 
     #expect(update == .initial(revision: 7, snapshot: [1, 2]))
+    let initialCaptures = await owner.initialSnapshotCaptureCount
+    let rebaseCaptures = await owner.rebaseSnapshotCaptureCount
+    #expect(initialCaptures == 1)
+    #expect(rebaseCaptures == 0)
 }
 
 @Test
-func revisionedSnapshotPublicationDeliversAContiguousChange() async throws {
-    let publication = TestPublication(snapshot: [])
-    var iterator = publication.subscribe().makeAsyncIterator()
+func waitingSubscriberReceivesAContiguousChangeWithoutSnapshotWork() async throws {
+    let owner = RevisionedSnapshotTestOwner()
+    var iterator = await owner.subscribe().makeAsyncIterator()
     #expect(try await iterator.next() == .initial(revision: 0, snapshot: []))
-
-    publication.publish(
-        from: 0,
-        to: 1,
-        changes: "insert 1",
-        latestSnapshot: [1]
-    )
-
-    #expect(try await iterator.next() == .changes(
-        fromRevision: 0,
-        toRevision: 1,
-        changes: "insert 1"
-    ))
-}
-
-@Test
-func waitingSubscriberReceivesTheContiguousChangeDirectly() async throws {
-    let publication = TestPublication(snapshot: [])
-    var iterator = publication.subscribe().makeAsyncIterator()
-    _ = try await iterator.next()
 
     let delivery = Task {
         try await iterator.next()
     }
-    while publication.waitingSubscriberCountForTesting == 0 {
+    while owner.publication.waitingSubscriberCountForTesting == 0 {
         await Task.yield()
     }
 
-    publication.publish(
-        from: 0,
-        to: 1,
-        changes: "insert 1",
-        latestSnapshot: [1]
-    )
+    await owner.publish(1)
 
-    #expect(try await delivery.value == .changes(
-        fromRevision: 0,
-        toRevision: 1,
-        changes: "insert 1"
-    ))
+    #expect(
+        try await delivery.value
+            == .changes(
+                fromRevision: 0,
+                toRevision: 1,
+                changes: "insert 1"
+            ))
+    let rebaseCaptures = await owner.rebaseSnapshotCaptureCount
+    #expect(rebaseCaptures == 0)
 }
 
 @Test
-func pendingInitialRefreshesToTheLatestAtomicInitialState() async throws {
-    let publication = TestPublication(snapshot: [])
-    var iterator = publication.subscribe().makeAsyncIterator()
+func pendingInitialCoalescesToOwnerSuppliedInitialRebase() async throws {
+    let owner = RevisionedSnapshotTestOwner()
+    var iterator = await owner.subscribe().makeAsyncIterator()
 
-    publication.publish(from: 0, to: 1, changes: "one", latestSnapshot: [1])
-    publication.publish(from: 1, to: 2, changes: "two", latestSnapshot: [1, 2])
+    await owner.publish(1)
+    await owner.publish(2)
 
-    #expect(try await iterator.next() == .initial(revision: 2, snapshot: [1, 2]))
+    let capturesBeforeDequeue = await owner.rebaseSnapshotCaptureCount
+    #expect(capturesBeforeDequeue == 0)
+    guard case let .resetRequired(latestRevision, token) = try await iterator.next() else {
+        Issue.record("Expected an owner-supplied initial rebase request.")
+        return
+    }
+    #expect(latestRevision == 2)
+
+    let rebase = try await owner.rebase(token)
+    #expect(
+        rebase
+            == .init(
+                disposition: .initial,
+                revision: 2,
+                snapshot: [1, 2]
+            ))
+    let capturesAfterRebase = await owner.rebaseSnapshotCaptureCount
+    #expect(capturesAfterRebase == 1)
 }
 
 @Test
-func slowSubscriberReceivesOneLatestReset() async throws {
-    let publication = TestPublication(snapshot: [])
-    var iterator = publication.subscribe().makeAsyncIterator()
+func pendingChangeAndResetMarkerCoalesceWithoutSnapshotWork() async throws {
+    let owner = RevisionedSnapshotTestOwner()
+    var iterator = await owner.subscribe().makeAsyncIterator()
     _ = try await iterator.next()
 
-    publication.publish(from: 0, to: 1, changes: "one", latestSnapshot: [1])
-    publication.publish(from: 1, to: 2, changes: "two", latestSnapshot: [1, 2])
+    await owner.publish(1)
+    await owner.publish(2)
+    await owner.publish(3)
 
-    #expect(try await iterator.next() == .reset(revision: 2, snapshot: [1, 2]))
+    let capturesBeforeDequeue = await owner.rebaseSnapshotCaptureCount
+    #expect(capturesBeforeDequeue == 0)
+    guard case let .resetRequired(latestRevision, token) = try await iterator.next() else {
+        Issue.record("Expected a reset request after a pending change overflowed.")
+        return
+    }
+    #expect(latestRevision == 3)
+
+    let rebase = try await owner.rebase(token)
+    #expect(
+        rebase
+            == .init(
+                disposition: .reset,
+                revision: 3,
+                snapshot: [1, 2, 3]
+            ))
 }
 
 @Test
-func pendingResetRefreshesWithoutExposingIntermediateStates() async throws {
-    let publication = TestPublication(snapshot: [])
-    var iterator = publication.subscribe().makeAsyncIterator()
+func permanentlySlowSubscriberDoesNoSnapshotWorkWhilePublishing() async throws {
+    let owner = RevisionedSnapshotTestOwner()
+    let sequence = await owner.subscribe()
+    var iterator = sequence.makeAsyncIterator()
     _ = try await iterator.next()
 
-    publication.publish(from: 0, to: 1, changes: "one", latestSnapshot: [1])
-    publication.publish(from: 1, to: 2, changes: "two", latestSnapshot: [1, 2])
-    publication.publish(from: 2, to: 3, changes: "three", latestSnapshot: [1, 2, 3])
+    await owner.publish(1...100)
 
-    #expect(try await iterator.next() == .reset(revision: 3, snapshot: [1, 2, 3]))
+    let rebaseCaptures = await owner.rebaseSnapshotCaptureCount
+    #expect(rebaseCaptures == 0)
+    #expect(owner.publication.activeSubscriberCount == 1)
+    sequence.cancel()
 }
 
 @Test
-func subscribersMaintainIndependentCapacityOneMailboxes() async throws {
-    let publication = TestPublication(snapshot: [])
-    var fastIterator = publication.subscribe().makeAsyncIterator()
-    var slowIterator = publication.subscribe().makeAsyncIterator()
-    _ = try await fastIterator.next()
-    _ = try await slowIterator.next()
+func dequeuedResetTracksLaterPublishesAndRebasesToTheLatestOwnerRevision() async throws {
+    let owner = RevisionedSnapshotTestOwner()
+    var iterator = await owner.subscribe().makeAsyncIterator()
+    _ = try await iterator.next()
 
-    publication.publish(from: 0, to: 1, changes: "one", latestSnapshot: [1])
-    #expect(try await fastIterator.next() == .changes(
-        fromRevision: 0,
-        toRevision: 1,
-        changes: "one"
-    ))
+    await owner.publish(1)
+    await owner.publish(2)
+    guard case let .resetRequired(markerRevision, token) = try await iterator.next() else {
+        Issue.record("Expected a reset request.")
+        return
+    }
+    #expect(markerRevision == 2)
 
-    publication.publish(from: 1, to: 2, changes: "two", latestSnapshot: [1, 2])
+    await owner.publish(3)
+    let rebase = try await owner.rebase(token, thenPublish: 4)
+    #expect(
+        rebase
+            == .init(
+                disposition: .reset,
+                revision: 3,
+                snapshot: [1, 2, 3]
+            ))
 
-    #expect(try await fastIterator.next() == .changes(
-        fromRevision: 1,
-        toRevision: 2,
-        changes: "two"
-    ))
-    #expect(try await slowIterator.next() == .reset(revision: 2, snapshot: [1, 2]))
+    #expect(
+        try await iterator.next()
+            == .changes(
+                fromRevision: 3,
+                toRevision: 4,
+                changes: "insert 4"
+            ))
+}
+
+@Test
+func slowSubscribersRequestIndependentOwnerSnapshotsOnlyWhenConsumed() async throws {
+    let owner = RevisionedSnapshotTestOwner()
+    var firstIterator = await owner.subscribe().makeAsyncIterator()
+    var secondIterator = await owner.subscribe().makeAsyncIterator()
+    _ = try await firstIterator.next()
+    _ = try await secondIterator.next()
+
+    await owner.publish(1)
+    await owner.publish(2)
+    let capturesBeforeDequeue = await owner.rebaseSnapshotCaptureCount
+    #expect(capturesBeforeDequeue == 0)
+
+    guard case let .resetRequired(_, firstToken) = try await firstIterator.next(),
+        case let .resetRequired(_, secondToken) = try await secondIterator.next()
+    else {
+        Issue.record("Expected independent reset requests.")
+        return
+    }
+
+    _ = try await owner.rebase(firstToken)
+    let capturesAfterFirst = await owner.rebaseSnapshotCaptureCount
+    #expect(capturesAfterFirst == 1)
+
+    _ = try await owner.rebase(secondToken)
+    let capturesAfterSecond = await owner.rebaseSnapshotCaptureCount
+    #expect(capturesAfterSecond == 2)
 }
 
 @Test
 func explicitSequenceCancellationRemovesOnlyItsSubscriber() async throws {
-    let publication = TestPublication(snapshot: [])
-    let cancelledSequence = publication.subscribe()
-    var remainingIterator = publication.subscribe().makeAsyncIterator()
+    let publication = TestPublication()
+    let cancelledSequence = publication.subscribe(revision: 0, snapshot: [])
+    var remainingIterator =
+        publication
+        .subscribe(revision: 0, snapshot: [])
+        .makeAsyncIterator()
     _ = try await remainingIterator.next()
     #expect(publication.activeSubscriberCount == 2)
 
     cancelledSequence.cancel()
     #expect(publication.activeSubscriberCount == 1)
 
-    publication.publish(from: 0, to: 1, changes: "one", latestSnapshot: [1])
-    #expect(try await remainingIterator.next() == .changes(
-        fromRevision: 0,
-        toRevision: 1,
-        changes: "one"
-    ))
+    publication.publish(from: 0, to: 1, changes: "one")
+    #expect(
+        try await remainingIterator.next()
+            == .changes(
+                fromRevision: 0,
+                toRevision: 1,
+                changes: "one"
+            ))
 }
 
 @Test
 func explicitIteratorCancellationRemovesOnlyItsSubscriber() async throws {
-    let publication = TestPublication(snapshot: [])
-    var cancelledIterator = publication.subscribe().makeAsyncIterator()
-    var remainingIterator = publication.subscribe().makeAsyncIterator()
+    let publication = TestPublication()
+    var cancelledIterator =
+        publication
+        .subscribe(revision: 0, snapshot: [])
+        .makeAsyncIterator()
+    var remainingIterator =
+        publication
+        .subscribe(revision: 0, snapshot: [])
+        .makeAsyncIterator()
     _ = try await cancelledIterator.next()
     _ = try await remainingIterator.next()
 
     cancelledIterator.cancel()
     #expect(publication.activeSubscriberCount == 1)
 
-    publication.publish(from: 0, to: 1, changes: "one", latestSnapshot: [1])
-    #expect(try await remainingIterator.next() == .changes(
-        fromRevision: 0,
-        toRevision: 1,
-        changes: "one"
-    ))
+    publication.publish(from: 0, to: 1, changes: "one")
+    #expect(
+        try await remainingIterator.next()
+            == .changes(
+                fromRevision: 0,
+                toRevision: 1,
+                changes: "one"
+            ))
 }
 
 @Test
 func taskCancellationUnregistersAWaitingSubscriber() async throws {
-    let publication = TestPublication(snapshot: [])
-    let sequence = publication.subscribe()
+    let publication = TestPublication()
+    let sequence = publication.subscribe(revision: 0, snapshot: [])
     let consumedInitial = AsyncStream<Void>.makeStream()
 
     let consumer = Task {
@@ -190,73 +261,299 @@ func taskCancellationUnregistersAWaitingSubscriber() async throws {
 }
 
 @Test
-func successfulFinishDrainsPublishedUpdateThenTerminatesCurrentAndFutureSubscribers() async throws {
-    let publication = TestPublication(snapshot: [])
-    var iterator = publication.subscribe().makeAsyncIterator()
+func foreignPublicationRejectsARebaseToken() async throws {
+    let publication = TestPublication()
+    let foreignPublication = TestPublication(revision: 2)
+    var iterator =
+        publication
+        .subscribe(revision: 0, snapshot: [])
+        .makeAsyncIterator()
     _ = try await iterator.next()
-    publication.publish(from: 0, to: 1, changes: "one", latestSnapshot: [1])
+    publication.publish(from: 0, to: 1, changes: "one")
+    publication.publish(from: 1, to: 2, changes: "two")
+    guard case let .resetRequired(_, token) = try await iterator.next() else {
+        Issue.record("Expected a reset request.")
+        return
+    }
 
-    publication.finish()
-
-    #expect(try await iterator.next() == .changes(
-        fromRevision: 0,
-        toRevision: 1,
-        changes: "one"
-    ))
-    #expect(try await iterator.next() == nil)
-    #expect(publication.activeSubscriberCount == 0)
-
-    var lateIterator = publication.subscribe().makeAsyncIterator()
-    #expect(try await lateIterator.next() == nil)
+    #expect(throws: WebInspectorRevisionedSnapshotRebaseError.foreignPublication) {
+        try foreignPublication.rebase(token, revision: 2, snapshot: [1, 2])
+    }
 }
 
 @Test
-func failedFinishUsesTheSequenceFailureTypeForCurrentAndFutureSubscribers() async throws {
-    let publication = TestPublication(snapshot: [])
-    let sequence = publication.subscribe()
+func staleSnapshotAndRepeatedTokenAreRejectedExplicitly() async throws {
+    let publication = TestPublication()
+    var iterator =
+        publication
+        .subscribe(revision: 0, snapshot: [])
+        .makeAsyncIterator()
+    _ = try await iterator.next()
+    publication.publish(from: 0, to: 1, changes: "one")
+    publication.publish(from: 1, to: 2, changes: "two")
+    guard case let .resetRequired(_, token) = try await iterator.next() else {
+        Issue.record("Expected a reset request.")
+        return
+    }
+
+    #expect(
+        throws: WebInspectorRevisionedSnapshotRebaseError.staleSnapshot(
+            expectedRevision: 2,
+            suppliedRevision: 1
+        )
+    ) {
+        try publication.rebase(token, revision: 1, snapshot: [1])
+    }
+
+    #expect(
+        try publication.rebase(token, revision: 2, snapshot: [1, 2])
+            == .init(
+                disposition: .reset,
+                revision: 2,
+                snapshot: [1, 2]
+            ))
+    #expect(throws: WebInspectorRevisionedSnapshotRebaseError.staleToken) {
+        try publication.rebase(token, revision: 2, snapshot: [1, 2])
+    }
+}
+
+@Test
+func cancellationInvalidatesADequeuedRebaseToken() async throws {
+    let publication = TestPublication()
+    var iterator =
+        publication
+        .subscribe(revision: 0, snapshot: [])
+        .makeAsyncIterator()
+    _ = try await iterator.next()
+    publication.publish(from: 0, to: 1, changes: "one")
+    publication.publish(from: 1, to: 2, changes: "two")
+    guard case let .resetRequired(_, token) = try await iterator.next() else {
+        Issue.record("Expected a reset request.")
+        return
+    }
+
+    iterator.cancel()
+    #expect(throws: WebInspectorRevisionedSnapshotRebaseError.subscriptionCancelled) {
+        try publication.rebase(token, revision: 2, snapshot: [1, 2])
+    }
+}
+
+@Test
+func successfulFinishSupersedesAnOutstandingRebase() async throws {
+    let publication = TestPublication()
+    var iterator =
+        publication
+        .subscribe(revision: 0, snapshot: [])
+        .makeAsyncIterator()
+    _ = try await iterator.next()
+    publication.publish(from: 0, to: 1, changes: "one")
+    publication.publish(from: 1, to: 2, changes: "two")
+    guard case let .resetRequired(_, token) = try await iterator.next() else {
+        Issue.record("Expected a reset request.")
+        return
+    }
+
+    publication.finish()
+
+    #expect(throws: WebInspectorRevisionedSnapshotRebaseError.publicationTerminated) {
+        try publication.rebase(token, revision: 2, snapshot: [1, 2])
+    }
+    #expect(try await iterator.next() == nil)
+    #expect(publication.activeSubscriberCount == 0)
+}
+
+@Test
+func successfulFinishSupersedesAPendingResetMarkerBeforeDequeue() async throws {
+    let publication = TestPublication()
+    var iterator =
+        publication
+        .subscribe(revision: 0, snapshot: [])
+        .makeAsyncIterator()
+    _ = try await iterator.next()
+    publication.publish(from: 0, to: 1, changes: "one")
+    publication.publish(from: 1, to: 2, changes: "two")
+
+    publication.finish()
+
+    #expect(try await iterator.next() == nil)
+    #expect(publication.activeSubscriberCount == 0)
+}
+
+@Test
+func rebaseBeforeSuccessfulFinishEstablishesTheSnapshotBoundaryFirst() async throws {
+    let publication = TestPublication()
+    var iterator =
+        publication
+        .subscribe(revision: 0, snapshot: [])
+        .makeAsyncIterator()
+    _ = try await iterator.next()
+    publication.publish(from: 0, to: 1, changes: "one")
+    publication.publish(from: 1, to: 2, changes: "two")
+    guard case let .resetRequired(_, token) = try await iterator.next() else {
+        Issue.record("Expected a reset request.")
+        return
+    }
+
+    #expect(try publication.rebase(token, revision: 2, snapshot: [1, 2]).revision == 2)
+    publication.finish()
+    #expect(try await iterator.next() == nil)
+}
+
+@Test
+func failedFinishSupersedesRebaseThenUsesTheSequenceFailureType() async throws {
+    let publication = TestPublication()
+    let sequence = publication.subscribe(revision: 0, snapshot: [])
     requireTypedFailure(sequence)
     var iterator = sequence.makeAsyncIterator()
     _ = try await iterator.next()
+    publication.publish(from: 0, to: 1, changes: "one")
+    publication.publish(from: 1, to: 2, changes: "two")
+    guard case let .resetRequired(_, token) = try await iterator.next() else {
+        Issue.record("Expected a reset request.")
+        return
+    }
 
     publication.finish(throwing: .failed)
 
+    #expect(throws: WebInspectorRevisionedSnapshotRebaseError.publicationTerminated) {
+        try publication.rebase(token, revision: 2, snapshot: [1, 2])
+    }
     await #expect(throws: RevisionedSnapshotTestFailure.failed) {
         try await iterator.next()
     }
     #expect(try await iterator.next() == nil)
 
-    var lateIterator = publication.subscribe().makeAsyncIterator()
+    var lateIterator =
+        publication
+        .subscribe(revision: 2, snapshot: [1, 2])
+        .makeAsyncIterator()
     await #expect(throws: RevisionedSnapshotTestFailure.failed) {
         try await lateIterator.next()
     }
     #expect(try await lateIterator.next() == nil)
 }
 
-#if os(macOS)
 @Test
-func noncontiguousRevisionFailsFast() async {
-    await #expect(processExitsWith: .failure) {
-        let publication = TestPublication(snapshot: [])
-        publication.publish(
-            from: 0,
-            to: 2,
-            changes: "gap",
-            latestSnapshot: [2]
-        )
-    }
+func successfulFinishDrainsAConcretePendingChange() async throws {
+    let publication = TestPublication()
+    var iterator =
+        publication
+        .subscribe(revision: 0, snapshot: [])
+        .makeAsyncIterator()
+    _ = try await iterator.next()
+    publication.publish(from: 0, to: 1, changes: "one")
+
+    publication.finish()
+
+    #expect(
+        try await iterator.next()
+            == .changes(
+                fromRevision: 0,
+                toRevision: 1,
+                changes: "one"
+            ))
+    #expect(try await iterator.next() == nil)
 }
 
-@Test
-func aSecondIteratorFailsFastEvenFromASequenceCopy() async {
-    await #expect(processExitsWith: .failure) {
-        let publication = TestPublication(snapshot: [])
-        let sequence = publication.subscribe()
-        let sequenceCopy = sequence
-        _ = sequence.makeAsyncIterator()
-        _ = sequenceCopy.makeAsyncIterator()
+#if os(macOS)
+    @Test
+    func noncontiguousRevisionFailsFast() async {
+        await #expect(processExitsWith: .failure) {
+            let publication = TestPublication()
+            publication.publish(from: 0, to: 2, changes: "gap")
+        }
+    }
+
+    @Test
+    func staleInitialRevisionFailsFast() async {
+        await #expect(processExitsWith: .failure) {
+            let publication = TestPublication(revision: 1)
+            _ = publication.subscribe(revision: 0, snapshot: [])
+        }
+    }
+
+    @Test
+    func requestingAnotherUpdateBeforeRebaseFailsFast() async {
+        await #expect(processExitsWith: .failure) {
+            let publication = TestPublication()
+            var iterator =
+                publication
+                .subscribe(revision: 0, snapshot: [])
+                .makeAsyncIterator()
+            _ = try await iterator.next()
+            publication.publish(from: 0, to: 1, changes: "one")
+            publication.publish(from: 1, to: 2, changes: "two")
+            _ = try await iterator.next()
+            _ = try await iterator.next()
+        }
+    }
+
+    @Test
+    func aSecondIteratorFailsFastEvenFromASequenceCopy() async {
+        await #expect(processExitsWith: .failure) {
+            let publication = TestPublication()
+            let sequence = publication.subscribe(revision: 0, snapshot: [])
+            let sequenceCopy = sequence
+            _ = sequence.makeAsyncIterator()
+            _ = sequenceCopy.makeAsyncIterator()
+        }
+    }
+#endif
+
+private actor RevisionedSnapshotTestOwner {
+    nonisolated let publication: TestPublication
+    private var revision: UInt64
+    private var snapshot: [Int]
+    private(set) var initialSnapshotCaptureCount = 0
+    private(set) var rebaseSnapshotCaptureCount = 0
+
+    init(revision: UInt64 = 0, snapshot: [Int] = []) {
+        publication = TestPublication(revision: revision)
+        self.revision = revision
+        self.snapshot = snapshot
+    }
+
+    func subscribe() -> TestSequence {
+        initialSnapshotCaptureCount += 1
+        return publication.subscribe(revision: revision, snapshot: snapshot)
+    }
+
+    func publish(_ value: Int) {
+        precondition(revision < UInt64.max)
+        let fromRevision = revision
+        revision += 1
+        snapshot.append(value)
+        publication.publish(
+            from: fromRevision,
+            to: revision,
+            changes: "insert \(value)"
+        )
+    }
+
+    func publish(_ values: ClosedRange<Int>) {
+        for value in values {
+            publish(value)
+        }
+    }
+
+    func rebase(_ token: TestRebaseToken) throws -> TestPublication.Rebase {
+        rebaseSnapshotCaptureCount += 1
+        return try publication.rebase(
+            token,
+            revision: revision,
+            snapshot: snapshot
+        )
+    }
+
+    func rebase(
+        _ token: TestRebaseToken,
+        thenPublish value: Int
+    ) throws -> TestPublication.Rebase {
+        let rebase = try self.rebase(token)
+        publish(value)
+        return rebase
     }
 }
-#endif
 
 private func requireTypedFailure<Sequence: AsyncSequence>(
     _: Sequence
