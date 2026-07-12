@@ -1473,10 +1473,11 @@ integrated.
   delayed; they await its cancellation/completion and candidate cleanup. A new
   attach requested during detach cannot begin native creation until that
   barrier completes.
-- Native creation failure preserves the previously adopted attachment (or the
-  detached state when none existed). Feed-claim/bootstrap failure after valid
-  adoption teardown leaves the Container detached. Neither path leaks a
-  pending Proxy or model-feed consumer.
+- Native creation failure preserves the previously adopted attachment and
+  restores `.attached`; when none existed, the current attempt publishes
+  `.failed`. Feed-claim/bootstrap failure after valid adoption teardown also
+  leaves the Container in `.failed`. A later `detach()` converges either failed
+  state to `.detached`. No path leaks a pending Proxy or model-feed consumer.
 - Successful attach returns only after every registered Context/FRC has
   acknowledged the new authoritative initial state.
 - Reattach preserves those owner identities while old model IDs resolve to
