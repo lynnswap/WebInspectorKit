@@ -1,6 +1,9 @@
 # Fetched-results actor isolation and grouped Network entries
 
-Status: approved design gate (2026-07-11)
+Status: superseded on 2026-07-12 by
+[`WebInspectorModelArchitecture.md`](WebInspectorModelArchitecture.md). The
+performance findings remain evidence; the compatibility decision to preserve
+closed domain queries and encode Network rows as sections does not.
 
 ## Scope contract
 

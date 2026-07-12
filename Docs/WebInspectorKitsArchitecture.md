@@ -1,5 +1,9 @@
 # WebInspectorProxyKit and WebInspectorDataKit Architecture
 
+- DataKit ownership/query status: superseded on 2026-07-12 by
+  [`WebInspectorModelArchitecture.md`](WebInspectorModelArchitecture.md).
+  ProxyKit transport findings remain historical evidence, but this document's
+  exclusive-model-context and closed-query decisions are no longer binding.
 - Status: implemented and validated
 - Scope: breaking redesign of WebInspectorProxyKit, WebInspectorDataKit, their
   testing products, and the built-in UIKit consumers
