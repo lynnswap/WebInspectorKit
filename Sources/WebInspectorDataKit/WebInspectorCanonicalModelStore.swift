@@ -1330,7 +1330,7 @@ private extension WebInspectorCanonicalModelStore {
             )
             return transaction
 
-        case let .frameNavigated(frame):
+        case let .frameNavigated(frame, isNewLoader):
             try validateRegisteredTargets(scope, in: binding)
             guard let previousNavigation = binding.navigationEpochs[scope.target.id],
                 scope.navigationEpoch == previousNavigation
@@ -1354,7 +1354,18 @@ private extension WebInspectorCanonicalModelStore {
                 runtimeMayAdvance: true
             )
             let navigationAdvanced = previousNavigation != scope.navigationEpoch
-            guard !requiresRuntimeBinding || runtimeAdvanced == navigationAdvanced else {
+            let targetOwnsNavigatedFrame = scope.target.frameID == frame.id
+            guard targetOwnsNavigatedFrame
+                ? navigationAdvanced == isNewLoader
+                : !navigationAdvanced
+            else {
+                throw protocolViolation(.invalidTargetLifecycle)
+            }
+            guard
+                !requiresRuntimeBinding
+                    || !isNewLoader
+                    || runtimeAdvanced
+            else {
                 throw protocolViolation(
                     .runtimeBindingMismatch(scope.agentTarget.id)
                 )
@@ -1362,10 +1373,25 @@ private extension WebInspectorCanonicalModelStore {
             binding.navigationEpochs[scope.target.id] = scope.navigationEpoch
 
             var consoleTransaction: CanonicalConsoleRuntimeTransaction?
-            if requiresRuntimeBinding, navigationAdvanced {
-                consoleTransaction = try consoleRuntimeStore.semanticTargetNavigated(
-                    scope: scope
-                )
+            if requiresRuntimeBinding, runtimeAdvanced || isNewLoader {
+                var nextConsole = consoleRuntimeStore
+                var transaction = CanonicalConsoleRuntimeTransaction()
+                if runtimeAdvanced {
+                    transaction.merge(
+                        try nextConsole.runtimeBindingDidAdvance(scope: scope)
+                    )
+                }
+                if isNewLoader, targetOwnsNavigatedFrame {
+                    transaction.merge(
+                        try nextConsole.semanticTargetNavigated(scope: scope)
+                    )
+                } else if isNewLoader {
+                    transaction.merge(nextConsole.frameWasNavigated(frame.id))
+                }
+                consoleRuntimeStore = nextConsole
+                if !transaction.isEmpty {
+                    consoleTransaction = transaction
+                }
             }
             return WebInspectorCanonicalModelTransaction(
                 feedChanges: [
@@ -1542,6 +1568,17 @@ private extension WebInspectorCanonicalModelStore {
             CSS: CSSTransaction,
             consoleRuntime: consoleTransaction
         )
+    }
+}
+
+private extension CanonicalConsoleRuntimeTransaction {
+    mutating func merge(_ other: CanonicalConsoleRuntimeTransaction?) {
+        guard let other else {
+            return
+        }
+        runtimeContextChanges.append(contentsOf: other.runtimeContextChanges)
+        consoleMessageChanges.append(contentsOf: other.consoleMessageChanges)
+        resourceInvalidations.append(contentsOf: other.resourceInvalidations)
     }
 }
 

@@ -908,12 +908,13 @@ func modelFeedMapsOrdinarySubframeLifecycleToOwningPageAgents() async throws {
     let navigation = try await modelFeedRequireEvent(iterator.next())
     #expect(navigation.target.id == WebInspectorTarget.ID("page-main"))
     #expect(navigation.agentTarget.id == WebInspectorTarget.ID("page-main"))
-    #expect(navigation.navigationEpoch == ModelNavigationEpoch(rawValue: 1))
-    guard case let .target(.frameNavigated(frame)) = navigation.payload else {
+    #expect(navigation.navigationEpoch == ModelNavigationEpoch(rawValue: 0))
+    guard case let .target(.frameNavigated(frame, isNewLoader)) = navigation.payload else {
         Issue.record("Expected an ordinary-subframe navigation event.")
         return
     }
     #expect(frame.id == FrameID("ordinary-subframe"))
+    #expect(isNewLoader)
 
     _ = await core.receiveRootMessage(
         #"{"method":"Page.frameDetached","params":{"frameId":"ordinary-subframe"}}"#
@@ -937,12 +938,15 @@ func modelFeedMapsOrdinarySubframeLifecycleToOwningPageAgents() async throws {
     let nestedNavigation = try await modelFeedRequireEvent(iterator.next())
     #expect(nestedNavigation.target.id == WebInspectorTarget.ID("frame-agent"))
     #expect(nestedNavigation.agentTarget.id == WebInspectorTarget.ID("frame-agent"))
-    #expect(nestedNavigation.navigationEpoch == ModelNavigationEpoch(rawValue: 1))
-    guard case let .target(.frameNavigated(nestedFrame)) = nestedNavigation.payload else {
+    #expect(nestedNavigation.navigationEpoch == ModelNavigationEpoch(rawValue: 0))
+    guard case let .target(
+        .frameNavigated(nestedFrame, isNewNestedLoader)
+    ) = nestedNavigation.payload else {
         Issue.record("Expected a nested ordinary-subframe navigation event.")
         return
     }
     #expect(nestedFrame.id == FrameID("nested-ordinary-subframe"))
+    #expect(isNewNestedLoader)
 
     _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
         targetID: "frame-agent",
@@ -4804,6 +4808,270 @@ func modelBindingCommandWaitsForInitialSynchronizationBeforeWire() async throws 
         backend: backend,
         targetID: "page-main",
         enableMethods: ["Page.enable", "Network.enable"]
+    )
+    await core.close()
+}
+
+@Test
+func ordinaryFrameLoadersAdvanceOnlyTheDeliveringRuntimeBinding() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main", type: "page", frameID: "main-frame"
+    ))
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core, backend: backend, configuredDomains: [.runtime], targetID: "page-main"
+    )
+    var iterator = feed.records.makeAsyncIterator()
+    let generation = try await modelFeedRequireReset(iterator.next())
+    _ = try await modelFeedRequireTargetSnapshot(iterator.next())
+    _ = try await modelFeedRequireReplayCompletion(iterator.next())
+    _ = try await modelFeedRequireSynchronization(iterator.next())
+
+    let originalAuthority = modelRuntimeAuthorization(
+        feedID: feed.id,
+        generation: generation,
+        agentTargetID: "page-main",
+        runtimeEpoch: 0,
+        semanticTargetID: "page-main",
+        navigationEpoch: 0
+    )
+
+    _ = await core.receiveRootMessage(
+        #"{"method":"Page.frameNavigated","params":{"frame":{"id":"ordinary-frame-a","parentId":"main-frame","loaderId":"loader-a","url":"https://example.test/a","securityOrigin":"https://example.test","mimeType":"text/html"}}}"#
+    )
+    let firstChildNavigation = try await modelFeedRequireEvent(iterator.next())
+    #expect(firstChildNavigation.target.id == WebInspectorTarget.ID("page-main"))
+    #expect(firstChildNavigation.agentTarget.id == WebInspectorTarget.ID("page-main"))
+    #expect(firstChildNavigation.navigationEpoch == ModelNavigationEpoch(rawValue: 0))
+    #expect(firstChildNavigation.runtimeBindingEpoch == ModelRuntimeBindingEpoch(rawValue: 1))
+
+    var baseline = await backend.sentTargetMessages().count
+    await #expect(throws: WebInspectorProxyError.staleIdentifier) {
+        _ = try await core.send(modelFeedCommand(
+            domain: .runtime,
+            method: "Runtime.getProperties",
+            authority: originalAuthority,
+            routing: .target(ProtocolTarget.ID("page-main"))
+        ))
+    }
+    #expect(await backend.sentTargetMessages().count == baseline)
+
+    let firstChildAuthority = modelRuntimeAuthorization(
+        feedID: feed.id,
+        generation: generation,
+        agentTargetID: "page-main",
+        runtimeEpoch: 1,
+        semanticTargetID: "page-main",
+        navigationEpoch: 0
+    )
+    baseline = try await modelFeedSendRuntimeCommand(
+        core: core,
+        backend: backend,
+        authorization: firstChildAuthority,
+        targetID: "page-main",
+        after: baseline
+    )
+
+    for (frameID, loaderID, expectedRuntimeEpoch) in [
+        ("ordinary-frame-b", "loader-b", UInt64(2)),
+        ("ordinary-frame-a", "loader-a", UInt64(2)),
+    ] {
+        _ = await core.receiveRootMessage(
+            #"{"method":"Page.frameNavigated","params":{"frame":{"id":"\#(frameID)","parentId":"main-frame","loaderId":"\#(loaderID)","url":"https://example.test/child","securityOrigin":"https://example.test","mimeType":"text/html"}}}"#
+        )
+        let navigation = try await modelFeedRequireEvent(iterator.next())
+        #expect(navigation.navigationEpoch == ModelNavigationEpoch(rawValue: 0))
+        #expect(navigation.runtimeBindingEpoch
+            == ModelRuntimeBindingEpoch(rawValue: expectedRuntimeEpoch))
+    }
+
+    let latestChildAuthority = modelRuntimeAuthorization(
+        feedID: feed.id,
+        generation: generation,
+        agentTargetID: "page-main",
+        runtimeEpoch: 2,
+        semanticTargetID: "page-main",
+        navigationEpoch: 0
+    )
+    baseline = try await modelFeedSendRuntimeCommand(
+        core: core,
+        backend: backend,
+        authorization: latestChildAuthority,
+        targetID: "page-main",
+        after: baseline
+    )
+
+    _ = await core.receiveRootMessage(
+        #"{"method":"Page.frameNavigated","params":{"frame":{"id":"main-frame","loaderId":"main-loader","url":"https://example.test/main","securityOrigin":"https://example.test","mimeType":"text/html"}}}"#
+    )
+    let mainNavigation = try await modelFeedRequireEvent(iterator.next())
+    #expect(mainNavigation.navigationEpoch == ModelNavigationEpoch(rawValue: 1))
+    #expect(mainNavigation.runtimeBindingEpoch == ModelRuntimeBindingEpoch(rawValue: 3))
+
+    let staleNavigationAuthority = modelRuntimeAuthorization(
+        feedID: feed.id,
+        generation: generation,
+        agentTargetID: "page-main",
+        runtimeEpoch: 3,
+        semanticTargetID: "page-main",
+        navigationEpoch: 0
+    )
+    await #expect(throws: WebInspectorProxyError.staleIdentifier) {
+        _ = try await core.send(modelFeedCommand(
+            domain: .runtime,
+            method: "Runtime.getProperties",
+            authority: staleNavigationAuthority,
+            routing: .target(ProtocolTarget.ID("page-main"))
+        ))
+    }
+    #expect(await backend.sentTargetMessages().count == baseline)
+
+    let currentAuthority = modelRuntimeAuthorization(
+        feedID: feed.id,
+        generation: generation,
+        agentTargetID: "page-main",
+        runtimeEpoch: 3,
+        semanticTargetID: "page-main",
+        navigationEpoch: 1
+    )
+    _ = try await modelFeedSendRuntimeCommand(
+        core: core,
+        backend: backend,
+        authorization: currentAuthority,
+        targetID: "page-main",
+        after: baseline
+    )
+
+    try await modelFeedCloseSuccessfully(
+        feed, core: core, backend: backend, targetID: "page-main",
+        enableMethods: ["Page.enable", "Runtime.enable"]
+    )
+    await core.close()
+}
+
+@Test
+func frameAgentRootAndChildNavigationAdvanceDifferentEpochs() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main", type: "page", frameID: "main-frame"
+    ))
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "frame-agent",
+        type: "frame",
+        frameID: "isolated-frame",
+        parentFrameID: "main-frame"
+    ))
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core, backend: backend, configuredDomains: [.runtime], targetID: "page-main"
+    )
+    var iterator = feed.records.makeAsyncIterator()
+    _ = try await modelFeedRequireReset(iterator.next())
+    _ = try await modelFeedRequireTargetSnapshot(iterator.next())
+    _ = try await modelFeedRequireReplayCompletion(iterator.next())
+    _ = try await modelFeedRequireSynchronization(iterator.next())
+
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "frame-agent",
+        message: #"{"method":"Page.frameNavigated","params":{"frame":{"id":"isolated-frame","loaderId":"root-loader","url":"https://example.test/frame","securityOrigin":"https://example.test","mimeType":"text/html"}}}"#
+    ))
+    let rootNavigation = try await modelFeedRequireEvent(iterator.next())
+    #expect(rootNavigation.target.id == WebInspectorTarget.ID("frame-agent"))
+    #expect(rootNavigation.agentTarget.id == WebInspectorTarget.ID("frame-agent"))
+    #expect(rootNavigation.navigationEpoch == ModelNavigationEpoch(rawValue: 1))
+    #expect(rootNavigation.runtimeBindingEpoch == ModelRuntimeBindingEpoch(rawValue: 1))
+
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "frame-agent",
+        message: #"{"method":"Page.frameNavigated","params":{"frame":{"id":"nested-frame","parentId":"isolated-frame","loaderId":"nested-loader","url":"https://example.test/nested","securityOrigin":"https://example.test","mimeType":"text/html"}}}"#
+    ))
+    let childNavigation = try await modelFeedRequireEvent(iterator.next())
+    #expect(childNavigation.target.id == WebInspectorTarget.ID("frame-agent"))
+    #expect(childNavigation.agentTarget.id == WebInspectorTarget.ID("frame-agent"))
+    #expect(childNavigation.navigationEpoch == ModelNavigationEpoch(rawValue: 1))
+    #expect(childNavigation.runtimeBindingEpoch == ModelRuntimeBindingEpoch(rawValue: 2))
+
+    try await modelFeedCloseSuccessfully(
+        feed, core: core, backend: backend, targetID: "page-main",
+        enableMethods: ["Page.enable", "Runtime.enable"]
+    )
+    await core.close()
+}
+
+@Test
+func semanticFrameNavigationDeduplicatesAcrossDeliveringAgents() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main", type: "page", frameID: "main-frame"
+    ))
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "frame-agent", type: "frame", frameID: "isolated-frame",
+        parentFrameID: "main-frame"
+    ))
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core, backend: backend, configuredDomains: [.runtime], targetID: "page-main"
+    )
+    var iterator = feed.records.makeAsyncIterator()
+    _ = try await modelFeedRequireReset(iterator.next())
+    _ = try await modelFeedRequireTargetSnapshot(iterator.next())
+    _ = try await modelFeedRequireReplayCompletion(iterator.next())
+    _ = try await modelFeedRequireSynchronization(iterator.next())
+
+    let navigationMessage =
+        #"{"method":"Page.frameNavigated","params":{"frame":{"id":"isolated-frame","loaderId":"shared-loader","url":"https://example.test/frame","securityOrigin":"https://example.test","mimeType":"text/html"}}}"#
+    _ = await core.receiveRootMessage(navigationMessage)
+    let pageAgentDelivery = try await modelFeedRequireEvent(iterator.next())
+    #expect(pageAgentDelivery.target.id == WebInspectorTarget.ID("frame-agent"))
+    #expect(pageAgentDelivery.agentTarget.id == WebInspectorTarget.ID("page-main"))
+    #expect(pageAgentDelivery.navigationEpoch == ModelNavigationEpoch(rawValue: 1))
+    #expect(pageAgentDelivery.runtimeBindingEpoch == ModelRuntimeBindingEpoch(rawValue: 1))
+
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "frame-agent",
+        message: navigationMessage
+    ))
+    let frameAgentDelivery = try await modelFeedRequireEvent(iterator.next())
+    #expect(frameAgentDelivery.target.id == WebInspectorTarget.ID("frame-agent"))
+    #expect(frameAgentDelivery.agentTarget.id == WebInspectorTarget.ID("frame-agent"))
+    #expect(frameAgentDelivery.navigationEpoch == ModelNavigationEpoch(rawValue: 1))
+    #expect(frameAgentDelivery.runtimeBindingEpoch == ModelRuntimeBindingEpoch(rawValue: 1))
+
+    let ordinaryNavigationMessage =
+        #"{"method":"Page.frameNavigated","params":{"frame":{"id":"shared-ordinary-frame","parentId":"isolated-frame","loaderId":"ordinary-loader","url":"https://example.test/ordinary","securityOrigin":"https://example.test","mimeType":"text/html"}}}"#
+    _ = await core.receiveRootMessage(ordinaryNavigationMessage)
+    let pageOrdinaryDelivery = try await modelFeedRequireEvent(iterator.next())
+    guard case let .target(
+        .frameNavigated(_, pageObservedNewLoader)
+    ) = pageOrdinaryDelivery.payload else {
+        Issue.record("Expected the page agent's ordinary-frame navigation.")
+        return
+    }
+    #expect(pageOrdinaryDelivery.target.id == WebInspectorTarget.ID("page-main"))
+    #expect(pageOrdinaryDelivery.navigationEpoch == ModelNavigationEpoch(rawValue: 0))
+    #expect(pageOrdinaryDelivery.runtimeBindingEpoch == ModelRuntimeBindingEpoch(rawValue: 2))
+    #expect(pageObservedNewLoader)
+
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "frame-agent",
+        message: ordinaryNavigationMessage
+    ))
+    let frameOrdinaryDelivery = try await modelFeedRequireEvent(iterator.next())
+    guard case let .target(
+        .frameNavigated(_, frameObservedNewLoader)
+    ) = frameOrdinaryDelivery.payload else {
+        Issue.record("Expected the frame agent's ordinary-frame navigation.")
+        return
+    }
+    #expect(frameOrdinaryDelivery.target.id == WebInspectorTarget.ID("frame-agent"))
+    #expect(frameOrdinaryDelivery.navigationEpoch == ModelNavigationEpoch(rawValue: 1))
+    #expect(frameOrdinaryDelivery.runtimeBindingEpoch == ModelRuntimeBindingEpoch(rawValue: 2))
+    #expect(!frameObservedNewLoader)
+
+    try await modelFeedCloseSuccessfully(
+        feed, core: core, backend: backend, targetID: "page-main",
+        enableMethods: ["Page.enable", "Runtime.enable"]
     )
     await core.close()
 }

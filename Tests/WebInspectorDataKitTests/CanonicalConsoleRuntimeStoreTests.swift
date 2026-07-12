@@ -402,10 +402,6 @@ func canonicalSemanticNavigationDeletesOnlyPriorMembershipForThatTarget() throws
     #expect(fixture.store.runtimeContextCount == 1)
     #expect(
         transaction.resourceInvalidations == [
-            .runtimeBinding(
-                agentTargetID: WebInspectorTarget.ID("root-agent"),
-                epoch: ModelRuntimeBindingEpoch(rawValue: 2)
-            ),
             .semanticNavigation(
                 semanticTargetID: WebInspectorTarget.ID("frame-a"),
                 navigationEpoch: ModelNavigationEpoch(rawValue: 2)
@@ -456,14 +452,67 @@ func canonicalSemanticNavigationInvalidatesEveryAgentThroughSemanticAuthority() 
     #expect(fixture.store.consoleMessageCount == 2)
     #expect(
         transaction.resourceInvalidations == [
-            .runtimeBinding(
-                agentTargetID: WebInspectorTarget.ID("page-agent"),
-                epoch: ModelRuntimeBindingEpoch(rawValue: 2)
-            ),
             .semanticNavigation(
                 semanticTargetID: WebInspectorTarget.ID("shared-frame"),
                 navigationEpoch: ModelNavigationEpoch(rawValue: 2)
+            )
+        ]
+    )
+}
+
+@Test
+func canonicalFrameNavigationDeletesOnlyThatFramesRuntimeContexts() throws {
+    var fixture = try CanonicalConsoleRuntimeFixture()
+    let scope = fixture.scope(
+        semanticTargetID: "page",
+        agentTargetID: "page",
+        runtimeBindingEpoch: 1
+    )
+    for (id, frameID) in [
+        ("main-context", "main-frame"),
+        ("frame-a-context", "frame-a"),
+        ("frame-b-context", "frame-b"),
+    ] {
+        _ = try fixture.store.reduceRuntime(
+            .executionContextCreated(
+                canonicalRuntimeContext(id: id, frameID: frameID)
             ),
+            scope: scope
+        )
+    }
+
+    let transaction = fixture.store.frameWasNavigated(FrameID("frame-a"))
+
+    #expect(transaction.runtimeContextChanges.count == 1)
+    #expect(transaction.resourceInvalidations.isEmpty)
+    #expect(
+        Set(fixture.store.snapshot().runtimeContexts.map(\.record.id.rawContextID))
+            == [
+                Runtime.ExecutionContext.ID("main-context"),
+                Runtime.ExecutionContext.ID("frame-b-context"),
+            ]
+    )
+}
+
+@Test
+func canonicalRuntimeBindingAdvanceIsIndependentFromPersistentMembership() throws {
+    let fixture = try CanonicalConsoleRuntimeFixture()
+    let transaction = try #require(
+        try fixture.store.runtimeBindingDidAdvance(
+            scope: fixture.scope(
+                agentTargetID: "page-agent",
+                runtimeBindingEpoch: 2
+            )
+        )
+    )
+
+    #expect(transaction.runtimeContextChanges.isEmpty)
+    #expect(
+        transaction.resourceInvalidations == [
+            .runtimeBinding(
+                agentTargetID: WebInspectorTarget.ID("page-agent"),
+                epoch: ModelRuntimeBindingEpoch(rawValue: 2)
+            )
         ]
     )
 }

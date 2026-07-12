@@ -374,9 +374,10 @@ package struct CanonicalConsoleRuntimeStore: Equatable, Sendable {
         return CanonicalConsoleRuntimeTransaction(consoleMessageChanges: changes)
     }
 
-    /// Applies a semantic navigation boundary without guessing membership from
-    /// an identifier-only Runtime event.
-    package mutating func semanticTargetNavigated(
+    /// Invalidates agent-owned Runtime resources when the transport observes a
+    /// new document loader. Persistent RuntimeContext membership is handled by
+    /// the frame or semantic-target navigation boundary separately.
+    package func runtimeBindingDidAdvance(
         scope: ModelEventScope
     ) throws -> CanonicalConsoleRuntimeTransaction? {
         guard isActive(scope) else {
@@ -386,6 +387,24 @@ package struct CanonicalConsoleRuntimeStore: Equatable, Sendable {
             scope,
             event: "Page.frameNavigated"
         )
+        return CanonicalConsoleRuntimeTransaction(
+            resourceInvalidations: [
+                .runtimeBinding(
+                    agentTargetID: scope.agentTarget.id,
+                    epoch: runtimeBindingEpoch
+                )
+            ]
+        )
+    }
+
+    /// Applies a semantic-target navigation boundary without guessing
+    /// membership from an identifier-only Runtime event.
+    package mutating func semanticTargetNavigated(
+        scope: ModelEventScope
+    ) throws -> CanonicalConsoleRuntimeTransaction? {
+        guard isActive(scope) else {
+            return nil
+        }
         let candidateIDs = runtimeContextIDsBySemanticTargetID[scope.target.id] ?? []
         var removedIDs: [CanonicalRuntimeContextIDStorage] = []
         for id in candidateIDs {
@@ -414,15 +433,22 @@ package struct CanonicalConsoleRuntimeStore: Equatable, Sendable {
         return CanonicalConsoleRuntimeTransaction(
             runtimeContextChanges: removedIDs.map(CanonicalRuntimeContextChange.delete),
             resourceInvalidations: [
-                .runtimeBinding(
-                    agentTargetID: scope.agentTarget.id,
-                    epoch: runtimeBindingEpoch
-                ),
                 .semanticNavigation(
                     semanticTargetID: scope.target.id,
                     navigationEpoch: scope.navigationEpoch
-                ),
+                )
             ]
+        )
+    }
+
+    /// Removes Runtime contexts for an ordinary frame whose document changed
+    /// while its owning protocol target remained the same.
+    @discardableResult
+    package mutating func frameWasNavigated(
+        _ frameID: FrameID
+    ) -> CanonicalConsoleRuntimeTransaction {
+        return CanonicalConsoleRuntimeTransaction(
+            runtimeContextChanges: removeRuntimeContexts(inFrame: frameID)
         )
     }
 
@@ -479,6 +505,17 @@ package struct CanonicalConsoleRuntimeStore: Equatable, Sendable {
     package mutating func frameWasDetached(
         _ frameID: FrameID
     ) -> CanonicalConsoleRuntimeTransaction {
+        return CanonicalConsoleRuntimeTransaction(
+            runtimeContextChanges: removeRuntimeContexts(inFrame: frameID),
+            resourceInvalidations: [.frameDetached(frameID)]
+        )
+    }
+}
+
+private extension CanonicalConsoleRuntimeStore {
+    mutating func removeRuntimeContexts(
+        inFrame frameID: FrameID
+    ) -> [CanonicalRuntimeContextChange] {
         let ids = (runtimeContextIDsByFrameID[frameID] ?? []).sorted(
             by: Self.runtimeContextPrecedes
         )
@@ -491,14 +528,9 @@ package struct CanonicalConsoleRuntimeStore: Equatable, Sendable {
             removeRuntimeContext(id, tombstone: true)
         }
         recordIncrementalVisits(ids.count)
-        return CanonicalConsoleRuntimeTransaction(
-            runtimeContextChanges: ids.map(CanonicalRuntimeContextChange.delete),
-            resourceInvalidations: [.frameDetached(frameID)]
-        )
+        return ids.map(CanonicalRuntimeContextChange.delete)
     }
-}
 
-private extension CanonicalConsoleRuntimeStore {
     func isActive(_ scope: ModelEventScope) -> Bool {
         activeAttachmentGeneration != nil
             && scope.generation == activePageGeneration

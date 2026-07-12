@@ -229,6 +229,16 @@ private struct ConnectionModelBootstrapTask: Sendable {
     let generation: WebInspectorPage.Generation
 }
 
+private struct ConnectionModelFrameLoaderKey: Hashable, Sendable {
+    let agentTargetID: ProtocolTarget.ID
+    let frameID: FrameID
+}
+
+private struct ConnectionModelSemanticFrameLoaderObservation: Sendable {
+    let targetID: ProtocolTarget.ID
+    let loaderID: String
+}
+
 private struct PhysicalTargetDisappearanceWaiters: Sendable {
     var activation: [ReplyPromise<Void>] = []
     var release: [ReplyPromise<Void>] = []
@@ -522,7 +532,10 @@ package actor ConnectionCore {
         continuation: CheckedContinuation<Void, Never>
     )]
     private var modelNavigationEpochs: [ProtocolTarget.ID: ModelNavigationEpoch]
-    private var modelNavigationLoaderIDs: [ProtocolTarget.ID: String]
+    private var modelFrameLoaderIDs: [ConnectionModelFrameLoaderKey: String]
+    private var modelSemanticFrameLoaders: [
+        FrameID: ConnectionModelSemanticFrameLoaderObservation
+    ]
     private var modelDOMBindingEpochs: [ProtocolTarget.ID: ModelDOMBindingEpoch]
     private var modelRuntimeBindingEpochs: [ProtocolTarget.ID: ModelRuntimeBindingEpoch]
     private var modelConsoleBindingEpochs: [ProtocolTarget.ID: ModelConsoleBindingEpoch]
@@ -584,7 +597,8 @@ package actor ConnectionCore {
         modelCommandOwnerCountWaiters = []
         modelCommandReadinessCountWaiters = []
         modelNavigationEpochs = [:]
-        modelNavigationLoaderIDs = [:]
+        modelFrameLoaderIDs = [:]
+        modelSemanticFrameLoaders = [:]
         modelDOMBindingEpochs = [:]
         modelRuntimeBindingEpochs = [:]
         modelConsoleBindingEpochs = [:]
@@ -2426,21 +2440,86 @@ package actor ConnectionCore {
     }
 
     private func advanceModelNavigationEpoch(
-        for targetID: ProtocolTarget.ID,
-        loaderID: String
+        for targetID: ProtocolTarget.ID
     ) -> ModelNavigationEpoch {
         let current = modelNavigationEpoch(for: targetID)
-        if modelNavigationLoaderIDs[targetID] == loaderID {
-            return current
-        }
         precondition(
             current.rawValue < UInt64.max,
             "A model navigation epoch exhausted UInt64."
         )
         let next = ModelNavigationEpoch(rawValue: current.rawValue + 1)
-        modelNavigationLoaderIDs[targetID] = loaderID
         modelNavigationEpochs[targetID] = next
         return next
+    }
+
+    private func observeModelFrameLoader(
+        agentTargetID: ProtocolTarget.ID,
+        frameID: FrameID,
+        loaderID: String
+    ) -> Bool {
+        let key = ConnectionModelFrameLoaderKey(
+            agentTargetID: agentTargetID,
+            frameID: frameID
+        )
+        guard modelFrameLoaderIDs[key] != loaderID else {
+            return false
+        }
+        modelFrameLoaderIDs[key] = loaderID
+        return true
+    }
+
+    private func observeModelSemanticFrameLoader(
+        targetID: ProtocolTarget.ID,
+        frameID: FrameID,
+        loaderID: String
+    ) -> Bool {
+        if modelSemanticFrameLoaders[frameID]?.loaderID == loaderID {
+            return false
+        }
+        modelSemanticFrameLoaders[frameID] =
+            ConnectionModelSemanticFrameLoaderObservation(
+                targetID: targetID,
+                loaderID: loaderID
+            )
+        return true
+    }
+
+    private func removeModelFrameLoaderObservations(
+        for targetID: ProtocolTarget.ID,
+        frameID: ProtocolFrame.ID?
+    ) {
+        let frameID = frameID.map { FrameID($0.rawValue) }
+        let obsoleteKeys = modelFrameLoaderIDs.keys.filter { key in
+            if key.agentTargetID == targetID {
+                return true
+            }
+            return frameID.map { key.frameID == $0 } ?? false
+        }
+        for key in obsoleteKeys {
+            modelFrameLoaderIDs.removeValue(forKey: key)
+        }
+        let obsoleteSemanticFrameIDs = modelSemanticFrameLoaders.compactMap {
+            observedFrameID, observation in
+            observation.targetID == targetID || frameID == observedFrameID
+                ? observedFrameID
+                : nil
+        }
+        for observedFrameID in obsoleteSemanticFrameIDs {
+            modelSemanticFrameLoaders.removeValue(forKey: observedFrameID)
+        }
+    }
+
+    private func removeModelFrameLoaderObservation(
+        agentTargetID: ProtocolTarget.ID,
+        frameID: FrameID
+    ) {
+        modelFrameLoaderIDs.removeValue(
+            forKey: ConnectionModelFrameLoaderKey(
+                agentTargetID: agentTargetID,
+                frameID: frameID
+            )
+        )
+        modelSemanticFrameLoaders.removeValue(forKey: frameID)
     }
 
     private func modelDOMBindingEpoch(
@@ -5774,7 +5853,10 @@ package actor ConnectionCore {
         }
         targetRegistry.removeTarget(targetID)
         modelNavigationEpochs.removeValue(forKey: targetID)
-        modelNavigationLoaderIDs.removeValue(forKey: targetID)
+        removeModelFrameLoaderObservations(
+            for: targetID,
+            frameID: destroyedRecord?.frameID
+        )
         modelDOMBindingEpochs.removeValue(forKey: targetID)
         modelTargetMutationActionForTesting?()
         let capabilityWaiters = physicalTargetDidDisappear(targetID)
@@ -5816,6 +5898,8 @@ package actor ConnectionCore {
         eventSequence: UInt64
     ) -> RootEventMutation {
         let previousMainPageTargetID = targetRegistry.currentMainPageTargetID
+        let committedFrameID = targetRegistry.target(for: oldTargetID)?.frameID
+            ?? targetRegistry.target(for: newTargetID)?.frameID
         let mutation = targetRegistry.commitTarget(oldTargetID: oldTargetID, newTargetID: newTargetID)
         modelTargetMutationActionForTesting?()
         var capabilityWaiters = PhysicalTargetDisappearanceWaiters()
@@ -5866,7 +5950,10 @@ package actor ConnectionCore {
             )
         }
         modelNavigationEpochs.removeValue(forKey: oldTargetID)
-        modelNavigationLoaderIDs.removeValue(forKey: oldTargetID)
+        removeModelFrameLoaderObservations(
+            for: oldTargetID,
+            frameID: committedFrameID
+        )
         modelDOMBindingEpochs.removeValue(forKey: oldTargetID)
         reconcileDOMBootstrapTargets()
         invalidateCSSBootstrapForModelFeed()
@@ -5942,7 +6029,8 @@ package actor ConnectionCore {
             rawValue: currentPageGeneration.rawValue &+ 1
         )
         modelNavigationEpochs.removeAll(keepingCapacity: true)
-        modelNavigationLoaderIDs.removeAll(keepingCapacity: true)
+        modelFrameLoaderIDs.removeAll(keepingCapacity: true)
+        modelSemanticFrameLoaders.removeAll(keepingCapacity: true)
         modelDOMBindingEpochs.removeAll(keepingCapacity: true)
         modelRuntimeBindingEpochs.removeAll(keepingCapacity: true)
         modelConsoleBindingEpochs.removeAll(keepingCapacity: true)
@@ -6777,26 +6865,40 @@ package actor ConnectionCore {
                     for: frame.id,
                     owningAgentTargetID: agentTargetID
                 )
-                let previousNavigationEpoch = modelNavigationEpoch(
-                    for: physicalTargetID
-                )
-                let navigationEpoch = advanceModelNavigationEpoch(
-                    for: physicalTargetID,
+                let observedNewAgentLoader = modelFeedRequiresRuntimeBinding
+                    && observeModelFrameLoader(
+                        agentTargetID: agentTargetID,
+                        frameID: frame.id,
+                        loaderID: loaderID
+                    )
+                let observedNewSemanticLoader = observeModelSemanticFrameLoader(
+                    targetID: physicalTargetID,
+                    frameID: frame.id,
                     loaderID: loaderID
                 )
-                if navigationEpoch != previousNavigationEpoch,
-                   modelFeedRequiresRuntimeBinding {
+                if observedNewSemanticLoader,
+                   frame.id == target.frameID {
+                    _ = advanceModelNavigationEpoch(for: physicalTargetID)
+                }
+                if observedNewAgentLoader {
                     commandInvalidation.append(
                         advanceRuntimeBindingAndInvalidateCommands(
                             for: agentTargetID
                         )
                     )
                 }
-                payload = .target(.frameNavigated(frame))
+                payload = .target(.frameNavigated(
+                    frame,
+                    isNewLoader: observedNewSemanticLoader
+                ))
             case let .frameDetached(frameID):
                 (physicalTargetID, target) = try modelTarget(
                     for: frameID,
                     owningAgentTargetID: agentTargetID
+                )
+                removeModelFrameLoaderObservation(
+                    agentTargetID: agentTargetID,
+                    frameID: frameID
                 )
                 payload = .target(.frameDetached(frameID: frameID))
             case .didCommitProvisionalTarget, .targetDestroyed, .unknown:

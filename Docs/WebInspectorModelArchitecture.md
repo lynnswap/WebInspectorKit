@@ -459,8 +459,18 @@ persistent ID. Detach clears membership, while a later attach necessarily
 creates identities in a different attachment scope.
 
 ProxyKit maintains the navigation epoch from its Page observation lease for
-every configured model feed. A new loader advances the epoch for the affected
-target. ProxyKit maintains the exact DOM-binding epoch from
+every configured model feed. A new loader advances a target navigation epoch
+only when the navigated frame is that target's own root frame. An ordinary
+child frame remains delivered through its owning Page agent, but its loader is
+tracked by `(agentTarget, frame)` and does not advance the owning page or frame
+target's semantic navigation epoch. The canonical Runtime owner removes only
+that frame's persistent contexts; a target-root navigation removes membership
+for the semantic target. If WebKit reports one frame loader through more than
+one protocol agent, its current-page `frame` identity advances persistent
+navigation membership only once while each `(agentTarget, frame)` independently
+advances Runtime command authority. This mirrors WebKit's frame-local `frameNavigated`
+handling instead of treating event delivery ownership as document ownership.
+ProxyKit maintains the exact DOM-binding epoch from
 `DOM.documentUpdated` only while DOM delivery is armed; DOM/CSS records require
 that value. It does not issue a hidden `DOM.getDocument` merely to manufacture
 a DOM epoch for Network, Console, or Runtime.
@@ -472,7 +482,8 @@ remote objects even when the public Runtime model domain is not requested, so
 dependency; it does not implicitly expose persistent `RuntimeContext` models
 or Runtime queries. Agent-wide execution-context clear and any frame
 navigation that can discard an execution context owned by that agent advance
-the epoch; target/page replacement establishes a new binding. This
+the epoch independently from the semantic navigation epoch; target/page
+replacement establishes a new binding. This
 conservative agent-wide advance also protects Console remote objects when
 their event did not identify a finer semantic frame. Runtime events and Runtime
 model-command authorization carry the value. This is transport command

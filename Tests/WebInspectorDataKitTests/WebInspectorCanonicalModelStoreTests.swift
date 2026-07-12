@@ -906,6 +906,19 @@ func canonicalModelStoreAcceptsOrdinaryAndNestedFrameLifecycleOnTheirDeliveryAge
         ),
         scope: fixture.scope()
     )
+    for (id, frameID) in [
+        ("main-context", "main-frame"),
+        ("sibling-context", "sibling-frame"),
+    ] {
+        _ = try fixture.event(
+            .runtime(
+                .executionContextCreated(
+                    canonicalModelRuntimeContext(id: id, frameID: frameID)
+                )
+            ),
+            scope: fixture.scope()
+        )
+    }
     _ = try fixture.event(
         .runtime(
             .executionContextCreated(
@@ -924,10 +937,11 @@ func canonicalModelStoreAcceptsOrdinaryAndNestedFrameLifecycleOnTheirDeliveryAge
                 canonicalModelFrameLifecycle(
                     id: "ordinary-frame",
                     parentID: "main-frame"
-                )
+                ),
+                isNewLoader: true
             )
         ),
-        scope: fixture.scope()
+        scope: fixture.scope(runtimeBindingEpoch: 2)
     )
     #expect(
         ordinaryNavigation.feedChanges == [
@@ -938,9 +952,47 @@ func canonicalModelStoreAcceptsOrdinaryAndNestedFrameLifecycleOnTheirDeliveryAge
             )
         ]
     )
+    #expect(ordinaryNavigation.consoleRuntime?.runtimeContextChanges.count == 1)
+    #expect(
+        ordinaryNavigation.consoleRuntime?.resourceInvalidations == [
+            .runtimeBinding(
+                agentTargetID: WebInspectorTarget.ID("page"),
+                epoch: ModelRuntimeBindingEpoch(rawValue: 2)
+            )
+        ]
+    )
+    #expect(
+        fixture.store.snapshot(reason: .onDemandRebase)
+            .consoleRuntime?.runtimeContexts.count == 3)
+
+    _ = try fixture.event(
+        .runtime(
+            .executionContextCreated(
+                canonicalModelRuntimeContext(
+                    id: "ordinary-context-new",
+                    frameID: "ordinary-frame"
+                )
+            )
+        ),
+        scope: fixture.scope(runtimeBindingEpoch: 2)
+    )
+    let duplicateOrdinaryNavigation = try fixture.event(
+        .target(
+            .frameNavigated(
+                canonicalModelFrameLifecycle(
+                    id: "ordinary-frame",
+                    parentID: "main-frame"
+                ),
+                isNewLoader: false
+            )
+        ),
+        scope: fixture.scope(runtimeBindingEpoch: 2)
+    )
+    #expect(duplicateOrdinaryNavigation.consoleRuntime == nil)
+
     let ordinaryDetach = try fixture.event(
         .target(.frameDetached(frameID: FrameID("ordinary-frame"))),
-        scope: fixture.scope()
+        scope: fixture.scope(runtimeBindingEpoch: 2)
     )
     #expect(ordinaryDetach.DOM?.deletedRecordIDs.count == 1)
     #expect(ordinaryDetach.consoleRuntime?.runtimeContextChanges.count == 1)
@@ -951,10 +1003,14 @@ func canonicalModelStoreAcceptsOrdinaryAndNestedFrameLifecycleOnTheirDeliveryAge
                 canonicalModelFrameLifecycle(
                     id: "nested-ordinary-frame",
                     parentID: "isolated-frame"
-                )
+                ),
+                isNewLoader: true
             )
         ),
-        scope: fixture.scope(targetID: "frame-agent")
+        scope: fixture.scope(
+            targetID: "frame-agent",
+            runtimeBindingEpoch: 2
+        )
     )
     #expect(
         nestedNavigation.feedChanges == [
@@ -965,13 +1021,178 @@ func canonicalModelStoreAcceptsOrdinaryAndNestedFrameLifecycleOnTheirDeliveryAge
             )
         ]
     )
+    #expect(nestedNavigation.consoleRuntime?.runtimeContextChanges.count == 1)
+    #expect(
+        nestedNavigation.consoleRuntime?.resourceInvalidations == [
+            .runtimeBinding(
+                agentTargetID: WebInspectorTarget.ID("frame-agent"),
+                epoch: ModelRuntimeBindingEpoch(rawValue: 2)
+            )
+        ]
+    )
     let nestedDetach = try fixture.event(
         .target(.frameDetached(frameID: FrameID("nested-ordinary-frame"))),
-        scope: fixture.scope(targetID: "frame-agent")
+        scope: fixture.scope(
+            targetID: "frame-agent",
+            runtimeBindingEpoch: 2
+        )
     )
     #expect(nestedDetach.DOM?.deletedRecordIDs.count == 1)
-    #expect(nestedDetach.consoleRuntime?.runtimeContextChanges.count == 1)
+    #expect(nestedDetach.consoleRuntime?.runtimeContextChanges.isEmpty == true)
     #expect(fixture.store.bindingSnapshot?.targets.count == 2)
+}
+
+@Test
+func canonicalModelStoreKeepsNewContextsAcrossDuplicateCrossAgentNavigation() throws {
+    let page = canonicalModelPageTarget()
+    let frameAgent = canonicalModelFrameTarget()
+    var fixture = try CanonicalModelStoreFixture(
+        domains: [.runtime],
+        targets: [page, frameAgent]
+    )
+    _ = try fixture.event(
+        .runtime(
+            .executionContextCreated(
+                canonicalModelRuntimeContext(
+                    id: "old-frame-context",
+                    frameID: "isolated-frame"
+                )
+            )
+        ),
+        scope: fixture.scope(
+            targetID: "frame-agent",
+            agentTargetID: "page"
+        )
+    )
+
+    let firstDelivery = try fixture.event(
+        .target(
+            .frameNavigated(
+                canonicalModelFrameLifecycle(
+                    id: "isolated-frame",
+                    parentID: "main-frame"
+                ),
+                isNewLoader: true
+            )
+        ),
+        scope: fixture.scope(
+            targetID: "frame-agent",
+            agentTargetID: "page",
+            navigationEpoch: 2,
+            runtimeBindingEpoch: 2
+        )
+    )
+    #expect(firstDelivery.consoleRuntime?.runtimeContextChanges.count == 1)
+
+    _ = try fixture.event(
+        .runtime(
+            .executionContextCreated(
+                canonicalModelRuntimeContext(
+                    id: "new-frame-context",
+                    frameID: "isolated-frame"
+                )
+            )
+        ),
+        scope: fixture.scope(
+            targetID: "frame-agent",
+            navigationEpoch: 2
+        )
+    )
+    let duplicateDelivery = try fixture.event(
+        .target(
+            .frameNavigated(
+                canonicalModelFrameLifecycle(
+                    id: "isolated-frame",
+                    parentID: "main-frame"
+                ),
+                isNewLoader: false
+            )
+        ),
+        scope: fixture.scope(
+            targetID: "frame-agent",
+            navigationEpoch: 2,
+            runtimeBindingEpoch: 2
+        )
+    )
+
+    #expect(duplicateDelivery.consoleRuntime?.runtimeContextChanges.isEmpty == true)
+    #expect(
+        duplicateDelivery.consoleRuntime?.resourceInvalidations == [
+            .runtimeBinding(
+                agentTargetID: WebInspectorTarget.ID("frame-agent"),
+                epoch: ModelRuntimeBindingEpoch(rawValue: 2)
+            )
+        ]
+    )
+    #expect(
+        fixture.store.snapshot(reason: .onDemandRebase)
+            .consoleRuntime?.runtimeContexts.map(\.record.id.rawContextID)
+            == [Runtime.ExecutionContext.ID("new-frame-context")]
+    )
+}
+
+@Test
+func canonicalModelStoreDeduplicatesOrdinaryFrameCleanupAcrossAgents() throws {
+    let page = canonicalModelPageTarget()
+    let frameAgent = canonicalModelFrameTarget()
+    var fixture = try CanonicalModelStoreFixture(
+        domains: [.runtime],
+        targets: [page, frameAgent]
+    )
+    _ = try fixture.event(
+        .runtime(
+            .executionContextCreated(
+                canonicalModelRuntimeContext(
+                    id: "old-ordinary-context",
+                    frameID: "shared-ordinary-frame"
+                )
+            )
+        ),
+        scope: fixture.scope()
+    )
+    let frame = canonicalModelFrameLifecycle(
+        id: "shared-ordinary-frame",
+        parentID: "isolated-frame"
+    )
+    let firstDelivery = try fixture.event(
+        .target(.frameNavigated(frame, isNewLoader: true)),
+        scope: fixture.scope(runtimeBindingEpoch: 2)
+    )
+    #expect(firstDelivery.consoleRuntime?.runtimeContextChanges.count == 1)
+
+    _ = try fixture.event(
+        .runtime(
+            .executionContextCreated(
+                canonicalModelRuntimeContext(
+                    id: "new-ordinary-context",
+                    frameID: "shared-ordinary-frame"
+                )
+            )
+        ),
+        scope: fixture.scope(targetID: "frame-agent")
+    )
+    let duplicateDelivery = try fixture.event(
+        .target(.frameNavigated(frame, isNewLoader: false)),
+        scope: fixture.scope(
+            targetID: "frame-agent",
+            runtimeBindingEpoch: 2
+        )
+    )
+
+    #expect(duplicateDelivery.consoleRuntime?.runtimeContextChanges.isEmpty == true)
+    #expect(
+        duplicateDelivery.consoleRuntime?.resourceInvalidations == [
+            .runtimeBinding(
+                agentTargetID: WebInspectorTarget.ID("frame-agent"),
+                epoch: ModelRuntimeBindingEpoch(rawValue: 2)
+            )
+        ]
+    )
+    #expect(
+        fixture.store.snapshot(reason: .onDemandRebase)
+            .consoleRuntime?.runtimeContexts.map(\.record.id.rawContextID)
+            == [Runtime.ExecutionContext.ID("new-ordinary-context")]
+    )
 }
 
 @Test
@@ -1004,7 +1225,8 @@ func canonicalModelStoreAppliesRuntimeAndConsoleEpochsAtTheirOwnBoundaries() thr
                 canonicalModelFrameLifecycle(
                     id: "main-frame",
                     parentID: "main-frame"
-                )
+                ),
+                isNewLoader: true
             )
         ),
         scope: navigationScope
@@ -1029,7 +1251,8 @@ func canonicalModelStoreAppliesRuntimeAndConsoleEpochsAtTheirOwnBoundaries() thr
                 canonicalModelFrameLifecycle(
                     id: "main-frame",
                     parentID: "main-frame"
-                )
+                ),
+                isNewLoader: false
             )
         ),
         scope: navigationScope

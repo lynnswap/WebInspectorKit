@@ -208,7 +208,12 @@ package enum ModelTargetLifecycleEvent: Sendable {
     case targetCreated
     case targetDestroyed
     case didCommitProvisionalTarget(oldTargetID: WebInspectorTarget.ID)
-    case frameNavigated(WebInspectorPageFrameLifecycle)
+    /// `isNewLoader` is scoped by current-page frame identity, independently
+    /// from the delivering Runtime agent's binding epoch.
+    case frameNavigated(
+        WebInspectorPageFrameLifecycle,
+        isNewLoader: Bool
+    )
     case frameDetached(frameID: FrameID)
 }
 
