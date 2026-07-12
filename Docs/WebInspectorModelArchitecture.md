@@ -455,8 +455,9 @@ and replaces the current hop under the same scoped request ID. A response-first
 event may create a synthetic `GET` request only when the protocol supplies a
 URL; otherwise an untracked response, data, or terminal event is an attach race
 and is ignored. Memory-cache delivery creates a terminal record. A second live
-non-redirect start or WebSocket creation for the same scoped ID is a protocol
-violation.
+non-redirect start for the same scoped ID is a protocol violation. A second
+WebSocket creation is likewise invalid outside enable/replay; during replay,
+only a semantically identical creation is the no-op exception described below.
 
 `loadingFinished` normally makes the request terminal, and a duplicate finish
 or fail is invalid. WebKit multipart resources are the deliberate exception:
@@ -726,11 +727,13 @@ where ItemID: Hashable & Sendable,
 }
 ```
 
-Each subscriber has a custom synchronized mailbox. If a subscriber has not
-consumed its pending change when a later revision arrives, the mailbox
-atomically replaces the pending value with one `.reset` containing the latest
-snapshot. It does not use two `AsyncStream.yield` calls as an atomic
-replacement.
+Each subscriber has a custom synchronized capacity-one mailbox. If a
+subscriber has not consumed its pending initial/change when a later revision
+arrives, the mailbox atomically replaces the pending value with one internal
+`resetRequired(latestRevision:)` marker. It does not build a snapshot during
+publish and does not use two `AsyncStream.yield` calls as an atomic
+replacement. The public `.reset` value is created only after the owner-atomic
+rebase described below returns its snapshot.
 
 The publication broker does not retain or receive a newly copied full
 canonical snapshot on every revision. The canonical store remains the sole
@@ -1168,6 +1171,8 @@ require the implementation-phase tests listed above.
 | F14 | No persistent-ID parser for target-prefixed raw strings; structured-scope tests. |
 | F15 | Reducer duplicate-ID invariant and redirect exception tests. |
 | F16 | Domain reducers/schema registry and command gateway; no domain-event switch in the context type. |
+| F17 | Pure Network record/reducer in Container Core; projection contains no protocol reducer or query registration. |
+| F18 | Snapshot-free publish and owner-supplied on-demand rebase; zero-snapshot slow/pending-subscriber tests. |
 
 ## Migration and commit plan
 
