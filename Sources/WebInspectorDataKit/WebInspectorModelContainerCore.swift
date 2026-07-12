@@ -243,6 +243,8 @@ package actor WebInspectorModelContainerCore {
     private var nextNetworkResponseBodyCommandOperationID: UInt64 = 0
     private var networkResponseBodyOperationIDByLease: [CanonicalNetworkResponseBodyLease: UInt64] = [:]
     private var networkResponseBodyOperations: [UInt64: NetworkResponseBodyCommandOperation] = [:]
+    package var runtimeCommandGatewayState =
+        WebInspectorRuntimeCommandGatewayState()
     private var performanceCounters =
         WebInspectorModelContainerCorePerformanceCounters()
     package var nextAttachmentGeneration: UInt64 = 0
@@ -317,6 +319,47 @@ package actor WebInspectorModelContainerCore {
 
     package var isClosed: Bool {
         lifecycle == .closed
+    }
+
+    package func runtimeCommandEnvironment()
+        throws(WebInspectorRuntimeCommandGatewayError)
+        -> WebInspectorRuntimeCommandEnvironment
+    {
+        guard !isConnectionCloseRequested,
+            lifecycle == .open
+        else {
+            throw .closed
+        }
+        guard let resource = activeAttachment,
+            let binding = canonicalStore.bindingSnapshot
+        else {
+            throw .detached
+        }
+        precondition(
+            resource.generation == binding.attachmentGeneration,
+            "Runtime command authority crossed attachment generations."
+        )
+        return WebInspectorRuntimeCommandEnvironment(
+            resourceID: resource.id,
+            attachmentGeneration: resource.generation,
+            pageGeneration: binding.pageGeneration,
+            currentPageID: binding.currentPageID,
+            targets: binding.targets,
+            proxy: resource.proxyLease.proxy,
+            feedID: resource.feed.id
+        )
+    }
+
+    package func runtimeCommandConsoleMessage(
+        for id: CanonicalConsoleMessageIDStorage
+    ) -> CanonicalConsoleMessageRecord? {
+        canonicalStore.consoleMessage(for: id)
+    }
+
+    package func runtimeCommandContext(
+        for id: CanonicalRuntimeContextIDStorage
+    ) -> CanonicalRuntimeContextRecord? {
+        canonicalStore.runtimeContext(for: id)
     }
 
     package var metrics: WebInspectorModelContainerCoreMetrics {
@@ -604,6 +647,7 @@ package actor WebInspectorModelContainerCore {
             )
         }
         invalidateStaleNetworkResponseBodyOperations()
+        applyRuntimeCommandInvalidations(from: transaction)
         return publish(transaction)
     }
 
@@ -640,6 +684,7 @@ package actor WebInspectorModelContainerCore {
         }
         retireAllNetworkResponseBodyOperations(with: .detached)
         let transaction = canonicalStore.clearForDetach()
+        applyRuntimeCommandInvalidations(from: transaction)
         guard let commit = publish(transaction) else {
             return nil
         }
@@ -677,6 +722,8 @@ package actor WebInspectorModelContainerCore {
             transaction.acknowledgementBarrier
         )
         await waitForNetworkResponseBodyOperationsToFinish()
+        await waitForRuntimeCommandOperationsToFinish()
+        discardRuntimeCommandTombstonesAfterDetach()
         if isCompletedDetachTransaction(transaction) {
             return
         }
@@ -745,6 +792,7 @@ package actor WebInspectorModelContainerCore {
         )
         lifecycle = .closing
         retireAllNetworkResponseBodyOperations(with: .closed)
+        invalidateAllRuntimeCommandResources(with: .closed)
         var closingRegistrationIDs: Set<WebInspectorModelContextRegistrationID> = []
         for registrationID in Array(contextRegistrations.keys) {
             guard var registration = contextRegistrations[registrationID] else {
@@ -806,6 +854,7 @@ package actor WebInspectorModelContainerCore {
             transaction.acknowledgementBarrier
         )
         await waitForNetworkResponseBodyOperationsToFinish()
+        await waitForRuntimeCommandOperationsToFinish()
         if lifecycle == .closed {
             return
         }
@@ -826,6 +875,7 @@ package actor WebInspectorModelContainerCore {
             registration.updates.cancel()
         }
         canonicalStore.releaseSemanticStorageForClose()
+        releaseRuntimeCommandStorageForClose()
         lifecycle = .closed
 
         let waiters = acknowledgementBarriers.values.map(\.waiter)
