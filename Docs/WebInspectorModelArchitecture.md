@@ -735,21 +735,37 @@ publish and does not use two `AsyncStream.yield` calls as an atomic
 replacement. The public `.reset` value is created only after the owner-atomic
 rebase described below returns its snapshot.
 
-The publication broker does not retain or receive a newly copied full
-canonical snapshot on every revision. The canonical store remains the sole
-owner of current full records. The Container Core supplies a snapshot when it
-atomically registers a context. A normal publish stores and delivers only its
-revision and typed delta.
+The generic publication primitive does not retain or receive a newly copied
+full snapshot on every revision. A normal publish stores and delivers only its
+revision and typed delta. Its semantic snapshot owner depends on the edge where
+the primitive is used:
+
+| Publication edge | Atomic rebase owner | Snapshot captured with revision |
+| --- | --- | --- |
+| Container Core → context core | `WebInspectorModelContainerCore` | complete canonical record snapshot |
+| context query core → FRC | that context query core | predicate/sort/section/window result plus its source cursor |
+
+The canonical store remains the sole owner of current full records and
+supplies a snapshot when it atomically registers a context. It never constructs
+an FRC snapshot. A query core independently owns each registration's filtered
+and ordered result, so only that query core can rebase a slow FRC subscriber.
 
 If a subscriber already has a pending initial/change, its internal capacity-one
 mailbox coalesces later publications into `resetRequired(latestRevision:)`
 without a snapshot. Only when the consumer actually dequeues that marker does
-it ask the owning Core actor to rebase its opaque subscription token. In one
-Core turn, the owner captures the current revision and full snapshot, rebases
-the subscriber to that revision, and returns the snapshot. The context/FRC
-driver exposes the result as `.initial` if it had not published one yet, or as
-`.reset` otherwise. Publications ordered after that Core turn are contiguous
-with the returned snapshot.
+it ask that publication edge's owner to rebase its opaque subscription token.
+In one owner-actor turn, the owner captures its current revision, snapshot, and
+where applicable query source cursor; it then rebases the subscriber to that
+revision and returns the snapshot directly. The edge driver exposes the result
+as `.initial` if it had not published one yet, or as `.reset` otherwise.
+Publications ordered after that owner turn are contiguous with the returned
+snapshot.
+
+The two edges do not forward reset markers to one another. A slow FRC can lose
+query-update continuity while its context continues to consume every canonical
+delta; that FRC therefore rebases only in its query core. Conversely, a slow
+context subscription rebases canonical records in the Container Core before
+the context query core evaluates later query changes.
 
 This on-demand rebase means a permanently slow subscriber causes no full
 snapshot work merely because new events keep arriving. It also prevents a
@@ -1036,6 +1052,8 @@ integrated.
   owned Tasks.
 - A late context receives an atomic current snapshot before later deltas.
 - A slow context receives reset rather than a discontinuous delta.
+- A slow FRC rebases its query-specific snapshot in the context query core
+  without forcing a canonical context reset.
 - DOM/CSS deltas preceding their per-target bootstrap boundary are suppressed;
   the first delivered delta is ordered after the authoritative snapshot.
 - Network/Console/Runtime replay events remain ordered before their replay
@@ -1078,7 +1096,8 @@ integrated.
 - A slow subscriber receives exactly one latest reset.
 - Fast, waiting, and merely pending subscribers do not generate full snapshots.
   A slow subscriber generates one only when it consumes `resetRequired` and
-  requests an owner-atomic rebase.
+  requests an owner-atomic rebase. Container and FRC publication edges exercise
+  this contract independently with their respective snapshot owners.
 - Closing FRC unregisters immediately and terminates subscribers.
 
 ### Network/UI contracts
@@ -1172,7 +1191,7 @@ require the implementation-phase tests listed above.
 | F15 | Reducer duplicate-ID invariant and redirect exception tests. |
 | F16 | Domain reducers/schema registry and command gateway; no domain-event switch in the context type. |
 | F17 | Pure Network record/reducer in Container Core; projection contains no protocol reducer or query registration. |
-| F18 | Snapshot-free publish and owner-supplied on-demand rebase; zero-snapshot slow/pending-subscriber tests. |
+| F18 | Snapshot-free publish and layer-owner-supplied on-demand rebase; separate zero-snapshot Container and FRC slow/pending-subscriber tests. |
 
 ## Migration and commit plan
 
