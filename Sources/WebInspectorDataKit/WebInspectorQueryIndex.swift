@@ -34,7 +34,7 @@ package protocol WebInspectorIndexedQueryDomain: SendableMetatype {
         matchingItemIDs: [ItemID],
         recordsByID: [ItemID: Record],
         query: Query
-    ) -> WebInspectorFetchedResultsSnapshot<ItemID>
+    ) -> WebInspectorFetchedResultsSnapshot<ItemID, WebInspectorFetchSectionID>
 }
 
 package enum WebInspectorIndexedQueryMutationImpact: Sendable {
@@ -598,7 +598,7 @@ package actor WebInspectorQueryIndex<Domain: WebInspectorIndexedQueryDomain> {
     private func makeSnapshot(
         matchingIDs: [Domain.ItemID],
         query: Domain.Query
-    ) -> WebInspectorFetchedResultsSnapshot<Domain.ItemID> {
+    ) -> WebInspectorFetchedResultsSnapshot<Domain.ItemID, WebInspectorFetchSectionID> {
 #if DEBUG
         performanceCounters.snapshotBuildCount += 1
 #endif
@@ -611,7 +611,7 @@ package actor WebInspectorQueryIndex<Domain: WebInspectorIndexedQueryDomain> {
     }
 
     private func visiblePositions(
-        in snapshot: WebInspectorFetchedResultsSnapshot<Domain.ItemID>
+        in snapshot: WebInspectorFetchedResultsSnapshot<Domain.ItemID, WebInspectorFetchSectionID>
     ) -> [Domain.ItemID: WebInspectorFetchedResultsIndexPath] {
         var positions: [Domain.ItemID: WebInspectorFetchedResultsIndexPath] = [:]
         positions.reserveCapacity(snapshot.itemIDs.count)

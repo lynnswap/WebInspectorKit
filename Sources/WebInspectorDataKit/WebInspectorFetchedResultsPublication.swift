@@ -17,11 +17,19 @@ public struct WebInspectorFetchedResultsIndexPath: Hashable, Sendable {
 }
 
 /// Immutable snapshot of fetched-result section and item identities.
-public struct WebInspectorFetchedResultsSnapshot<ItemID: Hashable & Sendable>: Hashable, Sendable {
+public struct WebInspectorFetchedResultsSnapshot<
+    ItemID: Hashable & Sendable,
+    SectionName: Hashable & Sendable
+>: Hashable, Sendable {
     /// One section in a fetched-results snapshot.
     public struct Section: Identifiable, Hashable, Sendable {
+        /// The value shared by every item in this section.
+        public let name: SectionName
+
         /// The stable section identity.
-        public let id: WebInspectorFetchSectionID
+        public var id: SectionName {
+            name
+        }
 
         /// The display title for the section.
         public let title: String?
@@ -30,76 +38,164 @@ public struct WebInspectorFetchedResultsSnapshot<ItemID: Hashable & Sendable>: H
         public let itemIDs: [ItemID]
 
         /// Creates a snapshot section.
-        public init(id: WebInspectorFetchSectionID, title: String?, itemIDs: [ItemID]) {
-            self.id = id
+        package init(name: SectionName, title: String? = nil, itemIDs: [ItemID]) {
+            self.name = name
             self.title = title
             self.itemIDs = itemIDs
         }
     }
 
-    /// Sections in display order.
-    public let sections: [Section]
+    private enum Storage: Hashable, Sendable {
+        case flat([ItemID])
+        case sectioned([Section])
+    }
 
-    /// Creates a fetched-results snapshot.
-    public init(sections: [Section] = []) {
-        self.sections = sections
+    private let storage: Storage
+
+    /// Creates a sectioned snapshot.
+    package init(sections: [Section]) {
         let itemIDs = sections.flatMap(\.itemIDs)
         precondition(
             Set(itemIDs).count == itemIDs.count,
             "WebInspectorFetchedResultsSnapshot item IDs must be unique."
         )
+        let sectionNames = sections.map(\.name)
+        precondition(
+            Set(sectionNames).count == sectionNames.count,
+            "WebInspectorFetchedResultsSnapshot section names must be unique."
+        )
+        storage = .sectioned(sections)
     }
 
-    /// Creates a single-section snapshot from item identities.
-    public init(itemIDs: [ItemID]) {
+    /// Creates an unsectioned snapshot from item identities.
+    public init(itemIDs: [ItemID] = []) where SectionName == Never {
+        precondition(
+            Set(itemIDs).count == itemIDs.count,
+            "WebInspectorFetchedResultsSnapshot item IDs must be unique."
+        )
+        storage = .flat(itemIDs)
+    }
+
+    /// Sections in first-occurrence order.
+    ///
+    /// This collection is empty for an unsectioned (`SectionName == Never`)
+    /// snapshot. Unsectioned item identities remain available through
+    /// ``itemIDs``.
+    public var sections: [Section] {
+        switch storage {
+        case .flat:
+            []
+        case let .sectioned(sections):
+            sections
+        }
+    }
+
+    /// Section names in first-occurrence order.
+    public var sectionNames: [SectionName] {
+        sections.map(\.name)
+    }
+
+    /// All item identities in display order.
+    public var itemIDs: [ItemID] {
+        switch storage {
+        case let .flat(itemIDs):
+            itemIDs
+        case let .sectioned(sections):
+            sections.flatMap(\.itemIDs)
+        }
+    }
+
+    /// Returns item identities for a section.
+    public func itemIDs(in sectionName: SectionName) -> [ItemID]? {
+        sections.first { $0.name == sectionName }?.itemIDs
+    }
+}
+
+extension WebInspectorFetchedResultsSnapshot {
+    package init<Model: Identifiable>(
+        sections: [WebInspectorFetchSection<Model>]
+    )
+    where
+        Model.ID == ItemID,
+        Model.ID: Hashable & Sendable,
+        SectionName == WebInspectorFetchSectionID
+    {
+        self.init(
+            sections: sections.map { section in
+                Section(
+                    name: section.id,
+                    title: section.title,
+                    itemIDs: section.items.map(\.id)
+                )
+            })
+    }
+}
+
+extension WebInspectorFetchedResultsSnapshot
+where SectionName == WebInspectorFetchSectionID {
+    package init() {
+        self.init(sections: [])
+    }
+
+    package init(itemIDs: [ItemID]) {
         self.init(sections: [
-            Section(id: .defaultSection, title: nil, itemIDs: itemIDs)
+            Section(name: .defaultSection, itemIDs: itemIDs)
         ])
     }
 
     /// Section identities in display order.
     public var sectionIDs: [WebInspectorFetchSectionID] {
-        sections.map(\.id)
-    }
-
-    /// All item identities in display order.
-    public var itemIDs: [ItemID] {
-        sections.flatMap(\.itemIDs)
-    }
-
-    /// Returns item identities for a section.
-    public func itemIDs(in sectionID: WebInspectorFetchSectionID) -> [ItemID]? {
-        sections.first { $0.id == sectionID }?.itemIDs
-    }
-}
-
-extension WebInspectorFetchedResultsSnapshot {
-    init<Model: Identifiable>(
-        sections: [WebInspectorFetchSection<Model>]
-    ) where Model.ID == ItemID, Model.ID: Hashable & Sendable {
-        self.init(sections: sections.map { section in
-            Section(
-                id: section.id,
-                title: section.title,
-                itemIDs: section.items.map(\.id)
-            )
-        })
+        sectionNames
     }
 }
 
 /// Section-level change in a fetched-results transaction.
-public enum WebInspectorFetchedResultsSectionChange: Hashable, Sendable {
+public enum WebInspectorFetchedResultsSectionChange<
+    SectionName: Hashable & Sendable
+>: Hashable, Sendable {
     /// A section was inserted.
-    case insert(sectionID: WebInspectorFetchSectionID, index: Int)
+    case insert(sectionName: SectionName, index: Int)
 
     /// A section was deleted.
-    case delete(sectionID: WebInspectorFetchSectionID, index: Int)
+    case delete(sectionName: SectionName, index: Int)
 
     /// A section moved.
-    case move(sectionID: WebInspectorFetchSectionID, from: Int, to: Int)
+    case move(sectionName: SectionName, from: Int, to: Int)
 
     /// A section's display metadata changed.
-    case update(sectionID: WebInspectorFetchSectionID, index: Int)
+    case update(sectionName: SectionName, index: Int)
+}
+
+extension WebInspectorFetchedResultsSectionChange
+where SectionName == WebInspectorFetchSectionID {
+    package static func insert(
+        sectionID: WebInspectorFetchSectionID,
+        index: Int
+    ) -> Self {
+        .insert(sectionName: sectionID, index: index)
+    }
+
+    package static func delete(
+        sectionID: WebInspectorFetchSectionID,
+        index: Int
+    ) -> Self {
+        .delete(sectionName: sectionID, index: index)
+    }
+
+    package static func move(
+        sectionID: WebInspectorFetchSectionID,
+        from: Int,
+        to: Int
+    ) -> Self {
+        .move(sectionName: sectionID, from: from, to: to)
+    }
+
+    package static func update(
+        sectionID: WebInspectorFetchSectionID,
+        index: Int
+    ) -> Self {
+        .update(sectionName: sectionID, index: index)
+    }
 }
 
 /// Item-level change in a fetched-results transaction.
@@ -120,19 +216,69 @@ public enum WebInspectorFetchedResultsItemChange<ItemID: Hashable & Sendable>: H
     case update(itemID: ItemID, indexPath: WebInspectorFetchedResultsIndexPath)
 }
 
+/// One atomic publication from a generic fetched-results registration.
+public enum WebInspectorFetchedResultsUpdate<
+    ItemID: Hashable & Sendable,
+    SectionName: Hashable & Sendable
+>: Hashable, Sendable {
+    /// The complete result state at the subscription boundary.
+    case initial(
+        revision: UInt64,
+        snapshot: WebInspectorFetchedResultsSnapshot<ItemID, SectionName>
+    )
+
+    /// One contiguous identity and presentation delta.
+    case changes(
+        fromRevision: UInt64,
+        toRevision: UInt64,
+        sectionChanges: [WebInspectorFetchedResultsSectionChange<SectionName>],
+        itemChanges: [WebInspectorFetchedResultsItemChange<ItemID>],
+        updatedItemIDs: Set<ItemID>
+    )
+
+    /// A complete owner-atomic replacement after this subscriber lost continuity.
+    case reset(
+        revision: UInt64,
+        snapshot: WebInspectorFetchedResultsSnapshot<ItemID, SectionName>
+    )
+}
+
+package struct WebInspectorFetchedResultsChanges<
+    ItemID: Hashable & Sendable,
+    SectionName: Hashable & Sendable
+>: Hashable, Sendable {
+    package let sectionChanges: [WebInspectorFetchedResultsSectionChange<SectionName>]
+    package let itemChanges: [WebInspectorFetchedResultsItemChange<ItemID>]
+    package let updatedItemIDs: Set<ItemID>
+
+    package var isEmpty: Bool {
+        sectionChanges.isEmpty && itemChanges.isEmpty && updatedItemIDs.isEmpty
+    }
+
+    package init(
+        sectionChanges: [WebInspectorFetchedResultsSectionChange<SectionName>] = [],
+        itemChanges: [WebInspectorFetchedResultsItemChange<ItemID>] = [],
+        updatedItemIDs: Set<ItemID> = []
+    ) {
+        self.sectionChanges = sectionChanges
+        self.itemChanges = itemChanges
+        self.updatedItemIDs = updatedItemIDs
+    }
+}
+
 /// A batch of fetched-results changes between two snapshots.
 public struct WebInspectorFetchedResultsTransaction<ItemID: Hashable & Sendable>: Hashable, Sendable {
     /// Snapshot before the transaction.
-    public let oldSnapshot: WebInspectorFetchedResultsSnapshot<ItemID>
+    public let oldSnapshot: WebInspectorFetchedResultsSnapshot<ItemID, WebInspectorFetchSectionID>
 
     /// Snapshot after the transaction.
-    public let newSnapshot: WebInspectorFetchedResultsSnapshot<ItemID>
+    public let newSnapshot: WebInspectorFetchedResultsSnapshot<ItemID, WebInspectorFetchSectionID>
 
     /// A Boolean value indicating whether consumers should treat the change as a full reset.
     public let isReset: Bool
 
     /// Section changes in application order.
-    public let sectionChanges: [WebInspectorFetchedResultsSectionChange]
+    public let sectionChanges: [WebInspectorFetchedResultsSectionChange<WebInspectorFetchSectionID>]
 
     /// Item changes in application order.
     public let itemChanges: [WebInspectorFetchedResultsItemChange<ItemID>]
@@ -144,10 +290,17 @@ public struct WebInspectorFetchedResultsTransaction<ItemID: Hashable & Sendable>
 
     /// Creates a fetched-results transaction.
     public init(
-        oldSnapshot: WebInspectorFetchedResultsSnapshot<ItemID>,
-        newSnapshot: WebInspectorFetchedResultsSnapshot<ItemID>,
+        oldSnapshot: WebInspectorFetchedResultsSnapshot<
+            ItemID,
+            WebInspectorFetchSectionID
+        >,
+        newSnapshot: WebInspectorFetchedResultsSnapshot<
+            ItemID,
+            WebInspectorFetchSectionID
+        >,
         isReset: Bool = false,
-        sectionChanges: [WebInspectorFetchedResultsSectionChange] = [],
+        sectionChanges:
+            [WebInspectorFetchedResultsSectionChange<WebInspectorFetchSectionID>] = [],
         itemChanges: [WebInspectorFetchedResultsItemChange<ItemID>]
     ) {
         self.oldSnapshot = oldSnapshot
@@ -158,8 +311,14 @@ public struct WebInspectorFetchedResultsTransaction<ItemID: Hashable & Sendable>
     }
 
     init(
-        oldSnapshot: WebInspectorFetchedResultsSnapshot<ItemID>,
-        newSnapshot: WebInspectorFetchedResultsSnapshot<ItemID>,
+        oldSnapshot: WebInspectorFetchedResultsSnapshot<
+            ItemID,
+            WebInspectorFetchSectionID
+        >,
+        newSnapshot: WebInspectorFetchedResultsSnapshot<
+            ItemID,
+            WebInspectorFetchSectionID
+        >,
         updatedItemIDs: Set<ItemID> = []
     ) {
         if oldSnapshot == newSnapshot {
@@ -176,7 +335,10 @@ public struct WebInspectorFetchedResultsTransaction<ItemID: Hashable & Sendable>
     }
 
     init(
-        unchangedSnapshot snapshot: WebInspectorFetchedResultsSnapshot<ItemID>,
+        unchangedSnapshot snapshot: WebInspectorFetchedResultsSnapshot<
+            ItemID,
+            WebInspectorFetchSectionID
+        >,
         updatedItemIDs: Set<ItemID>
     ) {
         // The publisher already proved that identity, order, and section
@@ -194,7 +356,10 @@ public struct WebInspectorFetchedResultsTransaction<ItemID: Hashable & Sendable>
     }
 
     private static func updateChanges(
-        in snapshot: WebInspectorFetchedResultsSnapshot<ItemID>,
+        in snapshot: WebInspectorFetchedResultsSnapshot<
+            ItemID,
+            WebInspectorFetchSectionID
+        >,
         updatedItemIDs: Set<ItemID>
     ) -> [WebInspectorFetchedResultsItemChange<ItemID>] {
         guard updatedItemIDs.isEmpty == false else {
@@ -204,23 +369,30 @@ public struct WebInspectorFetchedResultsTransaction<ItemID: Hashable & Sendable>
         changes.reserveCapacity(updatedItemIDs.count)
         for (sectionIndex, section) in snapshot.sections.enumerated() {
             for (itemIndex, itemID) in section.itemIDs.enumerated()
-                where updatedItemIDs.contains(itemID) {
-                changes.append(.update(
-                    itemID: itemID,
-                    indexPath: WebInspectorFetchedResultsIndexPath(
-                        section: sectionIndex,
-                        item: itemIndex
-                    )
-                ))
+            where updatedItemIDs.contains(itemID) {
+                changes.append(
+                    .update(
+                        itemID: itemID,
+                        indexPath: WebInspectorFetchedResultsIndexPath(
+                            section: sectionIndex,
+                            item: itemIndex
+                        )
+                    ))
             }
         }
         return changes
     }
 
     private static func sectionChanges(
-        from oldSnapshot: WebInspectorFetchedResultsSnapshot<ItemID>,
-        to newSnapshot: WebInspectorFetchedResultsSnapshot<ItemID>
-    ) -> [WebInspectorFetchedResultsSectionChange] {
+        from oldSnapshot: WebInspectorFetchedResultsSnapshot<
+            ItemID,
+            WebInspectorFetchSectionID
+        >,
+        to newSnapshot: WebInspectorFetchedResultsSnapshot<
+            ItemID,
+            WebInspectorFetchSectionID
+        >
+    ) -> [WebInspectorFetchedResultsSectionChange<WebInspectorFetchSectionID>] {
         let oldIndexes = indexSections(oldSnapshot.sections)
         let newIndexes = indexSections(newSnapshot.sections)
 
@@ -228,45 +400,56 @@ public struct WebInspectorFetchedResultsTransaction<ItemID: Hashable & Sendable>
             .filter { _, section in newIndexes[section.id] == nil }
             .sorted { lhs, rhs in lhs.offset > rhs.offset }
             .map { index, section in
-                WebInspectorFetchedResultsSectionChange.delete(sectionID: section.id, index: index)
+                WebInspectorFetchedResultsSectionChange.delete(
+                    sectionName: section.id,
+                    index: index
+                )
             }
 
         let inserts = newSnapshot.sections.enumerated()
             .filter { _, section in oldIndexes[section.id] == nil }
             .map { index, section in
-                WebInspectorFetchedResultsSectionChange.insert(sectionID: section.id, index: index)
+                WebInspectorFetchedResultsSectionChange.insert(
+                    sectionName: section.id,
+                    index: index
+                )
             }
 
         let oldCommonOrder = oldSnapshot.sectionIDs.filter { newIndexes[$0] != nil }
         let newCommonOrder = newSnapshot.sectionIDs.filter { oldIndexes[$0] != nil }
-        let moves: [WebInspectorFetchedResultsSectionChange] = if oldCommonOrder == newCommonOrder {
-            []
-        } else {
-            newSnapshot.sections.enumerated()
-                .compactMap { newIndex, section -> WebInspectorFetchedResultsSectionChange? in
-                    guard let oldIndex = oldIndexes[section.id], oldIndex != newIndex else {
-                        return nil
+        let moves: [WebInspectorFetchedResultsSectionChange<WebInspectorFetchSectionID>] =
+            if oldCommonOrder == newCommonOrder {
+                []
+            } else {
+                newSnapshot.sections.enumerated()
+                    .compactMap {
+                        newIndex, section -> WebInspectorFetchedResultsSectionChange<WebInspectorFetchSectionID>? in
+                        guard let oldIndex = oldIndexes[section.id], oldIndex != newIndex else {
+                            return nil
+                        }
+                        return .move(sectionName: section.id, from: oldIndex, to: newIndex)
                     }
-                    return .move(sectionID: section.id, from: oldIndex, to: newIndex)
-                }
-        }
+            }
 
         let updates = newSnapshot.sections.enumerated()
-            .compactMap { newIndex, section -> WebInspectorFetchedResultsSectionChange? in
+            .compactMap { newIndex, section -> WebInspectorFetchedResultsSectionChange<WebInspectorFetchSectionID>? in
                 guard let oldIndex = oldIndexes[section.id] else {
                     return nil
                 }
                 guard oldSnapshot.sections[oldIndex].title != section.title else {
                     return nil
                 }
-                return .update(sectionID: section.id, index: newIndex)
+                return .update(sectionName: section.id, index: newIndex)
             }
 
         return deletes + inserts + moves + updates
     }
 
     private static func indexSections(
-        _ sections: [WebInspectorFetchedResultsSnapshot<ItemID>.Section]
+        _ sections: [WebInspectorFetchedResultsSnapshot<
+            ItemID,
+            WebInspectorFetchSectionID
+        >.Section]
     ) -> [WebInspectorFetchSectionID: Int] {
         Dictionary(
             uniqueKeysWithValues: sections.enumerated().map { index, section in
@@ -276,8 +459,14 @@ public struct WebInspectorFetchedResultsTransaction<ItemID: Hashable & Sendable>
     }
 
     private static func itemChanges(
-        from oldSnapshot: WebInspectorFetchedResultsSnapshot<ItemID>,
-        to newSnapshot: WebInspectorFetchedResultsSnapshot<ItemID>,
+        from oldSnapshot: WebInspectorFetchedResultsSnapshot<
+            ItemID,
+            WebInspectorFetchSectionID
+        >,
+        to newSnapshot: WebInspectorFetchedResultsSnapshot<
+            ItemID,
+            WebInspectorFetchSectionID
+        >,
         updatedItemIDs: Set<ItemID>
     ) -> [WebInspectorFetchedResultsItemChange<ItemID>] {
         let oldPositions = indexItems(oldSnapshot)
@@ -321,10 +510,11 @@ public struct WebInspectorFetchedResultsTransaction<ItemID: Hashable & Sendable>
 
         let updates = newSnapshot.itemIDs.compactMap { itemID -> WebInspectorFetchedResultsItemChange<ItemID>? in
             guard updatedItemIDs.contains(itemID),
-                  let oldPosition = oldPositions[itemID],
-                  let newPosition = newPositions[itemID],
-                  oldPosition.sectionID == newPosition.sectionID,
-                  oldPosition.indexPath == newPosition.indexPath else {
+                let oldPosition = oldPositions[itemID],
+                let newPosition = newPositions[itemID],
+                oldPosition.sectionID == newPosition.sectionID,
+                oldPosition.indexPath == newPosition.indexPath
+            else {
                 return nil
             }
             return .update(itemID: itemID, indexPath: newPosition.indexPath)
@@ -334,8 +524,14 @@ public struct WebInspectorFetchedResultsTransaction<ItemID: Hashable & Sendable>
     }
 
     private static func sectionMembershipChanges(
-        from oldSnapshot: WebInspectorFetchedResultsSnapshot<ItemID>,
-        to newSnapshot: WebInspectorFetchedResultsSnapshot<ItemID>,
+        from oldSnapshot: WebInspectorFetchedResultsSnapshot<
+            ItemID,
+            WebInspectorFetchSectionID
+        >,
+        to newSnapshot: WebInspectorFetchedResultsSnapshot<
+            ItemID,
+            WebInspectorFetchSectionID
+        >,
         oldPositions: [ItemID: ItemPosition],
         newPositions: [ItemID: ItemPosition]
     ) -> [WebInspectorFetchedResultsItemChange<ItemID>] {
@@ -346,8 +542,9 @@ public struct WebInspectorFetchedResultsTransaction<ItemID: Hashable & Sendable>
 
         return newSnapshot.itemIDs.compactMap { itemID -> WebInspectorFetchedResultsItemChange<ItemID>? in
             guard let oldPosition = oldPositions[itemID],
-                  let newPosition = newPositions[itemID],
-                  oldPosition.sectionID != newPosition.sectionID else {
+                let newPosition = newPositions[itemID],
+                oldPosition.sectionID != newPosition.sectionID
+            else {
                 return nil
             }
             let oldSectionDeleted = deletedSectionIDs.contains(oldPosition.sectionID)
@@ -370,8 +567,14 @@ public struct WebInspectorFetchedResultsTransaction<ItemID: Hashable & Sendable>
     }
 
     private static func moveChanges(
-        from oldSnapshot: WebInspectorFetchedResultsSnapshot<ItemID>,
-        to newSnapshot: WebInspectorFetchedResultsSnapshot<ItemID>,
+        from oldSnapshot: WebInspectorFetchedResultsSnapshot<
+            ItemID,
+            WebInspectorFetchSectionID
+        >,
+        to newSnapshot: WebInspectorFetchedResultsSnapshot<
+            ItemID,
+            WebInspectorFetchSectionID
+        >,
         oldPositions: [ItemID: ItemPosition],
         newPositions: [ItemID: ItemPosition],
         updatedItemIDs: Set<ItemID>,
@@ -384,18 +587,19 @@ public struct WebInspectorFetchedResultsTransaction<ItemID: Hashable & Sendable>
         }
 
         if updatedItemIDs.count == 1,
-           let changedID = updatedItemIDs.first,
-           excludedItemIDs.contains(changedID) == false,
-           let oldPosition = oldPositions[changedID],
-           let newPosition = newPositions[changedID],
-           oldPosition.sectionID == newPosition.sectionID,
-           oldPosition.indexPath != newPosition.indexPath {
+            let changedID = updatedItemIDs.first,
+            excludedItemIDs.contains(changedID) == false,
+            let oldPosition = oldPositions[changedID],
+            let newPosition = newPositions[changedID],
+            oldPosition.sectionID == newPosition.sectionID,
+            oldPosition.indexPath != newPosition.indexPath
+        {
             return [
                 .move(
                     itemID: changedID,
                     from: oldPosition.indexPath,
                     to: newPosition.indexPath
-                ),
+                )
             ]
         }
 
@@ -404,9 +608,10 @@ public struct WebInspectorFetchedResultsTransaction<ItemID: Hashable & Sendable>
                 return nil
             }
             guard let oldPosition = oldPositions[itemID],
-                  let newPosition = newPositions[itemID],
-                  oldPosition.sectionID == newPosition.sectionID,
-                  oldPosition.indexPath != newPosition.indexPath else {
+                let newPosition = newPositions[itemID],
+                oldPosition.sectionID == newPosition.sectionID,
+                oldPosition.indexPath != newPosition.indexPath
+            else {
                 return nil
             }
             return .move(
@@ -424,7 +629,10 @@ public struct WebInspectorFetchedResultsTransaction<ItemID: Hashable & Sendable>
     }
 
     private static func indexItems(
-        _ snapshot: WebInspectorFetchedResultsSnapshot<ItemID>
+        _ snapshot: WebInspectorFetchedResultsSnapshot<
+            ItemID,
+            WebInspectorFetchSectionID
+        >
     ) -> [ItemID: ItemPosition] {
         var positions: [ItemID: ItemPosition] = [:]
         for (sectionIndex, section) in snapshot.sections.enumerated() {
@@ -447,27 +655,32 @@ public struct WebInspectorFetchedResultsTransaction<ItemID: Hashable & Sendable>
     ) -> ItemID {
         switch change {
         case let .insert(itemID, _),
-             let .delete(itemID, _),
-             let .update(itemID, _),
-             let .move(itemID, _, _):
+            let .delete(itemID, _),
+            let .update(itemID, _),
+            let .move(itemID, _, _):
             return itemID
         }
     }
 }
 
-/// One atomic fetched-results publication.
+/// A compatibility publication used by the pre-container fetched-results API.
 ///
-/// The initial value and every later transaction contain a complete identity
-/// snapshot. Consumers that observe a revision gap can therefore replace their
-/// local snapshot instead of applying a delta across missing revisions.
-public enum WebInspectorFetchedResultsUpdate<ItemID: Hashable & Sendable>: Hashable, Sendable {
+/// New query registrations use ``WebInspectorFetchedResultsUpdate``. This
+/// legacy value remains only until the Network and Console query paths move to
+/// the generic context query core.
+public enum WebInspectorLegacyFetchedResultsUpdate<
+    ItemID: Hashable & Sendable
+>: Hashable, Sendable {
     /// The complete result state that begins a subscription.
     ///
     /// If the producer advances before first consumption, the pending initial
     /// value coalesces to the newest complete snapshot.
     case initial(
         revision: UInt64,
-        snapshot: WebInspectorFetchedResultsSnapshot<ItemID>
+        snapshot: WebInspectorFetchedResultsSnapshot<
+            ItemID,
+            WebInspectorFetchSectionID
+        >
     )
 
     /// One later result publication.
@@ -481,10 +694,10 @@ public enum WebInspectorFetchedResultsUpdate<ItemID: Hashable & Sendable>: Hasha
     )
 }
 
-extension WebInspectorFetchedResultsUpdate {
+extension WebInspectorLegacyFetchedResultsUpdate {
     fileprivate func coalescing(
-        _ pending: WebInspectorFetchedResultsUpdate<ItemID>
-    ) -> WebInspectorFetchedResultsUpdate<ItemID> {
+        _ pending: WebInspectorLegacyFetchedResultsUpdate<ItemID>
+    ) -> WebInspectorLegacyFetchedResultsUpdate<ItemID> {
         switch (pending, self) {
         case (_, .initial):
             return self
@@ -500,7 +713,8 @@ extension WebInspectorFetchedResultsUpdate {
             return .transaction(
                 revision: revision,
                 transaction: transaction,
-                reconfigureItemIDs: reconfigureItemIDs
+                reconfigureItemIDs:
+                    reconfigureItemIDs
                     .union(pendingReconfigureItemIDs)
                     .intersection(transaction.newSnapshot.itemIDs)
             )
@@ -508,10 +722,10 @@ extension WebInspectorFetchedResultsUpdate {
     }
 }
 
-private final class WebInspectorFetchedResultsUpdateSubscriber<
+private final class WebInspectorLegacyFetchedResultsUpdateSubscriber<
     ItemID: Hashable & Sendable
 >: Sendable {
-    typealias Update = WebInspectorFetchedResultsUpdate<ItemID>
+    typealias Update = WebInspectorLegacyFetchedResultsUpdate<ItemID>
 
     private struct State {
         var pending: Update?
@@ -570,15 +784,17 @@ private final class WebInspectorFetchedResultsUpdateSubscriber<
 
             var resumptions: [Resumption] = []
             if state.waiters.isEmpty == false, let pending = state.pending {
-                resumptions.append(Resumption(
-                    continuation: state.waiters.removeFirst(),
-                    update: pending
-                ))
+                resumptions.append(
+                    Resumption(
+                        continuation: state.waiters.removeFirst(),
+                        update: pending
+                    ))
                 state.pending = nil
             }
-            resumptions.append(contentsOf: state.waiters.map {
-                Resumption(continuation: $0, update: nil)
-            })
+            resumptions.append(
+                contentsOf: state.waiters.map {
+                    Resumption(continuation: $0, update: nil)
+                })
             state.waiters.removeAll(keepingCapacity: false)
             return resumptions
         }
@@ -623,22 +839,22 @@ private final class WebInspectorFetchedResultsUpdateSubscriber<
     }
 }
 
-private final class WeakWebInspectorFetchedResultsUpdateSubscriber<
+private final class WeakWebInspectorLegacyFetchedResultsUpdateSubscriber<
     ItemID: Hashable & Sendable
 > {
-    weak var value: WebInspectorFetchedResultsUpdateSubscriber<ItemID>?
+    weak var value: WebInspectorLegacyFetchedResultsUpdateSubscriber<ItemID>?
 
-    init(_ value: WebInspectorFetchedResultsUpdateSubscriber<ItemID>) {
+    init(_ value: WebInspectorLegacyFetchedResultsUpdateSubscriber<ItemID>) {
         self.value = value
     }
 }
 
-final class WebInspectorFetchedResultsUpdateBroker<ItemID: Hashable & Sendable>: Sendable {
-    typealias Update = WebInspectorFetchedResultsUpdate<ItemID>
-    private typealias Subscriber = WebInspectorFetchedResultsUpdateSubscriber<ItemID>
+final class WebInspectorLegacyFetchedResultsUpdateBroker<ItemID: Hashable & Sendable>: Sendable {
+    typealias Update = WebInspectorLegacyFetchedResultsUpdate<ItemID>
+    private typealias Subscriber = WebInspectorLegacyFetchedResultsUpdateSubscriber<ItemID>
 
     private struct State {
-        var subscribers: [UUID: WeakWebInspectorFetchedResultsUpdateSubscriber<ItemID>] = [:]
+        var subscribers: [UUID: WeakWebInspectorLegacyFetchedResultsUpdateSubscriber<ItemID>] = [:]
         var isFinished = false
     }
 
@@ -654,7 +870,7 @@ final class WebInspectorFetchedResultsUpdateBroker<ItemID: Hashable & Sendable>:
                 return true
             }
             state.subscribers = state.subscribers.filter { $0.value.value != nil }
-            state.subscribers[id] = WeakWebInspectorFetchedResultsUpdateSubscriber(subscriber)
+            state.subscribers[id] = WeakWebInspectorLegacyFetchedResultsUpdateSubscriber(subscriber)
             return false
         }
         if shouldFinish {

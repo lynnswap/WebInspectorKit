@@ -67,14 +67,14 @@ public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel
         var sections: [WebInspectorFetchSection<Model>]
         var modelsByID: [Model.ID: Model]
         var sectionsByID: [WebInspectorFetchSectionID: WebInspectorFetchSection<Model>]
-        var snapshot: WebInspectorFetchedResultsSnapshot<Model.ID>
+        var snapshot: WebInspectorFetchedResultsSnapshot<Model.ID, WebInspectorFetchSectionID>
         var revision: UInt64
         var query: ConcreteQuery?
     }
 
     private var state: State
     @ObservationIgnored private let updateBroker =
-        WebInspectorFetchedResultsUpdateBroker<Model.ID>()
+        WebInspectorLegacyFetchedResultsUpdateBroker<Model.ID>()
     @ObservationIgnored weak var modelContext: WebInspectorModelContext?
     @ObservationIgnored private var queryRegistrationID: WebInspectorQueryRegistrationID?
     @ObservationIgnored private var queryRegistrationLifetime: WebInspectorQueryRegistrationLifetime?
@@ -94,7 +94,7 @@ public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel
     }
 
     /// The complete current section and item identity snapshot.
-    public var snapshot: WebInspectorFetchedResultsSnapshot<Model.ID> {
+    public var snapshot: WebInspectorFetchedResultsSnapshot<Model.ID, WebInspectorFetchSectionID> {
         modelContext?.preconditionOwnerIsolation()
         return state.snapshot
     }
@@ -316,7 +316,7 @@ public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel
     }
 
     private func resolve(
-        _ snapshot: WebInspectorFetchedResultsSnapshot<Model.ID>,
+        _ snapshot: WebInspectorFetchedResultsSnapshot<Model.ID, WebInspectorFetchSectionID>,
         reusing existingModelsByID: [Model.ID: Model],
         lookup: (Model.ID) -> Model?
     ) -> (
@@ -373,7 +373,7 @@ public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel
     /// stream then retains only its newest unconsumed transaction. Every
     /// transaction includes a full current snapshot, so consumers recover from
     /// a revision gap by replacing their local snapshot.
-    public func updates() -> AsyncStream<WebInspectorFetchedResultsUpdate<Model.ID>> {
+    public func updates() -> AsyncStream<WebInspectorLegacyFetchedResultsUpdate<Model.ID>> {
         modelContext?.preconditionOwnerIsolation()
         return updateBroker.makeStream(initial: .initial(
             revision: state.revision,

@@ -62,7 +62,7 @@ private actor DataKitImportOnlyActor {
         _ = requests.items.first?.metrics
         _ = requests.sections.first?.title
         _ = requests.query
-        let requestSnapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID> =
+        let requestSnapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID, WebInspectorFetchSectionID> =
             requests.snapshot
         if let requestID = requestSnapshot.itemIDs.first {
             _ = requests[id: requestID]

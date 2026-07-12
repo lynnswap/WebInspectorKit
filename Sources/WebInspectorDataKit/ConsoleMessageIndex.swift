@@ -64,7 +64,7 @@ package enum ConsoleMessageQueryDomain: WebInspectorIndexedQueryDomain {
         matchingItemIDs: [ItemID],
         recordsByID: [ItemID: Record],
         query: Query
-    ) -> WebInspectorFetchedResultsSnapshot<ItemID> {
+    ) -> WebInspectorFetchedResultsSnapshot<ItemID, WebInspectorFetchSectionID> {
         let lowerBound = min(query.offset, matchingItemIDs.count)
         let upperBound: Int
         if let limit = query.limit {
@@ -93,7 +93,7 @@ package enum ConsoleMessageQueryDomain: WebInspectorIndexedQueryDomain {
         }
         return WebInspectorFetchedResultsSnapshot(sections: sections.map { section in
             WebInspectorFetchedResultsSnapshot.Section(
-                id: section.id,
+                name: section.id,
                 title: section.id.rawValue,
                 itemIDs: section.itemIDs
             )

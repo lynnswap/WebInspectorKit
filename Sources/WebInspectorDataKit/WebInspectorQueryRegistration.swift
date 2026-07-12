@@ -43,11 +43,11 @@ package struct WebInspectorIndexedQueryCursor: Hashable, Sendable {
 
 package struct WebInspectorIndexedQueryState<ItemID: Hashable & Sendable>: Hashable, Sendable {
     package let cursor: WebInspectorIndexedQueryCursor
-    package let snapshot: WebInspectorFetchedResultsSnapshot<ItemID>
+    package let snapshot: WebInspectorFetchedResultsSnapshot<ItemID, WebInspectorFetchSectionID>
 
     package init(
         cursor: WebInspectorIndexedQueryCursor,
-        snapshot: WebInspectorFetchedResultsSnapshot<ItemID>
+        snapshot: WebInspectorFetchedResultsSnapshot<ItemID, WebInspectorFetchSectionID>
     ) {
         self.cursor = cursor
         self.snapshot = snapshot

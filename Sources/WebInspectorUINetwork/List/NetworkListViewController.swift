@@ -571,7 +571,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func fetchedResultsDidPublish(
-        _ update: WebInspectorFetchedResultsUpdate<NetworkRequest.ID>
+        _ update: WebInspectorLegacyFetchedResultsUpdate<NetworkRequest.ID>
     ) {
         switch update {
         case .initial(let revision, let snapshot):
@@ -675,8 +675,8 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func applySectionChanges(
-        _ changes: [WebInspectorFetchedResultsSectionChange],
-        newSemanticSnapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID>,
+        _ changes: [WebInspectorFetchedResultsSectionChange<WebInspectorFetchSectionID>],
+        newSemanticSnapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID, WebInspectorFetchSectionID>,
         to snapshot: inout NSDiffableDataSourceSnapshot<SectionIdentifier, WebInspectorFetchSectionID>
     ) -> Bool {
         var deletedEntryIDs: Set<WebInspectorFetchSectionID> = []
@@ -794,7 +794,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
     private func entryID(
         atSectionIndex sectionIndex: Int,
-        in snapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID>
+        in snapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID, WebInspectorFetchSectionID>
     ) -> WebInspectorFetchSectionID {
         guard snapshot.sections.indices.contains(sectionIndex) else {
             preconditionFailure("A Network transaction referenced an invalid semantic section index.")
@@ -962,12 +962,12 @@ extension NetworkListViewController {
     package func reduceSectionChangesForTesting(
         oldEntryIDs: [WebInspectorFetchSectionID],
         newEntryIDs: [WebInspectorFetchSectionID],
-        changes: [WebInspectorFetchedResultsSectionChange]
+        changes: [WebInspectorFetchedResultsSectionChange<WebInspectorFetchSectionID>]
     ) -> [WebInspectorFetchSectionID] {
         var snapshot = makeSnapshot(entryIDs: oldEntryIDs)
-        let semanticSnapshot = WebInspectorFetchedResultsSnapshot<NetworkRequest.ID>(
+        let semanticSnapshot = WebInspectorFetchedResultsSnapshot<NetworkRequest.ID, WebInspectorFetchSectionID>(
             sections: newEntryIDs.map { entryID in
-                .init(id: entryID, title: nil, itemIDs: [])
+                .init(name: entryID, title: nil, itemIDs: [])
             }
         )
         guard applySectionChanges(

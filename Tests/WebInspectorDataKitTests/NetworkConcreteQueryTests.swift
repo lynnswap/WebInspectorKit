@@ -1059,7 +1059,8 @@ func fetchedResultsBaseMismatchRecoversWithResetAndCursorOnlyAdvanceDoesNotInval
     let models = [first.id: firstModel, second.id: secondModel]
     let results = WebInspectorFetchedResults<NetworkRequest>(modelContext: context)
     let firstCursor = WebInspectorIndexedQueryCursor(sourceEpoch: 1, sequence: 1)
-    let firstSnapshot = WebInspectorFetchedResultsSnapshot(itemIDs: [first.id])
+    let firstSnapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID, WebInspectorFetchSectionID> =
+        WebInspectorFetchedResultsSnapshot(itemIDs: [first.id])
     _ = results.installInitialNetworkQuery(
         NetworkQuery(),
         generation: 1,
@@ -1129,7 +1130,8 @@ func fetchedResultsBaseMismatchRecoversWithResetAndCursorOnlyAdvanceDoesNotInval
     #expect(results.revision == 0)
 
     let thirdCursor = WebInspectorIndexedQueryCursor(sourceEpoch: 1, sequence: 3)
-    let thirdSnapshot = WebInspectorFetchedResultsSnapshot(itemIDs: [first.id, second.id])
+    let thirdSnapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID, WebInspectorFetchSectionID> =
+        WebInspectorFetchedResultsSnapshot(itemIDs: [first.id, second.id])
     _ = results.applyNetworkQueryPublication(
         NetworkRequestIndex.QueryPublication(
             state: NetworkRequestIndex.QueryState(
@@ -1159,7 +1161,8 @@ func fetchedResultsBaseMismatchRecoversWithResetAndCursorOnlyAdvanceDoesNotInval
     #expect(observationInvalidations.withLock { $0 } == 1)
 
     let fifthCursor = WebInspectorIndexedQueryCursor(sourceEpoch: 1, sequence: 5)
-    let fifthSnapshot = WebInspectorFetchedResultsSnapshot(itemIDs: [second.id])
+    let fifthSnapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID, WebInspectorFetchSectionID> =
+        WebInspectorFetchedResultsSnapshot(itemIDs: [second.id])
     let recoveredState = results.applyNetworkQueryPublication(
         NetworkRequestIndex.QueryPublication(
             state: NetworkRequestIndex.QueryState(

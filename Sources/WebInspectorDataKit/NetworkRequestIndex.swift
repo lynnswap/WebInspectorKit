@@ -92,7 +92,7 @@ package enum NetworkRequestQueryDomain: WebInspectorIndexedQueryDomain {
         matchingItemIDs: [ItemID],
         recordsByID: [ItemID: Record],
         query: Query
-    ) -> WebInspectorFetchedResultsSnapshot<ItemID> {
+    ) -> WebInspectorFetchedResultsSnapshot<ItemID, WebInspectorFetchSectionID> {
         if query.section == .initiatorNode {
             return makeInitiatorNodeSnapshot(
                 allItemIDsInSourceOrder: allItemIDsInSourceOrder,
@@ -129,7 +129,7 @@ package enum NetworkRequestQueryDomain: WebInspectorIndexedQueryDomain {
         }
         return WebInspectorFetchedResultsSnapshot(sections: sections.map { section in
             WebInspectorFetchedResultsSnapshot.Section(
-                id: section.id,
+                name: section.id,
                 title: section.id.rawValue,
                 itemIDs: section.itemIDs
             )
@@ -146,7 +146,7 @@ package enum NetworkRequestQueryDomain: WebInspectorIndexedQueryDomain {
         matchingItemIDs: [ItemID],
         recordsByID: [ItemID: Record],
         query: Query
-    ) -> WebInspectorFetchedResultsSnapshot<ItemID> {
+    ) -> WebInspectorFetchedResultsSnapshot<ItemID, WebInspectorFetchSectionID> {
         let matchingGroupIDs = Set(matchingItemIDs.map { id in
             guard let record = recordsByID[id] else {
                 preconditionFailure(
@@ -210,7 +210,7 @@ package enum NetworkRequestQueryDomain: WebInspectorIndexedQueryDomain {
         }
         return WebInspectorFetchedResultsSnapshot(sections: groups[lowerBound..<upperBound].map {
             WebInspectorFetchedResultsSnapshot.Section(
-                id: $0.id,
+                name: $0.id,
                 title: nil,
                 itemIDs: $0.itemIDs
             )
