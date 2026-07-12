@@ -58,9 +58,16 @@ private struct ModelContainerCoreFixture {
                         ModelTargetState(
                             target: pageTarget,
                             navigationEpoch: ModelNavigationEpoch(rawValue: 1),
-                            domBindingEpoch: nil,
-                            runtimeBindingEpoch: nil,
-                            consoleBindingEpoch: nil
+                            domBindingEpoch: core.configuredDomains.contains(.dom)
+                                ? ModelDOMBindingEpoch(rawValue: 1)
+                                : nil,
+                            runtimeBindingEpoch: core.configuredDomains.contains(.runtime)
+                                || core.configuredDomains.contains(.console)
+                                ? ModelRuntimeBindingEpoch(rawValue: 1)
+                                : nil,
+                            consoleBindingEpoch: core.configuredDomains.contains(.console)
+                                ? ModelConsoleBindingEpoch(rawValue: 1)
+                                : nil
                         )
                     ]
                 )
@@ -763,6 +770,25 @@ func modelContainerCoreDetachRejectsAForeignTransaction() async throws {
 }
 
 @Test
+func modelContainerCoreCompletedDetachRejectsAForeignTransaction() async throws {
+    var first = ModelContainerCoreFixture()
+    var second = ModelContainerCoreFixture()
+    try await first.establishAttachment()
+    try await second.establishAttachment()
+    let firstReset = try #require(try await first.core.resetForDetach())
+    let secondReset = try #require(try await second.core.resetForDetach())
+
+    try await first.core.finishDetach(firstReset)
+    await #expect(
+        throws: WebInspectorModelContainerCoreError
+            .detachTransactionMismatch
+    ) {
+        try await first.core.finishDetach(secondReset)
+    }
+    try await second.core.finishDetach(secondReset)
+}
+
+@Test
 func modelContainerCoreTerminalCloseWinsAnInFlightDetach() async throws {
     var fixture = ModelContainerCoreFixture()
     try await fixture.establishAttachment()
@@ -920,6 +946,15 @@ func modelContainerCoreCancelledFinishDetachCanBeRetried() async throws {
 func modelContainerCoreTerminalCloseFinishesStreamsAndRejectsNewWork() async throws {
     var fixture = ModelContainerCoreFixture()
     try await fixture.establishAttachment()
+    _ = try await fixture.event(
+        .network(
+            canonicalRequestWillBeSent(
+                id: "retained-until-close",
+                url: "https://example.test/retained-until-close",
+                timestamp: 1
+            )
+        )
+    )
     let registration = try await registerActiveContext(fixture.core)
     let pendingInitial = try await registerActiveContext(fixture.core)
     var iterator = registration.updates.makeAsyncIterator()
@@ -955,6 +990,10 @@ func modelContainerCoreTerminalCloseFinishesStreamsAndRejectsNewWork() async thr
     try await fixture.core.finishClose(close)
     #expect(await fixture.core.isClosed)
     #expect(await fixture.core.metrics.activeContextRegistrationCount == 0)
+    let closedSnapshot = await fixture.core.canonicalSnapshotForTesting()
+    #expect(closedSnapshot.binding == nil)
+    #expect(closedSnapshot.network?.requests.isEmpty == true)
+    #expect(closedSnapshot.network?.entries.isEmpty == true)
     var mainIterator = fixture.core.mainContextSeed.updates.makeAsyncIterator()
     #expect(await mainIterator.next() == nil)
     await #expect(throws: WebInspectorModelContainerCoreError.closed) {
@@ -972,6 +1011,46 @@ func modelContainerCoreTerminalCloseFinishesStreamsAndRejectsNewWork() async thr
     await #expect(throws: WebInspectorModelContainerCoreError.closed) {
         try await fixture.core.resetForDetach()
     }
+}
+
+@Test
+func modelContainerCoreCloseReleasesDetachedAllDomainStorage() async throws {
+    let core = WebInspectorModelContainerCore(
+        configuredDomains: [.dom, .network, .console, .runtime, .css]
+    )
+
+    let close = await core.beginClose()
+    try await core.finishClose(close)
+    let snapshot = await core.canonicalSnapshotForTesting()
+
+    #expect(snapshot.binding == nil)
+    #expect(snapshot.network?.requests.isEmpty == true)
+    #expect(snapshot.network?.entries.isEmpty == true)
+    #expect(snapshot.DOM?.recordsByID.isEmpty == true)
+    #expect(snapshot.CSS?.recordsByID.isEmpty == true)
+    #expect(snapshot.consoleRuntime?.runtimeContexts.isEmpty == true)
+    #expect(snapshot.consoleRuntime?.consoleMessages.isEmpty == true)
+}
+
+@Test
+func modelContainerCoreCloseReleasesAttachedAllDomainStorage() async throws {
+    var fixture = ModelContainerCoreFixture(
+        domains: [.dom, .network, .console, .runtime, .css]
+    )
+    try await fixture.establishAttachment()
+    #expect(await fixture.core.canonicalSnapshotForTesting().binding != nil)
+
+    let close = await fixture.core.beginClose()
+    try await fixture.core.finishClose(close)
+    let snapshot = await fixture.core.canonicalSnapshotForTesting()
+
+    #expect(snapshot.binding == nil)
+    #expect(snapshot.network?.requests.isEmpty == true)
+    #expect(snapshot.network?.entries.isEmpty == true)
+    #expect(snapshot.DOM?.recordsByID.isEmpty == true)
+    #expect(snapshot.CSS?.recordsByID.isEmpty == true)
+    #expect(snapshot.consoleRuntime?.runtimeContexts.isEmpty == true)
+    #expect(snapshot.consoleRuntime?.consoleMessages.isEmpty == true)
 }
 
 @Test
