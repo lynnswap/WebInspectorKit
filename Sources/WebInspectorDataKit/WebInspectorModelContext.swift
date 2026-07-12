@@ -2734,7 +2734,8 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
 
         _ = try await lease.completion.value()
         guard networkRequests.request(for: request.id) === request,
-              request.responseBody === body else {
+              request.responseBody === body,
+              body.isCurrentResponseFetch(lease) else {
             throw WebInspectorModelError.staleModel
         }
         return body

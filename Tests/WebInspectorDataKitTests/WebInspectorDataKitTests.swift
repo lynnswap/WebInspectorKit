@@ -441,6 +441,10 @@ func responseMetadataAndRedirectsPreserveResponseBodyIdentity() async throws {
         Issue.record("Expected the reset response body to own its next fetch.")
         return
     }
+    body.finishResponseFetch(
+        .success(Network.Body(data: "superseded", base64Encoded: false)),
+        for: lease
+    )
     request.applyRedirect(
         to: Network.Request(
             id: requestID,
@@ -459,9 +463,8 @@ func responseMetadataAndRedirectsPreserveResponseBodyIdentity() async throws {
     #expect(request.responseBody === body)
     #expect(body.phase == .available)
     #expect(body.kind == .text)
-    await #expect(throws: WebInspectorProxyError.staleIdentifier) {
-        _ = try await lease.completion.value()
-    }
+    _ = try await lease.completion.value()
+    #expect(body.isCurrentResponseFetch(lease) == false)
 }
 
 @MainActor

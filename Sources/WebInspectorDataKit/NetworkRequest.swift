@@ -279,6 +279,7 @@ public final class NetworkBody {
 
     struct ResponseFetchLease {
         fileprivate let identity: ResponseFetchIdentity
+        fileprivate let revision: UInt64
         let completion: ReplyPromise<Network.Body>
     }
 
@@ -432,6 +433,7 @@ public final class NetworkBody {
     public private(set) var textRepresentationSyntaxKind: SyntaxKind
     @ObservationIgnored private var isBatchingTextRepresentationInvalidation: Bool
     @ObservationIgnored private var needsTextRepresentationInvalidation: Bool
+    @ObservationIgnored private var responseRevision: UInt64
     @ObservationIgnored private var responseFetch: ResponseFetch?
 
     package init(
@@ -457,6 +459,7 @@ public final class NetworkBody {
         textRepresentationSyntaxKind = .plainText
         isBatchingTextRepresentationInvalidation = false
         needsTextRepresentationInvalidation = false
+        responseRevision = 0
         responseFetch = nil
         refreshTextRepresentation()
     }
@@ -502,6 +505,7 @@ public final class NetworkBody {
             )
             let lease = ResponseFetchLease(
                 identity: ResponseFetchIdentity(),
+                revision: responseRevision,
                 completion: ReplyPromise<Network.Body>()
             )
             responseFetch = ResponseFetch(lease: lease, task: nil)
@@ -544,6 +548,10 @@ public final class NetworkBody {
             fail(.proxy(error))
             lease.completion.fulfill(.failure(error))
         }
+    }
+
+    func isCurrentResponseFetch(_ lease: ResponseFetchLease) -> Bool {
+        lease.revision == responseRevision
     }
 
     func invalidateResponseFetch(
@@ -597,6 +605,11 @@ public final class NetworkBody {
             role == .response,
             "Only a response NetworkBody can adopt response metadata."
         )
+        precondition(
+            responseRevision < UInt64.max,
+            "A NetworkBody exhausted its response revision space."
+        )
+        responseRevision += 1
         let hints = Self.bodyHints(
             mimeType: response?.mimeType,
             headers: response?.headers ?? [:],
