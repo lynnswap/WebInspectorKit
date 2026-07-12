@@ -1259,19 +1259,41 @@ WKWebView operations (@MainActor only)
        - publish context snapshot/delta/reset
   -> context detached subscription driver
   -> context-core actor
-       - update synchronized record cache
+       - stage the next synchronized record-cache state
        - evaluate Predicate<QueryValue>
        - sort/section/window
        - build membership/order differences
   -> context owner actor
+       - atomically commit the staged record-access gate
+       - invalidate context resources before their owning records
        - update only materialized model instances
-       - commit FRC ID state
+       - publish the already-staged FRC ID differences
        - notify Observation/UI
+  -> acknowledge the committed canonical revision to the container core
 ```
 
 The context core mirrors the set of materialized IDs. A source transaction
 only sends record payloads for those IDs back to the owner actor. Unmaterialized
 records remain in the synchronized record cache and query indexes.
+
+Context application is a two-phase transaction. The context core first stages
+all model-type record changes and query-engine state for one canonical revision
+without exposing either through synchronous lookup or a fetched-results
+mailbox. While that transaction is outstanding, later query registration,
+descriptor replacement, state reads, and source revisions wait at the context
+core. The resulting commit is Sendable but contains no query engine or model;
+it carries the next record-access state, owner-model mutations, and one-shot
+publication values only.
+
+The context owner then commits the record-access gate, applies resource
+invalidation and materialized-model deletion or patching, and publishes the
+staged fetched-results values in one synchronous owner turn. A MainActor
+subscriber therefore cannot observe a new ID snapshot before the corresponding
+context-local model state is current. Only after that owner turn completes does
+the subscription driver acknowledge the canonical revision to the container.
+If materialization wins the synchronized record-gate race before a source
+commit, that commit includes the model mutation; if the source commit wins,
+materialization reads the final record. No update is lost in either order.
 
 Canonical transactions are complete deltas rather than full-store snapshots.
 An insert carries the full new record, a delete carries its stable ID, and an
