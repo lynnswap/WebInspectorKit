@@ -162,6 +162,120 @@ func canonicalDOMBootstrapBuildsNormalizedGraphAndTypedInitialTransaction() thro
 }
 
 @Test
+func canonicalDOMRecordPatchAppliesFieldsSequentiallyWithoutReplacingIdentity() throws {
+    let fixture = canonicalDOMReducerFixture()
+    var reducer = fixture.reducer
+    let host = canonicalDOMNode(id: "host")
+    _ = try reducer.bootstrap(
+        scope: fixture.scope,
+        root: canonicalDOMNode(
+            id: "document",
+            type: 9,
+            name: "#document",
+            children: [
+                canonicalDOMNode(id: "parent", children: [host])
+            ]
+        )
+    )
+    let scope = try canonicalDocumentScope(fixture, eventScope: fixture.scope)
+    let id = canonicalDOMID("host", scope: scope)
+    let childID = canonicalDOMID("child", scope: scope)
+    let contentID = canonicalDOMID("content", scope: scope)
+    let shadowID = canonicalDOMID("shadow", scope: scope)
+    let templateID = canonicalDOMID("template", scope: scope)
+    let beforeID = canonicalDOMID("before", scope: scope)
+    let markerID = canonicalDOMID("marker", scope: scope)
+    let afterID = canonicalDOMID("after", scope: scope)
+    let initial = try #require(reducer.record(for: id))
+    let firstAttributes = [
+        DOM.Attribute(name: "class", value: "first"),
+        DOM.Attribute(name: "data-order", value: "1"),
+    ]
+    let replacement = canonicalDOMNode(
+        id: "host",
+        type: 3,
+        name: "SPAN",
+        localName: "span",
+        value: "first",
+        frameID: FrameID("frame"),
+        documentURL: "https://example.test/document",
+        baseURL: "https://example.test/",
+        attributes: firstAttributes,
+        children: [canonicalDOMNode(id: "child")],
+        contentDocument: canonicalDOMNode(
+            id: "content",
+            type: 9,
+            name: "#document"
+        ),
+        shadowRoots: [canonicalDOMNode(id: "shadow")],
+        templateContent: canonicalDOMNode(id: "template"),
+        beforePseudoElement: canonicalDOMNode(id: "before", pseudoType: .before),
+        otherPseudoElements: [
+            canonicalDOMNode(id: "marker", pseudoType: .other("marker"))
+        ],
+        afterPseudoElement: canonicalDOMNode(id: "after", pseudoType: .after),
+        pseudoType: .before,
+        shadowRootType: .open
+    )
+    let firstTransaction = try reducer.apply(
+        scope: fixture.scope,
+        event: .setChildNodes(
+            parent: DOM.Node.ID("parent"),
+            nodes: [replacement]
+        )
+    )
+    let firstPatch = try #require(
+        firstTransaction.recordPatches.first { $0.id == id }
+    )
+    #expect(
+        firstPatch.fields == [
+            .nodeName("SPAN"),
+            .localName("span"),
+            .nodeValue("first"),
+            .nodeType(3),
+            .frameID(FrameID("frame")),
+            .documentURL("https://example.test/document"),
+            .baseURL("https://example.test/"),
+            .attributes(firstAttributes),
+            .children(.loaded([childID])),
+            .contentDocument(contentID),
+            .shadowRoots([shadowID]),
+            .templateContent(templateID),
+            .beforePseudoElement(beforeID),
+            .otherPseudoElements([markerID]),
+            .afterPseudoElement(afterID),
+            .pseudoType(.before),
+            .shadowRootType(.open),
+        ])
+
+    var projected = initial
+    projected.apply(firstPatch)
+    #expect(projected == reducer.record(for: id))
+    #expect(projected.id == initial.id)
+    #expect(projected.insertionOrdinal == initial.insertionOrdinal)
+
+    let secondTransaction = try reducer.apply(
+        scope: fixture.scope,
+        event: .characterDataModified(DOM.Node.ID("host"), value: "second")
+    )
+    let secondPatch = try #require(
+        secondTransaction.recordPatches.first { $0.id == id }
+    )
+    #expect(secondPatch.fields == [.nodeValue("second")])
+    projected.apply(secondPatch)
+
+    #expect(projected == reducer.record(for: id))
+    #expect(projected.nodeName == "SPAN")
+    #expect(projected.localName == "span")
+    #expect(projected.templateContentID == templateID)
+    #expect(projected.beforePseudoElementID == beforeID)
+    #expect(projected.afterPseudoElementID == afterID)
+    #expect(projected.shadowRootType == .open)
+    #expect(projected.id == initial.id)
+    #expect(projected.insertionOrdinal == initial.insertionOrdinal)
+}
+
+@Test
 func canonicalDOMBootstrapPreservesEveryProtocolRelationshipWithoutFlatteningIt() throws {
     let fixture = canonicalDOMReducerFixture()
     var reducer = fixture.reducer
@@ -1057,6 +1171,8 @@ private func canonicalDOMNode(
     localName: String = "div",
     value: String = "",
     frameID: FrameID? = nil,
+    documentURL: String? = nil,
+    baseURL: String? = nil,
     attributes: [DOM.Attribute] = [],
     childCount: Int? = nil,
     children: [DOM.Node]? = nil,
@@ -1076,6 +1192,8 @@ private func canonicalDOMNode(
         localName: localName,
         nodeValue: value,
         frameID: frameID,
+        documentURL: documentURL,
+        baseURL: baseURL,
         attributes: Dictionary(uniqueKeysWithValues: attributes.map { ($0.name, $0.value) }),
         attributeList: attributes,
         childNodeCount: childCount ?? children?.count ?? 0,

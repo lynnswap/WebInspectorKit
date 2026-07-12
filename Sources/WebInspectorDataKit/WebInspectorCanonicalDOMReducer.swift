@@ -138,6 +138,53 @@ package struct WebInspectorCanonicalDOMRecordPatch: Equatable, Sendable {
     package let fields: [Field]
 }
 
+package extension WebInspectorCanonicalDOMRecord {
+    mutating func apply(_ patch: WebInspectorCanonicalDOMRecordPatch) {
+        precondition(
+            patch.id == id,
+            "A canonical DOM patch must target its record identity."
+        )
+        for field in patch.fields {
+            switch field {
+            case let .nodeName(value):
+                nodeName = value
+            case let .localName(value):
+                localName = value
+            case let .nodeValue(value):
+                nodeValue = value
+            case let .nodeType(value):
+                nodeType = value
+            case let .frameID(value):
+                frameID = value
+            case let .documentURL(value):
+                documentURL = value
+            case let .baseURL(value):
+                baseURL = value
+            case let .attributes(value):
+                attributes = value
+            case let .children(value):
+                children = value
+            case let .contentDocument(value):
+                contentDocumentID = value
+            case let .shadowRoots(value):
+                shadowRootIDs = value
+            case let .templateContent(value):
+                templateContentID = value
+            case let .beforePseudoElement(value):
+                beforePseudoElementID = value
+            case let .otherPseudoElements(value):
+                otherPseudoElementIDs = value
+            case let .afterPseudoElement(value):
+                afterPseudoElementID = value
+            case let .pseudoType(value):
+                pseudoType = value
+            case let .shadowRootType(value):
+                shadowRootType = value
+            }
+        }
+    }
+}
+
 package struct WebInspectorCanonicalDOMRootChange: Equatable, Sendable {
     package let scope: WebInspectorDOMDocumentScopeStorage
     package let rootID: WebInspectorDOMNodeIdentityStorage?

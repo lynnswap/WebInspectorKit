@@ -72,6 +72,85 @@ func canonicalNetworkRequestInsertNormalizesEveryProtocolField() throws {
 }
 
 @Test
+func canonicalNetworkEntryPatchAppliesSequentialMembershipAndSummaryUpdates() throws {
+    var fixture = try CanonicalNetworkTestFixture()
+    let scope = fixture.scope(domBindingEpoch: 4)
+    _ = try fixture.store.reduce(
+        canonicalRequestWillBeSent(
+            id: "first",
+            url: "https://example.test/master.m3u8",
+            initiatorNodeID: "video",
+            resourceType: .media,
+            timestamp: 1
+        ),
+        scope: scope
+    )
+    let initial = try #require(fixture.store.entries.first)
+
+    let membershipTransaction = try #require(
+        try fixture.store.reduce(
+            canonicalRequestWillBeSent(
+                id: "second",
+                url: "https://example.test/segment.ts",
+                initiatorNodeID: "video",
+                resourceType: .media,
+                timestamp: 2
+            ),
+            scope: scope
+        ))
+    guard
+        case let .update(entryID, membershipPatch, _) =
+            membershipTransaction.entryChanges.first
+    else {
+        Issue.record("Expected an entry membership patch.")
+        return
+    }
+    let afterMembership = try #require(fixture.store.entry(for: initial.id))
+    var projected = initial
+    projected.apply(membershipPatch)
+
+    #expect(entryID == initial.id)
+    #expect(projected == afterMembership)
+    #expect(projected.requestIDs == membershipPatch.requestIDs)
+    #expect(projected.summary == membershipPatch.summary)
+    #expect(projected.id == initial.id)
+    #expect(projected.groupKey == initial.groupKey)
+
+    let summaryTransaction = try #require(
+        try fixture.store.reduce(
+            .responseReceived(
+                id: Network.Request.ID("first"),
+                response: Network.Response(
+                    url: "https://example.test/master.m3u8",
+                    status: 200,
+                    mimeType: "application/vnd.apple.mpegurl"
+                ),
+                resourceType: .media,
+                timestamp: 3
+            ),
+            scope: scope
+        ))
+    guard
+        case let .update(summaryEntryID, summaryPatch, _) =
+            summaryTransaction.entryChanges.first
+    else {
+        Issue.record("Expected an entry summary patch.")
+        return
+    }
+    projected.apply(summaryPatch)
+    let authoritative = try #require(fixture.store.entry(for: initial.id))
+
+    #expect(summaryEntryID == initial.id)
+    #expect(projected == authoritative)
+    #expect(summaryPatch.requestIDs == membershipPatch.requestIDs)
+    #expect(summaryPatch.summary != membershipPatch.summary)
+    #expect(projected.requestIDs == summaryPatch.requestIDs)
+    #expect(projected.summary == summaryPatch.summary)
+    #expect(projected.id == initial.id)
+    #expect(projected.groupKey == initial.groupKey)
+}
+
+@Test
 func canonicalNetworkRedirectPreservesLogicalStartAndInvalidatesBodyLease() throws {
     var fixture = try CanonicalNetworkTestFixture()
     let scope = fixture.scope(domBindingEpoch: 1)

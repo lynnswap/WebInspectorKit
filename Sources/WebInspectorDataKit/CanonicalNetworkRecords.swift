@@ -592,6 +592,13 @@ package struct CanonicalNetworkEntryPatch: Equatable, Sendable {
     package let summary: CanonicalNetworkEntrySummary
 }
 
+package extension CanonicalNetworkEntryRecord {
+    mutating func apply(_ patch: CanonicalNetworkEntryPatch) {
+        requestIDs = patch.requestIDs
+        summary = patch.summary
+    }
+}
+
 package enum CanonicalNetworkEntryChange: Equatable, Sendable {
     case insert(
         record: CanonicalNetworkEntryRecord,
