@@ -2364,13 +2364,32 @@ package actor ConnectionCore {
         targetID: ProtocolTarget.ID,
         target: ModelTarget
     ) -> ModelEventScope {
+        modelEventScope(
+            targetID: targetID,
+            target: target,
+            agentTargetID: targetID,
+            agentTarget: target
+        )
+    }
+
+    private func modelEventScope(
+        targetID: ProtocolTarget.ID,
+        target: ModelTarget,
+        agentTargetID: ProtocolTarget.ID,
+        agentTarget: ModelTarget
+    ) -> ModelEventScope {
         precondition(
             target.id.rawValue == targetID.rawValue,
             "A model event scope target does not match its physical target identifier."
         )
+        precondition(
+            agentTarget.id.rawValue == agentTargetID.rawValue,
+            "A model event scope agent target does not match its physical target identifier."
+        )
         return ModelEventScope(
             generation: currentPageGeneration,
             target: target,
+            agentTarget: agentTarget,
             navigationEpoch: modelNavigationEpoch(for: targetID),
             domBindingEpoch: modelFeed?.configuredDomains.contains(.dom) == true
                 ? modelDOMBindingEpoch(for: targetID)
@@ -2403,6 +2422,7 @@ package actor ConnectionCore {
         return ModelEventScope(
             generation: currentPageGeneration,
             target: target,
+            agentTarget: target,
             navigationEpoch: navigationEpoch,
             domBindingEpoch: domBindingEpoch
         )
@@ -6498,6 +6518,7 @@ package actor ConnectionCore {
         ) else {
             return
         }
+        let (agentTargetID, agentTarget) = try modelAgentTarget(for: event)
 
         let semanticTargetID = WebInspectorTarget.ID.currentPage
         let decodedEvent = try LiveProxyEventDecoder.proxyEvent(
@@ -6601,7 +6622,9 @@ package actor ConnectionCore {
         }
         let scope = modelEventScope(
             targetID: physicalTargetID,
-            target: target
+            target: target,
+            agentTargetID: agentTargetID,
+            agentTarget: agentTarget
         )
         switch payload {
         case .dom, .css:
@@ -6619,6 +6642,20 @@ package actor ConnectionCore {
                 payload: payload
             )
         )
+    }
+
+    private func modelAgentTarget(
+        for event: ProtocolEvent
+    ) throws -> (ProtocolTarget.ID, ModelTarget) {
+        guard let agentTargetID = event.sourceTargetID
+                ?? event.targetID
+                ?? targetRegistry.currentMainPageTargetID,
+              let record = targetRegistry.target(for: agentTargetID),
+              targetRegistry.isCurrentPageModelTarget(record),
+              let target = ModelTarget(record: record) else {
+            throw TransportSession.Error.malformedMessage
+        }
+        return (agentTargetID, target)
     }
 
     private func modelTarget(

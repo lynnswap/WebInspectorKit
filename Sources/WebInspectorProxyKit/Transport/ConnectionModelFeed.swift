@@ -115,18 +115,26 @@ package struct ModelDOMBindingEpoch: Hashable, Sendable {
 
 package struct ModelEventScope: Equatable, Sendable {
     package let generation: WebInspectorPage.Generation
+    /// The best available semantic model target for the event.
+    ///
+    /// Agent-wide or identifier-only events use `agentTarget`; reducers resolve
+    /// existing semantic membership from `agentTarget` and the raw identifier.
     package let target: ModelTarget
+    /// The physical protocol agent that owns raw identifiers and commands.
+    package let agentTarget: ModelTarget
     package let navigationEpoch: ModelNavigationEpoch
     package let domBindingEpoch: ModelDOMBindingEpoch?
 
     package init(
         generation: WebInspectorPage.Generation,
         target: ModelTarget,
+        agentTarget: ModelTarget,
         navigationEpoch: ModelNavigationEpoch,
         domBindingEpoch: ModelDOMBindingEpoch?
     ) {
         self.generation = generation
         self.target = target
+        self.agentTarget = agentTarget
         self.navigationEpoch = navigationEpoch
         self.domBindingEpoch = domBindingEpoch
     }

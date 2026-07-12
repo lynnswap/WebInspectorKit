@@ -716,6 +716,7 @@ func modelFeedPublishesFutureTargetAndConfiguredDomainEventsAfterSnapshotWaterma
         return
     }
     #expect(targetEvent.target.id == WebInspectorTarget.ID("frame-a"))
+    #expect(targetEvent.agentTarget.id == WebInspectorTarget.ID("frame-a"))
     #expect(targetEvent.navigationEpoch == ModelNavigationEpoch(rawValue: 0))
     #expect(targetEvent.domBindingEpoch == nil)
 
@@ -744,6 +745,7 @@ func modelFeedPublishesFutureTargetAndConfiguredDomainEventsAfterSnapshotWaterma
         return
     }
     #expect(networkEvent.target.id == WebInspectorTarget.ID("page-main"))
+    #expect(networkEvent.agentTarget.id == WebInspectorTarget.ID("page-main"))
     #expect(networkEvent.navigationEpoch == ModelNavigationEpoch(rawValue: 1))
     #expect(networkEvent.domBindingEpoch == nil)
     guard case let .requestWillBeSent(id, _, _, _, _, _) = event else {
@@ -785,7 +787,11 @@ func modelEventScopeSeparatesPhysicalTargetsAndTracksParentlessFrameNavigationEp
     )
     var iterator = feed.records.makeAsyncIterator()
     _ = try await modelFeedRequireReset(iterator.next())
-    _ = try await modelFeedRequireTargetSnapshot(iterator.next())
+    let targetSnapshot = try await modelFeedRequireTargetSnapshot(iterator.next())
+    let parentlessFrame = try #require(targetSnapshot.snapshot.targets.first {
+        $0.target.id == WebInspectorTarget.ID("frame-a")
+    })
+    #expect(parentlessFrame.target.kind == .frame)
     _ = try await modelFeedRequireReplayCompletion(iterator.next())
     _ = try await modelFeedRequireSynchronization(iterator.next())
 
@@ -800,7 +806,9 @@ func modelEventScopeSeparatesPhysicalTargetsAndTracksParentlessFrameNavigationEp
     let mainRequest = try await modelFeedRequireEvent(iterator.next())
     let frameRequest = try await modelFeedRequireEvent(iterator.next())
     #expect(mainRequest.target.id == WebInspectorTarget.ID("page-main"))
+    #expect(mainRequest.agentTarget.id == WebInspectorTarget.ID("page-main"))
     #expect(frameRequest.target.id == WebInspectorTarget.ID("frame-a"))
+    #expect(frameRequest.agentTarget.id == WebInspectorTarget.ID("frame-a"))
     #expect(mainRequest.navigationEpoch == ModelNavigationEpoch(rawValue: 0))
     #expect(frameRequest.navigationEpoch == ModelNavigationEpoch(rawValue: 0))
     guard case let .network(.requestWillBeSent(mainID, _, _, _, _, _)) = mainRequest.payload,
@@ -822,6 +830,7 @@ func modelEventScopeSeparatesPhysicalTargetsAndTracksParentlessFrameNavigationEp
         ))
         let navigation = try await modelFeedRequireEvent(iterator.next())
         #expect(navigation.target.id == WebInspectorTarget.ID("frame-a"))
+        #expect(navigation.agentTarget.id == WebInspectorTarget.ID("frame-a"))
         #expect(navigation.navigationEpoch == ModelNavigationEpoch(rawValue: expectedEpoch))
         #expect(navigation.domBindingEpoch == nil)
         guard case .target(.frameNavigated) = navigation.payload else {
@@ -863,6 +872,280 @@ func modelEventScopeSeparatesPhysicalTargetsAndTracksParentlessFrameNavigationEp
         enableMethods: ["Page.enable", "Network.enable"]
     )
     await core.close()
+}
+
+@Test
+func modelEventScopeUsesAvailableRuntimeFrameAndAgentWideTargetSeparately() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "frame-a",
+        type: "frame",
+        frameID: "frame-a",
+        parentFrameID: "main-frame"
+    ))
+
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [.runtime],
+        targetID: "page-main"
+    )
+    var iterator = feed.records.makeAsyncIterator()
+    _ = try await modelFeedRequireReset(iterator.next())
+    _ = try await modelFeedRequireTargetSnapshot(iterator.next())
+    _ = try await modelFeedRequireReplayCompletion(iterator.next())
+    _ = try await modelFeedRequireSynchronization(iterator.next())
+
+    _ = await core.receiveRootMessage(
+        #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7,"type":"normal","name":"frame context","frameId":"frame-a"}}}"#
+    )
+    let created = try await modelFeedRequireEvent(iterator.next())
+    #expect(created.target.id == WebInspectorTarget.ID("frame-a"))
+    #expect(created.agentTarget.id == WebInspectorTarget.ID("page-main"))
+    guard case let .runtime(.executionContextCreated(context)) = created.payload else {
+        Issue.record("Expected a root Runtime execution-context creation.")
+        return
+    }
+    #expect(context.id == Runtime.ExecutionContext.ID("7"))
+
+    _ = await core.receiveRootMessage(
+        #"{"method":"Runtime.executionContextDestroyed","params":{"executionContextId":7}}"#
+    )
+    let destroyed = try await modelFeedRequireEvent(iterator.next())
+    #expect(destroyed.target.id == WebInspectorTarget.ID("page-main"))
+    #expect(destroyed.agentTarget.id == created.agentTarget.id)
+    #expect(destroyed.target == destroyed.agentTarget)
+    guard case let .runtime(.executionContextDestroyed(id)) = destroyed.payload else {
+        Issue.record("Expected a root Runtime execution-context destruction.")
+        return
+    }
+    #expect(id == Runtime.ExecutionContext.ID("7"))
+
+    _ = await core.receiveRootMessage(
+        #"{"method":"Runtime.executionContextsCleared","params":{}}"#
+    )
+    let cleared = try await modelFeedRequireEvent(iterator.next())
+    #expect(cleared.target.id == WebInspectorTarget.ID("page-main"))
+    #expect(cleared.agentTarget.id == created.agentTarget.id)
+    #expect(cleared.target == cleared.agentTarget)
+    guard case .runtime(.executionContextsCleared) = cleared.payload else {
+        Issue.record("Expected a root Runtime execution-context clear.")
+        return
+    }
+
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Page.enable", "Runtime.enable"]
+    )
+    #expect(try await iterator.next() == nil)
+    await core.close()
+}
+
+@Test
+func modelEventScopeUsesDispatchSourceAsRuntimeAgentTarget() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "frame-a",
+        type: "frame",
+        frameID: "frame-a",
+        parentFrameID: "main-frame"
+    ))
+
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [.runtime],
+        targetID: "page-main"
+    )
+    var iterator = feed.records.makeAsyncIterator()
+    _ = try await modelFeedRequireReset(iterator.next())
+    _ = try await modelFeedRequireTargetSnapshot(iterator.next())
+    _ = try await modelFeedRequireReplayCompletion(iterator.next())
+    _ = try await modelFeedRequireSynchronization(iterator.next())
+
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "frame-a",
+        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":8,"type":"normal","name":"isolated frame","frameId":"frame-a"}}}"#
+    ))
+    let created = try await modelFeedRequireEvent(iterator.next())
+    #expect(created.target.id == WebInspectorTarget.ID("frame-a"))
+    #expect(created.agentTarget.id == WebInspectorTarget.ID("frame-a"))
+    guard case let .runtime(.executionContextCreated(context)) = created.payload else {
+        Issue.record("Expected a target-dispatched Runtime execution-context creation.")
+        return
+    }
+    #expect(context.id.targetScopeRawValue == "frame-a")
+
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "frame-a",
+        message: #"{"method":"Runtime.executionContextDestroyed","params":{"executionContextId":8}}"#
+    ))
+    let destroyed = try await modelFeedRequireEvent(iterator.next())
+    #expect(destroyed.target.id == WebInspectorTarget.ID("frame-a"))
+    #expect(destroyed.agentTarget.id == created.agentTarget.id)
+
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "frame-a",
+        message: #"{"method":"Runtime.executionContextsCleared","params":{}}"#
+    ))
+    let cleared = try await modelFeedRequireEvent(iterator.next())
+    #expect(cleared.target.id == WebInspectorTarget.ID("frame-a"))
+    #expect(cleared.agentTarget.id == created.agentTarget.id)
+
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Page.enable", "Runtime.enable"]
+    )
+    #expect(try await iterator.next() == nil)
+    await core.close()
+}
+
+@Test
+func consoleNetworkReferenceAndNetworkEventUseTheSameAgentTargetScope() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "frame-a",
+        type: "frame",
+        frameID: "frame-a",
+        parentFrameID: "main-frame"
+    ))
+
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [.network, .console],
+        targetID: "page-main"
+    )
+    var iterator = feed.records.makeAsyncIterator()
+    _ = try await modelFeedRequireReset(iterator.next())
+    _ = try await modelFeedRequireTargetSnapshot(iterator.next())
+    _ = try await modelFeedRequireReplayCompletion(iterator.next())
+    _ = try await modelFeedRequireReplayCompletion(iterator.next())
+    _ = try await modelFeedRequireSynchronization(iterator.next())
+
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "frame-a",
+        message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"shared-request","request":{"url":"https://example.test/frame","method":"GET"},"initiator":{"type":"other"},"timestamp":1,"type":"Fetch"}}"#
+    ))
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "frame-a",
+        message: #"{"method":"Console.messageAdded","params":{"message":{"source":"network","level":"error","text":"failed","networkRequestId":"shared-request"}}}"#
+    ))
+    let network = try await modelFeedRequireEvent(iterator.next())
+    let console = try await modelFeedRequireEvent(iterator.next())
+    #expect(network.agentTarget.id == WebInspectorTarget.ID("frame-a"))
+    #expect(console.agentTarget == network.agentTarget)
+    guard case let .network(.requestWillBeSent(networkID, _, _, _, _, _)) = network.payload,
+          case let .console(.messageAdded(message)) = console.payload else {
+        Issue.record("Expected related Network and Console model events.")
+        return
+    }
+    #expect(message.networkRequestID == networkID)
+    #expect(networkID.targetScopeRawValue == "frame-a")
+
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Page.enable", "Network.enable", "Console.enable"]
+    )
+    #expect(try await iterator.next() == nil)
+    await core.close()
+}
+
+@Test
+func modelFeedRejectsAnEventFromAnAgentTargetAfterTargetLoss() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "frame-a",
+        type: "frame",
+        frameID: "frame-a",
+        parentFrameID: "main-frame"
+    ))
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "frame-b",
+        type: "frame",
+        frameID: "frame-b",
+        parentFrameID: "main-frame"
+    ))
+
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [.runtime],
+        targetID: "page-main"
+    )
+    var iterator = feed.records.makeAsyncIterator()
+    _ = try await modelFeedRequireReset(iterator.next())
+    _ = try await modelFeedRequireTargetSnapshot(iterator.next())
+    _ = try await modelFeedRequireReplayCompletion(iterator.next())
+    _ = try await modelFeedRequireSynchronization(iterator.next())
+
+    _ = await core.receiveRootMessage(
+        #"{"method":"Target.targetDestroyed","params":{"targetId":"frame-a"}}"#
+    )
+    let destroyed = try await modelFeedRequireEvent(iterator.next())
+    guard case .target(.targetDestroyed) = destroyed.payload else {
+        Issue.record("Expected target loss before the late Runtime event.")
+        return
+    }
+    #expect(destroyed.target.id == WebInspectorTarget.ID("frame-a"))
+    #expect(destroyed.agentTarget.id == WebInspectorTarget.ID("frame-a"))
+
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "frame-a",
+        message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":9,"type":"normal","name":"late","frameId":"frame-b"}}}"#
+    ))
+
+    guard await core.terminalCause != nil else {
+        Issue.record("The late Runtime event did not terminate the model feed.")
+        await core.close()
+        return
+    }
+    await #expect(throws: WebInspectorProxyError.self) {
+        try await core.waitUntilClosed()
+    }
+    guard case let .protocolViolation(message) = await core.terminalCause else {
+        Issue.record("Expected a missing model agent target to terminate the connection.")
+        return
+    }
+    #expect(message.contains("Runtime.executionContextCreated"))
+    await #expect(throws: WebInspectorProxyError.self) {
+        try await iterator.next()
+    }
+    #expect(await backend.isDetached())
+    _ = feed
 }
 
 @Test
@@ -3203,6 +3486,7 @@ func domDocumentInvalidationPrecedesMainTargetDeltasAndFreshBootstrap() async th
     #expect(invalidation.generation == reset)
     #expect(invalidation.sequence == invalidationSequence)
     #expect(invalidation.target.id == WebInspectorTarget.ID("page-main"))
+    #expect(invalidation.agentTarget.id == WebInspectorTarget.ID("page-main"))
     #expect(invalidation.documentEpoch == ModelDOMBindingEpoch(rawValue: 1))
 
     let refreshedCSSCommand = try await backend.waitForTargetMessage(
@@ -3229,6 +3513,7 @@ func domDocumentInvalidationPrecedesMainTargetDeltasAndFreshBootstrap() async th
     )
     #expect(refreshedStyleSheets.allSatisfy {
         $0.scope.domBindingEpoch == ModelDOMBindingEpoch(rawValue: 1)
+            && $0.scope.agentTarget == $0.scope.target
     })
     let refreshedCSSCompletion = try await modelFeedRequireBootstrapCompletion(
         iterator.next()
@@ -3247,6 +3532,7 @@ func domDocumentInvalidationPrecedesMainTargetDeltasAndFreshBootstrap() async th
     let initialBootstrap = try await modelFeedRequireDOMBootstrapSnapshot(iterator.next())
     #expect(initialBootstrap.generation == reset)
     #expect(initialBootstrap.target.id == WebInspectorTarget.ID("page-main"))
+    #expect(initialBootstrap.agentTarget.id == WebInspectorTarget.ID("page-main"))
     #expect(initialBootstrap.documentEpoch == ModelDOMBindingEpoch(rawValue: 1))
     #expect(initialBootstrap.root.id == DOM.Node.ID("fresh"))
     #expect(suppressedDOMSequence < initialBootstrap.sequence)
@@ -5382,6 +5668,7 @@ private struct ModelFeedEventRecord {
 
     var generation: WebInspectorPage.Generation { scope.generation }
     var target: ModelTarget { scope.target }
+    var agentTarget: ModelTarget { scope.agentTarget }
     var navigationEpoch: ModelNavigationEpoch { scope.navigationEpoch }
     var domBindingEpoch: ModelDOMBindingEpoch? { scope.domBindingEpoch }
 }
@@ -5398,6 +5685,7 @@ private struct ModelFeedDOMDocumentInvalidationRecord {
 
     var generation: WebInspectorPage.Generation { scope.generation }
     var target: ModelTarget { scope.target }
+    var agentTarget: ModelTarget { scope.agentTarget }
     var documentEpoch: ModelDOMBindingEpoch {
         guard let epoch = scope.domBindingEpoch else {
             preconditionFailure("A DOM invalidation test record has no binding epoch.")
@@ -5424,6 +5712,7 @@ private struct ModelFeedDOMBootstrapSnapshotRecord {
     let root: DOM.Node
 
     var target: ModelTarget { scope.target }
+    var agentTarget: ModelTarget { scope.agentTarget }
     var navigationEpoch: ModelNavigationEpoch { scope.navigationEpoch }
     var documentEpoch: ModelDOMBindingEpoch {
         guard let epoch = scope.domBindingEpoch else {
