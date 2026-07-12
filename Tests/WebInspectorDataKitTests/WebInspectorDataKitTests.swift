@@ -133,6 +133,53 @@ func attachmentPublishesDOMSnapshotAndAcceptsFilteredSequenceGaps() async throws
 
 @MainActor
 @Test
+func attachedContextAcceptsOrdinarySubframeNavigationFromTheOwningPageAgent() async throws {
+    try await withAttachedModelContext(
+        configuration: .init(domains: [.network])
+    ) { fixture in
+        try await fixture.runtime.wire.emitRaw(
+            .frameNavigated(
+                WebInspectorPageFrameLifecycle(
+                    id: FrameID("ordinary-subframe"),
+                    parentID: FrameID("main-frame"),
+                    loaderID: "ordinary-subframe-loader",
+                    name: nil,
+                    url: "https://example.com/frame",
+                    securityOrigin: "https://example.com",
+                    mimeType: "text/html"
+                )
+            ),
+            target: fixture.target
+        )
+
+        let requestID = Network.Request.ID("after-subframe-navigation")
+        try await fixture.runtime.wire.emitRaw(
+            .requestWillBeSent(
+                id: requestID,
+                request: Network.Request(
+                    id: requestID,
+                    url: "https://example.com/after-frame",
+                    method: "GET"
+                ),
+                initiator: Network.Initiator(kind: "other"),
+                resourceType: .fetch,
+                redirectResponse: nil,
+                timestamp: 1
+            ),
+            target: fixture.target
+        )
+
+        try await waitUntil {
+            try fixture.context.networkRequest(
+                id: NetworkRequest.ID(requestID)
+            ) != nil
+        }
+        #expect(fixture.context.state == .attached)
+    }
+}
+
+@MainActor
+@Test
 func attachmentAcceptsDOMAndCSSRefreshBeforeInitialSynchronization() async throws {
     try await withDataKitTestRuntime { runtime in
         let target = try await runtime.proxy.waitForCurrentPage()
