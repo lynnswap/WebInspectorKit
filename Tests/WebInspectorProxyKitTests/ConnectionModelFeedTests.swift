@@ -875,6 +875,67 @@ func modelEventScopeSeparatesPhysicalTargetsAndTracksParentlessFrameNavigationEp
 }
 
 @Test
+func modelFeedMapsOrdinarySubframeLifecycleToTheOwningPageTarget() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [.network],
+        targetID: "page-main"
+    )
+    var iterator = feed.records.makeAsyncIterator()
+    _ = try await modelFeedRequireReset(iterator.next())
+    _ = try await modelFeedRequireTargetSnapshot(iterator.next())
+    _ = try await modelFeedRequireReplayCompletion(iterator.next())
+    _ = try await modelFeedRequireSynchronization(iterator.next())
+
+    _ = await core.receiveRootMessage(
+        #"{"method":"Page.frameNavigated","params":{"frame":{"id":"ordinary-subframe","parentId":"main-frame","loaderId":"subframe-loader","url":"https://example.test/frame","securityOrigin":"https://example.test","mimeType":"text/html"}}}"#
+    )
+    let navigation = try await modelFeedRequireEvent(iterator.next())
+    #expect(navigation.target.id == WebInspectorTarget.ID("page-main"))
+    #expect(navigation.agentTarget.id == WebInspectorTarget.ID("page-main"))
+    #expect(navigation.navigationEpoch == ModelNavigationEpoch(rawValue: 1))
+    guard case let .target(.frameNavigated(frame)) = navigation.payload else {
+        Issue.record("Expected an ordinary-subframe navigation event.")
+        return
+    }
+    #expect(frame.id == FrameID("ordinary-subframe"))
+
+    _ = await core.receiveRootMessage(
+        #"{"method":"Page.frameDetached","params":{"frameId":"ordinary-subframe"}}"#
+    )
+    let detached = try await modelFeedRequireEvent(iterator.next())
+    #expect(detached.target.id == WebInspectorTarget.ID("page-main"))
+    #expect(detached.agentTarget.id == WebInspectorTarget.ID("page-main"))
+    #expect(detached.navigationEpoch == navigation.navigationEpoch)
+    guard case .target(
+        .frameDetached(frameID: FrameID("ordinary-subframe"))
+    ) = detached.payload else {
+        Issue.record("Expected an ordinary-subframe detach event.")
+        return
+    }
+    #expect(await core.terminalCause == nil)
+
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Page.enable", "Network.enable"]
+    )
+    #expect(try await iterator.next() == nil)
+    await core.close()
+}
+
+@Test
 func modelEventScopeUsesAvailableRuntimeFrameAndAgentWideTargetSeparately() async throws {
     let backend = FakeTransportBackend()
     let core = ConnectionCore(backend: backend, responseTimeout: nil)

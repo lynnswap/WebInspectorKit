@@ -6666,7 +6666,13 @@ package actor ConnectionCore {
         if protocolFrameID == targetRegistry.currentMainFrameID {
             targetID = targetRegistry.currentMainPageTargetID
         } else {
+            // Most subframes are not site-isolated protocol targets. Their
+            // Page lifecycle is delivered by the owning page agent, so the
+            // current page is the exact model target available for that
+            // event. A registered FrameTarget remains the more specific
+            // semantic target when WebKit supplies one.
             targetID = targetRegistry.targetID(forFrameID: protocolFrameID)
+                ?? targetRegistry.currentMainPageTargetID
         }
         guard let targetID,
               let record = targetRegistry.target(for: targetID),
