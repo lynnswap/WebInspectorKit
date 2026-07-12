@@ -969,6 +969,7 @@ func modelEventScopeUsesAvailableRuntimeFrameAndAgentWideTargetSeparately() asyn
     let created = try await modelFeedRequireEvent(iterator.next())
     #expect(created.target.id == WebInspectorTarget.ID("frame-a"))
     #expect(created.agentTarget.id == WebInspectorTarget.ID("page-main"))
+    #expect(created.runtimeBindingEpoch == ModelRuntimeBindingEpoch(rawValue: 0))
     guard case let .runtime(.executionContextCreated(context)) = created.payload else {
         Issue.record("Expected a root Runtime execution-context creation.")
         return
@@ -982,6 +983,7 @@ func modelEventScopeUsesAvailableRuntimeFrameAndAgentWideTargetSeparately() asyn
     #expect(destroyed.target.id == WebInspectorTarget.ID("page-main"))
     #expect(destroyed.agentTarget.id == created.agentTarget.id)
     #expect(destroyed.target == destroyed.agentTarget)
+    #expect(destroyed.runtimeBindingEpoch == ModelRuntimeBindingEpoch(rawValue: 0))
     guard case let .runtime(.executionContextDestroyed(id)) = destroyed.payload else {
         Issue.record("Expected a root Runtime execution-context destruction.")
         return
@@ -995,6 +997,7 @@ func modelEventScopeUsesAvailableRuntimeFrameAndAgentWideTargetSeparately() asyn
     #expect(cleared.target.id == WebInspectorTarget.ID("page-main"))
     #expect(cleared.agentTarget.id == created.agentTarget.id)
     #expect(cleared.target == cleared.agentTarget)
+    #expect(cleared.runtimeBindingEpoch == ModelRuntimeBindingEpoch(rawValue: 1))
     guard case .runtime(.executionContextsCleared) = cleared.payload else {
         Issue.record("Expected a root Runtime execution-context clear.")
         return
@@ -1046,6 +1049,7 @@ func modelEventScopeUsesDispatchSourceAsRuntimeAgentTarget() async throws {
     let created = try await modelFeedRequireEvent(iterator.next())
     #expect(created.target.id == WebInspectorTarget.ID("frame-a"))
     #expect(created.agentTarget.id == WebInspectorTarget.ID("frame-a"))
+    #expect(created.runtimeBindingEpoch == ModelRuntimeBindingEpoch(rawValue: 0))
     guard case let .runtime(.executionContextCreated(context)) = created.payload else {
         Issue.record("Expected a target-dispatched Runtime execution-context creation.")
         return
@@ -1059,6 +1063,7 @@ func modelEventScopeUsesDispatchSourceAsRuntimeAgentTarget() async throws {
     let destroyed = try await modelFeedRequireEvent(iterator.next())
     #expect(destroyed.target.id == WebInspectorTarget.ID("frame-a"))
     #expect(destroyed.agentTarget.id == created.agentTarget.id)
+    #expect(destroyed.runtimeBindingEpoch == ModelRuntimeBindingEpoch(rawValue: 0))
 
     _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
         targetID: "frame-a",
@@ -1067,6 +1072,7 @@ func modelEventScopeUsesDispatchSourceAsRuntimeAgentTarget() async throws {
     let cleared = try await modelFeedRequireEvent(iterator.next())
     #expect(cleared.target.id == WebInspectorTarget.ID("frame-a"))
     #expect(cleared.agentTarget.id == created.agentTarget.id)
+    #expect(cleared.runtimeBindingEpoch == ModelRuntimeBindingEpoch(rawValue: 1))
 
     try await modelFeedCloseSuccessfully(
         feed,
@@ -1120,6 +1126,10 @@ func consoleNetworkReferenceAndNetworkEventUseTheSameAgentTargetScope() async th
     let console = try await modelFeedRequireEvent(iterator.next())
     #expect(network.agentTarget.id == WebInspectorTarget.ID("frame-a"))
     #expect(console.agentTarget == network.agentTarget)
+    #expect(network.runtimeBindingEpoch == ModelRuntimeBindingEpoch(rawValue: 0))
+    #expect(console.runtimeBindingEpoch == network.runtimeBindingEpoch)
+    #expect(network.consoleBindingEpoch == ModelConsoleBindingEpoch(rawValue: 0))
+    #expect(console.consoleBindingEpoch == network.consoleBindingEpoch)
     guard case let .network(.requestWillBeSent(networkID, _, _, _, _, _)) = network.payload,
           case let .console(.messageAdded(message)) = console.payload else {
         Issue.record("Expected related Network and Console model events.")
@@ -1133,7 +1143,12 @@ func consoleNetworkReferenceAndNetworkEventUseTheSameAgentTargetScope() async th
         core: core,
         backend: backend,
         targetID: "page-main",
-        enableMethods: ["Page.enable", "Network.enable", "Console.enable"]
+        enableMethods: [
+            "Page.enable",
+            "Network.enable",
+            "Runtime.enable",
+            "Console.enable",
+        ]
     )
     #expect(try await iterator.next() == nil)
     await core.close()
@@ -1911,8 +1926,8 @@ func modelFeedAcquiresAndReleasesConfiguredCapabilitiesInDeterministicOrder() as
         "Page.enable",
         "CSS.enable",
         "Network.enable",
-        "Console.enable",
         "Runtime.enable",
+        "Console.enable",
     ])
     #expect(try await modelFeedSentTargetMethods(backend) == enableMethods)
 
@@ -1942,8 +1957,8 @@ func modelFeedAcquiresAndReleasesConfiguredCapabilitiesInDeterministicOrder() as
     }
     #expect(replayCompletions.map(\.domain) == [
         .network,
-        .console,
         .runtime,
+        .console,
     ])
     #expect(replayCompletions.allSatisfy {
         $0.generation == reset && $0.through == snapshot.through
@@ -1977,7 +1992,6 @@ func modelFeedAcquiresAndReleasesConfiguredCapabilitiesInDeterministicOrder() as
         WebInspectorProxyEventDomain.css,
         .network,
         .console,
-        .runtime,
     ] {
         let key = ConnectionCapabilityKey(
             route: .currentPage,
@@ -1986,6 +2000,15 @@ func modelFeedAcquiresAndReleasesConfiguredCapabilitiesInDeterministicOrder() as
         )
         #expect(owners[key]?.count == 1)
     }
+    let runtimeKey = ConnectionCapabilityKey(
+        route: .currentPage,
+        targetID: .currentPage,
+        domain: .runtime
+    )
+    #expect(owners[runtimeKey] == Set([
+        .modelFeed(feed.id, .runtime),
+        .modelFeed(feed.id, .console),
+    ]))
 
     try await modelFeedCloseSuccessfully(
         feed,
@@ -1995,8 +2018,8 @@ func modelFeedAcquiresAndReleasesConfiguredCapabilitiesInDeterministicOrder() as
         enableMethods: enableMethods
     )
     #expect(try await modelFeedSentTargetMethods(backend) == enableMethods + [
-        "Runtime.disable",
         "Console.disable",
+        "Runtime.disable",
         "Network.disable",
         "CSS.disable",
         "Page.disable",
@@ -2265,8 +2288,8 @@ func modelFeedCapabilityFailureRollsBackSuccessfulPrefixInReverseOrder(
         .css,
         .css,
         .network,
-        .console,
         .runtime,
+        .console,
     ]
     let openTask = Task {
         try await core.openModelFeed(
@@ -2712,7 +2735,7 @@ func restoredPageTargetReusesPageAgentAndRefreshesReplayDomains() async throws {
     _ = try await modelFeedRequireBootstrapCompletion(iterator.next())
     _ = try await modelFeedRequireCSSBootstrapSnapshot(iterator.next())
     #expect(try await modelFeedRequireBootstrapCompletion(iterator.next()).domain == .css)
-    for domain in [ModelDomain.network, .console, .runtime] {
+    for domain in [ModelDomain.network, .runtime, .console] {
         #expect(try await modelFeedRequireReplayCompletion(iterator.next()).domain == domain)
     }
     _ = try await modelFeedRequireSynchronization(iterator.next())
@@ -2737,8 +2760,8 @@ func restoredPageTargetReusesPageAgentAndRefreshesReplayDomains() async throws {
         "Page.enable",
         "CSS.enable",
         "Network.enable",
-        "Console.enable",
         "Runtime.enable",
+        "Console.enable",
     ] {
         let message = try await backend.waitForTargetMessage(
             method: method,
@@ -2761,7 +2784,7 @@ func restoredPageTargetReusesPageAgentAndRefreshesReplayDomains() async throws {
     _ = try await modelFeedRequireBootstrapCompletion(iterator.next())
     _ = try await modelFeedRequireCSSBootstrapSnapshot(iterator.next())
     #expect(try await modelFeedRequireBootstrapCompletion(iterator.next()).domain == .css)
-    for domain in [ModelDomain.network, .console, .runtime] {
+    for domain in [ModelDomain.network, .runtime, .console] {
         #expect(try await modelFeedRequireReplayCompletion(iterator.next()).domain == domain)
     }
     _ = try await modelFeedRequireSynchronization(iterator.next())
@@ -2812,19 +2835,19 @@ func restoredPageTargetReusesPageAgentAndRefreshesReplayDomains() async throws {
     )
     await modelFeedRespond(to: networkEnable, core: core)
 
-    await modelFeedRespond(to: consoleDisable, core: core)
-    let consoleEnable = try await backend.waitForTargetMessage(
-        method: "Console.enable",
-        after: restorationBaseline
-    )
-    await modelFeedRespond(to: consoleEnable, core: core)
-
     await modelFeedRespond(to: runtimeDisable, core: core)
     let runtimeEnable = try await backend.waitForTargetMessage(
         method: "Runtime.enable",
         after: restorationBaseline
     )
     await modelFeedRespond(to: runtimeEnable, core: core)
+
+    await modelFeedRespond(to: consoleDisable, core: core)
+    let consoleEnable = try await backend.waitForTargetMessage(
+        method: "Console.enable",
+        after: restorationBaseline
+    )
+    await modelFeedRespond(to: consoleEnable, core: core)
 
     let restorationMethods = try await backend.sentTargetMessages()
         .dropFirst(restorationBaseline)
@@ -2852,7 +2875,7 @@ func restoredPageTargetReusesPageAgentAndRefreshesReplayDomains() async throws {
     #expect(postSnapshotCSS.generation == restoredGeneration)
     #expect(postSnapshotCSS.sequence == postSnapshotCSSSequence)
     #expect(postSnapshotCSS.sequence > cssCompletion.through)
-    for domain in [ModelDomain.network, .console, .runtime] {
+    for domain in [ModelDomain.network, .runtime, .console] {
         let replay = try await modelFeedRequireReplayCompletion(iterator.next())
         #expect(replay.generation == restoredGeneration)
         #expect(replay.domain == domain)
@@ -3263,7 +3286,7 @@ func restoredConsoleReplaySubsumesBufferedProvisionalMessages() async throws {
         core: core,
         backend: backend,
         targetID: "page-a",
-        enableMethods: ["Page.enable", "Console.enable"]
+        enableMethods: ["Page.enable", "Runtime.enable", "Console.enable"]
     )
     #expect(try await iterator.next() == nil)
     await core.close()
@@ -4452,6 +4475,8 @@ func rollingBackModelFeedDoesNotReadmitDOMBootstrapDuringCommit() async throws {
     await modelFeedRespond(to: pageEnable, core: core)
     let networkEnable = try await backend.waitForTargetMessage(method: "Network.enable")
     await modelFeedRespond(to: networkEnable, core: core)
+    let runtimeEnable = try await backend.waitForTargetMessage(method: "Runtime.enable")
+    await modelFeedRespond(to: runtimeEnable, core: core)
     _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
         id: "page-new",
         type: "page",
@@ -4464,6 +4489,8 @@ func rollingBackModelFeedDoesNotReadmitDOMBootstrapDuringCommit() async throws {
         core: core,
         errorMessage: "console rejected"
     )
+    let runtimeDisable = try await backend.waitForTargetMessage(method: "Runtime.disable")
+    await modelFeedRespond(to: runtimeDisable, core: core)
     _ = try await backend.waitForTargetMessage(method: "Network.disable")
 
     _ = await core.receiveRootMessage(
@@ -4510,12 +4537,16 @@ func terminalDuringModelFeedRollbackCompletesWithoutLeakingClaim() async throws 
     await modelFeedRespond(to: pageEnable, core: core)
     let networkEnable = try await backend.waitForTargetMessage(method: "Network.enable")
     await modelFeedRespond(to: networkEnable, core: core)
+    let runtimeEnable = try await backend.waitForTargetMessage(method: "Runtime.enable")
+    await modelFeedRespond(to: runtimeEnable, core: core)
     let consoleEnable = try await backend.waitForTargetMessage(method: "Console.enable")
     await modelFeedRespond(
         to: consoleEnable,
         core: core,
         errorMessage: "console rejected"
     )
+    let runtimeDisable = try await backend.waitForTargetMessage(method: "Runtime.disable")
+    await modelFeedRespond(to: runtimeDisable, core: core)
     _ = try await backend.waitForTargetMessage(method: "Network.disable")
 
     let fatalHandoff = try #require(core.failFromNativeCallback("fatal during rollback"))
@@ -4546,12 +4577,16 @@ func explicitCloseDuringModelFeedRollbackLetsTerminalOwnerRetireRegistration() a
     await modelFeedRespond(to: pageEnable, core: core)
     let networkEnable = try await backend.waitForTargetMessage(method: "Network.enable")
     await modelFeedRespond(to: networkEnable, core: core)
+    let runtimeEnable = try await backend.waitForTargetMessage(method: "Runtime.enable")
+    await modelFeedRespond(to: runtimeEnable, core: core)
     let consoleEnable = try await backend.waitForTargetMessage(method: "Console.enable")
     await modelFeedRespond(
         to: consoleEnable,
         core: core,
         errorMessage: "console rejected"
     )
+    let runtimeDisable = try await backend.waitForTargetMessage(method: "Runtime.disable")
+    await modelFeedRespond(to: runtimeDisable, core: core)
     _ = try await backend.waitForTargetMessage(method: "Network.disable")
 
     await core.close()
@@ -4585,12 +4620,16 @@ func modelFeedRollbackDisableRejectionTerminatesInsteadOfReusingEnabledState() a
     await modelFeedRespond(to: pageEnable, core: core)
     let networkEnable = try await backend.waitForTargetMessage(method: "Network.enable")
     await modelFeedRespond(to: networkEnable, core: core)
+    let runtimeEnable = try await backend.waitForTargetMessage(method: "Runtime.enable")
+    await modelFeedRespond(to: runtimeEnable, core: core)
     let consoleEnable = try await backend.waitForTargetMessage(method: "Console.enable")
     await modelFeedRespond(
         to: consoleEnable,
         core: core,
         errorMessage: "console rejected"
     )
+    let runtimeDisable = try await backend.waitForTargetMessage(method: "Runtime.disable")
+    await modelFeedRespond(to: runtimeDisable, core: core)
     let networkDisable = try await backend.waitForTargetMessage(method: "Network.disable")
     await modelFeedRespond(
         to: networkDisable,
@@ -4729,6 +4768,441 @@ func modelBindingCommandWaitsForInitialSynchronizationBeforeWire() async throws 
         backend: backend,
         targetID: "page-main",
         enableMethods: ["Page.enable", "Network.enable"]
+    )
+    await core.close()
+}
+
+@Test
+func runtimeBindingEpochScopesAndWireAdmissionTrackOnlyTheDeliveringAgent() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main", type: "page", frameID: "main-frame"
+    ))
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "frame-a", type: "frame", frameID: "frame-a", parentFrameID: "main-frame"
+    ))
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core, backend: backend, configuredDomains: [.runtime], targetID: "page-main"
+    )
+    var iterator = feed.records.makeAsyncIterator()
+    let generation = try await modelFeedRequireReset(iterator.next())
+    let snapshot = try await modelFeedRequireTargetSnapshot(iterator.next())
+    #expect(snapshot.snapshot.targets.allSatisfy {
+        $0.runtimeBindingEpoch == ModelRuntimeBindingEpoch(rawValue: 0)
+    })
+    _ = try await modelFeedRequireReplayCompletion(iterator.next())
+    _ = try await modelFeedRequireSynchronization(iterator.next())
+
+    let oldRoot = modelRuntimeAuthorization(
+        feedID: feed.id, generation: generation, agentTargetID: "page-main",
+        runtimeEpoch: 0, semanticTargetID: "frame-a", navigationEpoch: 0
+    )
+    let otherAgent = modelRuntimeAuthorization(
+        feedID: feed.id, generation: generation, agentTargetID: "frame-a", runtimeEpoch: 0
+    )
+    _ = await core.receiveRootMessage(
+        #"{"method":"Page.frameNavigated","params":{"frame":{"id":"frame-a","loaderId":"loader-1","url":"https://example.test/frame","securityOrigin":"https://example.test","mimeType":"text/html"}}}"#
+    )
+    let navigation = try await modelFeedRequireEvent(iterator.next())
+    #expect(navigation.target.id == WebInspectorTarget.ID("frame-a"))
+    #expect(navigation.agentTarget.id == WebInspectorTarget.ID("page-main"))
+    #expect(navigation.navigationEpoch == ModelNavigationEpoch(rawValue: 1))
+    #expect(navigation.runtimeBindingEpoch == ModelRuntimeBindingEpoch(rawValue: 1))
+
+    var baseline = await backend.sentTargetMessages().count
+    await #expect(throws: WebInspectorProxyError.staleIdentifier) {
+        _ = try await core.send(modelFeedCommand(
+            domain: .runtime, method: "Runtime.getProperties", authority: oldRoot,
+            routing: .target(ProtocolTarget.ID("page-main"))
+        ))
+    }
+    #expect(await backend.sentTargetMessages().count == baseline)
+    baseline = try await modelFeedSendRuntimeCommand(
+        core: core, backend: backend, authorization: otherAgent,
+        targetID: "frame-a", after: baseline
+    )
+
+    let epochOne = modelRuntimeAuthorization(
+        feedID: feed.id, generation: generation, agentTargetID: "page-main",
+        runtimeEpoch: 1, semanticTargetID: "frame-a", navigationEpoch: 1
+    )
+    baseline = try await modelFeedSendRuntimeCommand(
+        core: core, backend: backend, authorization: epochOne,
+        targetID: "page-main", after: baseline
+    )
+    _ = await core.receiveRootMessage(
+        #"{"method":"Runtime.executionContextsCleared","params":{}}"#
+    )
+    let clear = try await modelFeedRequireEvent(iterator.next())
+    #expect(clear.runtimeBindingEpoch == ModelRuntimeBindingEpoch(rawValue: 2))
+    await #expect(throws: WebInspectorProxyError.staleIdentifier) {
+        _ = try await core.send(modelFeedCommand(
+            domain: .runtime, method: "Runtime.getProperties", authority: epochOne,
+            routing: .target(ProtocolTarget.ID("page-main"))
+        ))
+    }
+    #expect(await backend.sentTargetMessages().count == baseline)
+    let epochTwo = modelRuntimeAuthorization(
+        feedID: feed.id, generation: generation, agentTargetID: "page-main", runtimeEpoch: 2
+    )
+    _ = try await modelFeedSendRuntimeCommand(
+        core: core, backend: backend, authorization: epochTwo,
+        targetID: "page-main", after: baseline
+    )
+
+    try await modelFeedCloseSuccessfully(
+        feed, core: core, backend: backend, targetID: "page-main",
+        enableMethods: ["Page.enable", "Runtime.enable"]
+    )
+    await core.close()
+}
+
+@Test
+func consoleBindingEpochInvalidatesOnlyConsoleOwnedRuntimeAuthority() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main", type: "page", frameID: "main-frame"
+    ))
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core, backend: backend,
+        configuredDomains: [.runtime, .console], targetID: "page-main"
+    )
+    var iterator = feed.records.makeAsyncIterator()
+    let generation = try await modelFeedRequireReset(iterator.next())
+    let snapshot = try await modelFeedRequireTargetSnapshot(iterator.next())
+    let initial = try #require(snapshot.snapshot.targets.first)
+    #expect(initial.runtimeBindingEpoch == ModelRuntimeBindingEpoch(rawValue: 0))
+    #expect(initial.consoleBindingEpoch == ModelConsoleBindingEpoch(rawValue: 0))
+    #expect(try await modelFeedRequireReplayCompletion(iterator.next()).domain == .runtime)
+    #expect(try await modelFeedRequireReplayCompletion(iterator.next()).domain == .console)
+    _ = try await modelFeedRequireSynchronization(iterator.next())
+
+    let oldConsole = modelRuntimeAuthorization(
+        feedID: feed.id, generation: generation, agentTargetID: "page-main",
+        runtimeEpoch: 0, consoleEpoch: 0
+    )
+    let independent = modelRuntimeAuthorization(
+        feedID: feed.id, generation: generation, agentTargetID: "page-main", runtimeEpoch: 0
+    )
+    _ = await core.receiveRootMessage(
+        #"{"method":"Console.messagesCleared","params":{"reason":"console-api"}}"#
+    )
+    let clear = try await modelFeedRequireEvent(iterator.next())
+    #expect(clear.runtimeBindingEpoch == ModelRuntimeBindingEpoch(rawValue: 0))
+    #expect(clear.consoleBindingEpoch == ModelConsoleBindingEpoch(rawValue: 1))
+
+    var baseline = await backend.sentTargetMessages().count
+    await #expect(throws: WebInspectorProxyError.staleIdentifier) {
+        _ = try await core.send(modelFeedCommand(
+            domain: .runtime, method: "Runtime.getProperties", authority: oldConsole,
+            routing: .target(ProtocolTarget.ID("page-main"))
+        ))
+    }
+    #expect(await backend.sentTargetMessages().count == baseline)
+    baseline = try await modelFeedSendRuntimeCommand(
+        core: core, backend: backend, authorization: independent,
+        targetID: "page-main", after: baseline
+    )
+
+    let freshConsole = modelRuntimeAuthorization(
+        feedID: feed.id, generation: generation, agentTargetID: "page-main",
+        runtimeEpoch: 0, consoleEpoch: 1
+    )
+    baseline = try await modelFeedSendRuntimeCommand(
+        core: core, backend: backend, authorization: freshConsole,
+        targetID: "page-main", after: baseline
+    )
+    _ = await core.receiveRootMessage(
+        #"{"method":"Page.frameNavigated","params":{"frame":{"id":"main-frame","loaderId":"main-loader-1","url":"https://example.test/next","securityOrigin":"https://example.test","mimeType":"text/html"}}}"#
+    )
+    let navigation = try await modelFeedRequireEvent(iterator.next())
+    #expect(navigation.runtimeBindingEpoch == ModelRuntimeBindingEpoch(rawValue: 1))
+    #expect(navigation.consoleBindingEpoch == ModelConsoleBindingEpoch(rawValue: 1))
+    await #expect(throws: WebInspectorProxyError.staleIdentifier) {
+        _ = try await core.send(modelFeedCommand(
+            domain: .runtime, method: "Runtime.getProperties", authority: freshConsole,
+            routing: .target(ProtocolTarget.ID("page-main"))
+        ))
+    }
+    #expect(await backend.sentTargetMessages().count == baseline)
+    let navigatedConsole = modelRuntimeAuthorization(
+        feedID: feed.id, generation: generation, agentTargetID: "page-main",
+        runtimeEpoch: 1, consoleEpoch: 1
+    )
+    _ = try await modelFeedSendRuntimeCommand(
+        core: core, backend: backend, authorization: navigatedConsole,
+        targetID: "page-main", after: baseline
+    )
+
+    try await modelFeedCloseSuccessfully(
+        feed, core: core, backend: backend, targetID: "page-main",
+        enableMethods: ["Page.enable", "Runtime.enable", "Console.enable"]
+    )
+    await core.close()
+}
+
+@Test
+func consoleOnlyFeedArmsRuntimeInvalidationWithoutProjectingRuntimeContexts() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main", type: "page", frameID: "main-frame"
+    ))
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core, backend: backend, configuredDomains: [.console], targetID: "page-main"
+    )
+    var iterator = feed.records.makeAsyncIterator()
+    let generation = try await modelFeedRequireReset(iterator.next())
+    let snapshot = try await modelFeedRequireTargetSnapshot(iterator.next())
+    let initial = try #require(snapshot.snapshot.targets.first)
+    #expect(initial.runtimeBindingEpoch == ModelRuntimeBindingEpoch(rawValue: 0))
+    #expect(initial.consoleBindingEpoch == ModelConsoleBindingEpoch(rawValue: 0))
+    #expect(try await modelFeedRequireReplayCompletion(iterator.next()).domain == .console)
+    _ = try await modelFeedRequireSynchronization(iterator.next())
+    #expect(try await modelFeedSentTargetMethods(backend) == [
+        "Page.enable", "Runtime.enable", "Console.enable",
+    ])
+
+    _ = await core.receiveRootMessage(
+        #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":42,"type":"normal","name":"not projected","frameId":"main-frame"}}}"#
+    )
+    _ = await core.receiveRootMessage(
+        #"{"method":"Console.messageAdded","params":{"message":{"source":"console-api","level":"log","text":"visible"}}}"#
+    )
+    guard case .console(.messageAdded) = try await modelFeedRequireEvent(iterator.next()).payload else {
+        Issue.record("Console-only feeds must not project RuntimeContext creation.")
+        return
+    }
+
+    let old = modelRuntimeAuthorization(
+        feedID: feed.id, generation: generation, agentTargetID: "page-main",
+        runtimeEpoch: 0, consoleEpoch: 0
+    )
+    _ = await core.receiveRootMessage(
+        #"{"method":"Runtime.executionContextsCleared","params":{}}"#
+    )
+    let runtimeClear = try await modelFeedRequireEvent(iterator.next())
+    guard case .runtime(.executionContextsCleared) = runtimeClear.payload else {
+        Issue.record("Expected an operational Runtime clear boundary.")
+        return
+    }
+    #expect(runtimeClear.runtimeBindingEpoch == ModelRuntimeBindingEpoch(rawValue: 1))
+
+    let baseline = await backend.sentTargetMessages().count
+    await #expect(throws: WebInspectorProxyError.staleIdentifier) {
+        _ = try await core.send(modelFeedCommand(
+            domain: .runtime, method: "Runtime.getProperties", authority: old,
+            routing: .target(ProtocolTarget.ID("page-main"))
+        ))
+    }
+    #expect(await backend.sentTargetMessages().count == baseline)
+    let fresh = modelRuntimeAuthorization(
+        feedID: feed.id, generation: generation, agentTargetID: "page-main",
+        runtimeEpoch: 1, consoleEpoch: 0
+    )
+    _ = try await modelFeedSendRuntimeCommand(
+        core: core, backend: backend, authorization: fresh,
+        targetID: "page-main", after: baseline
+    )
+
+    let independent = modelRuntimeAuthorization(
+        feedID: feed.id, generation: generation, agentTargetID: "page-main", runtimeEpoch: 1
+    )
+    await #expect(throws: ConnectionModelCommandError.domainNotConfigured(.runtime)) {
+        _ = try await core.send(modelFeedCommand(
+            domain: .runtime, method: "Runtime.getProperties", authority: independent,
+            routing: .target(ProtocolTarget.ID("page-main"))
+        ))
+    }
+    try await modelFeedCloseSuccessfully(
+        feed, core: core, backend: backend, targetID: "page-main",
+        enableMethods: ["Page.enable", "Runtime.enable", "Console.enable"]
+    )
+    await core.close()
+}
+
+@Test
+func runtimeBindingEpochDoesNotReuseATargetBindingAfterTargetLoss() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main", type: "page", frameID: "main-frame"
+    ))
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "frame-agent", type: "frame", frameID: "frame-agent",
+        parentFrameID: "main-frame"
+    ))
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core, backend: backend, configuredDomains: [.runtime], targetID: "page-main"
+    )
+    var iterator = feed.records.makeAsyncIterator()
+    let generation = try await modelFeedRequireReset(iterator.next())
+    _ = try await modelFeedRequireTargetSnapshot(iterator.next())
+    _ = try await modelFeedRequireReplayCompletion(iterator.next())
+    _ = try await modelFeedRequireSynchronization(iterator.next())
+    let old = modelRuntimeAuthorization(
+        feedID: feed.id, generation: generation, agentTargetID: "frame-agent", runtimeEpoch: 0
+    )
+
+    _ = await core.receiveRootMessage(
+        #"{"method":"Target.targetDestroyed","params":{"targetId":"frame-agent"}}"#
+    )
+    #expect(try await modelFeedRequireEvent(iterator.next()).runtimeBindingEpoch
+        == ModelRuntimeBindingEpoch(rawValue: 0))
+    var baseline = await backend.sentTargetMessages().count
+    await #expect(throws: WebInspectorProxyError.staleIdentifier) {
+        _ = try await core.send(modelFeedCommand(
+            domain: .runtime, method: "Runtime.getProperties", authority: old,
+            routing: .target(ProtocolTarget.ID("frame-agent"))
+        ))
+    }
+    #expect(await backend.sentTargetMessages().count == baseline)
+
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "frame-agent", type: "frame", frameID: "frame-agent",
+        parentFrameID: "main-frame"
+    ))
+    #expect(try await modelFeedRequireEvent(iterator.next()).runtimeBindingEpoch
+        == ModelRuntimeBindingEpoch(rawValue: 1))
+    let fresh = modelRuntimeAuthorization(
+        feedID: feed.id, generation: generation, agentTargetID: "frame-agent", runtimeEpoch: 1
+    )
+    await #expect(throws: WebInspectorProxyError.staleIdentifier) {
+        _ = try await core.send(modelFeedCommand(
+            domain: .runtime, method: "Runtime.getProperties", authority: fresh,
+            routing: .target(ProtocolTarget.ID("page-main"))
+        ))
+    }
+    #expect(await backend.sentTargetMessages().count == baseline)
+    baseline = try await modelFeedSendRuntimeCommand(
+        core: core, backend: backend, authorization: fresh,
+        targetID: "frame-agent", after: baseline
+    )
+    _ = baseline
+    try await modelFeedCloseSuccessfully(
+        feed, core: core, backend: backend, targetID: "page-main",
+        enableMethods: ["Page.enable", "Runtime.enable"]
+    )
+    await core.close()
+}
+
+@Test
+func pageReplacementRejectsOldConsoleRuntimeAuthorityAndIssuesANewBinding() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-old", type: "page", frameID: "main-frame"
+    ))
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core, backend: backend, configuredDomains: [.console], targetID: "page-old"
+    )
+    var iterator = feed.records.makeAsyncIterator()
+    let oldGeneration = try await modelFeedRequireReset(iterator.next())
+    _ = try await modelFeedRequireTargetSnapshot(iterator.next())
+    _ = try await modelFeedRequireReplayCompletion(iterator.next())
+    _ = try await modelFeedRequireSynchronization(iterator.next())
+    let old = modelRuntimeAuthorization(
+        feedID: feed.id, generation: oldGeneration, agentTargetID: "page-old",
+        runtimeEpoch: 0, consoleEpoch: 0
+    )
+    _ = await core.receiveRootMessage(
+        #"{"method":"Target.targetDestroyed","params":{"targetId":"page-old"}}"#
+    )
+    let baseline = await backend.sentTargetMessages().count
+    await #expect(throws: WebInspectorProxyError.staleIdentifier) {
+        _ = try await core.send(modelFeedCommand(
+            domain: .runtime, method: "Runtime.getProperties", authority: old,
+            routing: .target(ProtocolTarget.ID("page-old"))
+        ))
+    }
+    #expect(await backend.sentTargetMessages().count == baseline)
+
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-new", type: "page", frameID: "main-frame"
+    ))
+    for method in ["Page.enable", "Runtime.enable", "Console.enable"] {
+        let message = try await backend.waitForTargetMessage(method: method, ordinal: 1)
+        await modelFeedRespond(to: message, core: core)
+    }
+    let replacementGeneration = try await modelFeedRequireReset(iterator.next())
+    let snapshot = try await modelFeedRequireTargetSnapshot(iterator.next())
+    #expect(replacementGeneration.rawValue == oldGeneration.rawValue + 1)
+    #expect(snapshot.snapshot.currentPageID == WebInspectorTarget.ID("page-new"))
+    #expect(snapshot.snapshot.targets.first?.runtimeBindingEpoch == ModelRuntimeBindingEpoch(rawValue: 0))
+    #expect(snapshot.snapshot.targets.first?.consoleBindingEpoch == ModelConsoleBindingEpoch(rawValue: 0))
+    _ = try await modelFeedRequireReplayCompletion(iterator.next())
+    _ = try await modelFeedRequireSynchronization(iterator.next())
+
+    let fresh = modelRuntimeAuthorization(
+        feedID: feed.id, generation: replacementGeneration, agentTargetID: "page-new",
+        runtimeEpoch: 0, consoleEpoch: 0
+    )
+    _ = try await modelFeedSendRuntimeCommand(
+        core: core, backend: backend, authorization: fresh,
+        targetID: "page-new", after: await backend.sentTargetMessages().count
+    )
+    try await modelFeedCloseSuccessfully(
+        feed, core: core, backend: backend, targetID: "page-new",
+        enableMethods: ["Page.enable", "Runtime.enable", "Console.enable"]
+    )
+    await core.close()
+}
+
+@Test
+func documentAndRuntimeAuthorityValidateTheirBindingEpochsIndependently() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main", type: "page", frameID: "main-frame"
+    ))
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core, backend: backend,
+        configuredDomains: [.dom, .runtime], targetID: "page-main"
+    )
+    let generation = try await core.pageGeneration()
+    let old = modelRuntimeAuthorization(
+        feedID: feed.id, generation: generation, agentTargetID: "page-main",
+        runtimeEpoch: 0, semanticTargetID: "page-main", navigationEpoch: 0,
+        document: ConnectionModelCommandAuthorization.Document(
+            targetID: WebInspectorTarget.ID("page-main"),
+            epoch: ModelDOMBindingEpoch(rawValue: 0)
+        )
+    )
+    _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
+        targetID: "page-main",
+        message: #"{"method":"DOM.documentUpdated","params":{}}"#
+    ))
+    let bootstrap = try await backend.waitForTargetMessage(
+        method: "DOM.getDocument", ordinal: 1
+    )
+    var baseline = await backend.sentTargetMessages().count
+    await #expect(throws: WebInspectorProxyError.staleIdentifier) {
+        _ = try await core.send(modelFeedCommand(
+            domain: .dom, method: "DOM.querySelector", authority: old,
+            routing: .target(ProtocolTarget.ID("page-main"))
+        ))
+    }
+    #expect(await backend.sentTargetMessages().count == baseline)
+    baseline = try await modelFeedSendRuntimeCommand(
+        core: core, backend: backend, authorization: old,
+        targetID: "page-main", after: baseline
+    )
+    await modelFeedRespondWithDocument(to: bootstrap, core: core, nodeID: "replacement")
+    _ = await core.receiveRootMessage(
+        #"{"method":"Runtime.executionContextsCleared","params":{}}"#
+    )
+    await #expect(throws: WebInspectorProxyError.staleIdentifier) {
+        _ = try await core.send(modelFeedCommand(
+            domain: .runtime, method: "Runtime.getProperties", authority: old,
+            routing: .target(ProtocolTarget.ID("page-main"))
+        ))
+    }
+    #expect(await backend.sentTargetMessages().count == baseline)
+    try await modelFeedCloseSuccessfully(
+        feed, core: core, backend: backend, targetID: "page-main",
+        enableMethods: ["Page.enable", "Runtime.enable"]
     )
     await core.close()
 }
@@ -5403,6 +5877,74 @@ func replyWaitingModelCommandRunnerDoesNotKeepCoreAlive() async throws {
     }
 }
 
+private func modelRuntimeAuthorization(
+    feedID: ConnectionModelFeedID,
+    generation: WebInspectorPage.Generation,
+    agentTargetID: String,
+    runtimeEpoch: UInt64,
+    semanticTargetID: String? = nil,
+    navigationEpoch: UInt64? = nil,
+    consoleEpoch: UInt64? = nil,
+    document: ConnectionModelCommandAuthorization.Document? = nil
+) -> ConnectionModelCommandAuthorization {
+    let semanticTarget: ConnectionModelCommandAuthorization.Runtime.SemanticTarget?
+    if let semanticTargetID {
+        guard let navigationEpoch else {
+            preconditionFailure("A Runtime semantic target requires an exact navigation epoch.")
+        }
+        semanticTarget = ConnectionModelCommandAuthorization.Runtime.SemanticTarget(
+            targetID: WebInspectorTarget.ID(semanticTargetID),
+            navigationEpoch: ModelNavigationEpoch(rawValue: navigationEpoch)
+        )
+    } else {
+        precondition(navigationEpoch == nil)
+        semanticTarget = nil
+    }
+    let agentTargetID = WebInspectorTarget.ID(agentTargetID)
+    let consoleBinding = consoleEpoch.map { epoch in
+        ConnectionModelCommandAuthorization.Runtime.ConsoleBinding(
+            agentTargetID: agentTargetID,
+            epoch: ModelConsoleBindingEpoch(rawValue: epoch)
+        )
+    }
+    return ConnectionModelCommandAuthorization(
+        feedID: feedID,
+        generation: generation,
+        document: document,
+        runtime: ConnectionModelCommandAuthorization.Runtime(
+            agentTargetID: agentTargetID,
+            epoch: ModelRuntimeBindingEpoch(rawValue: runtimeEpoch),
+            semanticTarget: semanticTarget,
+            consoleBinding: consoleBinding
+        )
+    )
+}
+
+@discardableResult
+private func modelFeedSendRuntimeCommand(
+    core: ConnectionCore,
+    backend: FakeTransportBackend,
+    authorization: ConnectionModelCommandAuthorization,
+    targetID: String,
+    after baseline: Int
+) async throws -> Int {
+    let task = Task {
+        try await core.send(modelFeedCommand(
+            domain: .runtime,
+            method: "Runtime.getProperties",
+            authority: authorization,
+            routing: .target(ProtocolTarget.ID(targetID))
+        ))
+    }
+    let command = try await backend.waitForTargetMessage(
+        method: "Runtime.getProperties",
+        after: baseline
+    )
+    await modelFeedRespond(to: command, core: core)
+    _ = try await task.value
+    return await backend.sentTargetMessages().count
+}
+
 private func modelFeedCommand(
     domain: ProtocolDomain,
     method: String,
@@ -5732,6 +6274,8 @@ private struct ModelFeedEventRecord {
     var agentTarget: ModelTarget { scope.agentTarget }
     var navigationEpoch: ModelNavigationEpoch { scope.navigationEpoch }
     var domBindingEpoch: ModelDOMBindingEpoch? { scope.domBindingEpoch }
+    var runtimeBindingEpoch: ModelRuntimeBindingEpoch? { scope.runtimeBindingEpoch }
+    var consoleBindingEpoch: ModelConsoleBindingEpoch? { scope.consoleBindingEpoch }
 }
 
 private struct ModelFeedTargetSnapshotRecord {

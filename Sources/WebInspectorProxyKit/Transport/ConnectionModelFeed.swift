@@ -12,8 +12,8 @@ package enum ModelDomain: Hashable, Sendable {
         .dom,
         .css,
         .network,
-        .console,
         .runtime,
+        .console,
     ]
 
     static func ordered(
@@ -42,7 +42,10 @@ package enum ModelDomain: Hashable, Sendable {
         case .network:
             [.network]
         case .console:
-            [.console]
+            // Console parameters can retain Runtime remote objects. Arm the
+            // Runtime lifecycle before Console delivery without projecting
+            // RuntimeContext state unless `.runtime` was explicitly requested.
+            [.runtime, .console]
         case .runtime:
             [.runtime]
         }
@@ -113,6 +116,22 @@ package struct ModelDOMBindingEpoch: Hashable, Sendable {
     }
 }
 
+package struct ModelRuntimeBindingEpoch: Hashable, Sendable {
+    package let rawValue: UInt64
+
+    package init(rawValue: UInt64) {
+        self.rawValue = rawValue
+    }
+}
+
+package struct ModelConsoleBindingEpoch: Hashable, Sendable {
+    package let rawValue: UInt64
+
+    package init(rawValue: UInt64) {
+        self.rawValue = rawValue
+    }
+}
+
 package struct ModelEventScope: Equatable, Sendable {
     package let generation: WebInspectorPage.Generation
     /// The best available semantic model target for the event.
@@ -124,19 +143,25 @@ package struct ModelEventScope: Equatable, Sendable {
     package let agentTarget: ModelTarget
     package let navigationEpoch: ModelNavigationEpoch
     package let domBindingEpoch: ModelDOMBindingEpoch?
+    package let runtimeBindingEpoch: ModelRuntimeBindingEpoch?
+    package let consoleBindingEpoch: ModelConsoleBindingEpoch?
 
     package init(
         generation: WebInspectorPage.Generation,
         target: ModelTarget,
         agentTarget: ModelTarget,
         navigationEpoch: ModelNavigationEpoch,
-        domBindingEpoch: ModelDOMBindingEpoch?
+        domBindingEpoch: ModelDOMBindingEpoch?,
+        runtimeBindingEpoch: ModelRuntimeBindingEpoch?,
+        consoleBindingEpoch: ModelConsoleBindingEpoch?
     ) {
         self.generation = generation
         self.target = target
         self.agentTarget = agentTarget
         self.navigationEpoch = navigationEpoch
         self.domBindingEpoch = domBindingEpoch
+        self.runtimeBindingEpoch = runtimeBindingEpoch
+        self.consoleBindingEpoch = consoleBindingEpoch
     }
 }
 
@@ -144,15 +169,21 @@ package struct ModelTargetState: Equatable, Sendable {
     package let target: ModelTarget
     package let navigationEpoch: ModelNavigationEpoch
     package let domBindingEpoch: ModelDOMBindingEpoch?
+    package let runtimeBindingEpoch: ModelRuntimeBindingEpoch?
+    package let consoleBindingEpoch: ModelConsoleBindingEpoch?
 
     package init(
         target: ModelTarget,
         navigationEpoch: ModelNavigationEpoch,
-        domBindingEpoch: ModelDOMBindingEpoch?
+        domBindingEpoch: ModelDOMBindingEpoch?,
+        runtimeBindingEpoch: ModelRuntimeBindingEpoch?,
+        consoleBindingEpoch: ModelConsoleBindingEpoch?
     ) {
         self.target = target
         self.navigationEpoch = navigationEpoch
         self.domBindingEpoch = domBindingEpoch
+        self.runtimeBindingEpoch = runtimeBindingEpoch
+        self.consoleBindingEpoch = consoleBindingEpoch
     }
 }
 

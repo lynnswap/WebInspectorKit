@@ -183,6 +183,11 @@ private struct ConnectionPendingReplyFailure: Sendable {
 private struct ConnectionCommandInvalidationEffects: Sendable {
     var pendingFailures: [ConnectionPendingReplyFailure] = []
     var modelCommandTasksToAwait: [Task<ProtocolCommand.Result, any Swift.Error>] = []
+
+    mutating func append(_ other: Self) {
+        pendingFailures.append(contentsOf: other.pendingFailures)
+        modelCommandTasksToAwait.append(contentsOf: other.modelCommandTasksToAwait)
+    }
 }
 
 private struct ConnectionCapabilityTask: Sendable {
@@ -519,6 +524,8 @@ package actor ConnectionCore {
     private var modelNavigationEpochs: [ProtocolTarget.ID: ModelNavigationEpoch]
     private var modelNavigationLoaderIDs: [ProtocolTarget.ID: String]
     private var modelDOMBindingEpochs: [ProtocolTarget.ID: ModelDOMBindingEpoch]
+    private var modelRuntimeBindingEpochs: [ProtocolTarget.ID: ModelRuntimeBindingEpoch]
+    private var modelConsoleBindingEpochs: [ProtocolTarget.ID: ModelConsoleBindingEpoch]
     private var currentPageGeneration: WebInspectorPage.Generation
     private var currentPageBindingGapIsOpen: Bool
     private var eventScopeRegistrationWaiters: [(
@@ -579,6 +586,8 @@ package actor ConnectionCore {
         modelNavigationEpochs = [:]
         modelNavigationLoaderIDs = [:]
         modelDOMBindingEpochs = [:]
+        modelRuntimeBindingEpochs = [:]
+        modelConsoleBindingEpochs = [:]
         currentPageGeneration = WebInspectorPage.Generation(rawValue: 0)
         currentPageBindingGapIsOpen = false
         eventScopeRegistrationWaiters = []
@@ -1509,12 +1518,26 @@ package actor ConnectionCore {
                 method: method
             )
         }
-        if let requiredDomain = requiredModelDomain(for: domain),
-           !registration.configuredDomains.contains(requiredDomain) {
-            throw ConnectionModelCommandError.domainNotConfigured(proxyDomain)
+        if let requiredDomain = requiredModelDomain(for: domain) {
+            let isConfigured: Bool
+            if requiredDomain == .runtime {
+                isConfigured = registration.configuredDomains.contains(.runtime)
+                    || (
+                        authorization.runtime?.consoleBinding != nil
+                            && registration.configuredDomains.contains(.console)
+                    )
+            } else {
+                isConfigured = registration.configuredDomains.contains(requiredDomain)
+            }
+            guard isConfigured else {
+                throw ConnectionModelCommandError.domainNotConfigured(proxyDomain)
+            }
         }
         if isDocumentSensitive(domain, method: method), authorization.document == nil {
             throw ConnectionModelCommandError.documentAuthorizationRequired(proxyDomain)
+        }
+        if domain == .runtime, authorization.runtime == nil {
+            throw ConnectionModelCommandError.runtimeAuthorizationRequired(proxyDomain)
         }
     }
 
@@ -1563,6 +1586,37 @@ package actor ConnectionCore {
                   ProtocolTarget.ID(document.targetID.rawValue) == targetID,
                   modelDOMBindingEpoch(for: targetID) == document.epoch else {
                 throw WebInspectorProxyError.staleIdentifier
+            }
+        }
+
+        if domain == .runtime {
+            guard let targetID,
+                  let runtime = authorization.runtime,
+                  ProtocolTarget.ID(runtime.agentTargetID.rawValue) == targetID,
+                  modelRuntimeBindingEpoch(for: targetID) == runtime.epoch else {
+                throw WebInspectorProxyError.staleIdentifier
+            }
+            if let semanticTarget = runtime.semanticTarget {
+                let semanticTargetID = ProtocolTarget.ID(
+                    semanticTarget.targetID.rawValue
+                )
+                guard let record = targetRegistry.target(for: semanticTargetID),
+                      targetRegistry.isCurrentPageModelTarget(record),
+                      modelNavigationEpoch(for: semanticTargetID)
+                        == semanticTarget.navigationEpoch else {
+                    throw WebInspectorProxyError.staleIdentifier
+                }
+            }
+            if let consoleBinding = runtime.consoleBinding {
+                let consoleAgentTargetID = ProtocolTarget.ID(
+                    consoleBinding.agentTargetID.rawValue
+                )
+                guard consoleAgentTargetID == targetID,
+                      modelFeed?.configuredDomains.contains(.console) == true,
+                      modelConsoleBindingEpoch(for: consoleAgentTargetID)
+                        == consoleBinding.epoch else {
+                    throw WebInspectorProxyError.staleIdentifier
+                }
             }
         }
 
@@ -1815,6 +1869,70 @@ package actor ConnectionCore {
         }
         resumeModelCommandOwnerCountWaitersIfNeeded()
         return effects
+    }
+
+    private func advanceRuntimeBindingAndInvalidateCommands(
+        for agentTargetID: ProtocolTarget.ID
+    ) -> ConnectionCommandInvalidationEffects {
+        let epoch = advanceModelRuntimeBindingEpoch(for: agentTargetID)
+        return invalidateModelCommands(
+            where: { task in
+                guard let runtime = task.authorization.runtime else {
+                    return false
+                }
+                return ProtocolTarget.ID(runtime.agentTargetID.rawValue)
+                    == agentTargetID
+                    && runtime.epoch != epoch
+            },
+            failureOverride: .staleIdentifier,
+            pendingFailureReason: .staleIdentifier
+        )
+    }
+
+    private func advanceConsoleBindingAndInvalidateCommands(
+        for agentTargetID: ProtocolTarget.ID
+    ) -> ConnectionCommandInvalidationEffects {
+        let epoch = advanceModelConsoleBindingEpoch(for: agentTargetID)
+        return invalidateModelCommands(
+            where: { task in
+                guard let console = task.authorization.runtime?.consoleBinding else {
+                    return false
+                }
+                return ProtocolTarget.ID(console.agentTargetID.rawValue)
+                    == agentTargetID
+                    && console.epoch != epoch
+            },
+            failureOverride: .staleIdentifier,
+            pendingFailureReason: .staleIdentifier
+        )
+    }
+
+    private func retireModelAgentBindingsAndInvalidateCommands(
+        for targetID: ProtocolTarget.ID
+    ) -> ConnectionCommandInvalidationEffects {
+        _ = advanceModelRuntimeBindingEpoch(for: targetID)
+        _ = advanceModelConsoleBindingEpoch(for: targetID)
+        return invalidateModelCommands(
+            where: { task in
+                guard let runtime = task.authorization.runtime else {
+                    return false
+                }
+                let referencesAgent = ProtocolTarget.ID(
+                    runtime.agentTargetID.rawValue
+                ) == targetID
+                let referencesSemanticTarget = runtime.semanticTarget.map {
+                    ProtocolTarget.ID($0.targetID.rawValue) == targetID
+                } ?? false
+                let referencesConsoleAgent = runtime.consoleBinding.map {
+                    ProtocolTarget.ID($0.agentTargetID.rawValue) == targetID
+                } ?? false
+                return referencesAgent
+                    || referencesSemanticTarget
+                    || referencesConsoleAgent
+            },
+            failureOverride: .staleIdentifier,
+            pendingFailureReason: .staleIdentifier
+        )
     }
 
     private func completeCommandInvalidationEffects(
@@ -2349,6 +2467,54 @@ package actor ConnectionCore {
         return next
     }
 
+    private func modelRuntimeBindingEpoch(
+        for agentTargetID: ProtocolTarget.ID
+    ) -> ModelRuntimeBindingEpoch {
+        if let epoch = modelRuntimeBindingEpochs[agentTargetID] {
+            return epoch
+        }
+        let epoch = ModelRuntimeBindingEpoch(rawValue: 0)
+        modelRuntimeBindingEpochs[agentTargetID] = epoch
+        return epoch
+    }
+
+    private func advanceModelRuntimeBindingEpoch(
+        for agentTargetID: ProtocolTarget.ID
+    ) -> ModelRuntimeBindingEpoch {
+        let current = modelRuntimeBindingEpoch(for: agentTargetID)
+        precondition(
+            current.rawValue < UInt64.max,
+            "A Runtime binding epoch exhausted UInt64."
+        )
+        let next = ModelRuntimeBindingEpoch(rawValue: current.rawValue + 1)
+        modelRuntimeBindingEpochs[agentTargetID] = next
+        return next
+    }
+
+    private func modelConsoleBindingEpoch(
+        for agentTargetID: ProtocolTarget.ID
+    ) -> ModelConsoleBindingEpoch {
+        if let epoch = modelConsoleBindingEpochs[agentTargetID] {
+            return epoch
+        }
+        let epoch = ModelConsoleBindingEpoch(rawValue: 0)
+        modelConsoleBindingEpochs[agentTargetID] = epoch
+        return epoch
+    }
+
+    private func advanceModelConsoleBindingEpoch(
+        for agentTargetID: ProtocolTarget.ID
+    ) -> ModelConsoleBindingEpoch {
+        let current = modelConsoleBindingEpoch(for: agentTargetID)
+        precondition(
+            current.rawValue < UInt64.max,
+            "A Console binding epoch exhausted UInt64."
+        )
+        let next = ModelConsoleBindingEpoch(rawValue: current.rawValue + 1)
+        modelConsoleBindingEpochs[agentTargetID] = next
+        return next
+    }
+
     private func modelTargetState(_ target: ModelTarget) -> ModelTargetState {
         let targetID = ProtocolTarget.ID(target.id.rawValue)
         return ModelTargetState(
@@ -2356,8 +2522,22 @@ package actor ConnectionCore {
             navigationEpoch: modelNavigationEpoch(for: targetID),
             domBindingEpoch: modelFeed?.configuredDomains.contains(.dom) == true
                 ? modelDOMBindingEpoch(for: targetID)
+                : nil,
+            runtimeBindingEpoch: modelFeedRequiresRuntimeBinding
+                ? modelRuntimeBindingEpoch(for: targetID)
+                : nil,
+            consoleBindingEpoch: modelFeed?.configuredDomains.contains(.console) == true
+                ? modelConsoleBindingEpoch(for: targetID)
                 : nil
         )
+    }
+
+    private var modelFeedRequiresRuntimeBinding: Bool {
+        guard let configuredDomains = modelFeed?.configuredDomains else {
+            return false
+        }
+        return configuredDomains.contains(.runtime)
+            || configuredDomains.contains(.console)
     }
 
     private func modelEventScope(
@@ -2393,6 +2573,12 @@ package actor ConnectionCore {
             navigationEpoch: modelNavigationEpoch(for: targetID),
             domBindingEpoch: modelFeed?.configuredDomains.contains(.dom) == true
                 ? modelDOMBindingEpoch(for: targetID)
+                : nil,
+            runtimeBindingEpoch: modelFeedRequiresRuntimeBinding
+                ? modelRuntimeBindingEpoch(for: agentTargetID)
+                : nil,
+            consoleBindingEpoch: modelFeed?.configuredDomains.contains(.console) == true
+                ? modelConsoleBindingEpoch(for: agentTargetID)
                 : nil
         )
     }
@@ -2424,7 +2610,13 @@ package actor ConnectionCore {
             target: target,
             agentTarget: target,
             navigationEpoch: navigationEpoch,
-            domBindingEpoch: domBindingEpoch
+            domBindingEpoch: domBindingEpoch,
+            runtimeBindingEpoch: modelFeedRequiresRuntimeBinding
+                ? modelRuntimeBindingEpoch(for: targetID)
+                : nil,
+            consoleBindingEpoch: modelFeed?.configuredDomains.contains(.console) == true
+                ? modelConsoleBindingEpoch(for: targetID)
+                : nil
         )
     }
 
@@ -5573,6 +5765,13 @@ package actor ConnectionCore {
             }
             return modelEventScope(targetID: targetID, target: target)
         }
+        var commandInvalidation = ConnectionCommandInvalidationEffects()
+        if destroyedTargetWasCurrent,
+           targetID != previousMainPageTargetID {
+            commandInvalidation = retireModelAgentBindingsAndInvalidateCommands(
+                for: targetID
+            )
+        }
         targetRegistry.removeTarget(targetID)
         modelNavigationEpochs.removeValue(forKey: targetID)
         modelNavigationLoaderIDs.removeValue(forKey: targetID)
@@ -5587,6 +5786,12 @@ package actor ConnectionCore {
             to: targetRegistry.currentMainPageTargetID
         )
         let pendingReplies = replyStore.removeTargetReplies(for: targetID)
+        commandInvalidation.pendingFailures.append(contentsOf: pendingReplies.map {
+            ConnectionPendingReplyFailure(
+                pending: $0,
+                reason: .missingTarget(targetID)
+            )
+        })
         if let destroyedScope {
             publishModelTargetLifecycleEvent(
                 .targetDestroyed,
@@ -5601,14 +5806,7 @@ package actor ConnectionCore {
         return RootEventMutation(
             bindingEffects: bindingEffects,
             physicalTargetWaiters: capabilityWaiters,
-            commandInvalidation: ConnectionCommandInvalidationEffects(
-                pendingFailures: pendingReplies.map {
-                    ConnectionPendingReplyFailure(
-                        pending: $0,
-                        reason: .missingTarget(targetID)
-                    )
-                }
-            )
+            commandInvalidation: commandInvalidation
         )
     }
 
@@ -5622,9 +5820,15 @@ package actor ConnectionCore {
         modelTargetMutationActionForTesting?()
         var capabilityWaiters = PhysicalTargetDisappearanceWaiters()
         var disappearedTargetID: ProtocolTarget.ID?
+        var commandInvalidation = ConnectionCommandInvalidationEffects()
 
         if mutation.shouldRetargetExternalState {
             let oldTargetID = mutation.committedOldTargetID
+            if oldTargetID != previousMainPageTargetID {
+                commandInvalidation = retireModelAgentBindingsAndInvalidateCommands(
+                    for: oldTargetID
+                )
+            }
             capabilityWaiters = physicalTargetDidDisappear(oldTargetID)
             disappearedTargetID = oldTargetID
             provisionalTargetMessageStore.removeTarget(oldTargetID)
@@ -5639,6 +5843,14 @@ package actor ConnectionCore {
         let remainingPendingReplies = disappearedTargetID.map {
             replyStore.removeTargetReplies(for: $0)
         } ?? []
+        commandInvalidation.pendingFailures.append(
+            contentsOf: remainingPendingReplies.map {
+                ConnectionPendingReplyFailure(
+                    pending: $0,
+                    reason: .missingTarget(mutation.committedOldTargetID)
+                )
+            }
+        )
         if let newRecord = targetRegistry.target(for: newTargetID),
            targetRegistry.isCurrentPageModelTarget(newRecord),
            let newTarget = ModelTarget(record: newRecord) {
@@ -5664,14 +5876,7 @@ package actor ConnectionCore {
                 : [],
             bindingEffects: bindingEffects,
             physicalTargetWaiters: capabilityWaiters,
-            commandInvalidation: ConnectionCommandInvalidationEffects(
-                pendingFailures: remainingPendingReplies.map {
-                    ConnectionPendingReplyFailure(
-                        pending: $0,
-                        reason: .missingTarget(mutation.committedOldTargetID)
-                    )
-                }
-            )
+            commandInvalidation: commandInvalidation
         )
     }
 
@@ -5739,6 +5944,8 @@ package actor ConnectionCore {
         modelNavigationEpochs.removeAll(keepingCapacity: true)
         modelNavigationLoaderIDs.removeAll(keepingCapacity: true)
         modelDOMBindingEpochs.removeAll(keepingCapacity: true)
+        modelRuntimeBindingEpochs.removeAll(keepingCapacity: true)
+        modelConsoleBindingEpochs.removeAll(keepingCapacity: true)
         for key in elementPickerModes.keys where key.route == .currentPage {
             guard var mode = elementPickerModes[key] else {
                 continue
@@ -6317,7 +6524,7 @@ package actor ConnectionCore {
         // WebKit invalidates every bound node identifier before emitting
         // documentUpdated. Advance the target epoch and publish its dedicated
         // model boundary before this event can reach any later model delta.
-        let commandInvalidation = prepareDOMDocumentUpdateForModelFeed(envelope)
+        var commandInvalidation = prepareDOMDocumentUpdateForModelFeed(envelope)
         guard isOpen else {
             return EventEmissionEffects(commandInvalidation: commandInvalidation)
         }
@@ -6417,7 +6624,8 @@ package actor ConnectionCore {
         do {
             try publishConfiguredModelEvent(
                 envelope,
-                in: snapshot()
+                in: snapshot(),
+                commandInvalidation: &commandInvalidation
             )
         } catch {
             handoffTermination(
@@ -6447,7 +6655,8 @@ package actor ConnectionCore {
 
     private func publishConfiguredModelEvent(
         _ event: ProtocolEvent,
-        in targetSnapshot: TransportSession.Snapshot
+        in targetSnapshot: TransportSession.Snapshot,
+        commandInvalidation: inout ConnectionCommandInvalidationEffects
     ) throws {
         guard let registration = modelFeed,
               let targetSnapshotThrough = registration.targetSnapshotThrough,
@@ -6506,9 +6715,14 @@ package actor ConnectionCore {
                 to: elementPickerOwner,
                 key: elementPickerKey
             )
+        let isOperationalRuntimeClear = event.domain == .runtime
+            && event.method == "Runtime.executionContextsCleared"
+            && registration.configuredDomains.contains(.console)
+            && !registration.configuredDomains.contains(.runtime)
         guard event.domain == .page
                 || configuredDomain.map(registration.configuredDomains.contains) == true
-                || isElementPickerEvent else {
+                || isElementPickerEvent
+                || isOperationalRuntimeClear else {
             return
         }
         guard ConnectionEventProjection.shouldDeliver(
@@ -6560,10 +6774,21 @@ package actor ConnectionCore {
                     throw TransportSession.Error.malformedMessage
                 }
                 (physicalTargetID, target) = try modelTarget(for: frame.id)
-                _ = advanceModelNavigationEpoch(
+                let previousNavigationEpoch = modelNavigationEpoch(
+                    for: physicalTargetID
+                )
+                let navigationEpoch = advanceModelNavigationEpoch(
                     for: physicalTargetID,
                     loaderID: loaderID
                 )
+                if navigationEpoch != previousNavigationEpoch,
+                   modelFeedRequiresRuntimeBinding {
+                    commandInvalidation.append(
+                        advanceRuntimeBindingAndInvalidateCommands(
+                            for: agentTargetID
+                        )
+                    )
+                }
                 payload = .target(.frameNavigated(frame))
             case let .frameDetached(frameID):
                 (physicalTargetID, target) = try modelTarget(for: frameID)
@@ -6601,13 +6826,29 @@ package actor ConnectionCore {
                 throw TransportSession.Error.malformedMessage
             }
             payload = .console(value.event)
+            if case .messagesCleared = value.event {
+                commandInvalidation.append(
+                    advanceConsoleBindingAndInvalidateCommands(
+                        for: agentTargetID
+                    )
+                )
+            }
         case let .runtime(value):
             physicalTargetID = defaultPhysicalTargetID
             target = defaultTarget
-            guard configuredDomain == .runtime else {
+            let projectsRuntime = configuredDomain == .runtime
+                && registration.configuredDomains.contains(.runtime)
+            guard projectsRuntime || isOperationalRuntimeClear else {
                 throw TransportSession.Error.malformedMessage
             }
             payload = .runtime(value)
+            if case .executionContextsCleared = value {
+                commandInvalidation.append(
+                    advanceRuntimeBindingAndInvalidateCommands(
+                        for: agentTargetID
+                    )
+                )
+            }
         case let .inspector(value):
             physicalTargetID = defaultPhysicalTargetID
             target = defaultTarget

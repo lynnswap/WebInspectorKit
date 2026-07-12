@@ -281,6 +281,8 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         var targets: [WebInspectorTarget.ID: ModelTarget]
         var navigationEpochs: [WebInspectorTarget.ID: ModelNavigationEpoch]
         var domAuthority: [WebInspectorTarget.ID: DOMTargetAuthority]
+        var runtimeBindingEpochs: [WebInspectorTarget.ID: ModelRuntimeBindingEpoch]
+        var consoleBindingEpochs: [WebInspectorTarget.ID: ModelConsoleBindingEpoch]
         var bootstrapSnapshotThrough: [ModelDomain: UInt64]
         var bootstrapCompletionThrough: [ModelDomain: UInt64]
         var completedDomains: Set<ModelDomain>
@@ -1382,6 +1384,8 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
                 targets: [:],
                 navigationEpochs: [:],
                 domAuthority: [:],
+                runtimeBindingEpochs: [:],
+                consoleBindingEpochs: [:],
                 bootstrapSnapshotThrough: [:],
                 bootstrapCompletionThrough: [:],
                 completedDomains: [],
@@ -1404,9 +1408,18 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
                   Set(snapshot.targets.map(\.target.id)).count
                     == snapshot.targets.count,
                   snapshot.targets.allSatisfy({ state in
-                      configuredDomains.contains(.dom)
+                      let hasValidDOMEpoch = configuredDomains.contains(.dom)
                         ? state.domBindingEpoch != nil
                         : state.domBindingEpoch == nil
+                      let hasValidRuntimeEpoch = requiresRuntimeBinding
+                        ? state.runtimeBindingEpoch != nil
+                        : state.runtimeBindingEpoch == nil
+                      let hasValidConsoleEpoch = configuredDomains.contains(.console)
+                        ? state.consoleBindingEpoch != nil
+                        : state.consoleBindingEpoch == nil
+                      return hasValidDOMEpoch
+                        && hasValidRuntimeEpoch
+                        && hasValidConsoleEpoch
                   }) else {
                 return prepareProtocolFailure(
                     "Model target snapshot was stale, duplicated, or missing its current page.",
@@ -1440,6 +1453,30 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
                             )
                         }
                         return (state.target.id, .awaiting(epoch))
+                    }
+                )
+            }
+            if requiresRuntimeBinding {
+                binding.runtimeBindingEpochs = Dictionary(
+                    uniqueKeysWithValues: snapshot.targets.map { state in
+                        guard let epoch = state.runtimeBindingEpoch else {
+                            preconditionFailure(
+                                "A validated Runtime target state lost its binding epoch."
+                            )
+                        }
+                        return (state.target.id, epoch)
+                    }
+                )
+            }
+            if configuredDomains.contains(.console) {
+                binding.consoleBindingEpochs = Dictionary(
+                    uniqueKeysWithValues: snapshot.targets.map { state in
+                        guard let epoch = state.consoleBindingEpoch else {
+                            preconditionFailure(
+                                "A validated Console target state lost its binding epoch."
+                            )
+                        }
+                        return (state.target.id, epoch)
                     }
                 )
             }
@@ -1521,6 +1558,12 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
                 // `prepareProtocolFailure` already invalidated the binding.
             } else {
                 self.binding = binding
+                guard refreshCurrentPageAuthorization() else {
+                    return prepareProtocolFailure(
+                        "A model event left the current-page command authority incomplete.",
+                        token: token
+                    )
+                }
             }
             return PreparedReducerStep(work: work, commit: .record(token: token))
 
@@ -1703,6 +1746,82 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         }
     }
 
+    private func acceptAgentBindings(
+        _ scope: ModelEventScope,
+        in binding: inout BindingState,
+        runtimeMayAdvance: Bool = false,
+        runtimeMustAdvance: Bool = false,
+        consoleMustAdvance: Bool = false
+    ) -> Bool {
+        let agentTarget = scope.agentTarget
+        guard binding.targets[agentTarget.id] == agentTarget else {
+            return false
+        }
+
+        if requiresRuntimeBinding {
+            guard let previous = binding.runtimeBindingEpochs[agentTarget.id],
+                  let epoch = scope.runtimeBindingEpoch else {
+                return false
+            }
+            let didAdvance = previous.rawValue < UInt64.max
+                && epoch.rawValue == previous.rawValue + 1
+            if runtimeMustAdvance {
+                guard didAdvance else { return false }
+            } else if runtimeMayAdvance {
+                guard epoch == previous || didAdvance else { return false }
+            } else {
+                guard epoch == previous else { return false }
+            }
+            binding.runtimeBindingEpochs[agentTarget.id] = epoch
+        } else if scope.runtimeBindingEpoch != nil {
+            return false
+        }
+
+        if configuredDomains.contains(.console) {
+            guard let previous = binding.consoleBindingEpochs[agentTarget.id],
+                  let epoch = scope.consoleBindingEpoch else {
+                return false
+            }
+            if consoleMustAdvance {
+                guard previous.rawValue < UInt64.max,
+                      epoch.rawValue == previous.rawValue + 1 else {
+                    return false
+                }
+            } else {
+                guard epoch == previous else { return false }
+            }
+            binding.consoleBindingEpochs[agentTarget.id] = epoch
+        } else if scope.consoleBindingEpoch != nil {
+            return false
+        }
+        return true
+    }
+
+    private func installAgentBindings(
+        _ scope: ModelEventScope,
+        in binding: inout BindingState
+    ) -> Bool {
+        let agentTarget = scope.agentTarget
+        guard agentTarget == scope.target,
+              binding.runtimeBindingEpochs[agentTarget.id] == nil,
+              binding.consoleBindingEpochs[agentTarget.id] == nil else {
+            return false
+        }
+        if requiresRuntimeBinding {
+            guard let epoch = scope.runtimeBindingEpoch else { return false }
+            binding.runtimeBindingEpochs[agentTarget.id] = epoch
+        } else if scope.runtimeBindingEpoch != nil {
+            return false
+        }
+        if configuredDomains.contains(.console) {
+            guard let epoch = scope.consoleBindingEpoch else { return false }
+            binding.consoleBindingEpochs[agentTarget.id] = epoch
+        } else if scope.consoleBindingEpoch != nil {
+            return false
+        }
+        return true
+    }
+
     private func prepare(
         _ payload: ModelProtocolEvent,
         scope: ModelEventScope,
@@ -1710,12 +1829,14 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         token: UInt64
     ) -> ReducerWork? {
         let target = scope.target
+        let agentTarget = scope.agentTarget
         switch payload {
         case let .target(event):
             switch event {
             case .targetCreated:
                 guard binding.targets[target.id] == nil,
                       binding.navigationEpochs[target.id] == nil,
+                      installAgentBindings(scope, in: &binding),
                       configuredDomains.contains(.dom)
                         ? scope.domBindingEpoch != nil
                         : scope.domBindingEpoch == nil else {
@@ -1738,6 +1859,7 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
                 guard binding.targets[target.id] == target,
                       binding.navigationEpochs[target.id]
                         == scope.navigationEpoch,
+                      acceptAgentBindings(scope, in: &binding),
                       scope.domBindingEpoch
                         == binding.domAuthority[target.id]?.epoch else {
                     return prepareProtocolFailure(
@@ -1748,6 +1870,8 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
                 binding.targets.removeValue(forKey: target.id)
                 binding.navigationEpochs.removeValue(forKey: target.id)
                 binding.domAuthority.removeValue(forKey: target.id)
+                binding.runtimeBindingEpochs.removeValue(forKey: target.id)
+                binding.consoleBindingEpochs.removeValue(forKey: target.id)
                 cssInspectorBaselineStore.reset(targetID: target.id)
                 if let frameID = target.frameID {
                     applyDOMStateEffects(
@@ -1760,8 +1884,11 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
                 binding.targets.removeValue(forKey: oldTargetID)
                 binding.navigationEpochs.removeValue(forKey: oldTargetID)
                 binding.domAuthority.removeValue(forKey: oldTargetID)
+                binding.runtimeBindingEpochs.removeValue(forKey: oldTargetID)
+                binding.consoleBindingEpochs.removeValue(forKey: oldTargetID)
                 cssInspectorBaselineStore.reset(targetID: oldTargetID)
                 guard binding.targets[target.id] == nil,
+                      installAgentBindings(scope, in: &binding),
                       configuredDomains.contains(.dom)
                         ? scope.domBindingEpoch != nil
                         : scope.domBindingEpoch == nil else {
@@ -1782,6 +1909,11 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
                 }
             case .frameNavigated:
                 guard binding.targets[target.id] == target,
+                      acceptAgentBindings(
+                          scope,
+                          in: &binding,
+                          runtimeMayAdvance: true
+                      ),
                       let previousEpoch = binding.navigationEpochs[target.id],
                       scope.domBindingEpoch
                         == binding.domAuthority[target.id]?.epoch,
@@ -1796,6 +1928,7 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
                 binding.navigationEpochs[target.id] = scope.navigationEpoch
             case let .frameDetached(frameID):
                 guard binding.targets[target.id] == target,
+                      acceptAgentBindings(scope, in: &binding),
                       binding.navigationEpochs[target.id]
                         == scope.navigationEpoch,
                       scope.domBindingEpoch
@@ -1815,6 +1948,7 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
 
         case let .dom(event):
             guard configuredDomains.contains(.dom),
+                  acceptAgentBindings(scope, in: &binding),
                   binding.targets[target.id] == target,
                   binding.navigationEpochs[target.id] == scope.navigationEpoch,
                   scope.domBindingEpoch == binding.domAuthority[target.id]?.epoch,
@@ -1846,6 +1980,7 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
                 return ReducerWork.none
             }
             guard configuredDomains.contains(.dom),
+                  acceptAgentBindings(scope, in: &binding),
                   binding.targets[target.id] == target,
                   binding.navigationEpochs[target.id] == scope.navigationEpoch,
                   scope.domBindingEpoch == binding.domAuthority[target.id]?.epoch,
@@ -1878,6 +2013,7 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
 
         case let .css(event):
             guard configuredDomains.contains(.css),
+                  acceptAgentBindings(scope, in: &binding),
                   binding.targets[target.id] == target,
                   binding.navigationEpochs[target.id] == scope.navigationEpoch,
                   scope.domBindingEpoch == binding.domAuthority[target.id]?.epoch,
@@ -1892,6 +2028,7 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
 
         case let .network(event):
             guard configuredDomains.contains(.network),
+                  acceptAgentBindings(scope, in: &binding),
                   binding.targets[target.id] == target,
                   binding.navigationEpochs[target.id] == scope.navigationEpoch,
                   scope.domBindingEpoch
@@ -1907,7 +2044,18 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
             ).map(ReducerWork.network) ?? ReducerWork.none
 
         case let .console(event):
+            let clearsMessages: Bool
+            if case .messagesCleared = event {
+                clearsMessages = true
+            } else {
+                clearsMessages = false
+            }
             guard configuredDomains.contains(.console),
+                  acceptAgentBindings(
+                      scope,
+                      in: &binding,
+                      consoleMustAdvance: clearsMessages
+                  ),
                   binding.targets[target.id] == target,
                   binding.navigationEpochs[target.id] == scope.navigationEpoch,
                   scope.domBindingEpoch
@@ -1931,7 +2079,21 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
             return prepared.indexWork.map(ReducerWork.console) ?? ReducerWork.none
 
         case let .runtime(event):
-            guard configuredDomains.contains(.runtime),
+            let clearsExecutionContexts: Bool
+            if case .executionContextsCleared = event {
+                clearsExecutionContexts = true
+            } else {
+                clearsExecutionContexts = false
+            }
+            let isOperationalConsoleInvalidation = clearsExecutionContexts
+                && configuredDomains.contains(.console)
+            guard configuredDomains.contains(.runtime)
+                    || isOperationalConsoleInvalidation,
+                  acceptAgentBindings(
+                      scope,
+                      in: &binding,
+                      runtimeMustAdvance: clearsExecutionContexts
+                  ),
                   binding.targets[target.id] == target,
                   binding.navigationEpochs[target.id] == scope.navigationEpoch,
                   scope.domBindingEpoch
@@ -1943,8 +2105,8 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
             }
             runtimeState.apply(
                 event,
-                sourceTargetID: target.id,
-                isCurrentPageTarget: target.id == binding.currentPageID
+                sourceTargetID: agentTarget.id,
+                isCurrentPageTarget: agentTarget.id == binding.currentPageID
             )
             return ReducerWork.none
         }
@@ -2051,14 +2213,38 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
                 epoch: $0
             )
         }
+        let runtime = binding.runtimeBindingEpochs[target.id].map { epoch in
+            ConnectionModelCommandAuthorization.Runtime(
+                agentTargetID: target.id,
+                epoch: epoch,
+                semanticTarget: binding.navigationEpochs[target.id].map {
+                    ConnectionModelCommandAuthorization.Runtime.SemanticTarget(
+                        targetID: target.id,
+                        navigationEpoch: $0
+                    )
+                }
+            )
+        }
         return activeProxy.modelTarget(
             target,
             authorization: ConnectionModelCommandAuthorization(
                 feedID: activeFeed.id,
                 generation: binding.generation,
-                document: document
+                document: document,
+                runtime: runtime
             )
         )
+    }
+
+    private func refreshCurrentPageAuthorization() -> Bool {
+        guard let binding,
+              let currentPageID = binding.currentPageID,
+              let target = binding.targets[currentPageID],
+              let authorized = authorizedTarget(target, documentEpoch: nil) else {
+            return false
+        }
+        currentPage = authorized
+        return true
     }
 
     private func advanceAttachmentToken() -> UInt64 {
@@ -2072,6 +2258,11 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
 
     private var configuredModelDomains: Set<ModelDomain> {
         Set(configuredDomains.map(Self.modelDomain))
+    }
+
+    private var requiresRuntimeBinding: Bool {
+        configuredDomains.contains(.runtime)
+            || configuredDomains.contains(.console)
     }
 
     private static func modelDomain(_ domain: Domain) -> ModelDomain {
