@@ -271,6 +271,10 @@ package struct WebInspectorModelSchemaRegistration: Sendable {
 package struct WebInspectorModelSchemaRegistry: Sendable {
     private let definitions: [_WebInspectorModelSchemaDefinition]
 
+    package var configuredModelTypeIDs: Set<ObjectIdentifier> {
+        Set(definitions.map(\.modelTypeID))
+    }
+
     package init(
         _ registrations: [WebInspectorModelSchemaRegistration]
     ) {
@@ -283,9 +287,7 @@ package struct WebInspectorModelSchemaRegistry: Sendable {
     }
 
     /// Creates one fresh record/query core and caller-confined identity graph.
-    package func makeContext(
-        owner: WebInspectorModelContext
-    ) -> WebInspectorModelSchemaContext {
+    package func makeContext() -> WebInspectorModelSchemaContext {
         let contextIdentity = _WebInspectorModelSchemaContextIdentity()
         let pairs = definitions.map { $0.makeBoxes() }
         precondition(
@@ -303,10 +305,19 @@ package struct WebInspectorModelSchemaRegistry: Sendable {
             ),
             owner: WebInspectorModelSchemaOwnerRegistry(
                 contextIdentity: contextIdentity,
-                owner: owner,
                 boxes: pairs.map(\.owner)
             )
         )
+    }
+
+    /// Creates and binds one context-local schema graph for test and package
+    /// owners that already exist.
+    package func makeContext(
+        owner: WebInspectorModelContext
+    ) -> WebInspectorModelSchemaContext {
+        let context = makeContext()
+        context.owner.bind(to: owner)
+        return context
     }
 }
 
@@ -1268,20 +1279,30 @@ private final class _WebInspectorAnyModelSchemaOwnerBox {
 package final class WebInspectorModelSchemaOwnerRegistry {
     private let contextIdentity: _WebInspectorModelSchemaContextIdentity
     private weak var contextOwner: WebInspectorModelContext?
+    private var hasBoundContextOwner = false
     private let boxes: [_WebInspectorAnyModelSchemaOwnerBox]
     private let boxByModelTypeID: [ObjectIdentifier: _WebInspectorAnyModelSchemaOwnerBox]
 
     fileprivate init(
         contextIdentity: _WebInspectorModelSchemaContextIdentity,
-        owner: WebInspectorModelContext,
         boxes: [_WebInspectorAnyModelSchemaOwnerBox]
     ) {
         self.contextIdentity = contextIdentity
-        contextOwner = owner
         self.boxes = boxes
         boxByModelTypeID = Dictionary(
             uniqueKeysWithValues: boxes.map { ($0.modelTypeID, $0) }
         )
+    }
+
+    /// Establishes the caller-confined owner after the Context has initialized
+    /// all of its stored state.
+    package func bind(to owner: WebInspectorModelContext) {
+        precondition(
+            hasBoundContextOwner == false,
+            "A schema owner registry can bind to one WebInspectorModelContext only once."
+        )
+        hasBoundContextOwner = true
+        contextOwner = owner
     }
 
     /// Returns only an already materialized model. This operation never claims

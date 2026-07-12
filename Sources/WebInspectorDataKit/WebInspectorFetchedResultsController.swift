@@ -779,7 +779,7 @@ public final class WebInspectorFetchedResultsController<
             )
             didInstallOwner = true
             try await claim.activate()
-            guard modelContext.isFetchedResultsProjectionClosed == false else {
+            guard modelContext.isPersistentModelProjectionClosed == false else {
                 throw WebInspectorFetchedResultsControllerError.closed
             }
         } catch {
@@ -787,7 +787,7 @@ public final class WebInspectorFetchedResultsController<
             publication.finish()
             await claim.abandon()
             if didInstallOwner {
-                if modelContext.isFetchedResultsProjectionClosed == false {
+                if modelContext.isPersistentModelProjectionClosed == false {
                     modelContext.markFetchedResultsControllerClosing(ownerID)
                 }
                 modelContext.removeFetchedResultsController(ownerID)

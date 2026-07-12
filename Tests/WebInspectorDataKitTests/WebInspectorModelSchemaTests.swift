@@ -6,6 +6,72 @@ import Testing
 
 @MainActor
 @Test
+func modelContextMaterializesAndReusesItsOwnSchemaModels() async throws {
+    let fixture = SchemaTestFixture()
+    fixture.source.setSnapshot(primary: [1: 10], secondary: [:])
+    let context = WebInspectorModelContext(
+        modelSchemaRegistry: fixture.registry,
+        isolation: MainActor.shared
+    )
+    try await applyContextSchemaInitial(to: context)
+
+    let id = SchemaPrimaryID(rawValue: 1)
+    #expect(context.registeredModel(for: id) == nil)
+    let first = try #require(context.model(for: id))
+    let second = try #require(context.model(for: id))
+    let registered = try #require(context.registeredModel(for: id))
+    #expect(first === second)
+    #expect(first === registered)
+    #expect(first.value == 10)
+    #expect(fixture.probe.makeCount == 1)
+
+    await context.close()
+    #expect(first.isInvalidated)
+    #expect(context.registeredModel(for: id) == nil)
+    #expect(context.model(for: id) == nil)
+}
+
+@MainActor
+@Test
+func modelContextsUseEqualIDsAndDistinctSchemaModelInstances() async throws {
+    let fixture = SchemaTestFixture()
+    fixture.source.setSnapshot(primary: [1: 10], secondary: [:])
+    let registry = fixture.registry
+    let firstContext = WebInspectorModelContext(
+        modelSchemaRegistry: registry,
+        isolation: MainActor.shared
+    )
+    let secondContext = WebInspectorModelContext(
+        modelSchemaRegistry: registry,
+        isolation: MainActor.shared
+    )
+    try await applyContextSchemaInitial(to: firstContext)
+    try await applyContextSchemaInitial(to: secondContext)
+
+    let id = SchemaPrimaryID(rawValue: 1)
+    let first = try #require(firstContext.model(for: id))
+    let second = try #require(secondContext.model(for: id))
+    #expect(first.id == second.id)
+    #expect(first !== second)
+    #expect(fixture.probe.contextIdentityCount == 2)
+
+    await firstContext.close()
+    #expect(first.isInvalidated)
+    #expect(second.isInvalidated == false)
+    await secondContext.close()
+    #expect(second.isInvalidated)
+}
+
+@Test
+func modelContextSchemaGraphRunsOnACustomActor() async throws {
+    let fixture = SchemaTestFixture()
+    fixture.source.setSnapshot(primary: [1: 10], secondary: [:])
+    let owner = SchemaContextOwnerActor()
+    #expect(try await owner.materializes(registry: fixture.registry))
+}
+
+@MainActor
+@Test
 func schemaCommitPatchesModelThenFetchedResultsBackingBeforePublication() async throws {
     let fixture = SchemaTestFixture()
     fixture.source.setSnapshot(primary: [1: 10], secondary: [:])
@@ -1144,6 +1210,31 @@ private actor SchemaTestHarness {
     }
 }
 
+private actor SchemaContextOwnerActor {
+    func materializes(
+        registry: WebInspectorModelSchemaRegistry
+    ) async throws -> Bool {
+        let context = WebInspectorModelContext(
+            modelSchemaRegistry: registry,
+            isolation: self
+        )
+        let transaction = context.modelSchemaContextCore.initial(
+            at: 0,
+            snapshot: emptySchemaCanonicalSnapshot()
+        )
+        let commit = try await transaction.stage(
+            on: context.fetchedResultsQueryCore
+        )
+        precondition(context.publish(commit))
+        let id = SchemaPrimaryID(rawValue: 1)
+        let model = context.model(for: id)
+        let result = model?.value == 10
+            && model === context.registeredModel(for: id)
+        await context.close()
+        return result && model?.isInvalidated == true
+    }
+}
+
 private func emptySchemaCanonicalSnapshot() -> WebInspectorCanonicalModelSnapshot {
     WebInspectorCanonicalModelSnapshot(
         binding: nil,
@@ -1152,4 +1243,18 @@ private func emptySchemaCanonicalSnapshot() -> WebInspectorCanonicalModelSnapsho
         CSS: nil,
         consoleRuntime: nil
     )
+}
+
+@MainActor
+private func applyContextSchemaInitial(
+    to context: WebInspectorModelContext
+) async throws {
+    let transaction = context.modelSchemaContextCore.initial(
+        at: 0,
+        snapshot: emptySchemaCanonicalSnapshot()
+    )
+    let commit = try await transaction.stage(
+        on: context.fetchedResultsQueryCore
+    )
+    #expect(context.publish(commit))
 }
