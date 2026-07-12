@@ -126,7 +126,15 @@ private final class WebInspectorModelDeliveryBridge: @unchecked Sendable {
 /// It is non-Sendable and becomes permanently confined to the actor that first
 /// calls ``attach(to:isolation:)``.
 @Observable
-public final class WebInspectorModelContext {
+public final class WebInspectorModelContext: Equatable, SendableMetatype {
+    /// Compares contexts by object identity.
+    public nonisolated static func == (
+        lhs: WebInspectorModelContext,
+        rhs: WebInspectorModelContext
+    ) -> Bool {
+        lhs === rhs
+    }
+
     package struct DOMUndoRedoCommands {
         private weak var store: DOMStateStore?
         private let target: WebInspectorTarget?
@@ -3141,6 +3149,13 @@ public final class WebInspectorModelContext {
     }
 
 }
+
+@available(
+    *,
+    unavailable,
+    message: "contexts cannot be shared across concurrency contexts"
+)
+extension WebInspectorModelContext: @unchecked Sendable {}
 
 extension WebInspectorModelContext {
     func apply(_ event: DOM.Event) {

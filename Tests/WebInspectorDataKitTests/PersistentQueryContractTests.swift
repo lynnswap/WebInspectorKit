@@ -42,6 +42,21 @@ func persistentIdentifiersInferTheirModelAndQueryValueTypes() {
 }
 
 @Test
+func modelContextEqualityUsesContextObjectIdentity() {
+    let context = WebInspectorModelContext.preview()
+    let sameContext = context
+    let distinctContext = WebInspectorModelContext.preview()
+
+    #expect(context == sameContext)
+    #expect(context != distinctContext)
+}
+
+@Test
+func modelContextMetatypeIsSendable() {
+    requireSendableMetatype(WebInspectorModelContext.self)
+}
+
+@Test
 func contextLocalResourcesRetainObjectIdentitySemantics() {
     let context = WebInspectorModelContext.preview(
         configuration: .init(domains: [.dom, .css])
@@ -111,6 +126,10 @@ private func requirePersistentContract<Model>(
 }
 
 private func requireSendable<Value>(_: Value.Type) where Value: Sendable {}
+
+private func requireSendableMetatype<Value>(
+    _: Value.Type
+) where Value: SendableMetatype {}
 
 private func modelTypeIdentifier<ID>(
     for _: ID.Type

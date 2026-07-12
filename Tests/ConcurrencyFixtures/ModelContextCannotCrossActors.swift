@@ -1,9 +1,9 @@
 import WebInspectorDataKit
 
-func requireSendable<Value: Sendable>(_: Value) {}
+func requireConcurrencyContextSharing<Value: Sendable>(_: Value) {}
 
-func illegallyTreatModelContextAsSendable(
+func illegallyShareModelContextAcrossConcurrencyContexts(
     _ context: WebInspectorModelContext
 ) {
-    requireSendable(context)
+    requireConcurrencyContextSharing(context)
 }

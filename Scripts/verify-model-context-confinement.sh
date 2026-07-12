@@ -14,6 +14,8 @@ if xcrun swiftc \
     -typecheck \
     -swift-version 6 \
     -strict-concurrency=complete \
+    -default-isolation nonisolated \
+    -strict-memory-safety \
     -target arm64-apple-macosx15.4 \
     -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
     -I "$build_root/Modules" \
@@ -30,7 +32,8 @@ then
     exit 1
 fi
 
-if ! /usr/bin/grep -q "WebInspectorModelContext.*does not conform to the 'Sendable' protocol" "$diagnostics"; then
+if ! /usr/bin/grep -Fq "conformance of 'WebInspectorModelContext' to 'Sendable' is unavailable" "$diagnostics" || \
+    ! /usr/bin/grep -Fq "contexts cannot be shared across concurrency contexts" "$diagnostics"; then
     /bin/cat "$diagnostics" >&2
     print -u2 "The confinement fixture failed for an unexpected reason."
     exit 1
