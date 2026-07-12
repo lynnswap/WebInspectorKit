@@ -225,6 +225,9 @@ private func rawNetworkEvent(_ event: Network.Event) throws -> RawWireEvent {
             "Network.requestWillBeSent",
             NetworkRequestWillBeSentWire(
                 requestId: id.rawValue,
+                frameId: request.origin?.frameID.rawValue ?? "main-frame",
+                loaderId: request.origin?.loaderID ?? "main-loader",
+                targetId: request.origin?.targetID,
                 request: NetworkRequestWire(request),
                 initiator: NetworkInitiatorWire(initiator),
                 type: resourceType?.rawValue,
@@ -557,6 +560,9 @@ private struct CSSStyleSheetHeaderWire: Encodable {
 
 private struct NetworkRequestWillBeSentWire: Encodable {
     let requestId: String
+    let frameId: String
+    let loaderId: String
+    let targetId: String?
     let request: NetworkRequestWire
     let initiator: NetworkInitiatorWire
     let type: String?

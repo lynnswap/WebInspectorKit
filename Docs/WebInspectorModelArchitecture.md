@@ -452,6 +452,19 @@ WebKit's protocol definition of `targetId` as the context where the load
 originated while keeping response-body commands routed to the allocating
 Network agent.
 
+A present `targetId` is not equivalent to a missing target. WebKit uses the
+same worker inspector identifier that its target registry consumes, and the
+frontend may receive a request before that target is registered. Such a
+request retains the exact protocol target as opaque origin membership; it does
+not fall through to the frame or event target and it does not borrow another
+target's navigation or DOM-binding epoch. The frame and event fallbacks apply
+only when `targetId` is absent; a present empty identifier is malformed.
+The current model feed projects the current page and its frame targets, not
+worker or service-worker target lifecycle, so these protocol targets remain
+opaque for that feed. If the target-graph owner later projects workers,
+registration and adoption of matching opaque request membership must ship as
+one atomic canonical update; DataKit must not infer registration on its own.
+
 `ModelEventScope.generation` is the generation of one Proxy connection. A new
 Proxy may reuse the same raw value. On every attach attempt, the Container Core
 therefore reserves a monotonically increasing attachment generation and never

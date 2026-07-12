@@ -6926,7 +6926,7 @@ package actor ConnectionCore {
             guard configuredDomain == .network else {
                 throw TransportSession.Error.malformedMessage
             }
-            payload = .network(value)
+            payload = .network(networkEventWithFrameTargetMapping(value))
         case let .console(value):
             physicalTargetID = defaultPhysicalTargetID
             target = defaultTarget
@@ -7031,6 +7031,54 @@ package actor ConnectionCore {
             throw TransportSession.Error.malformedMessage
         }
         return (targetID, target)
+    }
+
+    private func networkEventWithFrameTargetMapping(
+        _ event: Network.Event
+    ) -> Network.Event {
+        guard case let .requestWillBeSent(
+            id,
+            request,
+            initiator,
+            resourceType,
+            redirectResponse,
+            timestamp
+        ) = event,
+            let origin = request.origin
+        else {
+            return event
+        }
+
+        let mappedTargetID = targetRegistry.targetID(
+            forFrameID: ProtocolFrame.ID(origin.frameID.rawValue)
+        ).flatMap { targetID -> WebInspectorTarget.ID? in
+            guard let record = targetRegistry.target(for: targetID),
+                targetRegistry.isCurrentPageModelTarget(record),
+                !record.isProvisional
+            else {
+                return nil
+            }
+            return WebInspectorTarget.ID(targetID.rawValue)
+        }
+        let requestWithOrigin = Network.Request(
+            id: request.id,
+            url: request.url,
+            method: request.method,
+            headers: request.headers,
+            postData: request.postData,
+            referrerPolicy: request.referrerPolicy,
+            integrity: request.integrity,
+            backendResourceIdentifier: request.backendResourceIdentifier,
+            origin: origin.mappingFrame(to: mappedTargetID)
+        )
+        return .requestWillBeSent(
+            id: id,
+            request: requestWithOrigin,
+            initiator: initiator,
+            resourceType: resourceType,
+            redirectResponse: redirectResponse,
+            timestamp: timestamp
+        )
     }
 
     private func modelDomain(for domain: ProtocolDomain) -> ModelDomain? {

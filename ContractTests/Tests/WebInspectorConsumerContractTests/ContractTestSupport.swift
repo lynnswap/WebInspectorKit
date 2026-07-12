@@ -44,6 +44,8 @@ enum ContractTestSupport {
     static func requestWillBeSentParameters() throws -> WebInspectorTestJSONObject {
         try jsonObject([
             "requestId": "contract-request",
+            "frameId": "main-frame",
+            "loaderId": "main-loader",
             "request": [
                 "url": "https://example.com/data.json",
                 "method": "GET",

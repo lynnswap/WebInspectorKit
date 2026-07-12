@@ -6,6 +6,12 @@ package enum CanonicalNetworkEventOrigin: Equatable, Sendable {
     case enableReplay
 }
 
+package enum CanonicalNetworkRequestOriginResolution: Equatable, Sendable {
+    case required
+    case existing(CanonicalNetworkRequestMembership)
+    case notRequired
+}
+
 /// A protocol invariant rejected before canonical state is mutated.
 package enum CanonicalNetworkProtocolViolation: Error, Equatable, Sendable {
     case eventPayloadIdentifierMismatch(
@@ -267,6 +273,20 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
         forRawRequestID rawID: Network.Request.ID
     ) -> CanonicalNetworkRequestIDStorage? {
         scopedRequestIDByRawRequestID[rawID]
+    }
+
+    package func requestOriginResolution(
+        forRawRequestID rawID: Network.Request.ID,
+        scope: WebInspectorCanonicalNetworkEventScope
+    ) -> CanonicalNetworkRequestOriginResolution {
+        if let id = scopedRequestIDByRawRequestID[rawID] {
+            if let membership = requestsByID[id]?.membership {
+                return .existing(membership)
+            }
+            return .notRequired
+        }
+        let id = canonicalID(rawID: rawID, scope: scope)
+        return tombstones.contains(id) ? .notRequired : .required
     }
 
     package func entry(
@@ -601,9 +621,10 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
         for scope: WebInspectorCanonicalNetworkEventScope
     ) -> CanonicalNetworkRequestMembership {
         CanonicalNetworkRequestMembership(
-            semanticTargetID: scope.semanticTargetID,
-            navigationEpoch: scope.navigationEpoch,
-            domBindingEpoch: scope.domBindingEpoch
+            origin: scope.origin,
+            targetAuthority: scope.targetAuthority,
+            frameID: scope.frameID,
+            loaderID: scope.loaderID
         )
     }
 
@@ -2274,7 +2295,7 @@ private extension CanonicalNetworkStore {
                 pageGeneration: requestID.pageGeneration,
                 semanticTargetID: membership.semanticTargetID,
                 agentTargetID: requestID.agentTargetID,
-                navigationEpoch: membership.navigationEpoch,
+                targetAuthority: membership.targetAuthority,
                 rawNodeID: rawNodeID
             ))
     }

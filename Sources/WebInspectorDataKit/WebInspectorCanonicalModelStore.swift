@@ -51,6 +51,10 @@ package enum WebInspectorCanonicalFeedProtocolViolation: Error, Equatable, Senda
     )
     case runtimeBindingMismatch(WebInspectorTarget.ID)
     case consoleBindingMismatch(WebInspectorTarget.ID)
+    case networkMappedFrameTargetUnavailable(
+        frameID: FrameID,
+        targetID: WebInspectorTarget.ID
+    )
     case operationalRuntimeEventWithoutRuntimeProjection
     case inspectorSelectionOutsideCurrentDocument
 }
@@ -1148,6 +1152,7 @@ private extension WebInspectorCanonicalModelStore {
             return try reduceNetwork(
                 event,
                 scope: scope,
+                binding: binding,
                 origin: binding.completedDomains.contains(.network)
                     ? .live
                     : .enableReplay
@@ -1233,11 +1238,17 @@ private extension WebInspectorCanonicalModelStore {
         }
     }
 
-    mutating func reduceNetwork(
+    private mutating func reduceNetwork(
         _ event: Network.Event,
         scope: ModelEventScope,
+        binding: BindingState,
         origin: CanonicalNetworkEventOrigin
     ) throws -> WebInspectorCanonicalModelTransaction {
+        let networkScope = try canonicalNetworkScope(
+            for: event,
+            modelScope: scope,
+            binding: binding
+        )
         let rawID = Self.rawRequestID(in: event)
         let hasPendingConsoleReference =
             rawID.map {
@@ -1249,7 +1260,7 @@ private extension WebInspectorCanonicalModelStore {
             var nextConsole = consoleRuntimeStore
             let networkTransaction = try nextNetwork.reduce(
                 event,
-                scope: WebInspectorCanonicalNetworkEventScope(modelScope: scope),
+                scope: networkScope,
                 origin: origin
             )
             var consoleTransaction: CanonicalConsoleRuntimeTransaction?
@@ -1273,10 +1284,122 @@ private extension WebInspectorCanonicalModelStore {
 
         let transaction = try networkStore.reduce(
             event,
-            scope: WebInspectorCanonicalNetworkEventScope(modelScope: scope),
+            scope: networkScope,
             origin: origin
         )
         return WebInspectorCanonicalModelTransaction(network: transaction)
+    }
+
+    private func canonicalNetworkScope(
+        for event: Network.Event,
+        modelScope: ModelEventScope,
+        binding: BindingState
+    ) throws -> WebInspectorCanonicalNetworkEventScope {
+        guard case let .requestWillBeSent(rawID, request, _, _, _, _) = event
+        else {
+            return WebInspectorCanonicalNetworkEventScope(
+                modelScope: modelScope
+            )
+        }
+        let eventScope = WebInspectorCanonicalNetworkEventScope(
+            modelScope: modelScope
+        )
+        switch networkStore.requestOriginResolution(
+            forRawRequestID: rawID,
+            scope: eventScope
+        ) {
+        case let .existing(membership):
+            return WebInspectorCanonicalNetworkEventScope(
+                modelScope: modelScope,
+                membership: membership
+            )
+        case .notRequired:
+            return eventScope
+        case .required:
+            break
+        }
+        guard
+            let requestOrigin = request.origin
+        else {
+            return WebInspectorCanonicalNetworkEventScope(
+                modelScope: modelScope
+            )
+        }
+
+        let origin: CanonicalNetworkRequestOrigin
+        let authority: CanonicalNetworkRegisteredTargetAuthority?
+        if let rawTargetID = requestOrigin.targetID {
+            let targetID = WebInspectorTarget.ID(rawTargetID)
+            origin = .protocolTarget(targetID)
+            // Worker targets are not part of the current page/frame model
+            // graph. Do not borrow the delivering agent's authority for an
+            // origin that the graph owner has not registered.
+            authority = canonicalNetworkTargetAuthority(
+                for: targetID,
+                binding: binding
+            )
+        } else if let targetID = requestOrigin.mappedFrameTargetID {
+            guard binding.targets[targetID] != nil else {
+                throw protocolViolation(
+                    .networkMappedFrameTargetUnavailable(
+                        frameID: requestOrigin.frameID,
+                        targetID: targetID
+                    )
+                )
+            }
+            origin = .mappedFrame(
+                frameID: requestOrigin.frameID,
+                targetID: targetID
+            )
+            guard let resolvedAuthority = canonicalNetworkTargetAuthority(
+                for: targetID,
+                binding: binding
+            ) else {
+                preconditionFailure(
+                    "A registered canonical Network frame target has no authority."
+                )
+            }
+            authority = resolvedAuthority
+        } else {
+            origin = .eventTarget(modelScope.target.id)
+            guard let eventAuthority = canonicalNetworkTargetAuthority(
+                for: modelScope.target.id,
+                binding: binding
+            ) else {
+                preconditionFailure(
+                    "A validated canonical Network event target has no authority."
+                )
+            }
+            authority = eventAuthority
+        }
+
+        return WebInspectorCanonicalNetworkEventScope(
+            modelScope: modelScope,
+            origin: origin,
+            targetAuthority: authority,
+            frameID: requestOrigin.frameID,
+            loaderID: requestOrigin.loaderID
+        )
+    }
+
+    private func canonicalNetworkTargetAuthority(
+        for targetID: WebInspectorTarget.ID,
+        binding: BindingState
+    ) -> CanonicalNetworkRegisteredTargetAuthority? {
+        guard binding.targets[targetID] != nil else {
+            return nil
+        }
+        guard let navigationEpoch = binding.navigationEpochs[targetID] else {
+            preconditionFailure(
+                "A canonical Network target has no navigation authority."
+            )
+        }
+        return CanonicalNetworkRegisteredTargetAuthority(
+            targetID: targetID,
+            navigationEpoch: navigationEpoch,
+            domBindingEpoch: binding.DOMAuthorities[targetID]?
+                .scope.domBindingEpoch
+        )
     }
 
     func consoleNetworkResolution(

@@ -84,6 +84,10 @@ func canonicalRequestWillBeSent(
     initiatorNodeID: String? = nil,
     resourceType: Network.ResourceType? = .fetch,
     redirectResponse: Network.Response? = nil,
+    originFrameID: String? = nil,
+    originLoaderID: String = "loader",
+    originTargetID: String? = nil,
+    mappedFrameTargetID: String? = nil,
     timestamp: Double
 ) -> Network.Event {
     let id = Network.Request.ID(rawID)
@@ -99,7 +103,17 @@ func canonicalRequestWillBeSent(
                 Network.ReferrerPolicy.init(rawValue:)
             ),
             integrity: integrity,
-            backendResourceIdentifier: backendResourceIdentifier
+            backendResourceIdentifier: backendResourceIdentifier,
+            origin: originFrameID.map { frameID in
+                Network.Request.Origin(
+                    frameID: FrameID(frameID),
+                    loaderID: originLoaderID,
+                    targetID: originTargetID,
+                    mappedFrameTargetID: mappedFrameTargetID.map(
+                        WebInspectorTarget.ID.init
+                    )
+                )
+            }
         ),
         initiator: Network.Initiator(
             kind: initiatorKind,

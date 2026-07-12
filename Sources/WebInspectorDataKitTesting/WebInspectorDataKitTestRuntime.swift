@@ -579,6 +579,8 @@ private actor ScenarioDriver {
             parameters: try WebInspectorTestJSONObject(encoding:
                 RequestWillBeSentParameters(
                     requestId: request.id,
+                    frameId: "main-frame",
+                    loaderId: "main-loader",
                     request: .init(
                         url: request.url,
                         method: request.method,
@@ -678,6 +680,8 @@ private struct RequestWillBeSentParameters: Encodable {
     }
 
     let requestId: String
+    let frameId: String
+    let loaderId: String
     let request: Request
     let initiator: Initiator
     let timestamp: Double

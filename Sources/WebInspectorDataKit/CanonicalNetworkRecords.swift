@@ -274,18 +274,55 @@ package struct CanonicalNetworkWebSocketRecord: Equatable, Sendable {
 /// Immutable semantic membership captured by the first authoritative event
 /// for a Network request.
 package struct CanonicalNetworkRequestMembership: Equatable, Sendable {
-    package let semanticTargetID: WebInspectorTarget.ID
-    package let navigationEpoch: ModelNavigationEpoch
-    package let domBindingEpoch: ModelDOMBindingEpoch?
+    package let origin: CanonicalNetworkRequestOrigin
+    package let targetAuthority: CanonicalNetworkRegisteredTargetAuthority?
+    package let frameID: FrameID?
+    package let loaderID: String?
+
+    package var semanticTargetID: WebInspectorTarget.ID {
+        origin.semanticTargetID
+    }
+
+    package var navigationEpoch: ModelNavigationEpoch? {
+        targetAuthority?.navigationEpoch
+    }
+
+    package var domBindingEpoch: ModelDOMBindingEpoch? {
+        targetAuthority?.domBindingEpoch
+    }
+
+    package init(
+        origin: CanonicalNetworkRequestOrigin,
+        targetAuthority: CanonicalNetworkRegisteredTargetAuthority?,
+        frameID: FrameID?,
+        loaderID: String?
+    ) {
+        precondition(
+            targetAuthority == nil
+                || targetAuthority?.targetID == origin.semanticTargetID,
+            "Canonical Network target authority does not own its request membership."
+        )
+        self.origin = origin
+        self.targetAuthority = targetAuthority
+        self.frameID = frameID
+        self.loaderID = loaderID
+    }
 
     package init(
         semanticTargetID: WebInspectorTarget.ID,
         navigationEpoch: ModelNavigationEpoch,
         domBindingEpoch: ModelDOMBindingEpoch?
     ) {
-        self.semanticTargetID = semanticTargetID
-        self.navigationEpoch = navigationEpoch
-        self.domBindingEpoch = domBindingEpoch
+        self.init(
+            origin: .eventTarget(semanticTargetID),
+            targetAuthority: CanonicalNetworkRegisteredTargetAuthority(
+                targetID: semanticTargetID,
+                navigationEpoch: navigationEpoch,
+                domBindingEpoch: domBindingEpoch
+            ),
+            frameID: nil,
+            loaderID: nil
+        )
     }
 }
 

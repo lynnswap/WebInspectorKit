@@ -547,7 +547,8 @@ package enum ConnectionEventProjection {
             postData: request.postData,
             referrerPolicy: request.referrerPolicy,
             integrity: request.integrity,
-            backendResourceIdentifier: request.backendResourceIdentifier
+            backendResourceIdentifier: request.backendResourceIdentifier,
+            origin: request.origin
         )
     }
 

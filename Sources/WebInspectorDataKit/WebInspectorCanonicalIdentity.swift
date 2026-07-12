@@ -83,26 +83,111 @@ package struct CanonicalConsoleMessageIDStorage: Hashable, Sendable {
     }
 }
 
-/// Canonical Network routing authority for one protocol event.
-///
-/// `semanticTargetID` owns model membership while `agentTargetID` owns the
-/// physical Network command and request-ID namespace. They may differ for
-/// frame and worker loads.
-package struct WebInspectorCanonicalNetworkEventScope: Equatable, Sendable {
-    package let generation: WebInspectorPage.Generation
-    package let semanticTargetID: WebInspectorTarget.ID
-    package let agentTargetID: WebInspectorTarget.ID
+/// Exact semantic origin selected from protocol, frame-map, or event authority.
+package enum CanonicalNetworkRequestOrigin: Equatable, Sendable {
+    case protocolTarget(WebInspectorTarget.ID)
+    case mappedFrame(frameID: FrameID, targetID: WebInspectorTarget.ID)
+    case eventTarget(WebInspectorTarget.ID)
+
+    package var semanticTargetID: WebInspectorTarget.ID {
+        switch self {
+        case let .protocolTarget(targetID),
+            let .mappedFrame(_, targetID),
+            let .eventTarget(targetID):
+            targetID
+        }
+    }
+}
+
+/// Navigation and DOM authority exists only when the origin target is part of
+/// the canonical target graph. A present but not-yet-registered worker target
+/// keeps its exact origin identity without borrowing another target's epoch.
+package struct CanonicalNetworkRegisteredTargetAuthority: Equatable, Hashable, Sendable {
+    package let targetID: WebInspectorTarget.ID
     package let navigationEpoch: ModelNavigationEpoch
     package let domBindingEpoch: ModelDOMBindingEpoch?
+
+    package init(
+        targetID: WebInspectorTarget.ID,
+        navigationEpoch: ModelNavigationEpoch,
+        domBindingEpoch: ModelDOMBindingEpoch?
+    ) {
+        self.targetID = targetID
+        self.navigationEpoch = navigationEpoch
+        self.domBindingEpoch = domBindingEpoch
+    }
+}
+
+/// Canonical Network routing authority for one protocol event.
+///
+/// `origin` owns model membership while `agentTargetID` owns the physical
+/// Network command and request-ID namespace. They may differ for frame and
+/// worker loads.
+package struct WebInspectorCanonicalNetworkEventScope: Equatable, Sendable {
+    package let generation: WebInspectorPage.Generation
+    package let origin: CanonicalNetworkRequestOrigin
+    package let agentTargetID: WebInspectorTarget.ID
+    package let targetAuthority: CanonicalNetworkRegisteredTargetAuthority?
+    package let frameID: FrameID?
+    package let loaderID: String?
+
+    package var semanticTargetID: WebInspectorTarget.ID {
+        origin.semanticTargetID
+    }
+
+    package var navigationEpoch: ModelNavigationEpoch? {
+        targetAuthority?.navigationEpoch
+    }
+
+    package var domBindingEpoch: ModelDOMBindingEpoch? {
+        targetAuthority?.domBindingEpoch
+    }
 
     package init(
         modelScope: ModelEventScope
     ) {
         generation = modelScope.generation
-        semanticTargetID = modelScope.target.id
+        origin = .eventTarget(modelScope.target.id)
         agentTargetID = modelScope.agentTarget.id
-        navigationEpoch = modelScope.navigationEpoch
-        domBindingEpoch = modelScope.domBindingEpoch
+        targetAuthority = CanonicalNetworkRegisteredTargetAuthority(
+            targetID: modelScope.target.id,
+            navigationEpoch: modelScope.navigationEpoch,
+            domBindingEpoch: modelScope.domBindingEpoch
+        )
+        frameID = nil
+        loaderID = nil
+    }
+
+    package init(
+        modelScope: ModelEventScope,
+        membership: CanonicalNetworkRequestMembership
+    ) {
+        generation = modelScope.generation
+        origin = membership.origin
+        agentTargetID = modelScope.agentTarget.id
+        targetAuthority = membership.targetAuthority
+        frameID = membership.frameID
+        loaderID = membership.loaderID
+    }
+
+    package init(
+        modelScope: ModelEventScope,
+        origin: CanonicalNetworkRequestOrigin,
+        targetAuthority: CanonicalNetworkRegisteredTargetAuthority?,
+        frameID: FrameID,
+        loaderID: String
+    ) {
+        precondition(
+            targetAuthority == nil
+                || targetAuthority?.targetID == origin.semanticTargetID,
+            "Canonical Network target authority does not own its request origin."
+        )
+        generation = modelScope.generation
+        self.origin = origin
+        agentTargetID = modelScope.agentTarget.id
+        self.targetAuthority = targetAuthority
+        self.frameID = frameID
+        self.loaderID = loaderID
     }
 }
 
@@ -287,8 +372,26 @@ package struct CanonicalNetworkOpaqueInitiatorKey: Hashable, Sendable {
     package let pageGeneration: WebInspectorPage.Generation
     package let semanticTargetID: WebInspectorTarget.ID
     package let agentTargetID: WebInspectorTarget.ID
-    package let navigationEpoch: ModelNavigationEpoch
+    package let targetAuthority: CanonicalNetworkRegisteredTargetAuthority?
     package let rawNodeID: DOM.Node.ID
+
+    package init(
+        storeID: WebInspectorContainerStoreID,
+        attachmentGeneration: WebInspectorContainerAttachmentGeneration,
+        pageGeneration: WebInspectorPage.Generation,
+        semanticTargetID: WebInspectorTarget.ID,
+        agentTargetID: WebInspectorTarget.ID,
+        targetAuthority: CanonicalNetworkRegisteredTargetAuthority?,
+        rawNodeID: DOM.Node.ID
+    ) {
+        self.storeID = storeID
+        self.attachmentGeneration = attachmentGeneration
+        self.pageGeneration = pageGeneration
+        self.semanticTargetID = semanticTargetID
+        self.agentTargetID = agentTargetID
+        self.targetAuthority = targetAuthority
+        self.rawNodeID = rawNodeID
+    }
 
     package init(
         storeID: WebInspectorContainerStoreID,
@@ -299,13 +402,19 @@ package struct CanonicalNetworkOpaqueInitiatorKey: Hashable, Sendable {
         navigationEpoch: ModelNavigationEpoch,
         rawNodeID: DOM.Node.ID
     ) {
-        self.storeID = storeID
-        self.attachmentGeneration = attachmentGeneration
-        self.pageGeneration = pageGeneration
-        self.semanticTargetID = semanticTargetID
-        self.agentTargetID = agentTargetID
-        self.navigationEpoch = navigationEpoch
-        self.rawNodeID = rawNodeID
+        self.init(
+            storeID: storeID,
+            attachmentGeneration: attachmentGeneration,
+            pageGeneration: pageGeneration,
+            semanticTargetID: semanticTargetID,
+            agentTargetID: agentTargetID,
+            targetAuthority: CanonicalNetworkRegisteredTargetAuthority(
+                targetID: semanticTargetID,
+                navigationEpoch: navigationEpoch,
+                domBindingEpoch: nil
+            ),
+            rawNodeID: rawNodeID
+        )
     }
 }
 

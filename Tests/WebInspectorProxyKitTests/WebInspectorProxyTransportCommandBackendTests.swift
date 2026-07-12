@@ -1720,7 +1720,7 @@ func structuredNetworkScopePreservesFrameScopedIdentifiers() async throws {
         transport,
         targetID: ProtocolTarget.ID("frame-target"),
         method: "Network.requestWillBeSent",
-        params: #"{"requestId":"frame-request","request":{"url":"https://frame.example.test/","method":"GET"},"initiator":{"type":"other","nodeId":7},"timestamp":1}"#
+        params: #"{"requestId":"frame-request","frameId":"child-frame","loaderId":"child-loader","request":{"url":"https://frame.example.test/","method":"GET"},"initiator":{"type":"other","nodeId":7},"timestamp":1,"targetId":"worker-origin"}"#
     )
     await receiveTargetReply(
         transport,
@@ -1742,6 +1742,9 @@ func structuredNetworkScopePreservesFrameScopedIdentifiers() async throws {
     }
     #expect(id.targetScopeRawValue == "frame-target")
     #expect(request.id.targetScopeRawValue == "frame-target")
+    #expect(request.origin?.frameID == FrameID("child-frame"))
+    #expect(request.origin?.loaderID == "child-loader")
+    #expect(request.origin?.targetID == "worker-origin")
     #expect(initiator.nodeID?.targetScopeRawValue == "frame-target")
     #expect(initiator.nodeID?.unscopedRawValue == "7")
 }
@@ -1753,7 +1756,7 @@ func networkInitiatorTreatsUnboundDOMNodeSentinelAsMissing() throws {
         domain: .network,
         method: "Network.requestWillBeSent",
         targetID: nil,
-        paramsData: Data(#"{"requestId":"zero-node","request":{"url":"https://example.test/","method":"GET"},"initiator":{"type":"other","nodeId":0},"timestamp":1}"#.utf8)
+        paramsData: Data(#"{"requestId":"zero-node","frameId":"main-frame","loaderId":"main-loader","request":{"url":"https://example.test/","method":"GET"},"initiator":{"type":"other","nodeId":0},"timestamp":1}"#.utf8)
     )
 
     guard case let .network(.requestWillBeSent(_, _, initiator, _, _, _)) = try LiveProxyEventDecoder.proxyEvent(
@@ -1765,6 +1768,50 @@ func networkInitiatorTreatsUnboundDOMNodeSentinelAsMissing() throws {
     }
 
     #expect(initiator.nodeID == nil)
+}
+
+@Test
+func networkRequestWillBeSentRequiresProtocolFrameAndLoaderMembership() {
+    let missingLoader = ProtocolEvent(
+        sequence: 1,
+        domain: .network,
+        method: "Network.requestWillBeSent",
+        targetID: nil,
+        paramsData: Data(#"{"requestId":"missing-loader","frameId":"main-frame","request":{"url":"https://example.test/","method":"GET"},"initiator":{"type":"other"},"timestamp":1}"#.utf8)
+    )
+    let missingFrame = ProtocolEvent(
+        sequence: 2,
+        domain: .network,
+        method: "Network.requestWillBeSent",
+        targetID: nil,
+        paramsData: Data(#"{"requestId":"missing-frame","loaderId":"main-loader","request":{"url":"https://example.test/","method":"GET"},"initiator":{"type":"other"},"timestamp":1}"#.utf8)
+    )
+    let emptyTarget = ProtocolEvent(
+        sequence: 3,
+        domain: .network,
+        method: "Network.requestWillBeSent",
+        targetID: nil,
+        paramsData: Data(#"{"requestId":"empty-target","frameId":"main-frame","loaderId":"main-loader","request":{"url":"https://example.test/","method":"GET"},"initiator":{"type":"other"},"timestamp":1,"targetId":""}"#.utf8)
+    )
+
+    #expect(throws: DecodingError.self) {
+        try LiveProxyEventDecoder.proxyEvent(
+            from: missingLoader,
+            targetID: WebInspectorTarget.ID("page-main")
+        )
+    }
+    #expect(throws: DecodingError.self) {
+        try LiveProxyEventDecoder.proxyEvent(
+            from: missingFrame,
+            targetID: WebInspectorTarget.ID("page-main")
+        )
+    }
+    #expect(throws: DecodingError.self) {
+        try LiveProxyEventDecoder.proxyEvent(
+            from: emptyTarget,
+            targetID: WebInspectorTarget.ID("page-main")
+        )
+    }
 }
 
 @Test

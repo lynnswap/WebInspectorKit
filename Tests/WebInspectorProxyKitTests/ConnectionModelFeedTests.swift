@@ -736,7 +736,7 @@ func modelFeedPublishesFutureTargetAndConfiguredDomainEventsAfterSnapshotWaterma
         return
     }
     let networkSequence = await core.receiveRootMessage(
-        #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-1","request":{"url":"https://example.test","method":"GET"},"initiator":{"type":"other"},"timestamp":1,"type":"Document"}}"#
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-1","frameId":"main-frame","loaderId":"main-loader","request":{"url":"https://example.test","method":"GET"},"initiator":{"type":"other"},"timestamp":1,"type":"Document"}}"#
     )
     let networkEvent = try await modelFeedRequireEvent(iterator.next())
     #expect(networkEvent.sequence == networkSequence)
@@ -797,11 +797,11 @@ func modelEventScopeSeparatesPhysicalTargetsAndTracksParentlessFrameNavigationEp
 
     _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
         targetID: "page-main",
-        message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"shared-request","request":{"url":"https://example.test/main","method":"GET"},"initiator":{"type":"other"},"timestamp":1,"type":"Fetch"}}"#
+        message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"shared-request","frameId":"main-frame","loaderId":"main-loader","request":{"url":"https://example.test/main","method":"GET"},"initiator":{"type":"other"},"timestamp":1,"type":"Fetch"}}"#
     ))
     _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
         targetID: "frame-a",
-        message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"shared-request","request":{"url":"https://example.test/frame","method":"GET"},"initiator":{"type":"other"},"timestamp":2,"type":"Fetch"}}"#
+        message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"shared-request","frameId":"frame-a","loaderId":"frame-loader","request":{"url":"https://example.test/frame","method":"GET"},"initiator":{"type":"other"},"timestamp":2,"type":"Fetch","targetId":"worker-origin"}}"#
     ))
     let mainRequest = try await modelFeedRequireEvent(iterator.next())
     let frameRequest = try await modelFeedRequireEvent(iterator.next())
@@ -811,13 +811,26 @@ func modelEventScopeSeparatesPhysicalTargetsAndTracksParentlessFrameNavigationEp
     #expect(frameRequest.agentTarget.id == WebInspectorTarget.ID("frame-a"))
     #expect(mainRequest.navigationEpoch == ModelNavigationEpoch(rawValue: 0))
     #expect(frameRequest.navigationEpoch == ModelNavigationEpoch(rawValue: 0))
-    guard case let .network(.requestWillBeSent(mainID, _, _, _, _, _)) = mainRequest.payload,
-          case let .network(.requestWillBeSent(frameID, _, _, _, _, _)) = frameRequest.payload else {
+    guard case let .network(.requestWillBeSent(mainID, mainPayload, _, _, _, _)) = mainRequest.payload,
+          case let .network(.requestWillBeSent(frameID, framePayload, _, _, _, _)) = frameRequest.payload else {
         Issue.record("Expected the same raw Network request from both physical targets.")
         return
     }
     #expect(mainID.targetScopeRawValue == nil)
     #expect(frameID.targetScopeRawValue == "frame-a")
+    #expect(mainPayload.origin?.frameID == FrameID("main-frame"))
+    #expect(mainPayload.origin?.loaderID == "main-loader")
+    #expect(
+        mainPayload.origin?.mappedFrameTargetID
+            == WebInspectorTarget.ID("page-main")
+    )
+    #expect(framePayload.origin?.frameID == FrameID("frame-a"))
+    #expect(framePayload.origin?.loaderID == "frame-loader")
+    #expect(framePayload.origin?.targetID == "worker-origin")
+    #expect(
+        framePayload.origin?.mappedFrameTargetID
+            == WebInspectorTarget.ID("frame-a")
+    )
 
     for (loaderID, expectedEpoch) in [
         ("frame-loader-a", UInt64(1)),
@@ -1156,7 +1169,7 @@ func consoleNetworkReferenceAndNetworkEventUseTheSameAgentTargetScope() async th
 
     _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
         targetID: "frame-a",
-        message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"shared-request","request":{"url":"https://example.test/frame","method":"GET"},"initiator":{"type":"other"},"timestamp":1,"type":"Fetch"}}"#
+        message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"shared-request","frameId":"frame-a","loaderId":"frame-loader","request":{"url":"https://example.test/frame","method":"GET"},"initiator":{"type":"other"},"timestamp":1,"type":"Fetch"}}"#
     ))
     _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
         targetID: "frame-a",
@@ -1416,7 +1429,7 @@ func modelFeedReplayCompletionFollowsEnableTimeEventsBeforeOpenReturns() async t
     let replayedEventSequence = await core.receiveRootMessage(
         modelFeedTargetDispatchMessage(
             targetID: "page-main",
-            message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"enable-replay","request":{"url":"https://example.test/replay","method":"GET"},"initiator":{"type":"other"},"timestamp":1,"type":"Document"}}"#
+            message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"enable-replay","frameId":"main-frame","loaderId":"main-loader","request":{"url":"https://example.test/replay","method":"GET"},"initiator":{"type":"other"},"timestamp":1,"type":"Document"}}"#
         )
     )
     await modelFeedRespond(to: enable, core: core)
@@ -2113,7 +2126,7 @@ func registeredModelFeedConsumerDrainsEnableReplayBeforeOpenReturns() async thro
         _ = await core.receiveRootMessage(
             modelFeedTargetDispatchMessage(
                 targetID: "page-main",
-                message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-\#(index)","request":{"url":"https://example.test/\#(index)","method":"GET"},"initiator":{"type":"other"},"timestamp":\#(index),"type":"Fetch"}}"#
+                message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-\#(index)","frameId":"main-frame","loaderId":"main-loader","request":{"url":"https://example.test/\#(index)","method":"GET"},"initiator":{"type":"other"},"timestamp":\#(index),"type":"Fetch"}}"#
             )
         )
     }
@@ -2714,7 +2727,7 @@ func activeModelFeedLeaseReconcilesOntoReplacementTarget() async throws {
     let replacementEventSequence = await core.receiveRootMessage(
         modelFeedTargetDispatchMessage(
             targetID: "page-new",
-            message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"replacement-replay","request":{"url":"https://example.test/replacement","method":"GET"},"initiator":{"type":"other"},"timestamp":2,"type":"Document"}}"#
+            message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"replacement-replay","frameId":"main-frame","loaderId":"replacement-loader","request":{"url":"https://example.test/replacement","method":"GET"},"initiator":{"type":"other"},"timestamp":2,"type":"Document"}}"#
         )
     )
     await modelFeedRespond(to: replacementEnable, core: core)

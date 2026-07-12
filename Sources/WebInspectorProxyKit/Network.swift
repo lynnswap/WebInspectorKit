@@ -60,6 +60,38 @@ public struct Network: Sendable, WebInspectorEventDomainHandle {
 
     /// A network request payload reported by WebKit.
     public struct Request: Identifiable, Sendable {
+        /// Exact protocol membership carried by
+        /// `Network.requestWillBeSent` before canonical model routing.
+        package struct Origin: Equatable, Sendable {
+            package let frameID: FrameID
+            package let loaderID: String
+            package let targetID: String?
+            package let mappedFrameTargetID: WebInspectorTarget.ID?
+
+            package init(
+                frameID: FrameID,
+                loaderID: String,
+                targetID: String?,
+                mappedFrameTargetID: WebInspectorTarget.ID? = nil
+            ) {
+                self.frameID = frameID
+                self.loaderID = loaderID
+                self.targetID = targetID
+                self.mappedFrameTargetID = mappedFrameTargetID
+            }
+
+            package func mappingFrame(
+                to targetID: WebInspectorTarget.ID?
+            ) -> Self {
+                Self(
+                    frameID: frameID,
+                    loaderID: loaderID,
+                    targetID: self.targetID,
+                    mappedFrameTargetID: targetID
+                )
+            }
+        }
+
         /// Stable identity for a network request.
         public struct ID: Hashable, Sendable {
             package let rawValue: String
@@ -93,6 +125,10 @@ public struct Network: Sendable, WebInspectorEventDomainHandle {
         /// The backend resource identity used for some body lookups.
         public let backendResourceIdentifier: BackendResourceID?
 
+        /// Request membership is package-owned because public command callers
+        /// do not synthesize protocol event authority.
+        package let origin: Origin?
+
         /// Creates a network request payload.
         public init(
             id: ID,
@@ -112,6 +148,29 @@ public struct Network: Sendable, WebInspectorEventDomainHandle {
             self.referrerPolicy = referrerPolicy
             self.integrity = integrity
             self.backendResourceIdentifier = backendResourceIdentifier
+            origin = nil
+        }
+
+        package init(
+            id: ID,
+            url: String,
+            method: String,
+            headers: [String: String] = [:],
+            postData: String? = nil,
+            referrerPolicy: ReferrerPolicy? = nil,
+            integrity: String? = nil,
+            backendResourceIdentifier: BackendResourceID? = nil,
+            origin: Origin?
+        ) {
+            self.id = id
+            self.url = url
+            self.method = method
+            self.headers = headers
+            self.postData = postData
+            self.referrerPolicy = referrerPolicy
+            self.integrity = integrity
+            self.backendResourceIdentifier = backendResourceIdentifier
+            self.origin = origin
         }
     }
 

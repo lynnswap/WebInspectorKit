@@ -558,6 +558,325 @@ func canonicalModelStoreKeepsSemanticAndAgentTargetsDistinctAndResolvesConsoleRe
 }
 
 @Test
+func canonicalModelStoreResolvesNetworkRequestOriginWithoutReplacingUnknownTargets() throws {
+    let page = canonicalModelPageTarget()
+    let frame = canonicalModelFrameTarget()
+    var fixture = try CanonicalModelStoreFixture(
+        domains: [.network, .dom],
+        targets: [page, frame]
+    )
+    let deliveryScope = fixture.scope(
+        targetID: "page",
+        agentTargetID: "page"
+    )
+
+    let firstWorker = try fixture.event(
+        .network(
+            canonicalRequestWillBeSent(
+                id: "worker-one",
+                url: "https://example.test/worker-one",
+                initiatorNodeID: "worker-node",
+                originFrameID: "isolated-frame",
+                originLoaderID: "worker-loader",
+                originTargetID: "worker-origin",
+                mappedFrameTargetID: "frame-agent",
+                timestamp: 1
+            )
+        ),
+        scope: fixture.scope(
+            targetID: "frame-agent",
+            agentTargetID: "page"
+        )
+    )
+    guard case let .insert(firstWorkerRecord, _) = try #require(
+        firstWorker.network?.requestChanges.first
+    ) else {
+        Issue.record("Expected the first worker-origin request insertion.")
+        return
+    }
+    #expect(firstWorkerRecord.id.agentTargetID == WebInspectorTarget.ID("page"))
+    #expect(
+        firstWorkerRecord.membership.origin
+            == .protocolTarget(WebInspectorTarget.ID("worker-origin"))
+    )
+    #expect(firstWorkerRecord.membership.targetAuthority == nil)
+    #expect(firstWorkerRecord.membership.frameID == FrameID("isolated-frame"))
+    #expect(firstWorkerRecord.membership.loaderID == "worker-loader")
+    guard case let .opaqueInitiator(workerGroup) = try #require(
+        fixture.store.snapshot(reason: .onDemandRebase)
+            .network?.entries.first?.record.groupKey
+    ) else {
+        Issue.record("Expected opaque worker-origin grouping.")
+        return
+    }
+    #expect(workerGroup.semanticTargetID == WebInspectorTarget.ID("worker-origin"))
+    #expect(workerGroup.targetAuthority == nil)
+
+    _ = try fixture.event(
+        .network(
+            canonicalRequestWillBeSent(
+                id: "worker-two",
+                url: "https://example.test/worker-two",
+                initiatorNodeID: "worker-node",
+                originFrameID: "isolated-frame",
+                originLoaderID: "worker-loader",
+                originTargetID: "worker-origin",
+                mappedFrameTargetID: "frame-agent",
+                timestamp: 2
+            )
+        ),
+        scope: deliveryScope
+    )
+    let workerEntry = try #require(
+        fixture.store.snapshot(reason: .onDemandRebase)
+            .network?.entries.first?.record
+    )
+    #expect(workerEntry.requestIDs.count == 2)
+
+    let mapped = try fixture.event(
+        .network(
+            canonicalRequestWillBeSent(
+                id: "mapped-frame",
+                url: "https://example.test/frame",
+                originFrameID: "isolated-frame",
+                originLoaderID: "frame-loader",
+                mappedFrameTargetID: "frame-agent",
+                timestamp: 3
+            )
+        ),
+        scope: deliveryScope
+    )
+    guard case let .insert(mappedRecord, _) = try #require(
+        mapped.network?.requestChanges.first
+    ) else {
+        Issue.record("Expected the mapped-frame request insertion.")
+        return
+    }
+    #expect(
+        mappedRecord.membership.origin
+            == .mappedFrame(
+                frameID: FrameID("isolated-frame"),
+                targetID: WebInspectorTarget.ID("frame-agent")
+            )
+    )
+    #expect(
+        mappedRecord.membership.targetAuthority?.navigationEpoch
+            == ModelNavigationEpoch(rawValue: 1)
+    )
+
+    let fallback = try fixture.event(
+        .network(
+            canonicalRequestWillBeSent(
+                id: "event-fallback",
+                url: "https://example.test/fallback",
+                originFrameID: "ordinary-frame",
+                originLoaderID: "ordinary-loader",
+                timestamp: 4
+            )
+        ),
+        scope: deliveryScope
+    )
+    guard case let .insert(fallbackRecord, _) = try #require(
+        fallback.network?.requestChanges.first
+    ) else {
+        Issue.record("Expected the event-fallback request insertion.")
+        return
+    }
+    #expect(
+        fallbackRecord.membership.origin
+            == .eventTarget(WebInspectorTarget.ID("page"))
+    )
+
+    let beforeUnavailableMapping = fixture.store.snapshot(
+        reason: .onDemandRebase
+    )
+    #expect(throws: WebInspectorCanonicalModelStoreError.self) {
+        try fixture.event(
+            .network(
+                canonicalRequestWillBeSent(
+                    id: "unavailable-frame-target",
+                    url: "https://example.test/unavailable",
+                    originFrameID: "missing-frame",
+                    mappedFrameTargetID: "missing-target",
+                    timestamp: 4.5
+                )
+            ),
+            scope: deliveryScope
+        )
+    }
+    #expect(
+        fixture.store.snapshot(reason: .onDemandRebase)
+            == beforeUnavailableMapping
+    )
+
+    let redirect = try fixture.event(
+        .network(
+            canonicalRequestWillBeSent(
+                id: "mapped-frame",
+                url: "https://example.test/frame-redirected",
+                redirectResponse: Network.Response(
+                    url: "https://example.test/frame",
+                    status: 302
+                ),
+                originFrameID: "missing-frame",
+                originLoaderID: "other-loader",
+                mappedFrameTargetID: "missing-target",
+                timestamp: 4.75
+            )
+        ),
+        scope: deliveryScope
+    )
+    guard case let .update(redirectID, _, _) = try #require(
+        redirect.network?.requestChanges.first
+    ) else {
+        Issue.record("Expected a redirect update.")
+        return
+    }
+    let redirectedRecord = try #require(
+        fixture.store.snapshot(reason: .onDemandRebase)
+            .network?.requests.first(where: { $0.record.id == redirectID })?
+            .record
+    )
+    #expect(redirectedRecord.membership == mappedRecord.membership)
+
+    let response = try fixture.event(
+        .network(
+            .responseReceived(
+                id: Network.Request.ID("mapped-frame"),
+                response: Network.Response(
+                    url: "https://example.test/frame-redirected",
+                    status: 200
+                ),
+                resourceType: .fetch,
+                timestamp: 5
+            )
+        ),
+        scope: fixture.scope(
+            targetID: "frame-agent",
+            agentTargetID: "page"
+        )
+    )
+    guard case let .update(responseID, _, _) = try #require(
+        response.network?.requestChanges.first
+    ) else {
+        Issue.record("Expected a response update.")
+        return
+    }
+    let responseRecord = try #require(
+        fixture.store.snapshot(reason: .onDemandRebase)
+            .network?.requests.first(where: { $0.record.id == responseID })?
+            .record
+    )
+    #expect(responseRecord.membership == mappedRecord.membership)
+
+    let targetLoss = try fixture.event(
+        .target(.targetDestroyed),
+        scope: fixture.scope(targetID: "frame-agent")
+    )
+    #expect(
+        targetLoss.network?.requestChanges == [
+            .delete(mappedRecord.id)
+        ]
+    )
+    let lateRedirect = try fixture.event(
+        .network(
+            canonicalRequestWillBeSent(
+                id: "mapped-frame",
+                url: "https://example.test/too-late",
+                redirectResponse: Network.Response(
+                    url: "https://example.test/frame-redirected",
+                    status: 302
+                ),
+                originFrameID: "missing-frame",
+                originLoaderID: "late-loader",
+                mappedFrameTargetID: "missing-target",
+                timestamp: 6
+            )
+        ),
+        scope: deliveryScope
+    )
+    #expect(lateRedirect.network == nil)
+}
+
+@Test
+func canonicalNetworkGroupingIgnoresUnrelatedFrameNavigation() throws {
+    let page = canonicalModelPageTarget()
+    let frameA = canonicalModelFrameTarget(
+        id: "frame-a",
+        frameID: "frame-a"
+    )
+    let frameB = canonicalModelFrameTarget(
+        id: "frame-b",
+        frameID: "frame-b"
+    )
+    var fixture = try CanonicalModelStoreFixture(
+        domains: [.network],
+        targets: [page, frameA, frameB]
+    )
+    let deliveryScope = fixture.scope()
+
+    _ = try fixture.event(
+        .network(
+            canonicalRequestWillBeSent(
+                id: "frame-a-before",
+                url: "https://example.test/a-before",
+                initiatorNodeID: "node-a",
+                originFrameID: "frame-a",
+                mappedFrameTargetID: "frame-a",
+                timestamp: 1
+            )
+        ),
+        scope: deliveryScope
+    )
+    _ = try fixture.event(
+        .target(
+            .frameNavigated(
+                canonicalModelFrameLifecycle(
+                    id: "frame-b",
+                    parentID: "main-frame"
+                ),
+                isNewLoader: true
+            )
+        ),
+        scope: fixture.scope(
+            targetID: "frame-b",
+            navigationEpoch: 2
+        )
+    )
+    _ = try fixture.event(
+        .network(
+            canonicalRequestWillBeSent(
+                id: "frame-a-after",
+                url: "https://example.test/a-after",
+                initiatorNodeID: "node-a",
+                originFrameID: "frame-a",
+                mappedFrameTargetID: "frame-a",
+                timestamp: 2
+            )
+        ),
+        scope: deliveryScope
+    )
+
+    let entries = try #require(
+        fixture.store.snapshot(reason: .onDemandRebase).network?.entries
+    )
+    #expect(entries.count == 1)
+    #expect(entries[0].record.requestIDs.map(\.rawRequestID) == [
+        Network.Request.ID("frame-a-before"),
+        Network.Request.ID("frame-a-after"),
+    ])
+    guard case let .opaqueInitiator(groupKey) = entries[0].record.groupKey else {
+        Issue.record("Expected opaque frame initiator grouping.")
+        return
+    }
+    #expect(groupKey.semanticTargetID == WebInspectorTarget.ID("frame-a"))
+    #expect(
+        groupKey.targetAuthority?.navigationEpoch
+            == ModelNavigationEpoch(rawValue: 1)
+    )
+}
+
+@Test
 func canonicalModelStoreResolvesConsoleReferenceAtWebSocketIdentityReservation() throws {
     var fixture = try CanonicalModelStoreFixture(domains: [.network, .console])
     let console = try fixture.event(

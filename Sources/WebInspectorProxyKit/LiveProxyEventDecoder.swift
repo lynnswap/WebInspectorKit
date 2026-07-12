@@ -165,7 +165,12 @@ enum LiveProxyEventDecoder {
                 id: Network.Request.ID(params.requestId),
                 request: params.request.proxyRequest(
                     id: params.requestId,
-                    backendResourceIdentifier: params.backendResourceIdentifier?.proxyIdentifier
+                    backendResourceIdentifier: params.backendResourceIdentifier?.proxyIdentifier,
+                    origin: Network.Request.Origin(
+                        frameID: FrameID(params.frameId),
+                        loaderID: params.loaderId,
+                        targetID: params.targetId
+                    )
                 ),
                 initiator: params.initiator.proxyInitiator,
                 resourceType: params.type.map(Network.ResourceType.init(rawValue:)),
@@ -635,12 +640,55 @@ struct StyleSheetHeaderPayload: Codable {
 
 private struct RequestWillBeSentParams: Decodable {
     var requestId: String
+    var frameId: String
+    var loaderId: String
     var request: RequestPayload
     var initiator: InitiatorPayload
     var type: String?
     var redirectResponse: ResponsePayload?
     var timestamp: Double
+    var targetId: String?
     var backendResourceIdentifier: BackendResourceIdentifierPayload?
+
+    private enum CodingKeys: String, CodingKey {
+        case requestId
+        case frameId
+        case loaderId
+        case request
+        case initiator
+        case type
+        case redirectResponse
+        case timestamp
+        case targetId
+        case backendResourceIdentifier
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        requestId = try container.decode(String.self, forKey: .requestId)
+        frameId = try container.decode(String.self, forKey: .frameId)
+        loaderId = try container.decode(String.self, forKey: .loaderId)
+        request = try container.decode(RequestPayload.self, forKey: .request)
+        initiator = try container.decode(InitiatorPayload.self, forKey: .initiator)
+        type = try container.decodeIfPresent(String.self, forKey: .type)
+        redirectResponse = try container.decodeIfPresent(
+            ResponsePayload.self,
+            forKey: .redirectResponse
+        )
+        timestamp = try container.decode(Double.self, forKey: .timestamp)
+        targetId = try container.decodeIfPresent(String.self, forKey: .targetId)
+        if targetId?.isEmpty == true {
+            throw DecodingError.dataCorruptedError(
+                forKey: .targetId,
+                in: container,
+                debugDescription: "Network targetId must be non-empty when present."
+            )
+        }
+        backendResourceIdentifier = try container.decodeIfPresent(
+            BackendResourceIdentifierPayload.self,
+            forKey: .backendResourceIdentifier
+        )
+    }
 }
 
 private struct BackendResourceIdentifierPayload: Decodable {
@@ -740,7 +788,8 @@ private struct RequestPayload: Decodable {
 
     func proxyRequest(
         id: String,
-        backendResourceIdentifier: Network.BackendResourceID? = nil
+        backendResourceIdentifier: Network.BackendResourceID? = nil,
+        origin: Network.Request.Origin? = nil
     ) -> Network.Request {
         Network.Request(
             id: Network.Request.ID(id),
@@ -750,7 +799,8 @@ private struct RequestPayload: Decodable {
             postData: postData,
             referrerPolicy: referrerPolicy.map(Network.ReferrerPolicy.init(rawValue:)),
             integrity: integrity,
-            backendResourceIdentifier: backendResourceIdentifier
+            backendResourceIdentifier: backendResourceIdentifier,
+            origin: origin
         )
     }
 }
