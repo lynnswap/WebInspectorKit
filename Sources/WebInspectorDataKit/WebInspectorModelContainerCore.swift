@@ -129,12 +129,16 @@ package struct WebInspectorModelContainerCorePerformanceCounters: Equatable, Sen
     package fileprivate(set) var networkResponseBodyWireCommandCount = 0
     package fileprivate(set) var networkResponseBodyCoalescedWaiterCount = 0
     package fileprivate(set) var networkResponseBodyInvalidationCount = 0
+    package var domCSSCommandWireOperationCount = 0
+    package var domCSSCommandCoalescedWaiterCount = 0
+    package var domCSSCommandInvalidationCount = 0
 }
 
 package struct WebInspectorModelContainerCoreMetrics: Equatable, Sendable {
     package let revision: UInt64
     package let activeContextRegistrationCount: Int
     package let networkResponseBodyOperationCount: Int
+    package let domCSSCommandOperationCount: Int
     package let core: WebInspectorModelContainerCorePerformanceCounters
     package let canonicalStore: WebInspectorCanonicalModelStorePerformanceCounters
 }
@@ -231,7 +235,7 @@ package actor WebInspectorModelContainerCore {
 
     private nonisolated let publication: Publication
     private nonisolated let identity = WebInspectorModelContainerCoreIdentity()
-    private var canonicalStore: WebInspectorCanonicalModelStore
+    var canonicalStore: WebInspectorCanonicalModelStore
     private var revision: UInt64 = 0
     private var lifecycle = Lifecycle.open
     private var nextContextRegistrationID: UInt64 = 0
@@ -246,7 +250,11 @@ package actor WebInspectorModelContainerCore {
     private var networkResponseBodyOperations: [UInt64: NetworkResponseBodyCommandOperation] = [:]
     package var runtimeCommandGatewayState =
         WebInspectorRuntimeCommandGatewayState()
-    private var performanceCounters =
+    var nextDOMCSSCommandOperationID: UInt64 = 0
+    var domCSSCommandOperations: [UInt64: WebInspectorDOMCSSCommandOperation] = [:]
+    var domCSSOperationIDByCSSResourceLease: [WebInspectorCanonicalCSSResourceLease: UInt64] = [:]
+    var domCSSResourceCompletions: [UInt64: ReplyPromise<WebInspectorCanonicalCSSResource>] = [:]
+    var performanceCounters =
         WebInspectorModelContainerCorePerformanceCounters()
     package var nextAttachmentGeneration: UInt64 = 0
     package var nextFeedResourceID: UInt64 = 0
@@ -366,6 +374,10 @@ package actor WebInspectorModelContainerCore {
         canonicalStore.runtimeContext(for: id)
     }
 
+    var acceptsDOMCSSCommands: Bool {
+        lifecycle == .open
+    }
+
     package var metrics: WebInspectorModelContainerCoreMetrics {
         WebInspectorModelContainerCoreMetrics(
             revision: revision,
@@ -374,6 +386,7 @@ package actor WebInspectorModelContainerCore {
             },
             networkResponseBodyOperationCount:
                 networkResponseBodyOperations.count,
+            domCSSCommandOperationCount: domCSSCommandOperations.count,
             core: performanceCounters,
             canonicalStore: canonicalStore.performanceCounters
         )
@@ -652,6 +665,7 @@ package actor WebInspectorModelContainerCore {
         }
         invalidateStaleNetworkResponseBodyOperations()
         applyRuntimeCommandInvalidations(from: transaction)
+        invalidateStaleDOMCSSOperations(applying: transaction)
         return publish(transaction)
     }
 
@@ -687,6 +701,7 @@ package actor WebInspectorModelContainerCore {
             throw .closed
         }
         retireAllNetworkResponseBodyOperations(with: .detached)
+        retireAllDOMCSSOperations(with: .detached)
         let transaction = canonicalStore.clearForDetach()
         applyRuntimeCommandInvalidations(from: transaction)
         guard let commit = publish(transaction) else {
@@ -728,6 +743,7 @@ package actor WebInspectorModelContainerCore {
         await waitForNetworkResponseBodyOperationsToFinish()
         await waitForRuntimeCommandOperationsToFinish()
         discardRuntimeCommandTombstonesAfterDetach()
+        await waitForDOMCSSOperationsToFinish()
         if isCompletedDetachTransaction(transaction) {
             return
         }
@@ -797,6 +813,7 @@ package actor WebInspectorModelContainerCore {
         lifecycle = .closing
         retireAllNetworkResponseBodyOperations(with: .closed)
         invalidateAllRuntimeCommandResources(with: .closed)
+        retireAllDOMCSSOperations(with: .closed)
         var closingRegistrationIDs: Set<WebInspectorModelContextRegistrationID> = []
         for registrationID in Array(contextRegistrations.keys) {
             guard var registration = contextRegistrations[registrationID] else {
@@ -859,6 +876,7 @@ package actor WebInspectorModelContainerCore {
         )
         await waitForNetworkResponseBodyOperationsToFinish()
         await waitForRuntimeCommandOperationsToFinish()
+        await waitForDOMCSSOperationsToFinish()
         if lifecycle == .closed {
             return
         }

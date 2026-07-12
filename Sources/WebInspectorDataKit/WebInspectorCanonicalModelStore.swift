@@ -172,6 +172,80 @@ package struct WebInspectorCanonicalModelStorePerformanceCounters: Equatable, Se
     package fileprivate(set) var bindingEpochMapMutationCount = 0
 }
 
+package struct WebInspectorCanonicalPresentationRevision: Hashable, Sendable {
+    package struct SubtreeComponent: Hashable, Sendable {
+        package let rootID: WebInspectorDOMNodeIdentityStorage
+        package let revision: UInt64
+    }
+
+    package let targetRevision: UInt64
+    package let subtreeComponents: [SubtreeComponent]
+    package let nodeRevision: UInt64
+}
+
+private struct WebInspectorCanonicalPresentationRevisionStore: Sendable {
+    private var targetRevisions: [WebInspectorDOMDocumentScopeStorage: UInt64] = [:]
+    private var subtreeRevisions: [WebInspectorDOMNodeIdentityStorage: UInt64] = [:]
+    private var nodeRevisions: [WebInspectorDOMNodeIdentityStorage: UInt64] = [:]
+
+    mutating func apply(
+        _ invalidations: Set<WebInspectorCanonicalResourceInvalidation>
+    ) {
+        for invalidation in invalidations {
+            switch invalidation {
+            case let .target(scope):
+                Self.advance(&targetRevisions[scope, default: 0])
+            case let .subtree(rootID):
+                Self.advance(&subtreeRevisions[rootID, default: 0])
+            case let .nodes(nodeIDs):
+                for nodeID in nodeIDs {
+                    Self.advance(&nodeRevisions[nodeID, default: 0])
+                }
+            }
+        }
+    }
+
+    func revision(
+        for nodeID: WebInspectorDOMNodeIdentityStorage,
+        ancestry: [WebInspectorDOMNodeIdentityStorage]
+    ) -> WebInspectorCanonicalPresentationRevision {
+        WebInspectorCanonicalPresentationRevision(
+            targetRevision: targetRevisions[nodeID.documentScope, default: 0],
+            subtreeComponents: ancestry.compactMap { rootID in
+                guard let revision = subtreeRevisions[rootID] else {
+                    return nil
+                }
+                return .init(rootID: rootID, revision: revision)
+            },
+            nodeRevision: nodeRevisions[nodeID, default: 0]
+        )
+    }
+
+    mutating func reset() {
+        targetRevisions.removeAll(keepingCapacity: true)
+        subtreeRevisions.removeAll(keepingCapacity: true)
+        nodeRevisions.removeAll(keepingCapacity: true)
+    }
+
+    mutating func prune(
+        deletedNodeIDs: Set<WebInspectorDOMNodeIdentityStorage>,
+        retiredDocumentScopes: Set<WebInspectorDOMDocumentScopeStorage>
+    ) {
+        for nodeID in deletedNodeIDs {
+            subtreeRevisions.removeValue(forKey: nodeID)
+            nodeRevisions.removeValue(forKey: nodeID)
+        }
+        for scope in retiredDocumentScopes {
+            targetRevisions.removeValue(forKey: scope)
+        }
+    }
+
+    private static func advance(_ revision: inout UInt64) {
+        precondition(revision < .max, "Canonical presentation revision exhausted.")
+        revision += 1
+    }
+}
+
 /// Pure, ordered canonical state intended to be owned by exactly one
 /// `WebInspectorModelContainerCore` actor.
 ///
@@ -225,6 +299,7 @@ package struct WebInspectorCanonicalModelStore: Sendable {
     private var DOMReducer: WebInspectorCanonicalDOMReducer?
     private var CSSReducer: WebInspectorCanonicalCSSReducer?
     private var consoleRuntimeStore: CanonicalConsoleRuntimeStore
+    private var presentationRevisions = WebInspectorCanonicalPresentationRevisionStore()
 
     package private(set) var performanceCounters =
         WebInspectorCanonicalModelStorePerformanceCounters()
@@ -267,6 +342,73 @@ package struct WebInspectorCanonicalModelStore: Sendable {
         for id: CanonicalNetworkRequestIDStorage
     ) -> CanonicalNetworkRequestRecord? {
         networkStore.request(for: id)
+    }
+
+    package func domRecord(
+        for id: WebInspectorDOMNodeIdentityStorage
+    ) -> WebInspectorCanonicalDOMRecord? {
+        guard configuredDomains.contains(.dom) else {
+            return nil
+        }
+        return DOMReducer?.record(for: id)
+    }
+
+    package func domRoot(
+        in scope: WebInspectorDOMDocumentScopeStorage
+    ) -> WebInspectorDOMNodeIdentityStorage? {
+        guard configuredDomains.contains(.dom) else {
+            return nil
+        }
+        return DOMReducer?.root(in: scope)
+    }
+
+    package func cssStyleSheetRecord(
+        for id: WebInspectorCSSStyleSheetIdentityStorage
+    ) -> WebInspectorCanonicalCSSStyleSheetRecord? {
+        guard configuredDomains.contains(.css) else {
+            return nil
+        }
+        return CSSReducer?.record(for: id)
+    }
+
+    package func cssCascadeRevision(
+        in scope: WebInspectorDOMDocumentScopeStorage
+    ) -> UInt64? {
+        guard configuredDomains.contains(.css),
+            let CSSReducer
+        else {
+            return nil
+        }
+        return CSSReducer.cascadeRevision(in: scope)
+    }
+
+    package func resourceInvalidation(
+        _ invalidation: WebInspectorCanonicalResourceInvalidation,
+        affects nodeID: WebInspectorDOMNodeIdentityStorage
+    ) -> Bool {
+        switch invalidation {
+        case let .target(scope):
+            return scope == nodeID.documentScope
+        case let .subtree(rootID):
+            return DOMReducer?.contains(
+                nodeID,
+                inSubtreeOf: rootID
+            ) == true
+        case let .nodes(nodeIDs):
+            return nodeIDs.contains(nodeID)
+        }
+    }
+
+    package func presentationRevision(
+        for nodeID: WebInspectorDOMNodeIdentityStorage
+    ) -> WebInspectorCanonicalPresentationRevision? {
+        guard let ancestry = DOMReducer?.ancestry(of: nodeID) else {
+            return nil
+        }
+        return presentationRevisions.revision(
+            for: nodeID,
+            ancestry: ancestry
+        )
     }
 
     package func runtimeContext(
@@ -371,6 +513,29 @@ package struct WebInspectorCanonicalModelStore: Sendable {
                 record,
                 attachmentGeneration: attachmentGeneration
             )
+            if transaction.feedChanges.contains(where: {
+                if case .reset = $0 {
+                    return true
+                }
+                return false
+            }) {
+                presentationRevisions.reset()
+            } else {
+                let resourceInvalidations =
+                    (transaction.DOM?.resourceInvalidations ?? [])
+                    .union(transaction.CSS?.resourceInvalidations ?? [])
+                presentationRevisions.apply(
+                    resourceInvalidations
+                )
+                presentationRevisions.prune(
+                    deletedNodeIDs: transaction.DOM?.deletedRecordIDs ?? [],
+                    retiredDocumentScopes: Set(
+                        transaction.DOM?.rootChanges.compactMap { change in
+                            change.rootID == nil ? change.scope : nil
+                        } ?? []
+                    )
+                )
+            }
             performanceCounters.reducedFeedRecordCount += 1
             if let currentEpochMapMutationCount = binding?.epochMapMutationCount,
                 currentEpochMapMutationCount >= priorEpochMapMutationCount
@@ -422,6 +587,7 @@ package struct WebInspectorCanonicalModelStore: Sendable {
             : nil
         let DOMTransaction = DOMReducer?.reset()
         let CSSTransaction = CSSReducer?.reset()
+        presentationRevisions.reset()
         binding = nil
 
         var transaction = WebInspectorCanonicalModelTransaction(
@@ -1363,10 +1529,12 @@ private extension WebInspectorCanonicalModelStore {
                 frameID: requestOrigin.frameID,
                 targetID: targetID
             )
-            guard let resolvedAuthority = canonicalNetworkTargetAuthority(
-                for: targetID,
-                binding: binding
-            ) else {
+            guard
+                let resolvedAuthority = canonicalNetworkTargetAuthority(
+                    for: targetID,
+                    binding: binding
+                )
+            else {
                 preconditionFailure(
                     "A registered canonical Network frame target has no authority."
                 )
@@ -1374,10 +1542,12 @@ private extension WebInspectorCanonicalModelStore {
             authority = resolvedAuthority
         } else {
             origin = .eventTarget(modelScope.target.id)
-            guard let eventAuthority = canonicalNetworkTargetAuthority(
-                for: modelScope.target.id,
-                binding: binding
-            ) else {
+            guard
+                let eventAuthority = canonicalNetworkTargetAuthority(
+                    for: modelScope.target.id,
+                    binding: binding
+                )
+            else {
                 preconditionFailure(
                     "A validated canonical Network event target has no authority."
                 )
@@ -1549,9 +1719,10 @@ private extension WebInspectorCanonicalModelStore {
             )
             let navigationAdvanced = previousNavigation != scope.navigationEpoch
             let targetOwnsNavigatedFrame = scope.target.frameID == frame.id
-            guard targetOwnsNavigatedFrame
-                ? navigationAdvanced == isNewLoader
-                : !navigationAdvanced
+            guard
+                targetOwnsNavigatedFrame
+                    ? navigationAdvanced == isNewLoader
+                    : !navigationAdvanced
             else {
                 throw protocolViolation(.invalidTargetLifecycle)
             }

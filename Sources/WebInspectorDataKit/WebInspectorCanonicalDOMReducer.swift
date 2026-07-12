@@ -358,6 +358,33 @@ package struct WebInspectorCanonicalDOMReducer: Sendable {
         rootByDocumentScope[scope]
     }
 
+    package func contains(
+        _ nodeID: WebInspectorDOMNodeIdentityStorage,
+        inSubtreeOf rootID: WebInspectorDOMNodeIdentityStorage
+    ) -> Bool {
+        guard nodeID.documentScope == rootID.documentScope,
+            let ancestry = ancestry(of: nodeID)
+        else {
+            return false
+        }
+        return ancestry.contains(rootID)
+    }
+
+    package func ancestry(
+        of nodeID: WebInspectorDOMNodeIdentityStorage
+    ) -> [WebInspectorDOMNodeIdentityStorage]? {
+        guard recordsByID[nodeID] != nil else {
+            return nil
+        }
+        var reversed: [WebInspectorDOMNodeIdentityStorage] = []
+        var candidate: WebInspectorDOMNodeIdentityStorage? = nodeID
+        while let current = candidate {
+            reversed.append(current)
+            candidate = parentByNodeID[current]
+        }
+        return reversed.reversed()
+    }
+
     package mutating func snapshot() -> WebInspectorCanonicalDOMSnapshot {
         performanceCounters.fullSnapshotBuildCount += 1
         return WebInspectorCanonicalDOMSnapshot(
