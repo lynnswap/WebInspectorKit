@@ -40,7 +40,8 @@ compatibility layers.
    feed, while multiple model contexts may independently consume the same
    canonical page state.
 2. The built-in UIKit inspector uses a main-actor context. A headless or custom
-   consumer may create a context confined to any actor.
+   consumer asks the same container to vend a context confined to any actor.
+   The context has no public initializer independent of its container.
 3. The same stable ID resolves to the same object instance for the lifetime of
    one context registration, and to different instances in different contexts.
 4. Filtering, sorting, sectioning, grouping, windowing, and difference
@@ -167,6 +168,11 @@ are monotonic within their scope. Reuse of the same fully scoped ID is a
 protocol violation, except that a Network redirect deliberately continues the
 same request ID.
 
+`F16` — `WebInspectorModelContext` directly switches over DOM, CSS, Network,
+Console, Runtime, target-lifecycle, bootstrap, and command cases. The type is a
+domain coordinator rather than a reusable context boundary, so adding or
+changing a domain edits context lifecycle code.
+
 ### Historical cause
 
 - `61f547f5` removed `WebInspectorFetchedResultsController` while fixing the
@@ -178,6 +184,36 @@ same request ID.
 The atomic publication, ordered feed, detached driver, and query-index work
 added by those commits remain useful. The exclusive owner graph and closed
 public query vocabulary do not.
+
+## Apple framework analog and deliberate differences
+
+The installed iOS 26.5 SDK and Xcode Documentation establish these reference
+contracts:
+
+- SwiftData declares `ModelContext: Equatable, SendableMetatype` and separately
+  declares an unavailable `@unchecked Sendable` conformance with the message
+  that contexts cannot be shared across concurrency contexts.
+- `ModelContext.init(_ container:)` exists and the context exposes its
+  container. `ModelContainer.mainContext` is the default main-actor context.
+- Core Data permits low-level `NSManagedObjectContext(concurrencyType:)`
+  construction, while `NSPersistentContainer` owns the standard stack and
+  vends `viewContext`, `newBackgroundContext()`, and `performBackgroundTask`.
+- Both SwiftData `ResultsObserver` and Core Data
+  `NSFetchedResultsController` bind one observed result set to a specific model
+  context. The context is part of query identity, not a global model cache.
+- SwiftData exposes identifier-only fetch and context-local
+  `model(for:)`/`registeredModel(for:)` operations.
+
+WebInspectorDataKit adopts the context identity, context-local object graph,
+identifier-only query, and context-bound results-controller shapes. It is
+stricter about context creation: the model container is the only public
+factory. Unlike a database coordinator, the container owns one exclusive live
+ProxyKit model feed, so a free-standing context initializer would obscure
+which connection, terminal state, and close authority the context belongs to.
+
+It also deliberately does not copy SwiftData's fault behavior. A foreign,
+deleted, or stale identifier returns `nil`; DataKit never invents an empty
+model whose backing WebKit resource may not exist.
 
 ## Target and package graph
 
@@ -212,6 +248,7 @@ learn about persistent models or queries.
 | Physical targets, replies, capabilities | ProxyKit connection core | One source of transport truth. |
 | Structured model-event scope | ProxyKit model feed | Generation, target, navigation epoch, and optional exact DOM-binding epoch travel separately from raw IDs. |
 | Model-feed iteration and final Proxy close | `WebInspectorModelContainer` core | Exactly one feed consumer and close authority. |
+| Context creation and registration | `WebInspectorModelContainer` | `mainContext` and `makeContext(isolation:)` are the only public creation paths. |
 | Canonical current records and revision | container record-store actor | No Observable models. |
 | Context subscription fan-out | container publication broker | Atomic initial snapshot plus ordered delta/reset. |
 | Context record mirror and query execution | one context-core actor per context | Immutable Sendable records only. |
@@ -315,15 +352,30 @@ reports that a frame is associated with a new loader. By contrast,
 requested. Treating either signal as the other would invent state that the
 producer did not publish.
 
-The model feed starts in this order:
+The model feed establishes initial authority in this order:
 
 ```text
 reset(generation)
 -> target snapshot containing each target's current navigation/DOM scope
--> scoped events after the snapshot sequence fence
--> configured-domain replay/bootstrap
--> synchronization complete
+-> per-domain replay or authoritative bootstrap boundary
+-> synchronization complete after every configured domain is authoritative
 ```
+
+This is not permission to reduce every live event before an asynchronous
+bootstrap finishes. DOM and CSS are snapshot domains. ProxyKit suppresses live
+domain deltas until it publishes the authoritative bootstrap snapshot at
+sequence `S`; that snapshot represents state through `S`, and only events
+ordered after `S` are delivered as deltas. DOM authority is tracked per target,
+so one ready target need not wait for another. CSS authority is page-wide: any
+relevant DOM invalidation returns CSS to awaiting state and triggers a fresh
+`CSS.getAllStyleSheets` snapshot before later CSS deltas are delivered.
+
+Network, Console, and Runtime are replay-only domains. They have no later
+snapshot that can overwrite already delivered state, so their ordered events
+after the target-snapshot fence remain authoritative. Their
+`replayComplete(through:)` marker closes the enable/replay boundary; it does not
+replace those events. `synchronizationComplete` is published only after every
+configured domain has established the appropriate boundary.
 
 The final model feed carries raw protocol IDs unchanged; ProxyKit's direct
 typed event APIs retain their existing target-prefixed projection as a separate
@@ -378,7 +430,7 @@ subject to the compiler proof described below, but the ownership contract is
 not.
 
 ```swift
-public final class WebInspectorModelContainer: Sendable {
+public final class WebInspectorModelContainer: Equatable, Sendable {
     public struct Domain: Hashable, Sendable {
         public static let dom: Domain
         public static let network: Domain
@@ -406,14 +458,18 @@ public final class WebInspectorModelContainer: Sendable {
     @MainActor
     public let mainContext: WebInspectorModelContext
 
+    public func makeContext(
+        isolation: isolated (any Actor) = #isolation
+    ) async throws -> WebInspectorModelContext
+
     public func close() async
 }
 
-public final class WebInspectorModelContext {
-    public init(
-        _ container: WebInspectorModelContainer,
-        isolation: isolated (any Actor) = #isolation
-    ) async throws
+public final class WebInspectorModelContext: Equatable, SendableMetatype {
+    public nonisolated static func == (
+        lhs: WebInspectorModelContext,
+        rhs: WebInspectorModelContext
+    ) -> Bool
 
     public func registeredModel<ID>(for id: ID) -> ID.Model?
     where ID: WebInspectorPersistentIdentifier
@@ -444,11 +500,33 @@ public final class WebInspectorModelContext {
 
     public nonisolated(nonsending) func close() async
 }
+
+@available(
+    *,
+    unavailable,
+    message: "contexts cannot be shared across concurrency contexts"
+)
+extension WebInspectorModelContext: @unchecked Sendable {}
 ```
 
-`WebInspectorModelContext` is deliberately unavailable for `Sendable`
-conformance. The instance remains in the caller isolation supplied at creation.
-Its internal context core and record cache are separate Sendable owners.
+`WebInspectorModelContext` equality is reference/context identity (`===`), not
+equality of current records. `SendableMetatype` permits its type metadata in
+generic schema/query machinery without making an instance transferable. The
+unavailable `Sendable` conformance gives the same explicit diagnostic shape as
+SwiftData. The instance remains in the caller isolation supplied to the
+container factory; its internal context core and record cache are separate
+Sendable owners.
+
+The container registers the context subscription atomically before returning
+the context. Creation after container close fails. A context retains the
+container core, not the public container object; the public container retains
+`mainContext`, so this owner graph has no container/context reference cycle.
+Custom contexts retain their own subscriptions and may close independently.
+
+One container is one inspection session. Multiple contexts that are intended
+to observe the same `WKWebView` use that container and therefore share one
+canonical store and feed. A separately attached container is a separate
+session with different store identity; its IDs and models never alias.
 
 ### Fetch descriptor
 
@@ -625,8 +703,7 @@ actor NetworkRecorder {
     private var context: WebInspectorModelContext?
 
     func start(container: WebInspectorModelContainer) async throws {
-        let context = try await WebInspectorModelContext(
-            container,
+        let context = try await container.makeContext(
             isolation: self
         )
         self.context = context
@@ -757,8 +834,8 @@ async close completion.
 New public declarations justified by the consumer code above:
 
 - `WebInspectorModelContainer` and `Configuration` — attach, share, close.
-- `WebInspectorModelContext` — create an isolated context, resolve IDs, fetch,
-  observe, close.
+- `WebInspectorModelContext` — container-vended isolated identity graph that
+  resolves IDs, fetches, observes, and closes independently.
 - `WebInspectorPersistentIdentifier` — type-safe ID-to-model association.
 - `WebInspectorPersistentModel.QueryValue` — Sendable query boundary.
 - `WebInspectorFetchDescriptor` — generic query value.
@@ -808,6 +885,11 @@ integrated.
   evaluate predicates. Queries evaluate `QueryValue` records.
 - Do not retain `NetworkQuery`/`ConsoleQuery` inside a generic FRC.
 - Do not add per-domain subclasses or duplicated query-registration state.
+- Do not expose a public free-standing model-context initializer; context
+  registration and initial state belong to the container factory transaction.
+- Do not put protocol-domain event switches or physical command authority in
+  `WebInspectorModelContext`; canonical reducers and the container command
+  gateway own them.
 - Do not publish two stream elements and call them an atomic reset.
 - Do not use an unbounded subscriber buffer.
 - Do not synthesize an empty/fault model for a foreign or stale ID.
@@ -824,6 +906,8 @@ integrated.
 ### Container/context contracts
 
 - One container creates contexts owned by MainActor and a custom actor.
+- `mainContext` is stable, custom contexts compare by context identity, and a
+  closed container rejects new context creation.
 - One source event reaches both contexts with equal IDs and distinct model
   object identities.
 - Repeated same-context lookup returns the identical object.
@@ -832,6 +916,10 @@ integrated.
   owned Tasks.
 - A late context receives an atomic current snapshot before later deltas.
 - A slow context receives reset rather than a discontinuous delta.
+- DOM/CSS deltas preceding their per-target bootstrap boundary are suppressed;
+  the first delivered delta is ordered after the authoritative snapshot.
+- Network/Console/Runtime replay events remain ordered before their replay
+  completion marker and are not overwritten by later bootstrap state.
 - A loader navigation advances that target's navigation epoch without
   surfacing transient context failure; physical current-page replacement
   advances page generation.
@@ -918,8 +1006,10 @@ public surface:
 - `Predicate<Model.QueryValue>`, `SortDescriptor<Model.QueryValue>`, and
   `Expression<Model.QueryValue, SectionName>`;
 - `WebInspectorFetchedResultsController<Model, Never>`;
-- an async initializer with `isolated (any Actor) = #isolation`;
 - a Sendable container with a `@MainActor` context property;
+- an `Equatable & SendableMetatype` context with unavailable `Sendable`;
+- a container factory returning a non-Sendable context into its isolated
+  caller parameter;
 - `nonisolated(nonsending)` generic fetch/controller methods.
 
 SIL generation reports the fetch methods as
@@ -948,6 +1038,7 @@ require the implementation-phase tests listed above.
 | F13 | Structured navigation plus optional DOM-binding epochs; Network-only Page observation and opaque-initiator tests. |
 | F14 | No persistent-ID parser for target-prefixed raw strings; structured-scope tests. |
 | F15 | Reducer duplicate-ID invariant and redirect exception tests. |
+| F16 | Domain reducers/schema registry and command gateway; no domain-event switch in the context type. |
 
 ## Migration and commit plan
 
@@ -982,6 +1073,8 @@ the same change series.
 ## Acceptance measurements
 
 - `WebInspectorModelContext` no longer owns Proxy/feed/attachment tasks.
+- `WebInspectorModelContext` has no protocol-domain reducer switch or physical
+  command authority.
 - At least two contexts can share one container in production-path tests.
 - No generic fetched-results implementation references `NetworkQuery`,
   `ConsoleQuery`, `NetworkRequest`, or `ConsoleMessage`.
