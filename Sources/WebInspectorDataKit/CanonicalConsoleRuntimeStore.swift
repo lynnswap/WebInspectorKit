@@ -254,6 +254,53 @@ package struct CanonicalConsoleRuntimeStore: Equatable, Sendable {
         return transaction
     }
 
+    /// Clears attachment-owned membership while preserving generation and
+    /// never-reused Console ordinal authority for a later reattachment.
+    @discardableResult
+    package mutating func clearForDetach() -> CanonicalConsoleRuntimeTransaction {
+        guard let attachmentGeneration = activeAttachmentGeneration,
+            let pageGeneration = activePageGeneration
+        else {
+            preconditionFailure(
+                "Canonical Console/Runtime detach requires active attachment authority."
+            )
+        }
+
+        let runtimeIDs = runtimeContextsByID.keys.sorted(
+            by: Self.runtimeContextPrecedes
+        )
+        let consoleIDs = consoleMessagesByID.keys.sorted {
+            $0.ordinal < $1.ordinal
+        }
+        let transaction = CanonicalConsoleRuntimeTransaction(
+            runtimeContextChanges: runtimeIDs.map(
+                CanonicalRuntimeContextChange.delete
+            ),
+            consoleMessageChanges: consoleIDs.map(
+                CanonicalConsoleMessageChange.delete
+            ),
+            resourceInvalidations: [
+                .attachmentDetached(
+                    attachmentGeneration: attachmentGeneration,
+                    pageGeneration: pageGeneration
+                )
+            ]
+        )
+
+        runtimeContextTombstones.formUnion(runtimeIDs)
+        runtimeContextsByID.removeAll(keepingCapacity: true)
+        runtimeContextIDByLookupKey.removeAll(keepingCapacity: true)
+        runtimeContextIDsByAgentTargetID.removeAll(keepingCapacity: true)
+        runtimeContextIDsBySemanticTargetID.removeAll(keepingCapacity: true)
+        runtimeContextIDsByFrameID.removeAll(keepingCapacity: true)
+        consoleMessagesByID.removeAll(keepingCapacity: true)
+        consoleMessageIDsByAgentTargetID.removeAll(keepingCapacity: true)
+        consoleMessageIDsBySemanticTargetID.removeAll(keepingCapacity: true)
+        lastConsoleMessageIDByAgentTargetID.removeAll(keepingCapacity: true)
+        unresolvedConsoleMessageIDsByRawRequestID.removeAll(keepingCapacity: true)
+        return transaction
+    }
+
     package mutating func reduceRuntime(
         _ event: Runtime.Event,
         scope: ModelEventScope

@@ -284,6 +284,11 @@ func foreignPublicationRejectsARebaseToken() async throws {
 @Test
 func staleSnapshotAndRepeatedTokenAreRejectedExplicitly() async throws {
     let publication = TestPublication()
+    var snapshotBuildCount = 0
+    func makeSnapshot(_ values: [Int]) -> [Int] {
+        snapshotBuildCount += 1
+        return values
+    }
     var iterator =
         publication
         .subscribe(revision: 0, snapshot: [])
@@ -302,19 +307,34 @@ func staleSnapshotAndRepeatedTokenAreRejectedExplicitly() async throws {
             suppliedRevision: 1
         )
     ) {
-        try publication.rebase(token, revision: 1, snapshot: [1])
+        try publication.rebase(
+            token,
+            revision: 1,
+            snapshot: makeSnapshot([1])
+        )
     }
+    #expect(snapshotBuildCount == 0)
 
     #expect(
-        try publication.rebase(token, revision: 2, snapshot: [1, 2])
+        try publication.rebase(
+            token,
+            revision: 2,
+            snapshot: makeSnapshot([1, 2])
+        )
             == .init(
                 disposition: .reset,
                 revision: 2,
                 snapshot: [1, 2]
             ))
+    #expect(snapshotBuildCount == 1)
     #expect(throws: WebInspectorRevisionedSnapshotRebaseError.staleToken) {
-        try publication.rebase(token, revision: 2, snapshot: [1, 2])
+        try publication.rebase(
+            token,
+            revision: 2,
+            snapshot: makeSnapshot([1, 2])
+        )
     }
+    #expect(snapshotBuildCount == 1)
 }
 
 @Test

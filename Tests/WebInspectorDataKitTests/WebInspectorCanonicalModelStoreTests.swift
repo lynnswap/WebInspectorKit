@@ -1436,6 +1436,110 @@ func canonicalModelStoreResetScopesIdentitiesWithoutReusingOrdinals() throws {
 }
 
 @Test
+func canonicalModelStoreDetachResetClearsEveryDomainAndRetainsGenerationAuthority() throws {
+    var fixture = try CanonicalModelStoreFixture(
+        domains: [.dom, .css, .network, .runtime, .console]
+    )
+    _ = try fixture.bootstrapDOM(
+        root: canonicalModelDocument(
+            id: "document",
+            frameID: "main-frame"
+        )
+    )
+    _ = try fixture.bootstrapCSS([
+        (
+            targetID: "page",
+            header: canonicalModelStyleSheet(
+                id: "sheet",
+                frameID: "main-frame"
+            )
+        )
+    ])
+    _ = try fixture.event(
+        .network(
+            canonicalRequestWillBeSent(
+                id: "request",
+                url: "https://example.test/",
+                timestamp: 1
+            )
+        ),
+        scope: fixture.scope()
+    )
+    _ = try fixture.event(
+        .runtime(
+            .executionContextCreated(
+                canonicalModelRuntimeContext(
+                    id: "context",
+                    frameID: "main-frame"
+                )
+            )
+        ),
+        scope: fixture.scope()
+    )
+    _ = try fixture.event(
+        .console(.messageAdded(canonicalModelConsoleMessage(text: "message"))),
+        scope: fixture.scope()
+    )
+
+    let transaction = fixture.store.clearForDetach()
+    #expect(
+        transaction.feedChanges == [
+            .detached(
+                attachmentGeneration: fixture.attachmentGeneration,
+                pageGeneration: fixture.pageGeneration
+            )
+        ]
+    )
+    #expect(transaction.network?.requestChanges.count == 1)
+    #expect(transaction.DOM?.deletedRecordIDs.count == 1)
+    #expect(transaction.CSS?.deletedRecordIDs.count == 1)
+    #expect(transaction.consoleRuntime?.runtimeContextChanges.count == 1)
+    #expect(transaction.consoleRuntime?.consoleMessageChanges.count == 1)
+    #expect(transaction.resetSnapshot?.binding == nil)
+    #expect(transaction.resetSnapshot?.network?.requests.isEmpty == true)
+    #expect(transaction.resetSnapshot?.DOM?.recordsByID.isEmpty == true)
+    #expect(transaction.resetSnapshot?.CSS?.recordsByID.isEmpty == true)
+    #expect(
+        transaction.resetSnapshot?.consoleRuntime?.runtimeContexts.isEmpty
+            == true
+    )
+    #expect(
+        transaction.resetSnapshot?.consoleRuntime?.consoleMessages.isEmpty
+            == true
+    )
+    #expect(fixture.store.bindingSnapshot == nil)
+    #expect(fixture.store.performanceCounters.resetSnapshotBuildCount == 1)
+
+    #expect(fixture.store.clearForDetach().isEmpty)
+    #expect(fixture.store.performanceCounters.resetSnapshotBuildCount == 1)
+    #expect(throws: WebInspectorCanonicalModelStoreError.self) {
+        try fixture.store.reduce(
+            .reset(fixture.pageGeneration),
+            attachmentGeneration: fixture.attachmentGeneration
+        )
+    }
+    #expect(throws: WebInspectorCanonicalModelStoreError.self) {
+        try fixture.store.reduce(
+            .reset(
+                WebInspectorPage.Generation(
+                    rawValue: fixture.pageGeneration.rawValue + 1
+                )
+            ),
+            attachmentGeneration: fixture.attachmentGeneration
+        )
+    }
+
+    let nextAttachment = WebInspectorContainerAttachmentGeneration(rawValue: 2)
+    _ = try fixture.store.reduce(
+        .reset(WebInspectorPage.Generation(rawValue: 1)),
+        attachmentGeneration: nextAttachment
+    )
+    #expect(
+        fixture.store.bindingSnapshot?.attachmentGeneration == nextAttachment
+    )
+}
+
+@Test
 func canonicalModelStoreBuildsSnapshotsOnlyOnExplicitBoundaryAndNotForTenThousandDeltas() throws {
     var fixture = try CanonicalModelStoreFixture(domains: [.network])
     _ = try fixture.event(

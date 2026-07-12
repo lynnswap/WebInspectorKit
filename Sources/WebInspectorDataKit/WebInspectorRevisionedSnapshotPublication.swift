@@ -132,6 +132,12 @@ package struct WebInspectorRevisionedSnapshotSequence<
     package func cancel() {
         subscription.cancel()
     }
+
+    package func owns(
+        _ token: WebInspectorRevisionedSnapshotRebaseToken
+    ) -> Bool {
+        subscription.owns(token)
+    }
 }
 
 /// Owns one revision and atomically connects owner snapshots to later deltas.
@@ -261,44 +267,49 @@ package final class WebInspectorRevisionedSnapshotPublication<
 
     /// Commits an owner snapshot directly to the slow consumer that requested it.
     ///
-    /// The semantic owner must capture `snapshot` and call this method in the
-    /// same actor turn. The snapshot is returned directly and is never retained
-    /// by the publication or enqueued in the subscriber mailbox.
+    /// The semantic owner must call this method in the same actor turn in which
+    /// it owns `snapshot`. The autoclosure is evaluated only after the token is
+    /// atomically consumed, so rejected rebase attempts cannot construct an
+    /// owner snapshot. The result is returned directly and is never retained by
+    /// the publication or enqueued in the subscriber mailbox.
     package func rebase(
         _ token: RebaseToken,
         revision: UInt64,
-        snapshot: Snapshot
+        snapshot: @autoclosure () -> Snapshot
     ) throws(WebInspectorRevisionedSnapshotRebaseError) -> Rebase {
         guard token.publicationIdentity === identity else {
             throw WebInspectorRevisionedSnapshotRebaseError.foreignPublication
         }
 
-        let result: Result<Rebase, WebInspectorRevisionedSnapshotRebaseError> = state.withLock { state in
-            guard state.terminal == nil else {
-                return .failure(.publicationTerminated)
-            }
-            guard let subscriber = state.subscribers[token.subscriberID] else {
-                return .failure(.subscriptionCancelled)
-            }
-            guard revision == state.revision else {
-                return .failure(
-                    .staleSnapshot(
-                        expectedRevision: state.revision,
-                        suppliedRevision: revision
-                    ))
-            }
-            return subscriber.rebase(
-                generation: token.generation,
-                revision: revision
-            ).map { disposition in
-                Rebase(
-                    disposition: disposition,
-                    revision: revision,
-                    snapshot: snapshot
+        let result:
+            Result<
+                WebInspectorRevisionedSnapshotRebaseDisposition,
+                WebInspectorRevisionedSnapshotRebaseError
+            > = state.withLock { state in
+                guard state.terminal == nil else {
+                    return .failure(.publicationTerminated)
+                }
+                guard let subscriber = state.subscribers[token.subscriberID] else {
+                    return .failure(.subscriptionCancelled)
+                }
+                guard revision == state.revision else {
+                    return .failure(
+                        .staleSnapshot(
+                            expectedRevision: state.revision,
+                            suppliedRevision: revision
+                        ))
+                }
+                return subscriber.rebase(
+                    generation: token.generation,
+                    revision: revision
                 )
             }
-        }
-        return try result.get()
+        let disposition = try result.get()
+        return Rebase(
+            disposition: disposition,
+            revision: revision,
+            snapshot: snapshot()
+        )
     }
 
     /// Finishes every current and future subscription successfully.
@@ -382,6 +393,10 @@ private final class WebInspectorRevisionedSnapshotSubscription<
 
     func cancel() {
         subscriber.cancel()
+    }
+
+    func owns(_ token: WebInspectorRevisionedSnapshotRebaseToken) -> Bool {
+        subscriber.owns(token)
     }
 
     deinit {
@@ -478,6 +493,11 @@ fileprivate final class WebInspectorRevisionedSnapshotSubscriber<
 
     var isWaiting: Bool {
         state.withLock { $0.waiter != nil }
+    }
+
+    func owns(_ token: RebaseToken) -> Bool {
+        token.publicationIdentity === publicationIdentity
+            && token.subscriberID == subscriberID
     }
 
     func offer(

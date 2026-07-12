@@ -96,6 +96,10 @@ package enum WebInspectorCanonicalFeedChange: Equatable, Sendable {
         attachmentGeneration: WebInspectorContainerAttachmentGeneration,
         pageGeneration: WebInspectorPage.Generation
     )
+    case detached(
+        attachmentGeneration: WebInspectorContainerAttachmentGeneration,
+        pageGeneration: WebInspectorPage.Generation
+    )
     case targetSnapshot(through: UInt64, snapshot: ModelTargetSnapshot)
     case targetCreated(ModelTarget)
     case targetRemoved(WebInspectorTarget.ID)
@@ -138,6 +142,7 @@ package struct WebInspectorCanonicalModelTransaction: Equatable, Sendable {
     package var CSS: WebInspectorCanonicalCSSTransaction?
     package var consoleRuntime: CanonicalConsoleRuntimeTransaction?
     package var actions: [WebInspectorCanonicalModelAction] = []
+    package var resetSnapshot: WebInspectorCanonicalModelSnapshot? = nil
 
     package var isEmpty: Bool {
         feedChanges.isEmpty
@@ -148,6 +153,7 @@ package struct WebInspectorCanonicalModelTransaction: Equatable, Sendable {
             && (CSS?.isEmpty ?? true)
             && (consoleRuntime?.isEmpty ?? true)
             && actions.isEmpty
+            && resetSnapshot == nil
     }
 }
 
@@ -170,6 +176,11 @@ package struct WebInspectorCanonicalModelStorePerformanceCounters: Equatable, Se
 /// and every affected domain transaction together or leaves the entire store
 /// unchanged.
 package struct WebInspectorCanonicalModelStore: Sendable {
+    private struct ResetScope: Equatable, Sendable {
+        let attachmentGeneration: WebInspectorContainerAttachmentGeneration
+        let pageGeneration: WebInspectorPage.Generation
+    }
+
     private enum DOMPhase: Equatable, Sendable {
         case awaiting
         case ready
@@ -205,6 +216,7 @@ package struct WebInspectorCanonicalModelStore: Sendable {
     package let configuredDomains: Set<ModelDomain>
 
     private var binding: BindingState?
+    private var lastResetScope: ResetScope?
     private var networkStore: CanonicalNetworkStore
     private var DOMReducer: WebInspectorCanonicalDOMReducer?
     private var CSSReducer: WebInspectorCanonicalCSSReducer?
@@ -224,6 +236,7 @@ package struct WebInspectorCanonicalModelStore: Sendable {
         }
         self.configuredDomains = normalizedDomains
         binding = nil
+        lastResetScope = nil
         networkStore = CanonicalNetworkStore(storeID: storeID)
         DOMReducer = nil
         CSSReducer = nil
@@ -381,6 +394,46 @@ package struct WebInspectorCanonicalModelStore: Sendable {
                 "A canonical domain reducer threw an undeclared error: \(error)"
             )
         }
+    }
+
+    /// Clears one adopted attachment without terminating the stable store.
+    ///
+    /// The returned transaction is the complete detach reset delivered to
+    /// existing context subscriptions. A later attachment must still advance
+    /// from the retained reset scope, even though the public binding is nil.
+    @discardableResult
+    package mutating func clearForDetach() -> WebInspectorCanonicalModelTransaction {
+        guard let current = binding else {
+            return WebInspectorCanonicalModelTransaction()
+        }
+
+        let networkTransaction =
+            configuredDomains.contains(.network)
+            ? networkStore.clear()
+            : nil
+        let consoleRuntimeTransaction =
+            configuredDomains.contains(.console)
+                || configuredDomains.contains(.runtime)
+            ? consoleRuntimeStore.clearForDetach()
+            : nil
+        let DOMTransaction = DOMReducer?.reset()
+        let CSSTransaction = CSSReducer?.reset()
+        binding = nil
+
+        var transaction = WebInspectorCanonicalModelTransaction(
+            feedChanges: [
+                .detached(
+                    attachmentGeneration: current.attachmentGeneration,
+                    pageGeneration: current.pageGeneration
+                )
+            ],
+            network: networkTransaction,
+            DOM: DOMTransaction,
+            CSS: CSSTransaction,
+            consoleRuntime: consoleRuntimeTransaction
+        )
+        transaction.resetSnapshot = snapshot(reason: .reset)
+        return transaction
     }
 }
 
@@ -588,9 +641,11 @@ private extension WebInspectorCanonicalModelStore {
         attachmentGeneration: WebInspectorContainerAttachmentGeneration,
         pageGeneration: WebInspectorPage.Generation
     ) throws -> WebInspectorCanonicalModelTransaction {
-        if let current = binding {
+        if let current = lastResetScope {
             let isValid: Bool
-            if attachmentGeneration == current.attachmentGeneration {
+            if binding == nil {
+                isValid = attachmentGeneration > current.attachmentGeneration
+            } else if attachmentGeneration == current.attachmentGeneration {
                 isValid = pageGeneration.rawValue > current.pageGeneration.rawValue
             } else {
                 isValid = attachmentGeneration > current.attachmentGeneration
@@ -649,6 +704,10 @@ private extension WebInspectorCanonicalModelStore {
         consoleRuntimeStore = nextConsoleRuntime
         DOMReducer = nextDOM
         CSSReducer = nextCSS
+        lastResetScope = ResetScope(
+            attachmentGeneration: attachmentGeneration,
+            pageGeneration: pageGeneration
+        )
         binding = BindingState(
             attachmentGeneration: attachmentGeneration,
             pageGeneration: pageGeneration,

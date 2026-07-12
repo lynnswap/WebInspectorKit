@@ -286,6 +286,10 @@ package enum CanonicalConsoleRuntimeResourceInvalidation: Equatable, Sendable {
     )
     case frameDetached(FrameID)
     case targetLost(WebInspectorTarget.ID)
+    case attachmentDetached(
+        attachmentGeneration: WebInspectorContainerAttachmentGeneration,
+        pageGeneration: WebInspectorPage.Generation
+    )
     case attachmentReset(
         previous: WebInspectorContainerAttachmentGeneration?,
         current: WebInspectorContainerAttachmentGeneration,
