@@ -339,7 +339,7 @@ package struct WebInspectorCanonicalModelStore: Sendable {
         performanceCounters.fullSnapshotRecordVisitCount +=
             (network?.requests.count ?? 0)
             + (network?.entries.count ?? 0)
-            + (DOM?.recordsByID.count ?? 0)
+            + (DOM?.records.count ?? 0)
             + (CSS?.recordsByID.count ?? 0)
             + (consoleRuntime?.runtimeContexts.count ?? 0)
             + (consoleRuntime?.consoleMessages.count ?? 0)

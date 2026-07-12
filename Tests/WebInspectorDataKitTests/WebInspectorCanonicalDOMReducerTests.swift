@@ -133,8 +133,19 @@ func canonicalDOMBootstrapBuildsNormalizedGraphAndTypedInitialTransaction() thro
     let rootID = canonicalDOMID("document", scope: documentScope)
     let bodyID = canonicalDOMID("body", scope: documentScope)
     let shadowID = canonicalDOMID("shadow", scope: documentScope)
+    let beforeID = canonicalDOMID("before", scope: documentScope)
 
     #expect(transaction.insertedRecords.count == 4)
+    #expect(
+        transaction.insertedRecords.map(\.id) == [
+            rootID,
+            bodyID,
+            shadowID,
+            beforeID,
+        ]
+    )
+    #expect(transaction.insertedRecords.map(\.insertionOrdinal) == [1, 2, 3, 4])
+    #expect(reducer.snapshot().records.map(\.id) == transaction.insertedRecords.map(\.id))
     #expect(transaction.parentChanges.count == 4)
     #expect(
         transaction.rootChanges == [
@@ -451,6 +462,7 @@ func canonicalDOMSetChildNodesReplacesOnlyTheMaterializedChildSubtrees() throws 
     let removedID = canonicalDOMID("removed", scope: documentScope)
     let addedID = canonicalDOMID("added", scope: documentScope)
     let rootID = canonicalDOMID("document", scope: documentScope)
+    let retainedOrdinal = try #require(reducer.record(for: retainedID)).insertionOrdinal
     let before = reducer.performanceCounters
 
     let transaction = try reducer.apply(
@@ -471,6 +483,7 @@ func canonicalDOMSetChildNodesReplacesOnlyTheMaterializedChildSubtrees() throws 
     #expect(transaction.recordPatches.contains { $0.id == retainedID })
     #expect(transaction.deletedRecordIDs.contains(rootID) == false)
     #expect(reducer.record(for: retainedID)?.queryValue.attributes == ["class": "after"])
+    #expect(reducer.record(for: retainedID)?.insertionOrdinal == retainedOrdinal)
     #expect(reducer.record(for: removedID) == nil)
     #expect(reducer.record(for: addedID) != nil)
     #expect(reducer.performanceCounters.fullGraphBuildCount == before.fullGraphBuildCount)
@@ -526,6 +539,118 @@ func canonicalDOMDocumentInvalidationRetiresExactScopeAndAllowsRawIDInNextEpoch(
         try reducer.invalidateDocument(invalidJump)
     }
     #expect(reducer.snapshot() == before)
+}
+
+@Test
+func canonicalDOMInsertionOrdinalSurvivesDeletionAndMatchesLateSnapshot() throws {
+    let fixture = canonicalDOMReducerFixture()
+    var reducer = fixture.reducer
+    _ = try reducer.bootstrap(
+        scope: fixture.scope,
+        root: canonicalDOMNode(
+            id: "document",
+            type: 9,
+            name: "#document",
+            children: [canonicalDOMNode(id: "existing")]
+        )
+    )
+    let documentScope = try canonicalDocumentScope(fixture, eventScope: fixture.scope)
+    let firstID = canonicalDOMID("first", scope: documentScope)
+    let secondID = canonicalDOMID("second", scope: documentScope)
+
+    let firstInsertion = try reducer.apply(
+        scope: fixture.scope,
+        event: .childNodeInserted(
+            parent: DOM.Node.ID("document"),
+            previous: DOM.Node.ID("existing"),
+            node: canonicalDOMNode(id: "first")
+        )
+    )
+    let firstOrdinal = try #require(firstInsertion.insertedRecords.first?.insertionOrdinal)
+    _ = try reducer.apply(
+        scope: fixture.scope,
+        event: .childNodeRemoved(
+            parent: DOM.Node.ID("document"),
+            node: DOM.Node.ID("first")
+        )
+    )
+    let secondInsertion = try reducer.apply(
+        scope: fixture.scope,
+        event: .childNodeInserted(
+            parent: DOM.Node.ID("document"),
+            previous: DOM.Node.ID("existing"),
+            node: canonicalDOMNode(id: "second")
+        )
+    )
+    let secondRecord = try #require(secondInsertion.insertedRecords.first)
+
+    #expect(firstInsertion.insertedRecords.map(\.id) == [firstID])
+    #expect(secondRecord.id == secondID)
+    #expect(secondRecord.insertionOrdinal > firstOrdinal)
+    #expect(reducer.record(for: firstID) == nil)
+    #expect(
+        reducer.snapshot().records.first(where: { $0.id == secondID })?.insertionOrdinal
+            == secondRecord.insertionOrdinal
+    )
+
+    let replacementScope = canonicalDOMScope(domEpoch: 2)
+    _ = try reducer.invalidateDocument(replacementScope)
+    let replacement = try reducer.bootstrap(
+        scope: replacementScope,
+        root: canonicalDOMNode(id: "document", type: 9, name: "#document")
+    )
+    #expect(
+        try #require(replacement.insertedRecords.first).insertionOrdinal
+            > secondRecord.insertionOrdinal
+    )
+}
+
+@Test
+func canonicalDOMInsertionOrdinalOverflowHasStrongExceptionGuarantee() throws {
+    let fixture = canonicalDOMReducerFixture()
+    var reducer = fixture.reducer
+    reducer.setLastInsertionOrdinalForTesting(UInt64.max - 1)
+    let before = reducer.snapshot()
+    let countersBefore = reducer.performanceCounters
+
+    #expect(throws: WebInspectorCanonicalDOMError.insertionOrdinalExhausted) {
+        try reducer.bootstrap(
+            scope: fixture.scope,
+            root: canonicalDOMNode(
+                id: "document",
+                type: 9,
+                name: "#document",
+                children: [canonicalDOMNode(id: "child")]
+            )
+        )
+    }
+    #expect(reducer.snapshot() == before)
+    #expect(
+        reducer.performanceCounters.fullSnapshotBuildCount
+            == countersBefore.fullSnapshotBuildCount + 1
+    )
+    #expect(
+        reducer.performanceCounters.fullGraphBuildCount
+            == countersBefore.fullGraphBuildCount
+    )
+    #expect(
+        reducer.performanceCounters.fullGraphNodeVisitCount
+            == countersBefore.fullGraphNodeVisitCount
+    )
+    #expect(
+        reducer.performanceCounters.incrementalNodeVisitCount
+            == countersBefore.incrementalNodeVisitCount
+    )
+    #expect(
+        reducer.performanceCounters.recordMutationCount
+            == countersBefore.recordMutationCount
+    )
+
+    let committed = try reducer.bootstrap(
+        scope: fixture.scope,
+        root: canonicalDOMNode(id: "document", type: 9, name: "#document")
+    )
+    #expect(committed.insertedRecords.map(\.insertionOrdinal) == [UInt64.max])
 }
 
 @Test
@@ -792,7 +917,7 @@ func canonicalDOMPseudoAdditionAtomicallyReplacesExistingSlotOrIdentity() throws
 func canonicalDOMNormalMutationVisitsOnlyChangedRecordInLargeGraph() throws {
     let fixture = canonicalDOMReducerFixture()
     var reducer = fixture.reducer
-    let children = (0..<2_000).map { index in
+    let children = (0..<10_000).map { index in
         canonicalDOMNode(id: "node-\(index)")
     }
     _ = try reducer.bootstrap(
@@ -804,6 +929,9 @@ func canonicalDOMNormalMutationVisitsOnlyChangedRecordInLargeGraph() throws {
             children: children
         )
     )
+    let documentScope = try canonicalDocumentScope(fixture, eventScope: fixture.scope)
+    let changedID = canonicalDOMID("node-997", scope: documentScope)
+    let insertionOrdinal = try #require(reducer.record(for: changedID)).insertionOrdinal
     let before = reducer.performanceCounters
     _ = try reducer.apply(
         scope: fixture.scope,
@@ -816,6 +944,7 @@ func canonicalDOMNormalMutationVisitsOnlyChangedRecordInLargeGraph() throws {
     #expect(after.incrementalNodeVisitCount - before.incrementalNodeVisitCount == 1)
     #expect(after.recordMutationCount - before.recordMutationCount == 1)
     #expect(after.unrelatedRecordScanCount == 0)
+    #expect(reducer.record(for: changedID)?.insertionOrdinal == insertionOrdinal)
 }
 
 @Test

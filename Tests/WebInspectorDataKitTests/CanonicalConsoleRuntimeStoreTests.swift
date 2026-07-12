@@ -173,6 +173,143 @@ func canonicalRuntimeIdentitySeparatesAgentAuthorityFromSemanticMembership() thr
 }
 
 @Test
+func canonicalRuntimeInsertionOrdinalDefinesLiveAndSnapshotOrder() throws {
+    var fixture = try CanonicalConsoleRuntimeFixture()
+    let scope = fixture.scope(agentTargetID: "agent")
+    let first = try #require(
+        try fixture.store.reduceRuntime(
+            .executionContextCreated(canonicalRuntimeContext(id: "z-last-by-raw-id")),
+            scope: scope
+        )
+    )
+    let second = try #require(
+        try fixture.store.reduceRuntime(
+            .executionContextCreated(canonicalRuntimeContext(id: "a-first-by-raw-id")),
+            scope: scope
+        )
+    )
+    guard case let .insert(firstRecord, _) = first.runtimeContextChanges.first,
+        case let .insert(secondRecord, _) = second.runtimeContextChanges.first
+    else {
+        Issue.record("Expected canonical Runtime insertions.")
+        return
+    }
+
+    #expect(firstRecord.insertionOrdinal == 1)
+    #expect(secondRecord.insertionOrdinal == 2)
+    #expect(
+        fixture.store.snapshot().runtimeContexts.map(\.record.id) == [
+            firstRecord.id,
+            secondRecord.id,
+        ]
+    )
+    #expect(
+        fixture.store.snapshot().runtimeContexts.map(\.record.insertionOrdinal)
+            == [firstRecord.insertionOrdinal, secondRecord.insertionOrdinal]
+    )
+}
+
+@Test
+func canonicalRuntimeInsertionOrdinalIsNeverReusedAcrossRemovalBoundaries() throws {
+    var fixture = try CanonicalConsoleRuntimeFixture()
+    let scope = fixture.scope(agentTargetID: "page")
+
+    func insertedRecord(
+        _ transaction: CanonicalConsoleRuntimeTransaction?
+    ) throws -> CanonicalRuntimeContextRecord {
+        let transaction = try #require(transaction)
+        guard case let .insert(record, _) = transaction.runtimeContextChanges.first else {
+            Issue.record("Expected a canonical Runtime insertion.")
+            throw CancellationError()
+        }
+        return record
+    }
+
+    let destroyed = try insertedRecord(
+        try fixture.store.reduceRuntime(
+            .executionContextCreated(canonicalRuntimeContext(id: "destroyed")),
+            scope: scope
+        )
+    )
+    _ = try fixture.store.reduceRuntime(
+        .executionContextDestroyed(Runtime.ExecutionContext.ID("destroyed")),
+        scope: scope
+    )
+
+    let frameRemoved = try insertedRecord(
+        try fixture.store.reduceRuntime(
+            .executionContextCreated(canonicalRuntimeContext(id: "frame-removed")),
+            scope: scope
+        )
+    )
+    _ = fixture.store.frameWasDetached(FrameID("frame"))
+
+    let targetRemoved = try insertedRecord(
+        try fixture.store.reduceRuntime(
+            .executionContextCreated(canonicalRuntimeContext(id: "target-removed")),
+            scope: scope
+        )
+    )
+    _ = fixture.store.targetWasLost(WebInspectorTarget.ID("page"))
+
+    let bindingCleared = try insertedRecord(
+        try fixture.store.reduceRuntime(
+            .executionContextCreated(canonicalRuntimeContext(id: "binding-cleared")),
+            scope: scope
+        )
+    )
+    _ = try fixture.store.reduceRuntime(
+        .executionContextsCleared,
+        scope: fixture.scope(agentTargetID: "page", runtimeBindingEpoch: 2)
+    )
+
+    let detached = try insertedRecord(
+        try fixture.store.reduceRuntime(
+            .executionContextCreated(canonicalRuntimeContext(id: "detached")),
+            scope: fixture.scope(agentTargetID: "page", runtimeBindingEpoch: 2)
+        )
+    )
+    _ = fixture.store.clearForDetach()
+    try fixture.store.reset(
+        attachmentGeneration: WebInspectorContainerAttachmentGeneration(rawValue: 2),
+        pageGeneration: WebInspectorPage.Generation(rawValue: 2)
+    )
+    let reset = try insertedRecord(
+        try fixture.store.reduceRuntime(
+            .executionContextCreated(canonicalRuntimeContext(id: "after-reset")),
+            scope: fixture.scope(
+                agentTargetID: "page",
+                pageGeneration: WebInspectorPage.Generation(rawValue: 2)
+            )
+        )
+    )
+
+    #expect(
+        [destroyed, frameRemoved, targetRemoved, bindingCleared, detached, reset]
+            .map(\.insertionOrdinal) == [1, 2, 3, 4, 5, 6]
+    )
+    #expect(fixture.store.runtimeContextOrdinalForTesting == 6)
+    #expect(
+        fixture.store.snapshot().runtimeContexts.map(\.record.insertionOrdinal) == [6]
+    )
+}
+
+@Test
+func canonicalRuntimeInsertionOrdinalOverflowHasStrongExceptionGuarantee() throws {
+    var fixture = try CanonicalConsoleRuntimeFixture()
+    fixture.store.setLastRuntimeContextOrdinalForTesting(UInt64.max)
+    let before = fixture.store
+
+    #expect(throws: CanonicalConsoleRuntimeStoreError.runtimeContextOrdinalExhausted) {
+        try fixture.store.reduceRuntime(
+            .executionContextCreated(canonicalRuntimeContext(id: "overflow")),
+            scope: fixture.scope()
+        )
+    }
+    #expect(fixture.store == before)
+}
+
+@Test
 func canonicalRuntimeIdentifierOnlyDestroyUsesThePhysicalAgentIndex() throws {
     var fixture = try CanonicalConsoleRuntimeFixture()
     let firstScope = fixture.scope(
@@ -1089,6 +1226,35 @@ func canonicalConsoleRuntimeNormalEventsDoNotBuildOrScanSnapshots() throws {
     #expect(snapshot.consoleMessages.count == 10_000)
     #expect(fixture.store.performanceCounters.fullSnapshotBuildCount == 1)
     #expect(fixture.store.performanceCounters.fullSnapshotRecordVisitCount == 10_000)
+}
+
+@Test
+func canonicalRuntimeRankedEventsDoNotBuildOrScanSnapshots() throws {
+    var fixture = try CanonicalConsoleRuntimeFixture()
+    let scope = fixture.scope(agentTargetID: "agent")
+    for index in 0..<10_000 {
+        _ = try fixture.store.reduceRuntime(
+            .executionContextCreated(canonicalRuntimeContext(id: "context-\(index)")),
+            scope: scope
+        )
+    }
+    fixture.store.resetPerformanceCountersForTesting()
+
+    _ = try fixture.store.reduceRuntime(
+        .executionContextDestroyed(Runtime.ExecutionContext.ID("context-5000")),
+        scope: scope
+    )
+    #expect(fixture.store.performanceCounters.incrementalRecordVisitCount == 1)
+    #expect(fixture.store.performanceCounters.fullSnapshotBuildCount == 0)
+    #expect(fixture.store.performanceCounters.fullSnapshotRecordVisitCount == 0)
+    #expect(fixture.store.performanceCounters.unrelatedRecordScanCount == 0)
+
+    let snapshot = fixture.store.snapshot()
+    #expect(snapshot.runtimeContexts.count == 9_999)
+    #expect(snapshot.runtimeContexts.first?.record.insertionOrdinal == 1)
+    #expect(snapshot.runtimeContexts.last?.record.insertionOrdinal == 10_000)
+    #expect(fixture.store.performanceCounters.fullSnapshotBuildCount == 1)
+    #expect(fixture.store.performanceCounters.fullSnapshotRecordVisitCount == 9_999)
 }
 
 @Test

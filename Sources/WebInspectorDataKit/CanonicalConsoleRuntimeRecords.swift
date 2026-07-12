@@ -25,6 +25,7 @@ package struct CanonicalRuntimeContextQueryProjection: Equatable, Sendable {
 
 package struct CanonicalRuntimeContextRecord: Equatable, Sendable {
     package let id: CanonicalRuntimeContextIDStorage
+    package let insertionOrdinal: UInt64
     package let membership: CanonicalRuntimeContextMembership
     package let name: String
     package let frameID: FrameID?

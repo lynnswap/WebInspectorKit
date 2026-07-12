@@ -47,6 +47,7 @@ package enum CanonicalConsoleRuntimeProtocolViolation: Error, Equatable, Sendabl
 
 package enum CanonicalConsoleRuntimeStoreError: Error, Equatable, Sendable {
     case consoleOrdinalExhausted
+    case runtimeContextOrdinalExhausted
     case nonmonotonicAttachmentGeneration(
         current: WebInspectorContainerAttachmentGeneration,
         proposed: WebInspectorContainerAttachmentGeneration
@@ -87,6 +88,7 @@ package struct CanonicalConsoleRuntimeStore: Equatable, Sendable {
     private var runtimeContextIDsBySemanticTargetID: [WebInspectorTarget.ID: Set<CanonicalRuntimeContextIDStorage>]
     private var runtimeContextIDsByFrameID: [FrameID: Set<CanonicalRuntimeContextIDStorage>]
     private var runtimeContextTombstones: Set<CanonicalRuntimeContextIDStorage>
+    private var lastRuntimeContextOrdinal: UInt64
 
     private var consoleMessagesByID: [CanonicalConsoleMessageIDStorage: CanonicalConsoleMessageRecord]
     private var consoleMessageIDsByAgentTargetID: [WebInspectorTarget.ID: Set<CanonicalConsoleMessageIDStorage>]
@@ -120,6 +122,7 @@ package struct CanonicalConsoleRuntimeStore: Equatable, Sendable {
         runtimeContextIDsBySemanticTargetID = [:]
         runtimeContextIDsByFrameID = [:]
         runtimeContextTombstones = []
+        lastRuntimeContextOrdinal = 0
         consoleMessagesByID = [:]
         consoleMessageIDsByAgentTargetID = [:]
         consoleMessageIDsBySemanticTargetID = [:]
@@ -180,7 +183,7 @@ package struct CanonicalConsoleRuntimeStore: Equatable, Sendable {
 
     package mutating func snapshot() -> CanonicalConsoleRuntimeSnapshot {
         let runtimeRecords = runtimeContextsByID.values.sorted {
-            Self.runtimeContextPrecedes($0.id, $1.id)
+            $0.insertionOrdinal < $1.insertionOrdinal
         }
         let consoleRecords = consoleMessagesByID.values.sorted {
             $0.id.ordinal < $1.id.ordinal
@@ -207,8 +210,19 @@ package struct CanonicalConsoleRuntimeStore: Equatable, Sendable {
     }
 
     #if DEBUG
+        package var runtimeContextOrdinalForTesting: UInt64 {
+            lastRuntimeContextOrdinal
+        }
+
         package mutating func resetPerformanceCountersForTesting() {
             performanceCounters = PerformanceCounters()
+        }
+
+        package mutating func setLastRuntimeContextOrdinalForTesting(
+            _ ordinal: UInt64
+        ) {
+            precondition(runtimeContextsByID.isEmpty)
+            lastRuntimeContextOrdinal = ordinal
         }
     #endif
 
@@ -224,7 +238,7 @@ package struct CanonicalConsoleRuntimeStore: Equatable, Sendable {
             pageGeneration: pageGeneration
         )
         let previousAttachment = activeAttachmentGeneration
-        let runtimeIDs = runtimeContextsByID.keys.sorted(by: Self.runtimeContextPrecedes)
+        let runtimeIDs = runtimeContextIDsInInsertionOrder(runtimeContextsByID.keys)
         let consoleIDs = consoleMessagesByID.keys.sorted { $0.ordinal < $1.ordinal }
         let transaction = CanonicalConsoleRuntimeTransaction(
             runtimeContextChanges: runtimeIDs.map(CanonicalRuntimeContextChange.delete),
@@ -266,9 +280,7 @@ package struct CanonicalConsoleRuntimeStore: Equatable, Sendable {
             )
         }
 
-        let runtimeIDs = runtimeContextsByID.keys.sorted(
-            by: Self.runtimeContextPrecedes
-        )
+        let runtimeIDs = runtimeContextIDsInInsertionOrder(runtimeContextsByID.keys)
         let consoleIDs = consoleMessagesByID.keys.sorted {
             $0.ordinal < $1.ordinal
         }
@@ -471,7 +483,7 @@ package struct CanonicalConsoleRuntimeStore: Equatable, Sendable {
                 removedIDs.append(id)
             }
         }
-        removedIDs.sort(by: Self.runtimeContextPrecedes)
+        removedIDs = runtimeContextIDsInInsertionOrder(removedIDs)
 
         for id in removedIDs {
             removeRuntimeContext(id, tombstone: true)
@@ -510,7 +522,7 @@ package struct CanonicalConsoleRuntimeStore: Equatable, Sendable {
             runtimeContextIDsBySemanticTargetID[targetID] ?? [])
         let consoleIDs = (consoleMessageIDsByAgentTargetID[targetID] ?? [])
             .union(consoleMessageIDsBySemanticTargetID[targetID] ?? [])
-        let orderedRuntimeIDs = runtimeIDs.sorted(by: Self.runtimeContextPrecedes)
+        let orderedRuntimeIDs = runtimeContextIDsInInsertionOrder(runtimeIDs)
         let orderedConsoleIDs = consoleIDs.sorted { $0.ordinal < $1.ordinal }
 
         for id in orderedRuntimeIDs {
@@ -563,8 +575,8 @@ private extension CanonicalConsoleRuntimeStore {
     mutating func removeRuntimeContexts(
         inFrame frameID: FrameID
     ) -> [CanonicalRuntimeContextChange] {
-        let ids = (runtimeContextIDsByFrameID[frameID] ?? []).sorted(
-            by: Self.runtimeContextPrecedes
+        let ids = runtimeContextIDsInInsertionOrder(
+            runtimeContextIDsByFrameID[frameID] ?? []
         )
         for id in ids {
             guard runtimeContextsByID[id]?.frameID == frameID else {
@@ -651,20 +663,20 @@ private extension CanonicalConsoleRuntimeStore {
         )
     }
 
-    static func runtimeContextPrecedes(
-        _ lhs: CanonicalRuntimeContextIDStorage,
-        _ rhs: CanonicalRuntimeContextIDStorage
-    ) -> Bool {
-        if lhs.attachmentGeneration != rhs.attachmentGeneration {
-            return lhs.attachmentGeneration < rhs.attachmentGeneration
+    func runtimeContextIDsInInsertionOrder<IDs: Sequence>(
+        _ ids: IDs
+    ) -> [CanonicalRuntimeContextIDStorage]
+    where IDs.Element == CanonicalRuntimeContextIDStorage {
+        ids.sorted { lhs, rhs in
+            guard let lhsRecord = runtimeContextsByID[lhs],
+                let rhsRecord = runtimeContextsByID[rhs]
+            else {
+                preconditionFailure(
+                    "Canonical Runtime order referenced a missing record."
+                )
+            }
+            return lhsRecord.insertionOrdinal < rhsRecord.insertionOrdinal
         }
-        if lhs.pageGeneration != rhs.pageGeneration {
-            return lhs.pageGeneration.rawValue < rhs.pageGeneration.rawValue
-        }
-        if lhs.agentTargetID != rhs.agentTargetID {
-            return lhs.agentTargetID.rawValue < rhs.agentTargetID.rawValue
-        }
-        return lhs.rawContextID.rawValue < rhs.rawContextID.rawValue
     }
 }
 
@@ -699,8 +711,10 @@ private extension CanonicalConsoleRuntimeStore {
                 proposed: id
             )
         }
+        let insertionOrdinal = try nextRuntimeContextOrdinal()
         let record = CanonicalRuntimeContextRecord(
             id: id,
+            insertionOrdinal: insertionOrdinal,
             membership: CanonicalRuntimeContextMembership(
                 semanticTargetID: scope.target.id,
                 navigationEpoch: scope.navigationEpoch,
@@ -711,6 +725,7 @@ private extension CanonicalConsoleRuntimeStore {
             kind: context.kind
         )
 
+        lastRuntimeContextOrdinal = insertionOrdinal
         runtimeContextsByID[id] = record
         runtimeContextIDByLookupKey[lookupKey] = id
         runtimeContextIDsByAgentTargetID[scope.agentTarget.id, default: []].insert(id)
@@ -724,6 +739,14 @@ private extension CanonicalConsoleRuntimeStore {
                 .insert(record: record, query: record.queryProjection)
             ]
         )
+    }
+
+    func nextRuntimeContextOrdinal() throws -> UInt64 {
+        let (ordinal, overflow) = lastRuntimeContextOrdinal.addingReportingOverflow(1)
+        guard !overflow else {
+            throw CanonicalConsoleRuntimeStoreError.runtimeContextOrdinalExhausted
+        }
+        return ordinal
     }
 
     mutating func destroyRuntimeContext(
@@ -771,8 +794,9 @@ private extension CanonicalConsoleRuntimeStore {
             scope,
             event: "Runtime.executionContextsCleared"
         )
-        let ids = (runtimeContextIDsByAgentTargetID[scope.agentTarget.id] ?? [])
-            .sorted(by: Self.runtimeContextPrecedes)
+        let ids = runtimeContextIDsInInsertionOrder(
+            runtimeContextIDsByAgentTargetID[scope.agentTarget.id] ?? []
+        )
         for id in ids {
             guard runtimeContextsByID[id] != nil else {
                 preconditionFailure(

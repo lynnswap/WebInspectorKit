@@ -38,6 +38,7 @@ package struct WebInspectorCanonicalDOMQueryValue: Equatable, Sendable {
 
 package struct WebInspectorCanonicalDOMRecord: Equatable, Sendable {
     package let id: WebInspectorDOMNodeIdentityStorage
+    package let insertionOrdinal: UInt64
     package var nodeName: String
     package var localName: String
     package var nodeValue: String
@@ -170,9 +171,36 @@ package struct WebInspectorCanonicalDOMTransaction: Equatable, Sendable {
 }
 
 package struct WebInspectorCanonicalDOMSnapshot: Equatable, Sendable {
-    package let recordsByID: [WebInspectorDOMNodeIdentityStorage: WebInspectorCanonicalDOMRecord]
+    package let records: [WebInspectorCanonicalDOMRecord]
     package let parentByNodeID: [WebInspectorDOMNodeIdentityStorage: WebInspectorDOMNodeIdentityStorage]
     package let rootByDocumentScope: [WebInspectorDOMDocumentScopeStorage: WebInspectorDOMNodeIdentityStorage]
+
+    package var recordsByID: [WebInspectorDOMNodeIdentityStorage: WebInspectorCanonicalDOMRecord] {
+        Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0) })
+    }
+
+    package init(
+        recordsByID: [WebInspectorDOMNodeIdentityStorage: WebInspectorCanonicalDOMRecord],
+        parentByNodeID: [WebInspectorDOMNodeIdentityStorage: WebInspectorDOMNodeIdentityStorage],
+        rootByDocumentScope: [WebInspectorDOMDocumentScopeStorage: WebInspectorDOMNodeIdentityStorage]
+    ) {
+        precondition(
+            recordsByID.allSatisfy { id, record in
+                id == record.id && record.insertionOrdinal > 0
+            },
+            "Canonical DOM snapshots require matching identities and allocated insertion ordinals."
+        )
+        precondition(
+            Set(recordsByID.values.map(\.insertionOrdinal)).count
+                == recordsByID.count,
+            "Canonical DOM snapshot insertion ordinals must be unique."
+        )
+        records = recordsByID.values.sorted {
+            $0.insertionOrdinal < $1.insertionOrdinal
+        }
+        self.parentByNodeID = parentByNodeID
+        self.rootByDocumentScope = rootByDocumentScope
+    }
 }
 
 package struct WebInspectorCanonicalDOMPerformanceCounters: Equatable, Sendable {
@@ -202,6 +230,7 @@ package enum WebInspectorCanonicalDOMError: Error, Equatable, Sendable {
     case ambiguousFrameOwner(FrameID)
     case ambiguousFrameRoot(FrameID)
     case documentUpdatedRequiresInvalidationBoundary
+    case insertionOrdinalExhausted
 }
 
 package struct WebInspectorCanonicalDOMReducer: Sendable {
@@ -215,6 +244,7 @@ package struct WebInspectorCanonicalDOMReducer: Sendable {
         var parentAssignments: [WebInspectorDOMNodeIdentityStorage: ParentAssignment] = [:]
         var insertionOrder: [WebInspectorDOMNodeIdentityStorage] = []
         var frameOwners: [FrameID: WebInspectorDOMNodeIdentityStorage] = [:]
+        var lastAllocatedInsertionOrdinal: UInt64?
         var visitCount = 0
     }
 
@@ -244,8 +274,16 @@ package struct WebInspectorCanonicalDOMReducer: Sendable {
     private var frameRootByFrameID: [FrameID: WebInspectorDOMNodeIdentityStorage] = [:]
     private var frameIDByFrameRootID: [WebInspectorDOMNodeIdentityStorage: FrameID] = [:]
     private var retiredRawNodeIDsByScope: [WebInspectorDOMDocumentScopeStorage: Set<DOM.Node.ID>] = [:]
+    private var lastInsertionOrdinal: UInt64 = 0
 
     package private(set) var performanceCounters = WebInspectorCanonicalDOMPerformanceCounters()
+
+    #if DEBUG
+        package mutating func setLastInsertionOrdinalForTesting(_ ordinal: UInt64) {
+            precondition(recordsByID.isEmpty)
+            lastInsertionOrdinal = ordinal
+        }
+    #endif
 
     package init(
         storeID: WebInspectorContainerStoreID,
@@ -330,7 +368,13 @@ package struct WebInspectorCanonicalDOMReducer: Sendable {
             frameRootID = frameID
         }
 
+        let committedInsertionOrdinal = validatedInsertionOrdinal(
+            upserts: graph.recordsByID,
+            upsertOrder: graph.insertionOrder
+        )
+
         var touchedFrames = Set(graph.frameOwners.keys)
+        lastInsertionOrdinal = committedInsertionOrdinal
         for id in embeddedDocumentIDs {
             if let frameID = recordsByID[id]?.frameOwnerID,
                 frameOwnerByFrameID[frameID] == id
@@ -1016,6 +1060,7 @@ private extension WebInspectorCanonicalDOMReducer {
 
         let record = WebInspectorCanonicalDOMRecord(
             id: id,
+            insertionOrdinal: try insertionOrdinal(for: id, in: &graph),
             nodeName: node.nodeName,
             localName: node.localName,
             nodeValue: node.nodeValue,
@@ -1235,8 +1280,13 @@ private extension WebInspectorCanonicalDOMReducer {
         _ plan: MutationPlan
     ) throws -> WebInspectorCanonicalDOMTransaction {
         let touchedFrames = try validateFrameOwnerChanges(plan)
+        let committedInsertionOrdinal = validatedInsertionOrdinal(
+            upserts: plan.upserts,
+            upsertOrder: plan.upsertOrder
+        )
         var transaction = transaction(for: plan)
 
+        lastInsertionOrdinal = committedInsertionOrdinal
         for id in plan.deletes {
             if let oldRecord = recordsByID[id], let frameID = oldRecord.frameOwnerID,
                 frameOwnerByFrameID[frameID] == id
@@ -1337,6 +1387,10 @@ private extension WebInspectorCanonicalDOMReducer {
                 continue
             }
             if let oldRecord = recordsByID[id] {
+                precondition(
+                    oldRecord.insertionOrdinal == newRecord.insertionOrdinal,
+                    "A canonical DOM patch cannot change insertion order."
+                )
                 let fields = Self.patchFields(from: oldRecord, to: newRecord)
                 if !fields.isEmpty {
                     transaction.recordPatches.append(
@@ -1363,6 +1417,58 @@ private extension WebInspectorCanonicalDOMReducer {
             }
         }
         return transaction
+    }
+
+    func insertionOrdinal(
+        for id: WebInspectorDOMNodeIdentityStorage,
+        in graph: inout BuiltGraph
+    ) throws -> UInt64 {
+        if let existing = recordsByID[id] {
+            return existing.insertionOrdinal
+        }
+        let previous = graph.lastAllocatedInsertionOrdinal ?? lastInsertionOrdinal
+        let (ordinal, overflow) = previous.addingReportingOverflow(1)
+        guard !overflow else {
+            throw WebInspectorCanonicalDOMError.insertionOrdinalExhausted
+        }
+        graph.lastAllocatedInsertionOrdinal = ordinal
+        return ordinal
+    }
+
+    func validatedInsertionOrdinal(
+        upserts: [WebInspectorDOMNodeIdentityStorage: WebInspectorCanonicalDOMRecord],
+        upsertOrder: [WebInspectorDOMNodeIdentityStorage]
+    ) -> UInt64 {
+        var committedOrdinal = lastInsertionOrdinal
+        var visitedNewIDs = Set<WebInspectorDOMNodeIdentityStorage>()
+        for id in upsertOrder {
+            guard let record = upserts[id] else {
+                continue
+            }
+            if let existing = recordsByID[id] {
+                precondition(
+                    existing.insertionOrdinal == record.insertionOrdinal,
+                    "A canonical DOM update cannot replace its insertion ordinal."
+                )
+                continue
+            }
+            precondition(
+                visitedNewIDs.insert(id).inserted,
+                "A canonical DOM mutation cannot insert one identity twice."
+            )
+            precondition(
+                record.insertionOrdinal > committedOrdinal,
+                "Canonical DOM insertion ordinals must advance in protocol order."
+            )
+            committedOrdinal = record.insertionOrdinal
+        }
+        precondition(
+            upserts.allSatisfy { id, _ in
+                recordsByID[id] != nil || visitedNewIDs.contains(id)
+            },
+            "Every canonical DOM insertion must appear in mutation order."
+        )
+        return committedOrdinal
     }
 
     static func patchFields(
