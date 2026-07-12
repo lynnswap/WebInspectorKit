@@ -407,6 +407,30 @@ func schemaCoalescesOrderedPatchesUsesLastQueryProjectionAndAppliesEffectsFirst(
 }
 
 @Test
+func schemaOwnerModelViewReadsOnlyAlreadyMaterializedIdentityGraph() async throws {
+    let fixture = SchemaTestFixture()
+    fixture.source.setSnapshot(primary: [1: 10, 2: 20], secondary: [:])
+    let harness = SchemaTestHarness(registry: fixture.registry)
+    try await harness.applyInitial(revision: 0)
+    _ = try #require(await harness.primary(1))
+    #expect(fixture.probe.makeCount == 1)
+
+    fixture.source.setDelta(primaryEffects: ["inspect-owner-models"])
+    try await harness.applyChanges(revision: 1)
+
+    #expect(fixture.probe.makeCount == 1)
+    #expect(
+        fixture.probe.ownerModelObservations == [
+            SchemaOwnerModelObservation(
+                firstLookupValue: 10,
+                secondLookupValue: nil,
+                visitedValues: [10]
+            )
+        ]
+    )
+}
+
+@Test
 func schemaInitialAndResetRebuildTransientOwnerProjectionInPhaseOrder() async throws {
     let fixture = SchemaTestFixture()
     fixture.source.setSnapshot(
@@ -807,8 +831,8 @@ func schemaSnapshotRejectsDuplicateCanonicalRanks() async {
             invalidateModel: { _, model in
                 model.isInvalidated = true
             },
-            applyOwnerEffect: { _, _ in },
-            resetOwnerProjection: { _ in }
+            applyOwnerEffect: { _, _, _ in },
+            resetOwnerProjection: { _, _ in }
         )
         let owner = WebInspectorModelContext()
         let schemas = WebInspectorModelSchemaRegistry([
@@ -994,10 +1018,17 @@ private enum SchemaTestOwnerEvent: Equatable, Sendable {
     case invalidate(String, id: Int)
 }
 
+private struct SchemaOwnerModelObservation: Equatable, Sendable {
+    let firstLookupValue: Int?
+    let secondLookupValue: Int?
+    let visitedValues: [Int]
+}
+
 private final class SchemaTestProbe: Sendable {
     private struct State: Sendable {
         var events: [SchemaTestOwnerEvent] = []
         var contextIdentities: Set<ObjectIdentifier> = []
+        var ownerModelObservations: [SchemaOwnerModelObservation] = []
     }
 
     private let state = Mutex(State())
@@ -1021,6 +1052,10 @@ private final class SchemaTestProbe: Sendable {
         state.withLock { $0.contextIdentities.count }
     }
 
+    var ownerModelObservations: [SchemaOwnerModelObservation] {
+        state.withLock(\.ownerModelObservations)
+    }
+
     func record(
         _ event: SchemaTestOwnerEvent,
         context: WebInspectorModelContext
@@ -1033,6 +1068,28 @@ private final class SchemaTestProbe: Sendable {
 
     func clearEvents() {
         state.withLock { $0.events.removeAll(keepingCapacity: true) }
+    }
+
+    func recordOwnerModels(
+        _ models: borrowing WebInspectorModelSchemaOwnerModels<SchemaPrimaryModel>
+    ) {
+        var visitedValues: [Int] = []
+        models.forEachRegisteredModel { model in
+            visitedValues.append(model.value)
+        }
+        visitedValues.sort()
+        let observation = SchemaOwnerModelObservation(
+            firstLookupValue: models.model(
+                for: SchemaPrimaryID(rawValue: 1)
+            )?.value,
+            secondLookupValue: models.model(
+                for: SchemaPrimaryID(rawValue: 2)
+            )?.value,
+            visitedValues: visitedValues
+        )
+        state.withLock { state in
+            state.ownerModelObservations.append(observation)
+        }
     }
 }
 
@@ -1139,10 +1196,11 @@ private struct SchemaTestFixture {
                     context: context
                 )
             },
-            applyOwnerEffect: { [probe] context, effect in
+            applyOwnerEffect: { [probe] context, effect, models in
+                probe.recordOwnerModels(models)
                 probe.record(.effect("primary", effect), context: context)
             },
-            resetOwnerProjection: { [probe] context in
+            resetOwnerProjection: { [probe] context, _ in
                 probe.record(.resetProjection("primary"), context: context)
             }
         )
@@ -1236,10 +1294,10 @@ private struct SchemaTestFixture {
                     context: context
                 )
             },
-            applyOwnerEffect: { [probe] context, effect in
+            applyOwnerEffect: { [probe] context, effect, _ in
                 probe.record(.effect("secondary", effect), context: context)
             },
-            resetOwnerProjection: { [probe] context in
+            resetOwnerProjection: { [probe] context, _ in
                 probe.record(.resetProjection("secondary"), context: context)
             }
         )

@@ -156,6 +156,45 @@ package struct WebInspectorModelSchemaRecordLookup<
     }
 }
 
+/// A callback-scoped view of the models already materialized by one schema
+/// owner.
+///
+/// Owner effects use this view to update context resources attached to live
+/// models without moving domain registries into ``WebInspectorModelContext``.
+/// Looking up or iterating this view never claims a RecordGate identity and
+/// therefore never materializes a model. The borrowing callback contract keeps
+/// the view confined to the synchronous owner turn in which the effect is
+/// applied.
+package struct WebInspectorModelSchemaOwnerModels<
+    Model: WebInspectorPersistentModel
+>: ~Copyable {
+    private let modelBody: (Model.ID) -> Model?
+    private let forEachBody: (@escaping (Model) -> Void) -> Void
+
+    fileprivate init(
+        model: @escaping (Model.ID) -> Model?,
+        forEach: @escaping (@escaping (Model) -> Void) -> Void
+    ) {
+        modelBody = model
+        forEachBody = forEach
+    }
+
+    /// Returns a model only when this owner has already materialized it.
+    package borrowing func model(for id: Model.ID) -> Model? {
+        modelBody(id)
+    }
+
+    /// Visits the owner's currently materialized models without copying the
+    /// registry or claiming any unmaterialized identity.
+    package borrowing func forEachRegisteredModel(
+        _ body: (Model) -> Void
+    ) {
+        withoutActuallyEscaping(body) { body in
+            forEachBody(body)
+        }
+    }
+}
+
 private final class _WebInspectorModelSchemaDefinitionIdentity: Sendable {}
 
 private struct _WebInspectorModelSchemaDefinition: Sendable {
@@ -218,11 +257,13 @@ package struct WebInspectorModelSchema<
         applyOwnerEffect:
             @escaping @Sendable (
                 WebInspectorModelContext,
-                OwnerEffect
+                OwnerEffect,
+                borrowing WebInspectorModelSchemaOwnerModels<Model>
             ) -> Void,
         resetOwnerProjection:
             @escaping @Sendable (
-                WebInspectorModelContext
+                WebInspectorModelContext,
+                borrowing WebInspectorModelSchemaOwnerModels<Model>
             ) -> Void
     ) {
         let identity = _WebInspectorModelSchemaDefinitionIdentity()
@@ -1002,11 +1043,13 @@ private final class _WebInspectorTypedModelSchemaOwnerBox<
     private let applyOwnerEffect:
         @Sendable (
             WebInspectorModelContext,
-            OwnerEffect
+            OwnerEffect,
+            borrowing WebInspectorModelSchemaOwnerModels<Model>
         ) -> Void
     private let resetOwnerProjection:
         @Sendable (
-            WebInspectorModelContext
+            WebInspectorModelContext,
+            borrowing WebInspectorModelSchemaOwnerModels<Model>
         ) -> Void
     private var models: [Model.ID: Model] = [:]
 
@@ -1038,11 +1081,13 @@ private final class _WebInspectorTypedModelSchemaOwnerBox<
         applyOwnerEffect:
             @escaping @Sendable (
                 WebInspectorModelContext,
-                OwnerEffect
+                OwnerEffect,
+                borrowing WebInspectorModelSchemaOwnerModels<Model>
             ) -> Void,
         resetOwnerProjection:
             @escaping @Sendable (
-                WebInspectorModelContext
+                WebInspectorModelContext,
+                borrowing WebInspectorModelSchemaOwnerModels<Model>
             ) -> Void
     ) {
         self.gate = gate
@@ -1084,12 +1129,20 @@ private final class _WebInspectorTypedModelSchemaOwnerBox<
         _ operations: [_WebInspectorModelSchemaEffectOperation<OwnerEffect>],
         owner: WebInspectorModelContext
     ) {
+        let ownerModels = WebInspectorModelSchemaOwnerModels<Model>(
+            model: { [self] id in models[id] },
+            forEach: { [self] body in
+                for model in models.values {
+                    body(model)
+                }
+            }
+        )
         for operation in operations {
             switch operation {
             case .resetOwnerProjection:
-                resetOwnerProjection(owner)
+                resetOwnerProjection(owner, ownerModels)
             case let .apply(effect):
-                applyOwnerEffect(owner, effect)
+                applyOwnerEffect(owner, effect, ownerModels)
             }
         }
     }
@@ -1169,11 +1222,13 @@ private final class _WebInspectorAnyModelSchemaOwnerBox {
         applyOwnerEffect:
             @escaping @Sendable (
                 WebInspectorModelContext,
-                OwnerEffect
+                OwnerEffect,
+                borrowing WebInspectorModelSchemaOwnerModels<Model>
             ) -> Void,
         resetOwnerProjection:
             @escaping @Sendable (
-                WebInspectorModelContext
+                WebInspectorModelContext,
+                borrowing WebInspectorModelSchemaOwnerModels<Model>
             ) -> Void
     ) {
         let box = _WebInspectorTypedModelSchemaOwnerBox(
