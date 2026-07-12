@@ -36,9 +36,9 @@ compatibility layers.
 
 ### Outcomes
 
-1. One inspected `WKWebView` has one model container and one ProxyKit model
-   feed, while multiple model contexts may independently consume the same
-   canonical page state.
+1. One inspection session for a `WKWebView` has one model container and one
+   ProxyKit model feed, while multiple model contexts may independently consume
+   the same canonical page state.
 2. The built-in UIKit inspector uses a main-actor context. A headless or custom
    consumer asks the same container to vend a context confined to any actor.
    The context has no public initializer independent of its container.
