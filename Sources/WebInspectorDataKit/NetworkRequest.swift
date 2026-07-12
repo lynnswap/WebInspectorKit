@@ -589,6 +589,38 @@ public final class NetworkBody {
         phase = .failed(failure)
     }
 
+    func resetForResponse(
+        _ response: Network.Response? = nil,
+        fallbackURL: String = ""
+    ) {
+        precondition(
+            role == .response,
+            "Only a response NetworkBody can adopt response metadata."
+        )
+        let hints = Self.bodyHints(
+            mimeType: response?.mimeType,
+            headers: response?.headers ?? [:],
+            url: response?.url ?? fallbackURL,
+            role: .response
+        )
+        let responseFetch = self.responseFetch
+        self.responseFetch = nil
+        responseFetch?.lease.completion.fulfill(
+            .failure(WebInspectorProxyError.staleIdentifier)
+        )
+        responseFetch?.task?.cancel()
+
+        withTextRepresentationInvalidationBatch {
+            kind = hints.kind
+            full = nil
+            isBase64Encoded = false
+            isTruncated = false
+            sourceSyntaxKind = hints.syntaxKind
+        }
+        size = nil
+        phase = .available
+    }
+
     static func makeRequestBody(for request: Network.Request) -> NetworkBody? {
         guard let postData = request.postData else {
             return nil
@@ -606,21 +638,6 @@ public final class NetworkBody {
             size: postData.utf8.count,
             sourceSyntaxKind: hints.syntaxKind,
             phase: .loaded
-        )
-    }
-
-    static func makeResponseBody(for response: Network.Response, fallbackURL: String = "") -> NetworkBody {
-        let hints = bodyHints(
-            mimeType: response.mimeType,
-            headers: response.headers,
-            url: response.url ?? fallbackURL,
-            role: .response
-        )
-        return NetworkBody(
-            role: .response,
-            kind: hints.kind,
-            sourceSyntaxKind: hints.syntaxKind,
-            phase: .available
         )
     }
 
@@ -968,15 +985,8 @@ public final class NetworkRequest: WebInspectorPersistentModel {
     /// Request body state, if the request has a body.
     public private(set) var requestBody: NetworkBody?
 
-    /// Response body state.
-    public private(set) var responseBody: NetworkBody {
-        willSet {
-            guard responseBody !== newValue else {
-                return
-            }
-            responseBody.invalidateResponseFetch()
-        }
-    }
+    /// Response body state. Its identity is stable for this request model.
+    public let responseBody: NetworkBody
 
     @ObservationIgnored weak var modelContext: WebInspectorModelContext?
     @ObservationIgnored private var currentRequest: Network.Request
@@ -1134,7 +1144,7 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         redirects = []
         webSocket = resourceType == .webSocket ? WebSocketState() : nil
         requestBody = NetworkBody.makeRequestBody(for: request)
-        responseBody = NetworkBody()
+        responseBody.resetForResponse(fallbackURL: currentRequest.url)
         state = .pending
     }
 
@@ -1171,7 +1181,7 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         encodedDataLength = 0
         metrics = nil
         requestBody = NetworkBody.makeRequestBody(for: request)
-        responseBody = NetworkBody()
+        responseBody.resetForResponse(fallbackURL: currentRequest.url)
         state = .pending
     }
 
@@ -1201,7 +1211,7 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         if let timestamp {
             responseReceivedTimestamp = timestamp
         }
-        responseBody = NetworkBody.makeResponseBody(for: response, fallbackURL: currentRequest.url)
+        responseBody.resetForResponse(response, fallbackURL: currentRequest.url)
         state = .responded
     }
 
@@ -1266,7 +1276,7 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         metrics = nil
         redirects = []
         requestBody = NetworkBody.makeRequestBody(for: currentRequest)
-        responseBody = NetworkBody.makeResponseBody(for: response, fallbackURL: currentRequest.url)
+        responseBody.resetForResponse(response, fallbackURL: currentRequest.url)
         state = .finished
     }
 
@@ -1289,7 +1299,7 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         resourceType = .webSocket
         requestHeaders = request.headers
         requestBody = NetworkBody.makeRequestBody(for: request)
-        responseBody = NetworkBody()
+        responseBody.resetForResponse(fallbackURL: currentRequest.url)
         status = nil
         statusText = nil
         responseURL = nil

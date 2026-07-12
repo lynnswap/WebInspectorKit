@@ -393,6 +393,79 @@ func concurrentResponseBodyCallersJoinOneProtocolRequest() async throws {
 
 @MainActor
 @Test
+func responseMetadataAndRedirectsPreserveResponseBodyIdentity() async throws {
+    let context = WebInspectorModelContext.preview(
+        configuration: .init(domains: [.network])
+    )
+    let requestID = Network.Request.ID("stable-response-body")
+    let request = NetworkRequest(
+        request: Network.Request(
+            id: requestID,
+            url: "https://example.com/start.txt",
+            method: "GET"
+        ),
+        initiator: nil,
+        resourceType: .fetch,
+        timestamp: 1,
+        modelContext: context
+    )
+    let body = request.responseBody
+
+    request.applyResponse(
+        Network.Response(
+            url: "https://example.com/start.txt",
+            status: 200,
+            mimeType: "text/plain"
+        ),
+        resourceType: .fetch,
+        timestamp: 2
+    )
+    body.load(Network.Body(data: "first payload", base64Encoded: false))
+    #expect(body.phase == .loaded)
+
+    request.applyResponse(
+        Network.Response(
+            url: "https://example.com/video.mp4",
+            status: 206,
+            mimeType: "video/mp4"
+        ),
+        resourceType: .media,
+        timestamp: 3
+    )
+    #expect(request.responseBody === body)
+    #expect(body.phase == .available)
+    #expect(body.full == nil)
+    #expect(body.kind == .binary)
+
+    guard case let .owner(lease) = body.acquireResponseFetch() else {
+        Issue.record("Expected the reset response body to own its next fetch.")
+        return
+    }
+    request.applyRedirect(
+        to: Network.Request(
+            id: requestID,
+            url: "https://example.com/final.json",
+            method: "GET"
+        ),
+        redirectResponse: Network.Response(
+            url: "https://example.com/video.mp4",
+            status: 302,
+            mimeType: "text/plain"
+        ),
+        timestamp: 4,
+        resourceType: .fetch
+    )
+
+    #expect(request.responseBody === body)
+    #expect(body.phase == .available)
+    #expect(body.kind == .text)
+    await #expect(throws: WebInspectorProxyError.staleIdentifier) {
+        _ = try await lease.completion.value()
+    }
+}
+
+@MainActor
+@Test
 func clearingNetworkInvalidatesEveryJoinedResponseBodyWaiter() async throws {
     try await withAttachedModelContext(
         configuration: .init(domains: [.network])
