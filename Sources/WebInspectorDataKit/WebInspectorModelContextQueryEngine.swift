@@ -45,13 +45,34 @@ package enum WebInspectorFetchedResultsSourceChange<
     case reset([WebInspectorFetchedResultsSourceRecord<Model>])
 }
 
-package struct WebInspectorFetchedResultsQueryRegistrationID: Hashable, Sendable {
+package struct WebInspectorFetchedResultsQueryRegistrationToken<
+    Model: WebInspectorPersistentModel,
+    SectionName: Hashable & Sendable
+>: Hashable, Sendable {
     fileprivate let rawValue: UInt64
 }
 
-package struct WebInspectorFetchedResultsQueryCandidateID: Hashable, Sendable {
-    fileprivate let registrationID: WebInspectorFetchedResultsQueryRegistrationID
+package struct WebInspectorFetchedResultsQueryCandidateToken<
+    Model: WebInspectorPersistentModel,
+    SectionName: Hashable & Sendable
+>: Hashable, Sendable {
+    fileprivate let registrationToken: WebInspectorFetchedResultsQueryRegistrationToken<Model, SectionName>
     fileprivate let generation: UInt64
+}
+
+package struct WebInspectorFetchedResultsSourceBatch<
+    Model: WebInspectorPersistentModel
+>: Sendable {
+    package let canonicalRevision: UInt64
+    package let changes: [WebInspectorFetchedResultsSourceChange<Model>]
+
+    package init(
+        canonicalRevision: UInt64,
+        changes: [WebInspectorFetchedResultsSourceChange<Model>]
+    ) {
+        self.canonicalRevision = canonicalRevision
+        self.changes = changes
+    }
 }
 
 package struct WebInspectorFetchedResultsQueryState<
@@ -62,7 +83,7 @@ package struct WebInspectorFetchedResultsQueryState<
     package let snapshot: WebInspectorFetchedResultsSnapshot<ItemID, SectionName>
 }
 
-package enum WebInspectorFetchedResultsQueryCoreError: Error, Equatable, Sendable {
+package enum WebInspectorFetchedResultsQueryError: Error, Equatable, Sendable {
     case closedRegistration
     case staleCandidate
 }
@@ -98,82 +119,134 @@ package struct WebInspectorFetchedResultsQueryRegistration<
     Model: WebInspectorPersistentModel,
     SectionName: Hashable & Sendable
 >: Sendable {
-    package let id: WebInspectorFetchedResultsQueryRegistrationID
-    private let owner: WebInspectorFetchedResultsQueryCore<Model>
+    typealias Snapshot =
+        WebInspectorFetchedResultsSnapshot<Model.ID, SectionName>
+    typealias Changes =
+        WebInspectorFetchedResultsChanges<Model.ID, SectionName>
+    typealias Publication =
+        WebInspectorRevisionedSnapshotPublication<Snapshot, Changes, any Error>
 
-    fileprivate init(
-        id: WebInspectorFetchedResultsQueryRegistrationID,
-        owner: WebInspectorFetchedResultsQueryCore<Model>
+    private let contextCore: WebInspectorModelContextCore
+    let token: WebInspectorFetchedResultsQueryRegistrationToken<Model, SectionName>
+    let publication: Publication
+
+    init(
+        contextCore: WebInspectorModelContextCore,
+        token: WebInspectorFetchedResultsQueryRegistrationToken<Model, SectionName>,
+        publication: Publication
     ) {
-        self.id = id
-        self.owner = owner
+        self.contextCore = contextCore
+        self.token = token
+        self.publication = publication
     }
 
     package func state() async throws -> WebInspectorFetchedResultsQueryState<
         Model.ID,
         SectionName
     > {
-        try await owner.state(for: id, sectionName: SectionName.self)
+        try await contextCore.queryState(
+            for: token,
+            publication: publication
+        )
     }
 
     package func updates() async throws -> WebInspectorFetchedResultsUpdateSequence<
         Model.ID,
         SectionName
     > {
-        try await owner.subscribe(to: id, sectionName: SectionName.self)
+        let base = try await contextCore.subscribe(
+            to: token,
+            publication: publication
+        )
+        return WebInspectorFetchedResultsUpdateSequence(
+            base: base,
+            rebase: { [contextCore, token, publication] rebaseToken in
+                try await contextCore.rebase(
+                    rebaseToken,
+                    for: token,
+                    publication: publication
+                )
+            }
+        )
     }
 
     package func prepareReplacement(
         _ descriptor: WebInspectorFetchDescriptor<Model>
-    ) async throws -> WebInspectorFetchedResultsQueryCandidateID {
-        try await owner.prepareReplacement(
+    ) async throws -> WebInspectorFetchedResultsQueryCandidateToken<Model, SectionName> {
+        try await contextCore.prepareReplacement(
             descriptor,
-            for: id,
-            sectionName: SectionName.self
+            for: token,
+            publication: publication
         )
     }
 
     package func commitReplacement(
-        _ candidateID: WebInspectorFetchedResultsQueryCandidateID
+        _ candidateToken: WebInspectorFetchedResultsQueryCandidateToken<Model, SectionName>
     ) async throws -> WebInspectorFetchedResultsQueryState<Model.ID, SectionName> {
-        try await owner.commitReplacement(
-            candidateID,
-            for: id,
-            sectionName: SectionName.self
+        try await contextCore.commitReplacement(
+            candidateToken,
+            for: token,
+            publication: publication
         )
     }
 
     package func discardReplacement(
-        _ candidateID: WebInspectorFetchedResultsQueryCandidateID
+        _ candidateToken: WebInspectorFetchedResultsQueryCandidateToken<Model, SectionName>
     ) async {
-        await owner.discardReplacement(
-            candidateID,
-            for: id,
-            sectionName: SectionName.self
+        await contextCore.discardReplacement(
+            candidateToken,
+            for: token,
+            publication: publication
         )
     }
 
     package func close() async {
-        await owner.close(id, sectionName: SectionName.self)
+        await contextCore.closeQuery(
+            token,
+            publication: publication
+        )
     }
 }
 
-package actor WebInspectorFetchedResultsQueryCore<
+protocol _WebInspectorAnyQueryEngine: AnyObject {
+    var registrationCount: Int { get }
+    func close() -> [_WebInspectorModelContextPendingQueryPublication]
+}
+
+/// One type-erased query publication prepared by a context-core transaction.
+///
+/// The closure captures only synchronized publication state and Sendable
+/// payload values. Query engines and registration boxes remain isolated to
+/// `WebInspectorModelContextCore`.
+struct _WebInspectorModelContextPendingQueryPublication: Sendable {
+    private let publishBody: @Sendable () -> Void
+
+    init(_ publish: @escaping @Sendable () -> Void) {
+        publishBody = publish
+    }
+
+    func publish() {
+        publishBody()
+    }
+}
+
+final class _WebInspectorFetchedResultsQueryEngine<
     Model: WebInspectorPersistentModel
-> {
+>: _WebInspectorAnyQueryEngine {
     private typealias SourceRecord = WebInspectorFetchedResultsSourceRecord<Model>
     private typealias Entry = _WebInspectorFetchedResultsAnyRegistrationEntry<Model>
 
     private var recordsByID: [Model.ID: SourceRecord]
     private var canonicalItemIDs: [Model.ID]
     private var itemIDByCanonicalRank: [WebInspectorFetchedResultsCanonicalRank: Model.ID]
-    private var registrations: [WebInspectorFetchedResultsQueryRegistrationID: Entry] = [:]
+    private var registrations: [UInt64: Entry] = [:]
     private var nextRegistrationID: UInt64 = 0
-    private var sourcePerformanceCounters =
+    var sourcePerformanceCounters =
         WebInspectorFetchedResultsSourcePerformanceCounters()
+    private var lastCanonicalRevision: UInt64?
     private var isClosed = false
 
-    package init(
+    init(
         records: [WebInspectorFetchedResultsSourceRecord<Model>] = []
     ) {
         let source = Self.validatedSource(records)
@@ -182,199 +255,223 @@ package actor WebInspectorFetchedResultsQueryCore<
         itemIDByCanonicalRank = source.itemIDByCanonicalRank
     }
 
-    package func register(
-        fetchDescriptor: WebInspectorFetchDescriptor<Model> = .init()
-    ) throws -> WebInspectorFetchedResultsQueryRegistration<Model, Never> {
+    func register(
+        fetchDescriptor: WebInspectorFetchDescriptor<Model>,
+        publication: WebInspectorFetchedResultsQueryRegistration<Model, Never>.Publication
+    ) throws -> WebInspectorFetchedResultsQueryRegistrationToken<Model, Never> {
         try ensureOpen()
         let box = try _WebInspectorFetchedResultsFlatRegistrationBox<Model>(
             descriptor: fetchDescriptor,
             recordsByID: recordsByID,
-            canonicalItemIDs: canonicalItemIDs
+            canonicalItemIDs: canonicalItemIDs,
+            publication: publication
         )
         return install(box)
     }
 
-    package func register<SectionName: Hashable & Sendable>(
-        fetchDescriptor: WebInspectorFetchDescriptor<Model> = .init(),
-        sectionBy: Expression<Model.QueryValue, SectionName>
-    ) throws -> WebInspectorFetchedResultsQueryRegistration<Model, SectionName> {
+    func register<SectionName: Hashable & Sendable>(
+        fetchDescriptor: WebInspectorFetchDescriptor<Model>,
+        sectionBy: Expression<Model.QueryValue, SectionName>,
+        publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication
+    ) throws -> WebInspectorFetchedResultsQueryRegistrationToken<Model, SectionName> {
         try ensureOpen()
         let box = try _WebInspectorFetchedResultsSectionedRegistrationBox<Model, SectionName>(
             descriptor: fetchDescriptor,
             sectionBy: sectionBy,
             recordsByID: recordsByID,
-            canonicalItemIDs: canonicalItemIDs
+            canonicalItemIDs: canonicalItemIDs,
+            publication: publication
         )
         return install(box)
     }
 
-    package func apply(_ change: WebInspectorFetchedResultsSourceChange<Model>) {
+    func applyBatch(
+        _ batch: WebInspectorFetchedResultsSourceBatch<Model>
+    ) -> [_WebInspectorModelContextPendingQueryPublication] {
         guard isClosed == false else {
-            return
+            return []
         }
-        let mutation = applyToSource(change)
-        var failedRegistrationIDs: [WebInspectorFetchedResultsQueryRegistrationID] = []
-        failedRegistrationIDs.reserveCapacity(registrations.count)
-        for (id, entry) in registrations {
-            do {
-                try entry.apply(mutation, recordsByID, canonicalItemIDs)
-            } catch {
-                entry.finish(error)
-                failedRegistrationIDs.append(id)
+        if let lastCanonicalRevision {
+            precondition(
+                lastCanonicalRevision < batch.canonicalRevision,
+                "A context query engine can apply a canonical revision only once."
+            )
+        }
+
+        let registrationIDs = Array(registrations.keys)
+        let onlyContentChanges =
+            batch.changes.count > 1
+            && batch.changes.allSatisfy(\.isContentOnly)
+        for id in registrationIDs {
+            registrations[id]?.beginBatch(
+                batch.changes.count,
+                onlyContentChanges
+            )
+        }
+
+        var pendingPublications: [_WebInspectorModelContextPendingQueryPublication] = []
+        pendingPublications.reserveCapacity(registrationIDs.count)
+        for change in batch.changes {
+            let mutation = applyToSource(change)
+            for id in registrationIDs {
+                guard let entry = registrations[id] else {
+                    continue
+                }
+                do {
+                    try entry.applyStaged(
+                        mutation,
+                        recordsByID,
+                        canonicalItemIDs
+                    )
+                } catch {
+                    registrations.removeValue(forKey: id)
+                    pendingPublications.append(entry.stagedFinish(error))
+                }
             }
         }
-        for id in failedRegistrationIDs {
-            registrations.removeValue(forKey: id)
+        for id in registrationIDs {
+            if let pendingPublication = registrations[id]?.finishBatch() {
+                pendingPublications.append(pendingPublication)
+            }
         }
+        lastCanonicalRevision = batch.canonicalRevision
+        return pendingPublications
     }
 
-    package func close() {
+    var registrationCount: Int {
+        registrations.count
+    }
+
+    func close() -> [_WebInspectorModelContextPendingQueryPublication] {
         guard isClosed == false else {
-            return
+            return []
         }
         isClosed = true
         let entries = registrations.values
         registrations.removeAll(keepingCapacity: false)
-        for entry in entries {
-            entry.finish(nil)
-        }
         recordsByID.removeAll(keepingCapacity: false)
         canonicalItemIDs.removeAll(keepingCapacity: false)
         itemIDByCanonicalRank.removeAll(keepingCapacity: false)
+        return entries.map { $0.stagedFinish(nil) }
     }
 
-    package func registrationCountForTesting() -> Int {
-        registrations.count
-    }
-
-    package func sourcePerformanceCountersForTesting()
-        -> WebInspectorFetchedResultsSourcePerformanceCounters
-    {
-        sourcePerformanceCounters
-    }
-
-    package func resetSourcePerformanceCountersForTesting() {
-        sourcePerformanceCounters = .init()
-    }
-
-    package func performanceCountersForTesting<SectionName: Hashable & Sendable>(
-        for registration: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>
+    func performanceCounters<SectionName: Hashable & Sendable>(
+        for token: WebInspectorFetchedResultsQueryRegistrationToken<Model, SectionName>,
+        publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication
     ) throws -> WebInspectorFetchedResultsQueryPerformanceCounters {
-        try box(for: registration.id, sectionName: SectionName.self).performanceCounters
+        try box(for: token, publication: publication).performanceCounters
     }
 
-    package func resetPerformanceCountersForTesting<SectionName: Hashable & Sendable>(
-        for registration: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>
+    func resetPerformanceCounters<SectionName: Hashable & Sendable>(
+        for token: WebInspectorFetchedResultsQueryRegistrationToken<Model, SectionName>,
+        publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication
     ) throws {
-        try box(for: registration.id, sectionName: SectionName.self).performanceCounters = .init()
+        try box(for: token, publication: publication).performanceCounters = .init()
     }
 
-    package func activeSubscriberCountForTesting<SectionName: Hashable & Sendable>(
-        for registration: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>
+    func activeSubscriberCount<SectionName: Hashable & Sendable>(
+        for token: WebInspectorFetchedResultsQueryRegistrationToken<Model, SectionName>,
+        publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication
     ) throws -> Int {
-        try box(for: registration.id, sectionName: SectionName.self)
+        try box(for: token, publication: publication)
             .publication.activeSubscriberCount
     }
 
-    package func waitingSubscriberCountForTesting<SectionName: Hashable & Sendable>(
-        for registration: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>
+    func waitingSubscriberCount<SectionName: Hashable & Sendable>(
+        for token: WebInspectorFetchedResultsQueryRegistrationToken<Model, SectionName>,
+        publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication
     ) throws -> Int {
-        try box(for: registration.id, sectionName: SectionName.self)
+        try box(for: token, publication: publication)
             .publication.waitingSubscriberCountForTesting
     }
 
-    fileprivate func state<SectionName: Hashable & Sendable>(
-        for id: WebInspectorFetchedResultsQueryRegistrationID,
-        sectionName: SectionName.Type
+    func state<SectionName: Hashable & Sendable>(
+        for token: WebInspectorFetchedResultsQueryRegistrationToken<Model, SectionName>,
+        publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication
     ) throws -> WebInspectorFetchedResultsQueryState<Model.ID, SectionName> {
-        try box(for: id, sectionName: sectionName).state()
+        try box(for: token, publication: publication).state()
     }
 
-    fileprivate func subscribe<SectionName: Hashable & Sendable>(
-        to id: WebInspectorFetchedResultsQueryRegistrationID,
-        sectionName: SectionName.Type
-    ) throws -> WebInspectorFetchedResultsUpdateSequence<Model.ID, SectionName> {
-        let box = try box(for: id, sectionName: sectionName)
-        let base = box.publication.subscribe(
+    func subscribe<SectionName: Hashable & Sendable>(
+        to token: WebInspectorFetchedResultsQueryRegistrationToken<Model, SectionName>,
+        publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication
+    ) throws -> WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication.UpdateSequence {
+        let box = try box(for: token, publication: publication)
+        return publication.subscribe(
             revision: box.revision,
             snapshot: box.currentSnapshot()
         )
-        return WebInspectorFetchedResultsUpdateSequence(
-            base: base,
-            rebase: { [self] token in
-                try await rebase(token, for: id, sectionName: sectionName)
-            }
-        )
     }
 
-    fileprivate func prepareReplacement<SectionName: Hashable & Sendable>(
+    func prepareReplacement<SectionName: Hashable & Sendable>(
         _ descriptor: WebInspectorFetchDescriptor<Model>,
-        for id: WebInspectorFetchedResultsQueryRegistrationID,
-        sectionName: SectionName.Type
-    ) throws -> WebInspectorFetchedResultsQueryCandidateID {
-        let box = try box(for: id, sectionName: sectionName)
+        for token: WebInspectorFetchedResultsQueryRegistrationToken<Model, SectionName>,
+        publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication
+    ) throws -> WebInspectorFetchedResultsQueryCandidateToken<Model, SectionName> {
+        let box = try box(for: token, publication: publication)
         do {
             return try box.prepareReplacement(
                 descriptor,
                 recordsByID: recordsByID,
                 canonicalItemIDs: canonicalItemIDs,
-                registrationID: id
+                registrationToken: token
             )
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            terminateRegistration(id, with: error)
+            terminateRegistration(token.rawValue, with: error).publish()
             throw error
         }
     }
 
-    fileprivate func commitReplacement<SectionName: Hashable & Sendable>(
-        _ candidateID: WebInspectorFetchedResultsQueryCandidateID,
-        for id: WebInspectorFetchedResultsQueryRegistrationID,
-        sectionName: SectionName.Type
-    ) throws -> WebInspectorFetchedResultsQueryState<Model.ID, SectionName> {
-        guard candidateID.registrationID == id else {
-            throw WebInspectorFetchedResultsQueryCoreError.staleCandidate
+    func commitReplacement<SectionName: Hashable & Sendable>(
+        _ candidateToken: WebInspectorFetchedResultsQueryCandidateToken<Model, SectionName>,
+        for token: WebInspectorFetchedResultsQueryRegistrationToken<Model, SectionName>,
+        publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication
+    ) throws -> (
+        WebInspectorFetchedResultsQueryState<Model.ID, SectionName>,
+        _WebInspectorModelContextPendingQueryPublication?
+    ) {
+        guard candidateToken.registrationToken == token else {
+            throw WebInspectorFetchedResultsQueryError.staleCandidate
         }
-        return try box(for: id, sectionName: sectionName)
-            .commitReplacement(candidateID)
+        return try box(for: token, publication: publication)
+            .commitReplacement(candidateToken)
     }
 
-    fileprivate func discardReplacement<SectionName: Hashable & Sendable>(
-        _ candidateID: WebInspectorFetchedResultsQueryCandidateID,
-        for id: WebInspectorFetchedResultsQueryRegistrationID,
-        sectionName: SectionName.Type
+    func discardReplacement<SectionName: Hashable & Sendable>(
+        _ candidateToken: WebInspectorFetchedResultsQueryCandidateToken<Model, SectionName>,
+        for token: WebInspectorFetchedResultsQueryRegistrationToken<Model, SectionName>,
+        publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication
     ) {
-        guard candidateID.registrationID == id,
-            let box = try? box(for: id, sectionName: sectionName)
+        guard candidateToken.registrationToken == token,
+            let box = try? box(for: token, publication: publication)
         else {
             return
         }
-        box.discardReplacement(candidateID)
+        box.discardReplacement(candidateToken)
     }
 
-    fileprivate func close<SectionName: Hashable & Sendable>(
-        _ id: WebInspectorFetchedResultsQueryRegistrationID,
-        sectionName: SectionName.Type
-    ) {
-        guard let entry = registrations[id],
-            entry.box is _WebInspectorFetchedResultsRegistrationBox<Model, SectionName>
-        else {
-            return
+    func close<SectionName: Hashable & Sendable>(
+        _ token: WebInspectorFetchedResultsQueryRegistrationToken<Model, SectionName>,
+        publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication
+    ) -> _WebInspectorModelContextPendingQueryPublication? {
+        guard (try? box(for: token, publication: publication)) != nil else {
+            return nil
         }
-        registrations.removeValue(forKey: id)?.finish(nil)
+        return registrations.removeValue(forKey: token.rawValue)?.stagedFinish(nil)
     }
 
-    private func rebase<SectionName: Hashable & Sendable>(
-        _ token: WebInspectorRevisionedSnapshotRebaseToken,
-        for id: WebInspectorFetchedResultsQueryRegistrationID,
-        sectionName: SectionName.Type
+    func rebase<SectionName: Hashable & Sendable>(
+        _ rebaseToken: WebInspectorRevisionedSnapshotRebaseToken,
+        for token: WebInspectorFetchedResultsQueryRegistrationToken<Model, SectionName>,
+        publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication
     ) throws -> WebInspectorRevisionedSnapshotRebase<
         WebInspectorFetchedResultsSnapshot<Model.ID, SectionName>
     > {
-        let box = try box(for: id, sectionName: sectionName)
-        let rebase = try box.publication.rebase(
-            token,
+        let box = try box(for: token, publication: publication)
+        let rebase = try publication.rebase(
+            rebaseToken,
             revision: box.revision,
             snapshot: box.currentSnapshot()
         )
@@ -384,42 +481,46 @@ package actor WebInspectorFetchedResultsQueryCore<
 
     private func install<SectionName: Hashable & Sendable>(
         _ box: _WebInspectorFetchedResultsRegistrationBox<Model, SectionName>
-    ) -> WebInspectorFetchedResultsQueryRegistration<Model, SectionName> {
+    ) -> WebInspectorFetchedResultsQueryRegistrationToken<Model, SectionName> {
         precondition(
             nextRegistrationID < UInt64.max,
             "Fetched-results registration identity overflowed."
         )
         nextRegistrationID += 1
-        let id = WebInspectorFetchedResultsQueryRegistrationID(
+        let token = WebInspectorFetchedResultsQueryRegistrationToken<Model, SectionName>(
             rawValue: nextRegistrationID
         )
-        registrations[id] = Entry(box)
-        return WebInspectorFetchedResultsQueryRegistration(id: id, owner: self)
+        registrations[token.rawValue] = Entry(box)
+        return token
     }
 
-    private func box<SectionName: Hashable & Sendable>(
-        for id: WebInspectorFetchedResultsQueryRegistrationID,
-        sectionName: SectionName.Type
+    fileprivate func box<SectionName: Hashable & Sendable>(
+        for token: WebInspectorFetchedResultsQueryRegistrationToken<Model, SectionName>,
+        publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication
     ) throws -> _WebInspectorFetchedResultsRegistrationBox<Model, SectionName> {
         guard
-            let box = registrations[id]?.box
-                as? _WebInspectorFetchedResultsRegistrationBox<Model, SectionName>
+            let box = registrations[token.rawValue]?.box
+                as? _WebInspectorFetchedResultsRegistrationBox<Model, SectionName>,
+            box.publication === publication
         else {
-            throw WebInspectorFetchedResultsQueryCoreError.closedRegistration
+            throw WebInspectorFetchedResultsQueryError.closedRegistration
         }
         return box
     }
 
     private func terminateRegistration(
-        _ id: WebInspectorFetchedResultsQueryRegistrationID,
+        _ id: UInt64,
         with error: any Error
-    ) {
-        registrations.removeValue(forKey: id)?.finish(error)
+    ) -> _WebInspectorModelContextPendingQueryPublication {
+        guard let entry = registrations.removeValue(forKey: id) else {
+            preconditionFailure("A failing query registration disappeared before termination.")
+        }
+        return entry.stagedFinish(error)
     }
 
     private func ensureOpen() throws {
         if isClosed {
-            throw WebInspectorFetchedResultsQueryCoreError.closedRegistration
+            throw WebInspectorFetchedResultsQueryError.closedRegistration
         }
     }
 
@@ -595,6 +696,15 @@ private enum _WebInspectorFetchedResultsSourceMutation<
     case reset
 }
 
+private extension WebInspectorFetchedResultsSourceChange {
+    var isContentOnly: Bool {
+        if case .contentOnly = self {
+            return true
+        }
+        return false
+    }
+}
+
 private struct _WebInspectorFetchedResultsEvaluation<
     Model: WebInspectorPersistentModel,
     SectionName: Hashable & Sendable
@@ -609,7 +719,7 @@ private struct _WebInspectorFetchedResultsCandidate<
     Model: WebInspectorPersistentModel,
     SectionName: Hashable & Sendable
 > {
-    let id: WebInspectorFetchedResultsQueryCandidateID
+    let token: WebInspectorFetchedResultsQueryCandidateToken<Model, SectionName>
     let descriptor: WebInspectorFetchDescriptor<Model>
     var evaluation: _WebInspectorFetchedResultsEvaluation<Model, SectionName>
 }
@@ -622,6 +732,16 @@ private class _WebInspectorFetchedResultsRegistrationBox<
     typealias Snapshot = WebInspectorFetchedResultsSnapshot<Model.ID, SectionName>
     typealias Changes = WebInspectorFetchedResultsChanges<Model.ID, SectionName>
     typealias Evaluation = _WebInspectorFetchedResultsEvaluation<Model, SectionName>
+    typealias Publication = WebInspectorFetchedResultsQueryRegistration<
+        Model,
+        SectionName
+    >.Publication
+
+    private enum PendingBatch {
+        case single(Changes?)
+        case contentOnly(Set<Model.ID>)
+        case snapshot(Snapshot, updatedItemIDs: Set<Model.ID>)
+    }
 
     var descriptor: WebInspectorFetchDescriptor<Model>
     var active: Evaluation
@@ -629,20 +749,19 @@ private class _WebInspectorFetchedResultsRegistrationBox<
     var revision: UInt64 = 0
     var nextCandidateGeneration: UInt64 = 0
     var performanceCounters: WebInspectorFetchedResultsQueryPerformanceCounters
-    let publication = WebInspectorRevisionedSnapshotPublication<
-        Snapshot,
-        Changes,
-        any Error
-    >()
+    let publication: Publication
+    private var pendingBatch: PendingBatch?
 
     init(
         descriptor: WebInspectorFetchDescriptor<Model>,
         initial: Evaluation,
-        performanceCounters: WebInspectorFetchedResultsQueryPerformanceCounters
+        performanceCounters: WebInspectorFetchedResultsQueryPerformanceCounters,
+        publication: Publication
     ) {
         self.descriptor = descriptor
         active = initial
         self.performanceCounters = performanceCounters
+        self.publication = publication
     }
 
     func state() -> WebInspectorFetchedResultsQueryState<Model.ID, SectionName> {
@@ -693,11 +812,31 @@ private class _WebInspectorFetchedResultsRegistrationBox<
         return snapshot
     }
 
-    func apply(
+    func beginBatch(
+        changeCount: Int,
+        onlyContentChanges: Bool
+    ) {
+        precondition(
+            pendingBatch == nil,
+            "A fetched-results registration cannot overlap source batches."
+        )
+        if changeCount <= 1 {
+            pendingBatch = .single(nil)
+        } else if onlyContentChanges {
+            pendingBatch = .contentOnly([])
+        } else {
+            pendingBatch = .snapshot(currentSnapshot(), updatedItemIDs: [])
+        }
+    }
+
+    func applyStaged(
         _ mutation: _WebInspectorFetchedResultsSourceMutation<Model>,
         recordsByID: [Model.ID: SourceRecord],
         canonicalItemIDs: [Model.ID]
     ) throws {
+        guard let pendingBatch else {
+            preconditionFailure("A fetched-results mutation requires an active source batch.")
+        }
         let changes = try apply(
             mutation,
             to: &active,
@@ -705,7 +844,24 @@ private class _WebInspectorFetchedResultsRegistrationBox<
             recordsByID: recordsByID,
             canonicalItemIDs: canonicalItemIDs
         )
-        publish(changes)
+
+        switch pendingBatch {
+        case let .single(previous):
+            precondition(
+                previous == nil,
+                "A single-change fetched-results batch received multiple mutations."
+            )
+            self.pendingBatch = .single(changes)
+        case let .contentOnly(updatedItemIDs):
+            self.pendingBatch = .contentOnly(
+                updatedItemIDs.union(changes.updatedItemIDs)
+            )
+        case let .snapshot(snapshot, updatedItemIDs):
+            self.pendingBatch = .snapshot(
+                snapshot,
+                updatedItemIDs: updatedItemIDs.union(changes.updatedItemIDs)
+            )
+        }
 
         if var candidate {
             _ = try apply(
@@ -719,12 +875,43 @@ private class _WebInspectorFetchedResultsRegistrationBox<
         }
     }
 
+    func finishBatch() -> _WebInspectorModelContextPendingQueryPublication? {
+        guard let pendingBatch else {
+            preconditionFailure("A fetched-results source batch was finished twice.")
+        }
+        self.pendingBatch = nil
+
+        let changes: Changes
+        switch pendingBatch {
+        case let .single(stagedChanges):
+            changes = stagedChanges ?? Changes()
+        case let .contentOnly(updatedItemIDs):
+            changes = Changes(
+                updatedItemIDs: updatedItemIDs.intersection(active.visibleItemIDs)
+            )
+        case let .snapshot(previousSnapshot, updatedItemIDs):
+            let currentSnapshot = currentSnapshot()
+            changes = difference(
+                from: previousSnapshot,
+                to: currentSnapshot,
+                updatedItemIDs:
+                    updatedItemIDs
+                    .intersection(previousSnapshot.itemIDs)
+                    .intersection(currentSnapshot.itemIDs)
+            )
+        }
+        return stage(changes)
+    }
+
     func prepareReplacement(
         _ descriptor: WebInspectorFetchDescriptor<Model>,
         recordsByID: [Model.ID: SourceRecord],
         canonicalItemIDs: [Model.ID],
-        registrationID: WebInspectorFetchedResultsQueryRegistrationID
-    ) throws -> WebInspectorFetchedResultsQueryCandidateID {
+        registrationToken: WebInspectorFetchedResultsQueryRegistrationToken<
+            Model,
+            SectionName
+        >
+    ) throws -> WebInspectorFetchedResultsQueryCandidateToken<Model, SectionName> {
         try Task.checkCancellation()
         var counters = performanceCounters
         let evaluation = try evaluateAll(
@@ -739,24 +926,27 @@ private class _WebInspectorFetchedResultsRegistrationBox<
             "Fetched-results candidate generation overflowed."
         )
         nextCandidateGeneration += 1
-        let candidateID = WebInspectorFetchedResultsQueryCandidateID(
-            registrationID: registrationID,
+        let candidateToken = WebInspectorFetchedResultsQueryCandidateToken(
+            registrationToken: registrationToken,
             generation: nextCandidateGeneration
         )
         candidate = _WebInspectorFetchedResultsCandidate(
-            id: candidateID,
+            token: candidateToken,
             descriptor: descriptor,
             evaluation: evaluation
         )
         performanceCounters = counters
-        return candidateID
+        return candidateToken
     }
 
     func commitReplacement(
-        _ candidateID: WebInspectorFetchedResultsQueryCandidateID
-    ) throws -> WebInspectorFetchedResultsQueryState<Model.ID, SectionName> {
-        guard var candidate, candidate.id == candidateID else {
-            throw WebInspectorFetchedResultsQueryCoreError.staleCandidate
+        _ candidateToken: WebInspectorFetchedResultsQueryCandidateToken<Model, SectionName>
+    ) throws -> (
+        WebInspectorFetchedResultsQueryState<Model.ID, SectionName>,
+        _WebInspectorModelContextPendingQueryPublication?
+    ) {
+        guard var candidate, candidate.token == candidateToken else {
+            throw WebInspectorFetchedResultsQueryError.staleCandidate
         }
         let previousSnapshot = currentSnapshot()
         let nextSnapshot = currentSnapshot(
@@ -771,26 +961,29 @@ private class _WebInspectorFetchedResultsRegistrationBox<
             to: nextSnapshot,
             updatedItemIDs: []
         )
-        publish(changes)
-        return state()
+        let pendingPublication = stage(changes)
+        return (state(), pendingPublication)
     }
 
     func discardReplacement(
-        _ candidateID: WebInspectorFetchedResultsQueryCandidateID
+        _ candidateToken: WebInspectorFetchedResultsQueryCandidateToken<Model, SectionName>
     ) {
-        guard candidate?.id == candidateID else {
+        guard candidate?.token == candidateToken else {
             return
         }
         candidate = nil
     }
 
-    func finish(_ error: (any Error)?) {
-        if let error {
-            publication.finish(throwing: error)
-        } else {
-            publication.finish()
-        }
+    func stagedFinish(_ error: (any Error)?) -> _WebInspectorModelContextPendingQueryPublication {
         candidate = nil
+        pendingBatch = nil
+        return _WebInspectorModelContextPendingQueryPublication { [publication] in
+            if let error {
+                publication.finish(throwing: error)
+            } else {
+                publication.finish()
+            }
+        }
     }
 
     fileprivate func evaluateAll(
@@ -1171,22 +1364,27 @@ private class _WebInspectorFetchedResultsRegistrationBox<
         )
     }
 
-    private func publish(_ changes: Changes) {
+    private func stage(
+        _ changes: Changes
+    ) -> _WebInspectorModelContextPendingQueryPublication? {
         guard changes.isEmpty == false else {
-            return
+            return nil
         }
         precondition(
             revision < UInt64.max,
             "Fetched-results publication revision overflowed."
         )
         let nextRevision = revision + 1
-        publication.publish(
-            from: revision,
-            to: nextRevision,
-            changes: changes
-        )
+        let previousRevision = revision
         revision = nextRevision
         performanceCounters.publicationCount += 1
+        return _WebInspectorModelContextPendingQueryPublication { [publication] in
+            publication.publish(
+                from: previousRevision,
+                to: nextRevision,
+                changes: changes
+            )
+        }
     }
 }
 
@@ -1202,7 +1400,8 @@ private final class _WebInspectorFetchedResultsFlatRegistrationBox<
     init(
         descriptor: WebInspectorFetchDescriptor<Model>,
         recordsByID: [Model.ID: SourceRecord],
-        canonicalItemIDs: [Model.ID]
+        canonicalItemIDs: [Model.ID],
+        publication: Publication
     ) throws {
         let placeholder = WebInspectorFetchedResultsSnapshot<Model.ID, Never>()
         super.init(
@@ -1213,7 +1412,8 @@ private final class _WebInspectorFetchedResultsFlatRegistrationBox<
                 visibleItemIDs: [],
                 snapshot: placeholder
             ),
-            performanceCounters: .init()
+            performanceCounters: .init(),
+            publication: publication
         )
         var counters = WebInspectorFetchedResultsQueryPerformanceCounters()
         active = try evaluateAll(
@@ -1259,7 +1459,8 @@ private final class _WebInspectorFetchedResultsSectionedRegistrationBox<
         descriptor: WebInspectorFetchDescriptor<Model>,
         sectionBy expression: Expression<Model.QueryValue, SectionName>,
         recordsByID: [Model.ID: SourceRecord],
-        canonicalItemIDs: [Model.ID]
+        canonicalItemIDs: [Model.ID],
+        publication: Publication
     ) throws {
         self.expression = expression
         let placeholder = WebInspectorFetchedResultsSnapshot<Model.ID, SectionName>(
@@ -1273,7 +1474,8 @@ private final class _WebInspectorFetchedResultsSectionedRegistrationBox<
                 visibleItemIDs: [],
                 snapshot: placeholder
             ),
-            performanceCounters: .init()
+            performanceCounters: .init(),
+            publication: publication
         )
         var counters = WebInspectorFetchedResultsQueryPerformanceCounters()
         active = try evaluateAll(
@@ -1306,27 +1508,38 @@ private struct _WebInspectorFetchedResultsAnyRegistrationEntry<
     Model: WebInspectorPersistentModel
 > {
     let box: AnyObject
-    let apply:
+    let beginBatch: (Int, Bool) -> Void
+    let applyStaged:
         (
             _WebInspectorFetchedResultsSourceMutation<Model>,
             [Model.ID: WebInspectorFetchedResultsSourceRecord<Model>],
             [Model.ID]
         ) throws -> Void
-    let finish: ((any Error)?) -> Void
+    let finishBatch: () -> _WebInspectorModelContextPendingQueryPublication?
+    let stagedFinish: ((any Error)?) -> _WebInspectorModelContextPendingQueryPublication
 
     init<SectionName: Hashable & Sendable>(
         _ box: _WebInspectorFetchedResultsRegistrationBox<Model, SectionName>
     ) {
         self.box = box
-        apply = { mutation, recordsByID, canonicalItemIDs in
-            try box.apply(
+        beginBatch = { changeCount, onlyContentChanges in
+            box.beginBatch(
+                changeCount: changeCount,
+                onlyContentChanges: onlyContentChanges
+            )
+        }
+        applyStaged = { mutation, recordsByID, canonicalItemIDs in
+            try box.applyStaged(
                 mutation,
                 recordsByID: recordsByID,
                 canonicalItemIDs: canonicalItemIDs
             )
         }
-        finish = { error in
-            box.finish(error)
+        finishBatch = {
+            box.finishBatch()
+        }
+        stagedFinish = { error in
+            box.stagedFinish(error)
         }
     }
 }
