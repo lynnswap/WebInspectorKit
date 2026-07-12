@@ -28,6 +28,23 @@ package enum WebInspectorModelContainerCoreError: Error, Equatable, Sendable {
     case closeTransactionMismatch
 }
 
+package enum WebInspectorNetworkResponseBodyCommandError: Error, Equatable, Sendable {
+    case closed
+    case detached
+    case domainNotConfigured
+    case foreignStore
+    case staleRequest
+    case requestNotFound
+    case agentTargetUnavailable(WebInspectorTarget.ID)
+    case responseMissing
+    case responseNotFinished
+    case webSocketIneligible
+    case staleResponse
+    case proxy(WebInspectorProxyError)
+    case authorization(ConnectionModelCommandError)
+    case invalidReply(String)
+}
+
 package typealias WebInspectorCanonicalModelUpdateSequence =
     WebInspectorRevisionedSnapshotSequence<
         WebInspectorCanonicalModelSnapshot,
@@ -109,11 +126,15 @@ package struct WebInspectorModelContainerCorePerformanceCounters: Equatable, Sen
     package fileprivate(set) var ignoredEmptyTransactionCount = 0
     package fileprivate(set) var contextRegistrationCount = 0
     package fileprivate(set) var contextUnregistrationCount = 0
+    package fileprivate(set) var networkResponseBodyWireCommandCount = 0
+    package fileprivate(set) var networkResponseBodyCoalescedWaiterCount = 0
+    package fileprivate(set) var networkResponseBodyInvalidationCount = 0
 }
 
 package struct WebInspectorModelContainerCoreMetrics: Equatable, Sendable {
     package let revision: UInt64
     package let activeContextRegistrationCount: Int
+    package let networkResponseBodyOperationCount: Int
     package let core: WebInspectorModelContainerCorePerformanceCounters
     package let canonicalStore: WebInspectorCanonicalModelStorePerformanceCounters
 }
@@ -168,6 +189,40 @@ package actor WebInspectorModelContainerCore {
         let waiter: WebInspectorModelContextAcknowledgementWaiter
     }
 
+    private struct NetworkResponseBodyCommandRoute: Sendable {
+        let lease: CanonicalNetworkResponseBodyLease
+        let resourceID: UInt64
+        let attachmentGeneration: WebInspectorContainerAttachmentGeneration
+        let pageGeneration: WebInspectorPage.Generation
+        let agentTarget: ModelTarget
+        let rawRequestID: Network.Request.ID
+        let backendResourceIdentifier: Network.BackendResourceID?
+        let proxy: WebInspectorProxy
+        let feedID: ConnectionModelFeedID
+
+        func hasSameAuthority(
+            as other: NetworkResponseBodyCommandRoute
+        ) -> Bool {
+            lease == other.lease
+                && resourceID == other.resourceID
+                && attachmentGeneration == other.attachmentGeneration
+                && pageGeneration == other.pageGeneration
+                && agentTarget == other.agentTarget
+                && rawRequestID == other.rawRequestID
+                && backendResourceIdentifier
+                    == other.backendResourceIdentifier
+                && proxy === other.proxy
+                && feedID == other.feedID
+        }
+    }
+
+    private struct NetworkResponseBodyCommandOperation: Sendable {
+        let route: NetworkResponseBodyCommandRoute
+        let completion: ReplyPromise<Network.Body>
+        let task: Task<Void, Never>
+        var isRetired: Bool
+    }
+
     package nonisolated let storeID: WebInspectorContainerStoreID
     package nonisolated let configuredDomains: Set<ModelDomain>
     package nonisolated let mainContextSeed: WebInspectorModelContextSeed
@@ -185,6 +240,9 @@ package actor WebInspectorModelContainerCore {
     private var detachTransaction: WebInspectorModelContainerReset?
     private var completedDetachTransactionID: UInt64?
     private var closeTransaction: WebInspectorModelContainerClose?
+    private var nextNetworkResponseBodyCommandOperationID: UInt64 = 0
+    private var networkResponseBodyOperationIDByLease: [CanonicalNetworkResponseBodyLease: UInt64] = [:]
+    private var networkResponseBodyOperations: [UInt64: NetworkResponseBodyCommandOperation] = [:]
     private var performanceCounters =
         WebInspectorModelContainerCorePerformanceCounters()
     package var nextAttachmentGeneration: UInt64 = 0
@@ -267,6 +325,8 @@ package actor WebInspectorModelContainerCore {
             activeContextRegistrationCount: contextRegistrations.values.count {
                 $0.phase.isMaterialized || $0.admission.wasClaimed
             },
+            networkResponseBodyOperationCount:
+                networkResponseBodyOperations.count,
             core: performanceCounters,
             canonicalStore: canonicalStore.performanceCounters
         )
@@ -543,7 +603,24 @@ package actor WebInspectorModelContainerCore {
                 "Canonical Model Store escaped its declared error contract: \(error)"
             )
         }
+        invalidateStaleNetworkResponseBodyOperations()
         return publish(transaction)
+    }
+
+    /// Loads one current canonical response body through the physical Network
+    /// agent that allocated its opaque request identifier.
+    ///
+    /// The Core owns admission and cross-context coalescing. Cancelling one
+    /// caller removes only that caller's wait; attachment and canonical-state
+    /// invalidation own cancellation of the shared wire operation.
+    package func loadNetworkResponseBody(
+        for requestID: CanonicalNetworkRequestIDStorage
+    ) async throws -> Network.Body {
+        try Task.checkCancellation()
+        let completion = try claimNetworkResponseBodyOperation(
+            for: requestID
+        )
+        return try await completion.value()
     }
 
     /// Clears canonical membership and publishes a nonterminal reset. Every
@@ -561,6 +638,7 @@ package actor WebInspectorModelContainerCore {
         guard lifecycle == .open else {
             throw .closed
         }
+        retireAllNetworkResponseBodyOperations(with: .detached)
         let transaction = canonicalStore.clearForDetach()
         guard let commit = publish(transaction) else {
             return nil
@@ -598,6 +676,7 @@ package actor WebInspectorModelContainerCore {
         try await waitForAcknowledgements(
             transaction.acknowledgementBarrier
         )
+        await waitForNetworkResponseBodyOperationsToFinish()
         if isCompletedDetachTransaction(transaction) {
             return
         }
@@ -665,6 +744,7 @@ package actor WebInspectorModelContainerCore {
             "A closed Model Container Core must retain its close transaction."
         )
         lifecycle = .closing
+        retireAllNetworkResponseBodyOperations(with: .closed)
         var closingRegistrationIDs: Set<WebInspectorModelContextRegistrationID> = []
         for registrationID in Array(contextRegistrations.keys) {
             guard var registration = contextRegistrations[registrationID] else {
@@ -725,6 +805,7 @@ package actor WebInspectorModelContainerCore {
         try await waitForAcknowledgements(
             transaction.acknowledgementBarrier
         )
+        await waitForNetworkResponseBodyOperationsToFinish()
         if lifecycle == .closed {
             return
         }
@@ -764,6 +845,320 @@ package actor WebInspectorModelContainerCore {
 }
 
 private extension WebInspectorModelContainerCore {
+    func claimNetworkResponseBodyOperation(
+        for requestID: CanonicalNetworkRequestIDStorage
+    ) throws -> ReplyPromise<Network.Body> {
+        let route = try networkResponseBodyRoute(for: requestID)
+        if let operationID = networkResponseBodyOperationIDByLease[route.lease] {
+            guard let operation = networkResponseBodyOperations[operationID],
+                !operation.isRetired
+            else {
+                preconditionFailure(
+                    "A Network response-body lease lost its active operation."
+                )
+            }
+            precondition(
+                operation.route.hasSameAuthority(as: route),
+                "Canonical Network command authority changed without advancing its response-body revision."
+            )
+            performanceCounters.networkResponseBodyCoalescedWaiterCount += 1
+            return operation.completion
+        }
+
+        precondition(
+            nextNetworkResponseBodyCommandOperationID < UInt64.max,
+            "Model Container Core exhausted Network response-body operation identifiers."
+        )
+        nextNetworkResponseBodyCommandOperationID += 1
+        let operationID = nextNetworkResponseBodyCommandOperationID
+        let completion = ReplyPromise<Network.Body>()
+        let task = Task.detached(priority: .userInitiated) { [weak self] in
+            let result = await Self.performNetworkResponseBodyCommand(route)
+            guard let self else {
+                completion.fulfill(
+                    .failure(WebInspectorNetworkResponseBodyCommandError.closed)
+                )
+                return
+            }
+            await self.finishNetworkResponseBodyOperation(
+                operationID,
+                result: result
+            )
+        }
+        let operation = NetworkResponseBodyCommandOperation(
+            route: route,
+            completion: completion,
+            task: task,
+            isRetired: false
+        )
+        precondition(
+            networkResponseBodyOperations[operationID] == nil,
+            "A Network response-body operation identifier was reused."
+        )
+        precondition(
+            networkResponseBodyOperationIDByLease[route.lease] == nil,
+            "A Network response-body lease admitted two wire operations."
+        )
+        networkResponseBodyOperations[operationID] = operation
+        networkResponseBodyOperationIDByLease[route.lease] = operationID
+        performanceCounters.networkResponseBodyWireCommandCount += 1
+        return completion
+    }
+
+    private func networkResponseBodyRoute(
+        for requestID: CanonicalNetworkRequestIDStorage
+    ) throws -> NetworkResponseBodyCommandRoute {
+        guard !isConnectionCloseRequested,
+            lifecycle == .open
+        else {
+            throw WebInspectorNetworkResponseBodyCommandError.closed
+        }
+        guard configuredDomains.contains(.network) else {
+            throw WebInspectorNetworkResponseBodyCommandError
+                .domainNotConfigured
+        }
+        guard requestID.storeID == storeID else {
+            throw WebInspectorNetworkResponseBodyCommandError.foreignStore
+        }
+        guard let resource = activeAttachment,
+            let binding = canonicalStore.bindingSnapshot
+        else {
+            throw WebInspectorNetworkResponseBodyCommandError.detached
+        }
+        guard resource.generation == requestID.attachmentGeneration,
+            binding.attachmentGeneration == requestID.attachmentGeneration,
+            binding.pageGeneration == requestID.pageGeneration
+        else {
+            throw WebInspectorNetworkResponseBodyCommandError.staleRequest
+        }
+        guard let record = canonicalStore.networkRequest(for: requestID) else {
+            throw WebInspectorNetworkResponseBodyCommandError.requestNotFound
+        }
+        guard record.webSocket == nil else {
+            throw WebInspectorNetworkResponseBodyCommandError
+                .webSocketIneligible
+        }
+        guard record.currentHop.response != nil else {
+            throw WebInspectorNetworkResponseBodyCommandError.responseMissing
+        }
+        guard record.lifecycle == .finished else {
+            throw WebInspectorNetworkResponseBodyCommandError
+                .responseNotFinished
+        }
+        guard
+            let agentTarget = binding.targets.lazy
+                .map(\.target)
+                .first(where: { $0.id == requestID.agentTargetID })
+        else {
+            throw
+                WebInspectorNetworkResponseBodyCommandError
+                .agentTargetUnavailable(requestID.agentTargetID)
+        }
+
+        return NetworkResponseBodyCommandRoute(
+            lease: CanonicalNetworkResponseBodyLease(
+                requestID: requestID,
+                responseRevision: record.responseBodyRevision
+            ),
+            resourceID: resource.id,
+            attachmentGeneration: resource.generation,
+            pageGeneration: binding.pageGeneration,
+            agentTarget: agentTarget,
+            rawRequestID: record.currentHop.request.rawID,
+            backendResourceIdentifier: record.currentHop.request
+                .backendResourceIdentifier.map {
+                    Network.BackendResourceID(
+                        sourceProcessID: $0.sourceProcessID,
+                        resourceID: $0.resourceID
+                    )
+                },
+            proxy: resource.proxyLease.proxy,
+            feedID: resource.feed.id
+        )
+    }
+
+    private nonisolated static func performNetworkResponseBodyCommand(
+        _ route: NetworkResponseBodyCommandRoute
+    ) async -> Result<Network.Body, WebInspectorNetworkResponseBodyCommandError> {
+        let target = route.proxy.modelTarget(
+            route.agentTarget,
+            authorization: ConnectionModelCommandAuthorization(
+                feedID: route.feedID,
+                generation: route.pageGeneration
+            )
+        )
+        do {
+            return .success(
+                try await target.network.responseBody(
+                    for: route.rawRequestID,
+                    backendResourceIdentifier: route.backendResourceIdentifier
+                )
+            )
+        } catch let error as WebInspectorProxyError {
+            return .failure(.proxy(error))
+        } catch let error as ConnectionModelCommandError {
+            return .failure(.authorization(error))
+        } catch is CancellationError {
+            return .failure(.staleResponse)
+        } catch {
+            return .failure(.invalidReply(String(reflecting: error)))
+        }
+    }
+
+    func finishNetworkResponseBodyOperation(
+        _ operationID: UInt64,
+        result: Result<Network.Body, WebInspectorNetworkResponseBodyCommandError>
+    ) {
+        guard
+            let operation = networkResponseBodyOperations.removeValue(
+                forKey: operationID
+            )
+        else {
+            preconditionFailure(
+                "A Network response-body operation completed without its Core owner."
+            )
+        }
+        if networkResponseBodyOperationIDByLease[operation.route.lease]
+            == operationID
+        {
+            networkResponseBodyOperationIDByLease[operation.route.lease] = nil
+        }
+        guard !operation.isRetired else {
+            return
+        }
+
+        if let validationError = networkResponseBodyCompletionError(
+            for: operation.route
+        ) {
+            precondition(
+                operation.completion.fulfill(.failure(validationError)),
+                "A current Network response-body operation completed twice."
+            )
+        } else {
+            precondition(
+                operation.completion.fulfill(result.mapError { $0 as any Error }),
+                "A current Network response-body operation completed twice."
+            )
+        }
+    }
+
+    private func networkResponseBodyCompletionError(
+        for route: NetworkResponseBodyCommandRoute
+    ) -> WebInspectorNetworkResponseBodyCommandError? {
+        if isConnectionCloseRequested
+            || lifecycle == .closing
+            || lifecycle == .closed
+        {
+            return .closed
+        }
+        guard lifecycle == .open,
+            let resource = activeAttachment
+        else {
+            return .detached
+        }
+        guard resource.id == route.resourceID,
+            resource.generation == route.attachmentGeneration,
+            resource.feed.id == route.feedID,
+            resource.proxyLease.proxy === route.proxy,
+            let binding = canonicalStore.bindingSnapshot,
+            binding.attachmentGeneration == route.attachmentGeneration,
+            binding.pageGeneration == route.pageGeneration,
+            binding.targets.contains(where: { $0.target == route.agentTarget }),
+            let record = canonicalStore.networkRequest(
+                for: route.lease.requestID
+            ),
+            record.responseBodyRevision == route.lease.responseRevision,
+            record.lifecycle == .finished,
+            record.webSocket == nil,
+            record.currentHop.response != nil,
+            record.currentHop.request.rawID == route.rawRequestID,
+            networkBackendResourceIdentifier(
+                for: record
+            ) == route.backendResourceIdentifier
+        else {
+            return .staleResponse
+        }
+        return nil
+    }
+
+    func networkBackendResourceIdentifier(
+        for record: CanonicalNetworkRequestRecord
+    ) -> Network.BackendResourceID? {
+        record.currentHop.request.backendResourceIdentifier.map {
+            Network.BackendResourceID(
+                sourceProcessID: $0.sourceProcessID,
+                resourceID: $0.resourceID
+            )
+        }
+    }
+
+    func invalidateStaleNetworkResponseBodyOperations() {
+        for operationID in networkResponseBodyOperations.keys.sorted() {
+            guard let operation = networkResponseBodyOperations[operationID],
+                !operation.isRetired,
+                let error = networkResponseBodyCompletionError(
+                    for: operation.route
+                )
+            else {
+                continue
+            }
+            retireNetworkResponseBodyOperation(
+                operationID,
+                with: error
+            )
+        }
+    }
+
+    func retireAllNetworkResponseBodyOperations(
+        with error: WebInspectorNetworkResponseBodyCommandError
+    ) {
+        for operationID in networkResponseBodyOperations.keys.sorted() {
+            retireNetworkResponseBodyOperation(
+                operationID,
+                with: error
+            )
+        }
+    }
+
+    func retireNetworkResponseBodyOperation(
+        _ operationID: UInt64,
+        with error: WebInspectorNetworkResponseBodyCommandError
+    ) {
+        guard var operation = networkResponseBodyOperations[operationID],
+            !operation.isRetired
+        else {
+            return
+        }
+        operation.isRetired = true
+        networkResponseBodyOperations[operationID] = operation
+        if networkResponseBodyOperationIDByLease[operation.route.lease]
+            == operationID
+        {
+            networkResponseBodyOperationIDByLease[operation.route.lease] = nil
+        }
+        precondition(
+            operation.completion.fulfill(.failure(error)),
+            "A Network response-body operation was invalidated twice."
+        )
+        operation.task.cancel()
+        performanceCounters.networkResponseBodyInvalidationCount += 1
+    }
+
+    func waitForNetworkResponseBodyOperationsToFinish() async {
+        let tasks = networkResponseBodyOperations.values.map(\.task)
+        for task in tasks {
+            await task.value
+        }
+        precondition(
+            networkResponseBodyOperations.isEmpty,
+            "Model Container lifecycle completed before Network response-body commands quiesced."
+        )
+        precondition(
+            networkResponseBodyOperationIDByLease.isEmpty,
+            "Model Container lifecycle retained an active Network response-body lease."
+        )
+    }
+
     func publish(
         _ transaction: WebInspectorCanonicalModelTransaction
     ) -> WebInspectorCanonicalModelCommit? {
