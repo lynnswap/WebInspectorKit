@@ -1,6 +1,7 @@
 # WebInspector model container and context architecture
 
 - Status: approved design gate (2026-07-12)
+- Scope amendment: navigation and DOM-binding epochs separated (2026-07-12)
 - Baseline branch: `codex/network-grouped-entries`
 - Baseline revision: `bf364dbb43402ace80542ab3826b32e8a22b40d0`
 - Toolchain baseline: Swift 6.3, iOS 18.4, macOS 15.4
@@ -148,10 +149,12 @@ context lifecycle are the same state machine.
 `F12` — Network preview depends on UI selection wrappers and section lookup,
 rather than one stable semantic entry ID followed by context model resolution.
 
-`F13` — A Network model event carries generation and target but not the current
-target document epoch. In a Network-only container, an initiator node ID cannot
-be scoped to the document that produced it, so a later document may alias the
-same raw node ID.
+`F13` — A Network model event carries generation and target but neither a
+navigation epoch nor an exact DOM-binding epoch. WebKit does not emit
+`DOM.documentUpdated` until `DOM.getDocument` has armed document delivery, so a
+Network-only container cannot truthfully provide a DOM-binding epoch without
+also constructing the DOM. Navigation scope and DOM-binding scope are distinct
+protocol facts and must not be represented by one synthetic epoch.
 
 `F14` — ProxyKit's direct event projection embeds target scope into some raw ID
 strings with a separator while leaving main-target IDs unmodified. The model
@@ -207,7 +210,7 @@ learn about persistent models or queries.
 | --- | --- | --- |
 | WKWebView attach/detach | Native bridge / ProxyKit | Only the native WebKit boundary is `@MainActor`. |
 | Physical targets, replies, capabilities | ProxyKit connection core | One source of transport truth. |
-| Structured model-event scope | ProxyKit model feed | Generation, target, and current document epoch travel separately from raw IDs. |
+| Structured model-event scope | ProxyKit model feed | Generation, target, navigation epoch, and optional exact DOM-binding epoch travel separately from raw IDs. |
 | Model-feed iteration and final Proxy close | `WebInspectorModelContainer` core | Exactly one feed consumer and close authority. |
 | Canonical current records and revision | container record-store actor | No Observable models. |
 | Context subscription fan-out | container publication broker | Atomic initial snapshot plus ordered delta/reset. |
@@ -267,17 +270,80 @@ where
 }
 ```
 
-The internal identity key includes all scopes required to prevent aliasing:
+The internal identity key includes the domain-specific scopes required to
+prevent aliasing and reject stale commands:
 
 - model-container/store identity;
 - page generation;
 - physical target where the WebKit ID is target-local;
-- document epoch for DOM/CSS identities;
+- exact DOM-binding epoch for DOM/CSS identities;
 - the domain's canonical raw identity or canonical container-assigned ordinal.
 
-ProxyKit supplies generation, target, and target document epoch as structured
-model-feed scope even when the DOM domain is not configured. The canonical
-store never decodes a target prefix from a raw protocol ID.
+The concrete persistent identities are scoped as follows:
+
+| Model | Identity scope after container/store ID |
+| --- | --- |
+| `DOMNode` | page generation, physical target, exact DOM-binding epoch, raw node ID |
+| `NetworkRequest` | page generation, physical target, raw request ID |
+| `ConsoleMessage` | canonical container-assigned message ordinal |
+| `RuntimeContext` | page generation, physical target, raw execution-context ID |
+| `NetworkEntry` | canonical container-assigned entry ID |
+
+ProxyKit supplies a structured model-event scope instead of encoding target
+scope into raw IDs:
+
+```swift
+package struct ModelEventScope: Sendable {
+    let generation: WebInspectorPage.Generation
+    let target: ModelTarget
+    let navigationEpoch: ModelNavigationEpoch
+    let domBindingEpoch: ModelDOMBindingEpoch?
+}
+```
+
+ProxyKit maintains the navigation epoch from its Page observation lease for
+every configured model feed. A new loader advances the epoch for the affected
+target. ProxyKit maintains the exact DOM-binding epoch from
+`DOM.documentUpdated` only while DOM delivery is armed; DOM/CSS records require
+that value. It does not issue a hidden `DOM.getDocument` merely to manufacture
+a DOM epoch for Network, Console, or Runtime.
+
+This distinction follows WebKit's own agent contracts. `Page.frameNavigated`
+reports that a frame is associated with a new loader. By contrast,
+`InspectorDOMAgent::setDocument` and `FrameDOMAgent::setDocument` suppress
+`DOM.documentUpdated` until `DOM.getDocument` has marked the document as
+requested. Treating either signal as the other would invent state that the
+producer did not publish.
+
+The model feed starts in this order:
+
+```text
+reset(generation)
+-> target snapshot containing each target's current navigation/DOM scope
+-> scoped events after the snapshot sequence fence
+-> configured-domain replay/bootstrap
+-> synchronization complete
+```
+
+The final model feed carries raw protocol IDs unchanged; ProxyKit's direct
+typed event APIs retain their existing target-prefixed projection as a separate
+consumer contract. During migration, structured scope lands before prefix
+removal. A domain stops receiving projected IDs only in the same change that
+makes its DataKit reducer construct persistent IDs from structured scope.
+
+A Network initiator node becomes a resolvable `DOMNode.ID` only when its event
+scope carries an exact DOM-binding epoch. Otherwise the Network reducer may use
+an internal opaque grouping key made from generation, target, navigation epoch,
+and raw node ID, but it must not manufacture a persistent DOM identity or pass
+that key to `model(for:)`. The canonical store never decodes a target prefix
+from a raw protocol ID.
+
+Navigation epoch is not part of `NetworkRequest.ID`: WebKit request IDs are
+monotonic within their generation/target scope and redirects deliberately keep
+the same ID. The epoch is an event-validity and opaque-related-resource
+boundary. Exact DOM-binding epoch remains part of `DOMNode.ID` even though the
+current WebKit node counter is monotonic, because document replacement is the
+command-validity boundary.
 
 Consequences:
 
@@ -612,7 +678,7 @@ WKWebView operations (@MainActor only)
   -> container detached feed driver
   -> canonical record-store actor
        - decode/reduce domain record changes
-       - assign scoped stable IDs
+       - assign domain-scoped stable IDs
        - advance revision
        - publish context snapshot/delta/reset
   -> context detached subscription driver
@@ -712,7 +778,7 @@ direct ProxyKit consumer is lowered to `package`/`internal` or deleted.
 | Per-context Console ordinal generation | F5 | canonical container store |
 | Unscoped raw model IDs | F5 | scoped persistent IDs |
 | `RuntimeObject` / `CSSStyles` persistent-model conformance | F5, F6 | explicit context-resource ownership |
-| Separator-decoded target scope | F13, F14 | structured feed event scope |
+| Separator-decoded target scope | F13, F14 | navigation/DOM-aware structured feed event scope |
 | Raw-ID replacement after terminal state | F15 | reducer protocol-violation failure |
 | Eager all-model mutation on owner actor | F6 | record cache plus materialized-ID updates |
 | Full old/new snapshot in every transaction | F7 | initial/delta/reset stream |
@@ -758,14 +824,19 @@ integrated.
   owned Tasks.
 - A late context receives an atomic current snapshot before later deltas.
 - A slow context receives reset rather than a discontinuous delta.
-- Navigation creates a new generation without surfacing transient context
-  failure.
+- A loader navigation advances that target's navigation epoch without
+  surfacing transient context failure; physical current-page replacement
+  advances page generation.
 
 ### Identity and materialization contracts
 
-- IDs cannot alias across container, target, document epoch, or page generation.
-- Network initiator node IDs remain document-scoped in a Network-only
-  container.
+- IDs cannot alias across the domain-specific container, target, generation,
+  DOM-binding epoch, raw-ID, or canonical-ordinal scopes defined above.
+- A Network-only container advances navigation scope without enabling or
+  constructing DOM. Its initiator node key is opaque and cannot resolve as a
+  `DOMNode`.
+- When DOM is configured, a Network initiator node resolves only against the
+  exact DOM-binding epoch carried by that event.
 - Same-scope terminal Network ID reuse and Runtime-context ID reuse fail fast;
   redirect continuation remains valid.
 - Foreign/stale IDs return `nil` from `model(for:)`.
@@ -866,7 +937,7 @@ require the implementation-phase tests listed above.
 | F10 | Selection owner stores entry ID; transition test. |
 | F11 | Page generation belongs to container store; navigation failure test. |
 | F12 | Detail resolves entry/request IDs; preview tests. |
-| F13 | Structured document epoch in every model event; Network-only initiator test. |
+| F13 | Structured navigation plus optional DOM-binding epochs; Network-only Page observation and opaque-initiator tests. |
 | F14 | No persistent-ID parser for target-prefixed raw strings; structured-scope tests. |
 | F15 | Reducer duplicate-ID invariant and redirect exception tests. |
 
@@ -875,24 +946,30 @@ require the implementation-phase tests listed above.
 Each step leaves the branch buildable and deletes replaced responsibility in
 the same change series.
 
-1. **Design contract** — add this document, mark conflicting documents
-   superseded, add compiler probes for the public sketch.
-2. **Identity foundation** — introduce typed persistent identifiers, QueryValue
-   contracts, and a context identity registry; migrate concrete model IDs.
-3. **Container ownership** — introduce the model container, move feed/close and
-   canonical reduction from the context, restore multiple contexts.
-4. **Context materialization** — add context core/record cache and make context
-   responsible for lazy materialization and in-place updates.
-5. **Generic query controller** — replace domain query registrations and
-   `WebInspectorFetchedResults` with descriptor/FRC initial-delta-reset flow.
-6. **Network semantic entry** — replace section-as-row grouping with
+1. **Design and identity foundation** — establish this contract, typed
+   persistent identifiers, and immutable query values.
+2. **Publication foundation** — add the bounded atomic initial/delta/reset
+   primitive shared by container subscriptions and fetched results.
+3. **Structured Proxy scope** — add navigation and optional DOM-binding epochs
+   to the model feed while temporarily preserving the existing raw-ID
+   projection for the still-unmigrated DataKit consumer.
+4. **Canonical domain reducers** — separate Network, Console/Runtime, then
+   DOM/CSS Sendable records from context-local Observable projections. Migrate
+   each domain to structured IDs and remove its dependency on projected raw-ID
+   prefixes in the same step.
+5. **Container ownership** — introduce the container/core, physically move the
+   single Proxy/feed lifecycle and canonical reducers out of the context, and
+   restore multiple contexts. Remove context attach/detach in this step.
+6. **Context materialization and generic query controller** — add context-local
+   identity registries and record caches; replace domain query registrations
+   and `WebInspectorFetchedResults` with the generic descriptor/FRC flow.
+7. **Network semantic entry** — replace section-as-row grouping with
    `NetworkEntry` and migrate list/detail selection.
-7. **Preview/navigation** — finish native preview binding and compact-pop
+8. **Preview/navigation** — finish native preview binding and compact-pop
    convergence on the new stable-ID flow.
-8. **Deletion and surface audit** — remove old paths, lower unused public API,
-   update README/DocC/migration notes.
-9. **Validation** — full Xcode and external contract tests, isolation/runtime
-   probes, performance counters, and Codex review until clean.
+9. **Deletion, surface audit, and validation** — remove projected model-feed
+   raw IDs and old paths, lower unused public API, update docs, and run full
+   Xcode, external contract, isolation, performance, and Codex review gates.
 
 ## Acceptance measurements
 
