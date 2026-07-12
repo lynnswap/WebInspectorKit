@@ -668,26 +668,47 @@ implementation.
 
 ### Attachment transaction
 
-The Container Core serializes attach, detach, and close state transitions. A
-public attach is one tokenized resource transaction:
+The Container Core owns a single asynchronous lifecycle-operation chain.
+Reservations may invalidate intent immediately, but adoption, detach, and
+close side effects enter that chain in order rather than relying on actor
+non-reentrancy. A public attach is one tokenized resource transaction:
 
 1. Before native Proxy creation, the Core reserves a monotonically increasing
-   attachment generation and returns an opaque attempt token. Reservation
-   invalidates every older pending attempt and orders the request against
-   detach/close, while leaving the currently adopted attachment authoritative
+   attachment generation and registers a Sendable attachment-attempt object.
+   That object owns the native-creation Task slot, candidate-Proxy close
+   authority, and a quiescence completion. It remains tracked after
+   supersession until creation has stopped and any candidate has been closed.
+   Reservation invalidates and cancels every older pending attempt while
+   retaining its quiescence obligation, and orders the request against
+   detach/close while leaving the currently adopted attachment authoritative
    until a token-valid replacement reaches adoption.
-2. MainActor creates only the native Proxy. A successfully created Proxy is
-   immediately placed under pending-attachment close authority; cancellation
-   or every path that does not call adoption must close and await it.
-3. Core adoption takes ownership at method entry. It validates the attempt
-   token before touching the current attachment. For a valid replacement it
+2. The attempt installs its owned Task handle before opening a start gate and
+   running only native Proxy creation on MainActor. A reservation made during
+   detach receives no start permit until detach has completed. Cancellation or
+   every path that does not reach adoption resolves the attempt only after
+   native creation and candidate cleanup are quiescent.
+3. Core adoption takes Proxy ownership at method entry and enqueues one
+   lifecycle operation. The operation validates the attempt token before every
+   side effect and again after every awaited reset, feed-acquisition, or
+   teardown barrier before commit. For a still-current replacement it
    invalidates the old attachment, completes its canonical/context reset and
-   Proxy teardown barrier, and only then registers the new single model-feed
-   consumer. A stale, closed, rejected, or bootstrap-failed adoption closes
-   and awaits the new Proxy before returning failure.
-4. Successful adoption publishes the new attachment's authoritative initial
-   state and awaits the context-application acknowledgement barrier before the
-   attach call returns.
+   Proxy teardown barrier, revalidates, and only then registers the new single
+   model-feed consumer. If a newer reservation arrived during any await, the
+   operation closes its candidate and exits as superseded without committing
+   later stages. A closed, rejected, or bootstrap-failed adoption likewise
+   closes and awaits the new Proxy before returning failure.
+4. After bootstrap, one final token check and actor turn atomically promote the
+   Proxy/feed and publish the new attachment's authoritative initial state.
+   This is the attach linearization point. The operation then awaits the
+   context-application acknowledgement barrier before the call returns; a
+   newer reservation after promotion is a later operation and does not
+   retroactively supersede this successful attach.
+
+Every resource produced by an awaited stage remains provisional and
+attempt-owned until the following token check promotes it in one actor turn.
+If that check fails, the operation tears down the provisional feed/Proxy and
+waits for its completion; it does not expose that resource as the current
+attachment or publish its records.
 
 A newer reservation makes every older still-pending attempt finish with
 `WebInspectorModelContainer.Failure.attachmentSuperseded`; it can never commit
@@ -699,11 +720,16 @@ unchanged, or leaves the Container detached when none existed. Detach or close
 invalidates all pending tokens, so a Proxy that finishes creation afterward is
 closed rather than adopted. Cancellation before adoption likewise preserves
 the previous attachment; cancellation after replacement teardown has begun
-closes the new Proxy and leaves the Container detached. The current attempt
-returns `CancellationError`, while a token already invalidated by a newer
-intent reports `attachmentSuperseded`. Package `attach(owning:)` transfers
-close authority at method entry and performs reservation plus adoption through
-the same Core transaction.
+but before promotion closes the new Proxy and leaves the Container detached.
+Those pre-commit cancellations return `CancellationError`, while a token
+already invalidated by a newer intent reports `attachmentSuperseded`. After
+the promotion linearization point, caller cancellation does not roll back the
+adopted resource; the owned operation completes its context acknowledgement
+barrier and returns success. Package `attach(owning:)` transfers close
+authority at method entry and performs reservation plus adoption through the
+same Core transaction. The Core retains superseded attempt records until their
+quiescence completions resolve; removing the current token never drops the
+cleanup obligation.
 
 ### Fetch descriptor
 
@@ -1066,8 +1092,10 @@ one object on the context owner. It does not scan or sort a collection.
 | Resource | Acquire | Retaining owner | Close authority | Completion |
 | --- | --- | --- | --- | --- |
 | Container session | container init | public container + core | container | terminal `close()` |
-| Attachment reservation | Core before native creation | container core | container core | adopted, superseded, failed, cancelled, detached, or closed |
-| Pending native Proxy | successful native creation / package ownership transfer | pending attachment transaction, then Core at adoption entry | transaction/container core | adopted or close awaited on every failure path |
+| Attachment attempt | Core reservation before native creation | container core, including after token invalidation | attempt/container core | native Task stopped and candidate adopted or close awaited |
+| Native creation Task | attachment-attempt start gate | attachment attempt | attempt/container core | Task plus candidate cleanup quiescence |
+| Pending native Proxy | successful native creation / package ownership transfer | attachment attempt, then Core at adoption entry | attempt/container core | adopted or close awaited on every failure path |
+| Lifecycle operation | adoption, detach, or close enqueue | container core async operation chain | container core | prior operation and all stage acknowledgements complete |
 | Native attachment | successful token-validated adoption | ProxyKit core | container core | `detach()` or `close()` awaits native detach |
 | Model feed | successful attach | container core | container core | feed terminal plus driver Task value |
 | Canonical store | container init | container core | container core | detach reset or close terminal |
@@ -1079,9 +1107,13 @@ one object on the context owner. It does not scan or sort a collection.
 
 Container detach is idempotent and nonterminal:
 
-1. invalidate the active attachment token and every pending attempt token, and
-   reject old feed/command/adoption completions;
-2. atomically reset the canonical store to empty;
+1. capture and invalidate the active attachment token and every nonquiescent
+   current or retired attempt that exists at the detach linearization point,
+   then cancel their owned native-creation Tasks without dropping their tracked
+   quiescence obligations;
+2. enqueue detach after the prior lifecycle operation, then reject old
+   feed/command/adoption completions and atomically reset the canonical store
+   to empty;
 3. publish that reset with one acknowledgement obligation for every currently
    registered context;
 4. each materialized context applies the reset through its context core and
@@ -1090,28 +1122,33 @@ Container detach is idempotent and nonterminal:
    sequence. Closing/unregistering the context satisfies its obligation; an
    unmaterialized main-context seed advances its stored base revision and
    acknowledges without creating an Observable wrapper;
-5. stop/close the model feed and ProxyKit connection, then await both the feed
-   driver/native detach and every context acknowledgement;
-6. only after both barriers complete, enter detached state and return.
+5. stop/close the model feed and ProxyKit connection, then await the feed
+   driver/native detach, every context acknowledgement, and every attachment
+   attempt captured at step 1's creation/cleanup quiescence;
+6. only after all barriers complete, enter detached state and return.
 
 Consequently, after `await container.detach()` returns, synchronous
 `model(for:)`/`registeredModel(for:)` lookup cannot resolve an old ID and every
 retained FRC's current snapshot is empty. A subscriber may not yet have pulled
 its reset sequence element, but the controller state that element describes is
-already committed. A later attach may reserve a token only after this detach
-transition passes its lifecycle gate.
+already committed. An attach requested during detach may reserve newer intent,
+but its attempt start gate remains closed until this detach and every stale
+native-creation cleanup obligation have passed the lifecycle barrier. The Core
+then grants native-creation permission only to the newest still-valid queued
+attempt; superseded queued attempts complete without creating a Proxy.
 
 Container close is idempotent and terminal:
 
 1. invalidate active and pending attachment tokens, and reject new attach
-   operations, contexts, and commands;
-2. stop/close the model feed and ProxyKit connection;
+   operations, contexts, and commands; cancel but retain every tracked attempt;
+2. enqueue close after the prior lifecycle operation and stop/close the model
+   feed and ProxyKit connection;
 3. terminate context publication with one close acknowledgement per registered
    context;
 4. invalidate each context registry, terminate its FRCs, and satisfy the
    acknowledgement by completing or unregistering that context;
-5. cancel and await the feed driver, every context driver/acknowledgement, and
-   native detach;
+5. cancel and await the feed driver, every context driver/acknowledgement,
+   native detach, and every attachment-attempt creation/cleanup completion;
 6. enter closed state only after all barriers complete.
 
 Context close unregisters only that context, terminates and awaits its FRC
@@ -1232,9 +1269,19 @@ integrated.
   may adopt if the older transaction is still pending, that older waiter
   receives `attachmentSuperseded`, and every non-adopted native Proxy is closed
   and awaited exactly once.
+- Superseding an adoption while it awaits old reset/teardown makes its
+  post-await token check close the candidate; it cannot register a feed or
+  publish after the newer intent.
 - Detach/close during native creation invalidates that attempt and closes its
   eventual Proxy; cancellation of the current attempt does the same before
   returning `CancellationError`.
+- Cancellation after promotion does not roll back the adopted Proxy; the attach
+  operation finishes its Context/FRC acknowledgements and reports the already
+  committed success.
+- Detach/close do not return while a captured native-creation Task is gated or
+  delayed; they await its cancellation/completion and candidate cleanup. A new
+  attach requested during detach cannot begin native creation until that
+  barrier completes.
 - Native creation failure preserves the previously adopted attachment (or the
   detached state when none existed). Feed-claim/bootstrap failure after valid
   adoption teardown leaves the Container detached. Neither path leaks a
