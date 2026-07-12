@@ -148,6 +148,22 @@ context lifecycle are the same state machine.
 `F12` — Network preview depends on UI selection wrappers and section lookup,
 rather than one stable semantic entry ID followed by context model resolution.
 
+`F13` — A Network model event carries generation and target but not the current
+target document epoch. In a Network-only container, an initiator node ID cannot
+be scoped to the document that produced it, so a later document may alias the
+same raw node ID.
+
+`F14` — ProxyKit's direct event projection embeds target scope into some raw ID
+strings with a separator while leaving main-target IDs unmodified. The model
+feed already has a structured target; DataKit must not parse or reuse this
+transport encoding as persistent identity.
+
+`F15` — Current Network and Runtime stores accept reuse of a terminal raw ID by
+replacing content under the same public ID. WebKit's corresponding ID owners
+are monotonic within their scope. Reuse of the same fully scoped ID is a
+protocol violation, except that a Network redirect deliberately continues the
+same request ID.
+
 ### Historical cause
 
 - `61f547f5` removed `WebInspectorFetchedResultsController` while fixing the
@@ -191,20 +207,42 @@ learn about persistent models or queries.
 | --- | --- | --- |
 | WKWebView attach/detach | Native bridge / ProxyKit | Only the native WebKit boundary is `@MainActor`. |
 | Physical targets, replies, capabilities | ProxyKit connection core | One source of transport truth. |
+| Structured model-event scope | ProxyKit model feed | Generation, target, and current document epoch travel separately from raw IDs. |
 | Model-feed iteration and final Proxy close | `WebInspectorModelContainer` core | Exactly one feed consumer and close authority. |
 | Canonical current records and revision | container record-store actor | No Observable models. |
 | Context subscription fan-out | container publication broker | Atomic initial snapshot plus ordered delta/reset. |
 | Context record mirror and query execution | one context-core actor per context | Immutable Sendable records only. |
 | Observable identity graph | `WebInspectorModelContext` owner actor | Same ID returns the same live object in that context. |
+| Runtime remote-object resources | `RuntimeObjectGroup` or owning Console model in one context | Remote handles are never persistent/queryable identities. |
+| Loaded CSS-style resources | owning `DOMNode` in one context | Load/refresh/failure state is never persistent/queryable membership. |
 | Query membership and order | generic query registration in context core | Produces ID snapshots and differences. |
 | FRC descriptor/revision/subscribers | `WebInspectorFetchedResultsController` | One lifecycle owner, no domain switch. |
 | Network logical grouping | Network record reducer | Produces `NetworkEntry` records and member request IDs. |
 | Selection | UIKit panel/navigation model | Stores stable `NetworkEntry.ID`, never a section wrapper. |
 | Rendering | UIKit controllers/views | Resolves IDs, observes models, installs native artifacts. |
 
+## Persistent entities and context resources
+
+`WebInspectorPersistentModel` is reserved for canonical entities represented in
+the container store and resolvable by stable ID in every context of that
+container. Initially these are `DOMNode`, `NetworkRequest`, `ConsoleMessage`,
+and `RuntimeContext`; `NetworkEntry` joins them during the Network migration.
+
+`RuntimeObject` and `CSSStyles` are context-local resources instead:
+
+- `RuntimeObject` is retained by a `RuntimeObjectGroup` or a Console message and
+  represents a remote handle whose command lifetime belongs to that context.
+- `CSSStyles` is loaded on demand by one context and its loading/failure/refresh
+  phase belongs to the owning `DOMNode`.
+
+Those resource types remain Observable, identifiable reference types where
+their consumers require it, but do not conform to
+`WebInspectorPersistentModel`, do not expose `QueryValue`, and are not accepted
+by generic fetch or `model(for:)`.
+
 ## Stable identity contract
 
-Every public model ID is an opaque concrete value conforming to
+Every public persistent-model ID is an opaque concrete value conforming to
 `WebInspectorPersistentIdentifier`.
 
 ```swift
@@ -237,6 +275,10 @@ The internal identity key includes all scopes required to prevent aliasing:
 - document epoch for DOM/CSS identities;
 - the domain's canonical raw identity or canonical container-assigned ordinal.
 
+ProxyKit supplies generation, target, and target document epoch as structured
+model-feed scope even when the DOM domain is not configured. The canonical
+store never decodes a target prefix from a raw protocol ID.
+
 Consequences:
 
 - Two contexts from one container receive equal IDs for the same entity.
@@ -247,6 +289,9 @@ Consequences:
   stale and cannot be used for commands.
 - Console ordinals are assigned by the canonical store, not independently by
   each context.
+- Reuse of one fully scoped DOM, Network, Runtime-context, or remote-object raw
+  identity fails fast at the reducer boundary. A Network redirect is an update
+  to the existing scoped request, not reuse.
 
 The context strongly retains materialized active models until deletion,
 generation reset, or context close. This makes same-context identity an actual
@@ -260,9 +305,21 @@ not.
 
 ```swift
 public final class WebInspectorModelContainer: Sendable {
+    public struct Domain: Hashable, Sendable {
+        public static let dom: Domain
+        public static let network: Domain
+        public static let console: Domain
+        public static let runtime: Domain
+        public static let css: Domain
+    }
+
     public struct Configuration: Sendable {
         public var domains: Set<Domain>
-        public init(domains: Set<Domain> = Domain.all)
+        public init(
+            domains: Set<Domain> = [
+                .dom, .network, .console, .runtime, .css,
+            ]
+        )
     }
 
     @MainActor
@@ -344,9 +401,10 @@ The common call site retains SwiftData-like syntax through contextual type
 inference:
 
 ```swift
+let media = NetworkRequest.ResourceCategory.media
 let descriptor = WebInspectorFetchDescriptor<NetworkEntry>(
     predicate: #Predicate { entry in
-        entry.resourceCategories.contains(.media)
+        entry.resourceCategories.contains(media)
     },
     sortBy: [SortDescriptor(\.startedAt)]
 )
@@ -421,6 +479,17 @@ public enum WebInspectorFetchedResultsUpdate<
         snapshot: WebInspectorFetchedResultsSnapshot<ItemID, SectionName>
     )
 }
+
+public struct WebInspectorFetchedResultsUpdateSequence<
+    ItemID,
+    SectionName
+>: AsyncSequence, Sendable
+where ItemID: Hashable & Sendable,
+      SectionName: Hashable & Sendable {
+    public typealias Element =
+        WebInspectorFetchedResultsUpdate<ItemID, SectionName>
+    public typealias Failure = any Error
+}
 ```
 
 Each subscriber has a custom synchronized mailbox. If a subscriber has not
@@ -431,6 +500,15 @@ replacement.
 
 Normal delivery after `.initial` is delta-only. Full snapshots appear only in
 `.initial` and `.reset`.
+
+The sequence uses typed throwing iteration. A predicate-evaluation or
+registration failure terminates only that controller's sequence; container and
+sibling queries remain active. Consumers therefore iterate with
+`for try await` and handle query failure separately from container failure.
+
+For an unsectioned controller (`SectionName == Never`), a snapshot contains one
+flat `itemIDs` order and no named sections. `Never` is a type-level marker; the
+implementation does not fabricate a sentinel section name.
 
 ## Consumer usage
 
@@ -449,7 +527,7 @@ func attach(to webView: WKWebView) async throws {
         )
     )
 
-    for await update in controller.updates() {
+    for try await update in controller.updates() {
         apply(update)
     }
 }
@@ -591,6 +669,7 @@ async close completion.
 | Axis | Absorption point | Variant-addition test |
 | --- | --- | --- |
 | Persistent model type | one `WebInspectorModelSchema<Model>` registration | Add the model/schema file and one registry entry; generic context/FRC code is unchanged. |
+| Context-local resource type | its semantic parent (`RuntimeObjectGroup`, Console, or `DOMNode`) | Adding a resource does not edit persistent schema/query code. |
 | Protocol domain reduction | domain reducer registry in canonical store | Add one reducer and one registration; container lifecycle is unchanged. |
 | Query predicate | `Predicate<Model.QueryValue>` | New predicates require no framework code. |
 | Query sorting | `SortDescriptor<Model.QueryValue>` | New sort key paths require no query-engine branch. |
@@ -632,6 +711,9 @@ direct ProxyKit consumer is lowered to `package`/`internal` or deleted.
 | Network/Console registration state in domain stores | F4 | generic context query core |
 | Per-context Console ordinal generation | F5 | canonical container store |
 | Unscoped raw model IDs | F5 | scoped persistent IDs |
+| `RuntimeObject` / `CSSStyles` persistent-model conformance | F5, F6 | explicit context-resource ownership |
+| Separator-decoded target scope | F13, F14 | structured feed event scope |
+| Raw-ID replacement after terminal state | F15 | reducer protocol-violation failure |
 | Eager all-model mutation on owner actor | F6 | record cache plus materialized-ID updates |
 | Full old/new snapshot in every transaction | F7 | initial/delta/reset stream |
 | Network groups encoded as FRC sections | F8, F12 | `NetworkEntry` model |
@@ -655,6 +737,8 @@ integrated.
 - Do not publish two stream elements and call them an atomic reset.
 - Do not use an unbounded subscriber buffer.
 - Do not synthesize an empty/fault model for a foreign or stale ID.
+- Do not register `RuntimeObject` or `CSSStyles` in the persistent identity
+  registry merely to reuse generic APIs.
 - Do not fall back to MainActor predicate/sort/diff work.
 - Do not represent one Network row as a fetched-results section.
 - Do not add preview/test branches to production model or UI logic; use the
@@ -680,11 +764,17 @@ integrated.
 ### Identity and materialization contracts
 
 - IDs cannot alias across container, target, document epoch, or page generation.
+- Network initiator node IDs remain document-scoped in a Network-only
+  container.
+- Same-scope terminal Network ID reuse and Runtime-context ID reuse fail fast;
+  redirect continuation remains valid.
 - Foreign/stale IDs return `nil` from `model(for:)`.
 - `registeredModel(for:)` does not materialize.
 - `model(for:)` materializes once and applies later record changes in place.
 - Deleted/reset models are rejected by command ownership checks.
 - Unmaterialized record updates do not mutate the context owner actor.
+- Runtime objects and loaded CSS styles are absent from generic fetch and
+  `model(for:)` at compile time.
 
 ### Generic query/FRC contracts
 
@@ -776,6 +866,9 @@ require the implementation-phase tests listed above.
 | F10 | Selection owner stores entry ID; transition test. |
 | F11 | Page generation belongs to container store; navigation failure test. |
 | F12 | Detail resolves entry/request IDs; preview tests. |
+| F13 | Structured document epoch in every model event; Network-only initiator test. |
+| F14 | No persistent-ID parser for target-prefixed raw strings; structured-scope tests. |
+| F15 | Reducer duplicate-ID invariant and redirect exception tests. |
 
 ## Migration and commit plan
 
@@ -809,6 +902,8 @@ the same change series.
   `ConsoleQuery`, `NetworkRequest`, or `ConsoleMessage`.
 - Network and Console stores no longer own query registrations.
 - Every public persistent model ID is scoped and maps back to its model type.
+- RuntimeObject and CSSStyles are context resources, not persistent/queryable
+  models.
 - No full collection filter/sort/diff runs on MainActor.
 - Normal FRC updates after initial contain no full snapshot.
 - Network UIKit rows use `NetworkEntry.ID`, not section IDs.
