@@ -431,6 +431,11 @@ not.
 
 ```swift
 public final class WebInspectorModelContainer: Equatable, Sendable {
+    public nonisolated static func == (
+        lhs: WebInspectorModelContainer,
+        rhs: WebInspectorModelContainer
+    ) -> Bool
+
     public struct Domain: Hashable, Sendable {
         public static let dom: Domain
         public static let network: Domain
@@ -485,19 +490,6 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         _ descriptor: WebInspectorFetchDescriptor<Model>
     ) async throws -> [Model]
 
-    public nonisolated(nonsending) func fetchedResultsController<Model>(
-        for descriptor: WebInspectorFetchDescriptor<Model>
-    ) async throws -> WebInspectorFetchedResultsController<Model, Never>
-
-    public nonisolated(nonsending) func fetchedResultsController<
-        Model,
-        SectionName
-    >(
-        for descriptor: WebInspectorFetchDescriptor<Model>,
-        sectionBy: Expression<Model.QueryValue, SectionName>
-    ) async throws -> WebInspectorFetchedResultsController<Model, SectionName>
-    where SectionName: Hashable & Sendable
-
     public nonisolated(nonsending) func close() async
 }
 
@@ -527,6 +519,8 @@ One container is one inspection session. Multiple contexts that are intended
 to observe the same `WKWebView` use that container and therefore share one
 canonical store and feed. A separately attached container is a separate
 session with different store identity; its IDs and models never alias.
+Container equality is reference/session identity (`===`), not equality of its
+configuration, inspected view, or current records.
 
 ### Fetch descriptor
 
@@ -587,6 +581,19 @@ where
     public private(set) var snapshot:
         WebInspectorFetchedResultsSnapshot<Model.ID, SectionName>
 
+    public convenience init(
+        fetchDescriptor: WebInspectorFetchDescriptor<Model> = .init(),
+        modelContext: WebInspectorModelContext,
+        isolation: isolated (any Actor) = #isolation
+    ) async throws where SectionName == Never
+
+    public init(
+        fetchDescriptor: WebInspectorFetchDescriptor<Model> = .init(),
+        sectionBy: Expression<Model.QueryValue, SectionName>,
+        modelContext: WebInspectorModelContext,
+        isolation: isolated (any Actor) = #isolation
+    ) async throws
+
     public nonisolated(nonsending) func update(
         _ descriptor: WebInspectorFetchDescriptor<Model>
     ) async throws
@@ -599,7 +606,15 @@ where
 ```
 
 The controller stores IDs and section names only. A UI resolves a visible or
-selected ID with its context.
+selected ID with its context. Its initializer follows SwiftData
+`ResultsObserver` and Core Data `NSFetchedResultsController`: the descriptor and
+specific context together define the registration. The context does not grow a
+parallel controller-factory API.
+
+DataKit does not offer a container-only controller initializer. Such an
+initializer would have to create and close a hidden context, obscuring the
+context-local identity of the models returned to the consumer. Callers first
+choose `mainContext` or explicitly ask the container for a custom context.
 
 ### Snapshot and delta
 
@@ -673,10 +688,15 @@ func attach(to webView: WKWebView) async throws {
         attachingTo: webView
     )
     let context = container.mainContext
-    let controller = try await context.fetchedResultsController(
-        for: WebInspectorFetchDescriptor<NetworkEntry>(
+    let controller = try await WebInspectorFetchedResultsController<
+        NetworkEntry,
+        Never
+    >(
+        fetchDescriptor: WebInspectorFetchDescriptor<NetworkEntry>(
             sortBy: [SortDescriptor(\.startedAt)]
-        )
+        ),
+        modelContext: context,
+        isolation: MainActor.shared
     )
 
     for try await update in controller.updates() {
@@ -1006,6 +1026,8 @@ public surface:
 - `Predicate<Model.QueryValue>`, `SortDescriptor<Model.QueryValue>`, and
   `Expression<Model.QueryValue, SectionName>`;
 - `WebInspectorFetchedResultsController<Model, Never>`;
+- context-bound unsectioned and sectioned controller initializers with an
+  `isolated (any Actor) = #isolation` parameter;
 - a Sendable container with a `@MainActor` context property;
 - an `Equatable & SendableMetatype` context with unavailable `Sendable`;
 - a container factory returning a non-Sendable context into its isolated
