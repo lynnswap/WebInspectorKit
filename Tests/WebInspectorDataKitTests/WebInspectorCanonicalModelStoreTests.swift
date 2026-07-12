@@ -1873,6 +1873,8 @@ func canonicalModelStoreBuildsSnapshotsOnlyOnExplicitBoundaryAndNotForTenThousan
     )
     let baselineFullRebuilds = fixture.store
         .networkPerformanceCountersForTesting.entryFullRebuildCount
+    let baselineFullRebuildMemberVisits = fixture.store
+        .networkPerformanceCountersForTesting.entryFullRebuildMemberVisitCount
 
     for index in 0..<10_000 {
         _ = try fixture.event(
@@ -1894,6 +1896,11 @@ func canonicalModelStoreBuildsSnapshotsOnlyOnExplicitBoundaryAndNotForTenThousan
     #expect(
         fixture.store.networkPerformanceCountersForTesting.entryFullRebuildCount
             == baselineFullRebuilds
+    )
+    #expect(
+        fixture.store.networkPerformanceCountersForTesting
+            .entryFullRebuildMemberVisitCount
+            == baselineFullRebuildMemberVisits
     )
     #expect(
         fixture.store.networkPerformanceCountersForTesting.entryIncrementalUpdateCount

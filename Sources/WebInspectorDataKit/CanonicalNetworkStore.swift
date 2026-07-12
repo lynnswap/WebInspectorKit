@@ -76,6 +76,7 @@ package enum CanonicalNetworkStoreError: Error, Equatable, Sendable {
         case entryEncodedDataLength
         case entryActiveRequestCount
         case entryFailedRequestCount
+        case entryStatusSeverityCount
         case entryRequestCount
     }
 
@@ -106,6 +107,7 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
         var failedRequestCount: Int
         var decodedDataLength: Int
         var encodedDataLength: Int
+        var statusSeverityCounts: [CanonicalNetworkEntryStatusSeverity: Int]
         var resourceCategoryCounts: [CanonicalNetworkResourceCategory: Int]
     }
 
@@ -162,6 +164,7 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
     #if DEBUG
         package struct PerformanceCounters: Equatable, Sendable {
             package var entryFullRebuildCount = 0
+            package var entryFullRebuildMemberVisitCount = 0
             package var entryIncrementalUpdateCount = 0
             package var entryQueryRebuildCount = 0
             package var targetLossIndexLookupCount = 0
@@ -2028,15 +2031,21 @@ private extension CanonicalNetworkStore {
             "Canonical Network request chronology is fixed at insertion."
         )
         guard let oldMemberIndex = memberIndexByRequestID[replacement.id],
+            oldEntryQuery.methods.count == oldEntry.requestIDs.count,
+            oldEntryQuery.searchTexts.count == oldEntry.requestIDs.count,
             oldEntry.requestIDs.indices.contains(oldMemberIndex),
             oldEntry.requestIDs[oldMemberIndex] == replacement.id,
-            oldEntryQuery.searchTexts.indices.contains(oldMemberIndex)
+            oldEntryQuery.methods.indices.contains(oldMemberIndex)
         else {
             preconditionFailure(
                 "Canonical Network entry lost its member index."
             )
         }
         let requestIDs = oldEntry.requestIDs
+        var methods = oldEntryQuery.methods
+        if oldQuery.method != newQuery.method {
+            methods[oldMemberIndex] = newQuery.method
+        }
         var searchTexts = oldEntryQuery.searchTexts
         if oldQuery.searchableText != newQuery.searchableText {
             searchTexts[oldMemberIndex] = newQuery.searchableText
@@ -2077,6 +2086,7 @@ private extension CanonicalNetworkStore {
         let newEntryQuery = CanonicalNetworkEntryQueryProjection(
             id: entryID,
             chronology: oldEntryQuery.chronology,
+            methods: methods,
             resourceCategories: Set(
                 newAggregate.resourceCategoryCounts.keys
             ),
@@ -2215,6 +2225,8 @@ private extension CanonicalNetworkStore {
         ) {
             if entry.didFullRebuild {
                 performanceCounters.entryFullRebuildCount += 1
+                performanceCounters.entryFullRebuildMemberVisitCount +=
+                    entry.record.requestIDs.count
             } else {
                 performanceCounters.entryIncrementalUpdateCount += 1
             }
@@ -2346,6 +2358,7 @@ private extension CanonicalNetworkStore {
             failedRequestCount: 0,
             decodedDataLength: 0,
             encodedDataLength: 0,
+            statusSeverityCounts: [:],
             resourceCategoryCounts: [:]
         )
         for (record, query) in zip(records, requestQueries) {
@@ -2443,6 +2456,12 @@ private extension CanonicalNetworkStore {
             record.currentHop.transfer.encodedDataLength,
             counter: .entryEncodedDataLength
         )
+        let severity = statusSeverity(for: record)
+        aggregate.statusSeverityCounts[severity] = try adding(
+            aggregate.statusSeverityCounts[severity] ?? 0,
+            1,
+            counter: .entryStatusSeverityCount
+        )
         aggregate.resourceCategoryCounts[category] = try adding(
             aggregate.resourceCategoryCounts[category] ?? 0,
             1,
@@ -2494,6 +2513,30 @@ private extension CanonicalNetworkStore {
             newRecord.currentHop.transfer.encodedDataLength,
             counter: .entryEncodedDataLength
         )
+        let oldSeverity = statusSeverity(for: oldRecord)
+        let newSeverity = statusSeverity(for: newRecord)
+        if oldSeverity != newSeverity {
+            guard
+                let oldSeverityCount = aggregate.statusSeverityCounts[
+                    oldSeverity
+                ], oldSeverityCount > 0
+            else {
+                preconditionFailure(
+                    "Canonical Network entry lost a status severity contribution."
+                )
+            }
+            if oldSeverityCount == 1 {
+                aggregate.statusSeverityCounts[oldSeverity] = nil
+            } else {
+                aggregate.statusSeverityCounts[oldSeverity] =
+                    oldSeverityCount - 1
+            }
+            aggregate.statusSeverityCounts[newSeverity] = try adding(
+                aggregate.statusSeverityCounts[newSeverity] ?? 0,
+                1,
+                counter: .entryStatusSeverityCount
+            )
+        }
         if oldQuery.resourceCategory != newQuery.resourceCategory {
             guard
                 let oldCategoryCount = aggregate.resourceCategoryCounts[
@@ -2540,7 +2583,10 @@ private extension CanonicalNetworkStore {
             requestCount: requestCount,
             url: primary.currentHop.request.url,
             method: primary.currentHop.request.method,
+            resourceType: primary.currentHop.resourceType,
+            mimeType: primary.currentHop.response?.mimeType,
             statusCode: primary.currentHop.response?.status,
+            statusSeverity: highestStatusSeverity(in: aggregate),
             decodedDataLength: aggregate.decodedDataLength,
             encodedDataLength: aggregate.encodedDataLength,
             lifecycle: lifecycle
@@ -2559,6 +2605,7 @@ private extension CanonicalNetworkStore {
         return CanonicalNetworkEntryQueryProjection(
             id: id,
             chronology: chronology,
+            methods: requestQueries.map(\.method),
             resourceCategories: Set(
                 requestQueries.map(\.resourceCategory)
             ),
@@ -2571,13 +2618,22 @@ private extension CanonicalNetworkStore {
         to entry: CanonicalNetworkEntryQueryProjection,
         at index: Int
     ) -> CanonicalNetworkEntryQueryProjection {
+        precondition(
+            entry.methods.count == entry.searchTexts.count
+                && (entry.methods.indices.contains(index)
+                    || index == entry.methods.endIndex),
+            "Canonical Network entry query lost ordered member alignment."
+        )
         var categories = entry.resourceCategories
         categories.insert(request.resourceCategory)
+        var methods = entry.methods
+        methods.insert(request.method, at: index)
         var searchTexts = entry.searchTexts
         searchTexts.insert(request.searchableText, at: index)
         return CanonicalNetworkEntryQueryProjection(
             id: entry.id,
             chronology: min(entry.chronology, request.chronology),
+            methods: methods,
             resourceCategories: categories,
             searchTexts: searchTexts
         )
@@ -2588,6 +2644,53 @@ private extension CanonicalNetworkStore {
             return true
         }
         return false
+    }
+
+    func statusSeverity(
+        for record: CanonicalNetworkRequestRecord
+    ) -> CanonicalNetworkEntryStatusSeverity {
+        if isFailed(record.lifecycle) {
+            return .error
+        }
+        if let statusCode = record.currentHop.response?.status {
+            if statusCode >= 500 {
+                return .error
+            }
+            if statusCode >= 400 {
+                return .warning
+            }
+            if statusCode >= 300 {
+                return .notice
+            }
+            return .success
+        }
+        if record.lifecycle == .finished {
+            return .success
+        }
+        return .neutral
+    }
+
+    private func highestStatusSeverity(
+        in aggregate: EntryAggregateState
+    ) -> CanonicalNetworkEntryStatusSeverity {
+        if aggregate.statusSeverityCounts[.error, default: 0] > 0 {
+            return .error
+        }
+        if aggregate.statusSeverityCounts[.warning, default: 0] > 0 {
+            return .warning
+        }
+        if aggregate.statusSeverityCounts[.notice, default: 0] > 0 {
+            return .notice
+        }
+        if aggregate.statusSeverityCounts[.success, default: 0] > 0 {
+            return .success
+        }
+        if aggregate.statusSeverityCounts[.neutral, default: 0] > 0 {
+            return .neutral
+        }
+        preconditionFailure(
+            "Canonical Network entry cannot have an empty status aggregate."
+        )
     }
 
     func chronologyKey(

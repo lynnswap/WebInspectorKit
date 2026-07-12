@@ -400,16 +400,20 @@ func canonicalNetworkEntryRepresentativeIsChronologicalFirst() throws {
     var entry = try #require(fixture.store.entries.first)
     #expect(entry.summary.primaryRequestID == firstID)
     #expect(entry.summary.url == "https://example.test/master.m3u8")
+    #expect(entry.summary.resourceType == Network.ResourceType.media.rawValue)
+    #expect(entry.summary.mimeType == nil)
     #expect(entry.summary.statusCode == nil)
+    #expect(entry.summary.statusSeverity == .neutral)
 
     _ = try fixture.store.reduce(
         .responseReceived(
             id: Network.Request.ID("second"),
             response: Network.Response(
                 url: "https://example.test/segment-1.ts",
-                status: 206
+                status: 404,
+                mimeType: "image/png"
             ),
-            resourceType: .media,
+            resourceType: .image,
             timestamp: 3
         ),
         scope: scope
@@ -417,23 +421,57 @@ func canonicalNetworkEntryRepresentativeIsChronologicalFirst() throws {
     entry = try #require(fixture.store.entries.first)
     #expect(entry.summary.primaryRequestID == firstID)
     #expect(entry.summary.url == "https://example.test/master.m3u8")
+    #expect(entry.summary.resourceType == Network.ResourceType.media.rawValue)
+    #expect(entry.summary.mimeType == nil)
     #expect(entry.summary.statusCode == nil)
+    #expect(entry.summary.statusSeverity == .warning)
 
     _ = try fixture.store.reduce(
         .responseReceived(
             id: Network.Request.ID("first"),
             response: Network.Response(
                 url: "https://example.test/master.m3u8",
-                status: 200
+                status: 200,
+                mimeType: "application/vnd.apple.mpegurl"
             ),
-            resourceType: .media,
+            resourceType: .document,
             timestamp: 4
         ),
         scope: scope
     )
     entry = try #require(fixture.store.entries.first)
     #expect(entry.summary.primaryRequestID == firstID)
+    #expect(entry.summary.resourceType == Network.ResourceType.document.rawValue)
+    #expect(entry.summary.mimeType == "application/vnd.apple.mpegurl")
     #expect(entry.summary.statusCode == 200)
+    #expect(entry.summary.statusSeverity == .warning)
+
+    let entryID = entry.id
+    _ = try fixture.store.reduce(
+        canonicalRequestWillBeSent(
+            id: "first",
+            url: "https://cdn.example.test/master.m3u8",
+            method: "HEAD",
+            initiatorNodeID: "ignored-after-insertion",
+            resourceType: .media,
+            redirectResponse: Network.Response(
+                url: "https://example.test/master.m3u8",
+                status: 200,
+                mimeType: "application/vnd.apple.mpegurl"
+            ),
+            timestamp: 5
+        ),
+        scope: scope
+    )
+    entry = try #require(fixture.store.entries.first)
+    #expect(entry.id == entryID)
+    #expect(entry.summary.primaryRequestID == firstID)
+    #expect(entry.summary.url == "https://cdn.example.test/master.m3u8")
+    #expect(entry.summary.method == "HEAD")
+    #expect(entry.summary.resourceType == Network.ResourceType.media.rawValue)
+    #expect(entry.summary.mimeType == nil)
+    #expect(entry.summary.statusCode == nil)
+    #expect(entry.summary.statusSeverity == .warning)
 }
 
 @Test
@@ -448,6 +486,7 @@ func canonicalNetworkGroupingUsesExactScopeAndChronology() throws {
         canonicalRequestWillBeSent(
             id: "dom-late",
             url: "https://example.test/dom-late",
+            method: "PUT",
             initiatorNodeID: "node",
             timestamp: 20
         ),
@@ -457,6 +496,7 @@ func canonicalNetworkGroupingUsesExactScopeAndChronology() throws {
         canonicalRequestWillBeSent(
             id: "dom-early",
             url: "https://example.test/dom-early",
+            method: "GET",
             initiatorNodeID: "node",
             timestamp: 10
         ),
@@ -480,6 +520,7 @@ func canonicalNetworkGroupingUsesExactScopeAndChronology() throws {
             == domEntry.requestIDs.map {
                 searchTextByRequestID[$0]
             })
+    #expect(domSnapshot.query.methods == ["GET", "PUT"])
     guard case let .dom(domKey) = domEntry.groupKey else {
         Issue.record("Expected an exact DOM-backed group key.")
         return

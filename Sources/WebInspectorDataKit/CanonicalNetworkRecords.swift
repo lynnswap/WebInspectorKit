@@ -420,12 +420,23 @@ package enum CanonicalNetworkEntryLifecycleSummary: Equatable, Sendable {
     case failed
 }
 
+package enum CanonicalNetworkEntryStatusSeverity: Int, Equatable, Hashable, Sendable {
+    case neutral
+    case success
+    case notice
+    case warning
+    case error
+}
+
 package struct CanonicalNetworkEntrySummary: Equatable, Sendable {
     package let primaryRequestID: CanonicalNetworkRequestIDStorage
     package let requestCount: Int
     package let url: String
     package let method: String
+    package let resourceType: String?
+    package let mimeType: String?
     package let statusCode: Int?
+    package let statusSeverity: CanonicalNetworkEntryStatusSeverity
     package let decodedDataLength: Int
     package let encodedDataLength: Int
     package let lifecycle: CanonicalNetworkEntryLifecycleSummary
@@ -434,6 +445,7 @@ package struct CanonicalNetworkEntrySummary: Equatable, Sendable {
 package struct CanonicalNetworkEntryQueryProjection: Equatable, Sendable {
     package let id: CanonicalNetworkEntryIDStorage
     package let chronology: CanonicalNetworkChronologyKey
+    package let methods: [String]
     package let resourceCategories: Set<CanonicalNetworkResourceCategory>
     package let searchTexts: [String]
 }
