@@ -33,6 +33,56 @@ package struct WebInspectorContainerAttachmentGeneration: Hashable, Comparable, 
     }
 }
 
+/// Canonical storage wrapped by `RuntimeContext.ID`.
+///
+/// WebKit allocates execution-context identifiers in one physical Runtime
+/// agent. Semantic frame membership is deliberately retained by the record,
+/// not folded into this identity, because destroy and clear events carry only
+/// agent-local authority.
+package struct CanonicalRuntimeContextIDStorage: Hashable, Sendable {
+    package let storeID: WebInspectorContainerStoreID
+    package let attachmentGeneration: WebInspectorContainerAttachmentGeneration
+    package let pageGeneration: WebInspectorPage.Generation
+    package let agentTargetID: WebInspectorTarget.ID
+    package let rawContextID: Runtime.ExecutionContext.ID
+
+    package init(
+        storeID: WebInspectorContainerStoreID,
+        attachmentGeneration: WebInspectorContainerAttachmentGeneration,
+        pageGeneration: WebInspectorPage.Generation,
+        agentTargetID: WebInspectorTarget.ID,
+        rawContextID: Runtime.ExecutionContext.ID
+    ) {
+        self.storeID = storeID
+        self.attachmentGeneration = attachmentGeneration
+        self.pageGeneration = pageGeneration
+        self.agentTargetID = agentTargetID
+        self.rawContextID = rawContextID
+    }
+}
+
+/// Canonical storage wrapped by `ConsoleMessage.ID`.
+///
+/// The ordinal is allocated once by the container store and is never reused,
+/// including across page reset and reattachment. Console's protocol payload
+/// has no backend message identifier from which a stable identity can be
+/// reconstructed.
+package struct CanonicalConsoleMessageIDStorage: Hashable, Sendable {
+    package let storeID: WebInspectorContainerStoreID
+    package let attachmentGeneration: WebInspectorContainerAttachmentGeneration
+    package let ordinal: UInt64
+
+    package init(
+        storeID: WebInspectorContainerStoreID,
+        attachmentGeneration: WebInspectorContainerAttachmentGeneration,
+        ordinal: UInt64
+    ) {
+        self.storeID = storeID
+        self.attachmentGeneration = attachmentGeneration
+        self.ordinal = ordinal
+    }
+}
+
 /// Canonical Network routing authority for one protocol event.
 ///
 /// `semanticTargetID` owns model membership while `agentTargetID` owns the
