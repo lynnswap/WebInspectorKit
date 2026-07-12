@@ -248,11 +248,23 @@ package actor WebInspectorModelContextCore {
         case closed
     }
 
+    private struct ConfiguredModelSource: Equatable {
+        let modelTypeID: ObjectIdentifier
+        let sourceIdentity: AnyWebInspectorModelSourceBatch.SourceIdentity
+    }
+
+    private enum SourceMode {
+        case undecided
+        case queryOnly
+        case modelSources([ConfiguredModelSource])
+    }
+
     private let identity = _WebInspectorModelContextIdentity()
     private var queryEngines: [ObjectIdentifier: any _WebInspectorAnyQueryEngine] = [:]
     private var lastCanonicalRevision: UInt64?
     private var outstandingQueryCommit: WebInspectorModelContextQueryCommit?
     private var nextQueryCommitToken: UInt64 = 0
+    private var sourceMode = SourceMode.undecided
     private var lifecycle = Lifecycle.open
 
     package init() {}
@@ -318,6 +330,77 @@ package actor WebInspectorModelContextCore {
         try ensureOpen()
         await waitForOutstandingQueryCommit()
         try ensureOpen()
+        switch sourceMode {
+        case .undecided:
+            sourceMode = .queryOnly
+        case .queryOnly:
+            break
+        case .modelSources:
+            preconditionFailure(
+                "A model-source context cannot apply query-only source work."
+            )
+        }
+        return stageQueryBatches(batches)
+    }
+
+    package func applySourceBatch<
+        Model: WebInspectorPersistentModel,
+        Record: Sendable
+    >(
+        _ batch: WebInspectorModelSourceBatch<Model, Record>
+    ) async throws -> WebInspectorModelContextTransactionCommit {
+        try await applySourceBatches([AnyWebInspectorModelSourceBatch(batch)])
+    }
+
+    /// Stages one complete canonical revision across every configured model
+    /// source owned by this context.
+    package func applySourceBatches(
+        _ batches: [AnyWebInspectorModelSourceBatch]
+    ) async throws -> WebInspectorModelContextTransactionCommit {
+        try ensureOpen()
+        await waitForOutstandingQueryCommit()
+        try ensureOpen()
+
+        let proposedSources = validatedModelSources(in: batches)
+        switch sourceMode {
+        case .undecided:
+            break
+        case .queryOnly:
+            preconditionFailure(
+                "A query-only context cannot adopt model-source transactions."
+            )
+        case let .modelSources(configuredSources):
+            precondition(
+                configuredSources == proposedSources,
+                "Every canonical context transaction must preserve its configured model-source order and identity."
+            )
+        }
+
+        var recordCommits: [_WebInspectorAnyPreparedModelRecordCommit] = []
+        recordCommits.reserveCapacity(batches.count)
+        do {
+            for batch in batches {
+                recordCommits.append(try batch.prepare())
+            }
+        } catch {
+            discardPreparedRecordCommits(recordCommits)
+            throw error
+        }
+
+        let queryCommit = stageQueryBatches(batches.map(\.queryBatch))
+        if case .undecided = sourceMode {
+            sourceMode = .modelSources(proposedSources)
+        }
+        return WebInspectorModelContextTransactionCommit(
+            canonicalRevision: queryCommit.canonicalRevision,
+            recordCommits: recordCommits,
+            queryCommit: queryCommit
+        )
+    }
+
+    private func stageQueryBatches(
+        _ batches: [WebInspectorModelContextQueryBatch]
+    ) -> WebInspectorModelContextQueryCommit {
         precondition(
             batches.isEmpty == false,
             "A model-context query transaction must contain source work."
@@ -601,6 +684,52 @@ package actor WebInspectorModelContextCore {
         _ batch: WebInspectorFetchedResultsSourceBatch<Model>
     ) -> [_WebInspectorModelContextPendingQueryPublication] {
         engine(for: Model.self).applyBatch(batch)
+    }
+
+    private func validatedModelSources(
+        in batches: [AnyWebInspectorModelSourceBatch]
+    ) -> [ConfiguredModelSource] {
+        precondition(
+            batches.isEmpty == false,
+            "A model-context source transaction must contain source work."
+        )
+        let canonicalRevision = batches[0].canonicalRevision
+        precondition(
+            batches.allSatisfy { $0.canonicalRevision == canonicalRevision },
+            "One model-context source transaction must carry one canonical revision."
+        )
+
+        var seenModelTypeIDs: Set<ObjectIdentifier> = []
+        seenModelTypeIDs.reserveCapacity(batches.count)
+        var sources: [ConfiguredModelSource] = []
+        sources.reserveCapacity(batches.count)
+        for batch in batches {
+            precondition(
+                seenModelTypeIDs.insert(batch.modelTypeID).inserted,
+                "One model-context source transaction can stage each model type only once."
+            )
+            sources.append(
+                ConfiguredModelSource(
+                    modelTypeID: batch.modelTypeID,
+                    sourceIdentity: batch.sourceIdentity
+                )
+            )
+        }
+        return sources
+    }
+
+    private func discardPreparedRecordCommits(
+        _ commits: [_WebInspectorAnyPreparedModelRecordCommit]
+    ) {
+        for commit in commits.reversed() {
+            do {
+                try commit.discard()
+            } catch {
+                preconditionFailure(
+                    "A prepared model-record commit became invalid during transaction rollback: \(error)"
+                )
+            }
+        }
     }
 
     private func waitForOutstandingQueryCommit() async {
