@@ -2,6 +2,7 @@
 
 - Status: approved design gate (2026-07-12)
 - Scope amendment: navigation and DOM-binding epochs separated (2026-07-12)
+- Lifecycle amendment: stable container owns attach/detach/reattach (2026-07-12)
 - Baseline branch: `codex/network-grouped-entries`
 - Baseline revision: `bf364dbb43402ace80542ab3826b32e8a22b40d0`
 - Toolchain baseline: Swift 6.3, iOS 18.4, macOS 15.4
@@ -15,7 +16,7 @@ Data:
 
 ```text
 WebInspectorModelContainer
-  -> one ProxyKit connection and one canonical Sendable record store
+  -> zero or one active ProxyKit connection and one canonical Sendable record store
   -> one or more actor-confined WebInspectorModelContext instances
        -> context-local identity registry
        -> context-local Observable model instances
@@ -36,9 +37,10 @@ compatibility layers.
 
 ### Outcomes
 
-1. One inspection session for a `WKWebView` has one model container and one
-   ProxyKit model feed, while multiple model contexts may independently consume
-   the same canonical page state.
+1. One inspection session has one stable model container, at most one active
+   ProxyKit model feed, and multiple model contexts that independently consume
+   the same canonical page state. The container, contexts, and fetched-results
+   controllers survive nonterminal detach/reattach transitions.
 2. The built-in UIKit inspector uses a main-actor context. A headless or custom
    consumer asks the same container to vend a context confined to any actor.
    The context has no public initializer independent of its container.
@@ -75,6 +77,9 @@ compatibility layers.
 - Existing ProxyKit typed command and event APIs remain available.
 - The single-consumer `ConnectionModelFeed` remains a ProxyKit invariant. Its
   consumer moves from an individual model context to the model container.
+- The built-in UIKit contract that keeps one context and its controllers stable
+  across attach/detach/reattach remains supported. Persistent model identities
+  from an old attachment do not survive that transition.
 - Existing domain-model behavior is preserved unless this document assigns
   the responsibility to a different owner.
 
@@ -211,18 +216,28 @@ contracts:
 - Both SwiftData `ResultsObserver` and Core Data
   `NSFetchedResultsController` bind one observed result set to a specific model
   context. The context is part of query identity, not a global model cache.
+- SwiftData `ResultsObserver` additionally offers `modelContainer:`
+  convenience initializers. Each creates a new context from that container and
+  exposes it through the observer's `modelContext` property.
 - SwiftData exposes identifier-only fetch and context-local
   `model(for:)`/`registeredModel(for:)` operations.
 
 WebInspectorDataKit adopts the context identity, context-local object graph,
 identifier-only query, and context-bound results-controller shapes. It is
 stricter about context creation: the model container is the only public
-factory. Unlike a database coordinator, the container owns one exclusive live
-ProxyKit model feed whose registration is asynchronous and whose close must be
-awaited. A public free-standing context initializer would either obscure its
-connection, terminal state, and close authority or permit a second consumer of
-the single-consumer feed. Contexts therefore come only from `mainContext` or
-`makeContext(isolation:)`.
+factory. Unlike a database coordinator, the container owns an exclusive live
+ProxyKit model feed while attached; registration, replacement, detach, and
+close must be awaited. A public free-standing context initializer would either
+obscure that connection lifecycle and close authority or permit a second
+consumer of the single-consumer feed. Contexts therefore come only from
+`mainContext`, `makeContext(isolation:)`, or a fetched-results controller that
+explicitly asks that same container to create and own its child context.
+
+The container is constructed before native attachment, like a persistent-stack
+owner that exists before a store is loaded. This deliberate live-session
+difference lets UIKit construct one stable main context and its controllers,
+then attach, detach, and reattach the transport without replacing those UI
+owners.
 
 It also deliberately does not copy SwiftData's fault behavior. A foreign,
 deleted, or stale identifier returns `nil`; DataKit never invents an empty
@@ -257,11 +272,11 @@ learn about persistent models or queries.
 
 | Responsibility | Owner | Contract |
 | --- | --- | --- |
-| WKWebView attach/detach | Native bridge / ProxyKit | Only the native WebKit boundary is `@MainActor`. |
+| Inspection-session attach/detach/reattach | `WebInspectorModelContainer` / its Core actor | The stable container owns every active Proxy/feed replacement; only native WKWebView operations are `@MainActor`. |
 | Physical targets, replies, capabilities | ProxyKit connection core | One source of transport truth. |
 | Structured model-event scope | ProxyKit model feed | Generation, target, navigation epoch, and optional exact DOM-binding epoch travel separately from raw IDs. |
 | Model-feed iteration and final Proxy close | `WebInspectorModelContainerCore` actor | Exactly one feed consumer and close authority. |
-| Context creation and registration | `WebInspectorModelContainer` | `mainContext` and `makeContext(isolation:)` are the only public creation paths. |
+| Context creation and registration | `WebInspectorModelContainer` | `mainContext`, `makeContext(isolation:)`, and the FRC container convenience all use the same factory transaction; there is no standalone context initializer. |
 | Canonical current records and revision | `WebInspectorModelContainerCore` actor | Owns one pure-value `WebInspectorCanonicalModelStore`; no Observable models. |
 | Context subscription fan-out | container publication broker | Atomic initial snapshot plus ordered delta/reset. |
 | Context record mirror and query execution | one context-core actor per context | Immutable Sendable records only. |
@@ -333,7 +348,8 @@ The internal identity key includes the domain-specific scopes required to
 prevent aliasing and reject stale commands:
 
 - model-container/store identity;
-- page generation;
+- container-assigned attachment generation;
+- ProxyKit page generation;
 - physical target where the WebKit ID is target-local;
 - exact DOM-binding epoch for DOM/CSS identities;
 - the domain's canonical raw identity or canonical container-assigned ordinal.
@@ -342,11 +358,11 @@ The concrete persistent identities are scoped as follows:
 
 | Model | Identity scope after container/store ID |
 | --- | --- |
-| `DOMNode` | page generation, physical target, exact DOM-binding epoch, raw node ID |
-| `NetworkRequest` | page generation, physical target, raw request ID |
-| `ConsoleMessage` | canonical container-assigned message ordinal |
-| `RuntimeContext` | page generation, physical target, raw execution-context ID |
-| `NetworkEntry` | canonical container-assigned entry ID |
+| `DOMNode` | attachment generation, Proxy page generation, physical target, exact DOM-binding epoch, raw node ID |
+| `NetworkRequest` | attachment generation, Proxy page generation, physical target, raw request ID |
+| `ConsoleMessage` | attachment generation, canonical container-assigned message ordinal |
+| `RuntimeContext` | attachment generation, Proxy page generation, physical target, raw execution-context ID |
+| `NetworkEntry` | attachment generation, canonical container-assigned entry ID |
 
 ProxyKit supplies a structured model-event scope instead of encoding target
 scope into raw IDs:
@@ -359,6 +375,14 @@ package struct ModelEventScope: Sendable {
     let domBindingEpoch: ModelDOMBindingEpoch?
 }
 ```
+
+`ModelEventScope.generation` is the generation of one Proxy connection. A new
+Proxy may reuse the same raw value. On every attach attempt, the Container Core
+therefore reserves a monotonically increasing attachment generation and never
+reuses it, including after failure or supersession. The canonical scope combines
+that attachment generation with ProxyKit's event scope before constructing a
+persistent ID. Detach clears membership, while a later attach necessarily
+creates identities in a different attachment scope.
 
 ProxyKit maintains the navigation epoch from its Page observation lease for
 every configured model feed. A new loader advances the epoch for the affected
@@ -513,20 +537,35 @@ public final class WebInspectorModelContainer: Equatable, Sendable {
         )
     }
 
+    public nonisolated init(
+        configuration: Configuration = .init()
+    )
+
     @MainActor
-    public init(
+    public var mainContext: WebInspectorModelContext { get }
+
+    @MainActor
+    public convenience init(
         attachingTo webView: WKWebView,
         configuration: Configuration = .init(),
         proxyConfiguration: WebInspectorProxy.Configuration = .init()
     ) async throws
 
     @MainActor
-    public let mainContext: WebInspectorModelContext
+    public func attach(
+        to webView: WKWebView,
+        proxyConfiguration: WebInspectorProxy.Configuration = .init()
+    ) async throws
+
+    package func attach(
+        owning proxy: WebInspectorProxy
+    ) async throws
 
     public func makeContext(
         isolation: isolated (any Actor) = #isolation
     ) async throws -> WebInspectorModelContext
 
+    public func detach() async
     public func close() async
 }
 
@@ -569,26 +608,49 @@ SwiftData. The instance remains in the caller isolation supplied to the
 container factory; its internal context core and record cache are separate
 Sendable owners.
 
-The container registers the context subscription atomically before returning
-the context. Creation after container close fails. A context retains the
-container core, not the public container object; the public container retains
-`mainContext`, so this owner graph has no container/context reference cycle.
-Custom contexts retain their own subscriptions and may close independently.
+Container initialization is synchronous and nonisolated. It creates the
+Sendable Core and installs the stable main-context registration seed in that
+Core's initial empty state; it does not create Observable models or touch
+UIKit. The `@MainActor` `mainContext` getter materializes and caches the one
+actor-confined context wrapper on first access. This preserves stable identity
+without making Container initialization or canonical work main-actor work. If
+the getter is first accessed after terminal Container close, it materializes
+the same seed as an already closed Context; it never creates a new
+registration. If its bounded pre-materialization delivery lost continuity,
+the first dequeue asks the Core for one owner-atomic current rebase.
 
-One container is one inspection session. Multiple contexts that are intended
-to observe the same `WKWebView` use that container and therefore share one
-canonical store and feed. A separately attached container is a separate
-session with different store identity; its IDs and models never alias.
-Container equality is reference/session identity (`===`), not equality of its
-configuration, inspected view, or current records.
+Custom contexts may be created while detached or attached. The container
+registers each custom context subscription atomically before returning it.
+Creation after container close fails. A context retains the container core,
+not the public container object; the public container's actor-isolated cache
+retains `mainContext`, so this owner graph has no container/context reference
+cycle. Custom contexts retain their own subscriptions and may close
+independently.
+
+One container is one reusable inspection session and owns at most one active
+`WKWebView` attachment. Multiple contexts that observe that attachment use the
+same container and therefore share one canonical store and feed. Reattaching
+the container preserves context/FRC identity but assigns a new attachment
+generation, invalidating old persistent IDs. A separately created container is
+a separate session with different store identity; its IDs and models never
+alias. Container equality is reference/session identity (`===`), not equality
+of its configuration, inspected view, or current records.
 
 A context never accepts a `WKWebView`, Proxy, feed, or configuration. Calling
-`makeContext(isolation:)` joins the already attached container session and
-atomically registers one projection subscription; it never creates another
-native attachment or feed consumer. Closing the container invalidates every
+`makeContext(isolation:)` joins the stable container session and atomically
+registers one projection subscription; it never creates another native
+attachment or feed consumer. `detach()` clears canonical membership but keeps
+contexts and FRC sequences alive. Closing the container invalidates every
 context it vended, including externally retained context objects. Closing one
 custom context only unregisters that child. This makes the container the
 unambiguous owner when one inspected view is observed from multiple actors.
+
+Public `attach(to:)` creates the native Proxy at the `WKWebView` MainActor
+boundary, then transfers ownership to non-main `attach(owning:)`. DataKitTesting
+uses that same package ownership-transfer seam with an already connected test
+Proxy. Feed bootstrap, canonical reduction, publication, detach, and close all
+continue in the Container Core; test composition does not introduce a second
+lifecycle implementation.
 
 ### Fetch descriptor
 
@@ -655,10 +717,23 @@ where
         isolation: isolated (any Actor) = #isolation
     ) async throws where SectionName == Never
 
+    public convenience init(
+        fetchDescriptor: WebInspectorFetchDescriptor<Model> = .init(),
+        modelContainer: WebInspectorModelContainer,
+        isolation: isolated (any Actor) = #isolation
+    ) async throws where SectionName == Never
+
     public init(
         fetchDescriptor: WebInspectorFetchDescriptor<Model> = .init(),
         sectionBy: Expression<Model.QueryValue, SectionName>,
         modelContext: WebInspectorModelContext,
+        isolation: isolated (any Actor) = #isolation
+    ) async throws
+
+    public convenience init(
+        fetchDescriptor: WebInspectorFetchDescriptor<Model> = .init(),
+        sectionBy: Expression<Model.QueryValue, SectionName>,
+        modelContainer: WebInspectorModelContainer,
         isolation: isolated (any Actor) = #isolation
     ) async throws
 
@@ -674,15 +749,20 @@ where
 ```
 
 The controller stores IDs and section names only. A UI resolves a visible or
-selected ID with its context. Its initializer follows SwiftData
-`ResultsObserver` and Core Data `NSFetchedResultsController`: the descriptor and
-specific context together define the registration. The context does not grow a
-parallel controller-factory API.
+selected ID with `modelContext`. The descriptor and that specific context
+together define the registration. A caller that passes `modelContext` retains
+context close authority; closing the controller unregisters only its query. A
+caller that passes `modelContainer` explicitly asks the controller to create
+and own one child context on `isolation`; closing that controller also closes
+its child context. In both cases the public `modelContext` property makes model
+identity and command ownership observable rather than hidden.
 
-DataKit does not offer a container-only controller initializer. Such an
-initializer would have to create and close a hidden context, obscuring the
-context-local identity of the models returned to the consumer. Callers first
-choose `mainContext` or explicitly ask the container for a custom context.
+The built-in UIKit inspector passes the stable container `mainContext` so list,
+selection, and Detail share one context-local identity graph. The container
+convenience is the progressive-disclosure path for an independent observer.
+Both shapes follow SwiftData `ResultsObserver`; the explicit-context shape also
+matches Core Data `NSFetchedResultsController`. The context itself does not
+grow a parallel controller-factory API.
 
 ### Snapshot and delta
 
@@ -790,24 +870,31 @@ implementation does not fabricate a sentinel section name.
 
 ```swift
 @MainActor
-func attach(to webView: WKWebView) async throws {
-    let container = try await WebInspectorModelContainer(
-        attachingTo: webView
-    )
-    let context = container.mainContext
-    let controller = try await WebInspectorFetchedResultsController<
-        NetworkEntry,
-        Never
-    >(
-        fetchDescriptor: WebInspectorFetchDescriptor<NetworkEntry>(
-            sortBy: [SortDescriptor(\.startedAt)]
-        ),
-        modelContext: context,
-        isolation: MainActor.shared
-    )
+final class InspectorOwner {
+    let container = WebInspectorModelContainer()
 
-    for try await update in controller.updates() {
-        apply(update)
+    func attach(to webView: WKWebView) async throws {
+        try await container.attach(to: webView)
+    }
+
+    func detach() async {
+        await container.detach()
+    }
+
+    func makeNetworkController() async throws
+        -> WebInspectorFetchedResultsController<NetworkEntry, Never>
+    {
+        let context = container.mainContext
+        return try await WebInspectorFetchedResultsController<
+            NetworkEntry,
+            Never
+        >(
+            fetchDescriptor: WebInspectorFetchDescriptor<NetworkEntry>(
+                sortBy: [SortDescriptor(\.startedAt)]
+            ),
+            modelContext: context,
+            isolation: MainActor.shared
+        )
     }
 }
 
@@ -925,17 +1012,29 @@ one object on the context owner. It does not scan or sort a collection.
 
 | Resource | Acquire | Retaining owner | Close authority | Completion |
 | --- | --- | --- | --- | --- |
-| Native attachment | container async init | ProxyKit core | container core | `container.close()` awaits native detach |
-| Model feed | container core start | container core | container core | feed terminal plus driver Task value |
-| Canonical store | container core start | container core | container core | publication broker terminal |
-| Context subscription | context init | context core | context | subscription driver Task value |
-| Query registration | FRC creation | FRC + context core | FRC/context | unregister acknowledgement |
+| Container session | container init | public container + core | container | terminal `close()` |
+| Native attachment | `container.attach(to:)` | ProxyKit core | container core | `detach()` or `close()` awaits native detach |
+| Model feed | successful attach | container core | container core | feed terminal plus driver Task value |
+| Canonical store | container init | container core | container core | detach reset or close terminal |
+| Context subscription | main seed at container init; custom context factory | context core | context/container | subscription driver Task value |
+| Query registration | FRC creation | FRC + context core | FRC/context | unregister acknowledgement; a container-created child context closes with its FRC |
 | Update subscriber | `updates()` | subscriber sequence | iterator/subscriber | mailbox terminal |
 | Media player | Network Detail | Detail controller | Detail controller | player teardown on rebind/dismiss |
 
+Container detach is idempotent and nonterminal:
+
+1. invalidate the active attachment token and reject old feed/command
+   completions;
+2. atomically reset the canonical store to empty;
+3. invalidate materialized models in every context and publish an empty FRC
+   reset without terminating those contexts or sequences;
+4. stop/close the model feed and ProxyKit connection;
+5. cancel and await the feed driver and native detach;
+6. enter detached state and permit a later attach.
+
 Container close is idempotent and terminal:
 
-1. reject new contexts and commands;
+1. reject new attach operations, contexts, and commands;
 2. stop/close the model feed and ProxyKit connection;
 3. terminate context publication;
 4. cancel and await the feed driver;
@@ -975,7 +1074,8 @@ New public declarations justified by the consumer code above:
 - `WebInspectorPersistentIdentifier` — type-safe ID-to-model association.
 - `WebInspectorPersistentModel.QueryValue` — Sendable query boundary.
 - `WebInspectorFetchDescriptor` — generic query value.
-- `WebInspectorFetchedResultsController` — query lifecycle and current state.
+- `WebInspectorFetchedResultsController` — query lifecycle and current state,
+  with explicit-context and container-created-context initializers.
 - Snapshot, update, change, and update-sequence values — UIKit/custom consumer
   application of initial/delta/reset.
 - `NetworkEntry` — the semantic Network list item.
@@ -1041,13 +1141,29 @@ integrated.
 
 ### Container/context contracts
 
+- A Container can be constructed off MainActor without touching a native
+  `WKWebView`, Observable model, or UI owner.
 - One container creates contexts owned by MainActor and a custom actor.
 - `mainContext` is stable, custom contexts compare by context identity, and a
   closed container rejects new context creation.
+- First `mainContext` access after Container close returns the closed stable
+  registration and does not create a live child.
+- An FRC initialized with a container owns and exposes one child context; an
+  FRC initialized with an existing context never closes that context.
+- Contexts may be created while detached and receive the next attachment's
+  initial state through the same registration.
+- Detach empties results with reset but does not terminate the same contexts,
+  FRC objects, controllers, or update sequences.
+- Reattach preserves those owner identities while old model IDs resolve to
+  `nil` and new IDs include a distinct attachment generation.
+- Two Proxy connections that both report the same raw page-generation value
+  cannot produce equal persistent IDs in one container.
 - One source event reaches both contexts with equal IDs and distinct model
   object identities.
 - Repeated same-context lookup returns the identical object.
 - Closing one context leaves the other context and Proxy connection active.
+- Public WKWebView attach and package test-Proxy ownership transfer converge on
+  the same Core activation/lifecycle path after native Proxy creation.
 - Closing the container terminates all context and FRC sequences and awaits all
   owned Tasks.
 - A late context receives an atomic current snapshot before later deltas.
@@ -1120,6 +1236,10 @@ integrated.
 
 ### Performance/isolation contracts
 
+- Container construction, feed reduction, publication, filtering, sorting, and
+  difference construction do not require MainActor.
+- MainActor owns only the native `WKWebView` attach boundary, the cached
+  `mainContext` Observable graph, and UI application.
 - A 10,000-record source update performs filter/sort/diff outside MainActor.
 - A content-only update visits the changed record and active registrations,
   not the full collection.
@@ -1145,7 +1265,9 @@ public product without `@testable` imports.
 
 A standalone provider/consumer probe was compiled with the installed Swift
 6.3.3 toolchain using `-swift-version 6`,
-`-strict-concurrency=complete`, and `-default-isolation nonisolated`.
+`-strict-concurrency=complete`, `-strict-memory-safety`, and
+`-default-isolation nonisolated` against the iOS 26.5 SDK. Provider and consumer
+were compiled as separate modules.
 
 The positive probe established that the following declarations compose in one
 public surface:
@@ -1157,11 +1279,19 @@ public surface:
 - `WebInspectorFetchedResultsController<Model, Never>`;
 - context-bound unsectioned and sectioned controller initializers with an
   `isolated (any Actor) = #isolation` parameter;
-- a Sendable container with a `@MainActor` context property;
+- a checked-Sendable container with a nonisolated synchronous initializer and
+  a stable computed `@MainActor` context property backed by actor-isolated
+  cache storage;
 - an `Equatable & SendableMetatype` context with unavailable `Sendable`;
 - a container factory returning a non-Sendable context into its isolated
   caller parameter;
 - `nonisolated(nonsending)` generic fetch/controller methods.
+
+Negative probes rejected both assigning an `@MainActor let mainContext` from a
+nonisolated initializer and using `@MainActor lazy var` storage in a checked
+`Sendable` class. The selected shape instead creates only a Sendable
+registration seed during Container initialization and materializes the
+non-Sendable wrapper through the actor-isolated computed getter.
 
 SIL generation reports the fetch methods as
 `caller_isolation_inheriting` and includes their hop back to the implicit
@@ -1211,9 +1341,11 @@ the same change series.
    projections. During this stage the existing context forwards validated feed
    records to the core. Migrate each domain to structured IDs and remove its
    dependency on projected raw-ID prefixes in the same step.
-5. **Container ownership** — introduce the public container, physically move
-   the single Proxy/feed lifecycle into the existing core, and restore multiple
-   contexts. Remove context attach/detach in this step.
+5. **Container ownership** — introduce the stable public container, physically
+   move attach/detach/reattach and the single active Proxy/feed lifecycle into
+   the existing core, and restore multiple contexts. Remove public context
+   initialization/attach/detach in this step while preserving UIKit's stable
+   main-context and controller identity.
 6. **Context materialization and generic query controller** — add context-local
    identity registries and record caches; replace domain query registrations
    and `WebInspectorFetchedResults` with the generic descriptor/FRC flow.
@@ -1231,6 +1363,8 @@ the same change series.
 - `WebInspectorModelContext` has no protocol-domain reducer switch or physical
   command authority.
 - At least two contexts can share one container in production-path tests.
+- The same container/main context/FRC survive detach/reattach, while persistent
+  IDs from equal raw Proxy generations do not alias across attachments.
 - No generic fetched-results implementation references `NetworkQuery`,
   `ConsoleQuery`, `NetworkRequest`, or `ConsoleMessage`.
 - Network and Console stores no longer own query registrations.
