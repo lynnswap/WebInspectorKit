@@ -6,11 +6,41 @@ import WebInspectorProxyKit
 @Observable
 public final class RuntimeContext: WebInspectorPersistentModel {
     /// Stable identity for an execution context within a context.
-    public struct ID: Hashable, Sendable {
+    public struct ID: WebInspectorPersistentIdentifier {
+        /// The persistent model identified by this value.
+        public typealias Model = RuntimeContext
+
         let proxyID: Runtime.ExecutionContext.ID
 
         init(_ proxyID: Runtime.ExecutionContext.ID) {
             self.proxyID = proxyID
+        }
+    }
+
+    /// Immutable execution-context fields available to typed fetch descriptors.
+    public struct QueryValue: Identifiable, Sendable {
+        /// The execution-context identity.
+        public let id: ID
+
+        /// The display name for the execution context.
+        public let name: String
+
+        /// The frame associated with the execution context, if any.
+        public let frameID: FrameID?
+
+        /// The kind of execution context reported by WebKit.
+        public let kind: Runtime.ContextKind
+
+        package init(
+            id: ID,
+            name: String,
+            frameID: FrameID?,
+            kind: Runtime.ContextKind
+        ) {
+            self.id = id
+            self.name = name
+            self.frameID = frameID
+            self.kind = kind
         }
     }
 

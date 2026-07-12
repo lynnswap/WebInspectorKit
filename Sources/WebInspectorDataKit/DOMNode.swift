@@ -6,11 +6,86 @@ import WebInspectorProxyKit
 @Observable
 public final class DOMNode: WebInspectorPersistentModel {
     /// Stable identity for a DOM node within a context.
-    public struct ID: Hashable, Sendable {
+    public struct ID: WebInspectorPersistentIdentifier {
+        /// The persistent model identified by this value.
+        public typealias Model = DOMNode
+
         let proxyID: DOM.Node.ID
 
         package init(_ proxyID: DOM.Node.ID) {
             self.proxyID = proxyID
+        }
+    }
+
+    /// Immutable DOM node fields available to typed fetch descriptors.
+    public struct QueryValue: Identifiable, Sendable {
+        /// The node identity.
+        public let id: ID
+
+        /// The protocol node name.
+        public let nodeName: String
+
+        /// The local element name, if available.
+        public let localName: String
+
+        /// The node value for text-like nodes.
+        public let nodeValue: String
+
+        /// The raw numeric DOM node type.
+        public let nodeType: Int
+
+        /// The frame that owns the node, if WebKit reported one.
+        public let frameID: FrameID?
+
+        /// The document URL associated with the node.
+        public let documentURL: String?
+
+        /// The base URL associated with the node.
+        public let baseURL: String?
+
+        /// Attributes keyed by name.
+        public let attributes: [String: String]
+
+        /// The number of regular children reported by WebKit.
+        public let childNodeCount: Int
+
+        /// The node's pseudo-element kind.
+        public let pseudoType: DOM.PseudoType?
+
+        /// The node's shadow-root kind.
+        public let shadowRootType: DOM.ShadowRootType?
+
+        /// The DOM node kind derived from ``nodeType``.
+        public var kind: Kind {
+            Kind(rawValue: nodeType)
+        }
+
+        package init(
+            id: ID,
+            nodeName: String,
+            localName: String,
+            nodeValue: String,
+            nodeType: Int,
+            frameID: FrameID?,
+            documentURL: String?,
+            baseURL: String?,
+            attributes: [String: String],
+            childNodeCount: Int,
+            pseudoType: DOM.PseudoType?,
+            shadowRootType: DOM.ShadowRootType?
+        ) {
+            self.id = id
+            self.nodeName = nodeName
+            self.localName = localName
+            self.nodeValue = nodeValue
+            self.nodeType = nodeType
+            self.frameID = frameID
+            self.documentURL = documentURL
+            self.baseURL = baseURL
+            self.attributes = attributes
+            self.childNodeCount = childNodeCount
+            self.pseudoType = pseudoType
+            self.shadowRootType = shadowRootType
         }
     }
 

@@ -1,8 +1,20 @@
 import Observation
 
+/// A stable identifier associated with the persistent model it identifies.
+public protocol WebInspectorPersistentIdentifier: Hashable, Sendable {
+    /// The persistent model resolved from this identifier.
+    associatedtype Model: WebInspectorPersistentModel
+}
+
 /// Base protocol for identity-preserving observable DataKit models.
 public protocol WebInspectorPersistentModel: AnyObject, Observable, Hashable, Identifiable, SendableMetatype
-where ID: Hashable & Sendable {
+where ID: WebInspectorPersistentIdentifier,
+      ID.Model == Self,
+      QueryValue: Identifiable & Sendable,
+      QueryValue.ID == ID {
+    /// Immutable state used to evaluate this model's fetch descriptors.
+    associatedtype QueryValue
+
     /// Stable model identity within a ``WebInspectorModelContext``.
     nonisolated var id: ID { get }
 }

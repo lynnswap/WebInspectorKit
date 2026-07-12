@@ -4,7 +4,7 @@ import WebInspectorProxyKit
 
 /// Observable model for a Runtime remote object.
 @Observable
-public final class RuntimeObject: WebInspectorPersistentModel {
+public final class RuntimeObject: Hashable, Identifiable, SendableMetatype {
     /// Stable identity for a runtime object within a context.
     public struct ID: Hashable, Sendable {
         enum Storage: Hashable, Sendable {
@@ -101,6 +101,16 @@ public final class RuntimeObject: WebInspectorPersistentModel {
         size = remoteObject.size
         preview = remoteObject.preview
         proxyID = remoteObject.id
+    }
+
+    /// Compares Runtime resources by object identity.
+    public nonisolated static func == (lhs: RuntimeObject, rhs: RuntimeObject) -> Bool {
+        lhs === rhs
+    }
+
+    /// Hashes a Runtime resource by object identity.
+    public nonisolated func hash(into hasher: inout Hasher) {
+        hasher.combine(ObjectIdentifier(self))
     }
 
     func update(from remoteObject: Runtime.RemoteObject) {

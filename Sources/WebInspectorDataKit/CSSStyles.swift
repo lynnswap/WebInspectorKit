@@ -227,7 +227,7 @@ private actor CSSStylesOperationGate {
 
 /// Observable CSS state for one DOM element.
 @Observable
-public final class CSSStyles: WebInspectorPersistentModel {
+public final class CSSStyles: Hashable, Identifiable, SendableMetatype {
     /// Stable identity for an element's CSS style model.
     public struct ID: Hashable, Sendable {
         let nodeID: DOMNode.ID
@@ -285,6 +285,16 @@ public final class CSSStyles: WebInspectorPersistentModel {
         inspectorBaselineStore = modelContext.cssInspectorBaselineStore
         hasCompletedLoad = false
         self.modelContext = modelContext
+    }
+
+    /// Compares CSS resources by object identity.
+    public nonisolated static func == (lhs: CSSStyles, rhs: CSSStyles) -> Bool {
+        lhs === rhs
+    }
+
+    /// Hashes a CSS resource by object identity.
+    public nonisolated func hash(into hasher: inout Hasher) {
+        hasher.combine(ObjectIdentifier(self))
     }
 
     func markLoading() {

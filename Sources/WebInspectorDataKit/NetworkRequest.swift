@@ -775,11 +775,76 @@ public final class NetworkBody {
 @Observable
 public final class NetworkRequest: WebInspectorPersistentModel {
     /// Stable identity for a network request within a context.
-    public struct ID: Hashable, Sendable {
+    public struct ID: WebInspectorPersistentIdentifier {
+        /// The persistent model identified by this value.
+        public typealias Model = NetworkRequest
+
         let proxyID: Network.Request.ID
 
         init(_ proxyID: Network.Request.ID) {
             self.proxyID = proxyID
+        }
+    }
+
+    /// Immutable Network fields available to typed fetch descriptors.
+    public struct QueryValue: Identifiable, Sendable {
+        /// The request identity.
+        public let id: ID
+
+        /// The request's stable insertion position in its source generation.
+        public let insertionIndex: Int
+
+        /// The request URL.
+        public let url: String
+
+        /// The HTTP method.
+        public let method: String
+
+        /// The resource type reported by WebKit.
+        public let resourceType: Network.ResourceType?
+
+        /// The response MIME type.
+        public let mimeType: String?
+
+        /// The coarse resource category used by Network filtering.
+        public let resourceCategory: ResourceCategory
+
+        /// The normalized text used by Network filtering.
+        public let searchableText: String
+
+        /// The HTTP status code.
+        public let statusCode: Int?
+
+        /// The timestamp when the request was sent.
+        public let requestSentTimestamp: Double?
+
+        /// The initiating DOM node, if WebKit reported one.
+        public let initiatorNodeID: DOMNode.ID?
+
+        package init(
+            id: ID,
+            insertionIndex: Int,
+            url: String,
+            method: String,
+            resourceType: Network.ResourceType?,
+            mimeType: String?,
+            resourceCategory: ResourceCategory,
+            searchableText: String,
+            statusCode: Int?,
+            requestSentTimestamp: Double?,
+            initiatorNodeID: DOMNode.ID?
+        ) {
+            self.id = id
+            self.insertionIndex = insertionIndex
+            self.url = url
+            self.method = method
+            self.resourceType = resourceType
+            self.mimeType = mimeType
+            self.resourceCategory = resourceCategory
+            self.searchableText = searchableText
+            self.statusCode = statusCode
+            self.requestSentTimestamp = requestSentTimestamp
+            self.initiatorNodeID = initiatorNodeID
         }
     }
 
