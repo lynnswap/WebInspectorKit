@@ -173,6 +173,16 @@ Console, Runtime, target-lifecycle, bootstrap, and command cases. The type is a
 domain coordinator rather than a reusable context boundary, so adding or
 changing a domain edits context lifecycle code.
 
+`F17` — `NetworkRequestStore` combines protocol reduction, canonical request
+state, Observable projection, query registration, and command routing. It also
+reconstructs query records from mutable Observable models. No single owner can
+therefore prove request lifecycle invariants before context-local projection.
+
+`F18` — Supplying and retaining a new full canonical snapshot on every
+revision makes copy-on-write cost depend on every slow subscriber. In
+particular, retaining an old request dictionary or WebSocket-frame array can
+turn otherwise local updates into repeated whole-collection copies.
+
 ### Historical cause
 
 - `61f547f5` removed `WebInspectorFetchedResultsController` while fixing the
@@ -208,8 +218,11 @@ WebInspectorDataKit adopts the context identity, context-local object graph,
 identifier-only query, and context-bound results-controller shapes. It is
 stricter about context creation: the model container is the only public
 factory. Unlike a database coordinator, the container owns one exclusive live
-ProxyKit model feed, so a free-standing context initializer would obscure
-which connection, terminal state, and close authority the context belongs to.
+ProxyKit model feed whose registration is asynchronous and whose close must be
+awaited. A public free-standing context initializer would either obscure its
+connection, terminal state, and close authority or permit a second consumer of
+the single-consumer feed. Contexts therefore come only from `mainContext` or
+`makeContext(isolation:)`.
 
 It also deliberately does not copy SwiftData's fault behavior. A foreign,
 deleted, or stale identifier returns `nil`; DataKit never invents an empty
@@ -247,9 +260,9 @@ learn about persistent models or queries.
 | WKWebView attach/detach | Native bridge / ProxyKit | Only the native WebKit boundary is `@MainActor`. |
 | Physical targets, replies, capabilities | ProxyKit connection core | One source of transport truth. |
 | Structured model-event scope | ProxyKit model feed | Generation, target, navigation epoch, and optional exact DOM-binding epoch travel separately from raw IDs. |
-| Model-feed iteration and final Proxy close | `WebInspectorModelContainer` core | Exactly one feed consumer and close authority. |
+| Model-feed iteration and final Proxy close | `WebInspectorModelContainerCore` actor | Exactly one feed consumer and close authority. |
 | Context creation and registration | `WebInspectorModelContainer` | `mainContext` and `makeContext(isolation:)` are the only public creation paths. |
-| Canonical current records and revision | container record-store actor | No Observable models. |
+| Canonical current records and revision | `WebInspectorModelContainerCore` actor | Owns one pure-value `WebInspectorCanonicalModelStore`; no Observable models. |
 | Context subscription fan-out | container publication broker | Atomic initial snapshot plus ordered delta/reset. |
 | Context record mirror and query execution | one context-core actor per context | Immutable Sendable records only. |
 | Observable identity graph | `WebInspectorModelContext` owner actor | Same ID returns the same live object in that context. |
@@ -260,6 +273,15 @@ learn about persistent models or queries.
 | Network logical grouping | Network record reducer | Produces `NetworkEntry` records and member request IDs. |
 | Selection | UIKit panel/navigation model | Stores stable `NetworkEntry.ID`, never a section wrapper. |
 | Rendering | UIKit controllers/views | Resolves IDs, observes models, installs native artifacts. |
+
+`WebInspectorModelContainerCore` is the single cross-domain canonical actor.
+There is no additional Network/Console/DOM store actor and no second canonical
+actor behind it. The core owns a pure Sendable value store composed from domain
+reducers, so page reset, target scope, and cross-domain references commit in
+one order. A separate actor would add hops and close coordination without
+creating parallelism because the Proxy model feed is already totally ordered.
+Context query actors remain separate because filtering, sorting, and diffing
+are context-local work and can run independently of feed reduction.
 
 ## Persistent entities and context resources
 
@@ -419,6 +441,43 @@ Consequences:
   identity fails fast at the reducer boundary. A Network redirect is an update
   to the existing scoped request, not reuse.
 
+### Network canonical reducer contract
+
+The Network reducer owns request lifecycle semantics before any context sees a
+projection. Its canonical record contains protocol fields, immutable logical
+start time, current-hop time, redirect history, response metadata, transfer
+metrics, WebSocket handshake/content, and a semantic response-body revision.
+It contains no Observable object, loaded response body, Task, target handle,
+Proxy reference, or query registration.
+
+An initial request inserts a full record. A redirect appends the completed hop
+and replaces the current hop under the same scoped request ID. A response-first
+event may create a synthetic `GET` request only when the protocol supplies a
+URL; otherwise an untracked response, data, or terminal event is an attach race
+and is ignored. Memory-cache delivery creates a terminal record. A second live
+non-redirect start or WebSocket creation for the same scoped ID is a protocol
+violation.
+
+`loadingFinished` normally makes the request terminal, and a duplicate finish
+or fail is invalid. WebKit multipart resources are the deliberate exception:
+they can publish later response/data content for the same
+`ResourceLoaderIdentifier` after one finish. The reducer accepts that content
+as multipart continuation, preserves the finished lifecycle, and advances the
+response-body revision; it does not reinterpret it as ID reuse.
+
+Clear keeps request tombstones until generation reset. Late events for a
+tombstoned request are ignored, while a new live start for that identity still
+fails. During the WebSocket enable/replay window, identical creation is a
+no-op, conflicting creation fails, replay fills only missing handshake state,
+and close replay preserves the original chronology. Frames and errors are live
+append deltas rather than replay state.
+
+The model-feed Console-to-Network reference migrates in the same change as the
+Network ID. Console constructs `NetworkRequest.ID` from its raw request ID and
+the same structured generation/physical-target scope; it never parses the old
+target prefix. ProxyKit's direct typed APIs may keep their independent
+target-prefixed compatibility projection.
+
 The context strongly retains materialized active models until deletion,
 generation reset, or context close. This makes same-context identity an actual
 contract rather than a weak-cache accident.
@@ -521,6 +580,14 @@ canonical store and feed. A separately attached container is a separate
 session with different store identity; its IDs and models never alias.
 Container equality is reference/session identity (`===`), not equality of its
 configuration, inspected view, or current records.
+
+A context never accepts a `WKWebView`, Proxy, feed, or configuration. Calling
+`makeContext(isolation:)` joins the already attached container session and
+atomically registers one projection subscription; it never creates another
+native attachment or feed consumer. Closing the container invalidates every
+context it vended, including externally retained context objects. Closing one
+custom context only unregisters that child. This makes the container the
+unambiguous owner when one inspected view is observed from multiple actors.
 
 ### Fetch descriptor
 
@@ -665,6 +732,27 @@ atomically replaces the pending value with one `.reset` containing the latest
 snapshot. It does not use two `AsyncStream.yield` calls as an atomic
 replacement.
 
+The publication broker does not retain or receive a newly copied full
+canonical snapshot on every revision. The canonical store remains the sole
+owner of current full records. The Container Core supplies a snapshot when it
+atomically registers a context. A normal publish stores and delivers only its
+revision and typed delta.
+
+If a subscriber already has a pending initial/change, its internal capacity-one
+mailbox coalesces later publications into `resetRequired(latestRevision:)`
+without a snapshot. Only when the consumer actually dequeues that marker does
+it ask the owning Core actor to rebase its opaque subscription token. In one
+Core turn, the owner captures the current revision and full snapshot, rebases
+the subscriber to that revision, and returns the snapshot. The context/FRC
+driver exposes the result as `.initial` if it had not published one yet, or as
+`.reset` otherwise. Publications ordered after that Core turn are contiguous
+with the returned snapshot.
+
+This on-demand rebase means a permanently slow subscriber causes no full
+snapshot work merely because new events keep arriving. It also prevents a
+retained old dictionary or WebSocket-frame array from forcing copy-on-write of
+the entire canonical state on each event.
+
 Normal delivery after `.initial` is delta-only. Full snapshots appear only in
 `.initial` and `.reset`.
 
@@ -781,7 +869,7 @@ WKWebView operations (@MainActor only)
   -> WebInspectorProxy actor
   -> one ConnectionModelFeed
   -> container detached feed driver
-  -> canonical record-store actor
+  -> WebInspectorModelContainerCore actor
        - decode/reduce domain record changes
        - assign domain-scoped stable IDs
        - advance revision
@@ -801,6 +889,15 @@ WKWebView operations (@MainActor only)
 The context core mirrors the set of materialized IDs. A source transaction
 only sends record payloads for those IDs back to the owner actor. Unmaterialized
 records remain in the synchronized record cache and query indexes.
+
+Canonical transactions are complete deltas rather than full-store snapshots.
+An insert carries the full new record, a delete carries its stable ID, and an
+update carries an authoritative typed patch. Append-only content such as a
+WebSocket frame is an append patch; replacement metadata and terminal state are
+replacement values. `QueryValue` is included only when a query-visible value
+changed. Initial and reset publications alone carry a complete record snapshot.
+Context projections apply patches mechanically and make no second semantic
+decision.
 
 `model(for:)` performs one synchronized record lookup and materializes at most
 one object on the context owner. It does not scan or sort a collection.
@@ -976,11 +1073,21 @@ integrated.
 - Predicate failure terminates only that registration.
 - A fast subscriber receives contiguous deltas without full snapshots.
 - A slow subscriber receives exactly one latest reset.
+- Fast, waiting, and merely pending subscribers do not generate full snapshots.
+  A slow subscriber generates one only when it consumes `resetRequired` and
+  requests an owner-atomic rebase.
 - Closing FRC unregisters immediately and terminates subscribers.
 
 ### Network/UI contracts
 
 - A redirect chain is one request with redirect content.
+- A multipart response may receive response/data content after its first
+  finish without reopening lifecycle or reusing identity; a second finish is
+  still invalid.
+- Clear tombstones suppress late request/WebSocket events until generation
+  reset and reject a new live start with the same scoped identity.
+- A Console network-request reference resolves to the same scoped
+  `NetworkRequest.ID` without target-prefix parsing.
 - Related media/initiator requests form one stable `NetworkEntry`.
 - The Network diffable list has one item per entry and one UIKit section.
 - Detail displays all request members in chronological order.
@@ -1074,13 +1181,15 @@ the same change series.
 3. **Structured Proxy scope** — add navigation and optional DOM-binding epochs
    to the model feed while temporarily preserving the existing raw-ID
    projection for the still-unmigrated DataKit consumer.
-4. **Canonical domain reducers** — separate Network, Console/Runtime, then
-   DOM/CSS Sendable records from context-local Observable projections. Migrate
-   each domain to structured IDs and remove its dependency on projected raw-ID
-   prefixes in the same step.
-5. **Container ownership** — introduce the container/core, physically move the
-   single Proxy/feed lifecycle and canonical reducers out of the context, and
-   restore multiple contexts. Remove context attach/detach in this step.
+4. **Canonical domain reducers** — introduce the final internal
+   `WebInspectorModelContainerCore` actor with a pure value store, then separate
+   Network, Console/Runtime, and DOM/CSS records from context-local Observable
+   projections. During this stage the existing context forwards validated feed
+   records to the core. Migrate each domain to structured IDs and remove its
+   dependency on projected raw-ID prefixes in the same step.
+5. **Container ownership** — introduce the public container, physically move
+   the single Proxy/feed lifecycle into the existing core, and restore multiple
+   contexts. Remove context attach/detach in this step.
 6. **Context materialization and generic query controller** — add context-local
    identity registries and record caches; replace domain query registrations
    and `WebInspectorFetchedResults` with the generic descriptor/FRC flow.
