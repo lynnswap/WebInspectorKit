@@ -29,6 +29,36 @@ package enum ConsoleMessageQueryDomain: WebInspectorIndexedQueryDomain {
         }
     }
 
+    package static func mutationImpact(
+        previous: Record?,
+        current: Record,
+        query: Query
+    ) -> WebInspectorIndexedQueryMutationImpact {
+        guard let previous else {
+            return .topology
+        }
+        guard previous != current else {
+            return .contentOnly
+        }
+
+        let previouslyMatched = matches(previous, query: query)
+        let currentlyMatches = matches(current, query: query)
+        guard previouslyMatched == currentlyMatches else {
+            return .topology
+        }
+        guard previouslyMatched else {
+            return .contentOnly
+        }
+        if previous.orderIndex != current.orderIndex {
+            return .topology
+        }
+        if query.section == .level,
+           previous.levelRawValue != current.levelRawValue {
+            return .topology
+        }
+        return .contentOnly
+    }
+
     package static func makeSnapshot(
         allItemIDsInSourceOrder _: [ItemID],
         matchingItemIDs: [ItemID],

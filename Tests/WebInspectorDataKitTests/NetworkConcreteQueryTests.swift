@@ -854,6 +854,133 @@ func networkActorTransactionsKeepTheLastAcknowledgedBaselineAcrossTwoUnacknowled
 
 @MainActor
 @Test
+func networkQueryIndexBuildsContentTransactionsWithoutRebuildingTheSnapshot() async throws {
+    let context = WebInspectorModelContext.preview()
+    let record = makeIndexedNetworkRecord(
+        id: "content-only",
+        url: "https://example.com/content-only",
+        method: "GET",
+        timestamp: 1,
+        initiatorNodeIDRawValue: "content-group",
+        context: context
+    )
+    let index = NetworkRequestIndex()
+    _ = await index.replace(with: [record.input], sequence: 1)
+    let lifetime = WebInspectorQueryRegistrationLifetime()
+    let registrationID = WebInspectorQueryRegistrationID(rawValue: 24)
+    let generation = lifetime.nextGeneration()
+    let initial = try await index.register(
+        id: registrationID,
+        generation: generation,
+        query: NetworkQuery(
+            sort: .requestTimeDescending,
+            section: .initiatorNode
+        ),
+        lifetime: lifetime,
+        minimumSequence: 1
+    )
+    await index.acknowledge(
+        id: registrationID,
+        generation: generation,
+        state: initial.state
+    )
+    await index.resetPerformanceCountersForTesting()
+
+    var lastDelivery: NetworkRequestIndex.QueryDelivery?
+    for sequence in 2...101 {
+        lastDelivery = await index.upsert(record.input, sequence: UInt64(sequence)).first
+    }
+
+    let counters = await index.performanceCountersForTesting()
+    #expect(counters.snapshotBuildCount == 0)
+    #expect(counters.fullTransactionBuildCount == 0)
+    #expect(counters.contentTransactionBuildCount == 100)
+
+    let publication = try #require(lastDelivery?.publication)
+    #expect(publication.state.snapshot == initial.state.snapshot)
+    #expect(publication.reconfigureItemIDs == [record.id])
+    guard case let .transaction(base, transaction) = publication.change else {
+        Issue.record("Expected a content-only transaction.")
+        return
+    }
+    #expect(base == initial.state.cursor)
+    #expect(transaction.sectionChanges.isEmpty)
+    #expect(transaction.itemChanges == [
+        .update(
+            itemID: record.id,
+            indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)
+        ),
+    ])
+}
+
+@MainActor
+@Test
+func networkQueryMutationImpactIsEvaluatedPerRegisteredQuery() async throws {
+    let context = WebInspectorModelContext.preview()
+    let record = makeIndexedNetworkRecord(
+        id: "query-impact",
+        url: "https://example.com/query-impact",
+        method: "GET",
+        timestamp: 1,
+        context: context
+    )
+    let index = NetworkRequestIndex()
+    _ = await index.replace(with: [record.input], sequence: 1)
+
+    let allLifetime = WebInspectorQueryRegistrationLifetime()
+    let allGeneration = allLifetime.nextGeneration()
+    let allRegistrationID = WebInspectorQueryRegistrationID(rawValue: 25)
+    let allInitial = try await index.register(
+        id: allRegistrationID,
+        generation: allGeneration,
+        query: NetworkQuery(section: .initiatorNode),
+        lifetime: allLifetime,
+        minimumSequence: 1
+    )
+    await index.acknowledge(
+        id: allRegistrationID,
+        generation: allGeneration,
+        state: allInitial.state
+    )
+
+    let mediaLifetime = WebInspectorQueryRegistrationLifetime()
+    let mediaGeneration = mediaLifetime.nextGeneration()
+    let mediaRegistrationID = WebInspectorQueryRegistrationID(rawValue: 26)
+    let mediaInitial = try await index.register(
+        id: mediaRegistrationID,
+        generation: mediaGeneration,
+        query: NetworkQuery(
+            resourceCategories: [.media],
+            section: .initiatorNode
+        ),
+        lifetime: mediaLifetime,
+        minimumSequence: 1
+    )
+    await index.acknowledge(
+        id: mediaRegistrationID,
+        generation: mediaGeneration,
+        state: mediaInitial.state
+    )
+    await index.resetPerformanceCountersForTesting()
+
+    var mediaInput = record.input
+    mediaInput.resourceTypeRawValue = "Media"
+    mediaInput.mimeType = "video/mp4"
+    mediaInput.responseHeaders = ["content-type": "video/mp4"]
+    let deliveries = await index.upsert(mediaInput, sequence: 2)
+
+    let counters = await index.performanceCountersForTesting()
+    #expect(counters.snapshotBuildCount == 1)
+    #expect(counters.fullTransactionBuildCount == 1)
+    #expect(counters.contentTransactionBuildCount == 1)
+    let allDelivery = try #require(deliveries.first { $0.registrationID == allRegistrationID })
+    #expect(allDelivery.publication.state.snapshot == allInitial.state.snapshot)
+    let mediaDelivery = try #require(deliveries.first { $0.registrationID == mediaRegistrationID })
+    #expect(mediaDelivery.publication.state.snapshot.itemIDs == [record.id])
+}
+
+@MainActor
+@Test
 func networkSourceEpochReplacementPublishesResetUntilItsStateIsAcknowledged() async throws {
     let context = WebInspectorModelContext.preview()
     let record = makeIndexedNetworkRecord(

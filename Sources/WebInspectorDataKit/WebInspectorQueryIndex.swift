@@ -5,7 +5,7 @@ import Foundation
 package protocol WebInspectorIndexedQueryDomain: SendableMetatype {
     associatedtype ItemID: Hashable & Sendable
     associatedtype Input: Identifiable & Sendable where Input.ID == ItemID
-    associatedtype Record: Identifiable & Sendable where Record.ID == ItemID
+    associatedtype Record: Identifiable & Equatable & Sendable where Record.ID == ItemID
     associatedtype Query: Equatable & Sendable
 
     static func makeRecord(from input: Input) -> Record
@@ -18,6 +18,14 @@ package protocol WebInspectorIndexedQueryDomain: SendableMetatype {
         query: Query
     ) -> Bool
 
+    /// Classifies whether one record mutation can change the query's visible
+    /// membership, order, or section topology.
+    static func mutationImpact(
+        previous: Record?,
+        current: Record,
+        query: Query
+    ) -> WebInspectorIndexedQueryMutationImpact
+
     /// Builds the semantic snapshot from the actor-owned unfiltered source
     /// order and the query-sorted matching subset. The domain applies any
     /// additional grouping and group/member ordering.
@@ -27,6 +35,11 @@ package protocol WebInspectorIndexedQueryDomain: SendableMetatype {
         recordsByID: [ItemID: Record],
         query: Query
     ) -> WebInspectorFetchedResultsSnapshot<ItemID>
+}
+
+package enum WebInspectorIndexedQueryMutationImpact: Sendable {
+    case contentOnly
+    case topology
 }
 
 /// Owns compact records and acknowledged query publications away from the
@@ -65,6 +78,13 @@ package actor WebInspectorQueryIndex<Domain: WebInspectorIndexedQueryDomain> {
         var matchingIDs: [Domain.ItemID]
         var latestState: QueryState
         var acknowledgedState: QueryState?
+        var visiblePositionsByID: [Domain.ItemID: WebInspectorFetchedResultsIndexPath]
+        var pendingUpdatedItemIDs: Set<Domain.ItemID>
+    }
+
+    private struct RecordMutation {
+        var previous: Domain.Record?
+        var current: Domain.Record
     }
 
     private struct QueryRegistration {
@@ -82,6 +102,16 @@ package actor WebInspectorQueryIndex<Domain: WebInspectorIndexedQueryDomain> {
     private var sequenceWaiters: [UInt64: SequenceWaiter] = [:]
     private var nextSequenceWaiterID: UInt64 = 0
     private var queryRegistrations: [WebInspectorQueryRegistrationID: QueryRegistration] = [:]
+
+#if DEBUG
+    package struct PerformanceCounters: Equatable, Sendable {
+        package var snapshotBuildCount = 0
+        package var fullTransactionBuildCount = 0
+        package var contentTransactionBuildCount = 0
+    }
+
+    private var performanceCounters = PerformanceCounters()
+#endif
 
     package init() {}
 
@@ -155,31 +185,32 @@ package actor WebInspectorQueryIndex<Domain: WebInspectorIndexedQueryDomain> {
             lastUpdatedSequenceByID = [:]
             lastUpdatedSequenceByID.reserveCapacity(inputs.count)
             for input in inputs {
-                upsertRecord(input, sequence: sequence)
+                _ = upsertRecord(input, sequence: sequence)
             }
             return updateAllQueryRegistrations(sequence: sequence, rebuilding: true)
         case let .upsert(input):
-            upsertRecord(input, sequence: sequence)
+            let mutation = upsertRecord(input, sequence: sequence)
             return updateAllQueryRegistrations(
                 sequence: sequence,
                 rebuilding: false,
-                changedID: input.id
+                mutation: mutation
             )
         }
     }
 
-    private func upsertRecord(_ input: Domain.Input, sequence: UInt64) {
+    private func upsertRecord(_ input: Domain.Input, sequence: UInt64) -> RecordMutation {
         let record = Domain.makeRecord(from: input)
         precondition(
             record.id == input.id,
             "WebInspectorQueryIndex domain changed a record identity while projecting input."
         )
-        let isNewRecord = recordsByID[record.id] == nil
+        let previous = recordsByID[record.id]
         recordsByID[record.id] = record
         lastUpdatedSequenceByID[record.id] = sequence
-        if isNewRecord {
+        if previous == nil {
             orderedIDs.append(record.id)
         }
+        return RecordMutation(previous: previous, current: record)
     }
 
     package func register(
@@ -312,6 +343,9 @@ package actor WebInspectorQueryIndex<Domain: WebInspectorIndexedQueryDomain> {
             )
         }
         registration.active.acknowledgedState = state
+        registration.active.pendingUpdatedItemIDs = registration.active.pendingUpdatedItemIDs.filter { id in
+            lastUpdatedSequenceByID[id, default: 0] > state.cursor.sequence
+        }
         queryRegistrations[id] = registration
     }
 
@@ -363,7 +397,7 @@ package actor WebInspectorQueryIndex<Domain: WebInspectorIndexedQueryDomain> {
     private func updateAllQueryRegistrations(
         sequence: UInt64,
         rebuilding: Bool,
-        changedID: Domain.ItemID? = nil
+        mutation: RecordMutation? = nil
     ) -> [QueryDelivery] {
         pruneQueryRegistrations()
         var deliveries: [QueryDelivery] = []
@@ -376,7 +410,7 @@ package actor WebInspectorQueryIndex<Domain: WebInspectorIndexedQueryDomain> {
                 &registration.active,
                 sequence: sequence,
                 rebuilding: rebuilding,
-                changedID: changedID
+                mutation: mutation
             )
             deliveries.append(QueryDelivery(
                 registrationID: id,
@@ -388,7 +422,7 @@ package actor WebInspectorQueryIndex<Domain: WebInspectorIndexedQueryDomain> {
                     &candidate,
                     sequence: sequence,
                     rebuilding: rebuilding,
-                    changedID: changedID
+                    mutation: mutation
                 )
                 registration.candidate = candidate
                 deliveries.append(QueryDelivery(
@@ -406,15 +440,29 @@ package actor WebInspectorQueryIndex<Domain: WebInspectorIndexedQueryDomain> {
         _ version: inout QueryVersion,
         sequence: UInt64,
         rebuilding: Bool,
-        changedID: Domain.ItemID?
+        mutation: RecordMutation?
     ) {
         let previousSourceEpoch = version.latestState.cursor.sourceEpoch
+        var snapshot = version.latestState.snapshot
         if rebuilding {
             version.matchingIDs = matchingIDs(for: version.query)
-        } else if let changedID {
-            version.matchingIDs.removeAll { $0 == changedID }
-            if let record = recordsByID[changedID], Domain.matches(record, query: version.query) {
-                insert(changedID, into: &version.matchingIDs, query: version.query)
+            snapshot = makeSnapshot(matchingIDs: version.matchingIDs, query: version.query)
+            version.visiblePositionsByID = visiblePositions(in: snapshot)
+            version.pendingUpdatedItemIDs.formUnion(version.visiblePositionsByID.keys)
+        } else if let mutation {
+            version.pendingUpdatedItemIDs.insert(mutation.current.id)
+            if Domain.mutationImpact(
+                previous: mutation.previous,
+                current: mutation.current,
+                query: version.query
+            ) == .topology {
+                let changedID = mutation.current.id
+                version.matchingIDs.removeAll { $0 == changedID }
+                if Domain.matches(mutation.current, query: version.query) {
+                    insert(changedID, into: &version.matchingIDs, query: version.query)
+                }
+                snapshot = makeSnapshot(matchingIDs: version.matchingIDs, query: version.query)
+                version.visiblePositionsByID = visiblePositions(in: snapshot)
             }
         }
         version.latestState = QueryState(
@@ -422,15 +470,11 @@ package actor WebInspectorQueryIndex<Domain: WebInspectorIndexedQueryDomain> {
                 sourceEpoch: sourceEpoch,
                 sequence: sequence
             ),
-            snapshot: Domain.makeSnapshot(
-                allItemIDsInSourceOrder: orderedIDs,
-                matchingItemIDs: version.matchingIDs,
-                recordsByID: recordsByID,
-                query: version.query
-            )
+            snapshot: snapshot
         )
         if previousSourceEpoch != sourceEpoch {
             version.acknowledgedState = nil
+            version.pendingUpdatedItemIDs = []
         }
     }
 
@@ -439,6 +483,7 @@ package actor WebInspectorQueryIndex<Domain: WebInspectorIndexedQueryDomain> {
         query: Domain.Query
     ) -> QueryVersion {
         let matchingIDs = matchingIDs(for: query)
+        let snapshot = makeSnapshot(matchingIDs: matchingIDs, query: query)
         return QueryVersion(
             generation: generation,
             query: query,
@@ -448,14 +493,11 @@ package actor WebInspectorQueryIndex<Domain: WebInspectorIndexedQueryDomain> {
                     sourceEpoch: sourceEpoch,
                     sequence: lastAppliedSequence
                 ),
-                snapshot: Domain.makeSnapshot(
-                    allItemIDsInSourceOrder: orderedIDs,
-                    matchingItemIDs: matchingIDs,
-                    recordsByID: recordsByID,
-                    query: query
-                )
+                snapshot: snapshot
             ),
-            acknowledgedState: nil
+            acknowledgedState: nil,
+            visiblePositionsByID: visiblePositions(in: snapshot),
+            pendingUpdatedItemIDs: []
         )
     }
 
@@ -475,14 +517,45 @@ package actor WebInspectorQueryIndex<Domain: WebInspectorIndexedQueryDomain> {
             acknowledgedState.cursor.sequence <= version.latestState.cursor.sequence,
             "WebInspectorQueryIndex retained an acknowledgement ahead of its latest state."
         )
-        let reconfigureItemIDs = Set(version.latestState.snapshot.itemIDs.filter { id in
-            lastUpdatedSequenceByID[id, default: 0] > acknowledgedState.cursor.sequence
+        let reconfigureItemIDs = Set(version.pendingUpdatedItemIDs.filter { id in
+            version.visiblePositionsByID[id] != nil
         })
-        let transaction = WebInspectorFetchedResultsTransaction(
-            oldSnapshot: acknowledgedState.snapshot,
-            newSnapshot: version.latestState.snapshot,
-            updatedItemIDs: reconfigureItemIDs
-        )
+        let transaction: WebInspectorFetchedResultsTransaction<Domain.ItemID>
+        if acknowledgedState.snapshot == version.latestState.snapshot {
+            let updates = reconfigureItemIDs.compactMap { id -> (
+                id: Domain.ItemID,
+                indexPath: WebInspectorFetchedResultsIndexPath
+            )? in
+                guard let indexPath = version.visiblePositionsByID[id] else {
+                    return nil
+                }
+                return (id, indexPath)
+            }.sorted { lhs, rhs in
+                lhs.indexPath < rhs.indexPath
+            }.map { update in
+                WebInspectorFetchedResultsItemChange.update(
+                    itemID: update.id,
+                    indexPath: update.indexPath
+                )
+            }
+            transaction = WebInspectorFetchedResultsTransaction(
+                oldSnapshot: version.latestState.snapshot,
+                newSnapshot: version.latestState.snapshot,
+                itemChanges: updates
+            )
+#if DEBUG
+            performanceCounters.contentTransactionBuildCount += 1
+#endif
+        } else {
+            transaction = WebInspectorFetchedResultsTransaction(
+                oldSnapshot: acknowledgedState.snapshot,
+                newSnapshot: version.latestState.snapshot,
+                updatedItemIDs: reconfigureItemIDs
+            )
+#if DEBUG
+            performanceCounters.fullTransactionBuildCount += 1
+#endif
+        }
         return QueryPublication(
             state: version.latestState,
             change: .transaction(
@@ -500,6 +573,14 @@ package actor WebInspectorQueryIndex<Domain: WebInspectorIndexedQueryDomain> {
     }
 
 #if DEBUG
+    package func performanceCountersForTesting() -> PerformanceCounters {
+        performanceCounters
+    }
+
+    package func resetPerformanceCountersForTesting() {
+        performanceCounters = PerformanceCounters()
+    }
+
     package func isMutationPendingForTesting(sequence: UInt64) -> Bool {
         pendingMutationsBySequence[sequence] != nil
     }
@@ -513,6 +594,37 @@ package actor WebInspectorQueryIndex<Domain: WebInspectorIndexedQueryDomain> {
         return queryRegistrations.count
     }
 #endif
+
+    private func makeSnapshot(
+        matchingIDs: [Domain.ItemID],
+        query: Domain.Query
+    ) -> WebInspectorFetchedResultsSnapshot<Domain.ItemID> {
+#if DEBUG
+        performanceCounters.snapshotBuildCount += 1
+#endif
+        return Domain.makeSnapshot(
+            allItemIDsInSourceOrder: orderedIDs,
+            matchingItemIDs: matchingIDs,
+            recordsByID: recordsByID,
+            query: query
+        )
+    }
+
+    private func visiblePositions(
+        in snapshot: WebInspectorFetchedResultsSnapshot<Domain.ItemID>
+    ) -> [Domain.ItemID: WebInspectorFetchedResultsIndexPath] {
+        var positions: [Domain.ItemID: WebInspectorFetchedResultsIndexPath] = [:]
+        positions.reserveCapacity(snapshot.itemIDs.count)
+        for (sectionIndex, section) in snapshot.sections.enumerated() {
+            for (itemIndex, itemID) in section.itemIDs.enumerated() {
+                positions[itemID] = WebInspectorFetchedResultsIndexPath(
+                    section: sectionIndex,
+                    item: itemIndex
+                )
+            }
+        }
+        return positions
+    }
 
     private func matchingIDs(for query: Domain.Query) -> [Domain.ItemID] {
         var ids = orderedIDs.map { id in

@@ -45,6 +45,48 @@ package enum NetworkRequestQueryDomain: WebInspectorIndexedQueryDomain {
         }
     }
 
+    package static func mutationImpact(
+        previous: Record?,
+        current: Record,
+        query: Query
+    ) -> WebInspectorIndexedQueryMutationImpact {
+        guard let previous else {
+            return .topology
+        }
+        guard previous != current else {
+            return .contentOnly
+        }
+
+        let previouslyMatched = matches(previous, query: query)
+        let currentlyMatches = matches(current, query: query)
+        guard previouslyMatched == currentlyMatches else {
+            return .topology
+        }
+
+        switch query.section {
+        case .initiatorNode:
+            guard previous.groupID == current.groupID,
+                  previous.chronologyKey == current.chronologyKey else {
+                return .topology
+            }
+        case .method:
+            if previouslyMatched,
+               previous.method != current.method {
+                return .topology
+            }
+            if previouslyMatched,
+               previous.chronologyKey != current.chronologyKey {
+                return .topology
+            }
+        case nil:
+            if previouslyMatched,
+               previous.chronologyKey != current.chronologyKey {
+                return .topology
+            }
+        }
+        return .contentOnly
+    }
+
     package static func makeSnapshot(
         allItemIDsInSourceOrder: [ItemID],
         matchingItemIDs: [ItemID],
