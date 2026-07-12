@@ -14,13 +14,11 @@ package struct WebInspectorCanonicalNetworkEventScope: Equatable, Sendable {
     package let domBindingEpoch: ModelDOMBindingEpoch?
 
     package init(
-        modelScope: ModelEventScope,
-        semanticTargetID: WebInspectorTarget.ID,
-        agentTargetID: WebInspectorTarget.ID
+        modelScope: ModelEventScope
     ) {
         generation = modelScope.generation
-        self.semanticTargetID = semanticTargetID
-        self.agentTargetID = agentTargetID
+        semanticTargetID = modelScope.target.id
+        agentTargetID = modelScope.agentTarget.id
         navigationEpoch = modelScope.navigationEpoch
         domBindingEpoch = modelScope.domBindingEpoch
     }

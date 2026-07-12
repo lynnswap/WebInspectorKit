@@ -36,10 +36,19 @@ struct CanonicalNetworkTestFixture {
         pageGeneration: WebInspectorPage.Generation? = nil
     ) -> WebInspectorCanonicalNetworkEventScope {
         let semanticTargetID = WebInspectorTarget.ID(targetID)
+        let agentTargetID = WebInspectorTarget.ID(
+            agentTargetID ?? targetID
+        )
         let modelScope = ModelEventScope(
             generation: pageGeneration ?? self.pageGeneration,
             target: ModelTarget(
                 id: semanticTargetID,
+                kind: .page,
+                frameID: nil,
+                parentFrameID: nil
+            ),
+            agentTarget: ModelTarget(
+                id: agentTargetID,
                 kind: .page,
                 frameID: nil,
                 parentFrameID: nil
@@ -52,11 +61,7 @@ struct CanonicalNetworkTestFixture {
             }
         )
         return WebInspectorCanonicalNetworkEventScope(
-            modelScope: modelScope,
-            semanticTargetID: semanticTargetID,
-            agentTargetID: WebInspectorTarget.ID(
-                agentTargetID ?? targetID
-            )
+            modelScope: modelScope
         )
     }
 }
