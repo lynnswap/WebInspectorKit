@@ -2744,6 +2744,7 @@ struct NetworkDetailViewControllerTests {
         #expect(listViewController.displayedUIKitSectionCountForTesting == 1)
         let evaluationCount = listViewController.entryIDsEvaluationCountForTesting
         let applyCount = listViewController.snapshotApplyCountForTesting
+        let cellReconfigureCount = listViewController.cellReconfigureCountForTesting
         let fetchedResultsRevision = model.requests.revision
 
         let segmentProxyID = Network.Request.ID("segment")
@@ -2767,7 +2768,8 @@ struct NetworkDetailViewControllerTests {
         await listViewController.flushPendingSnapshotUpdateForTesting()
         #expect(listViewController.displayedEntryIDsForTesting == [groupID])
         #expect(listViewController.entryIDsEvaluationCountForTesting == evaluationCount)
-        #expect(listViewController.snapshotApplyCountForTesting == applyCount + 1)
+        #expect(listViewController.snapshotApplyCountForTesting == applyCount)
+        #expect(listViewController.cellReconfigureCountForTesting == cellReconfigureCount + 1)
         #expect(listViewController.lastAppliedReconfigureEntryIDsForTesting == [groupID])
 
         listViewController.collectionViewForTesting.layoutIfNeeded()
@@ -2775,6 +2777,73 @@ struct NetworkDetailViewControllerTests {
             at: IndexPath(item: 0, section: 0)
         ))
         #expect(cell.fileTypeLabelForTesting?.hasSuffix("×2") == true)
+    }
+
+    @Test
+    func contentOnlyDataEventsDoNotScheduleNetworkListProjectionWork() async throws {
+        let context = makeContext()
+        _ = try #require(await applyRequest(
+            to: context,
+            requestID: "content-only-list",
+            url: "https://example.com/content-only.js"
+        ))
+        let model = try await NetworkPanelModel.make(context: context)
+        let listViewController = NetworkListViewController(model: model)
+        let window = showInWindow(listViewController, makeVisible: true)
+        defer { window.isHidden = true }
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+        listViewController.collectionViewForTesting.layoutIfNeeded()
+        let cell = try #require(listViewController.networkListCellForTesting(
+            at: IndexPath(item: 0, section: 0)
+        ))
+
+        let snapshotApplyCount = listViewController.snapshotApplyCountForTesting
+        let cellReconfigureCount = listViewController.cellReconfigureCountForTesting
+        let cellRenderCount = cell.renderCountForTesting
+        let initialRevision = model.requests.revision
+
+        for index in 0..<100 {
+            await applyDataReceived(
+                to: context,
+                requestID: "content-only-list",
+                dataLength: 1,
+                encodedDataLength: 1,
+                timestamp: Double(index + 10)
+            )
+        }
+
+        #expect(model.requests.revision == initialRevision + 100)
+        #expect(await listViewController.waitForFetchedResultsRevisionForTesting(
+            model.requests.revision
+        ))
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCount)
+        #expect(listViewController.cellReconfigureCountForTesting == cellReconfigureCount)
+        #expect(cell.renderCountForTesting == cellRenderCount)
+
+        let revisionBeforeDisplayChange = model.requests.revision
+        await applyResponseReceived(
+            to: context,
+            requestID: "content-only-list",
+            url: "https://example.com/content-only.js",
+            responseHeaders: ["content-type": "text/css"],
+            responseMimeType: "text/css",
+            timestamp: 200
+        )
+        #expect(await listViewController.waitForFetchedResultsRevisionForTesting(
+            revisionBeforeDisplayChange + 1
+        ))
+        #expect(await waitForObservedCondition(
+            deliveries: {
+                [cell.requestObservationForTesting].compactMap { $0 }
+            },
+            sample: {
+                cell.fileTypeLabelForTesting == "css"
+            }
+        ))
+        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCount)
+        #expect(listViewController.cellReconfigureCountForTesting == cellReconfigureCount)
+        #expect(cell.renderCountForTesting > cellRenderCount)
     }
 
     @Test
@@ -3041,7 +3110,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func networkListCellRendersOnlyWhenConfigured() async throws {
+    func networkListCellObservesDisplayContentOnlyWhileRenderingIsActive() async throws {
         let context = makeContext()
         let request = try #require(await applyRequest(
             to: context,
@@ -3051,8 +3120,9 @@ struct NetworkDetailViewControllerTests {
             responseMimeType: "video/mp4"
         ))
         let cell = NetworkListCell(frame: CGRect(x: 0, y: 0, width: 390, height: 44))
-        cell.configure(requests: [request])
+        cell.bind(requests: [request], renderingActive: true)
         #expect(cell.fileTypeLabelForTesting == "mp4")
+        #expect(cell.hasActiveRequestObservationForTesting)
 
         await applyResponseReceived(
             to: context,
@@ -3063,11 +3133,30 @@ struct NetworkDetailViewControllerTests {
             timestamp: 4
         )
 
-        #expect(cell.fileTypeLabelForTesting == "mp4")
+        #expect(await waitForObservedCondition(
+            deliveries: {
+                [cell.requestObservationForTesting].compactMap { $0 }
+            },
+            sample: {
+                cell.fileTypeLabelForTesting == "css"
+            }
+        ))
 
-        cell.configure(requests: [request])
-
+        cell.setRenderingActive(false)
+        #expect(cell.hasActiveRequestObservationForTesting == false)
+        await applyResponseReceived(
+            to: context,
+            requestID: "1",
+            url: request.url,
+            responseHeaders: ["content-type": "image/png"],
+            responseMimeType: "image/png",
+            timestamp: 5
+        )
         #expect(cell.fileTypeLabelForTesting == "css")
+
+        cell.setRenderingActive(true)
+        #expect(cell.hasActiveRequestObservationForTesting)
+        #expect(cell.fileTypeLabelForTesting == "png")
     }
 
     @Test

@@ -84,6 +84,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private var lastFetchedResultsUpdateRevisionStorageForTesting: UInt64?
     private var entryIDsEvaluationCountStorageForTesting = 0
     private var snapshotApplyCountStorageForTesting = 0
+    private var cellReconfigureCountStorageForTesting = 0
     private var lastAppliedReconfigureEntryIDsStorageForTesting: Set<WebInspectorFetchSectionID> = []
     private var filterMenuBuildCountStorageForTesting = 0
 #endif
@@ -230,6 +231,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
     private func resumeRendering() {
         snapshotCoordinator.resumeRendering()
+        setVisibleCellRenderingActive(true)
         renderSearchText(model.searchText)
         resourceFilterSelectionDidChange(effectiveResourceFilters: model.effectiveResourceFilters)
         renderSelectedEntryID(model.selectedEntryID)
@@ -246,6 +248,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
             return
         }
         snapshotCoordinator.suspendRendering()
+        setVisibleCellRenderingActive(false)
     }
 
     private func configureNavigationItem() {
@@ -381,7 +384,10 @@ package final class NetworkListViewController: UICollectionViewController, UISea
                 cell.unbind()
                 return
             }
-            cell.configure(requests: requests)
+            cell.bind(
+                requests: requests,
+                renderingActive: self?.snapshotCoordinator.isRenderingActive == true
+            )
         }
         return UICollectionViewDiffableDataSource<SectionIdentifier, WebInspectorFetchSectionID>(
             collectionView: collectionView
@@ -479,6 +485,29 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         snapshotCoordinator.pendingUpdate = nil
 
         let currentSnapshot = dataSource.snapshot()
+        if update.requiresFullReconfigure == false,
+           currentSnapshot.sectionIdentifiers == update.snapshot.sectionIdentifiers,
+           currentSnapshot.itemIdentifiers == update.snapshot.itemIdentifiers {
+            let indexPaths = update.reconfigureEntryIDs.compactMap { entryID in
+                dataSource.indexPath(for: entryID)
+            }
+#if DEBUG
+            lastAppliedReconfigureEntryIDsStorageForTesting = Set(
+                indexPaths.compactMap { dataSource.itemIdentifier(for: $0) }
+            )
+            if indexPaths.isEmpty == false {
+                cellReconfigureCountStorageForTesting += 1
+            }
+#endif
+            if indexPaths.isEmpty == false {
+                collectionView.reconfigureItems(at: indexPaths)
+            }
+#if DEBUG
+            resumeSnapshotUpdateCompletionWaitersForTesting()
+#endif
+            return
+        }
+
         let reconfigureEntryIDs: [WebInspectorFetchSectionID]
         if update.requiresFullReconfigure {
             reconfigureEntryIDs = update.snapshot.itemIdentifiers.filter { entryID in
@@ -548,7 +577,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
             )
             renderEmptyState(isEmpty: entryIDs.isEmpty)
 
-        case .transaction(let revision, let transaction, let reconfigureItemIDs):
+        case .transaction(let revision, let transaction, _):
 #if DEBUG
             recordFetchedResultsUpdateDeliveryForTesting(revision: revision)
 #endif
@@ -581,39 +610,48 @@ package final class NetworkListViewController: UICollectionViewController, UISea
             }
             applyIncrementalTransaction(
                 transaction,
-                revision: revision,
-                reconfigureItemIDs: reconfigureItemIDs
+                revision: revision
             )
         }
     }
 
     private func applyIncrementalTransaction(
         _ transaction: WebInspectorFetchedResultsTransaction<NetworkRequest.ID>,
-        revision: UInt64,
-        reconfigureItemIDs: Set<NetworkRequest.ID>
+        revision: UInt64
     ) {
         guard var snapshot = snapshotCoordinator.projectedSnapshot else {
             preconditionFailure(
                 "A contiguous Network transaction requires an installed UIKit projection."
             )
         }
-        guard applySectionChanges(
-            transaction.sectionChanges,
-            newSemanticSnapshot: transaction.newSnapshot,
-            to: &snapshot
-        ) else {
-            preconditionFailure(
-                "A contiguous Network section transaction did not match its UIKit projection."
-            )
+        let reconfigureEntryIDs = affectedEntryIDs(transaction: transaction)
+        let changesRowTopology = transaction.sectionChanges.contains { change in
+            switch change {
+            case .insert, .delete, .move:
+                return true
+            case .update:
+                return false
+            }
+        }
+        if changesRowTopology {
+            guard applySectionChanges(
+                transaction.sectionChanges,
+                newSemanticSnapshot: transaction.newSnapshot,
+                to: &snapshot
+            ) else {
+                preconditionFailure(
+                    "A contiguous Network section transaction did not match its UIKit projection."
+                )
+            }
+        } else if reconfigureEntryIDs.isEmpty {
+            snapshotCoordinator.projectedRevision = revision
+            return
         }
 
         requestSnapshotUpdate(
             snapshot: snapshot,
             projectionRevision: revision,
-            reconfigureEntryIDs: affectedEntryIDs(
-                transaction: transaction,
-                reconfigureItemIDs: reconfigureItemIDs
-            ),
+            reconfigureEntryIDs: reconfigureEntryIDs,
             requiresFullReconfigure: false
         )
         renderEmptyState(isEmpty: transaction.newSnapshot.sections.isEmpty)
@@ -696,8 +734,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func affectedEntryIDs(
-        transaction: WebInspectorFetchedResultsTransaction<NetworkRequest.ID>,
-        reconfigureItemIDs: Set<NetworkRequest.ID>
+        transaction: WebInspectorFetchedResultsTransaction<NetworkRequest.ID>
     ) -> Set<WebInspectorFetchSectionID> {
         var entryIDs: Set<WebInspectorFetchSectionID> = []
         for change in transaction.sectionChanges {
@@ -712,7 +749,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         }
         for change in transaction.itemChanges {
             switch change {
-            case .insert(_, let indexPath), .update(_, let indexPath):
+            case .insert(_, let indexPath):
                 entryIDs.insert(entryID(
                     atSectionIndex: indexPath.section,
                     in: transaction.newSnapshot
@@ -731,13 +768,9 @@ package final class NetworkListViewController: UICollectionViewController, UISea
                     atSectionIndex: newIndexPath.section,
                     in: transaction.newSnapshot
                 ))
+            case .update:
+                break
             }
-        }
-        for requestID in reconfigureItemIDs {
-            guard let entryID = model.context.networkRequestGroupID(containing: requestID) else {
-                continue
-            }
-            entryIDs.insert(entryID)
         }
         return entryIDs
     }
@@ -820,6 +853,15 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         }
     }
 
+    private func setVisibleCellRenderingActive(_ isActive: Bool) {
+        guard isViewLoaded else {
+            return
+        }
+        for cell in collectionView.visibleCells {
+            (cell as? NetworkListCell)?.setRenderingActive(isActive)
+        }
+    }
+
     override package func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         guard let entryID = dataSource.itemIdentifier(for: indexPath) else {
             entrySelectionAction(nil)
@@ -858,6 +900,10 @@ extension NetworkListViewController {
 
     package var snapshotApplyCountForTesting: Int {
         snapshotApplyCountStorageForTesting
+    }
+
+    package var cellReconfigureCountForTesting: Int {
+        cellReconfigureCountStorageForTesting
     }
 
     package var filterMenuBuildCountForTesting: Int {

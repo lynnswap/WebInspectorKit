@@ -1,12 +1,19 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
 import WebInspectorDataKit
+import ObservationBridge
 import UIKit
 
 @MainActor
 package final class NetworkListCell: UICollectionViewListCell {
     private let statusIndicatorView = UIView(frame: CGRect(origin: .zero, size: CGSize(width: 8, height: 8)))
     private let fileTypeLabel = UILabel()
+    private var requestObservation: PortableObservationTracking.Token?
+    private var observedRequests: [NetworkRequest] = []
+    private var isRenderingActive = true
+#if DEBUG
+    private var renderCountStorageForTesting = 0
+#endif
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -18,18 +25,74 @@ package final class NetworkListCell: UICollectionViewListCell {
         nil
     }
 
+    isolated deinit {
+        requestObservation?.cancel()
+    }
+
     override package func prepareForReuse() {
         super.prepareForReuse()
         unbind()
     }
 
-    package func configure(requests: [NetworkRequest]) {
+    package func bind(requests: [NetworkRequest], renderingActive: Bool) {
         precondition(requests.isEmpty == false, "A Network list cell requires at least one request.")
-        render(requests: requests)
+        if hasSameRequestIdentities(as: requests) == false {
+            cancelRequestObservation()
+            observedRequests = requests
+        }
+        setRenderingActive(renderingActive)
+    }
+
+    package func setRenderingActive(_ isActive: Bool) {
+        guard isRenderingActive != isActive else {
+            if isActive {
+                renderObservedRequests()
+                startRequestObservationIfNeeded()
+            }
+            return
+        }
+
+        isRenderingActive = isActive
+        if isActive {
+            renderObservedRequests()
+            startRequestObservationIfNeeded()
+        } else {
+            cancelRequestObservation()
+        }
     }
 
     package func unbind() {
+        cancelRequestObservation()
+        observedRequests = []
         render(displayName: "", statusSeverity: .neutral, fileTypeLabel: "")
+    }
+
+    private func hasSameRequestIdentities(as requests: [NetworkRequest]) -> Bool {
+        observedRequests.count == requests.count
+            && zip(observedRequests, requests).allSatisfy { observed, request in
+                observed === request
+            }
+    }
+
+    private func startRequestObservationIfNeeded() {
+        guard requestObservation == nil,
+              observedRequests.isEmpty == false else {
+            return
+        }
+        requestObservation = withPortableContinuousObservation { [weak self] _ in
+            guard let self,
+                  self.isRenderingActive else {
+                return
+            }
+            self.renderObservedRequests()
+        }
+    }
+
+    private func renderObservedRequests() {
+        guard observedRequests.isEmpty == false else {
+            return
+        }
+        render(requests: observedRequests)
     }
 
     private func configureStaticViews() {
@@ -73,6 +136,9 @@ package final class NetworkListCell: UICollectionViewListCell {
     }
 
     private func render(requests: [NetworkRequest]) {
+#if DEBUG
+        renderCountStorageForTesting += 1
+#endif
         guard let representativeRequest = requests.first else {
             preconditionFailure("A Network list cell cannot render an empty entry.")
         }
@@ -129,6 +195,11 @@ package final class NetworkListCell: UICollectionViewListCell {
         }
     }
 
+    private func cancelRequestObservation() {
+        requestObservation?.cancel()
+        requestObservation = nil
+    }
+
     private static func makeContentConfiguration() -> UIListContentConfiguration {
         var content = UIListContentConfiguration.cell()
         content.secondaryText = nil
@@ -154,6 +225,17 @@ extension NetworkListCell {
         fileTypeLabel.text
     }
 
+    package var hasActiveRequestObservationForTesting: Bool {
+        requestObservation != nil
+    }
+
+    package var requestObservationForTesting: PortableObservationTracking.Token? {
+        requestObservation
+    }
+
+    package var renderCountForTesting: Int {
+        renderCountStorageForTesting
+    }
 }
 #endif
 #endif
