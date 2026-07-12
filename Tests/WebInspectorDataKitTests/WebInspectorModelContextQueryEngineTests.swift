@@ -5,7 +5,7 @@ import Testing
 
 @Test
 func genericQueryUsesCanonicalRankForEmptySortAndStableTies() async throws {
-    let core = await genericQueryCore(records: [
+    let core = try await genericQueryCore(records: [
         queryRecord(id: 30, score: 1, rank: 30),
         queryRecord(id: 10, score: 1, rank: 10),
         queryRecord(id: 20, score: 1, rank: 20),
@@ -25,7 +25,7 @@ func genericQueryUsesCanonicalRankForEmptySortAndStableTies() async throws {
 
 @Test
 func queryVisibleStablePositionUpdatePublishesOnlyTheUpdatedIdentity() async throws {
-    let core = await genericQueryCore(records: [
+    let core = try await genericQueryCore(records: [
         queryRecord(id: 1, score: 1, optionalScore: 1, rank: 1),
         queryRecord(id: 2, score: 2, optionalScore: 1, rank: 2),
     ])
@@ -38,7 +38,7 @@ func queryVisibleStablePositionUpdatePublishesOnlyTheUpdatedIdentity() async thr
     _ = try await iterator.next()
     try await core.resetPerformanceCountersForTesting(for: registration)
 
-    await applySource(
+    try await applySource(
         .update(
             queryRecord(
                 id: 2,
@@ -67,7 +67,7 @@ func queryVisibleStablePositionUpdatePublishesOnlyTheUpdatedIdentity() async thr
 
 @Test
 func genericFlatQueryPublishesInsertDeleteMoveAndUpdatedIdentityDeltas() async throws {
-    let core = await genericQueryCore(records: [
+    let core = try await genericQueryCore(records: [
         queryRecord(id: 1, score: 10, rank: 1),
         queryRecord(id: 2, score: 20, rank: 2),
         queryRecord(id: 3, score: 30, rank: 3),
@@ -85,7 +85,7 @@ func genericFlatQueryPublishesInsertDeleteMoveAndUpdatedIdentityDeltas() async t
                 snapshot: .init(itemIDs: [.init(1), .init(2), .init(3)])
             ))
 
-    await applySource(.contentOnly(.init(2)), at: 1, to: core)
+    try await applySource(.contentOnly(.init(2)), at: 1, to: core)
     guard
         case let .changes(from, to, sectionChanges, itemChanges, updatedIDs) =
             try await iterator.next()
@@ -99,7 +99,7 @@ func genericFlatQueryPublishesInsertDeleteMoveAndUpdatedIdentityDeltas() async t
     #expect(itemChanges.isEmpty)
     #expect(updatedIDs == [.init(2)])
 
-    await applySource(
+    try await applySource(
         .update(queryRecord(id: 3, score: 5, rank: 3)),
         at: 2,
         to: core
@@ -122,7 +122,7 @@ func genericFlatQueryPublishesInsertDeleteMoveAndUpdatedIdentityDeltas() async t
         ])
     #expect(movedUpdates == [.init(3)])
 
-    await applySource(
+    try await applySource(
         .insert(queryRecord(id: 4, score: 15, rank: 4)),
         at: 3,
         to: core
@@ -143,7 +143,7 @@ func genericFlatQueryPublishesInsertDeleteMoveAndUpdatedIdentityDeltas() async t
             )
         ])
 
-    await applySource(.delete(.init(1)), at: 4, to: core)
+    try await applySource(.delete(.init(1)), at: 4, to: core)
     guard
         case let .changes(_, deleteRevision, _, deleteChanges, _) =
             try await iterator.next()
@@ -167,7 +167,7 @@ func genericFlatQueryPublishesInsertDeleteMoveAndUpdatedIdentityDeltas() async t
 
 @Test
 func oneCanonicalBatchPublishesOneNetDifferencePerRegistration() async throws {
-    let core = await genericQueryCore(records: [
+    let core = try await genericQueryCore(records: [
         queryRecord(id: 1, score: 10, rank: 1),
         queryRecord(id: 2, score: 20, rank: 2),
         queryRecord(id: 3, score: 30, rank: 3),
@@ -180,7 +180,7 @@ func oneCanonicalBatchPublishesOneNetDifferencePerRegistration() async throws {
     _ = try await iterator.next()
     try await core.resetPerformanceCountersForTesting(for: registration)
 
-    let commit = await core.applyBatch(
+    let commit = try await core.applyBatch(
         WebInspectorFetchedResultsSourceBatch<GenericQueryModel>(
             canonicalRevision: 1,
             changes: [
@@ -204,12 +204,14 @@ func oneCanonicalBatchPublishesOneNetDifferencePerRegistration() async throws {
             == [.init(4), .init(3), .init(2)]
     )
     let counters = try await core.performanceCountersForTesting(for: registration)
+    #expect(counters.snapshotBuildCount == 1)
+    #expect(counters.differenceBuildCount == 1)
     #expect(counters.publicationCount == 1)
 }
 
 @Test
 func contentOnlyBatchUnionsUpdatesIntoOneDeliveryWithoutSnapshots() async throws {
-    let core = await genericQueryCore(records: [
+    let core = try await genericQueryCore(records: [
         queryRecord(id: 1, score: 1, rank: 1),
         queryRecord(id: 2, score: 2, rank: 2),
         queryRecord(id: 3, score: 3, rank: 3),
@@ -219,7 +221,7 @@ func contentOnlyBatchUnionsUpdatesIntoOneDeliveryWithoutSnapshots() async throws
     _ = try await iterator.next()
     try await core.resetPerformanceCountersForTesting(for: registration)
 
-    let commit = await core.applyBatch(
+    let commit = try await core.applyBatch(
         WebInspectorFetchedResultsSourceBatch<GenericQueryModel>(
             canonicalRevision: 1,
             changes: [
@@ -252,7 +254,7 @@ func contentOnlyBatchUnionsUpdatesIntoOneDeliveryWithoutSnapshots() async throws
 
 @Test
 func genericQueryAppliesOffsetAndLimitBeforePublishingDeltas() async throws {
-    let core = await genericQueryCore(
+    let core = try await genericQueryCore(
         records: (1...5).map {
             queryRecord(id: $0, score: $0 * 10, rank: UInt64($0))
         })
@@ -274,7 +276,7 @@ func genericQueryAppliesOffsetAndLimitBeforePublishingDeltas() async throws {
             ))
 
     try await core.resetPerformanceCountersForTesting(for: registration)
-    await applySource(.contentOnly(.init(5)), at: 1, to: core)
+    try await applySource(.contentOnly(.init(5)), at: 1, to: core)
     #expect(try await registration.state().revision == 0)
     let invisibleCounters = try await core.performanceCountersForTesting(
         for: registration
@@ -283,7 +285,7 @@ func genericQueryAppliesOffsetAndLimitBeforePublishingDeltas() async throws {
     #expect(invisibleCounters.snapshotBuildCount == 0)
     #expect(invisibleCounters.publicationCount == 0)
 
-    await applySource(
+    try await applySource(
         .insert(queryRecord(id: 6, score: 5, rank: 6)),
         at: 2,
         to: core
@@ -313,7 +315,7 @@ func genericQueryAppliesOffsetAndLimitBeforePublishingDeltas() async throws {
 
 @Test
 func sourceResetPublishesACompleteDeltaInsteadOfAnUnconditionalReset() async throws {
-    let core = await genericQueryCore(records: [
+    let core = try await genericQueryCore(records: [
         queryRecord(id: 1, score: 1, rank: 1),
         queryRecord(id: 2, score: 2, rank: 2),
     ])
@@ -321,7 +323,7 @@ func sourceResetPublishesACompleteDeltaInsteadOfAnUnconditionalReset() async thr
     var iterator = try await registration.updates().makeAsyncIterator()
     _ = try await iterator.next()
 
-    await applySource(
+    try await applySource(
         .reset([
             queryRecord(id: 2, score: 20, rank: 2),
             queryRecord(id: 3, score: 3, rank: 3),
@@ -355,7 +357,7 @@ func sourceResetPublishesACompleteDeltaInsteadOfAnUnconditionalReset() async thr
 
 @Test
 func genericSectionedQueryUsesFirstOccurrenceOrderAndPublishesSectionChanges() async throws {
-    let core = await genericQueryCore(records: [
+    let core = try await genericQueryCore(records: [
         queryRecord(id: 1, score: 1, group: "B", rank: 1),
         queryRecord(id: 2, score: 2, group: "B", rank: 2),
         queryRecord(id: 3, score: 3, group: "A", rank: 3),
@@ -376,7 +378,7 @@ func genericSectionedQueryUsesFirstOccurrenceOrderAndPublishesSectionChanges() a
     #expect(snapshot.sectionNames == ["B", "A"])
     #expect(snapshot.sections.map(\.itemIDs) == [[.init(1), .init(2)], [.init(3)]])
 
-    await applySource(
+    try await applySource(
         .update(
             queryRecord(
                 id: 3,
@@ -408,14 +410,14 @@ func genericSectionedQueryUsesFirstOccurrenceOrderAndPublishesSectionChanges() a
     )
     #expect(updatedIDs == [.init(3)])
 
-    await applySource(.delete(.init(3)), at: 2, to: core)
+    try await applySource(.delete(.init(3)), at: 2, to: core)
     guard case let .changes(_, _, deletedSections, _, _) = try await iterator.next() else {
         Issue.record("Expected a section deletion.")
         return
     }
     #expect(deletedSections == [.delete(sectionName: "A", index: 0)])
 
-    await applySource(
+    try await applySource(
         .insert(
             queryRecord(
                 id: 4,
@@ -435,7 +437,7 @@ func genericSectionedQueryUsesFirstOccurrenceOrderAndPublishesSectionChanges() a
 
 @Test
 func predicateFailureTerminatesOnlyItsRegistration() async throws {
-    let core = await genericQueryCore(records: [
+    let core = try await genericQueryCore(records: [
         queryRecord(id: 1, score: 1, optionalScore: 1, rank: 1)
     ])
     let failing = try await core.register(
@@ -450,7 +452,7 @@ func predicateFailureTerminatesOnlyItsRegistration() async throws {
     _ = try await siblingIterator.next()
 
     try await core.resetPerformanceCountersForTesting(for: sibling)
-    let commit = await core.applyBatch(
+    let commit = try await core.applyBatch(
         WebInspectorFetchedResultsSourceBatch<GenericQueryModel>(
             canonicalRevision: 1,
             changes: [
@@ -489,7 +491,7 @@ func predicateFailureTerminatesOnlyItsRegistration() async throws {
 
 @Test
 func predicateFailureRejectsInitialRegistrationWithoutInstallingIt() async throws {
-    let core = await genericQueryCore(records: [
+    let core = try await genericQueryCore(records: [
         queryRecord(id: 1, score: 1, optionalScore: nil, rank: 1)
     ])
 
@@ -505,7 +507,7 @@ func predicateFailureRejectsInitialRegistrationWithoutInstallingIt() async throw
 
 @Test
 func descriptorCandidatesPublishOnlyAfterCurrentAtomicCommit() async throws {
-    let core = await genericQueryCore(
+    let core = try await genericQueryCore(
         records: (1...3).map {
             queryRecord(id: $0, score: $0, rank: UInt64($0))
         })
@@ -563,7 +565,7 @@ func descriptorCandidatesPublishOnlyAfterCurrentAtomicCommit() async throws {
 
 @Test
 func descriptorCandidateTracksSourceMutationsUntilAtomicCommit() async throws {
-    let core = await genericQueryCore(records: [
+    let core = try await genericQueryCore(records: [
         queryRecord(id: 1, score: 1, rank: 1),
         queryRecord(id: 2, score: 2, rank: 2),
     ])
@@ -577,7 +579,7 @@ func descriptorCandidateTracksSourceMutationsUntilAtomicCommit() async throws {
             predicate: #Predicate { $0.score > minimumScore }
         ))
 
-    await applySource(
+    try await applySource(
         .insert(queryRecord(id: 3, score: 3, rank: 3)),
         at: 1,
         to: core
@@ -619,15 +621,41 @@ func descriptorCandidateTracksSourceMutationsUntilAtomicCommit() async throws {
 }
 
 @Test
+func descriptorCandidateRejectsMatchingTokenFromAnotherContext() async throws {
+    let firstCore = try await genericQueryCore(records: [
+        queryRecord(id: 1, score: 1, rank: 1),
+        queryRecord(id: 2, score: 2, rank: 2),
+    ])
+    let secondCore = try await genericQueryCore(records: [
+        queryRecord(id: 1, score: 1, rank: 1),
+        queryRecord(id: 2, score: 2, rank: 2),
+    ])
+    let first = try await firstCore.register(GenericQueryModel.self)
+    let second = try await secondCore.register(GenericQueryModel.self)
+    let descriptor = WebInspectorFetchDescriptor<GenericQueryModel>(
+        predicate: #Predicate { $0.score >= 2 }
+    )
+    let foreignCandidate = try await first.prepareReplacement(descriptor)
+    let localCandidate = try await second.prepareReplacement(descriptor)
+
+    await #expect(throws: WebInspectorFetchedResultsQueryError.staleCandidate) {
+        _ = try await second.commitReplacement(foreignCandidate)
+    }
+
+    let state = try await second.commitReplacement(localCandidate)
+    #expect(state.snapshot.itemIDs == [.init(2)])
+}
+
+@Test
 func capacityOneSubscribersRebaseOnlyWhenAResetIsConsumed() async throws {
-    let core = await genericQueryCore(records: [
+    let core = try await genericQueryCore(records: [
         queryRecord(id: 1, score: 1, rank: 1)
     ])
     let registration = try await core.register(GenericQueryModel.self)
     let pendingSequence = try await registration.updates()
 
-    await applySource(.contentOnly(.init(1)), at: 1, to: core)
-    await applySource(.contentOnly(.init(1)), at: 2, to: core)
+    try await applySource(.contentOnly(.init(1)), at: 1, to: core)
+    try await applySource(.contentOnly(.init(1)), at: 2, to: core)
     var counters = try await core.performanceCountersForTesting(for: registration)
     #expect(counters.rebaseSnapshotCount == 0)
 
@@ -651,7 +679,7 @@ func capacityOneSubscribersRebaseOnlyWhenAResetIsConsumed() async throws {
     while try await core.waitingSubscriberCountForTesting(for: registration) == 0 {
         await Task.yield()
     }
-    await applySource(.contentOnly(.init(1)), at: 3, to: core)
+    try await applySource(.contentOnly(.init(1)), at: 3, to: core)
     let waitingValues = try await waiting.value
     #expect(
         waitingValues.0
@@ -670,9 +698,9 @@ func capacityOneSubscribersRebaseOnlyWhenAResetIsConsumed() async throws {
         try await slowIterator.next()
             == .initial(revision: 3, snapshot: .init(itemIDs: [.init(1)]))
     )
-    await applySource(.contentOnly(.init(1)), at: 4, to: core)
-    await applySource(.contentOnly(.init(1)), at: 5, to: core)
-    await applySource(.contentOnly(.init(1)), at: 6, to: core)
+    try await applySource(.contentOnly(.init(1)), at: 4, to: core)
+    try await applySource(.contentOnly(.init(1)), at: 5, to: core)
+    try await applySource(.contentOnly(.init(1)), at: 6, to: core)
     counters = try await core.performanceCountersForTesting(for: registration)
     #expect(counters.rebaseSnapshotCount == 1)
     guard case let .reset(resetRevision, resetSnapshot) = try await slowIterator.next() else {
@@ -687,13 +715,13 @@ func capacityOneSubscribersRebaseOnlyWhenAResetIsConsumed() async throws {
 
 @Test
 func pendingInitialRebasesToTheAtomicResetResult() async throws {
-    let core = await genericQueryCore(records: [
+    let core = try await genericQueryCore(records: [
         queryRecord(id: 1, score: 1, rank: 1)
     ])
     let registration = try await core.register(GenericQueryModel.self)
     let sequence = try await registration.updates()
 
-    let commit = await core.applyBatch(
+    let commit = try await core.applyBatch(
         WebInspectorFetchedResultsSourceBatch<GenericQueryModel>(
             canonicalRevision: 1,
             changes: [
@@ -724,7 +752,7 @@ func pendingInitialRebasesToTheAtomicResetResult() async throws {
 
 @Test
 func closedContextHandleCannotRecreateItsQueryEngine() async throws {
-    let core = await genericQueryCore(records: [
+    let core = try await genericQueryCore(records: [
         queryRecord(id: 1, score: 1, rank: 1)
     ])
     let registration = try await core.register(GenericQueryModel.self)
@@ -744,10 +772,122 @@ func closedContextHandleCannotRecreateItsQueryEngine() async throws {
 }
 
 @Test
+func abortingOwnerCommitTerminatesChangedAndUnchangedRegistrations() async throws {
+    let core = try await genericQueryCore(records: [
+        queryRecord(id: 1, score: 1, rank: 1)
+    ])
+    let changed = try await core.register(GenericQueryModel.self)
+    let unchanged = try await core.register(
+        GenericQueryModel.self,
+        fetchDescriptor: .init(
+            predicate: #Predicate { $0.score > 100 }
+        )
+    )
+    var changedIterator = try await changed.updates().makeAsyncIterator()
+    var unchangedIterator = try await unchanged.updates().makeAsyncIterator()
+    _ = try await changedIterator.next()
+    _ = try await unchangedIterator.next()
+
+    let commit = try await core.applyBatch(
+        WebInspectorFetchedResultsSourceBatch<GenericQueryModel>(
+            canonicalRevision: 1,
+            changes: [
+                .update(queryRecord(id: 1, score: 2, rank: 1))
+            ]
+        )
+    )
+    let closeTask = Task {
+        await core.close()
+    }
+    while await core.isClosingForTesting() == false {
+        await Task.yield()
+    }
+    let resolution = await commit.abort(
+        throwing: QueryCommitOwnerFailure.ownerVanished
+    )
+    await closeTask.value
+
+    #expect(resolution == .aborted)
+    #expect(commit.isAbortedForTesting)
+    #expect(commit.publish() == false)
+    await #expect(throws: QueryCommitOwnerFailure.self) {
+        _ = try await changedIterator.next()
+    }
+    await #expect(throws: QueryCommitOwnerFailure.self) {
+        _ = try await unchangedIterator.next()
+    }
+    #expect(await core.queryEngineCountForTesting() == 0)
+    await #expect(throws: WebInspectorFetchedResultsQueryError.closedRegistration) {
+        _ = try await changed.state()
+    }
+    await #expect(throws: WebInspectorFetchedResultsQueryError.closedRegistration) {
+        _ = try await core.register(GenericQueryModel.self)
+    }
+    await #expect(throws: WebInspectorFetchedResultsQueryError.closedRegistration) {
+        _ = try await core.applyBatch(
+            WebInspectorFetchedResultsSourceBatch<GenericQueryModel>(
+                canonicalRevision: 2,
+                changes: [.contentOnly(.init(1))]
+            )
+        )
+    }
+}
+
+@Test
+func closeRejectsReentrantWorkWhileAwaitingOwnerCommit() async throws {
+    let core = try await genericQueryCore(records: [
+        queryRecord(id: 1, score: 1, rank: 1)
+    ])
+    let registration = try await core.register(GenericQueryModel.self)
+    let candidate = try await registration.prepareReplacement(.init())
+    let commit = try await core.applyBatch(
+        WebInspectorFetchedResultsSourceBatch<GenericQueryModel>(
+            canonicalRevision: 1,
+            changes: [.contentOnly(.init(1))]
+        )
+    )
+    let closeTask = Task {
+        await core.close()
+    }
+    while await core.isClosingForTesting() == false {
+        await Task.yield()
+    }
+
+    await #expect(throws: WebInspectorFetchedResultsQueryError.closedRegistration) {
+        _ = try await core.register(GenericQueryModel.self)
+    }
+    await #expect(throws: WebInspectorFetchedResultsQueryError.closedRegistration) {
+        _ = try await registration.state()
+    }
+    await #expect(throws: WebInspectorFetchedResultsQueryError.closedRegistration) {
+        _ = try await registration.prepareReplacement(.init())
+    }
+    await #expect(throws: WebInspectorFetchedResultsQueryError.closedRegistration) {
+        _ = try await registration.commitReplacement(candidate)
+    }
+    await #expect(throws: WebInspectorFetchedResultsQueryError.closedRegistration) {
+        _ = try await core.applyBatch(
+            WebInspectorFetchedResultsSourceBatch<GenericQueryModel>(
+                canonicalRevision: 2,
+                changes: [.contentOnly(.init(1))]
+            )
+        )
+    }
+
+    #expect(commit.publish())
+    #expect(
+        await commit.abort(throwing: QueryCommitOwnerFailure.ownerVanished)
+            == .published
+    )
+    await closeTask.value
+    #expect(await core.queryEngineCountForTesting() == 0)
+}
+
+@Test
 func heterogeneousCanonicalBatchCommitsEveryModelBeforePublication() async throws {
     let core = WebInspectorModelContextCore()
     let owner = QueryCommitTestModelOwner()
-    let initialCommit = await core.applyBatches([
+    let initialCommit = try await core.applyBatches([
         WebInspectorModelContextQueryBatch(
             WebInspectorFetchedResultsSourceBatch<GenericQueryModel>(
                 canonicalRevision: 0,
@@ -783,7 +923,7 @@ func heterogeneousCanonicalBatchCommitsEveryModelBeforePublication() async throw
         await Task.yield()
     }
 
-    let commit = await core.applyBatches([
+    let commit = try await core.applyBatches([
         WebInspectorModelContextQueryBatch(
             WebInspectorFetchedResultsSourceBatch<GenericQueryModel>(
                 canonicalRevision: 1,
@@ -849,7 +989,7 @@ func heterogeneousCanonicalBatchCommitsEveryModelBeforePublication() async throw
 func registeredCanonicalFlatQueryPublishesTenThousandAppendsWithoutSnapshots()
     async throws
 {
-    let core = await genericQueryCore()
+    let core = try await genericQueryCore()
     let registration = try await core.register(GenericQueryModel.self)
     var iterator = try await registration.updates().makeAsyncIterator()
     guard case let .initial(_, retainedInitialSnapshot) = try await iterator.next() else {
@@ -860,7 +1000,7 @@ func registeredCanonicalFlatQueryPublishesTenThousandAppendsWithoutSnapshots()
     await core.resetSourcePerformanceCountersForTesting(GenericQueryModel.self)
 
     for id in 0..<10_000 {
-        await applySource(
+        try await applySource(
             .insert(
                 queryRecord(
                     id: id,
@@ -897,7 +1037,7 @@ func registeredCanonicalFlatQueryPublishesTenThousandAppendsWithoutSnapshots()
     #expect(queryCounters.snapshotMaterializedItemCount == 10_000)
 
     try await core.resetPerformanceCountersForTesting(for: registration)
-    await applySource(
+    try await applySource(
         .insert(
             queryRecord(
                 id: 10_000,
@@ -918,7 +1058,7 @@ func registeredCanonicalFlatQueryPublishesTenThousandAppendsWithoutSnapshots()
     #expect(materializedState.snapshot.itemIDs.count == 10_000)
 
     try await core.resetPerformanceCountersForTesting(for: registration)
-    await applySource(
+    try await applySource(
         .update(
             queryRecord(
                 id: 5_000,
@@ -928,7 +1068,7 @@ func registeredCanonicalFlatQueryPublishesTenThousandAppendsWithoutSnapshots()
         at: 10_002,
         to: core
     )
-    await applySource(.delete(.init(5_000)), at: 10_003, to: core)
+    try await applySource(.delete(.init(5_000)), at: 10_003, to: core)
     queryCounters = try await core.performanceCountersForTesting(
         for: registration
     )
@@ -944,10 +1084,10 @@ func registeredCanonicalFlatQueryPublishesTenThousandAppendsWithoutSnapshots()
 func sequentialSourceInsertionsUseConstantTimeRankValidationAndAppendFastPath()
     async throws
 {
-    let core = await genericQueryCore()
+    let core = try await genericQueryCore()
 
     for id in 0..<10_000 {
-        await applySource(
+        try await applySource(
             .insert(
                 queryRecord(
                     id: id,
@@ -964,7 +1104,7 @@ func sequentialSourceInsertionsUseConstantTimeRankValidationAndAppendFastPath()
     #expect(counters.canonicalAppendCount == 10_000)
     #expect(counters.canonicalBinarySearchInsertionCount == 0)
 
-    await applySource(
+    try await applySource(
         .insert(
             queryRecord(
                 id: 10_000,
@@ -994,8 +1134,8 @@ func tenThousandRecordFilteringAndDiffingStayInTheModelContextCore() async throw
             rank: UInt64($0)
         )
     }
-    let core = await Task.detached {
-        await genericQueryCore(records: records)
+    let core = try await Task.detached {
+        try await genericQueryCore(records: records)
     }.value
     let registration = try await core.register(
         GenericQueryModel.self,
@@ -1004,8 +1144,8 @@ func tenThousandRecordFilteringAndDiffingStayInTheModelContextCore() async throw
         ))
     try await core.resetPerformanceCountersForTesting(for: registration)
 
-    await Task.detached {
-        await applySource(.contentOnly(.init(5_000)), at: 1, to: core)
+    try await Task.detached {
+        try await applySource(.contentOnly(.init(5_000)), at: 1, to: core)
     }.value
     var counters = try await core.performanceCountersForTesting(for: registration)
     #expect(counters.contentOnlyVisitCount == 1)
@@ -1014,8 +1154,8 @@ func tenThousandRecordFilteringAndDiffingStayInTheModelContextCore() async throw
     #expect(counters.publicationCount == 1)
 
     try await core.resetPerformanceCountersForTesting(for: registration)
-    await Task.detached {
-        await applySource(
+    try await Task.detached {
+        try await applySource(
             .update(
                 queryRecord(
                     id: 5_000,
@@ -1034,8 +1174,8 @@ func tenThousandRecordFilteringAndDiffingStayInTheModelContextCore() async throw
     #expect(counters.publicationCount == 1)
 
     try await core.resetPerformanceCountersForTesting(for: registration)
-    await Task.detached {
-        await applySource(
+    try await Task.detached {
+        try await applySource(
             .reset(Array(records.reversed())),
             at: 3,
             to: core
@@ -1129,11 +1269,15 @@ private actor QueryCommitTestModelOwner {
     }
 }
 
+private enum QueryCommitOwnerFailure: Error {
+    case ownerVanished
+}
+
 private func genericQueryCore(
     records: [WebInspectorFetchedResultsSourceRecord<GenericQueryModel>] = []
-) async -> WebInspectorModelContextCore {
+) async throws -> WebInspectorModelContextCore {
     let core = WebInspectorModelContextCore()
-    let commit = await core.applyBatch(
+    let commit = try await core.applyBatch(
         WebInspectorFetchedResultsSourceBatch<GenericQueryModel>(
             canonicalRevision: 0,
             changes: [.reset(records)]
@@ -1147,8 +1291,8 @@ private func applySource(
     _ change: WebInspectorFetchedResultsSourceChange<GenericQueryModel>,
     at canonicalRevision: UInt64,
     to core: WebInspectorModelContextCore
-) async {
-    let commit = await core.applyBatch(
+) async throws {
+    let commit = try await core.applyBatch(
         WebInspectorFetchedResultsSourceBatch<GenericQueryModel>(
             canonicalRevision: canonicalRevision,
             changes: [change]

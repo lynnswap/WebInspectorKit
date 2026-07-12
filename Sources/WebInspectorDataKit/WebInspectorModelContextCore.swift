@@ -32,97 +32,207 @@ package struct WebInspectorModelContextQueryBatch: Sendable {
     }
 }
 
-/// The publication phase of one canonical model-context transaction.
+package enum WebInspectorModelContextQueryCommitResolution: Equatable, Sendable {
+    case published
+    case aborted
+}
+
+/// The terminal publication phase of one canonical model-context transaction.
 ///
 /// The model owner receives this Sendable commit after query state has been
-/// staged. It patches every materialized model first, then calls `publish()`
-/// in the same owner turn. Publication is exactly once; the context core does
-/// not accept a later query operation until this commit has been published.
+/// staged. It either patches every materialized model and calls `publish()` in
+/// the same owner turn, or calls `abort(throwing:)` when that owner turn cannot
+/// complete. The first terminal operation wins. Abort never exposes staged
+/// source state and closes every registration owned by the context core.
 package final class WebInspectorModelContextQueryCommit: Sendable {
+    fileprivate typealias AbortOperation = @Sendable (any Error) async -> Void
+    private typealias Waiter = CheckedContinuation<
+        WebInspectorModelContextQueryCommitResolution,
+        Never
+    >
+
     private enum State: Sendable {
         case pending(
             publications: [_WebInspectorModelContextPendingQueryPublication],
-            waiters: [CheckedContinuation<Void, Never>]
+            abort: AbortOperation,
+            waiters: [Waiter]
         )
-        case publishing(waiters: [CheckedContinuation<Void, Never>])
-        case published
+        case resolving(
+            WebInspectorModelContextQueryCommitResolution,
+            waiters: [Waiter]
+        )
+        case resolved(WebInspectorModelContextQueryCommitResolution)
+    }
+
+    private enum PublishAction {
+        case publish([_WebInspectorModelContextPendingQueryPublication])
+        case lostToAbort
+        case repeatedPublish
+    }
+
+    private enum AbortAction {
+        case abort(
+            [_WebInspectorModelContextPendingQueryPublication],
+            AbortOperation
+        )
+        case awaitResolution
+        case resolved(WebInspectorModelContextQueryCommitResolution)
     }
 
     package let canonicalRevision: UInt64
+    fileprivate let token: UInt64
     private let state: Mutex<State>
 
     fileprivate init(
         canonicalRevision: UInt64,
-        publications: [_WebInspectorModelContextPendingQueryPublication]
+        token: UInt64,
+        publications: [_WebInspectorModelContextPendingQueryPublication],
+        abort: @escaping AbortOperation
     ) {
         self.canonicalRevision = canonicalRevision
-        state = Mutex(.pending(publications: publications, waiters: []))
+        self.token = token
+        state = Mutex(
+            .pending(
+                publications: publications,
+                abort: abort,
+                waiters: []
+            )
+        )
     }
 
     /// Makes every registration mailbox observe this canonical transaction.
     ///
     /// Call only after the same owner has patched all materialized models for
-    /// `canonicalRevision`.
-    package func publish() {
-        let publications = state.withLock { state in
+    /// `canonicalRevision`. Returns `false` when an abort already won the
+    /// transaction's terminal race.
+    @discardableResult
+    package func publish() -> Bool {
+        let action = state.withLock { state -> PublishAction in
             switch state {
-            case let .pending(publications, waiters):
-                state = .publishing(waiters: waiters)
-                return publications
-            case .publishing, .published:
-                preconditionFailure(
-                    "A model-context query commit can be published only once."
-                )
+            case let .pending(publications, _, waiters):
+                state = .resolving(.published, waiters: waiters)
+                return .publish(publications)
+            case .resolving(.aborted, _), .resolved(.aborted):
+                return .lostToAbort
+            case .resolving(.published, _), .resolved(.published):
+                return .repeatedPublish
             }
         }
 
-        for publication in publications {
-            publication.publish()
+        switch action {
+        case let .publish(publications):
+            for publication in publications {
+                publication.publish()
+            }
+            finish(.published)
+            return true
+        case .lostToAbort:
+            return false
+        case .repeatedPublish:
+            preconditionFailure(
+                "A model-context query commit can be published only once."
+            )
+        }
+    }
+
+    /// Terminates every affected registration without exposing staged source.
+    ///
+    /// The context driver calls this when the materialization owner disappears
+    /// or otherwise cannot complete its owner turn.
+    package func abort(
+        throwing error: any Error
+    ) async -> WebInspectorModelContextQueryCommitResolution {
+        let action = state.withLock { state -> AbortAction in
+            switch state {
+            case let .pending(publications, abort, waiters):
+                state = .resolving(.aborted, waiters: waiters)
+                return .abort(publications, abort)
+            case .resolving:
+                return .awaitResolution
+            case let .resolved(resolution):
+                return .resolved(resolution)
+            }
         }
 
-        let waiters = state.withLock { state in
-            guard case let .publishing(waiters) = state else {
-                preconditionFailure(
-                    "A model-context query commit lost its publication phase."
-                )
+        switch action {
+        case let .abort(publications, abort):
+            for publication in publications {
+                publication.abort(throwing: error)
             }
-            state = .published
-            return waiters
-        }
-        for waiter in waiters {
-            waiter.resume()
+            await abort(error)
+            finish(.aborted)
+            return .aborted
+        case .awaitResolution:
+            return await waitUntilResolved()
+        case let .resolved(resolution):
+            return resolution
         }
     }
 
     package var isPublishedForTesting: Bool {
         state.withLock { state in
-            if case .published = state {
+            if case .resolved(.published) = state {
                 return true
             }
             return false
         }
     }
 
-    fileprivate func waitUntilPublished() async {
+    package var isAbortedForTesting: Bool {
+        state.withLock { state in
+            if case .resolved(.aborted) = state {
+                return true
+            }
+            return false
+        }
+    }
+
+    fileprivate func waitUntilResolved()
+        async -> WebInspectorModelContextQueryCommitResolution
+    {
         await withCheckedContinuation { continuation in
-            let shouldResume = state.withLock { state in
+            let resolution = state.withLock {
+                state -> WebInspectorModelContextQueryCommitResolution? in
                 switch state {
-                case let .pending(publications, waiters):
+                case let .pending(publications, abort, waiters):
                     state = .pending(
                         publications: publications,
+                        abort: abort,
                         waiters: waiters + [continuation]
                     )
-                    return false
-                case let .publishing(waiters):
-                    state = .publishing(waiters: waiters + [continuation])
-                    return false
-                case .published:
-                    return true
+                    return nil
+                case let .resolving(resolution, waiters):
+                    state = .resolving(
+                        resolution,
+                        waiters: waiters + [continuation]
+                    )
+                    return nil
+                case let .resolved(resolution):
+                    return resolution
                 }
             }
-            if shouldResume {
-                continuation.resume()
+            if let resolution {
+                continuation.resume(returning: resolution)
             }
+        }
+    }
+
+    private func finish(
+        _ resolution: WebInspectorModelContextQueryCommitResolution
+    ) {
+        let waiters = state.withLock { state in
+            guard case let .resolving(expectedResolution, waiters) = state,
+                expectedResolution == resolution
+            else {
+                preconditionFailure(
+                    "A model-context query commit lost its terminal phase."
+                )
+            }
+            state = .resolved(resolution)
+            return waiters
+        }
+        for waiter in waiters {
+            waiter.resume(returning: resolution)
         }
     }
 }
@@ -132,10 +242,18 @@ package final class WebInspectorModelContextQueryCommit: Sendable {
 /// The actor is the only isolation boundary. Each model-specific query engine
 /// is synchronous and non-Sendable, and remains stored inside this actor.
 package actor WebInspectorModelContextCore {
+    private enum Lifecycle: Equatable {
+        case open
+        case closing
+        case closed
+    }
+
+    private let identity = _WebInspectorModelContextIdentity()
     private var queryEngines: [ObjectIdentifier: any _WebInspectorAnyQueryEngine] = [:]
     private var lastCanonicalRevision: UInt64?
     private var outstandingQueryCommit: WebInspectorModelContextQueryCommit?
-    private var isClosed = false
+    private var nextQueryCommitToken: UInt64 = 0
+    private var lifecycle = Lifecycle.open
 
     package init() {}
 
@@ -143,6 +261,7 @@ package actor WebInspectorModelContextCore {
         _ model: Model.Type,
         fetchDescriptor: WebInspectorFetchDescriptor<Model> = .init()
     ) async throws -> WebInspectorFetchedResultsQueryRegistration<Model, Never> {
+        try ensureOpen()
         await waitForOutstandingQueryCommit()
         try ensureOpen()
         let publication = WebInspectorFetchedResultsQueryRegistration<
@@ -168,6 +287,7 @@ package actor WebInspectorModelContextCore {
         fetchDescriptor: WebInspectorFetchDescriptor<Model> = .init(),
         sectionBy: Expression<Model.QueryValue, SectionName>
     ) async throws -> WebInspectorFetchedResultsQueryRegistration<Model, SectionName> {
+        try ensureOpen()
         await waitForOutstandingQueryCommit()
         try ensureOpen()
         let publication = WebInspectorFetchedResultsQueryRegistration<
@@ -188,18 +308,16 @@ package actor WebInspectorModelContextCore {
 
     package func applyBatch<Model: WebInspectorPersistentModel>(
         _ batch: WebInspectorFetchedResultsSourceBatch<Model>
-    ) async -> WebInspectorModelContextQueryCommit {
-        await applyBatches([WebInspectorModelContextQueryBatch(batch)])
+    ) async throws -> WebInspectorModelContextQueryCommit {
+        try await applyBatches([WebInspectorModelContextQueryBatch(batch)])
     }
 
     package func applyBatches(
         _ batches: [WebInspectorModelContextQueryBatch]
-    ) async -> WebInspectorModelContextQueryCommit {
+    ) async throws -> WebInspectorModelContextQueryCommit {
+        try ensureOpen()
         await waitForOutstandingQueryCommit()
-        precondition(
-            isClosed == false,
-            "A closed model context cannot stage a canonical query transaction."
-        )
+        try ensureOpen()
         precondition(
             batches.isEmpty == false,
             "A model-context query transaction must contain source work."
@@ -227,25 +345,47 @@ package actor WebInspectorModelContextCore {
         }
         lastCanonicalRevision = canonicalRevision
 
+        precondition(
+            nextQueryCommitToken < UInt64.max,
+            "A model context exhausted its query-commit identity space."
+        )
+        nextQueryCommitToken += 1
+        let token = nextQueryCommitToken
+
         let commit = WebInspectorModelContextQueryCommit(
             canonicalRevision: canonicalRevision,
-            publications: publications
+            token: token,
+            publications: publications,
+            abort: { [weak self] error in
+                await self?.abortQueryCommit(
+                    token: token,
+                    throwing: error
+                )
+            }
         )
         outstandingQueryCommit = commit
         return commit
     }
 
     package func close() async {
-        await waitForOutstandingQueryCommit()
-        guard isClosed == false else {
+        switch lifecycle {
+        case .open:
+            lifecycle = .closing
+        case .closing:
+            break
+        case .closed:
             return
         }
-        isClosed = true
-        let publications = queryEngines.values.flatMap { $0.close() }
-        queryEngines.removeAll(keepingCapacity: false)
-        for publication in publications {
-            publication.publish()
+
+        await waitForOutstandingQueryCommit()
+        guard lifecycle == .closing else {
+            return
         }
+        finishClose(throwing: nil)
+    }
+
+    package func isClosingForTesting() -> Bool {
+        lifecycle == .closing
     }
 
     package func registrationCountForTesting<Model: WebInspectorPersistentModel>(
@@ -329,7 +469,9 @@ package actor WebInspectorModelContextCore {
         for token: WebInspectorFetchedResultsQueryRegistrationToken<Model, SectionName>,
         publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication
     ) async throws -> WebInspectorFetchedResultsQueryState<Model.ID, SectionName> {
+        try ensureOpen()
         await waitForOutstandingQueryCommit()
+        try ensureOpen()
         return try requiredEngine(for: Model.self).state(
             for: token,
             publication: publication
@@ -343,7 +485,9 @@ package actor WebInspectorModelContextCore {
         to token: WebInspectorFetchedResultsQueryRegistrationToken<Model, SectionName>,
         publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication
     ) async throws -> WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication.UpdateSequence {
+        try ensureOpen()
         await waitForOutstandingQueryCommit()
+        try ensureOpen()
         return try requiredEngine(for: Model.self).subscribe(
             to: token,
             publication: publication
@@ -360,7 +504,9 @@ package actor WebInspectorModelContextCore {
     ) async throws -> WebInspectorRevisionedSnapshotRebase<
         WebInspectorFetchedResultsSnapshot<Model.ID, SectionName>
     > {
+        try ensureOpen()
         await waitForOutstandingQueryCommit()
+        try ensureOpen()
         return try requiredEngine(for: Model.self).rebase(
             rebaseToken,
             for: token,
@@ -376,7 +522,9 @@ package actor WebInspectorModelContextCore {
         for token: WebInspectorFetchedResultsQueryRegistrationToken<Model, SectionName>,
         publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication
     ) async throws -> WebInspectorFetchedResultsQueryCandidateToken<Model, SectionName> {
+        try ensureOpen()
         await waitForOutstandingQueryCommit()
+        try ensureOpen()
         return try requiredEngine(for: Model.self).prepareReplacement(
             descriptor,
             for: token,
@@ -392,7 +540,9 @@ package actor WebInspectorModelContextCore {
         for token: WebInspectorFetchedResultsQueryRegistrationToken<Model, SectionName>,
         publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication
     ) async throws -> WebInspectorFetchedResultsQueryState<Model.ID, SectionName> {
+        try ensureOpen()
         await waitForOutstandingQueryCommit()
+        try ensureOpen()
         let (state, pendingPublication) = try requiredEngine(for: Model.self)
             .commitReplacement(
                 candidateToken,
@@ -411,7 +561,13 @@ package actor WebInspectorModelContextCore {
         for token: WebInspectorFetchedResultsQueryRegistrationToken<Model, SectionName>,
         publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication
     ) async {
+        guard lifecycle == .open else {
+            return
+        }
         await waitForOutstandingQueryCommit()
+        guard lifecycle == .open else {
+            return
+        }
         guard let engine = typedEngine(for: Model.self) else {
             return
         }
@@ -429,7 +585,13 @@ package actor WebInspectorModelContextCore {
         _ token: WebInspectorFetchedResultsQueryRegistrationToken<Model, SectionName>,
         publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication
     ) async {
+        guard lifecycle == .open else {
+            return
+        }
         await waitForOutstandingQueryCommit()
+        guard lifecycle == .open else {
+            return
+        }
         typedEngine(for: Model.self)?
             .close(token, publication: publication)?
             .publish()
@@ -443,10 +605,38 @@ package actor WebInspectorModelContextCore {
 
     private func waitForOutstandingQueryCommit() async {
         while let commit = outstandingQueryCommit {
-            await commit.waitUntilPublished()
+            _ = await commit.waitUntilResolved()
             if outstandingQueryCommit === commit {
                 outstandingQueryCommit = nil
             }
+        }
+    }
+
+    private func abortQueryCommit(
+        token: UInt64,
+        throwing error: any Error
+    ) {
+        guard let outstandingQueryCommit,
+            outstandingQueryCommit.token == token
+        else {
+            preconditionFailure(
+                "A query-commit abort must resolve the context's outstanding transaction."
+            )
+        }
+        finishClose(throwing: error)
+    }
+
+    private func finishClose(
+        throwing error: (any Error)?
+    ) {
+        lifecycle = .closed
+        outstandingQueryCommit = nil
+        let publications = queryEngines.values.flatMap {
+            $0.close(throwing: error)
+        }
+        queryEngines.removeAll(keepingCapacity: false)
+        for publication in publications {
+            publication.publish()
         }
     }
 
@@ -462,7 +652,9 @@ package actor WebInspectorModelContextCore {
             }
             return typed
         }
-        let engine = _WebInspectorFetchedResultsQueryEngine<Model>()
+        let engine = _WebInspectorFetchedResultsQueryEngine<Model>(
+            contextIdentity: identity
+        )
         queryEngines[key] = engine
         return engine
     }
@@ -492,7 +684,7 @@ package actor WebInspectorModelContextCore {
     }
 
     private func ensureOpen() throws {
-        if isClosed {
+        if lifecycle != .open {
             throw WebInspectorFetchedResultsQueryError.closedRegistration
         }
     }

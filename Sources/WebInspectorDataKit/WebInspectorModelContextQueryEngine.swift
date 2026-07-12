@@ -45,10 +45,25 @@ package enum WebInspectorFetchedResultsSourceChange<
     case reset([WebInspectorFetchedResultsSourceRecord<Model>])
 }
 
+final class _WebInspectorModelContextIdentity: Hashable, Sendable {
+    static func == (
+        lhs: _WebInspectorModelContextIdentity,
+        rhs: _WebInspectorModelContextIdentity
+    ) -> Bool {
+        lhs === rhs
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(ObjectIdentifier(self))
+    }
+}
+
 package struct WebInspectorFetchedResultsQueryRegistrationToken<
     Model: WebInspectorPersistentModel,
     SectionName: Hashable & Sendable
 >: Hashable, Sendable {
+    fileprivate let contextIdentity: _WebInspectorModelContextIdentity
+    fileprivate let publicationIdentity: ObjectIdentifier
     fileprivate let rawValue: UInt64
 }
 
@@ -210,7 +225,9 @@ package struct WebInspectorFetchedResultsQueryRegistration<
 
 protocol _WebInspectorAnyQueryEngine: AnyObject {
     var registrationCount: Int { get }
-    func close() -> [_WebInspectorModelContextPendingQueryPublication]
+    func close(
+        throwing error: (any Error)?
+    ) -> [_WebInspectorModelContextPendingQueryPublication]
 }
 
 /// One type-erased query publication prepared by a context-core transaction.
@@ -220,13 +237,22 @@ protocol _WebInspectorAnyQueryEngine: AnyObject {
 /// `WebInspectorModelContextCore`.
 struct _WebInspectorModelContextPendingQueryPublication: Sendable {
     private let publishBody: @Sendable () -> Void
+    private let abortBody: @Sendable (any Error) -> Void
 
-    init(_ publish: @escaping @Sendable () -> Void) {
+    init(
+        publish: @escaping @Sendable () -> Void,
+        abort: @escaping @Sendable (any Error) -> Void
+    ) {
         publishBody = publish
+        abortBody = abort
     }
 
     func publish() {
         publishBody()
+    }
+
+    func abort(throwing error: any Error) {
+        abortBody(error)
     }
 }
 
@@ -239,6 +265,7 @@ final class _WebInspectorFetchedResultsQueryEngine<
     private var recordsByID: [Model.ID: SourceRecord]
     private var canonicalItemIDs: [Model.ID]
     private var itemIDByCanonicalRank: [WebInspectorFetchedResultsCanonicalRank: Model.ID]
+    private let contextIdentity: _WebInspectorModelContextIdentity
     private var registrations: [UInt64: Entry] = [:]
     private var nextRegistrationID: UInt64 = 0
     var sourcePerformanceCounters =
@@ -247,8 +274,10 @@ final class _WebInspectorFetchedResultsQueryEngine<
     private var isClosed = false
 
     init(
+        contextIdentity: _WebInspectorModelContextIdentity,
         records: [WebInspectorFetchedResultsSourceRecord<Model>] = []
     ) {
+        self.contextIdentity = contextIdentity
         let source = Self.validatedSource(records)
         recordsByID = source.recordsByID
         canonicalItemIDs = source.canonicalItemIDs
@@ -342,7 +371,9 @@ final class _WebInspectorFetchedResultsQueryEngine<
         registrations.count
     }
 
-    func close() -> [_WebInspectorModelContextPendingQueryPublication] {
+    func close(
+        throwing error: (any Error)?
+    ) -> [_WebInspectorModelContextPendingQueryPublication] {
         guard isClosed == false else {
             return []
         }
@@ -352,7 +383,7 @@ final class _WebInspectorFetchedResultsQueryEngine<
         recordsByID.removeAll(keepingCapacity: false)
         canonicalItemIDs.removeAll(keepingCapacity: false)
         itemIDByCanonicalRank.removeAll(keepingCapacity: false)
-        return entries.map { $0.stagedFinish(nil) }
+        return entries.map { $0.stagedFinish(error) }
     }
 
     func performanceCounters<SectionName: Hashable & Sendable>(
@@ -488,6 +519,8 @@ final class _WebInspectorFetchedResultsQueryEngine<
         )
         nextRegistrationID += 1
         let token = WebInspectorFetchedResultsQueryRegistrationToken<Model, SectionName>(
+            contextIdentity: contextIdentity,
+            publicationIdentity: ObjectIdentifier(box.publication),
             rawValue: nextRegistrationID
         )
         registrations[token.rawValue] = Entry(box)
@@ -499,6 +532,8 @@ final class _WebInspectorFetchedResultsQueryEngine<
         publication: WebInspectorFetchedResultsQueryRegistration<Model, SectionName>.Publication
     ) throws -> _WebInspectorFetchedResultsRegistrationBox<Model, SectionName> {
         guard
+            token.contextIdentity === contextIdentity,
+            token.publicationIdentity == ObjectIdentifier(publication),
             let box = registrations[token.rawValue]?.box
                 as? _WebInspectorFetchedResultsRegistrationBox<Model, SectionName>,
             box.publication === publication
@@ -740,7 +775,16 @@ private class _WebInspectorFetchedResultsRegistrationBox<
     private enum PendingBatch {
         case single(Changes?)
         case contentOnly(Set<Model.ID>)
-        case snapshot(Snapshot, updatedItemIDs: Set<Model.ID>)
+        case snapshot(
+            Snapshot,
+            updatedItemIDs: Set<Model.ID>,
+            containsReset: Bool
+        )
+    }
+
+    private struct MutationImpact {
+        var updatedItemIDs: Set<Model.ID> = []
+        var containsReset = false
     }
 
     var descriptor: WebInspectorFetchDescriptor<Model>
@@ -825,7 +869,11 @@ private class _WebInspectorFetchedResultsRegistrationBox<
         } else if onlyContentChanges {
             pendingBatch = .contentOnly([])
         } else {
-            pendingBatch = .snapshot(currentSnapshot(), updatedItemIDs: [])
+            pendingBatch = .snapshot(
+                currentSnapshot(),
+                updatedItemIDs: [],
+                containsReset: false
+            )
         }
     }
 
@@ -837,34 +885,48 @@ private class _WebInspectorFetchedResultsRegistrationBox<
         guard let pendingBatch else {
             preconditionFailure("A fetched-results mutation requires an active source batch.")
         }
-        let changes = try apply(
-            mutation,
-            to: &active,
-            descriptor: descriptor,
-            recordsByID: recordsByID,
-            canonicalItemIDs: canonicalItemIDs
-        )
-
         switch pendingBatch {
         case let .single(previous):
             precondition(
                 previous == nil,
                 "A single-change fetched-results batch received multiple mutations."
             )
+            let changes = try apply(
+                mutation,
+                to: &active,
+                descriptor: descriptor,
+                recordsByID: recordsByID,
+                canonicalItemIDs: canonicalItemIDs
+            )
             self.pendingBatch = .single(changes)
         case let .contentOnly(updatedItemIDs):
+            let changes = try apply(
+                mutation,
+                to: &active,
+                descriptor: descriptor,
+                recordsByID: recordsByID,
+                canonicalItemIDs: canonicalItemIDs
+            )
             self.pendingBatch = .contentOnly(
                 updatedItemIDs.union(changes.updatedItemIDs)
             )
-        case let .snapshot(snapshot, updatedItemIDs):
+        case let .snapshot(snapshot, updatedItemIDs, containsReset):
+            let impact = try applyWithoutDifference(
+                mutation,
+                to: &active,
+                descriptor: descriptor,
+                recordsByID: recordsByID,
+                canonicalItemIDs: canonicalItemIDs
+            )
             self.pendingBatch = .snapshot(
                 snapshot,
-                updatedItemIDs: updatedItemIDs.union(changes.updatedItemIDs)
+                updatedItemIDs: updatedItemIDs.union(impact.updatedItemIDs),
+                containsReset: containsReset || impact.containsReset
             )
         }
 
         if var candidate {
-            _ = try apply(
+            _ = try applyWithoutDifference(
                 mutation,
                 to: &candidate.evaluation,
                 descriptor: candidate.descriptor,
@@ -889,13 +951,20 @@ private class _WebInspectorFetchedResultsRegistrationBox<
             changes = Changes(
                 updatedItemIDs: updatedItemIDs.intersection(active.visibleItemIDs)
             )
-        case let .snapshot(previousSnapshot, updatedItemIDs):
+        case let .snapshot(previousSnapshot, updatedItemIDs, containsReset):
             let currentSnapshot = currentSnapshot()
+            let resetUpdatedItemIDs: Set<Model.ID> =
+                if containsReset {
+                    Set(previousSnapshot.itemIDs)
+                } else {
+                    []
+                }
             changes = difference(
                 from: previousSnapshot,
                 to: currentSnapshot,
                 updatedItemIDs:
                     updatedItemIDs
+                    .union(resetUpdatedItemIDs)
                     .intersection(previousSnapshot.itemIDs)
                     .intersection(currentSnapshot.itemIDs)
             )
@@ -977,20 +1046,26 @@ private class _WebInspectorFetchedResultsRegistrationBox<
     func stagedFinish(_ error: (any Error)?) -> _WebInspectorModelContextPendingQueryPublication {
         candidate = nil
         pendingBatch = nil
-        return _WebInspectorModelContextPendingQueryPublication { [publication] in
-            if let error {
+        return _WebInspectorModelContextPendingQueryPublication(
+            publish: { [publication] in
+                if let error {
+                    publication.finish(throwing: error)
+                } else {
+                    publication.finish()
+                }
+            },
+            abort: { [publication] error in
                 publication.finish(throwing: error)
-            } else {
-                publication.finish()
             }
-        }
+        )
     }
 
     fileprivate func evaluateAll(
         descriptor: WebInspectorFetchDescriptor<Model>,
         recordsByID: [Model.ID: SourceRecord],
         canonicalItemIDs: [Model.ID],
-        counters: inout WebInspectorFetchedResultsQueryPerformanceCounters
+        counters: inout WebInspectorFetchedResultsQueryPerformanceCounters,
+        materializesSnapshot: Bool = true
     ) throws -> Evaluation {
         counters.fullEvaluationCount += 1
         counters.fullEvaluationRecordCount += canonicalItemIDs.count
@@ -1035,17 +1110,102 @@ private class _WebInspectorFetchedResultsRegistrationBox<
             matchingItemIDs,
             descriptor: descriptor
         )
-        let snapshot = materializeSnapshot(
-            visibleItemIDs: visibleItemIDs,
-            sectionTokensByID: sectionTokensByID,
-            counters: &counters
-        )
+        let snapshot: Snapshot? =
+            if materializesSnapshot {
+                materializeSnapshot(
+                    visibleItemIDs: visibleItemIDs,
+                    sectionTokensByID: sectionTokensByID,
+                    counters: &counters
+                )
+            } else {
+                nil
+            }
         return Evaluation(
             matchingItemIDs: matchingItemIDs,
             sectionTokensByID: sectionTokensByID,
             visibleItemIDs: Set(visibleItemIDs),
             snapshot: snapshot
         )
+    }
+
+    private func applyWithoutDifference(
+        _ mutation: _WebInspectorFetchedResultsSourceMutation<Model>,
+        to evaluation: inout Evaluation,
+        descriptor: WebInspectorFetchDescriptor<Model>,
+        recordsByID: [Model.ID: SourceRecord],
+        canonicalItemIDs: [Model.ID]
+    ) throws -> MutationImpact {
+        if let changes = try applyCanonicalFlatFastPath(
+            mutation,
+            to: &evaluation,
+            descriptor: descriptor,
+            recordsByID: recordsByID
+        ) {
+            return MutationImpact(updatedItemIDs: changes.updatedItemIDs)
+        }
+
+        switch mutation {
+        case let .contentOnly(id):
+            performanceCounters.contentOnlyVisitCount += 1
+            return MutationImpact(updatedItemIDs: [id])
+
+        case .reset:
+            evaluation = try evaluateAll(
+                descriptor: descriptor,
+                recordsByID: recordsByID,
+                canonicalItemIDs: canonicalItemIDs,
+                counters: &performanceCounters,
+                materializesSnapshot: false
+            )
+            return MutationImpact(containsReset: true)
+
+        case let .insert(id, _), let .update(id), let .delete(id):
+            performanceCounters.singleRecordEvaluationCount += 1
+            evaluation.matchingItemIDs.removeAll { $0 == id }
+            evaluation.sectionTokensByID.removeValue(forKey: id)
+
+            let isUpdate: Bool
+            switch mutation {
+            case .update:
+                isUpdate = true
+            case .insert, .delete:
+                isUpdate = false
+            case .contentOnly, .reset:
+                preconditionFailure("Handled before single-record evaluation.")
+            }
+
+            if case .delete = mutation {
+                // Deletion only removes the prior match.
+            } else {
+                guard let record = recordsByID[id] else {
+                    preconditionFailure(
+                        "Fetched-results mutation referenced an unknown record."
+                    )
+                }
+                if try matches(record.value, descriptor: descriptor) {
+                    let index = matchingInsertionIndex(
+                        for: id,
+                        in: evaluation.matchingItemIDs,
+                        descriptor: descriptor,
+                        recordsByID: recordsByID
+                    )
+                    evaluation.matchingItemIDs.insert(id, at: index)
+                    evaluation.sectionTokensByID[id] = try sectionToken(
+                        for: record.value
+                    )
+                }
+            }
+
+            let visibleItemIDs = window(
+                evaluation.matchingItemIDs,
+                descriptor: descriptor
+            )
+            evaluation.visibleItemIDs = Set(visibleItemIDs)
+            evaluation.snapshot = nil
+            return MutationImpact(
+                updatedItemIDs: isUpdate ? [id] : []
+            )
+        }
     }
 
     private func apply(
@@ -1378,13 +1538,18 @@ private class _WebInspectorFetchedResultsRegistrationBox<
         let previousRevision = revision
         revision = nextRevision
         performanceCounters.publicationCount += 1
-        return _WebInspectorModelContextPendingQueryPublication { [publication] in
-            publication.publish(
-                from: previousRevision,
-                to: nextRevision,
-                changes: changes
-            )
-        }
+        return _WebInspectorModelContextPendingQueryPublication(
+            publish: { [publication] in
+                publication.publish(
+                    from: previousRevision,
+                    to: nextRevision,
+                    changes: changes
+                )
+            },
+            abort: { [publication] error in
+                publication.finish(throwing: error)
+            }
+        )
     }
 }
 
