@@ -345,6 +345,14 @@ boundary. Exact DOM-binding epoch remains part of `DOMNode.ID` even though the
 current WebKit node counter is monotonic, because document replacement is the
 command-validity boundary.
 
+Runtime clearing is likewise a membership boundary, not a new identity scope.
+Current WebKit's `InjectedScriptManager::discardInjectedScripts()` clears its
+maps without resetting `m_nextInjectedScriptId`, and the current Runtime
+protocol publishes only context creation. ProxyKit may decode legacy
+destroy/clear events, but a later reuse of the same execution-context ID within
+one generation and physical target is still a protocol violation. A target or
+page-generation change already produces a distinct `RuntimeContext.ID`.
+
 Consequences:
 
 - Two contexts from one container receive equal IDs for the same entity.
