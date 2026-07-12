@@ -30,7 +30,10 @@ private final class NetworkResponseBodyFetchCoordinator {
             }
             do {
                 _ = try await context.responseBody(for: request)
-            } catch WebInspectorModelError.staleModel where body.phase == .loaded {
+            } catch WebInspectorModelError.staleModel {
+                // A newer response can reset the stable body after the old
+                // fetch succeeds but before its waiter resumes. Rendering the
+                // new revision owns any subsequent fetch.
                 return
             } catch {
                 guard case .failed = body.phase else {
