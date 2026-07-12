@@ -119,6 +119,7 @@ func canonicalNetworkRedirectPreservesLogicalStartAndInvalidatesBodyLease() thro
     var projectedResponse = CanonicalNetworkRequestRecord(
         id: afterResponse.id,
         insertionOrdinal: afterResponse.insertionOrdinal,
+        membership: afterResponse.membership,
         initialInitiator: afterResponse.initialInitiator,
         logicalStartTimestamp: afterResponse.logicalStartTimestamp,
         currentHop: CanonicalNetworkCurrentHop(

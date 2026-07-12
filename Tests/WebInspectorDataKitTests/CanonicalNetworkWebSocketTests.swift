@@ -3,6 +3,56 @@ import Testing
 import WebInspectorProxyKit
 
 @Test
+func canonicalNetworkWebSocketRetainsCreationMembershipThroughHandshake() throws {
+    var fixture = try CanonicalNetworkTestFixture()
+    let creationScope = fixture.scope(
+        targetID: "initial-frame",
+        agentTargetID: "page-agent",
+        navigationEpoch: 2,
+        domBindingEpoch: 3
+    )
+    let handshakeScope = fixture.scope(
+        targetID: "later-frame",
+        agentTargetID: "page-agent",
+        navigationEpoch: 8,
+        domBindingEpoch: 9
+    )
+    let rawID = Network.Request.ID("socket-membership")
+
+    _ = try fixture.store.reduce(
+        .webSocket(
+            .created(
+                id: rawID,
+                url: "wss://example.test/socket"
+            )),
+        scope: creationScope
+    )
+    _ = try fixture.store.reduce(
+        .webSocket(
+            .handshakeRequest(
+                id: rawID,
+                request: Network.Request(
+                    id: rawID,
+                    url: "wss://example.test/socket",
+                    method: "GET"
+                ),
+                timestamp: 1
+            )),
+        scope: handshakeScope
+    )
+
+    let request = try #require(fixture.store.requests.first)
+    #expect(
+        request.membership
+            == CanonicalNetworkRequestMembership(
+                semanticTargetID: WebInspectorTarget.ID("initial-frame"),
+                navigationEpoch: ModelNavigationEpoch(rawValue: 2),
+                domBindingEpoch: ModelDOMBindingEpoch(rawValue: 3)
+            )
+    )
+}
+
+@Test
 func canonicalNetworkWebSocketUsesAppendPatchesAndPreservesChronology() throws {
     var fixture = try CanonicalNetworkTestFixture()
     let scope = fixture.scope()

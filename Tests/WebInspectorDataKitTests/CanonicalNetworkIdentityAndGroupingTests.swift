@@ -345,6 +345,18 @@ func canonicalNetworkGroupingSeparatesAgentsAndKeepsInitialSemanticMembership() 
     let preservedEntry = try #require(
         fixture.store.entry(containing: firstAgentRequest.id)
     )
+    let preservedRequest = try #require(
+        fixture.store.request(for: firstAgentRequest.id)
+    )
+    #expect(preservedRequest.membership == firstAgentRequest.membership)
+    #expect(
+        preservedRequest.membership.semanticTargetID
+            == WebInspectorTarget.ID("worker")
+    )
+    #expect(
+        preservedRequest.membership.domBindingEpoch
+            == ModelDOMBindingEpoch(rawValue: 1)
+    )
     #expect(preservedEntry.id == firstAgentEntry.id)
     #expect(preservedEntry.groupKey == firstAgentEntry.groupKey)
     #expect(fixture.store.entries.count == 2)

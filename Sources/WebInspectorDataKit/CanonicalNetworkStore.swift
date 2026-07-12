@@ -90,6 +90,11 @@ package enum CanonicalNetworkStoreError: Error, Equatable, Sendable {
 /// Contexts consume its complete snapshots and authoritative transactions;
 /// they never repeat Network protocol semantics.
 package struct CanonicalNetworkStore: Equatable, Sendable {
+    private struct PendingWebSocket: Equatable, Sendable {
+        let creationURL: String
+        let membership: CanonicalNetworkRequestMembership
+    }
+
     private struct EntryAggregateState: Equatable, Sendable {
         var activeRequestCount: Int
         var failedRequestCount: Int
@@ -142,7 +147,7 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
     private var memberIndexByRequestID: [CanonicalNetworkRequestIDStorage: Int]
     private var groupKeyByRequestID: [CanonicalNetworkRequestIDStorage: CanonicalNetworkGroupKey]
     private var scopedRequestIDByRawRequestID: [Network.Request.ID: CanonicalNetworkRequestIDStorage]
-    private var pendingWebSocketURLByID: [CanonicalNetworkRequestIDStorage: String]
+    private var pendingWebSocketByID: [CanonicalNetworkRequestIDStorage: PendingWebSocket]
     private var tombstones: Set<CanonicalNetworkRequestIDStorage>
     private var lastRequestOrdinal: UInt64
     private var lastEntryOrdinal: UInt64
@@ -170,7 +175,7 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
         memberIndexByRequestID = [:]
         groupKeyByRequestID = [:]
         scopedRequestIDByRawRequestID = [:]
-        pendingWebSocketURLByID = [:]
+        pendingWebSocketByID = [:]
         tombstones = []
         lastRequestOrdinal = 0
         lastEntryOrdinal = 0
@@ -321,7 +326,7 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
         memberIndexByRequestID.removeAll(keepingCapacity: true)
         groupKeyByRequestID.removeAll(keepingCapacity: true)
         scopedRequestIDByRawRequestID.removeAll(keepingCapacity: true)
-        pendingWebSocketURLByID.removeAll(keepingCapacity: true)
+        pendingWebSocketByID.removeAll(keepingCapacity: true)
         tombstones.removeAll(keepingCapacity: true)
         return transaction
     }
@@ -333,7 +338,7 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
         let removedIDs = Set(requestsByID.keys)
         let transaction = deletionTransaction(requestIDs: removedIDs)
         tombstones.formUnion(removedIDs)
-        tombstones.formUnion(pendingWebSocketURLByID.keys)
+        tombstones.formUnion(pendingWebSocketByID.keys)
         requestsByID.removeAll(keepingCapacity: true)
         requestQueriesByID.removeAll(keepingCapacity: true)
         entriesByID.removeAll(keepingCapacity: true)
@@ -344,7 +349,7 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
         memberIndexByRequestID.removeAll(keepingCapacity: true)
         groupKeyByRequestID.removeAll(keepingCapacity: true)
         scopedRequestIDByRawRequestID.removeAll(keepingCapacity: true)
-        pendingWebSocketURLByID.removeAll(keepingCapacity: true)
+        pendingWebSocketByID.removeAll(keepingCapacity: true)
         return transaction
     }
 
@@ -358,7 +363,7 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
                 $0.agentTargetID == agentTargetID
             })
         let removedPendingWebSocketIDs = Set(
-            pendingWebSocketURLByID.keys.filter {
+            pendingWebSocketByID.keys.filter {
                 $0.agentTargetID == agentTargetID
             })
         guard !removedIDs.isEmpty || !removedPendingWebSocketIDs.isEmpty else {
@@ -396,7 +401,7 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
             scopedRequestIDByRawRequestID[requestID.rawRequestID] = nil
         }
         for requestID in removedPendingWebSocketIDs {
-            pendingWebSocketURLByID[requestID] = nil
+            pendingWebSocketByID[requestID] = nil
         }
         for requestID in removedIDs {
             requestsByID[requestID] = nil
@@ -564,6 +569,16 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
         )
     }
 
+    private func requestMembership(
+        for scope: WebInspectorCanonicalNetworkEventScope
+    ) -> CanonicalNetworkRequestMembership {
+        CanonicalNetworkRequestMembership(
+            semanticTargetID: scope.semanticTargetID,
+            navigationEpoch: scope.navigationEpoch,
+            domBindingEpoch: scope.domBindingEpoch
+        )
+    }
+
     private func validateRawRequestIDReservation(
         _ id: CanonicalNetworkRequestIDStorage
     ) throws {
@@ -615,7 +630,7 @@ private extension CanonicalNetworkStore {
                 id: id
             )
         }
-        guard pendingWebSocketURLByID[id] == nil else {
+        guard pendingWebSocketByID[id] == nil else {
             throw CanonicalNetworkProtocolViolation.identityReuse(
                 event: "Network.requestWillBeSent",
                 id: id
@@ -696,7 +711,7 @@ private extension CanonicalNetworkStore {
         guard !tombstones.contains(id) else {
             return nil
         }
-        guard pendingWebSocketURLByID[id] == nil else {
+        guard pendingWebSocketByID[id] == nil else {
             throw CanonicalNetworkProtocolViolation.identityReuse(
                 event: "Network.responseReceived",
                 id: id
@@ -936,7 +951,7 @@ private extension CanonicalNetworkStore {
             )
         }
         guard requestsByID[id] == nil,
-            pendingWebSocketURLByID[id] == nil
+            pendingWebSocketByID[id] == nil
         else {
             throw CanonicalNetworkProtocolViolation.identityReuse(
                 event: "Network.requestServedFromMemoryCache",
@@ -1369,7 +1384,7 @@ private extension CanonicalNetworkStore {
                 id: id
             )
         }
-        if let pendingURL = pendingWebSocketURLByID[id] {
+        if let pending = pendingWebSocketByID[id] {
             guard origin == .enableReplay else {
                 throw
                     CanonicalNetworkProtocolViolation
@@ -1378,7 +1393,7 @@ private extension CanonicalNetworkStore {
                         id: id
                     )
             }
-            guard pendingURL == url else {
+            guard pending.creationURL == url else {
                 throw CanonicalNetworkProtocolViolation.conflictingReplay(
                     event: "Network.webSocketCreated",
                     id: id
@@ -1412,7 +1427,10 @@ private extension CanonicalNetworkStore {
 
         try validateRawRequestIDReservation(id)
         scopedRequestIDByRawRequestID[rawID] = id
-        pendingWebSocketURLByID[id] = url
+        pendingWebSocketByID[id] = PendingWebSocket(
+            creationURL: url,
+            membership: requestMembership(for: scope)
+        )
         return nil
     }
 
@@ -1428,8 +1446,8 @@ private extension CanonicalNetworkStore {
             return nil
         }
         let existing = requestsByID[id]
-        let pendingURL = pendingWebSocketURLByID[id]
-        guard existing != nil || pendingURL != nil else {
+        let pending = pendingWebSocketByID[id]
+        guard existing != nil || pending != nil else {
             return nil
         }
         guard rawID == request.id else {
@@ -1442,21 +1460,21 @@ private extension CanonicalNetworkStore {
                 )
         }
         if existing == nil {
-            guard let pendingURL else {
+            guard let pending else {
                 preconditionFailure(
                     "A tracked WebSocket handshake lost its creation URL."
                 )
             }
             var normalizedRequest = CanonicalNetworkRequestPayload(request)
             if normalizedRequest.url.isEmpty {
-                normalizedRequest.url = pendingURL
+                normalizedRequest.url = pending.creationURL
             }
             let handshake = CanonicalNetworkWebSocketHandshakeRequest(
                 request: normalizedRequest,
                 timestamp: timestamp
             )
             var webSocket = CanonicalNetworkWebSocketRecord(
-                creationURL: pendingURL
+                creationURL: pending.creationURL
             )
             webSocket.handshakeRequest = handshake
             let insertion = try prepareNewRequest(
@@ -1466,10 +1484,11 @@ private extension CanonicalNetworkStore {
                 resourceType: Network.ResourceType.webSocket.rawValue,
                 timestamp: timestamp,
                 scope: scope,
+                membership: pending.membership,
                 webSocket: webSocket
             )
             let transaction = commit(insertion)
-            pendingWebSocketURLByID[id] = nil
+            pendingWebSocketByID[id] = nil
             return transaction
         }
         guard let existing else {
@@ -1754,6 +1773,7 @@ private extension CanonicalNetworkStore {
         resourceType: String?,
         timestamp: Double?,
         scope: WebInspectorCanonicalNetworkEventScope,
+        membership: CanonicalNetworkRequestMembership? = nil,
         response: CanonicalNetworkResponsePayload? = nil,
         lifecycle: CanonicalNetworkLifecycle? = nil,
         transfer: CanonicalNetworkTransfer = .init(),
@@ -1778,9 +1798,11 @@ private extension CanonicalNetworkStore {
             terminalTimestamp: terminalTimestamp,
             servedFromMemoryCache: servedFromMemoryCache
         )
+        let membership = membership ?? requestMembership(for: scope)
         let record = CanonicalNetworkRequestRecord(
             id: id,
             insertionOrdinal: requestOrdinal,
+            membership: membership,
             initialInitiator: initiator,
             logicalStartTimestamp: timestamp,
             currentHop: currentHop,
@@ -1793,7 +1815,7 @@ private extension CanonicalNetworkStore {
         let groupKey = groupKey(
             requestID: id,
             initiator: initiator,
-            scope: scope
+            membership: membership
         )
         let requestQuery = queryProjection(
             for: record,
@@ -2154,23 +2176,18 @@ private extension CanonicalNetworkStore {
     func groupKey(
         requestID: CanonicalNetworkRequestIDStorage,
         initiator: CanonicalNetworkInitiator?,
-        scope: WebInspectorCanonicalNetworkEventScope
+        membership: CanonicalNetworkRequestMembership
     ) -> CanonicalNetworkGroupKey {
         guard let rawNodeID = initiator?.rawNodeID else {
             return .request(requestID)
         }
-        guard let attachmentGeneration = activeAttachmentGeneration else {
-            preconditionFailure(
-                "Canonical Network grouping requires active attachment authority."
-            )
-        }
-        if let domBindingEpoch = scope.domBindingEpoch {
+        if let domBindingEpoch = membership.domBindingEpoch {
             return .dom(
                 CanonicalNetworkDOMInitiatorKey(
-                    storeID: storeID,
-                    attachmentGeneration: attachmentGeneration,
-                    pageGeneration: scope.generation,
-                    semanticTargetID: scope.semanticTargetID,
+                    storeID: requestID.storeID,
+                    attachmentGeneration: requestID.attachmentGeneration,
+                    pageGeneration: requestID.pageGeneration,
+                    semanticTargetID: membership.semanticTargetID,
                     agentTargetID: requestID.agentTargetID,
                     domBindingEpoch: domBindingEpoch,
                     rawNodeID: rawNodeID
@@ -2178,12 +2195,12 @@ private extension CanonicalNetworkStore {
         }
         return .opaqueInitiator(
             CanonicalNetworkOpaqueInitiatorKey(
-                storeID: storeID,
-                attachmentGeneration: attachmentGeneration,
-                pageGeneration: scope.generation,
-                semanticTargetID: scope.semanticTargetID,
+                storeID: requestID.storeID,
+                attachmentGeneration: requestID.attachmentGeneration,
+                pageGeneration: requestID.pageGeneration,
+                semanticTargetID: membership.semanticTargetID,
                 agentTargetID: requestID.agentTargetID,
-                navigationEpoch: scope.navigationEpoch,
+                navigationEpoch: membership.navigationEpoch,
                 rawNodeID: rawNodeID
             ))
     }

@@ -271,10 +271,29 @@ package struct CanonicalNetworkWebSocketRecord: Equatable, Sendable {
     }
 }
 
+/// Immutable semantic membership captured by the first authoritative event
+/// for a Network request.
+package struct CanonicalNetworkRequestMembership: Equatable, Sendable {
+    package let semanticTargetID: WebInspectorTarget.ID
+    package let navigationEpoch: ModelNavigationEpoch
+    package let domBindingEpoch: ModelDOMBindingEpoch?
+
+    package init(
+        semanticTargetID: WebInspectorTarget.ID,
+        navigationEpoch: ModelNavigationEpoch,
+        domBindingEpoch: ModelDOMBindingEpoch?
+    ) {
+        self.semanticTargetID = semanticTargetID
+        self.navigationEpoch = navigationEpoch
+        self.domBindingEpoch = domBindingEpoch
+    }
+}
+
 /// Complete pure-value semantic state for one Network request.
 package struct CanonicalNetworkRequestRecord: Equatable, Sendable {
     package let id: CanonicalNetworkRequestIDStorage
     package let insertionOrdinal: UInt64
+    package let membership: CanonicalNetworkRequestMembership
     package let initialInitiator: CanonicalNetworkInitiator?
     package var logicalStartTimestamp: Double?
     package var currentHop: CanonicalNetworkCurrentHop
@@ -287,6 +306,7 @@ package struct CanonicalNetworkRequestRecord: Equatable, Sendable {
     package init(
         id: CanonicalNetworkRequestIDStorage,
         insertionOrdinal: UInt64,
+        membership: CanonicalNetworkRequestMembership,
         initialInitiator: CanonicalNetworkInitiator?,
         logicalStartTimestamp: Double?,
         currentHop: CanonicalNetworkCurrentHop,
@@ -298,6 +318,7 @@ package struct CanonicalNetworkRequestRecord: Equatable, Sendable {
     ) {
         self.id = id
         self.insertionOrdinal = insertionOrdinal
+        self.membership = membership
         self.initialInitiator = initialInitiator
         self.logicalStartTimestamp = logicalStartTimestamp
         self.currentHop = currentHop
