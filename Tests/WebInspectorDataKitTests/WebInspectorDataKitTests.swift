@@ -469,6 +469,67 @@ func responseMetadataAndRedirectsPreserveResponseBodyIdentity() async throws {
 
 @MainActor
 @Test
+func responseReplacementReportsJoinedBodyWaitersAsStaleModels() async throws {
+    try await withAttachedModelContext(
+        configuration: .init(domains: [.network])
+    ) { fixture in
+        let requestID = Network.Request.ID("replaced-body")
+        try await emitFinishedRequest(
+            id: requestID,
+            target: fixture.target,
+            wire: fixture.runtime.wire
+        )
+        let request = try await requireRequest(
+            requestID,
+            in: fixture.context
+        )
+        let body = request.responseBody
+        let gate = await fixture.runtime.wire.deferReply(
+            to: "Network.getResponseBody",
+            with: try rawNetworkBodyResult(
+                Network.Body(data: "obsolete", base64Encoded: false)
+            )
+        )
+        let first = Task {
+            _ = try await fixture.context.responseBody(for: request)
+        }
+        let second = Task {
+            _ = try await fixture.context.responseBody(for: request)
+        }
+        _ = await fixture.runtime.wire.observations.waitForCommands(
+            method: "Network.getResponseBody",
+            count: 1
+        )
+
+        try await fixture.runtime.wire.emitRaw(
+            .responseReceived(
+                id: requestID,
+                response: Network.Response(
+                    url: "https://example.com/replaced-body",
+                    status: 200,
+                    mimeType: "multipart/x-mixed-replace"
+                ),
+                resourceType: .fetch,
+                timestamp: 4
+            ),
+            target: fixture.target
+        )
+        try await waitUntil { body.phase == .available }
+
+        await #expect(throws: WebInspectorModelError.staleModel) {
+            try await first.value
+        }
+        await #expect(throws: WebInspectorModelError.staleModel) {
+            try await second.value
+        }
+        #expect(request.responseBody === body)
+        #expect(body.phase == .available)
+        gate.open()
+    }
+}
+
+@MainActor
+@Test
 func clearingNetworkInvalidatesEveryJoinedResponseBodyWaiter() async throws {
     try await withAttachedModelContext(
         configuration: .init(domains: [.network])

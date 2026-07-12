@@ -2732,13 +2732,37 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
             body.installResponseFetchTask(task, for: newLease)
         }
 
-        _ = try await lease.completion.value()
-        guard networkRequests.request(for: request.id) === request,
-              request.responseBody === body,
-              body.isCurrentResponseFetch(lease) else {
+        do {
+            _ = try await lease.completion.value()
+        } catch WebInspectorProxyError.staleIdentifier {
+            // A response replacement invalidates the old wire command with
+            // `staleIdentifier`, but that is a semantic model supersession,
+            // not a terminal failure of the stable body resource. Preserve
+            // the ProxyKit error only when the same model revision still owns
+            // the command.
+            guard body.isCurrentResponseFetch(lease) else {
+                throw WebInspectorModelError.staleModel
+            }
+            throw WebInspectorProxyError.staleIdentifier
+        }
+        guard responseBodyFetchIsCurrent(
+            lease,
+            body: body,
+            request: request
+        ) else {
             throw WebInspectorModelError.staleModel
         }
         return body
+    }
+
+    private func responseBodyFetchIsCurrent(
+        _ lease: NetworkBody.ResponseFetchLease,
+        body: NetworkBody,
+        request: NetworkRequest
+    ) -> Bool {
+        networkRequests.request(for: request.id) === request
+            && request.responseBody === body
+            && body.isCurrentResponseFetch(lease)
     }
 
     nonisolated(nonsending) func updateNetworkQuery(
