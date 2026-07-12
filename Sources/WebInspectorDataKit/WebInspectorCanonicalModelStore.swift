@@ -439,6 +439,18 @@ package struct WebInspectorCanonicalModelStore: Sendable {
         transaction.resetSnapshot = snapshot(reason: .reset)
         return transaction
     }
+
+    /// Replaces every semantic store after terminal publication has finished.
+    /// Unlike detach, terminal close has no subscriber that needs a reset
+    /// transaction, retained capacity, tombstones, or a reset snapshot.
+    package mutating func releaseSemanticStorageForClose() {
+        let performanceCounters = performanceCounters
+        self = WebInspectorCanonicalModelStore(
+            storeID: storeID,
+            configuredDomains: configuredDomains
+        )
+        self.performanceCounters = performanceCounters
+    }
 }
 
 private extension WebInspectorCanonicalModelStore {

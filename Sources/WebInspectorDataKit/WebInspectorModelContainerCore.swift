@@ -119,11 +119,13 @@ package struct WebInspectorModelContainerCoreMetrics: Equatable, Sendable {
 }
 
 /// The single ordered owner of canonical inspection state and context
-/// publication.
+/// publication, including attachment-attempt and Proxy/feed teardown ordering.
 ///
-/// This actor contains no native attachment, UI, Observable model, query, or
-/// domain-specific reduction. Feed semantics remain in the pure canonical
-/// store and subscriber coalescing remains in the synchronized publication.
+/// Native `WKWebView` Proxy construction stays at the MainActor boundary; the
+/// resulting Sendable Proxy is transferred here. This actor contains no UI,
+/// Observable model, query, or domain-specific reduction. Feed semantics remain
+/// in the pure canonical store and subscriber coalescing remains in the
+/// synchronized publication.
 package actor WebInspectorModelContainerCore {
     package typealias Publication = WebInspectorRevisionedSnapshotPublication<
         WebInspectorCanonicalModelSnapshot,
@@ -169,6 +171,7 @@ package actor WebInspectorModelContainerCore {
     package nonisolated let storeID: WebInspectorContainerStoreID
     package nonisolated let configuredDomains: Set<ModelDomain>
     package nonisolated let mainContextSeed: WebInspectorModelContextSeed
+    package nonisolated let connectionStatePublication: WebInspectorModelContainerStatePublication
 
     private nonisolated let publication: Publication
     private nonisolated let identity = WebInspectorModelContainerCoreIdentity()
@@ -180,14 +183,26 @@ package actor WebInspectorModelContainerCore {
     private var nextAcknowledgementBarrierID: UInt64 = 0
     private var acknowledgementBarriers: [UInt64: AcknowledgementBarrierState] = [:]
     private var detachTransaction: WebInspectorModelContainerReset?
-    private var completedDetachTransaction: WebInspectorModelContainerReset?
+    private var completedDetachTransactionID: UInt64?
     private var closeTransaction: WebInspectorModelContainerClose?
     private var performanceCounters =
         WebInspectorModelContainerCorePerformanceCounters()
+    package var nextAttachmentGeneration: UInt64 = 0
+    package var nextFeedResourceID: UInt64 = 0
+    package var attachmentAttempts:
+        [WebInspectorContainerAttachmentGeneration:
+            WebInspectorModelContainerAttachmentAttemptState] = [:]
+    package var activeAttachment: WebInspectorModelContainerAttachmentResource?
+    package var lifecycleOperationTail: ReplyPromise<Void>
+    package var connectionCloseCompletion: ReplyPromise<Void>?
+    package var isConnectionCloseRequested = false
 
     package init(
         storeID: WebInspectorContainerStoreID = WebInspectorContainerStoreID(),
-        configuredDomains: Set<ModelDomain>
+        configuredDomains: Set<ModelDomain>,
+        connectionStatePublication:
+            WebInspectorModelContainerStatePublication =
+            WebInspectorModelContainerStatePublication()
     ) {
         var canonicalStore = WebInspectorCanonicalModelStore(
             storeID: storeID,
@@ -202,11 +217,15 @@ package actor WebInspectorModelContainerCore {
             revision: 0,
             snapshot: canonicalStore.snapshot(reason: .initial)
         )
+        let lifecycleOperationTail = ReplyPromise<Void>()
+        lifecycleOperationTail.fulfill(.success(()))
 
         self.storeID = storeID
         self.canonicalStore = canonicalStore
         self.configuredDomains = canonicalStore.configuredDomains
         self.publication = publication
+        self.connectionStatePublication = connectionStatePublication
+        self.lifecycleOperationTail = lifecycleOperationTail
         mainContextSeed = WebInspectorModelContextSeed(
             id: mainContextID,
             updates: mainContextUpdates,
@@ -226,6 +245,18 @@ package actor WebInspectorModelContainerCore {
         revision
     }
 
+    package var hasCanonicalBinding: Bool {
+        canonicalStore.bindingSnapshot != nil
+    }
+
+    package nonisolated var connectionState: WebInspectorModelContainer.State {
+        connectionStatePublication.current
+    }
+
+    package nonisolated var connectionStateUpdates: WebInspectorModelContainer.StateUpdateSequence {
+        connectionStatePublication.subscribe()
+    }
+
     package var isClosed: Bool {
         lifecycle == .closed
     }
@@ -241,6 +272,14 @@ package actor WebInspectorModelContainerCore {
         )
     }
 
+    #if DEBUG
+        package func canonicalSnapshotForTesting()
+            -> WebInspectorCanonicalModelSnapshot
+        {
+            canonicalStore.snapshot(reason: .onDemandRebase)
+        }
+    #endif
+
     package func acknowledgedRevision(
         for registrationID: WebInspectorModelContextRegistrationID
     ) -> UInt64? {
@@ -253,7 +292,9 @@ package actor WebInspectorModelContainerCore {
         throws(WebInspectorModelContainerCoreError)
         -> WebInspectorModelContextRegistration
     {
-        guard lifecycle == .open || lifecycle == .detaching else {
+        guard !isConnectionCloseRequested,
+            lifecycle == .open || lifecycle == .detaching
+        else {
             throw .closed
         }
         precondition(
@@ -451,7 +492,9 @@ package actor WebInspectorModelContainerCore {
         _ token: Publication.RebaseToken,
         for registrationID: WebInspectorModelContextRegistrationID
     ) throws(WebInspectorModelContainerCoreError) -> Publication.Rebase {
-        guard lifecycle == .open || lifecycle == .detaching else {
+        guard !isConnectionCloseRequested,
+            lifecycle == .open || lifecycle == .detaching
+        else {
             throw .closed
         }
         guard let registration = contextRegistrations[registrationID] else {
@@ -534,7 +577,7 @@ package actor WebInspectorModelContainerCore {
             acknowledgementBarrier: barrier
         )
         detachTransaction = reset
-        completedDetachTransaction = nil
+        completedDetachTransactionID = nil
         lifecycle = .detaching
         return reset
     }
@@ -545,7 +588,7 @@ package actor WebInspectorModelContainerCore {
     package func finishDetach(
         _ transaction: WebInspectorModelContainerReset
     ) async throws {
-        if transaction == completedDetachTransaction {
+        if isCompletedDetachTransaction(transaction) {
             return
         }
         guard transaction == detachTransaction else {
@@ -555,14 +598,15 @@ package actor WebInspectorModelContainerCore {
         try await waitForAcknowledgements(
             transaction.acknowledgementBarrier
         )
-        if transaction == completedDetachTransaction {
+        if isCompletedDetachTransaction(transaction) {
             return
         }
         guard transaction == detachTransaction else {
             throw WebInspectorModelContainerCoreError.detachTransactionMismatch
         }
         detachTransaction = nil
-        completedDetachTransaction = transaction
+        completedDetachTransactionID =
+            transaction.acknowledgementBarrier.id
         switch lifecycle {
         case .detaching:
             lifecycle = .open
@@ -690,16 +734,17 @@ package actor WebInspectorModelContainerCore {
             },
             "A close barrier completed before every materialized context unregistered."
         )
-        if let detachTransaction {
-            completedDetachTransaction = detachTransaction
-            self.detachTransaction = nil
-        }
+        completedDetachTransactionID =
+            detachTransaction?.acknowledgementBarrier.id
+            ?? completedDetachTransactionID
+        detachTransaction = nil
         let registrations = contextRegistrations.values
         contextRegistrations.removeAll(keepingCapacity: false)
         performanceCounters.contextUnregistrationCount += registrations.count
         for registration in registrations {
             registration.updates.cancel()
         }
+        canonicalStore.releaseSemanticStorageForClose()
         lifecycle = .closed
 
         let waiters = acknowledgementBarriers.values.map(\.waiter)
@@ -707,6 +752,14 @@ package actor WebInspectorModelContainerCore {
         for waiter in waiters {
             waiter.satisfy()
         }
+    }
+
+    private func isCompletedDetachTransaction(
+        _ transaction: WebInspectorModelContainerReset
+    ) -> Bool {
+        transaction.acknowledgementBarrier.coreIdentity === identity
+            && transaction.acknowledgementBarrier.id
+                == completedDetachTransactionID
     }
 }
 
