@@ -103,6 +103,90 @@ func dataKitTestingScopesReusedRawIDsToTheSynchronizedReplacementPage() async th
 
 @MainActor
 @Test
+func dataKitTestingDrivesIncrementalDOMEventsThroughTheProductionTreeStream()
+    async throws
+{
+    let runtime = try await WebInspectorDataKitTestRuntime.start(
+        scenario: .init(
+            configuration: .init(domains: [.dom]),
+            document: .init(children: [
+                .element(id: "body", name: "body")
+            ])
+        ),
+        isolation: MainActor.shared
+    )
+    let updates = runtime.model.domTreeUpdates()
+    var iterator = updates.makeAsyncIterator()
+    guard case let .initial(_, initialSnapshot) = await iterator.next() else {
+        preconditionFailure("A DOM test runtime must publish its initial tree.")
+    }
+    let bodyID = try #require(initialSnapshot.rowsByID.keys.first { id in
+        id.canonicalStorage.rawNodeID.rawValue == "body"
+    })
+    let body = try #require(runtime.model.model(for: bodyID))
+
+    try await runtime.emitDOMAttributeModified(
+        nodeID: "body",
+        name: "data-state",
+        value: "ready"
+    )
+    guard case let .changes(_, _, .delta(attributeDelta)) =
+        await iterator.next()
+    else {
+        preconditionFailure("DOM.attributeModified must publish a tree delta.")
+    }
+    #expect(attributeDelta.upsertedRows.map(\.id) == [bodyID])
+    #expect(body.attributes["data-state"] == "ready")
+    #expect(runtime.model.model(for: bodyID) === body)
+
+    try await runtime.emitDOMSetChildNodes(
+        parentID: "body",
+        children: [.element(id: "span", name: "span")]
+    )
+    guard case let .changes(_, _, .delta(childrenDelta)) =
+        await iterator.next()
+    else {
+        preconditionFailure("DOM.setChildNodes must publish a tree delta.")
+    }
+    let spanID = try #require(childrenDelta.upsertedRows.first { row in
+        row.id.canonicalStorage.rawNodeID.rawValue == "span"
+    }?.id)
+    #expect(runtime.model.model(for: spanID)?.localName == "span")
+
+    try await runtime.emitDOMChildNodeInserted(
+        parentID: "body",
+        previousNodeID: "span",
+        node: .element(id: "strong", name: "strong")
+    )
+    guard case let .changes(_, _, .delta(insertionDelta)) =
+        await iterator.next()
+    else {
+        preconditionFailure("DOM.childNodeInserted must publish a tree delta.")
+    }
+    let strongID = try #require(insertionDelta.upsertedRows.first { row in
+        row.id.canonicalStorage.rawNodeID.rawValue == "strong"
+    }?.id)
+    #expect(runtime.model.model(for: strongID)?.localName == "strong")
+
+    try await runtime.emitDOMChildNodeRemoved(
+        parentID: "body",
+        nodeID: "span"
+    )
+    guard case let .changes(_, _, .delta(removalDelta)) =
+        await iterator.next()
+    else {
+        preconditionFailure("DOM.childNodeRemoved must publish a tree delta.")
+    }
+    #expect(removalDelta.deletedRowIDs == [spanID])
+    #expect(runtime.model.registeredModel(for: spanID) == nil)
+    #expect(runtime.model.model(for: strongID) != nil)
+
+    iterator.cancel()
+    await runtime.close()
+}
+
+@MainActor
+@Test
 func dataKitTestingVendsContextLocalIdentityFromOneContainer() async throws {
     let runtime = try await WebInspectorDataKitTestRuntime.start(
         scenario: .init(

@@ -325,6 +325,66 @@ public final class WebInspectorDataKitTestRuntime {
         try await driver.emitNetworkLoadingFinished(request)
     }
 
+    /// Emits one `DOM.attributeModified` event on the current page target.
+    public nonisolated(nonsending) func emitDOMAttributeModified(
+        nodeID: String,
+        name: String,
+        value: String
+    ) async throws {
+        guard !isClosed else {
+            throw RuntimeError.closed
+        }
+        try await driver.emitDOMAttributeModified(
+            nodeID: nodeID,
+            name: name,
+            value: value
+        )
+    }
+
+    /// Emits one `DOM.setChildNodes` event on the current page target.
+    public nonisolated(nonsending) func emitDOMSetChildNodes(
+        parentID: String,
+        children: [Node]
+    ) async throws {
+        guard !isClosed else {
+            throw RuntimeError.closed
+        }
+        try await driver.emitDOMSetChildNodes(
+            parentID: parentID,
+            children: children
+        )
+    }
+
+    /// Emits one `DOM.childNodeInserted` event on the current page target.
+    public nonisolated(nonsending) func emitDOMChildNodeInserted(
+        parentID: String,
+        previousNodeID: String? = nil,
+        node: Node
+    ) async throws {
+        guard !isClosed else {
+            throw RuntimeError.closed
+        }
+        try await driver.emitDOMChildNodeInserted(
+            parentID: parentID,
+            previousNodeID: previousNodeID,
+            node: node
+        )
+    }
+
+    /// Emits one `DOM.childNodeRemoved` event on the current page target.
+    public nonisolated(nonsending) func emitDOMChildNodeRemoved(
+        parentID: String,
+        nodeID: String
+    ) async throws {
+        guard !isClosed else {
+            throw RuntimeError.closed
+        }
+        try await driver.emitDOMChildNodeRemoved(
+            parentID: parentID,
+            nodeID: nodeID
+        )
+    }
+
     /// Commits a provisional page target and waits for the replacement model.
     public func replacePage(
         with document: Document,
@@ -584,6 +644,74 @@ private actor ScenarioDriver {
         )
     }
 
+    func emitDOMAttributeModified(
+        nodeID: String,
+        name: String,
+        value: String
+    ) async throws {
+        try await peer.emitTargetEvent(
+            targetID: currentTargetID,
+            method: "DOM.attributeModified",
+            parameters: try WebInspectorTestJSONObject(encoding:
+                DOMAttributeModifiedParameters(
+                    nodeId: nodeID,
+                    name: name,
+                    value: value
+                )
+            )
+        )
+    }
+
+    func emitDOMSetChildNodes(
+        parentID: String,
+        children: [WebInspectorDataKitTestRuntime.Node]
+    ) async throws {
+        try await peer.emitTargetEvent(
+            targetID: currentTargetID,
+            method: "DOM.setChildNodes",
+            parameters: try WebInspectorTestJSONObject(encoding:
+                DOMSetChildNodesParameters(
+                    parentId: parentID,
+                    nodes: children.map(DOMNodeWire.init(node:))
+                )
+            )
+        )
+    }
+
+    func emitDOMChildNodeInserted(
+        parentID: String,
+        previousNodeID: String?,
+        node: WebInspectorDataKitTestRuntime.Node
+    ) async throws {
+        try await peer.emitTargetEvent(
+            targetID: currentTargetID,
+            method: "DOM.childNodeInserted",
+            parameters: try WebInspectorTestJSONObject(encoding:
+                DOMChildNodeInsertedParameters(
+                    parentNodeId: parentID,
+                    previousNodeId: previousNodeID,
+                    node: DOMNodeWire(node: node)
+                )
+            )
+        )
+    }
+
+    func emitDOMChildNodeRemoved(
+        parentID: String,
+        nodeID: String
+    ) async throws {
+        try await peer.emitTargetEvent(
+            targetID: currentTargetID,
+            method: "DOM.childNodeRemoved",
+            parameters: try WebInspectorTestJSONObject(encoding:
+                DOMChildNodeRemovedParameters(
+                    parentNodeId: parentID,
+                    nodeId: nodeID
+                )
+            )
+        )
+    }
+
     func prepareReplacement(
         document: WebInspectorDataKitTestRuntime.Document,
         networkReplay: [WebInspectorDataKitTestRuntime.NetworkRequest]
@@ -794,6 +922,28 @@ private actor ScenarioDriver {
 
 private struct DOMDocumentResult: Encodable {
     let root: DOMNodeWire
+}
+
+private struct DOMAttributeModifiedParameters: Encodable {
+    let nodeId: String
+    let name: String
+    let value: String
+}
+
+private struct DOMSetChildNodesParameters: Encodable {
+    let parentId: String
+    let nodes: [DOMNodeWire]
+}
+
+private struct DOMChildNodeInsertedParameters: Encodable {
+    let parentNodeId: String
+    let previousNodeId: String?
+    let node: DOMNodeWire
+}
+
+private struct DOMChildNodeRemovedParameters: Encodable {
+    let parentNodeId: String
+    let nodeId: String
 }
 
 private struct DOMNodeWire: Encodable {
