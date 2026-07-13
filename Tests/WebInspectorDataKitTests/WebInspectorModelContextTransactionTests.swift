@@ -424,18 +424,20 @@ func emptyDeltaAdvancesEveryConfiguredRecordSourceRevision() async throws {
     #expect(secondaryGate.revision == 7)
 }
 
-@Test
-func modelSourceBatchesRejectAnExplicitRevisionMismatch() async {
-    await #expect(processExitsWith: .failure) {
-        let gate = TransactionPrimaryRecordGate()
-        let core = WebInspectorModelContextCore()
-        _ = try await core.applySourceBatches(
-            at: 1,
-            [
-                primaryResetBatch(gate: gate, revision: 0, records: [])
-            ])
+#if os(macOS)
+    @Test
+    func modelSourceBatchesRejectAnExplicitRevisionMismatch() async {
+        await #expect(processExitsWith: .failure) {
+            let gate = TransactionPrimaryRecordGate()
+            let core = WebInspectorModelContextCore()
+            _ = try await core.applySourceBatches(
+                at: 1,
+                [
+                    primaryResetBatch(gate: gate, revision: 0, records: [])
+                ])
+        }
     }
-}
+#endif
 
 @Test
 func authoritativeResetBridgesCanonicalRevisionGapForEveryModelSource() async throws {

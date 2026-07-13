@@ -348,12 +348,14 @@ func modelRecordGatePreservesTheSameOrderedAppendPatchesForClaimedAndUnclaimedRe
     )
 }
 
-@Test
-func modelRecordPatchBatchRejectsAnEmptyUpdate() async {
-    await #expect(processExitsWith: .failure) {
-        _ = WebInspectorModelRecordPatchBatch<TestRecord>([])
+#if os(macOS)
+    @Test
+    func modelRecordPatchBatchRejectsAnEmptyUpdate() async {
+        await #expect(processExitsWith: .failure) {
+            _ = WebInspectorModelRecordPatchBatch<TestRecord>([])
+        }
     }
-}
+#endif
 
 private typealias TestRecordGate = WebInspectorModelRecordGate<RecordGateTestModel, TestRecord>
 private typealias TestRecordCommit = WebInspectorModelRecordGateCommit<
