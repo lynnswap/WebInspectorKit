@@ -359,6 +359,22 @@ package final class WebInspectorModelContextTransactionCommit: Sendable {
             [WebInspectorFetchedResultsControllerOwnerMutationBatch]
         ) -> Void
     ) -> Bool {
+        publish(
+            applyingOwnerMutations: body,
+            finalizingOwnerTransaction: {}
+        )
+    }
+
+    /// Finalizes a schema-owned projection only after materialized model
+    /// mutations and every fetched-results publication for this revision.
+    @discardableResult
+    package func publish(
+        applyingOwnerMutations body: (
+            [WebInspectorModelRecordOwnerMutationBatch],
+            [WebInspectorFetchedResultsControllerOwnerMutationBatch]
+        ) -> Void,
+        finalizingOwnerTransaction finalize: () -> Void
+    ) -> Bool {
         state.withLock { state in
             switch state {
             case let .pending(recordCommits, queryCommit):
@@ -372,13 +388,16 @@ package final class WebInspectorModelContextTransactionCommit: Sendable {
                     }
                 }
                 precondition(
-                    queryCommit.publish { controllerMutations in
-                        body(mutations, controllerMutations)
-                        precondition(
-                            mutations.allSatisfy { $0.consumption.isConsumed },
-                            "Every model-record owner mutation batch must be consumed before query publication."
-                        )
-                    },
+                    queryCommit.publish(
+                        applyingControllerOwnerMutations: { controllerMutations in
+                            body(mutations, controllerMutations)
+                            precondition(
+                                mutations.allSatisfy { $0.consumption.isConsumed },
+                                "Every model-record owner mutation batch must be consumed before query publication."
+                            )
+                        },
+                        finalizingOwnerTransaction: finalize
+                    ),
                     "A query abort cannot interleave with the exclusive owner publication phase."
                 )
                 state = .resolved(.published)

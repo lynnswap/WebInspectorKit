@@ -113,6 +113,123 @@ func DOMSchemaDrivesGenericFetchFRCAndContextLocalIdentity() async throws {
 
 @MainActor
 @Test
+func domTreeProjectionPublishesInitialDeltaAndResetWithoutMaterializingGraph() async throws {
+    var fixture = DOMSchemaFixture()
+    var bootstrap = try fixture.reducer.bootstrap(
+        scope: fixture.pageScope,
+        root: domSchemaNode(
+            id: "document",
+            type: 9,
+            name: "#document",
+            children: [
+                domSchemaNode(
+                    id: "host",
+                    attributes: [
+                        DOM.Attribute(name: "class", value: "before")
+                    ]
+                )
+            ]
+        )
+    )
+    let scope = try fixture.documentScope(for: fixture.pageScope)
+    let documentStorage = fixture.id("document", in: scope)
+    let documentID = DOMNode.ID(canonical: documentStorage)
+    let hostID = DOMNode.ID(canonical: fixture.id("host", in: scope))
+    fixture.reducer.reconcilePrimaryTree(
+        rootID: documentStorage,
+        transaction: &bootstrap
+    )
+
+    let context = DOMSchemaFixture.context()
+    let secondContext = DOMSchemaFixture.context()
+    try await publishDOMInitial(fixture.modelSnapshot(), to: context)
+    try await publishDOMInitial(fixture.modelSnapshot(), to: secondContext)
+    #expect(context.registeredModel(for: documentID) == nil)
+    #expect(context.registeredModel(for: hostID) == nil)
+    #expect(context.domTreeSnapshot.primaryRootID == documentID)
+    #expect(Set(context.domTreeSnapshot.rowsByID.keys) == [documentID, hostID])
+    let secondInitialSnapshot = secondContext.domTreeSnapshot
+    #expect(
+        Mirror(reflecting: context.domTreeSnapshot).children.allSatisfy {
+            $0.label != "selectedNodeID"
+        }
+    )
+
+    var updates = context.domTreeUpdates().makeAsyncIterator()
+    guard case let .initial(revision, initial)? = await updates.next() else {
+        Issue.record("Expected an atomic initial DOM tree snapshot.")
+        return
+    }
+    #expect(revision == 0)
+    #expect(initial == context.domTreeSnapshot)
+
+    let host = try #require(context.model(for: hostID))
+    let controller = try await WebInspectorFetchedResultsController<DOMNode, Never>(
+        modelContext: context,
+        isolation: MainActor.shared
+    )
+    var mutation = try fixture.reducer.apply(
+        scope: fixture.pageScope,
+        event: .attributeModified(
+            DOM.Node.ID("host"),
+            name: "class",
+            value: "after"
+        )
+    )
+    fixture.reducer.reconcilePrimaryTree(
+        rootID: documentStorage,
+        transaction: &mutation
+    )
+    try await publishDOMChanges(mutation, revision: 1, to: context)
+
+    #expect(host.attributes == ["class": "after"])
+    #expect(controller.revision == 1)
+    guard
+        case let .changes(fromRevision, toRevision, change)? =
+            await updates.next(),
+        case let .delta(delta) = change
+    else {
+        Issue.record("Expected one complete DOM tree delta.")
+        return
+    }
+    #expect(fromRevision == 0)
+    #expect(toRevision == 1)
+    #expect(delta.upsertedRows.map(\.id) == [hostID])
+    #expect(delta.deletedRowIDs.isEmpty)
+    #expect(delta.upsertedRows[0].attributes == ["class": "after"])
+    #expect(context.registeredModel(for: documentID) == nil)
+    #expect(secondContext.domTreeSnapshot == secondInitialSnapshot)
+    #expect(
+        secondContext.domTreeSnapshot.rowsByID[hostID]?.attributes
+            == ["class": "before"]
+    )
+    #expect(secondContext.registeredModel(for: hostID) == nil)
+
+    try await publishDOMReset(
+        fixture.modelSnapshot(),
+        revision: 2,
+        to: context
+    )
+    guard
+        case let .changes(resetFrom, resetTo, change)? = await updates.next(),
+        case let .reset(resetSnapshot) = change
+    else {
+        Issue.record("Expected one full DOM tree reset snapshot.")
+        return
+    }
+    #expect(resetFrom == 1)
+    #expect(resetTo == 2)
+    #expect(resetSnapshot == context.domTreeSnapshot)
+    #expect(context.registeredModel(for: documentID) == nil)
+
+    await controller.close()
+    await context.close()
+    await secondContext.close()
+    #expect(await updates.next() == nil)
+}
+
+@MainActor
+@Test
 func DOMSchemaRelationshipsResolveOnlyTheRequestedCanonicalIDs() async throws {
     var fixture = DOMSchemaFixture()
     let host = domSchemaNode(

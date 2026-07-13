@@ -727,6 +727,21 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         )
     }
 
+    package func modelSchemaOwnerResource<
+        Model: WebInspectorPersistentModel,
+        Resource: AnyObject
+    >(
+        for model: Model.Type,
+        as resource: Resource.Type
+    ) -> Resource? {
+        preconditionOwnerIsolation()
+        return modelSchemaOwnerRegistry.ownerResource(
+            for: model,
+            as: resource,
+            owner: self
+        )
+    }
+
     /// Returns one actor-evaluated snapshot of matching persistent IDs.
     public nonisolated(nonsending) func fetchIdentifiers<
         Model: WebInspectorPersistentModel

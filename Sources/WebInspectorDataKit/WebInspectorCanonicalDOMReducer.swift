@@ -195,6 +195,57 @@ package struct WebInspectorCanonicalDOMParentChange: Equatable, Sendable {
     package let parentID: WebInspectorDOMNodeIdentityStorage?
 }
 
+package struct WebInspectorCanonicalDOMPrimaryRootChange: Equatable, Sendable {
+    package let rootID: WebInspectorDOMNodeIdentityStorage?
+}
+
+package struct WebInspectorCanonicalDOMTreeRow: Equatable, Sendable {
+    package let record: WebInspectorCanonicalDOMRecord
+    package let parentID: WebInspectorDOMNodeIdentityStorage?
+
+    package var id: WebInspectorDOMNodeIdentityStorage {
+        record.id
+    }
+}
+
+package struct WebInspectorCanonicalDOMTreeDelta: Equatable, Sendable {
+    package var primaryRootChange: WebInspectorCanonicalDOMPrimaryRootChange?
+    /// Complete replacement rows keyed semantically by `id`; array order is
+    /// deterministic for diagnostics but is not render order.
+    package var upsertedRows: [WebInspectorCanonicalDOMTreeRow] = []
+    package var deletedRowIDs: Set<WebInspectorDOMNodeIdentityStorage> = []
+
+    package var isEmpty: Bool {
+        primaryRootChange == nil
+            && upsertedRows.isEmpty
+            && deletedRowIDs.isEmpty
+    }
+}
+
+package struct WebInspectorCanonicalDOMTreeSnapshot: Equatable, Sendable {
+    package let primaryRootID: WebInspectorDOMNodeIdentityStorage?
+    /// Complete membership rows. Consumers index by identity and derive render
+    /// order only from each row's topology fields.
+    package let rows: [WebInspectorCanonicalDOMTreeRow]
+
+    package init(
+        primaryRootID: WebInspectorDOMNodeIdentityStorage?,
+        rows: [WebInspectorCanonicalDOMTreeRow]
+    ) {
+        precondition(
+            Set(rows.map(\.id)).count == rows.count,
+            "A canonical DOM tree snapshot cannot repeat one row identity."
+        )
+        precondition(
+            primaryRootID.map { rootID in rows.contains { $0.id == rootID } }
+                ?? rows.isEmpty,
+            "A canonical DOM tree snapshot must contain its primary root and cannot contain rows without one."
+        )
+        self.primaryRootID = primaryRootID
+        self.rows = rows
+    }
+}
+
 package struct WebInspectorCanonicalDOMTransaction: Equatable, Sendable {
     package var insertedRecords: [WebInspectorCanonicalDOMRecord] = []
     package var recordPatches: [WebInspectorCanonicalDOMRecordPatch] = []
@@ -205,6 +256,7 @@ package struct WebInspectorCanonicalDOMTransaction: Equatable, Sendable {
     package var queryValueUpserts: [WebInspectorDOMNodeIdentityStorage: WebInspectorCanonicalDOMQueryValue] = [:]
     package var queryValueDeletes: Set<WebInspectorDOMNodeIdentityStorage> = []
     package var resourceInvalidations: Set<WebInspectorCanonicalResourceInvalidation> = []
+    package var tree = WebInspectorCanonicalDOMTreeDelta()
 
     package var isEmpty: Bool {
         insertedRecords.isEmpty
@@ -216,6 +268,7 @@ package struct WebInspectorCanonicalDOMTransaction: Equatable, Sendable {
             && queryValueUpserts.isEmpty
             && queryValueDeletes.isEmpty
             && resourceInvalidations.isEmpty
+            && tree.isEmpty
     }
 }
 
@@ -223,6 +276,7 @@ package struct WebInspectorCanonicalDOMSnapshot: Equatable, Sendable {
     package let records: [WebInspectorCanonicalDOMRecord]
     package let parentByNodeID: [WebInspectorDOMNodeIdentityStorage: WebInspectorDOMNodeIdentityStorage]
     package let rootByDocumentScope: [WebInspectorDOMDocumentScopeStorage: WebInspectorDOMNodeIdentityStorage]
+    package let tree: WebInspectorCanonicalDOMTreeSnapshot
 
     package var recordsByID: [WebInspectorDOMNodeIdentityStorage: WebInspectorCanonicalDOMRecord] {
         Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0) })
@@ -231,7 +285,11 @@ package struct WebInspectorCanonicalDOMSnapshot: Equatable, Sendable {
     package init(
         recordsByID: [WebInspectorDOMNodeIdentityStorage: WebInspectorCanonicalDOMRecord],
         parentByNodeID: [WebInspectorDOMNodeIdentityStorage: WebInspectorDOMNodeIdentityStorage],
-        rootByDocumentScope: [WebInspectorDOMDocumentScopeStorage: WebInspectorDOMNodeIdentityStorage]
+        rootByDocumentScope: [WebInspectorDOMDocumentScopeStorage: WebInspectorDOMNodeIdentityStorage],
+        tree: WebInspectorCanonicalDOMTreeSnapshot = .init(
+            primaryRootID: nil,
+            rows: []
+        )
     ) {
         precondition(
             recordsByID.allSatisfy { id, record in
@@ -249,6 +307,7 @@ package struct WebInspectorCanonicalDOMSnapshot: Equatable, Sendable {
         }
         self.parentByNodeID = parentByNodeID
         self.rootByDocumentScope = rootByDocumentScope
+        self.tree = tree
     }
 }
 
@@ -260,6 +319,8 @@ package struct WebInspectorCanonicalDOMPerformanceCounters: Equatable, Sendable 
     package fileprivate(set) var subtreeDeletionNodeVisitCount = 0
     package fileprivate(set) var unrelatedRecordScanCount = 0
     package fileprivate(set) var recordMutationCount = 0
+    package fileprivate(set) var treeProjectionNodeVisitCount = 0
+    package fileprivate(set) var treeProjectionUnrelatedRecordScanCount = 0
 }
 
 package enum WebInspectorCanonicalDOMError: Error, Equatable, Sendable {
@@ -324,6 +385,10 @@ package struct WebInspectorCanonicalDOMReducer: Sendable {
     private var frameIDByFrameRootID: [WebInspectorDOMNodeIdentityStorage: FrameID] = [:]
     private var retiredRawNodeIDsByScope: [WebInspectorDOMDocumentScopeStorage: Set<DOM.Node.ID>] = [:]
     private var lastInsertionOrdinal: UInt64 = 0
+    private var primaryRootID: WebInspectorDOMNodeIdentityStorage?
+    private var treeReachableNodeIDs: Set<WebInspectorDOMNodeIdentityStorage> = []
+    private var treeChildrenByNodeID: [WebInspectorDOMNodeIdentityStorage: [WebInspectorDOMNodeIdentityStorage]] = [:]
+    private var treeParentByNodeID: [WebInspectorDOMNodeIdentityStorage: WebInspectorDOMNodeIdentityStorage] = [:]
 
     package private(set) var performanceCounters = WebInspectorCanonicalDOMPerformanceCounters()
 
@@ -360,6 +425,15 @@ package struct WebInspectorCanonicalDOMReducer: Sendable {
         rootByDocumentScope[scope]
     }
 
+    package func nodeID(
+        for rawNodeID: DOM.Node.ID,
+        in eventScope: WebInspectorCanonicalDOMEventScope
+    ) throws -> WebInspectorDOMNodeIdentityStorage? {
+        let scope = try requireActiveScope(eventScope)
+        let id = nodeID(rawNodeID, in: scope)
+        return recordsByID[id] == nil ? nil : id
+    }
+
     package func contains(
         _ nodeID: WebInspectorDOMNodeIdentityStorage,
         inSubtreeOf rootID: WebInspectorDOMNodeIdentityStorage
@@ -392,8 +466,53 @@ package struct WebInspectorCanonicalDOMReducer: Sendable {
         return WebInspectorCanonicalDOMSnapshot(
             recordsByID: recordsByID,
             parentByNodeID: parentByNodeID,
-            rootByDocumentScope: rootByDocumentScope
+            rootByDocumentScope: rootByDocumentScope,
+            tree: WebInspectorCanonicalDOMTreeSnapshot(
+                primaryRootID: primaryRootID,
+                rows: treeReachableNodeIDs.compactMap { id in
+                    guard let record = recordsByID[id] else {
+                        preconditionFailure(
+                            "Canonical DOM tree membership retained a missing record."
+                        )
+                    }
+                    return WebInspectorCanonicalDOMTreeRow(
+                        record: record,
+                        parentID: treeParentByNodeID[id]
+                    )
+                }.sorted {
+                    $0.record.insertionOrdinal < $1.record.insertionOrdinal
+                }
+            )
         )
+    }
+
+    package mutating func reconcilePrimaryTree(
+        rootID proposedPrimaryRootID: WebInspectorDOMNodeIdentityStorage?,
+        transaction: inout WebInspectorCanonicalDOMTransaction
+    ) {
+        if let proposedPrimaryRootID {
+            precondition(
+                recordsByID[proposedPrimaryRootID] != nil,
+                "A canonical primary DOM root must reference a current record."
+            )
+        }
+
+        if primaryRootID != proposedPrimaryRootID {
+            replacePrimaryTree(
+                with: proposedPrimaryRootID,
+                transaction: &transaction
+            )
+            return
+        }
+        guard proposedPrimaryRootID != nil else {
+            precondition(
+                treeReachableNodeIDs.isEmpty,
+                "A canonical DOM tree without a primary root retained reachable rows."
+            )
+            return
+        }
+
+        applyIncrementalTreeChanges(transaction: &transaction)
     }
 
     package mutating func bootstrap(
@@ -640,6 +759,11 @@ package struct WebInspectorCanonicalDOMReducer: Sendable {
             rootByDocumentScope.keys.map {
                 WebInspectorCanonicalResourceInvalidation.target($0)
             })
+        if primaryRootID != nil {
+            transaction.tree.primaryRootChange =
+                WebInspectorCanonicalDOMPrimaryRootChange(rootID: nil)
+        }
+        transaction.tree.deletedRowIDs = treeReachableNodeIDs
         performanceCounters.recordMutationCount += recordsByID.count
         recordsByID.removeAll(keepingCapacity: true)
         parentByNodeID.removeAll(keepingCapacity: true)
@@ -651,11 +775,293 @@ package struct WebInspectorCanonicalDOMReducer: Sendable {
         frameRootByFrameID.removeAll(keepingCapacity: true)
         frameIDByFrameRootID.removeAll(keepingCapacity: true)
         retiredRawNodeIDsByScope.removeAll(keepingCapacity: true)
+        primaryRootID = nil
+        treeReachableNodeIDs.removeAll(keepingCapacity: true)
+        treeChildrenByNodeID.removeAll(keepingCapacity: true)
+        treeParentByNodeID.removeAll(keepingCapacity: true)
         return transaction
     }
 }
 
 private extension WebInspectorCanonicalDOMReducer {
+    mutating func replacePrimaryTree(
+        with proposedPrimaryRootID: WebInspectorDOMNodeIdentityStorage?,
+        transaction: inout WebInspectorCanonicalDOMTransaction
+    ) {
+        let previousReachableNodeIDs = treeReachableNodeIDs
+        var nextReachableNodeIDs: Set<WebInspectorDOMNodeIdentityStorage> = []
+        var nextChildrenByNodeID: [WebInspectorDOMNodeIdentityStorage: [WebInspectorDOMNodeIdentityStorage]] = [:]
+        var nextParentByNodeID: [WebInspectorDOMNodeIdentityStorage: WebInspectorDOMNodeIdentityStorage] = [:]
+        var orderedNextNodeIDs: [WebInspectorDOMNodeIdentityStorage] = []
+        if let proposedPrimaryRootID {
+            collectCurrentTreeSubtree(
+                proposedPrimaryRootID,
+                into: &nextReachableNodeIDs,
+                childrenByNodeID: &nextChildrenByNodeID,
+                projectedParentByNodeID: &nextParentByNodeID,
+                orderedNodeIDs: &orderedNextNodeIDs
+            )
+        }
+
+        primaryRootID = proposedPrimaryRootID
+        treeReachableNodeIDs = nextReachableNodeIDs
+        treeChildrenByNodeID = nextChildrenByNodeID
+        treeParentByNodeID = nextParentByNodeID
+        transaction.tree.primaryRootChange =
+            WebInspectorCanonicalDOMPrimaryRootChange(
+                rootID: proposedPrimaryRootID
+            )
+        transaction.tree.deletedRowIDs.formUnion(
+            previousReachableNodeIDs.subtracting(nextReachableNodeIDs)
+        )
+        transaction.tree.upsertedRows = orderedNextNodeIDs.map(treeRow)
+    }
+
+    mutating func applyIncrementalTreeChanges(
+        transaction: inout WebInspectorCanonicalDOMTransaction
+    ) {
+        let previouslyReachableNodeIDs = treeReachableNodeIDs
+        let previousChildrenByNodeID = treeChildrenByNodeID
+        let previousParentByNodeID = treeParentByNodeID
+
+        var affectedParentIDs = transaction.topologyChangedNodeIDs
+        var changedRowIDs = Set(transaction.recordPatches.map(\.id))
+        changedRowIDs.formUnion(transaction.insertedRecords.map(\.id))
+        changedRowIDs.formUnion(transaction.parentChanges.map(\.nodeID))
+        affectedParentIDs.formUnion(
+            transaction.recordPatches.compactMap { patch in
+                patch.fields.contains(where: Self.isTreeTopologyField)
+                    ? patch.id
+                    : nil
+            })
+        for change in transaction.parentChanges {
+            if let oldParentID = previousParentByNodeID[change.nodeID] {
+                affectedParentIDs.insert(oldParentID)
+            }
+            if let newParentID = change.parentID {
+                affectedParentIDs.insert(newParentID)
+            }
+        }
+        for id in transaction.insertedRecords.map(\.id) {
+            if let parentID = parentByNodeID[id] {
+                affectedParentIDs.insert(parentID)
+            }
+        }
+        for id in transaction.deletedRecordIDs {
+            if let parentID = previousParentByNodeID[id] {
+                affectedParentIDs.insert(parentID)
+            }
+        }
+        changedRowIDs.formUnion(affectedParentIDs)
+
+        var removedNodeIDs = transaction.deletedRecordIDs.intersection(
+            previouslyReachableNodeIDs
+        )
+        for parentID in affectedParentIDs
+        where previouslyReachableNodeIDs.contains(parentID) {
+            let previousChildren = previousChildrenByNodeID[parentID] ?? []
+            let currentChildren = recordsByID[parentID].map(treeChildIDs) ?? []
+            let currentChildSet = Set(currentChildren)
+            for removedChildID in previousChildren
+            where !currentChildSet.contains(removedChildID) {
+                collectPreviousTreeSubtree(
+                    removedChildID,
+                    childrenByNodeID: previousChildrenByNodeID,
+                    into: &removedNodeIDs
+                )
+            }
+        }
+
+        treeReachableNodeIDs.subtract(removedNodeIDs)
+        for id in removedNodeIDs {
+            treeChildrenByNodeID.removeValue(forKey: id)
+            treeParentByNodeID.removeValue(forKey: id)
+        }
+
+        var addedNodeIDs: Set<WebInspectorDOMNodeIdentityStorage> = []
+        var addedNodeOrder: [WebInspectorDOMNodeIdentityStorage] = []
+        var nextChildrenByNodeID = treeChildrenByNodeID
+        var nextParentByNodeID = treeParentByNodeID
+        for parentID in affectedParentIDs.sorted(by: precedesInTreeOrder)
+        where treeReachableNodeIDs.contains(parentID) {
+            guard let parentRecord = recordsByID[parentID] else {
+                continue
+            }
+            for childID in treeChildIDs(parentRecord)
+            where !treeReachableNodeIDs.contains(childID) {
+                collectCurrentTreeSubtree(
+                    childID,
+                    into: &addedNodeIDs,
+                    childrenByNodeID: &nextChildrenByNodeID,
+                    projectedParentByNodeID: &nextParentByNodeID,
+                    orderedNodeIDs: &addedNodeOrder
+                )
+            }
+        }
+        treeReachableNodeIDs.formUnion(addedNodeIDs)
+        treeChildrenByNodeID = nextChildrenByNodeID
+        treeParentByNodeID = nextParentByNodeID
+
+        let upsertedNodeIDs =
+            changedRowIDs
+            .union(addedNodeIDs)
+            .intersection(treeReachableNodeIDs)
+            .subtracting(transaction.deletedRecordIDs)
+        for id in upsertedNodeIDs {
+            guard let record = recordsByID[id] else {
+                preconditionFailure(
+                    "Canonical DOM tree projection referenced a missing changed row."
+                )
+            }
+            treeChildrenByNodeID[id] = treeChildIDs(record)
+            if let parentID = parentByNodeID[id] {
+                treeParentByNodeID[id] = parentID
+            } else {
+                treeParentByNodeID.removeValue(forKey: id)
+            }
+        }
+
+        transaction.tree.deletedRowIDs.formUnion(removedNodeIDs)
+        transaction.tree.upsertedRows =
+            upsertedNodeIDs
+            .sorted(by: precedesInTreeOrder)
+            .map(treeRow)
+    }
+
+    mutating func collectCurrentTreeSubtree(
+        _ rootID: WebInspectorDOMNodeIdentityStorage,
+        into nodeIDs: inout Set<WebInspectorDOMNodeIdentityStorage>,
+        childrenByNodeID: inout [WebInspectorDOMNodeIdentityStorage: [WebInspectorDOMNodeIdentityStorage]],
+        projectedParentByNodeID: inout [WebInspectorDOMNodeIdentityStorage: WebInspectorDOMNodeIdentityStorage],
+        orderedNodeIDs: inout [WebInspectorDOMNodeIdentityStorage]
+    ) {
+        guard nodeIDs.insert(rootID).inserted else {
+            return
+        }
+        guard let record = recordsByID[rootID] else {
+            preconditionFailure(
+                "Canonical DOM tree topology referenced a missing record."
+            )
+        }
+        performanceCounters.treeProjectionNodeVisitCount += 1
+        orderedNodeIDs.append(rootID)
+        let childIDs = treeChildIDs(record)
+        childrenByNodeID[rootID] = childIDs
+        if let parentID = self.parentByNodeID[rootID] {
+            projectedParentByNodeID[rootID] = parentID
+        } else {
+            projectedParentByNodeID.removeValue(forKey: rootID)
+        }
+        for childID in childIDs {
+            collectCurrentTreeSubtree(
+                childID,
+                into: &nodeIDs,
+                childrenByNodeID: &childrenByNodeID,
+                projectedParentByNodeID: &projectedParentByNodeID,
+                orderedNodeIDs: &orderedNodeIDs
+            )
+        }
+    }
+
+    func collectPreviousTreeSubtree(
+        _ rootID: WebInspectorDOMNodeIdentityStorage,
+        childrenByNodeID: [WebInspectorDOMNodeIdentityStorage: [WebInspectorDOMNodeIdentityStorage]],
+        into nodeIDs: inout Set<WebInspectorDOMNodeIdentityStorage>
+    ) {
+        guard nodeIDs.insert(rootID).inserted else {
+            return
+        }
+        for childID in childrenByNodeID[rootID] ?? [] {
+            collectPreviousTreeSubtree(
+                childID,
+                childrenByNodeID: childrenByNodeID,
+                into: &nodeIDs
+            )
+        }
+    }
+
+    func treeRow(
+        _ id: WebInspectorDOMNodeIdentityStorage
+    ) -> WebInspectorCanonicalDOMTreeRow {
+        guard let record = recordsByID[id] else {
+            preconditionFailure(
+                "Canonical DOM tree row referenced a missing record."
+            )
+        }
+        return WebInspectorCanonicalDOMTreeRow(
+            record: record,
+            parentID: treeParentByNodeID[id]
+        )
+    }
+
+    func treeChildIDs(
+        _ record: WebInspectorCanonicalDOMRecord
+    ) -> [WebInspectorDOMNodeIdentityStorage] {
+        var childIDs: [WebInspectorDOMNodeIdentityStorage] = []
+        if let templateContentID = record.templateContentID {
+            childIDs.append(templateContentID)
+        }
+        if let beforePseudoElementID = record.beforePseudoElementID {
+            childIDs.append(beforePseudoElementID)
+        }
+        childIDs.append(contentsOf: record.otherPseudoElementIDs)
+        if let contentDocumentID = record.contentDocumentID {
+            childIDs.append(contentDocumentID)
+        } else {
+            childIDs.append(contentsOf: record.shadowRootIDs)
+            if case let .loaded(children) = record.children {
+                childIDs.append(contentsOf: children)
+            }
+        }
+        if let afterPseudoElementID = record.afterPseudoElementID {
+            childIDs.append(afterPseudoElementID)
+        }
+        precondition(
+            Set(childIDs).count == childIDs.count,
+            "Canonical DOM render topology cannot repeat one child identity."
+        )
+        return childIDs
+    }
+
+    static func isTreeTopologyField(
+        _ field: WebInspectorCanonicalDOMRecordPatch.Field
+    ) -> Bool {
+        switch field {
+        case .children,
+            .contentDocument,
+            .shadowRoots,
+            .templateContent,
+            .beforePseudoElement,
+            .otherPseudoElements,
+            .afterPseudoElement:
+            true
+        case .nodeName,
+            .localName,
+            .nodeValue,
+            .nodeType,
+            .frameID,
+            .documentURL,
+            .baseURL,
+            .attributes,
+            .pseudoType,
+            .shadowRootType:
+            false
+        }
+    }
+
+    func precedesInTreeOrder(
+        _ lhs: WebInspectorDOMNodeIdentityStorage,
+        _ rhs: WebInspectorDOMNodeIdentityStorage
+    ) -> Bool {
+        guard let lhsRecord = recordsByID[lhs] else {
+            return false
+        }
+        guard let rhsRecord = recordsByID[rhs] else {
+            return true
+        }
+        return lhsRecord.insertionOrdinal < rhsRecord.insertionOrdinal
+    }
+
     mutating func setChildNodes(
         _ rawParentID: DOM.Node.ID,
         nodes: [DOM.Node],

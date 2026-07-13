@@ -57,6 +57,8 @@ package struct WebInspectorDOMModelRecord: Equatable, Sendable,
 private enum DOMNodeSchemaOwnerEffect: Sendable {
     case topology([DOMNode.ID: WebInspectorDOMModelTopology])
     case invalidateResources(Set<WebInspectorCanonicalResourceInvalidation>)
+    case treeSnapshot(WebInspectorDOMTreeSnapshot)
+    case treeDelta(WebInspectorDOMTreeDelta)
 }
 
 package enum WebInspectorDOMModelSchemas {
@@ -106,12 +108,34 @@ package extension WebInspectorModelSchema where Model == DOMNode {
                             invalidations
                         )
                     }
+                case .treeSnapshot, .treeDelta:
+                    break
                 }
             },
             resetOwnerProjection: { _, models in
                 models.forEachRegisteredModel { model in
                     model.resetCanonicalOwnerProjection()
                 }
+            },
+            makeOwnerState: WebInspectorDOMTreeProjectionState.init,
+            stageOwnerEffect: { state, effect in
+                switch effect {
+                case let .treeSnapshot(snapshot):
+                    state.stage(snapshot: snapshot)
+                case let .treeDelta(delta):
+                    state.stage(delta: delta)
+                case .topology, .invalidateResources:
+                    break
+                }
+            },
+            prepareOwnerStateForReset: { state in
+                state.prepareReset()
+            },
+            finalizeOwnerState: { _, state, registeredModel in
+                state.finalize(registeredModel: registeredModel)
+            },
+            closeOwnerState: { state in
+                state.close()
             }
         )
     }
@@ -150,7 +174,10 @@ private func domNodeSnapshot(
                 canonicalRank: .init(rawValue: canonical.insertionOrdinal)
             )
         }
-    return WebInspectorModelSchemaSnapshot(entries: entries)
+    return WebInspectorModelSchemaSnapshot(
+        entries: entries,
+        ownerEffects: [.treeSnapshot(domTreeSnapshot(DOM.tree))]
+    )
 }
 
 private func domNodeDelta(
@@ -189,9 +216,89 @@ private func domNodeDelta(
     if !invalidations.isEmpty {
         ownerEffects.append(.invalidateResources(invalidations))
     }
+    if !DOM.tree.isEmpty {
+        ownerEffects.append(.treeDelta(domTreeDelta(DOM.tree)))
+    }
     return WebInspectorModelSchemaDelta(
         changes: result.changes,
         ownerEffects: ownerEffects
+    )
+}
+
+private func domTreeSnapshot(
+    _ snapshot: WebInspectorCanonicalDOMTreeSnapshot
+) -> WebInspectorDOMTreeSnapshot {
+    WebInspectorDOMTreeSnapshot(
+        primaryRootID: snapshot.primaryRootID.map(DOMNode.ID.init(canonical:)),
+        rowsByID: Dictionary(
+            uniqueKeysWithValues: snapshot.rows.map { row in
+                let mapped = domTreeRow(row)
+                return (mapped.id, mapped)
+            }
+        )
+    )
+}
+
+private func domTreeDelta(
+    _ delta: WebInspectorCanonicalDOMTreeDelta
+) -> WebInspectorDOMTreeDelta {
+    WebInspectorDOMTreeDelta(
+        primaryRootChange: delta.primaryRootChange.map {
+            WebInspectorDOMTreePrimaryRootChange(
+                rootID: $0.rootID.map(DOMNode.ID.init(canonical:))
+            )
+        },
+        upsertedRows: delta.upsertedRows.map(domTreeRow),
+        deletedRowIDs: Set(
+            delta.deletedRowIDs.map(DOMNode.ID.init(canonical:))
+        )
+    )
+}
+
+private func domTreeRow(
+    _ row: WebInspectorCanonicalDOMTreeRow
+) -> WebInspectorDOMTreeRow {
+    let record = row.record
+    let children: WebInspectorDOMTreeChildren =
+        switch record.children {
+        case let .unrequested(count):
+            .unrequested(count: count)
+        case let .loaded(ids):
+            .loaded(ids.map(DOMNode.ID.init(canonical:)))
+        }
+    return WebInspectorDOMTreeRow(
+        id: DOMNode.ID(canonical: record.id),
+        parentID: row.parentID.map(DOMNode.ID.init(canonical:)),
+        nodeName: record.nodeName,
+        localName: record.localName,
+        nodeValue: record.nodeValue,
+        nodeType: record.nodeType,
+        frameID: record.frameID,
+        documentURL: record.documentURL,
+        baseURL: record.baseURL,
+        attributes: record.queryValue.attributes,
+        attributeList: record.attributes.map(DOMNode.Attribute.init),
+        children: children,
+        contentDocumentID: record.contentDocumentID.map(
+            DOMNode.ID.init(canonical:)
+        ),
+        shadowRootIDs: record.shadowRootIDs.map(
+            DOMNode.ID.init(canonical:)
+        ),
+        templateContentID: record.templateContentID.map(
+            DOMNode.ID.init(canonical:)
+        ),
+        beforePseudoElementID: record.beforePseudoElementID.map(
+            DOMNode.ID.init(canonical:)
+        ),
+        otherPseudoElementIDs: record.otherPseudoElementIDs.map(
+            DOMNode.ID.init(canonical:)
+        ),
+        afterPseudoElementID: record.afterPseudoElementID.map(
+            DOMNode.ID.init(canonical:)
+        ),
+        pseudoType: record.pseudoType,
+        shadowRootType: record.shadowRootType
     )
 }
 

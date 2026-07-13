@@ -845,6 +845,162 @@ func canonicalDOMLinksFrameOwnerAndFrameRootIncrementallyInEitherArrivalOrder() 
 }
 
 @Test
+func canonicalDOMPrimaryTreeLinksFrameSubtreeInEitherArrivalOrder() throws {
+    let frameID = FrameID("child-frame")
+    let pageScope = canonicalDOMScope(targetID: "page", kind: .page)
+    let frameScope = canonicalDOMScope(
+        targetID: "frame-target",
+        kind: .frame,
+        frameID: frameID
+    )
+    let fixture = canonicalDOMReducerFixture(scope: pageScope)
+    let pageDocumentScope = try canonicalDocumentScope(
+        fixture,
+        eventScope: pageScope
+    )
+    let frameDocumentScope = try canonicalDocumentScope(
+        fixture,
+        eventScope: frameScope
+    )
+    let pageRootID = canonicalDOMID("page-document", scope: pageDocumentScope)
+    let ownerID = canonicalDOMID("iframe", scope: pageDocumentScope)
+    let frameRootID = canonicalDOMID(
+        "frame-document",
+        scope: frameDocumentScope
+    )
+    let frameChildID = canonicalDOMID("frame-child", scope: frameDocumentScope)
+    let pageRoot = canonicalDOMNode(
+        id: "page-document",
+        type: 9,
+        name: "#document",
+        children: [
+            canonicalDOMNode(
+                id: "iframe",
+                name: "IFRAME",
+                localName: "iframe",
+                frameID: frameID
+            )
+        ]
+    )
+    let frameRoot = canonicalDOMNode(
+        id: "frame-document",
+        type: 9,
+        name: "#document",
+        frameID: frameID,
+        children: [canonicalDOMNode(id: "frame-child")]
+    )
+
+    var ownerFirst = fixture.reducer
+    var pageBootstrap = try ownerFirst.bootstrap(
+        scope: pageScope,
+        root: pageRoot
+    )
+    ownerFirst.reconcilePrimaryTree(
+        rootID: pageRootID,
+        transaction: &pageBootstrap
+    )
+    #expect(
+        Set(pageBootstrap.tree.upsertedRows.map(\.id))
+            == [pageRootID, ownerID]
+    )
+    #expect(
+        pageBootstrap.tree.upsertedRows.first(where: { $0.id == ownerID })?
+            .parentID == pageRootID
+    )
+    var lateFrame = try ownerFirst.bootstrap(
+        scope: frameScope,
+        root: frameRoot
+    )
+    let beforeLateFrame = ownerFirst.performanceCounters
+    ownerFirst.reconcilePrimaryTree(
+        rootID: pageRootID,
+        transaction: &lateFrame
+    )
+    #expect(lateFrame.tree.upsertedRows.map(\.id).contains(frameRootID))
+    #expect(lateFrame.tree.upsertedRows.map(\.id).contains(frameChildID))
+    #expect(
+        Set(ownerFirst.snapshot().tree.rows.map(\.id)) == [
+            pageRootID, ownerID, frameRootID, frameChildID,
+        ])
+    #expect(
+        ownerFirst.performanceCounters.treeProjectionUnrelatedRecordScanCount
+            == 0
+    )
+    #expect(
+        ownerFirst.performanceCounters.treeProjectionNodeVisitCount
+            - beforeLateFrame.treeProjectionNodeVisitCount
+            == 2
+    )
+
+    var frameFirst = fixture.reducer
+    var earlyFrame = try frameFirst.bootstrap(
+        scope: frameScope,
+        root: frameRoot
+    )
+    frameFirst.reconcilePrimaryTree(rootID: nil, transaction: &earlyFrame)
+    #expect(earlyFrame.tree.isEmpty)
+    #expect(frameFirst.snapshot().tree.rows.isEmpty)
+    var lateOwner = try frameFirst.bootstrap(
+        scope: pageScope,
+        root: pageRoot
+    )
+    frameFirst.reconcilePrimaryTree(
+        rootID: pageRootID,
+        transaction: &lateOwner
+    )
+    #expect(lateOwner.tree.primaryRootChange?.rootID == pageRootID)
+    #expect(
+        Set(frameFirst.snapshot().tree.rows.map(\.id)) == [
+            pageRootID, ownerID, frameRootID, frameChildID,
+        ])
+    #expect(
+        frameFirst.snapshot().tree.rows.first(where: {
+            $0.id == frameRootID
+        })?.parentID == ownerID
+    )
+}
+
+@Test
+func canonicalDOMRawNodeLookupRequiresTheExactActiveDocumentScope() throws {
+    let fixture = canonicalDOMReducerFixture()
+    var reducer = fixture.reducer
+    _ = try reducer.bootstrap(
+        scope: fixture.scope,
+        root: canonicalDOMNode(
+            id: "document",
+            type: 9,
+            name: "#document",
+            children: [canonicalDOMNode(id: "target")]
+        )
+    )
+    let expected = canonicalDOMID(
+        "target",
+        scope: try canonicalDocumentScope(
+            fixture,
+            eventScope: fixture.scope
+        )
+    )
+    #expect(
+        try reducer.nodeID(
+            for: DOM.Node.ID("target"),
+            in: fixture.scope
+        ) == expected
+    )
+    #expect(
+        try reducer.nodeID(
+            for: DOM.Node.ID("missing"),
+            in: fixture.scope
+        ) == nil
+    )
+    #expect(throws: WebInspectorCanonicalDOMError.self) {
+        try reducer.nodeID(
+            for: DOM.Node.ID("target"),
+            in: canonicalDOMScope(domEpoch: 2)
+        )
+    }
+}
+
+@Test
 func canonicalDOMRejectsAmbiguousFrameOwnershipBeforeCommittingAnyNode() throws {
     let frameID = FrameID("shared-frame")
     let pageScope = canonicalDOMScope(targetID: "page")
@@ -1034,7 +1190,7 @@ func canonicalDOMNormalMutationVisitsOnlyChangedRecordInLargeGraph() throws {
     let children = (0..<10_000).map { index in
         canonicalDOMNode(id: "node-\(index)")
     }
-    _ = try reducer.bootstrap(
+    var bootstrap = try reducer.bootstrap(
         scope: fixture.scope,
         root: canonicalDOMNode(
             id: "document",
@@ -1044,12 +1200,21 @@ func canonicalDOMNormalMutationVisitsOnlyChangedRecordInLargeGraph() throws {
         )
     )
     let documentScope = try canonicalDocumentScope(fixture, eventScope: fixture.scope)
+    let rootID = canonicalDOMID("document", scope: documentScope)
+    reducer.reconcilePrimaryTree(
+        rootID: rootID,
+        transaction: &bootstrap
+    )
     let changedID = canonicalDOMID("node-997", scope: documentScope)
     let insertionOrdinal = try #require(reducer.record(for: changedID)).insertionOrdinal
     let before = reducer.performanceCounters
-    _ = try reducer.apply(
+    var transaction = try reducer.apply(
         scope: fixture.scope,
         event: .attributeModified(DOM.Node.ID("node-997"), name: "data-state", value: "changed")
+    )
+    reducer.reconcilePrimaryTree(
+        rootID: rootID,
+        transaction: &transaction
     )
     let after = reducer.performanceCounters
 
@@ -1058,6 +1223,9 @@ func canonicalDOMNormalMutationVisitsOnlyChangedRecordInLargeGraph() throws {
     #expect(after.incrementalNodeVisitCount - before.incrementalNodeVisitCount == 1)
     #expect(after.recordMutationCount - before.recordMutationCount == 1)
     #expect(after.unrelatedRecordScanCount == 0)
+    #expect(after.treeProjectionNodeVisitCount == before.treeProjectionNodeVisitCount)
+    #expect(after.treeProjectionUnrelatedRecordScanCount == 0)
+    #expect(transaction.tree.upsertedRows.map(\.id) == [changedID])
     #expect(reducer.record(for: changedID)?.insertionOrdinal == insertionOrdinal)
 }
 

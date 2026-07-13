@@ -999,11 +999,26 @@ func canonicalModelStoreResolvesConsoleReferenceAtWebSocketIdentityReservation()
 @Test
 func canonicalModelStoreAtomicallyInvalidatesDOMAndCSSDocumentState() throws {
     var fixture = try CanonicalModelStoreFixture(domains: [.css])
-    _ = try fixture.bootstrapDOM(
+    let bootstrap = try fixture.bootstrapDOM(
         root: canonicalModelDocument(
             id: "document",
             children: [canonicalModelDOMNode(id: "body")]
         )
+    )
+    let initialTree = try #require(
+        fixture.store.snapshot(reason: .onDemandRebase).DOM?.tree
+    )
+    let primaryRootID = try #require(initialTree.primaryRootID)
+    let resolvedBodyID = try fixture.store.domNodeID(
+        for: DOM.Node.ID("body"),
+        in: fixture.scope()
+    )
+    let bodyID = try #require(resolvedBodyID)
+    #expect(bootstrap.DOM?.tree.primaryRootChange?.rootID == primaryRootID)
+    #expect(Set(initialTree.rows.map(\.id)) == [primaryRootID, bodyID])
+    #expect(
+        initialTree.rows.first(where: { $0.id == bodyID })?.parentID
+            == primaryRootID
     )
     _ = try fixture.bootstrapCSS([
         (
@@ -1022,11 +1037,15 @@ func canonicalModelStoreAtomicallyInvalidatesDOMAndCSSDocumentState() throws {
     )
     fixture.nextSequence += 1
     #expect(transaction.DOM?.deletedRecordIDs.count == 2)
+    #expect(transaction.DOM?.tree.primaryRootChange?.rootID == nil)
+    #expect(transaction.DOM?.tree.deletedRowIDs.count == 2)
     #expect(transaction.CSS?.deletedRecordIDs.count == 1)
     #expect(fixture.store.bindingSnapshot?.readyDOMTargetIDs.isEmpty == true)
     #expect(fixture.store.bindingSnapshot?.isCSSReady == false)
     let afterInvalidation = fixture.store.snapshot(reason: .onDemandRebase)
     #expect(afterInvalidation.DOM?.recordsByID.isEmpty == true)
+    #expect(afterInvalidation.DOM?.tree.primaryRootID == nil)
+    #expect(afterInvalidation.DOM?.tree.rows.isEmpty == true)
     #expect(afterInvalidation.CSS?.recordsByID.isEmpty == true)
 
     let malformedScope = fixture.scope(DOMBindingEpoch: 4)
@@ -1042,6 +1061,51 @@ func canonicalModelStoreAtomicallyInvalidatesDOMAndCSSDocumentState() throws {
     #expect(
         fixture.store.snapshot(reason: .onDemandRebase)
             == afterInvalidation
+    )
+}
+
+@Test
+func canonicalModelStoreClearsPrimaryDOMRootAtProvisionalPageCommit() throws {
+    let oldPage = canonicalModelPageTarget(id: "old-page")
+    var fixture = try CanonicalModelStoreFixture(
+        domains: [.dom],
+        targets: [oldPage]
+    )
+    _ = try fixture.bootstrapDOM(
+        targetID: "old-page",
+        root: canonicalModelDocument(id: "old-document")
+    )
+    #expect(
+        fixture.store.snapshot(reason: .onDemandRebase).DOM?.tree.primaryRootID
+            != nil
+    )
+
+    let newPage = canonicalModelPageTarget(id: "new-page")
+    let replacement = try fixture.event(
+        .target(
+            .didCommitProvisionalTarget(
+                oldTargetID: WebInspectorTarget.ID("old-page")
+            )
+        ),
+        scope: ModelEventScope(
+            generation: fixture.pageGeneration,
+            target: newPage,
+            agentTarget: newPage,
+            navigationEpoch: ModelNavigationEpoch(rawValue: 1),
+            domBindingEpoch: ModelDOMBindingEpoch(rawValue: 1),
+            runtimeBindingEpoch: nil,
+            consoleBindingEpoch: nil
+        )
+    )
+
+    #expect(replacement.DOM?.tree.primaryRootChange?.rootID == nil)
+    #expect(replacement.DOM?.tree.deletedRowIDs.count == 1)
+    #expect(
+        fixture.store.snapshot(reason: .onDemandRebase).DOM?.tree
+            == WebInspectorCanonicalDOMTreeSnapshot(
+                primaryRootID: nil,
+                rows: []
+            )
     )
 }
 

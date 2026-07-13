@@ -350,6 +350,19 @@ package struct WebInspectorCanonicalModelStore: Sendable {
         return DOMReducer?.record(for: id)
     }
 
+    package func domNodeID(
+        for rawNodeID: DOM.Node.ID,
+        in scope: ModelEventScope
+    ) throws -> WebInspectorDOMNodeIdentityStorage? {
+        guard configuredDomains.contains(.dom), let DOMReducer else {
+            return nil
+        }
+        return try DOMReducer.nodeID(
+            for: rawNodeID,
+            in: WebInspectorCanonicalDOMEventScope(modelScope: scope)
+        )
+    }
+
     package func domRoot(
         in scope: WebInspectorDOMDocumentScopeStorage
     ) -> WebInspectorDOMNodeIdentityStorage? {
@@ -506,10 +519,11 @@ package struct WebInspectorCanonicalModelStore: Sendable {
     ) throws -> WebInspectorCanonicalModelTransaction {
         do {
             let priorEpochMapMutationCount = binding?.epochMapMutationCount ?? 0
-            let transaction = try reduceValidated(
+            var transaction = try reduceValidated(
                 record,
                 attachmentGeneration: attachmentGeneration
             )
+            reconcilePrimaryDOMTree(in: &transaction)
             if transaction.feedChanges.contains(where: {
                 if case .reset = $0 {
                     return true
@@ -633,6 +647,48 @@ package struct WebInspectorCanonicalModelStore: Sendable {
             configuredDomains: configuredDomains
         )
         self.performanceCounters = performanceCounters
+    }
+}
+
+private extension WebInspectorCanonicalModelStore {
+    mutating func reconcilePrimaryDOMTree(
+        in transaction: inout WebInspectorCanonicalModelTransaction
+    ) {
+        guard configuredDomains.contains(.dom), var reducer = DOMReducer else {
+            return
+        }
+        let primaryRootID: WebInspectorDOMNodeIdentityStorage?
+        if let binding,
+            let currentPageID = binding.currentPageID,
+            let authority = binding.DOMAuthorities[currentPageID],
+            authority.phase == .ready,
+            authority.isEstablishedInReducer,
+            let scope = WebInspectorDOMDocumentScopeStorage(
+                storeID: storeID,
+                attachmentGeneration: binding.attachmentGeneration,
+                eventScope: WebInspectorCanonicalDOMEventScope(
+                    modelScope: authority.scope
+                )
+            )
+        {
+            primaryRootID = reducer.root(in: scope)
+            precondition(
+                primaryRootID != nil,
+                "A ready current-page DOM authority must own a canonical root."
+            )
+        } else {
+            primaryRootID = nil
+        }
+
+        var DOM = transaction.DOM ?? WebInspectorCanonicalDOMTransaction()
+        reducer.reconcilePrimaryTree(
+            rootID: primaryRootID,
+            transaction: &DOM
+        )
+        DOMReducer = reducer
+        if transaction.DOM != nil || !DOM.isEmpty {
+            transaction.DOM = DOM
+        }
     }
 }
 

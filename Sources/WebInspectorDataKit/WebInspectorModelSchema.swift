@@ -295,6 +295,107 @@ package struct WebInspectorModelSchema<
             }
         )
     }
+
+    /// Creates a schema whose caller-confined owner also owns one typed
+    /// context-local projection resource. Effects stage resource work before
+    /// model/query publication; `finalizeOwnerState` publishes it only after
+    /// materialized models and fetched-results subscribers observe the same
+    /// transaction.
+    package init<
+        Record: WebInspectorModelRecord,
+        OwnerEffect: Sendable,
+        OwnerState: AnyObject
+    >(
+        snapshot:
+            @escaping @Sendable (
+                WebInspectorCanonicalModelSnapshot
+            ) -> WebInspectorModelSchemaSnapshot<Model, Record, OwnerEffect>,
+        delta:
+            @escaping @Sendable (
+                WebInspectorCanonicalModelTransaction,
+                WebInspectorModelSchemaRecordLookup<Model, Record>
+            ) -> WebInspectorModelSchemaDelta<Model, Record, OwnerEffect>,
+        makeModel:
+            @escaping @Sendable (
+                WebInspectorModelContext,
+                Model.ID,
+                Record
+            ) -> Model,
+        replaceModel:
+            @escaping @Sendable (
+                WebInspectorModelContext,
+                Model,
+                Record
+            ) -> Void,
+        applyPatch:
+            @escaping @Sendable (
+                WebInspectorModelContext,
+                Model,
+                Record.Patch
+            ) -> Void,
+        invalidateModel:
+            @escaping @Sendable (
+                WebInspectorModelContext,
+                Model
+            ) -> Void,
+        applyOwnerEffect:
+            @escaping @Sendable (
+                WebInspectorModelContext,
+                OwnerEffect,
+                borrowing WebInspectorModelSchemaOwnerModels<Model>
+            ) -> Void,
+        resetOwnerProjection:
+            @escaping @Sendable (
+                WebInspectorModelContext,
+                borrowing WebInspectorModelSchemaOwnerModels<Model>
+            ) -> Void,
+        makeOwnerState: @escaping @Sendable () -> OwnerState,
+        stageOwnerEffect:
+            @escaping @Sendable (OwnerState, OwnerEffect) -> Void,
+        prepareOwnerStateForReset:
+            @escaping @Sendable (OwnerState) -> Void,
+        finalizeOwnerState:
+            @escaping @Sendable (
+                WebInspectorModelContext,
+                OwnerState,
+                (Model.ID) -> Model?
+            ) -> Void,
+        closeOwnerState: @escaping @Sendable (OwnerState) -> Void
+    ) {
+        let identity = _WebInspectorModelSchemaDefinitionIdentity()
+        definition = _WebInspectorModelSchemaDefinition(
+            identity: identity,
+            modelTypeID: ObjectIdentifier(Model.self),
+            makeBoxes: {
+                let gate = WebInspectorModelRecordGate<Model, Record>()
+                let core = _WebInspectorAnyModelSchemaCoreBox(
+                    schemaIdentity: identity,
+                    gate: gate,
+                    snapshot: snapshot,
+                    delta: delta
+                )
+                let owner = _WebInspectorAnyModelSchemaOwnerBox(
+                    schemaIdentity: identity,
+                    gate: gate,
+                    makeModel: makeModel,
+                    replaceModel: replaceModel,
+                    applyPatch: applyPatch,
+                    invalidateModel: invalidateModel,
+                    applyOwnerEffect: applyOwnerEffect,
+                    resetOwnerProjection: resetOwnerProjection,
+                    ownerState: makeOwnerState(),
+                    stageOwnerEffect: stageOwnerEffect,
+                    prepareOwnerStateForReset: prepareOwnerStateForReset,
+                    finalizeOwnerState: finalizeOwnerState,
+                    closeOwnerState: closeOwnerState
+                )
+                return _WebInspectorModelSchemaBoxPair(
+                    core: core,
+                    owner: owner
+                )
+            }
+        )
+    }
 }
 
 /// One type-erased persistent-model schema registration.
@@ -922,9 +1023,9 @@ package final class WebInspectorModelSchemaTransactionCommit: Sendable {
         self.transactions = transactions
     }
 
-    /// Installs all RecordGates, then applies every owner-projection effect, every
-    /// materialized-model mutation, and finally the staged query publication in
-    /// one synchronous caller-owner turn.
+    /// Installs all RecordGates, stages owner-projection effects, applies every
+    /// materialized-model mutation, publishes staged queries, and only then
+    /// finalizes context-local projection publication in one owner turn.
     @discardableResult
     package func publish(
         on registry: WebInspectorModelSchemaOwnerRegistry,
@@ -932,13 +1033,18 @@ package final class WebInspectorModelSchemaTransactionCommit: Sendable {
     ) -> Bool {
         registry.requireContextIdentity(contextIdentity)
         registry.requireOwnerIdentity(owner)
-        let didPublish = combined.publish { mutations, controllerMutations in
+        let didPublish = combined.publish(
+            applyingOwnerMutations: { mutations, controllerMutations in
             registry.apply(effects: effects, owner: owner)
             registry.apply(mutations: mutations, owner: owner)
             owner.applyFetchedResultsControllerOwnerMutations(
                 controllerMutations
             )
+            },
+            finalizingOwnerTransaction: {
+                registry.finalizeOwnerProjections(owner: owner)
         }
+        )
         if didPublish {
             finishTransactionIfNeeded(.published)
         }
@@ -1012,6 +1118,7 @@ package final class WebInspectorModelSchemaClose: Sendable {
         }
         registry.apply(effects: effects, owner: owner)
         registry.apply(mutations: mutations, owner: owner)
+        registry.closeOwnerProjections()
     }
 }
 
@@ -1192,6 +1299,9 @@ private final class _WebInspectorAnyModelSchemaOwnerBox {
     private let modelBody: (Any, WebInspectorModelContext) -> AnyObject?
     private let applyEffectsBody: (WebInspectorModelSchemaOwnerEffectBatch, WebInspectorModelContext) -> Void
     private let applyMutationsBody: (WebInspectorModelRecordOwnerMutationBatch, WebInspectorModelContext) -> Void
+    private let ownerResourceBody: ((Any.Type) -> AnyObject?)?
+    private let finalizeOwnerProjectionBody: ((WebInspectorModelContext) -> Void)?
+    private let closeOwnerProjectionBody: (() -> Void)?
 
     init<
         Model: WebInspectorPersistentModel,
@@ -1287,6 +1397,142 @@ private final class _WebInspectorAnyModelSchemaOwnerBox {
                 box.apply(mutations, owner: owner)
             }
         }
+        ownerResourceBody = nil
+        finalizeOwnerProjectionBody = nil
+        closeOwnerProjectionBody = nil
+    }
+
+    init<
+        Model: WebInspectorPersistentModel,
+        Record: WebInspectorModelRecord,
+        OwnerEffect: Sendable,
+        OwnerState: AnyObject
+    >(
+        schemaIdentity: _WebInspectorModelSchemaDefinitionIdentity,
+        gate: WebInspectorModelRecordGate<Model, Record>,
+        makeModel:
+            @escaping @Sendable (
+                WebInspectorModelContext,
+                Model.ID,
+                Record
+            ) -> Model,
+        replaceModel:
+            @escaping @Sendable (
+                WebInspectorModelContext,
+                Model,
+                Record
+            ) -> Void,
+        applyPatch:
+            @escaping @Sendable (
+                WebInspectorModelContext,
+                Model,
+                Record.Patch
+            ) -> Void,
+        invalidateModel:
+            @escaping @Sendable (
+                WebInspectorModelContext,
+                Model
+            ) -> Void,
+        applyOwnerEffect:
+            @escaping @Sendable (
+                WebInspectorModelContext,
+                OwnerEffect,
+                borrowing WebInspectorModelSchemaOwnerModels<Model>
+            ) -> Void,
+        resetOwnerProjection:
+            @escaping @Sendable (
+                WebInspectorModelContext,
+                borrowing WebInspectorModelSchemaOwnerModels<Model>
+            ) -> Void,
+        ownerState: OwnerState,
+        stageOwnerEffect:
+            @escaping @Sendable (OwnerState, OwnerEffect) -> Void,
+        prepareOwnerStateForReset:
+            @escaping @Sendable (OwnerState) -> Void,
+        finalizeOwnerState:
+            @escaping @Sendable (
+                WebInspectorModelContext,
+                OwnerState,
+                (Model.ID) -> Model?
+            ) -> Void,
+        closeOwnerState: @escaping @Sendable (OwnerState) -> Void
+    ) {
+        let box = _WebInspectorTypedModelSchemaOwnerBox(
+            gate: gate,
+            makeModel: makeModel,
+            replaceModel: replaceModel,
+            applyPatch: applyPatch,
+            invalidateModel: invalidateModel,
+            applyOwnerEffect: applyOwnerEffect,
+            resetOwnerProjection: resetOwnerProjection
+        )
+        self.schemaIdentity = ObjectIdentifier(schemaIdentity)
+        modelTypeID = ObjectIdentifier(Model.self)
+        registeredModelBody = { rawID in
+            guard let id = rawID as? Model.ID else {
+                preconditionFailure(
+                    "A schema owner registry received the wrong persistent ID type."
+                )
+            }
+            return box.registeredModel(for: id)
+        }
+        modelBody = { rawID, owner in
+            guard let id = rawID as? Model.ID else {
+                preconditionFailure(
+                    "A schema owner registry received the wrong persistent ID type."
+                )
+            }
+            return box.model(for: id, owner: owner)
+        }
+        applyEffectsBody = { batch, owner in
+            precondition(
+                batch.schemaIdentity == ObjectIdentifier(schemaIdentity)
+                    && batch.modelTypeID == ObjectIdentifier(Model.self)
+                    && batch.effectTypeID == ObjectIdentifier(OwnerEffect.self),
+                "A schema owner-effect batch was opened with the wrong schema types."
+            )
+            guard
+                let operations = batch.payload
+                    as? [_WebInspectorModelSchemaEffectOperation<OwnerEffect>]
+            else {
+                preconditionFailure(
+                    "A schema owner-effect payload lost its concrete types."
+                )
+            }
+            for operation in operations {
+                switch operation {
+                case .resetOwnerProjection:
+                    prepareOwnerStateForReset(ownerState)
+                case let .apply(effect):
+                    stageOwnerEffect(ownerState, effect)
+                }
+            }
+            box.apply(operations, owner: owner)
+        }
+        applyMutationsBody = { batch, owner in
+            batch.consume(
+                as: Model.self,
+                recordType: Record.self
+            ) { mutations in
+                box.apply(mutations, owner: owner)
+            }
+        }
+        ownerResourceBody = { requestedType in
+            guard ObjectIdentifier(requestedType) == ObjectIdentifier(OwnerState.self) else {
+                return nil
+            }
+            return ownerState
+        }
+        finalizeOwnerProjectionBody = { owner in
+            finalizeOwnerState(
+                owner,
+                ownerState,
+                { id in box.registeredModel(for: id) }
+            )
+        }
+        closeOwnerProjectionBody = {
+            closeOwnerState(ownerState)
+        }
     }
 
     func registeredModel<Model: WebInspectorPersistentModel>(
@@ -1330,6 +1576,20 @@ private final class _WebInspectorAnyModelSchemaOwnerBox {
         owner: WebInspectorModelContext
     ) {
         applyMutationsBody(mutations, owner)
+    }
+
+    func ownerResource<Resource: AnyObject>(
+        _ resource: Resource.Type
+    ) -> Resource? {
+        ownerResourceBody?(resource) as? Resource
+    }
+
+    func finalizeOwnerProjection(owner: WebInspectorModelContext) {
+        finalizeOwnerProjectionBody?(owner)
+    }
+
+    func closeOwnerProjection() {
+        closeOwnerProjectionBody?()
     }
 }
 
@@ -1392,6 +1652,19 @@ package final class WebInspectorModelSchemaOwnerRegistry {
         return model
     }
 
+    package func ownerResource<
+        Model: WebInspectorPersistentModel,
+        Resource: AnyObject
+    >(
+        for model: Model.Type,
+        as resource: Resource.Type,
+        owner: WebInspectorModelContext
+    ) -> Resource? {
+        requireOwnerIdentity(owner)
+        return boxByModelTypeID[ObjectIdentifier(model)]?
+            .ownerResource(resource)
+    }
+
     fileprivate func requireContextIdentity(
         _ expected: _WebInspectorModelSchemaContextIdentity
     ) {
@@ -1442,6 +1715,20 @@ package final class WebInspectorModelSchemaOwnerRegistry {
                 "Schema model-mutation order or type did not match its owner registry."
             )
             box.apply(mutations: mutations, owner: owner)
+        }
+    }
+
+    fileprivate func finalizeOwnerProjections(
+        owner: WebInspectorModelContext
+    ) {
+        for box in boxes {
+            box.finalizeOwnerProjection(owner: owner)
+        }
+    }
+
+    fileprivate func closeOwnerProjections() {
+        for box in boxes {
+            box.closeOwnerProjection()
         }
     }
 }

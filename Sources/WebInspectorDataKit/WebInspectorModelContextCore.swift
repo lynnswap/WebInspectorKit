@@ -110,6 +110,20 @@ package final class WebInspectorModelContextQueryCommit: Sendable {
         applyingControllerOwnerMutations body:
             ([WebInspectorFetchedResultsControllerOwnerMutationBatch]) -> Void
     ) -> Bool {
+        publish(
+            applyingControllerOwnerMutations: body,
+            finalizingOwnerTransaction: {}
+        )
+    }
+
+    /// Publishes query state, then runs the schema owner's synchronous
+    /// finalization before this transaction leaves its owner turn.
+    @discardableResult
+    package func publish(
+        applyingControllerOwnerMutations body:
+            ([WebInspectorFetchedResultsControllerOwnerMutationBatch]) -> Void,
+        finalizingOwnerTransaction finalize: () -> Void
+    ) -> Bool {
         let action = state.withLock { state -> PublishAction in
             switch state {
             case let .pending(work, _, waiters):
@@ -135,6 +149,7 @@ package final class WebInspectorModelContextQueryCommit: Sendable {
             for publication in work.rawPublications {
                 publication.publish()
             }
+            finalize()
             finish(.published)
             return true
         case .lostToAbort:
