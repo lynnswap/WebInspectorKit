@@ -504,6 +504,89 @@ func activatedAdmissionCanBeResolvedBySourceBeforeClaimAcknowledgement() async t
 }
 
 @Test
+func admittedControllerCanAcknowledgeAfterTheNextAdmissionBegins() async throws {
+    let core = try await seededControllerCore()
+    let firstClaim = try await core.prepareControllerRegistration(
+        ControllerTestModel.self
+    )
+    let source = Task {
+        try await core.applyBatch(
+            WebInspectorFetchedResultsSourceBatch<ControllerTestModel>(
+                canonicalRevision: 1,
+                changes: [
+                    .insert(controllerRecord(id: 2, score: 2, group: "b", rank: 2))
+                ]
+            )
+        )
+    }
+    try await waitForControllerCondition {
+        await core.outstandingControllerAdmissionWaiterCountForTesting() == 1
+    }
+
+    #expect(firstClaim.admission.activate())
+    let sourceCommit = try await source.value
+    #expect(
+        sourceCommit.publish { batches in
+            for batch in batches {
+                batch.discard()
+            }
+        }
+    )
+    #expect(await core.hasOutstandingControllerAdmissionForTesting() == false)
+
+    let secondClaim = try await core.prepareControllerRegistration(
+        ControllerTestModel.self
+    )
+    try await firstClaim.activate()
+    #expect(await core.hasOutstandingControllerAdmissionForTesting())
+
+    await secondClaim.abandon()
+    #expect(await core.hasOutstandingControllerAdmissionForTesting() == false)
+    await core.close()
+}
+
+@Test
+func concurrentOwnerTurnWaitersSerializeAdmissionsAfterDelivery() async throws {
+    let core = try await seededControllerCore()
+    let rawRegistration = try await core.register(ControllerTestModel.self)
+    let sourceCommit = try await core.applyBatch(
+        WebInspectorFetchedResultsSourceBatch<ControllerTestModel>(
+            canonicalRevision: 1,
+            changes: [
+                .insert(controllerRecord(id: 2, score: 2, group: "b", rank: 2))
+            ]
+        )
+    )
+    let first = Task {
+        let claim = try await core.prepareControllerRegistration(
+            ControllerTestModel.self
+        )
+        let ownerID = claim.ownerID.rawValue
+        await claim.abandon()
+        return ownerID
+    }
+    let second = Task {
+        let claim = try await core.prepareControllerRegistration(
+            ControllerTestModel.self
+        )
+        let ownerID = claim.ownerID.rawValue
+        await claim.abandon()
+        return ownerID
+    }
+    for _ in 0..<100 {
+        await Task.yield()
+    }
+
+    #expect(sourceCommit.publish())
+    let ownerIDs = try await [first.value, second.value]
+    #expect(Set(ownerIDs) == [1, 2])
+    #expect(await core.hasOutstandingControllerAdmissionForTesting() == false)
+
+    await rawRegistration.close()
+    await core.close()
+}
+
+@Test
 func abandonedAdmissionCanBeResolvedBySourceBeforeClaimAcknowledgement() async throws {
     let core = try await seededControllerCore()
     let claim = try await core.prepareControllerRegistration(
