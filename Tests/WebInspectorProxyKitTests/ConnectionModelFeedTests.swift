@@ -453,6 +453,59 @@ func modelFeedElementPickerPublishesOnlyActivatedInspectAndClosesInWireOrder() a
 }
 
 @Test
+func modelFeedElementPickerCancellationAwaitsPhysicalModeRollback() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [.dom],
+        targetID: "page-main"
+    )
+
+    let acquireTask = Task {
+        try await feed.acquireElementPicker()
+    }
+    let enable = try await backend.waitForTargetMessage(
+        method: "Inspector.enable"
+    )
+    await modelFeedRespond(to: enable, core: core)
+    let initialized = try await backend.waitForTargetMessage(
+        method: "Inspector.initialized"
+    )
+    await modelFeedRespond(to: initialized, core: core)
+    let activate = try await backend.waitForTargetMessage(
+        method: "DOM.setInspectModeEnabled"
+    )
+
+    acquireTask.cancel()
+    let rollbackBaseline = await backend.sentTargetMessages().count
+    await modelFeedRespond(to: activate, core: core)
+
+    let deactivate = try await backend.waitForTargetMessage(
+        method: "DOM.setInspectModeEnabled",
+        after: rollbackBaseline
+    )
+    #expect(try modelFeedElementPickerEnabled(deactivate.message) == false)
+    await modelFeedRespond(to: deactivate, core: core)
+    let disable = try await backend.waitForTargetMessage(
+        method: "Inspector.disable",
+        after: rollbackBaseline
+    )
+    await modelFeedRespond(to: disable, core: core)
+
+    await #expect(throws: CancellationError.self) {
+        try await acquireTask.value
+    }
+    await core.close()
+}
+
+@Test
 func cssModelFeedUsesNormalizedDOMBootstrapAndOneSynchronization() async throws {
     let backend = FakeTransportBackend()
     let core = ConnectionCore(backend: backend, responseTimeout: nil)

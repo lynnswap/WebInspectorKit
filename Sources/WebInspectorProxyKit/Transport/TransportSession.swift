@@ -3330,10 +3330,19 @@ package actor ConnectionCore {
         elementPickerModes[key] = mode
         await reconcileElementPickerMode(for: key)
         do {
+            try Task.checkCancellation()
             try await completion.value()
         } catch {
-            await abandonElementPickerMode(owner, for: key)
-            throw error
+            let operationError = error
+            do {
+                try await releaseElementPickerMode(owner, for: key)
+            } catch {
+                throw WebInspectorScopeError(
+                    operationError: operationError,
+                    cleanupError: error
+                )
+            }
+            throw operationError
         }
     }
 
@@ -3367,22 +3376,6 @@ package actor ConnectionCore {
         removeEmptyElementPickerMode(for: key)
     }
 
-    private func abandonElementPickerMode(
-        _ owner: ConnectionCapabilityLeaseOwner,
-        for key: ConnectionCapabilityKey
-    ) async {
-        guard var mode = elementPickerModes[key] else {
-            return
-        }
-        mode.owners.remove(owner)
-        mode.activatedThrough[owner] = nil
-        mode.activationWaiters.removeValue(forKey: owner)
-        mode.releaseWaiters.removeValue(forKey: owner)
-        elementPickerModes[key] = mode
-        await reconcileElementPickerMode(for: key)
-        removeEmptyElementPickerMode(for: key)
-    }
-
     private func reconcileElementPickerMode(
         for key: ConnectionCapabilityKey
     ) async {
@@ -3400,19 +3393,15 @@ package actor ConnectionCore {
         case .inactive where !mode.owners.isEmpty:
             mode.physical = .enabling(generation)
             elementPickerModes[key] = mode
-            let result: Result<ProtocolCommand.Result, any Swift.Error>
-            do {
-                result = .success(
-                    try await sendElementPickerModeCommand(
-                        enabled: true,
-                        key: key,
-                        generation: generation
-                    )
+            let operation = Task { [self] in
+                try await sendElementPickerModeCommand(
+                    enabled: true,
+                    key: key,
+                    generation: generation
                 )
-            } catch {
-                result = .failure(
-                    Self.mapElementPickerModeError(error, enabled: true)
-                )
+            }
+            let result = await operation.result.mapError {
+                Self.mapElementPickerModeError($0, enabled: true)
             }
             await completeElementPickerModeTransition(
                 enabled: true,
@@ -3424,19 +3413,15 @@ package actor ConnectionCore {
         case .enabled where mode.owners.isEmpty:
             mode.physical = .disabling(generation)
             elementPickerModes[key] = mode
-            let result: Result<ProtocolCommand.Result, any Swift.Error>
-            do {
-                result = .success(
-                    try await sendElementPickerModeCommand(
-                        enabled: false,
-                        key: key,
-                        generation: generation
-                    )
+            let operation = Task { [self] in
+                try await sendElementPickerModeCommand(
+                    enabled: false,
+                    key: key,
+                    generation: generation
                 )
-            } catch {
-                result = .failure(
-                    Self.mapElementPickerModeError(error, enabled: false)
-                )
+            }
+            let result = await operation.result.mapError {
+                Self.mapElementPickerModeError($0, enabled: false)
             }
             await completeElementPickerModeTransition(
                 enabled: false,
