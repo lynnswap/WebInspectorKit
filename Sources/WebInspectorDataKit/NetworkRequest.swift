@@ -890,6 +890,28 @@ public final class NetworkBody {
         )
     }
 
+    func synchronizeRequest(_ request: Network.Request) {
+        precondition(role == .request, "Only a request body can synchronize request payload state.")
+        guard let postData = request.postData else {
+            preconditionFailure("A request body cannot synchronize a request without post data.")
+        }
+        let hints = Self.bodyHints(
+            mimeType: nil,
+            headers: request.headers,
+            url: request.url,
+            role: .request
+        )
+        withTextRepresentationInvalidationBatch {
+            kind = hints.kind
+            full = postData
+            size = postData.utf8.count
+            isBase64Encoded = false
+            isTruncated = false
+            sourceSyntaxKind = hints.syntaxKind
+        }
+        phase = .loaded
+    }
+
     static func bodyHints(
         mimeType: String?,
         headers: [String: String],
@@ -1470,7 +1492,7 @@ public final class NetworkRequest: WebInspectorPersistentModel {
             if let headers = response.requestHeaders {
                 requestHeaders = headers
                 currentRequest = currentRequest.replacingHeaders(headers)
-                requestBody = NetworkBody.makeRequestBody(for: currentRequest)
+                synchronizeRequestBody(for: currentRequest)
             }
             self.responseReceivedTimestamp = responseReceivedTimestamp
             let webSocket = ensureWebSocketState()
@@ -1528,10 +1550,22 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         applyCanonicalTransfer(hop.transfer)
         finishedOrFailedTimestamp = hop.terminalTimestamp
         metrics = hop.metrics?.proxyValue
-        requestBody = NetworkBody.makeRequestBody(for: request)
+        synchronizeRequestBody(for: request)
         wasServedFromMemoryCache = hop.servedFromMemoryCache
         if resourceType != .webSocket {
             webSocket = nil
+        }
+    }
+
+    private func synchronizeRequestBody(for request: Network.Request) {
+        guard request.postData != nil else {
+            requestBody = nil
+            return
+        }
+        if let requestBody {
+            requestBody.synchronizeRequest(request)
+        } else {
+            requestBody = NetworkBody.makeRequestBody(for: request)
         }
     }
 

@@ -89,6 +89,7 @@ public final class WebInspectorDataKitTestRuntime {
         public let url: String
         public let method: String
         public let requestHeaders: [String: String]
+        public let responseRequestHeaders: [String: String]?
         public let postData: String?
         public let status: Int
         public let statusText: String?
@@ -104,6 +105,7 @@ public final class WebInspectorDataKitTestRuntime {
             url: String,
             method: String = "GET",
             requestHeaders: [String: String] = [:],
+            responseRequestHeaders: [String: String]? = nil,
             postData: String? = nil,
             status: Int = 200,
             statusText: String? = nil,
@@ -118,6 +120,7 @@ public final class WebInspectorDataKitTestRuntime {
             self.url = url
             self.method = method
             self.requestHeaders = requestHeaders
+            self.responseRequestHeaders = responseRequestHeaders
             self.postData = postData
             self.status = status
             self.statusText = statusText
@@ -290,6 +293,36 @@ public final class WebInspectorDataKitTestRuntime {
             throw RuntimeError.closed
         }
         try await driver.emitNetworkRequest(request)
+    }
+
+    /// Emits only `Network.requestWillBeSent` for a staged request lifecycle.
+    public nonisolated(nonsending) func emitNetworkRequestWillBeSent(
+        _ request: NetworkRequest
+    ) async throws {
+        guard !isClosed else {
+            throw RuntimeError.closed
+        }
+        try await driver.emitNetworkRequestWillBeSent(request)
+    }
+
+    /// Emits only `Network.responseReceived` for a staged request lifecycle.
+    public nonisolated(nonsending) func emitNetworkResponseReceived(
+        _ request: NetworkRequest
+    ) async throws {
+        guard !isClosed else {
+            throw RuntimeError.closed
+        }
+        try await driver.emitNetworkResponseReceived(request)
+    }
+
+    /// Emits only `Network.loadingFinished` for a staged request lifecycle.
+    public nonisolated(nonsending) func emitNetworkLoadingFinished(
+        _ request: NetworkRequest
+    ) async throws {
+        guard !isClosed else {
+            throw RuntimeError.closed
+        }
+        try await driver.emitNetworkLoadingFinished(request)
     }
 
     /// Commits a provisional page target and waits for the replacement model.
@@ -507,10 +540,47 @@ private actor ScenarioDriver {
         _ request: WebInspectorDataKitTestRuntime.NetworkRequest
     ) async throws {
         responseBodies[request.id] = request.body
-        try await emitNetworkRequest(
+        try await emitNetworkRequestWillBeSent(
             request,
             targetID: currentTargetID,
             frameID: document.frameID
+        )
+        try await emitNetworkResponseReceived(
+            request,
+            targetID: currentTargetID
+        )
+        try await emitNetworkLoadingFinished(
+            request,
+            targetID: currentTargetID
+        )
+    }
+
+    func emitNetworkRequestWillBeSent(
+        _ request: WebInspectorDataKitTestRuntime.NetworkRequest
+    ) async throws {
+        responseBodies[request.id] = request.body
+        try await emitNetworkRequestWillBeSent(
+            request,
+            targetID: currentTargetID,
+            frameID: document.frameID
+        )
+    }
+
+    func emitNetworkResponseReceived(
+        _ request: WebInspectorDataKitTestRuntime.NetworkRequest
+    ) async throws {
+        try await emitNetworkResponseReceived(
+            request,
+            targetID: currentTargetID
+        )
+    }
+
+    func emitNetworkLoadingFinished(
+        _ request: WebInspectorDataKitTestRuntime.NetworkRequest
+    ) async throws {
+        try await emitNetworkLoadingFinished(
+            request,
+            targetID: currentTargetID
         )
     }
 
@@ -630,6 +700,20 @@ private actor ScenarioDriver {
         targetID: String,
         frameID: String
     ) async throws {
+        try await emitNetworkRequestWillBeSent(
+            request,
+            targetID: targetID,
+            frameID: frameID
+        )
+        try await emitNetworkResponseReceived(request, targetID: targetID)
+        try await emitNetworkLoadingFinished(request, targetID: targetID)
+    }
+
+    private func emitNetworkRequestWillBeSent(
+        _ request: WebInspectorDataKitTestRuntime.NetworkRequest,
+        targetID: String,
+        frameID: String
+    ) async throws {
         try await peer.emitTargetEvent(
             targetID: targetID,
             method: "Network.requestWillBeSent",
@@ -653,6 +737,12 @@ private actor ScenarioDriver {
                 )
             )
         )
+    }
+
+    private func emitNetworkResponseReceived(
+        _ request: WebInspectorDataKitTestRuntime.NetworkRequest,
+        targetID: String
+    ) async throws {
         try await peer.emitTargetEvent(
             targetID: targetID,
             method: "Network.responseReceived",
@@ -664,13 +754,20 @@ private actor ScenarioDriver {
                         status: request.status,
                         statusText: request.statusText,
                         mimeType: request.mimeType,
-                        headers: request.responseHeaders
+                        headers: request.responseHeaders,
+                        requestHeaders: request.responseRequestHeaders
                     ),
                     timestamp: 2,
                     type: request.resourceType.rawValue
                 )
             )
         )
+    }
+
+    private func emitNetworkLoadingFinished(
+        _ request: WebInspectorDataKitTestRuntime.NetworkRequest,
+        targetID: String
+    ) async throws {
         try await peer.emitTargetEvent(
             targetID: targetID,
             method: "Network.loadingFinished",
@@ -767,6 +864,7 @@ private struct ResponseReceivedParameters: Encodable {
         let statusText: String?
         let mimeType: String
         let headers: [String: String]
+        let requestHeaders: [String: String]?
     }
 
     let requestId: String

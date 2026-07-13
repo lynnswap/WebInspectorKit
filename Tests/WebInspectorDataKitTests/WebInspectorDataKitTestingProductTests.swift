@@ -165,6 +165,54 @@ func dataKitTestingVendsContextLocalIdentityFromOneContainer() async throws {
 
 @MainActor
 @Test
+func dataKitTestingPreservesRequestBodyIdentityAcrossResponseHeaderEnrichment()
+    async throws
+{
+    let runtime = try await WebInspectorDataKitTestRuntime.start(
+        scenario: .init(
+            configuration: .init(domains: [.network])
+        ),
+        isolation: MainActor.shared
+    )
+    let results = try await WebInspectorFetchedResultsController<
+        NetworkRequest,
+        Never
+    >(modelContext: runtime.model)
+    var updates = results.updates().makeAsyncIterator()
+    _ = try #require(try await updates.next())
+    let request = WebInspectorDataKitTestRuntime.NetworkRequest(
+        id: "staged-request",
+        url: "https://example.test/form",
+        method: "POST",
+        responseRequestHeaders: [
+            "content-type": "application/x-www-form-urlencoded"
+        ],
+        postData: "name=Jane+Doe"
+    )
+
+    try await runtime.emitNetworkRequestWillBeSent(request)
+    _ = try #require(try await updates.next())
+    let requestID = try #require(results.snapshot.itemIDs.first)
+    let model = try #require(runtime.model.model(for: requestID))
+    let body = try #require(model.requestBody)
+    #expect(body.kind == .text)
+
+    try await runtime.emitNetworkResponseReceived(request)
+    _ = try #require(try await updates.next())
+
+    #expect(model.requestBody === body)
+    #expect(body.kind == .form)
+    #expect(body.text == "name=Jane+Doe")
+    #expect(model.requestHeaders["content-type"] == "application/x-www-form-urlencoded")
+
+    try await runtime.emitNetworkLoadingFinished(request)
+    _ = try #require(try await updates.next())
+    await results.close()
+    await runtime.close()
+}
+
+@MainActor
+@Test
 func dataKitTestingWaitsForAnEmptyNetworkReplacementRevision() async throws {
     let runtime = try await WebInspectorDataKitTestRuntime.start(
         scenario: .init(
