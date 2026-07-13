@@ -533,6 +533,69 @@ package final class WebInspectorFetchedResultsControllerOwnerRegistry {
 )
 extension WebInspectorFetchedResultsControllerOwnerRegistry: Sendable {}
 
+/// Owns asynchronous Core teardown started by caller-confined controller
+/// destruction.
+///
+/// Controller `deinit` cannot suspend. The context therefore retains each
+/// query-close task until it completes and awaits the same task set before
+/// closing its query Core.
+package final class WebInspectorFetchedResultsControllerRetirementOwner: Sendable {
+    private enum Lifecycle: Sendable {
+        case open
+        case closed
+    }
+
+    private struct State: Sendable {
+        var lifecycle = Lifecycle.open
+        var nextID: UInt64 = 0
+        var tasks: [UInt64: Task<Void, Never>] = [:]
+    }
+
+    private let state = Mutex(State())
+
+    @discardableResult
+    package func submit(
+        _ operation: @escaping @Sendable () async -> Void
+    ) -> Bool {
+        state.withLock { state in
+            guard state.lifecycle == .open else {
+                return false
+            }
+            let id = state.nextID
+            state.nextID &+= 1
+            let task = Task { [self] in
+                await operation()
+                finish(id)
+            }
+            state.tasks[id] = task
+            return true
+        }
+    }
+
+    package func waitForCurrentTasks() async {
+        let tasks = state.withLock { Array($0.tasks.values) }
+        for task in tasks {
+            await task.value
+        }
+    }
+
+    package func close() async {
+        let tasks = state.withLock { state -> [Task<Void, Never>] in
+            state.lifecycle = .closed
+            return Array(state.tasks.values)
+        }
+        for task in tasks {
+            await task.value
+        }
+    }
+
+    private func finish(_ id: UInt64) {
+        _ = state.withLock { state in
+            state.tasks.removeValue(forKey: id)
+        }
+    }
+}
+
 /// An actor-confined observable owner for one persistent-model query.
 @Observable
 public final class WebInspectorFetchedResultsController<
@@ -693,6 +756,7 @@ public final class WebInspectorFetchedResultsController<
                 }
                 modelContext.removeFetchedResultsController(ownerID)
             }
+            closeState = .closed
             throw error
         }
     }
@@ -813,6 +877,16 @@ public final class WebInspectorFetchedResultsController<
     deinit {
         lease.cancel()
         publication.finish()
+        guard case .open = closeState else {
+            return
+        }
+        modelContext.preconditionOwnerIsolation()
+        modelContext.markFetchedResultsControllerClosing(ownerID)
+        modelContext.removeFetchedResultsController(ownerID)
+        modelContext.scheduleFetchedResultsControllerQueryRetirement(
+            token,
+            publication: publication
+        )
     }
 }
 

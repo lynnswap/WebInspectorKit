@@ -317,7 +317,7 @@ struct NetworkPanelModelTests {
 
     @MainActor
     @Test
-    func deinitBackstopClosesBothFetchedResultsRegistryEntries() async throws {
+    func deinitBackstopSynchronouslyRemovesBothFetchedResultsOwnerEntries() async throws {
         let fixture = try await CanonicalNetworkPanelFixture()
         var model: NetworkPanelModel? = try await NetworkPanelModel.make(
             context: fixture.context
@@ -325,12 +325,6 @@ struct NetworkPanelModelTests {
         #expect(fixture.context.fetchedResultsControllerOwnerCountForTesting == 2)
 
         model = nil
-        for _ in 0..<1_000 {
-            if fixture.context.fetchedResultsControllerOwnerCountForTesting == 0 {
-                break
-            }
-            await Task.yield()
-        }
 
         #expect(model == nil)
         #expect(fixture.context.fetchedResultsControllerOwnerCountForTesting == 0)

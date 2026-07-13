@@ -275,12 +275,6 @@ package final class NetworkPanelModel {
             task?.cancel()
         }
         lifecycle = .retired
-        let entries = entries
-        let allEntries = allEntries
-        Task { @MainActor in
-            await entries.close()
-            await allEntries.close()
-        }
     }
 
     /// Waits until the latest scheduled query replacement reaches a terminal state.

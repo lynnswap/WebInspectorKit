@@ -610,6 +610,8 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         WebInspectorModelSchemaOwnerRegistry
     @ObservationIgnored private let fetchedResultsControllerRegistry:
         WebInspectorFetchedResultsControllerOwnerRegistry
+    @ObservationIgnored private let fetchedResultsControllerRetirementOwner:
+        WebInspectorFetchedResultsControllerRetirementOwner
     @ObservationIgnored private var persistentModelProjectionIsClosed: Bool
 
     public convenience init(configuration: Configuration = .init()) {
@@ -664,6 +666,8 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
             WebInspectorFetchedResultsControllerOwnerRegistry(
                 contextIdentity: fetchedResultsQueryCore.identity
             )
+        fetchedResultsControllerRetirementOwner =
+            WebInspectorFetchedResultsControllerRetirementOwner()
         persistentModelProjectionIsClosed = false
         configuredDomains = configuration.domains
         cssInspectorBaselineStore = CSSInspectorBaselineStore()
@@ -855,12 +859,42 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         fetchedResultsControllerRegistry.remove(ownerID)
     }
 
+    package func scheduleFetchedResultsControllerQueryRetirement<
+        Model: WebInspectorPersistentModel,
+        SectionName: Hashable & Sendable
+    >(
+        _ token: WebInspectorFetchedResultsQueryRegistrationToken<
+            Model,
+            SectionName
+        >,
+        publication: WebInspectorFetchedResultsQueryRegistration<
+            Model,
+            SectionName
+        >.Publication
+    ) {
+        preconditionOwnerIsolation()
+        let contextCore = fetchedResultsQueryCore
+        fetchedResultsControllerRetirementOwner.submit {
+            await contextCore.closeQuery(
+                token,
+                publication: publication
+            )
+        }
+    }
+
+    package nonisolated(nonsending)
+    func waitForFetchedResultsControllerRetirementsForTesting() async {
+        preconditionOwnerIsolation()
+        await fetchedResultsControllerRetirementOwner.waitForCurrentTasks()
+    }
+
     private nonisolated(nonsending) func closePersistentModelProjection() async {
         guard persistentModelProjectionIsClosed == false else {
             return
         }
         persistentModelProjectionIsClosed = true
         fetchedResultsControllerRegistry.closeAll()
+        await fetchedResultsControllerRetirementOwner.close()
         await fetchedResultsQueryCore.close()
         modelSchemaContextCore.close().apply(
             on: modelSchemaOwnerRegistry,
@@ -968,6 +1002,7 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
             startGate: startGate,
             readiness: readiness,
             contextCore: context.fetchedResultsQueryCore,
+            retirementOwner: context.fetchedResultsControllerRetirementOwner,
             schemaCore: context.modelSchemaContextCore,
             bridge: context.deliveryBridge
         )
@@ -1497,6 +1532,7 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         startGate: ReplyPromise<Bool>,
         readiness: ReplyPromise<Void>,
         contextCore: WebInspectorModelContextCore,
+        retirementOwner: WebInspectorFetchedResultsControllerRetirementOwner,
         schemaCore: WebInspectorModelSchemaContextCore,
         bridge: WebInspectorModelDeliveryBridge
     ) -> Task<Void, Never> {
@@ -1508,6 +1544,7 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
                 startGate: startGate,
                 readiness: readiness,
                 contextCore: contextCore,
+                retirementOwner: retirementOwner,
                 schemaCore: schemaCore,
                 bridge: bridge
             )
@@ -1521,11 +1558,13 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         startGate: ReplyPromise<Bool>,
         readiness: ReplyPromise<Void>,
         contextCore: WebInspectorModelContextCore,
+        retirementOwner: WebInspectorFetchedResultsControllerRetirementOwner,
         schemaCore: WebInspectorModelSchemaContextCore,
         bridge: WebInspectorModelDeliveryBridge
     ) async {
         guard (try? await startGate.valueIgnoringCancellation()) == true else {
             await beginClosingContainerProjection(bridge: bridge)
+            await retirementOwner.close()
             await contextCore.close()
             let schemaClose = schemaCore.close()
             await finishClosingContainerProjection(
@@ -1628,6 +1667,7 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         }
 
         await beginClosingContainerProjection(bridge: bridge)
+        await retirementOwner.close()
         await contextCore.close()
         let schemaClose = schemaCore.close()
         await finishClosingContainerProjection(

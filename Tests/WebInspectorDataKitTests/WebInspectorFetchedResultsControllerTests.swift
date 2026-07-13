@@ -242,6 +242,61 @@ func unsupportedControllerModelFailsBeforeInstallingAQuery() async throws {
 
 @MainActor
 @Test
+func deinitializedControllerSynchronouslyRemovesOwnerRoutingAndRetiresItsQuery() async throws {
+    let context = ControllerTestContext.make()
+    try await applyControllerSource(
+        .reset([
+            controllerRecord(id: 1, score: 1, group: "a", rank: 1)
+        ]),
+        at: 0,
+        to: context
+    )
+    weak var releasedController: WebInspectorFetchedResultsController<
+        ControllerTestModel,
+        Never
+    >?
+
+    do {
+        let controller = try await WebInspectorFetchedResultsController<
+            ControllerTestModel,
+            Never
+        >(
+            modelContext: context,
+            isolation: MainActor.shared
+        )
+        releasedController = controller
+        #expect(context.fetchedResultsControllerOwnerCountForTesting == 1)
+        #expect(
+            await context.fetchedResultsQueryCore.registrationCountForTesting(
+                ControllerTestModel.self
+            ) == 1
+        )
+    }
+
+    #expect(releasedController == nil)
+    #expect(context.fetchedResultsControllerOwnerCountForTesting == 0)
+    await context.waitForFetchedResultsControllerRetirementsForTesting()
+    #expect(
+        await context.fetchedResultsQueryCore.registrationCountForTesting(
+            ControllerTestModel.self
+        ) == 0
+    )
+
+    try await applyControllerSource(
+        .contentOnly(.init(1)),
+        at: 1,
+        to: context
+    )
+    #expect(
+        await context.fetchedResultsQueryCore.registrationCountForTesting(
+            ControllerTestModel.self
+        ) == 0
+    )
+    await context.close()
+}
+
+@MainActor
+@Test
 func controllerInitializationFailsCleanlyWhenContextClosesAfterClaimPreparation() async throws {
     let context = ControllerTestContext.make()
     try await applyControllerSource(
