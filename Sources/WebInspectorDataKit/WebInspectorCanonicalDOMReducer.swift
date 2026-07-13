@@ -43,7 +43,11 @@ package struct WebInspectorCanonicalDOMRecord: Equatable, Sendable {
     package var localName: String
     package var nodeValue: String
     package var nodeType: Int
+    /// The frame containing this node, as defined by the WebKit DOM protocol.
     package var frameID: FrameID?
+    /// The child frame owned by an iframe/frame element when WebKit included
+    /// its embedded content document in the same payload.
+    package var ownedFrameID: FrameID?
     package var documentURL: String?
     package var baseURL: String?
     package var attributes: [DOM.Attribute]
@@ -99,17 +103,7 @@ package struct WebInspectorCanonicalDOMRecord: Equatable, Sendable {
     }
 
     fileprivate var frameOwnerID: FrameID? {
-        guard let frameID else {
-            return nil
-        }
-        let normalizedLocalName = localName.lowercased()
-        let normalizedNodeName = nodeName.lowercased()
-        switch (normalizedLocalName, normalizedNodeName) {
-        case ("iframe", _), ("frame", _), (_, "iframe"), (_, "frame"):
-            return frameID
-        default:
-            return nil
-        }
+        ownedFrameID
     }
 }
 
@@ -1548,6 +1542,7 @@ private extension WebInspectorCanonicalDOMReducer {
             nodeValue: node.nodeValue,
             nodeType: node.nodeType,
             frameID: node.frameID,
+            ownedFrameID: Self.ownedFrameID(for: node),
             documentURL: node.documentURL,
             baseURL: node.baseURL,
             attributes: node.attributeList,
@@ -1593,6 +1588,17 @@ private extension WebInspectorCanonicalDOMReducer {
         }
         if let afterPseudoElement = node.afterPseudoElement {
             try build(afterPseudoElement, scope: scope, parent: id, into: &graph)
+        }
+    }
+
+    static func ownedFrameID(for node: DOM.Node) -> FrameID? {
+        let normalizedLocalName = node.localName.lowercased()
+        let normalizedNodeName = node.nodeName.lowercased()
+        switch (normalizedLocalName, normalizedNodeName) {
+        case ("iframe", _), ("frame", _), (_, "iframe"), (_, "frame"):
+            return node.contentDocument?.frameID
+        default:
+            return nil
         }
     }
 

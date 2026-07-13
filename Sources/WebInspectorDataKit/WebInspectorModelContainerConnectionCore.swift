@@ -714,6 +714,11 @@ private extension WebInspectorModelContainerCore {
                     operationError: error
                 )
             }
+            if attempt.control.invalidation == nil {
+                WebInspectorDataKitLog.error(
+                    "Model Container attachment failed generation=\(attempt.generation.rawValue): \(reportedError)"
+                )
+            }
             result = .failure(reportedError)
         }
 
@@ -729,6 +734,9 @@ private extension WebInspectorModelContainerCore {
             turn.finish()
             return
         }
+        WebInspectorDataKitLog.error(
+            "Model Container feed terminated resource=\(resourceID): \(failure)"
+        )
         if let generation = activeAttachment?.generation {
             retireSynchronizationGeneration(
                 generation,

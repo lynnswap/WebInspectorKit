@@ -864,6 +864,10 @@ func canonicalDOMPrimaryTreeLinksFrameSubtreeInEitherArrivalOrder() throws {
     )
     let pageRootID = canonicalDOMID("page-document", scope: pageDocumentScope)
     let ownerID = canonicalDOMID("iframe", scope: pageDocumentScope)
+    let embeddedDocumentID = canonicalDOMID(
+        "embedded-frame-document",
+        scope: pageDocumentScope
+    )
     let frameRootID = canonicalDOMID(
         "frame-document",
         scope: frameDocumentScope
@@ -878,7 +882,13 @@ func canonicalDOMPrimaryTreeLinksFrameSubtreeInEitherArrivalOrder() throws {
                 id: "iframe",
                 name: "IFRAME",
                 localName: "iframe",
-                frameID: frameID
+                frameID: FrameID("main-frame"),
+                contentDocument: canonicalDOMNode(
+                    id: "embedded-frame-document",
+                    type: 9,
+                    name: "#document",
+                    frameID: frameID
+                )
             )
         ]
     )
@@ -901,7 +911,7 @@ func canonicalDOMPrimaryTreeLinksFrameSubtreeInEitherArrivalOrder() throws {
     )
     #expect(
         Set(pageBootstrap.tree.upsertedRows.map(\.id))
-            == [pageRootID, ownerID]
+            == [pageRootID, ownerID, embeddedDocumentID]
     )
     #expect(
         pageBootstrap.tree.upsertedRows.first(where: { $0.id == ownerID })?
@@ -1006,8 +1016,7 @@ func canonicalDOMRejectsAmbiguousFrameOwnershipBeforeCommittingAnyNode() throws 
     let pageScope = canonicalDOMScope(targetID: "page")
     let fixture = canonicalDOMReducerFixture(scope: pageScope)
     var reducer = fixture.reducer
-    let before = reducer.snapshot()
-    let ambiguousPage = canonicalDOMNode(
+    let sharedContainingFramePage = canonicalDOMNode(
         id: "document",
         type: 9,
         name: "#document",
@@ -1023,6 +1032,42 @@ func canonicalDOMRejectsAmbiguousFrameOwnershipBeforeCommittingAnyNode() throws 
                 name: "IFRAME",
                 localName: "iframe",
                 frameID: frameID
+            ),
+        ]
+    )
+    _ = try reducer.bootstrap(scope: pageScope, root: sharedContainingFramePage)
+    #expect(reducer.snapshot().records.count == 3)
+
+    reducer = fixture.reducer
+    let before = reducer.snapshot()
+    let ambiguousPage = canonicalDOMNode(
+        id: "document",
+        type: 9,
+        name: "#document",
+        children: [
+            canonicalDOMNode(
+                id: "first-owner",
+                name: "IFRAME",
+                localName: "iframe",
+                frameID: FrameID("main-frame"),
+                contentDocument: canonicalDOMNode(
+                    id: "first-content-document",
+                    type: 9,
+                    name: "#document",
+                    frameID: frameID
+                )
+            ),
+            canonicalDOMNode(
+                id: "second-owner",
+                name: "IFRAME",
+                localName: "iframe",
+                frameID: FrameID("main-frame"),
+                contentDocument: canonicalDOMNode(
+                    id: "second-content-document",
+                    type: 9,
+                    name: "#document",
+                    frameID: frameID
+                )
             ),
         ]
     )

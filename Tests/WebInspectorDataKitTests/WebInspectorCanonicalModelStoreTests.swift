@@ -1121,7 +1121,11 @@ func canonicalModelStorePropagatesTargetLossAcrossEveryCanonicalDomain() throws 
         id: "frame-owner",
         name: "IFRAME",
         localName: "iframe",
-        frameID: "isolated-frame"
+        frameID: "main-frame",
+        contentDocument: canonicalModelDocument(
+            id: "embedded-frame-document",
+            frameID: "isolated-frame"
+        )
     )
     _ = try fixture.bootstrapDOM(
         root: canonicalModelDocument(
@@ -1316,12 +1320,15 @@ func canonicalModelStoreAcceptsOrdinaryAndNestedFrameLifecycleOnTheirDeliveryAge
         domains: [.dom, .runtime],
         targets: [page, frameAgent]
     )
-    let ordinaryDocument = canonicalModelDocument(id: "ordinary-document")
+    let ordinaryDocument = canonicalModelDocument(
+        id: "ordinary-document",
+        frameID: "ordinary-frame"
+    )
     let ordinaryOwner = canonicalModelDOMNode(
         id: "ordinary-owner",
         name: "IFRAME",
         localName: "iframe",
-        frameID: "ordinary-frame",
+        frameID: "main-frame",
         contentDocument: ordinaryDocument
     )
     _ = try fixture.bootstrapDOM(
@@ -1330,12 +1337,15 @@ func canonicalModelStoreAcceptsOrdinaryAndNestedFrameLifecycleOnTheirDeliveryAge
             children: [ordinaryOwner]
         )
     )
-    let nestedDocument = canonicalModelDocument(id: "nested-document")
+    let nestedDocument = canonicalModelDocument(
+        id: "nested-document",
+        frameID: "nested-ordinary-frame"
+    )
     let nestedOwner = canonicalModelDOMNode(
         id: "nested-owner",
         name: "IFRAME",
         localName: "iframe",
-        frameID: "nested-ordinary-frame",
+        frameID: "isolated-frame",
         contentDocument: nestedDocument
     )
     _ = try fixture.bootstrapDOM(
