@@ -13,6 +13,156 @@ import UIKit
 @testable import WebInspectorUINetwork
 @testable import WebInspectorUIBase
 
+@MainActor
+final class CanonicalNetworkPanelFixture {
+    let context: WebInspectorModelContext
+    private let container: WebInspectorModelContainer
+    private var store: CanonicalNetworkStore
+    private var revision: UInt64 = 0
+    private let scope: WebInspectorCanonicalNetworkEventScope
+
+    init() async throws {
+        let container = WebInspectorModelContainer(
+            configuration: .init(domains: [.network])
+        )
+        self.container = container
+        context = container.mainContext
+        var store = CanonicalNetworkStore(storeID: container.core.storeID)
+        let attachment = WebInspectorContainerAttachmentGeneration(
+            rawValue: 1
+        )
+        let generation = WebInspectorPage.Generation(rawValue: 1)
+        _ = try store.reset(
+            attachmentGeneration: attachment,
+            pageGeneration: generation
+        )
+        self.store = store
+        scope = WebInspectorCanonicalNetworkEventScope(
+            modelScope: ModelEventScope(
+                generation: generation,
+                target: ModelTarget(
+                    id: WebInspectorTarget.ID("page"),
+                    kind: .page,
+                    frameID: FrameID("main-frame"),
+                    parentFrameID: nil
+                ),
+                agentTarget: ModelTarget(
+                    id: WebInspectorTarget.ID("page"),
+                    kind: .page,
+                    frameID: FrameID("main-frame"),
+                    parentFrameID: nil
+                ),
+                navigationEpoch: ModelNavigationEpoch(rawValue: 1),
+                domBindingEpoch: ModelDOMBindingEpoch(rawValue: 1),
+                runtimeBindingEpoch: nil,
+                consoleBindingEpoch: nil
+            )
+        )
+        try await context.waitUntilReady()
+    }
+
+    func insert(
+        id rawID: String,
+        url: String,
+        method: String = "GET",
+        resourceType: Network.ResourceType = .fetch,
+        initiatorNodeID: String? = nil,
+        timestamp: Double
+    ) async throws -> NetworkRequest.ID {
+        try await apply(.requestWillBeSent(
+            id: Network.Request.ID(rawID),
+            request: Network.Request(
+                id: Network.Request.ID(rawID),
+                url: url,
+                method: method
+            ),
+            initiator: Network.Initiator(
+                kind: "other",
+                nodeID: initiatorNodeID.map(DOM.Node.ID.init)
+            ),
+            resourceType: resourceType,
+            redirectResponse: nil,
+            timestamp: timestamp
+        ))
+        guard let id = store.requests.first(where: {
+            $0.id.rawRequestID == Network.Request.ID(rawID)
+        })?.id else {
+            preconditionFailure(
+                "Canonical Network insertion lost its request."
+            )
+        }
+        return NetworkRequest.ID(canonical: id)
+    }
+
+    func receiveResponse(
+        id rawID: String,
+        status: Int = 200,
+        mimeType: String,
+        resourceType: Network.ResourceType,
+        timestamp: Double
+    ) async throws {
+        try await apply(.responseReceived(
+            id: Network.Request.ID(rawID),
+            response: Network.Response(
+                url: "https://example.test/\(rawID)",
+                status: status,
+                mimeType: mimeType
+            ),
+            resourceType: resourceType,
+            timestamp: timestamp
+        ))
+    }
+
+    func entryID(containing requestID: NetworkRequest.ID) -> NetworkEntry.ID {
+        guard let entry = store.entries.first(where: {
+            $0.requestIDs.contains(requestID.canonicalStorage)
+        })
+        else {
+            preconditionFailure(
+                "Canonical Network request lost its entry."
+            )
+        }
+        return NetworkEntry.ID(canonical: entry.id)
+    }
+
+    func clear() async throws {
+        try await apply(store.clear())
+    }
+
+    func apply(_ event: Network.Event) async throws {
+        guard let transaction = try store.reduce(event, scope: scope) else {
+            return
+        }
+        try await apply(transaction)
+    }
+
+    func request(rawID: Network.Request.ID) -> NetworkRequest? {
+        guard let record = store.requests.first(where: {
+            $0.id.rawRequestID == rawID
+        }) else {
+            return nil
+        }
+        return context.model(for: NetworkRequest.ID(canonical: record.id))
+    }
+
+    private func apply(
+        _ transaction: CanonicalNetworkTransaction
+    ) async throws {
+        precondition(revision < .max)
+        revision += 1
+        var canonical = WebInspectorCanonicalModelTransaction()
+        canonical.network = transaction
+        let transaction = context.modelSchemaContextCore.changes(
+            at: revision,
+            transaction: canonical
+        )
+        let commit = try await transaction.stage(
+            on: context.fetchedResultsQueryCore
+        )
+        precondition(context.publish(commit))
+    }
+}
+
 extension WebInspectorUIRenderingTests {
 @MainActor
 @Suite
