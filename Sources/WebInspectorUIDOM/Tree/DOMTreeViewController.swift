@@ -12,68 +12,101 @@ package final class DOMTreeViewController: UIViewController {
     }
 
     package init(context: WebInspectorModelContext) {
-        self.treeView = DOMTreeTextView(
-            context: context,
-            requestChildrenAction: { [weak context] nodeID in
-                guard let context else {
-                    return false
-                }
-                do {
-                    guard let node = try context.domNode(id: nodeID) else {
-                        return false
-                    }
-                    try await context.requestDOMChildren(of: node)
-                    return true
-                } catch {
-                    WebInspectorUIDOMLog.debug("DOM tree request children failed nodeID=\(String(describing: nodeID)): \(String(describing: error))")
-                    return false
-                }
-            },
-            highlightNodeAction: { [weak context] nodeID, _ in
-                guard let context else {
-                    return
-                }
-                guard let node = try context.domNode(id: nodeID) else {
-                    return
-                }
-                try await context.highlightDOMNode(node)
-            },
-            restoreHighlightAction: { [weak context] in
-                guard let context else {
-                    return
-                }
-                if let selectedNode = try context.selectedDOMNode {
-                    try await context.highlightDOMNode(selectedNode)
-                } else {
-                    try await context.hideDOMHighlight()
-                }
-            },
-            copyNodeTextAction: { [weak context] nodeID, kind in
-                guard let context else {
-                    return nil
-                }
-                do {
-                    guard let node = try context.domNode(id: nodeID) else {
-                        return nil
-                    }
-                    return try await context.copyText(kind, for: node)
-                } catch {
-                    WebInspectorUIDOMLog.debug("DOM tree copy text failed nodeID=\(String(describing: nodeID)): \(String(describing: error))")
-                    return nil
-                }
-            },
-            deleteNodesAction: { [weak context] nodeIDs, undoManager in
-                guard let context else {
-                    return false
-                }
-                return await Self.deleteNodeIDs(
-                    nodeIDs,
-                    context: context,
-                    undoManager: undoManager
-                )
-            }
-        )
+        treeView = Self.makeTreeView(context: context, model: nil)
         super.init(nibName: nil, bundle: nil)
+    }
+
+    package init(model: DOMPanelModel) {
+        treeView = Self.makeTreeView(context: model.context, model: model)
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    private static func makeTreeView(
+        context: WebInspectorModelContext,
+        model: DOMPanelModel?
+    ) -> DOMTreeTextView {
+        let requestChildren: DOMTreeTextView.RequestChildrenAction = { [weak context] nodeID in
+            guard let context else {
+                return false
+            }
+            do {
+                guard let node = try context.domNode(id: nodeID) else {
+                    return false
+                }
+                try await context.requestDOMChildren(of: node)
+                return true
+            } catch {
+                WebInspectorUIDOMLog.debug("DOM tree request children failed nodeID=\(String(describing: nodeID)): \(String(describing: error))")
+                return false
+            }
+        }
+        let highlightNode: DOMTreeTextView.HighlightNodeAction = { [weak context] nodeID, _ in
+            guard let context else {
+                return
+            }
+            guard let node = try context.domNode(id: nodeID) else {
+                return
+            }
+            try await context.highlightDOMNode(node)
+        }
+        let restoreHighlight: DOMTreeTextView.RestoreHighlightAction = { [weak context, weak model] in
+            guard let context else {
+                return
+            }
+            let selectedNode: DOMNode?
+            if let model {
+                selectedNode = model.selectedNode
+            } else {
+                selectedNode = try? context.selectedDOMNode
+            }
+            if let selectedNode {
+                try await context.highlightDOMNode(selectedNode)
+            } else {
+                try await context.hideDOMHighlight()
+            }
+        }
+        let copyNodeText: DOMTreeTextView.CopyNodeTextAction = { [weak context] nodeID, kind in
+            guard let context else {
+                return nil
+            }
+            do {
+                guard let node = try context.domNode(id: nodeID) else {
+                    return nil
+                }
+                return try await context.copyText(kind, for: node)
+            } catch {
+                WebInspectorUIDOMLog.debug("DOM tree copy text failed nodeID=\(String(describing: nodeID)): \(String(describing: error))")
+                return nil
+            }
+        }
+        let deleteNodes: DOMTreeTextView.DeleteNodesAction = { [weak context] nodeIDs, undoManager in
+            guard let context else {
+                return false
+            }
+            return await deleteNodeIDs(
+                nodeIDs,
+                context: context,
+                undoManager: undoManager
+            )
+        }
+        if let model {
+            return DOMTreeTextView(
+                model: model,
+                requestChildrenAction: requestChildren,
+                highlightNodeAction: highlightNode,
+                restoreHighlightAction: restoreHighlight,
+                copyNodeTextAction: copyNodeText,
+                deleteNodesAction: deleteNodes
+            )
+        }
+        return DOMTreeTextView(
+            context: context,
+            requestChildrenAction: requestChildren,
+            highlightNodeAction: highlightNode,
+            restoreHighlightAction: restoreHighlight,
+            copyNodeTextAction: copyNodeText,
+            deleteNodesAction: deleteNodes
+        )
     }
 
     @available(*, unavailable)

@@ -226,12 +226,15 @@ extension DOMTreeTextView {
 extension DOMTreeTextView {
     @MainActor
     final class RowRenderBuilder {
-        private let treeController: DOMTreeController
+        private let snapshotProvider: @MainActor () -> DOMTreeRenderSnapshot
         private let expansionState: DOMTreeTextView.ExpansionState
         private var markupCache: [DOMTreeTextView.MarkupCacheKey: DOMTreeTextView.CachedMarkup] = [:]
 
-        init(treeController: DOMTreeController, expansionState: DOMTreeTextView.ExpansionState) {
-            self.treeController = treeController
+        init(
+            snapshotProvider: @escaping @MainActor () -> DOMTreeRenderSnapshot,
+            expansionState: DOMTreeTextView.ExpansionState
+        ) {
+            self.snapshotProvider = snapshotProvider
             self.expansionState = expansionState
         }
 
@@ -249,7 +252,7 @@ extension DOMTreeTextView {
         ) -> DOMTreeTextView.RowRenderBuildRequest {
             let expansionSnapshot = expansionState.snapshot
             return DOMTreeTextView.RowRenderBuildRequest(
-                snapshot: treeController.snapshot,
+                snapshot: snapshotProvider(),
                 expansionState: expansionSnapshot,
                 previousRowCapacity: previousRowCapacity,
                 previousTextCapacity: previousTextCapacity,
@@ -310,7 +313,7 @@ extension DOMTreeTextView {
         let regularChildKnownCount: Int
         let isTemplateContent: Bool
 
-        init(node: DOMTreeSnapshot.Node, isTemplateContent: Bool) {
+        init(node: DOMTreeRenderSnapshot.Node, isTemplateContent: Bool) {
             id = node.id
             nodeType = node.kind
             nodeName = node.nodeName
@@ -343,14 +346,14 @@ extension DOMTreeTextView {
     }
 
     struct RowRenderBuildRequest: Sendable {
-        let snapshot: DOMTreeSnapshot
+        let snapshot: DOMTreeRenderSnapshot
         let expansionState: [DOMNode.ID: Bool]
         let previousRowCapacity: Int
         let previousTextCapacity: Int
         let markupCache: [DOMTreeTextView.MarkupCacheKey: DOMTreeTextView.CachedMarkup]
 
         init(
-            snapshot: DOMTreeSnapshot,
+            snapshot: DOMTreeRenderSnapshot,
             expansionState: [DOMNode.ID: Bool],
             previousRowCapacity: Int,
             previousTextCapacity: Int,

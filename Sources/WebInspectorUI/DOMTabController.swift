@@ -47,19 +47,40 @@ package struct DOMTabController: WebInspectorTab.BuiltInController {
         contentStore: PresentationContentStore,
         layout: WebInspectorTab.HostLayout
     ) -> UIViewController {
+        if case .customTab = displayItem {
+            return UIViewController()
+        }
+        return contentStore.domViewController(
+            context: session.model
+        ) { model in
+            makeReadyViewController(
+                for: displayItem,
+                model: model,
+                contentStore: contentStore,
+                layout: layout
+            )
+        }
+    }
+
+    private func makeReadyViewController(
+        for displayItem: WebInspectorTab.DisplayItem,
+        model: DOMPanelModel,
+        contentStore: PresentationContentStore,
+        layout: WebInspectorTab.HostLayout
+    ) -> UIViewController {
         switch (layout, displayItem) {
         case (.compact, .tab):
             DOMCompactNavigationController(
                 rootViewController: cachedTreeViewController(
-                    session: session,
+                    model: model,
                     contentStore: contentStore
                 ),
-                context: session.model
+                model: model
             )
         case (.compact, .domElement):
             DOMCompactNavigationController(
                 rootViewController: cachedElementViewController(
-                    session: session,
+                    model: model,
                     contentStore: contentStore
                 )
             )
@@ -69,38 +90,39 @@ package struct DOMTabController: WebInspectorTab.BuiltInController {
             RegularSplitRootViewController(
                 contentViewController: DOMSplitViewController(
                     treeViewController: cachedTreeViewController(
-                        session: session,
+                        model: model,
                         contentStore: contentStore
                     ),
                     elementViewController: cachedElementViewController(
-                        session: session,
+                        model: model,
                         contentStore: contentStore
                     ),
-                    context: session.model
+                    context: model.context,
+                    panelModel: model
                 )
             )
         }
     }
 
     private func cachedTreeViewController(
-        session: WebInspectorSession,
+        model: DOMPanelModel,
         contentStore: PresentationContentStore
     ) -> DOMTreeViewController {
         contentStore.viewController(
             for: contentKey(ContentID.tree)
         ) {
-            DOMTreeViewController(context: session.model)
+            DOMTreeViewController(model: model)
         }
     }
 
     private func cachedElementViewController(
-        session: WebInspectorSession,
+        model: DOMPanelModel,
         contentStore: PresentationContentStore
     ) -> DOMElementViewController {
         contentStore.viewController(
             for: contentKey(ContentID.element)
         ) {
-            DOMElementViewController(context: session.model)
+            DOMElementViewController(model: model)
         }
     }
 

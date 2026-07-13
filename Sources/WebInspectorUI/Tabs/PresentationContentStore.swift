@@ -2,6 +2,7 @@
 import Observation
 import UIKit
 import WebInspectorDataKit
+import WebInspectorUIDOM
 import WebInspectorUINetwork
 
 /// Owns view controllers and asynchronous resources whose lifetime is bounded
@@ -9,6 +10,13 @@ import WebInspectorUINetwork
 @MainActor
 @Observable
 package final class PresentationContentStore {
+    package enum DOMResourceStatus: Equatable, Sendable {
+        case idle
+        case loading
+        case ready
+        case failed(String)
+    }
+
     package enum NetworkResourceStatus: Equatable, Sendable {
         case idle
         case loading
@@ -26,6 +34,13 @@ package final class PresentationContentStore {
         case idle
         case loading(generation: UInt64)
         case ready(generation: UInt64, model: NetworkPanelModel)
+        case failed(generation: UInt64, message: String)
+    }
+
+    private enum DOMResourceState {
+        case idle
+        case loading(generation: UInt64)
+        case ready(generation: UInt64, model: DOMPanelModel)
         case failed(generation: UInt64, message: String)
     }
 
@@ -52,6 +67,14 @@ package final class PresentationContentStore {
         }
     }
 
+    private final class WeakDOMResourceViewController {
+        weak var value: DOMTabResourceViewController?
+
+        init(_ value: DOMTabResourceViewController) {
+            self.value = value
+        }
+    }
+
     private final class WeakCustomResourceViewController {
         weak var value: CustomTabResourceViewController?
 
@@ -64,8 +87,17 @@ package final class PresentationContentStore {
         _ context: WebInspectorModelContext
     ) async throws -> NetworkPanelModel
 
+    package typealias DOMPanelModelFactory = @MainActor (
+        _ context: WebInspectorModelContext
+    ) async throws -> DOMPanelModel
+
     @ObservationIgnored private let contentCache = WebInspectorTab.ContentCache()
+    @ObservationIgnored private let makeDOMPanelModel: DOMPanelModelFactory
     @ObservationIgnored private let makeNetworkPanelModel: NetworkPanelModelFactory
+    @ObservationIgnored private var domResourceTask: Task<Void, Never>?
+    @ObservationIgnored private var domRetirementTask: Task<Void, Never>?
+    @ObservationIgnored private var domResourceViewControllers: [WeakDOMResourceViewController] = []
+    @ObservationIgnored private var domContext: WebInspectorModelContext?
     @ObservationIgnored private var networkResourceTask: Task<Void, Never>?
     @ObservationIgnored private var networkRetirementTask: Task<Void, Never>?
     @ObservationIgnored private var networkResourceViewControllers: [WeakNetworkResourceViewController] = []
@@ -86,6 +118,10 @@ package final class PresentationContentStore {
         WebInspectorTab.ContentKey: UInt64
     ] = [:]
     private var networkResourceState: NetworkResourceState = .idle
+    private var domResourceState: DOMResourceState = .idle
+    package private(set) var domResourceGeneration: UInt64 = 0
+    package private(set) var domResourceRevision: UInt64 = 0
+    @ObservationIgnored private var domRetirementGeneration: UInt64 = 0
     package private(set) var networkResourceGeneration: UInt64 = 0
     package private(set) var networkResourceRevision: UInt64 = 0
     @ObservationIgnored private var networkRetirementGeneration: UInt64 = 0
@@ -93,19 +129,31 @@ package final class PresentationContentStore {
     package init(
         makeNetworkPanelModel: @escaping NetworkPanelModelFactory = { context in
             try await NetworkPanelModel.make(context: context)
+        },
+        makeDOMPanelModel: @escaping DOMPanelModelFactory = { context in
+            try await DOMPanelModel.make(context: context)
         }
     ) {
+        self.makeDOMPanelModel = makeDOMPanelModel
         self.makeNetworkPanelModel = makeNetworkPanelModel
     }
 
     isolated deinit {
+        domResourceTask?.cancel()
+        domRetirementTask?.cancel()
         networkResourceTask?.cancel()
         networkRetirementTask?.cancel()
         for task in customResourceTasks.values {
             task.cancel()
         }
+        if case let .ready(_, model) = domResourceState {
+            model.synchronouslyCancelForOwnerDeinit()
+        }
         if case let .ready(_, model) = networkResourceState {
             model.synchronouslyCancelForOwnerDeinit()
+        }
+        for resourceViewController in domResourceViewControllers {
+            resourceViewController.value?.synchronouslyResetForOwnerDeinit()
         }
         for resourceViewController in networkResourceViewControllers {
             resourceViewController.value?.synchronouslyResetForOwnerDeinit()
@@ -116,6 +164,19 @@ package final class PresentationContentStore {
             }
         }
         contentCache.removeAll()
+    }
+
+    package var domResourceStatus: DOMResourceStatus {
+        switch domResourceState {
+        case .idle:
+            .idle
+        case .loading:
+            .loading
+        case .ready:
+            .ready
+        case let .failed(_, message):
+            .failed(message)
+        }
     }
 
     package var networkResourceStatus: NetworkResourceStatus {
@@ -136,6 +197,36 @@ package final class PresentationContentStore {
         make: () -> Content
     ) -> Content {
         return contentCache.viewController(for: key, make: make)
+    }
+
+    package func domViewController(
+        context: WebInspectorModelContext,
+        makeReadyViewController: @escaping @MainActor (DOMPanelModel)
+            -> UIViewController
+    ) -> DOMTabResourceViewController {
+        if let domContext {
+            precondition(
+                domContext === context,
+                "One presentation content store cannot bind multiple DOM model contexts."
+            )
+        } else {
+            domContext = context
+        }
+        let viewController = DOMTabResourceViewController(
+            makeReadyViewController: makeReadyViewController
+        )
+        domResourceViewControllers.append(
+            WeakDOMResourceViewController(viewController)
+        )
+
+        switch domResourceState {
+        case .idle:
+            startDOMResource(context: context)
+        case .loading, .ready, .failed:
+            break
+        }
+        renderDOMResource(on: viewController)
+        return viewController
     }
 
     package func networkViewController(
@@ -195,6 +286,7 @@ package final class PresentationContentStore {
     }
     /// Retires every presentation resource and waits for asynchronous owners.
     package func clear() async {
+        beginDOMRetirement()
         beginNetworkRetirement()
         let customTasks = Array(customResourceTasks.values)
         for task in customTasks {
@@ -211,12 +303,20 @@ package final class PresentationContentStore {
         customResourceGenerations.removeAll(keepingCapacity: false)
         customResourceRevisions.removeAll(keepingCapacity: false)
         contentCache.removeAll()
+        domResourceViewControllers.removeAll()
+        domContext = nil
         networkResourceViewControllers.removeAll()
         networkContext = nil
+        let capturedDOMRetirementGeneration = domRetirementGeneration
+        let capturedDOMRetirementTask = domRetirementTask
         let retirementGeneration = networkRetirementGeneration
         let retirementTask = networkRetirementTask
         for task in customTasks {
             await task.value
+        }
+        await capturedDOMRetirementTask?.value
+        if domRetirementGeneration == capturedDOMRetirementGeneration {
+            self.domRetirementTask = nil
         }
         await retirementTask?.value
         if networkRetirementGeneration == retirementGeneration {
@@ -352,6 +452,160 @@ package final class PresentationContentStore {
             "Custom tab resource revision overflowed."
         )
         customResourceRevisions[key] = revision + 1
+    }
+
+    private func startDOMResource(
+        context: WebInspectorModelContext
+    ) {
+        guard case .idle = domResourceState else {
+            return
+        }
+
+        let generation = advanceDOMResourceGeneration()
+        domResourceState = .loading(generation: generation)
+        advanceDOMResourceRevision()
+        renderDOMResource()
+
+        let retirementTask = domRetirementTask
+        let makeDOMPanelModel = makeDOMPanelModel
+        domResourceTask = Task { @MainActor [weak self] in
+            await retirementTask?.value
+            guard self?.isCurrentDOMResource(generation: generation) == true
+            else {
+                return
+            }
+            self?.domRetirementTask = nil
+
+            do {
+                let model = try await makeDOMPanelModel(context)
+                guard let self,
+                    isCurrentDOMResource(generation: generation)
+                else {
+                    await model.retire()
+                    return
+                }
+                domResourceTask = nil
+                domResourceState = .ready(
+                    generation: generation,
+                    model: model
+                )
+                advanceDOMResourceRevision()
+                renderDOMResource()
+            } catch {
+                guard let self,
+                    isCurrentDOMResource(generation: generation)
+                else {
+                    return
+                }
+                domResourceTask = nil
+                domResourceState = .failed(
+                    generation: generation,
+                    message: error.localizedDescription
+                )
+                advanceDOMResourceRevision()
+                renderDOMResource()
+            }
+        }
+    }
+
+    private func beginDOMRetirement() {
+        let loadTask = domResourceTask
+        domResourceTask = nil
+        loadTask?.cancel()
+        let readyModel: DOMPanelModel?
+        if case let .ready(_, model) = domResourceState {
+            readyModel = model
+        } else {
+            readyModel = nil
+        }
+        let previousRetirementTask = domRetirementTask
+
+        _ = advanceDOMResourceGeneration()
+        domResourceState = .idle
+        advanceDOMResourceRevision()
+        renderDOMResource()
+
+        guard loadTask != nil || readyModel != nil
+                || previousRetirementTask != nil
+        else {
+            domRetirementTask = nil
+            return
+        }
+        precondition(
+            domRetirementGeneration < UInt64.max,
+            "DOM resource retirement generation overflowed."
+        )
+        domRetirementGeneration += 1
+        let retirementGeneration = domRetirementGeneration
+        domRetirementTask = Task { @MainActor [weak self] in
+            await previousRetirementTask?.value
+            await loadTask?.value
+            await readyModel?.retire()
+            guard let self,
+                domRetirementGeneration == retirementGeneration
+            else {
+                return
+            }
+            domRetirementTask = nil
+        }
+    }
+
+    private func isCurrentDOMResource(
+        generation: UInt64
+    ) -> Bool {
+        guard domResourceGeneration == generation else {
+            return false
+        }
+        switch domResourceState {
+        case let .loading(resourceGeneration):
+            return resourceGeneration == generation
+        case .idle, .ready, .failed:
+            return false
+        }
+    }
+
+    @discardableResult
+    private func advanceDOMResourceGeneration() -> UInt64 {
+        precondition(
+            domResourceGeneration < UInt64.max,
+            "DOM resource generation overflowed."
+        )
+        domResourceGeneration += 1
+        return domResourceGeneration
+    }
+
+    private func advanceDOMResourceRevision() {
+        precondition(
+            domResourceRevision < UInt64.max,
+            "DOM resource revision overflowed."
+        )
+        domResourceRevision += 1
+    }
+
+    private func renderDOMResource() {
+        domResourceViewControllers = domResourceViewControllers.filter { box in
+            guard let viewController = box.value else {
+                return false
+            }
+            renderDOMResource(on: viewController)
+            return true
+        }
+    }
+
+    private func renderDOMResource(
+        on viewController: DOMTabResourceViewController
+    ) {
+        switch domResourceState {
+        case .idle, .loading:
+            viewController.showLoading(revision: domResourceRevision)
+        case let .ready(_, model):
+            viewController.showReady(model, revision: domResourceRevision)
+        case let .failed(_, message):
+            viewController.showFailure(
+                message,
+                revision: domResourceRevision
+            )
+        }
     }
 
     private func startNetworkResource(
@@ -505,6 +759,21 @@ package final class PresentationContentStore {
 
     package var contentCacheForTesting: WebInspectorTab.ContentCache {
         contentCache
+    }
+
+    package var domPanelModelForTesting: DOMPanelModel? {
+        guard case let .ready(_, model) = domResourceState else {
+            return nil
+        }
+        return model
+    }
+
+    package func waitForDOMResourceTaskForTesting() async {
+        await domResourceTask?.value
+    }
+
+    package func waitForDOMRetirementForTesting() async {
+        await domRetirementTask?.value
     }
 
     package var networkPanelModelForTesting: NetworkPanelModel? {

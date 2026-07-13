@@ -1,6 +1,7 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
 import WebInspectorDataKit
+import ObservationBridge
 import UIKit
 
 @MainActor
@@ -8,7 +9,9 @@ package final class DOMNavigationItems: NSObject {
     private typealias UndoManagerProvider = @MainActor () -> UndoManager?
 
     private let context: WebInspectorModelContext
+    private let panelModel: DOMPanelModel?
     private var statusTask: Task<Void, Never>?
+    private var panelObservation: PortableObservationTracking.Token?
     private var undoManagerProvider: UndoManagerProvider = { nil }
 
     package struct KeyCommandActions {
@@ -46,12 +49,21 @@ package final class DOMNavigationItems: NSObject {
 
     package init(context: WebInspectorModelContext) {
         self.context = context
+        panelModel = nil
+        super.init()
+        startObservingInspection()
+    }
+
+    package init(model: DOMPanelModel) {
+        context = model.context
+        panelModel = model
         super.init()
         startObservingInspection()
     }
 
     isolated deinit {
         statusTask?.cancel()
+        panelObservation?.cancel()
     }
 
     package func install(
@@ -110,6 +122,19 @@ package final class DOMNavigationItems: NSObject {
     }
 
     private func startObservingInspection() {
+        if let panelModel {
+            panelObservation = withPortableContinuousObservation { [weak self, weak panelModel] _ in
+                guard let self,
+                      let panelModel else {
+                    return
+                }
+                renderPickItem(
+                    isEnabled: context.state == .attached,
+                    isSelectingElement: panelModel.isPickingElement
+                )
+            }
+            return
+        }
         statusTask = Task { @MainActor [weak self, context] in
             for await status in context.statusUpdates {
                 self?.renderPickItem(status: status)
@@ -205,9 +230,6 @@ package final class DOMNavigationItems: NSObject {
             guard let self else {
                 return
             }
-            guard context.state == .attached else {
-                return
-            }
             do {
                 try await context.reload()
             } catch {
@@ -220,7 +242,7 @@ package final class DOMNavigationItems: NSObject {
         UIAction(
             title: String(localized: "inspector.delete_node", bundle: WebInspectorUILocalization.bundle),
             image: UIImage(systemName: "trash"),
-            attributes: context.status.selectedNodeID == nil ? [.disabled, .destructive] : [.destructive]
+            attributes: currentSelectedNode == nil ? [.disabled, .destructive] : [.destructive]
         ) { [weak self] _ in
             self?.performDeleteCommand()
         }
@@ -236,7 +258,7 @@ package final class DOMNavigationItems: NSObject {
     }
 
     private func deleteSelectedNodeFromNavigation(undoManager: UndoManager?) async {
-        guard let selectedNode = try? context.selectedDOMNode else {
+        guard let selectedNode = currentSelectedNode else {
             return
         }
         do {
@@ -264,6 +286,10 @@ package final class DOMNavigationItems: NSObject {
 
     @objc
     private func toggleElementPicker() {
+        if let panelModel {
+            panelModel.toggleElementPicker()
+            return
+        }
         Task { @MainActor [weak context] in
             guard let context else {
                 return
@@ -277,6 +303,13 @@ package final class DOMNavigationItems: NSObject {
     }
 
     private func updatePickItemAppearance() {
+        if let panelModel {
+            renderPickItem(
+                isEnabled: context.state == .attached,
+                isSelectingElement: panelModel.isPickingElement
+            )
+            return
+        }
         renderPickItem(
             status: context.status
         )
@@ -297,6 +330,13 @@ package final class DOMNavigationItems: NSObject {
         if pickItem.tintColor != tintColor {
             pickItem.tintColor = tintColor
         }
+    }
+
+    private var currentSelectedNode: DOMNode? {
+        if let panelModel {
+            return panelModel.selectedNode
+        }
+        return try? context.selectedDOMNode
     }
 }
 

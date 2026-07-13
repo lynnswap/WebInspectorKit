@@ -132,7 +132,11 @@ struct ParentContainerTests {
             )
             Issue.record("Expected attach to fail")
         } catch {
-            #expect(error is AttachmentFailure)
+            guard case let WebInspectorModelContainer.Failure.connection(.transport(message)) = error else {
+                Issue.record("Unexpected attach failure: \(error)")
+                return
+            }
+            #expect(message.contains("AttachmentFailure"))
         }
 
         #expect(observerRecorder.observers.count == 1)
@@ -185,7 +189,7 @@ struct ParentContainerTests {
     }
 
     @Test
-    func staleInstalledAttachDetachesWhenNewerAttachFailsBeforeInstallation() async throws {
+    func newerNativeCreationFailurePreservesInstalledContainerAttachment() async throws {
         let session = makeAttachmentSession()
         let firstModelAttachCompleted = WebInspectorTestGate()
         let releaseFirstAttach = WebInspectorTestGate()
@@ -221,13 +225,20 @@ struct ParentContainerTests {
         await #expect(throws: CancellationError.self) {
             try await firstAttach.value
         }
-        #expect(session.modelContainer.state == .detached)
+        #expect(session.modelContainer.state == .attaching)
 
         releaseSecondAttach.open()
-        await #expect(throws: AttachmentFailure.self) {
+        do {
             try await secondAttach.value
+            Issue.record("Expected the newer native Proxy creation to fail.")
+        } catch {
+            guard case let WebInspectorModelContainer.Failure.connection(.transport(message)) = error else {
+                Issue.record("Unexpected attach failure: \(error)")
+                return
+            }
+            #expect(message.contains("AttachmentFailure"))
         }
-        #expect(session.modelContainer.state == .detached)
+        #expect(session.modelContainer.state == .attached)
     }
 
     @Test
@@ -318,6 +329,56 @@ struct ParentContainerTests {
         #expect(second !== first)
         #expect(contentStore.viewController(for: key) { UIViewController() } === second)
         #expect(contentStore.contentCountForTesting == 1)
+    }
+
+    @Test
+    func DOMResourceOwnsOnePanelModelUntilRootRetirement() async throws {
+        let container = WebInspectorModelContainer(
+            configuration: .init(domains: [.dom])
+        )
+        let context = container.mainContext
+        let factoryStarted = WebInspectorTestGate()
+        let factoryRelease = WebInspectorTestGate()
+        let contentStore = PresentationContentStore(
+            makeDOMPanelModel: { context in
+                let model = try await DOMPanelModel.make(context: context)
+                factoryStarted.open()
+                await factoryRelease.waiter.wait()
+                return model
+            }
+        )
+        let firstResourceViewController = contentStore.domViewController(
+            context: context
+        ) { _ in
+            UIViewController()
+        }
+
+        #expect(firstResourceViewController.phase == .loading)
+        #expect(contentStore.domResourceStatus == .loading)
+        await factoryStarted.waiter.wait()
+        factoryRelease.open()
+        await contentStore.waitForDOMResourceTaskForTesting()
+
+        let model = try #require(contentStore.domPanelModelForTesting)
+        let secondResourceViewController = contentStore.domViewController(
+            context: context
+        ) { _ in
+            UIViewController()
+        }
+        #expect(firstResourceViewController.phase == .ready)
+        #expect(secondResourceViewController.phase == .ready)
+        #expect(contentStore.domPanelModelForTesting === model)
+        #expect(model.isRetiredForTesting == false)
+
+        await contentStore.clear()
+
+        #expect(model.isRetiredForTesting)
+        #expect(contentStore.domResourceStatus == .idle)
+        #expect(firstResourceViewController.phase == .loading)
+        #expect(secondResourceViewController.phase == .loading)
+        #expect(firstResourceViewController.readyViewControllerForTesting == nil)
+        #expect(secondResourceViewController.readyViewControllerForTesting == nil)
+        await container.close()
     }
 
     @Test
@@ -555,14 +616,18 @@ struct ParentContainerTests {
         let session = makeSessionWithNoOpAttachment()
         let viewController = WebInspectorViewController(session: session)
         let contentStore = viewController.presentationContentStoreForTesting
-        _ = WebInspectorTab.ContentFactory.makeViewController(
-            for: .dom,
-            session: session,
-            contentStore: contentStore,
-            hostLayout: .compact
+        let resourceViewController = try #require(
+            WebInspectorTab.ContentFactory.makeViewController(
+                for: .dom,
+                session: session,
+                contentStore: contentStore,
+                hostLayout: .compact
+            ) as? DOMTabResourceViewController
         )
         viewController.loadViewIfNeeded()
-        #expect(contentStore.contentCountForTesting > 0)
+        await contentStore.waitForDOMResourceTaskForTesting()
+        #expect(contentStore.domResourceStatus == .ready)
+        #expect(resourceViewController.phase == .ready)
 
         let retirementBaseline = viewController.rootPresentationRetirementTaskCompletionCountForTesting
         viewController.finishRootPresentationLifecycleForTesting()
@@ -573,7 +638,8 @@ struct ParentContainerTests {
         #expect(await viewController.waitForRootPresentationRetirementTaskCompletionForTesting(after: retirementBaseline))
 
         #expect(session.detachCountForTesting == 0)
-        #expect(contentStore.contentCountForTesting > 0)
+        #expect(contentStore.domResourceStatus == .ready)
+        #expect(resourceViewController.phase == .ready)
     }
 
     @Test
@@ -1005,14 +1071,18 @@ struct ParentContainerTests {
         let session = makeSessionWithNoOpAttachment()
         let viewController = WebInspectorViewController(session: session)
         let contentStore = viewController.presentationContentStoreForTesting
-        _ = WebInspectorTab.ContentFactory.makeViewController(
-            for: .dom,
-            session: session,
-            contentStore: contentStore,
-            hostLayout: .compact
+        let resourceViewController = try #require(
+            WebInspectorTab.ContentFactory.makeViewController(
+                for: .dom,
+                session: session,
+                contentStore: contentStore,
+                hostLayout: .compact
+            ) as? DOMTabResourceViewController
         )
         viewController.loadViewIfNeeded()
-        #expect(contentStore.contentCountForTesting > 0)
+        await contentStore.waitForDOMResourceTaskForTesting()
+        #expect(contentStore.domResourceStatus == .ready)
+        #expect(resourceViewController.phase == .ready)
         let stableModel = session.model
 
         let retirementBaseline = viewController.rootPresentationRetirementTaskCompletionCountForTesting
@@ -1025,7 +1095,8 @@ struct ParentContainerTests {
         )
 
         #expect(session.detachCountForTesting == 1)
-        #expect(contentStore.contentCountForTesting == 0)
+        #expect(contentStore.domResourceStatus == .idle)
+        #expect(resourceViewController.phase == .loading)
         #expect(session.model === stableModel)
         #expect(session.modelContainer.state == .detached)
     }
@@ -1135,13 +1206,15 @@ struct ParentContainerTests {
             hostLayout: .compact
         )
         viewController.loadViewIfNeeded()
-        let cacheCountBeforeCancel = contentStore.contentCountForTesting
+        await contentStore.waitForNetworkResourceTaskForTesting()
+        let modelBeforeCancel = try #require(contentStore.networkPanelModelForTesting)
 
         viewController.finishRootPresentationLifecycleForTesting(cancelled: true)
 
         #expect(session.detachCountForTesting == 0)
         #expect(viewController.hasFinishedRootPresentationLifecycleForTesting == false)
-        #expect(contentStore.contentCountForTesting == cacheCountBeforeCancel)
+        #expect(contentStore.networkResourceStatus == .ready)
+        #expect(contentStore.networkPanelModelForTesting === modelBeforeCancel)
     }
 
     @Test
@@ -1170,21 +1243,28 @@ struct ParentContainerTests {
         let session = makeSessionWithNoOpAttachment()
         let viewController = WebInspectorViewController(session: session)
         let contentStore = viewController.presentationContentStoreForTesting
-        _ = WebInspectorTab.ContentFactory.makeViewController(
-            for: .dom,
-            session: session,
-            contentStore: contentStore,
-            hostLayout: .compact
+        let domResourceViewController = try #require(
+            WebInspectorTab.ContentFactory.makeViewController(
+                for: .dom,
+                session: session,
+                contentStore: contentStore,
+                hostLayout: .compact
+            ) as? DOMTabResourceViewController
         )
-        _ = WebInspectorTab.ContentFactory.makeViewController(
-            for: .network,
-            session: session,
-            contentStore: contentStore,
-            hostLayout: .regular
+        let networkResourceViewController = try #require(
+            WebInspectorTab.ContentFactory.makeViewController(
+                for: .network,
+                session: session,
+                contentStore: contentStore,
+                hostLayout: .regular
+            ) as? NetworkTabResourceViewController
         )
         viewController.automaticallyDetachesOnDismiss = false
         viewController.loadViewIfNeeded()
-        #expect(contentStore.contentCountForTesting > 0)
+        await contentStore.waitForDOMResourceTaskForTesting()
+        await contentStore.waitForNetworkResourceTaskForTesting()
+        #expect(contentStore.domResourceStatus == .ready)
+        #expect(contentStore.networkResourceStatus == .ready)
         let stableModel = session.model
 
         let retirementBaseline = viewController.rootPresentationRetirementTaskCompletionCountForTesting
@@ -1192,7 +1272,10 @@ struct ParentContainerTests {
         #expect(await viewController.waitForRootPresentationRetirementTaskCompletionForTesting(after: retirementBaseline))
 
         #expect(session.detachCountForTesting == 0)
-        #expect(contentStore.contentCountForTesting == 0)
+        #expect(contentStore.domResourceStatus == .idle)
+        #expect(contentStore.networkResourceStatus == .idle)
+        #expect(domResourceViewController.phase == .loading)
+        #expect(networkResourceViewController.phase == .loading)
         #expect(session.model === stableModel)
     }
 
@@ -1239,22 +1322,33 @@ struct ParentContainerTests {
         )
         let contentStore = PresentationContentStore()
 
-        let domViewController = WebInspectorTab.ContentFactory.makeViewController(
-            for: .dom,
-            session: session,
-            contentStore: contentStore,
-            hostLayout: .compact
+        let domResourceViewController = try #require(
+            WebInspectorTab.ContentFactory.makeViewController(
+                for: .dom,
+                session: session,
+                contentStore: contentStore,
+                hostLayout: .compact
+            ) as? DOMTabResourceViewController
         )
-        let domNavigationController = try #require(domViewController as? DOMCompactNavigationController)
+        await contentStore.waitForDOMResourceTaskForTesting()
+        let domNavigationController = try #require(
+            domResourceViewController.readyViewControllerForTesting
+                as? DOMCompactNavigationController
+        )
         #expect(domNavigationController.viewControllers.first is DOMTreeViewController)
 
-        let elementViewController = WebInspectorTab.ContentFactory.makeViewController(
-            for: .domElement(parent: WebInspectorTab.dom.id),
-            session: session,
-            contentStore: contentStore,
-            hostLayout: .compact
+        let elementResourceViewController = try #require(
+            WebInspectorTab.ContentFactory.makeViewController(
+                for: .domElement(parent: WebInspectorTab.dom.id),
+                session: session,
+                contentStore: contentStore,
+                hostLayout: .compact
+            ) as? DOMTabResourceViewController
         )
-        let elementNavigationController = try #require(elementViewController as? DOMCompactNavigationController)
+        let elementNavigationController = try #require(
+            elementResourceViewController.readyViewControllerForTesting
+                as? DOMCompactNavigationController
+        )
         #expect(elementNavigationController.viewControllers.first is DOMElementViewController)
 
         let networkResourceViewController = try #require(
@@ -1274,48 +1368,70 @@ struct ParentContainerTests {
     }
 
     @Test
-    func regularHostWrapsDomainSplitControllersBeforeInstallingInNavigationStack() throws {
+    func regularHostWrapsDomainSplitControllersBeforeInstallingInNavigationStack()
+        async throws
+    {
         let session = WebInspectorSession()
+        let contentStore = PresentationContentStore()
         let host = RegularTabContentViewController(
             session: session,
-            contentStore: PresentationContentStore()
+            contentStore: contentStore
         )
 
         host.loadViewIfNeeded()
+        await contentStore.waitForDOMResourceTaskForTesting()
 
-        let rootViewController = try #require(host.viewControllers.first)
+        let resourceViewController = try #require(
+            host.viewControllers.first as? DOMTabResourceViewController
+        )
+        let rootViewController = try #require(
+            resourceViewController.readyViewControllerForTesting
+        )
         rootViewController.loadViewIfNeeded()
 
         #expect(rootViewController is UISplitViewController == false)
         #expect(rootViewController.children.contains { $0 is DOMSplitViewController })
-        #expect(rootViewController.navigationItem.centerItemGroups.isEmpty == false)
+        #expect(resourceViewController.navigationItem.centerItemGroups.isEmpty == false)
         #expect(
-            rootViewController.navigationItem.trailingItemGroups
+            resourceViewController.navigationItem.trailingItemGroups
                 .flatMap(\.barButtonItems)
                 .contains { $0.accessibilityIdentifier == "WebInspector.DOM.PickButton" }
         )
     }
 
     @Test
-    func cachedDOMTreeControllerIsSharedAcrossCompactAndRegularHosts() throws {
+    func DOMTreeViewControllerIsSharedAcrossCompactAndRegularHosts()
+        async throws
+    {
         let session = WebInspectorSession()
         let contentStore = PresentationContentStore()
-        let compactViewController = WebInspectorTab.ContentFactory.makeViewController(
-            for: .dom,
-            session: session,
-            contentStore: contentStore,
-            hostLayout: .compact
+        let compactResourceViewController = try #require(
+            WebInspectorTab.ContentFactory.makeViewController(
+                for: .dom,
+                session: session,
+                contentStore: contentStore,
+                hostLayout: .compact
+            ) as? DOMTabResourceViewController
         )
-        let compactNavigationController = try #require(compactViewController as? DOMCompactNavigationController)
+        await contentStore.waitForDOMResourceTaskForTesting()
+        let compactNavigationController = try #require(
+            compactResourceViewController.readyViewControllerForTesting
+                as? DOMCompactNavigationController
+        )
         let compactTreeViewController = try #require(
             compactNavigationController.viewControllers.first as? DOMTreeViewController
         )
 
-        let regularRoot = WebInspectorTab.ContentFactory.makeViewController(
-            for: .dom,
-            session: session,
-            contentStore: contentStore,
-            hostLayout: .regular
+        let regularResourceViewController = try #require(
+            WebInspectorTab.ContentFactory.makeViewController(
+                for: .dom,
+                session: session,
+                contentStore: contentStore,
+                hostLayout: .regular
+            ) as? DOMTabResourceViewController
+        )
+        let regularRoot = try #require(
+            regularResourceViewController.readyViewControllerForTesting
         )
         regularRoot.loadViewIfNeeded()
 
@@ -1449,53 +1565,7 @@ struct ParentContainerTests {
     }
 
     private func makeContext() -> WebInspectorModelContext {
-        WebInspectorModelContext.preview()
-    }
-
-    @discardableResult
-    private func applyRequest(
-        to context: WebInspectorModelContext,
-        requestID rawRequestID: String,
-        url: String
-    ) async -> WebInspectorDataKit.NetworkRequest.ID {
-        let requestID = WebInspectorProxyKit.Network.Request.ID(rawRequestID)
-        await context.apply(
-            .requestWillBeSent(
-                id: requestID,
-                request: WebInspectorProxyKit.Network.Request(
-                    id: requestID,
-                    url: url,
-                    method: "GET"
-                ),
-                initiator: WebInspectorProxyKit.Network.Initiator(kind: "other"),
-                resourceType: .script,
-                redirectResponse: nil,
-                timestamp: 1
-            )
-        )
-        await context.apply(
-            .responseReceived(
-                id: requestID,
-                response: WebInspectorProxyKit.Network.Response(
-                    url: url,
-                    status: 200,
-                    statusText: "OK",
-                    mimeType: "text/javascript",
-                    headers: ["content-type": "text/javascript"]
-                ),
-                resourceType: .script,
-                timestamp: 2
-            )
-        )
-        await context.apply(
-            .loadingFinished(
-                id: requestID,
-                timestamp: 3,
-                sourceMapURL: nil,
-                metrics: nil
-            ),
-        )
-        return context.registeredRequest(forProxyID: requestID)!.id
+        WebInspectorModelContainer().mainContext
     }
 
     private func showInWindow(

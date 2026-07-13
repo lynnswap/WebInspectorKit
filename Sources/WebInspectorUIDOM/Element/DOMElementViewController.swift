@@ -8,7 +8,9 @@ import UIKit
 @MainActor
 package final class DOMElementViewController: UICollectionViewController {
     private let context: WebInspectorModelContext
+    private let panelModel: DOMPanelModel?
     private var statusTask: Task<Void, Never>?
+    private var panelSelectionObservation: PortableObservationTracking.Token?
     private var styleHydrationTask: Task<Void, Never>?
     private var styleHydrationGeneration: UInt64 = 0
     private var isStyleHydrationActive = false
@@ -38,6 +40,13 @@ package final class DOMElementViewController: UICollectionViewController {
 
     package init(context: WebInspectorModelContext) {
         self.context = context
+        panelModel = nil
+        super.init(collectionViewLayout: Self.makeLayout())
+    }
+
+    package init(model: DOMPanelModel) {
+        context = model.context
+        panelModel = model
         super.init(collectionViewLayout: Self.makeLayout())
     }
 
@@ -53,6 +62,7 @@ package final class DOMElementViewController: UICollectionViewController {
         styleHydrationTask?.cancel()
         selectedStylesRenderTask?.cancel()
         statusTask?.cancel()
+        panelSelectionObservation?.cancel()
         selectedStylesObservation?.cancel()
     }
 
@@ -74,7 +84,7 @@ package final class DOMElementViewController: UICollectionViewController {
     override package func viewIsAppearing(_ animated: Bool) {
         super.viewIsAppearing(animated)
         isStyleHydrationActive = true
-        if let selectedNode = try? context.selectedDOMNode {
+        if let selectedNode = currentSelectedNode {
             scheduleSelectedStylesRender(for: selectedNode)
             hydrateStylesIfNeeded(for: selectedNode, retryFailure: true)
         }
@@ -193,7 +203,18 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
     private func startObservingState() {
-        bindSelectedNode(try? context.selectedDOMNode)
+        if let panelModel {
+            panelSelectionObservation = withPortableContinuousObservation { [weak self, weak panelModel] _ in
+                guard let self,
+                      let panelModel else {
+                    return
+                }
+                _ = panelModel.selectionRevision
+                bindSelectedNode(panelModel.selectedNode)
+            }
+            return
+        }
+        bindSelectedNode(currentSelectedNode)
         statusTask = Task { @MainActor [weak self, context] in
             for await status in context.statusUpdates {
                 guard let self else {
@@ -202,6 +223,13 @@ package final class DOMElementViewController: UICollectionViewController {
                 bindSelectedNode(status.selectedNodeID.flatMap { try? context.domNode(id: $0) })
             }
         }
+    }
+
+    private var currentSelectedNode: DOMNode? {
+        if let panelModel {
+            return panelModel.selectedNode
+        }
+        return try? context.selectedDOMNode
     }
 
     private func bindSelectedNode(_ node: DOMNode?) {
@@ -532,7 +560,7 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
     package func renderCurrentStylesForTesting() {
-        renderSelectedStyles((try? context.selectedDOMNode)?.elementStyles)
+        renderSelectedStyles(currentSelectedNode?.elementStyles)
     }
 
     private func finishStyleRenderForTesting() {

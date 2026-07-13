@@ -32,6 +32,23 @@ package final class DOMCompactNavigationController: UINavigationController {
         domNavigationItems = navigationItems
     }
 
+    package init(
+        rootViewController: UIViewController,
+        model: DOMPanelModel
+    ) {
+        rootViewController.webInspectorDetachFromContainerForReuse()
+        super.init(rootViewController: rootViewController)
+        navigationBar.prefersLargeTitles = false
+        webInspectorApplyNavigationControllerBackground(to: self)
+        rootViewController.navigationItem.style = .browser
+        let treeViewController = rootViewController as? DOMTreeViewController
+        let navigationItems = DOMNavigationItems(model: model)
+        navigationItems.install(on: rootViewController.navigationItem) { [weak self, weak treeViewController] in
+            treeViewController?.domTreeUndoManager ?? self?.undoManager
+        }
+        domNavigationItems = navigationItems
+    }
+
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         nil

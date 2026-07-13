@@ -14,6 +14,168 @@ import WebInspectorTestSupport
 @Suite(.serialized)
 struct DOMTreeTextViewTests {
     @Test
+    func selectionRevealStateKeepsSelectionOnlyRequestsOutOfTheScrollQueue() {
+        let state = DOMTreeTextView.SelectionRevealState()
+        let selectedNodeID = nodeID(1000)
+
+        let observation = state.observe(
+            selectedNodeID: selectedNodeID,
+            requestRevision: 1,
+            revealPolicy: .selectOnly
+        )
+
+        #expect(observation.selectedNodeID == selectedNodeID)
+        #expect(observation.selectedNodeIDChanged)
+        #expect(state.pendingSelectedNodeID == nil)
+    }
+
+    @Test
+    func selectionRevealStateRequeuesTheSameNodeForANewerScrollRequest() {
+        let state = DOMTreeTextView.SelectionRevealState()
+        let selectedNodeID = nodeID(1000)
+
+        _ = state.observe(
+            selectedNodeID: selectedNodeID,
+            requestRevision: 1,
+            revealPolicy: .selectAndScroll
+        )
+        state.consumePendingSelection()
+        let observation = state.observe(
+            selectedNodeID: selectedNodeID,
+            requestRevision: 2,
+            revealPolicy: .selectAndScroll
+        )
+
+        #expect(!observation.selectedNodeIDChanged)
+        #expect(state.pendingSelectedNodeID == selectedNodeID)
+    }
+
+    @Test
+    func selectionRevealStatePreservesPendingScrollUntilItCanBeConsumed() {
+        let state = DOMTreeTextView.SelectionRevealState()
+        let selectedNodeID = nodeID(1000)
+
+        _ = state.observe(
+            selectedNodeID: selectedNodeID,
+            requestRevision: 1,
+            revealPolicy: .selectAndScroll
+        )
+        _ = state.observe(
+            selectedNodeID: selectedNodeID,
+            requestRevision: 1,
+            revealPolicy: .none
+        )
+
+        #expect(state.pendingSelectedNodeID == selectedNodeID)
+    }
+
+    @Test
+    func selectionRevealStateCancelsPendingScrollForANewerNonScrollRequest() {
+        let state = DOMTreeTextView.SelectionRevealState()
+        let selectedNodeID = nodeID(1000)
+
+        _ = state.observe(
+            selectedNodeID: selectedNodeID,
+            requestRevision: 1,
+            revealPolicy: .selectAndScroll
+        )
+        _ = state.observe(
+            selectedNodeID: selectedNodeID,
+            requestRevision: 2,
+            revealPolicy: .selectOnly
+        )
+
+        #expect(state.pendingSelectedNodeID == nil)
+    }
+
+    @Test
+    func canonicalRenderStateAppliesContentAndTopologyDeltasInPlace() {
+        let documentID = nodeID(1000)
+        let bodyID = nodeID(1001)
+        let childID = nodeID(1002)
+        let document = makeCanonicalRenderRow(
+            id: documentID,
+            nodeType: 9,
+            nodeName: "#document",
+            children: .loaded([bodyID])
+        )
+        let body = makeCanonicalRenderRow(
+            id: bodyID,
+            parentID: documentID,
+            nodeName: "BODY",
+            localName: "body",
+            attributes: ["class": "before"],
+            children: .loaded([])
+        )
+        let state = DOMTreeRenderState(
+            revision: 0,
+            snapshot: WebInspectorDOMTreeSnapshot(
+                primaryRootID: documentID,
+                rowsByID: [documentID: document, bodyID: body]
+            ),
+            selectedNodeID: bodyID
+        )
+
+        #expect(state.snapshot.displayRootIDs() == [bodyID])
+        #expect(state.snapshot.selectedNodeID == bodyID)
+
+        let contentInvalidation = state.apply(
+            WebInspectorDOMTreeDelta(
+                primaryRootChange: nil,
+                upsertedRows: [
+                    makeCanonicalRenderRow(
+                        id: bodyID,
+                        parentID: documentID,
+                        nodeName: "BODY",
+                        localName: "body",
+                        attributes: ["class": "after"],
+                        children: .loaded([])
+                    )
+                ],
+                deletedRowIDs: []
+            ),
+            fromRevision: 0,
+            toRevision: 1,
+            selectedNodeID: bodyID
+        )
+
+        #expect(contentInvalidation.kind == .content)
+        #expect(contentInvalidation.affectedNodeIDs == [bodyID])
+        #expect(state.snapshot.node(for: bodyID)?.attributes == ["class": "after"])
+
+        let structureInvalidation = state.apply(
+            WebInspectorDOMTreeDelta(
+                primaryRootChange: nil,
+                upsertedRows: [
+                    makeCanonicalRenderRow(
+                        id: bodyID,
+                        parentID: documentID,
+                        nodeName: "BODY",
+                        localName: "body",
+                        attributes: ["class": "after"],
+                        children: .loaded([childID])
+                    ),
+                    makeCanonicalRenderRow(
+                        id: childID,
+                        parentID: bodyID,
+                        nodeName: "DIV",
+                        localName: "div"
+                    ),
+                ],
+                deletedRowIDs: []
+            ),
+            fromRevision: 1,
+            toRevision: 2,
+            selectedNodeID: bodyID
+        )
+
+        #expect(structureInvalidation.kind == .structure)
+        #expect(structureInvalidation.parentNodeIDs == [documentID, bodyID])
+        #expect(state.snapshot.visibleChildren(of: bodyID).nodeIDs == [childID])
+        #expect(state.snapshot.revision == 2)
+    }
+
+    @Test
     func rendersDOMMarkupFromDataKitContext() async throws {
         let view = await makeTreeView()
         let text = view.documentTextForTesting
@@ -1721,6 +1883,41 @@ private func proxyNodeID(_ value: String) -> DOM.Node.ID {
 
 private func nodeID(_ value: Int) -> DOMNode.ID {
     DOMNode.ID(proxyNodeID(value))
+}
+
+private func makeCanonicalRenderRow(
+    id: DOMNode.ID,
+    parentID: DOMNode.ID? = nil,
+    nodeType: Int = 1,
+    nodeName: String,
+    localName: String = "",
+    attributes: [String: String] = [:],
+    children: WebInspectorDOMTreeChildren = .loaded([])
+) -> WebInspectorDOMTreeRow {
+    WebInspectorDOMTreeRow(
+        id: id,
+        parentID: parentID,
+        nodeName: nodeName,
+        localName: localName,
+        nodeValue: "",
+        nodeType: nodeType,
+        frameID: nil,
+        documentURL: nil,
+        baseURL: nil,
+        attributes: attributes,
+        attributeList: attributes.sorted { $0.key < $1.key }.map {
+            DOMNode.Attribute(name: $0.key, value: $0.value)
+        },
+        children: children,
+        contentDocumentID: nil,
+        shadowRootIDs: [],
+        templateContentID: nil,
+        beforePseudoElementID: nil,
+        otherPseudoElementIDs: [],
+        afterPseudoElementID: nil,
+        pseudoType: nil,
+        shadowRootType: nil
+    )
 }
 
 private func attributesDictionary(_ attributes: [DOM.Attribute]) -> [String: String] {

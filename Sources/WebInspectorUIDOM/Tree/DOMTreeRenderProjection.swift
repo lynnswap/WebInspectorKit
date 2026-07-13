@@ -56,7 +56,7 @@ struct DOMTreeRenderInvalidation: Sendable {
 }
 
 extension DOMTreeRenderInvalidation {
-    static func initial(snapshot: DOMTreeSnapshot) -> DOMTreeRenderInvalidation {
+    static func initial(snapshot: DOMTreeRenderSnapshot) -> DOMTreeRenderInvalidation {
         DOMTreeRenderInvalidation(
             kind: .root,
             revision: snapshot.revision,
@@ -67,7 +67,7 @@ extension DOMTreeRenderInvalidation {
         )
     }
 
-    static func snapshot(_ snapshot: DOMTreeSnapshot, reason: DOMTreeSnapshotReason) -> DOMTreeRenderInvalidation {
+    static func snapshot(_ snapshot: DOMTreeRenderSnapshot, reason: DOMTreeSnapshotReason) -> DOMTreeRenderInvalidation {
         DOMTreeRenderInvalidation(
             kind: .root,
             revision: snapshot.revision,

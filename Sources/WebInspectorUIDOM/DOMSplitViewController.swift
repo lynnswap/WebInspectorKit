@@ -8,6 +8,7 @@ package final class DOMSplitViewController: UISplitViewController {
     private let treeViewController: DOMTreeViewController
     private let elementViewController: DOMElementViewController
     private let context: WebInspectorModelContext?
+    private let panelModel: DOMPanelModel?
     private var domNavigationItems: DOMNavigationItems?
     private lazy var treeNavigationController = RegularSplitColumnNavigationController(
         rootViewController: treeViewController
@@ -20,18 +21,30 @@ package final class DOMSplitViewController: UISplitViewController {
         self.init(
             treeViewController: DOMTreeViewController(context: context),
             elementViewController: DOMElementViewController(context: context),
-            context: context
+            context: context,
+            panelModel: nil
+        )
+    }
+
+    package convenience init(model: DOMPanelModel) {
+        self.init(
+            treeViewController: DOMTreeViewController(model: model),
+            elementViewController: DOMElementViewController(model: model),
+            context: model.context,
+            panelModel: model
         )
     }
 
     package init(
         treeViewController: DOMTreeViewController,
         elementViewController: DOMElementViewController,
-        context: WebInspectorModelContext? = nil
+        context: WebInspectorModelContext? = nil,
+        panelModel: DOMPanelModel? = nil
     ) {
         self.treeViewController = treeViewController
         self.elementViewController = elementViewController
         self.context = context
+        self.panelModel = panelModel
         super.init(style: .doubleColumn)
     }
 
@@ -97,7 +110,8 @@ package final class DOMSplitViewController: UISplitViewController {
         guard let context else {
             return
         }
-        let navigationItems = DOMNavigationItems(context: context)
+        let navigationItems = panelModel.map(DOMNavigationItems.init(model:))
+            ?? DOMNavigationItems(context: context)
         navigationItems.install(on: navigationItem) { [weak self] in
             self?.treeViewController.domTreeUndoManager ?? self?.undoManager
         }
