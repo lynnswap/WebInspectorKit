@@ -37,8 +37,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         return paragraphStyle
     }()
     private let context: WebInspectorModelContext
-    private let treeController: DOMTreeController?
-    private let panelModel: DOMPanelModel?
+    private let panelModel: DOMPanelModel
     private let treeRenderState: DOMTreeRenderState
     private var currentTreeSnapshot: DOMTreeRenderSnapshot {
         treeRenderState.snapshot
@@ -199,31 +198,6 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 #endif
 
-    convenience init(
-        context: WebInspectorModelContext,
-        requestChildrenAction: RequestChildrenAction? = nil,
-        highlightNodeAction: HighlightNodeAction? = nil,
-        restoreHighlightAction: RestoreHighlightAction? = nil,
-        copyNodeTextAction: CopyNodeTextAction? = nil,
-        deleteNodesAction: DeleteNodesAction? = nil
-    ) {
-        let treeController = context.rootTreeController()
-        let treeRenderState = DOMTreeRenderState(treeController.snapshot)
-        self.init(
-            context: context,
-            treeController: treeController,
-            panelModel: nil,
-            treeRenderState: treeRenderState,
-            selectionRevision: treeRenderState.snapshot.revision,
-            selectionRevealPolicy: .selectAndScroll,
-            requestChildrenAction: requestChildrenAction,
-            highlightNodeAction: highlightNodeAction,
-            restoreHighlightAction: restoreHighlightAction,
-            copyNodeTextAction: copyNodeTextAction,
-            deleteNodesAction: deleteNodesAction
-        )
-    }
-
     init(
         model: DOMPanelModel,
         requestChildrenAction: RequestChildrenAction? = nil,
@@ -233,7 +207,6 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         deleteNodesAction: DeleteNodesAction? = nil
     ) {
         self.context = model.context
-        treeController = nil
         panelModel = model
         let treeRenderState = DOMTreeRenderState(selectedNodeID: model.selectedNodeID)
         self.treeRenderState = treeRenderState
@@ -260,47 +233,6 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         configureInteractions()
         startObservingDocument()
         startObservingPanelSelection()
-    }
-
-    private init(
-        context: WebInspectorModelContext,
-        treeController: DOMTreeController,
-        panelModel: DOMPanelModel?,
-        treeRenderState: DOMTreeRenderState,
-        selectionRevision: UInt64,
-        selectionRevealPolicy: DOMRevealPolicy,
-        requestChildrenAction: RequestChildrenAction?,
-        highlightNodeAction: HighlightNodeAction?,
-        restoreHighlightAction: RestoreHighlightAction?,
-        copyNodeTextAction: CopyNodeTextAction?,
-        deleteNodesAction: DeleteNodesAction?
-    ) {
-        self.context = context
-        self.treeController = treeController
-        self.panelModel = panelModel
-        self.treeRenderState = treeRenderState
-        self.selectionRevision = selectionRevision
-        self.selectionRevealPolicy = selectionRevealPolicy
-        self.requestChildrenAction = requestChildrenAction
-        self.highlightNodeAction = highlightNodeAction
-        self.restoreHighlightAction = restoreHighlightAction
-        let expansionState = DOMTreeTextView.ExpansionState()
-        self.expansionState = expansionState
-        rowRenderBuildCoordinator = DOMTreeTextView.RowRenderBuildCoordinator(
-            builder: DOMTreeTextView.RowRenderBuilder(
-                snapshotProvider: { treeRenderState.snapshot },
-                expansionState: expansionState
-            )
-        )
-        menuModel = DOMTreeMenuModel(
-            context: context,
-            copyNodeTextAction: copyNodeTextAction,
-            deleteNodesAction: deleteNodesAction
-        )
-        super.init(frame: .zero)
-        configureTextSystem()
-        configureInteractions()
-        startObservingDocument()
     }
 
     @available(*, unavailable)
@@ -644,13 +576,6 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         }
     }
 
-    private func setCurrentTreeSnapshot(_ snapshot: DOMTreeSnapshot) {
-        treeRenderState.replace(snapshot)
-#if DEBUG
-        recordObservedTreeRevisionForTesting(snapshot.revision)
-#endif
-    }
-
     private func mergePendingDOMTreeRenderInvalidation(_ invalidation: DOMTreeRenderInvalidation) {
         pendingDOMTreeRenderInvalidation = pendingDOMTreeRenderInvalidation?.merging(with: invalidation) ?? invalidation
 #if DEBUG
@@ -661,52 +586,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func startObservingDocument() {
-        if let panelModel {
-            startObservingCanonicalDocument(model: panelModel)
-            return
-        }
-        guard let treeController else {
-            preconditionFailure("A DOM tree view requires exactly one document source.")
-        }
-        treeTransactionTask = Task { @MainActor [weak self, treeController] in
-            for await update in treeController.updates {
-                guard let self else {
-                    return
-                }
-                let previousSnapshot = currentTreeSnapshot
-                let invalidation: DOMTreeRenderInvalidation
-                let isSelectionChange: Bool
-                let isInitial: Bool
-                switch update {
-                case let .snapshot(snapshot, reason):
-                    setCurrentTreeSnapshot(snapshot)
-                    invalidation = .snapshot(currentTreeSnapshot, reason: reason)
-                    isSelectionChange = previousSnapshot.selectedNodeID != snapshot.selectedNodeID
-                    isInitial = reason == .initialDocument && lastRoutedTreeRevision == nil
-                case let .delta(delta):
-                    let currentRevision = treeController.revision
-                    let currentSelectedNodeID = treeController.selectedNodeID
-                    invalidation = DOMTreeRenderInvalidation(
-                        delta: delta,
-                        revision: currentRevision,
-                        startRevision: previousSnapshot.revision
-                    )
-                    isSelectionChange = delta.isSelectionChange
-                        || previousSnapshot.selectedNodeID != currentSelectedNodeID
-                    if isSelectionChange {
-                        setCurrentTreeSnapshot(treeController.snapshot)
-                    }
-                    isInitial = false
-                }
-                if !isSelectionChange || invalidation.kind != .content {
-                    scheduleDOMInvalidation(invalidation, isInitial: isInitial)
-                }
-                if isSelectionChange {
-                    selectionRevision = currentTreeSnapshot.revision
-                    routeSelectionInvalidation(selectionRevision: selectionRevision)
-                }
-            }
-        }
+        startObservingCanonicalDocument(model: panelModel)
     }
 
     private func startObservingCanonicalDocument(model: DOMPanelModel) {
@@ -787,9 +667,6 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func startObservingPanelSelection() {
-        guard let panelModel else {
-            return
-        }
         selectionObservation = withPortableContinuousObservation { [weak self, weak panelModel] _ in
             guard let self,
                   let panelModel else {
@@ -943,14 +820,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func synchronizeCurrentTreeSnapshotIfNeeded(for revision: UInt64? = nil) {
-        guard let treeController else {
-            return
-        }
-        let targetRevision = revision ?? treeController.revision
-        guard currentTreeSnapshot.revision < targetRevision else {
-            return
-        }
-        setCurrentTreeSnapshot(treeController.snapshot)
+        _ = revision
     }
 
     private func shouldRouteDOMInvalidation(
@@ -1186,7 +1056,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         let selectedNode = nextSelectedNodeID.flatMap { try? context.requiredNode(for: $0) }
         let observation = selectionRevealState.observe(
             selectedNodeID: selectedNode?.id,
-            requestRevision: panelModel == nil ? nil : selectionRevision,
+            requestRevision: selectionRevision,
             revealPolicy: selectionRevealPolicy
         )
         reconcileMultiSelectionForRenderedSelection(
@@ -1282,27 +1152,13 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
 
     @discardableResult
     private func select(_ nodeID: DOMNode.ID) -> Bool {
-        if let panelModel {
-            panelModel.selectNode(nodeID, reveal: .selectAndScroll)
-            guard panelModel.selectedNodeID == nodeID else {
-                return false
-            }
-            _ = treeRenderState.setSelectedNodeID(nodeID)
-            selectionRevision = panelModel.selectionRevision
-            selectionRevealPolicy = panelModel.selection?.revealPolicy ?? .none
-        } else {
-            do {
-                try context.selectNode(nodeID, reveal: .selectAndScroll)
-            } catch {
-                WebInspectorUIDOMLog.debug("DOM tree selection failed nodeID=\(String(describing: nodeID)): \(String(describing: error))")
-                return false
-            }
-            guard let treeController else {
-                preconditionFailure("A legacy DOM tree selection requires its controller.")
-            }
-            setCurrentTreeSnapshot(treeController.snapshot)
-            selectionRevision = currentTreeSnapshot.revision
+        panelModel.selectNode(nodeID, reveal: .selectAndScroll)
+        guard panelModel.selectedNodeID == nodeID else {
+            return false
         }
+        _ = treeRenderState.setSelectedNodeID(nodeID)
+        selectionRevision = panelModel.selectionRevision
+        selectionRevealPolicy = panelModel.selection?.revealPolicy ?? .none
         multiSelection.notePrimarySelection(nodeID)
         if isRenderingActive {
             handleSelectedNodeChange(selectionRevision: selectionRevision)

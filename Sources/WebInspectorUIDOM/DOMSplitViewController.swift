@@ -7,8 +7,7 @@ import UIKit
 package final class DOMSplitViewController: UISplitViewController {
     private let treeViewController: DOMTreeViewController
     private let elementViewController: DOMElementViewController
-    private let context: WebInspectorModelContext?
-    private let panelModel: DOMPanelModel?
+    private let panelModel: DOMPanelModel
     private var domNavigationItems: DOMNavigationItems?
     private lazy var treeNavigationController = RegularSplitColumnNavigationController(
         rootViewController: treeViewController
@@ -17,34 +16,22 @@ package final class DOMSplitViewController: UISplitViewController {
         rootViewController: elementViewController
     )
 
-    package convenience init(context: WebInspectorModelContext) {
-        self.init(
-            treeViewController: DOMTreeViewController(context: context),
-            elementViewController: DOMElementViewController(context: context),
-            context: context,
-            panelModel: nil
-        )
-    }
-
     package convenience init(model: DOMPanelModel) {
         self.init(
             treeViewController: DOMTreeViewController(model: model),
             elementViewController: DOMElementViewController(model: model),
-            context: model.context,
-            panelModel: model
+            model: model
         )
     }
 
     package init(
         treeViewController: DOMTreeViewController,
         elementViewController: DOMElementViewController,
-        context: WebInspectorModelContext? = nil,
-        panelModel: DOMPanelModel? = nil
+        model: DOMPanelModel
     ) {
         self.treeViewController = treeViewController
         self.elementViewController = elementViewController
-        self.context = context
-        self.panelModel = panelModel
+        panelModel = model
         super.init(style: .doubleColumn)
     }
 
@@ -107,11 +94,7 @@ package final class DOMSplitViewController: UISplitViewController {
     }
 
     private func configureNavigationItem() {
-        guard let context else {
-            return
-        }
-        let navigationItems = panelModel.map(DOMNavigationItems.init(model:))
-            ?? DOMNavigationItems(context: context)
+        let navigationItems = DOMNavigationItems(model: panelModel)
         navigationItems.install(on: navigationItem) { [weak self] in
             self?.treeViewController.domTreeUndoManager ?? self?.undoManager
         }
@@ -152,14 +135,4 @@ extension DOMSplitViewController {
 }
 #endif
 
-#Preview("DOM Split") {
-    DOMSplitViewControllerPreview.makeViewController()
-}
-
-@MainActor
-private enum DOMSplitViewControllerPreview {
-    static func makeViewController() -> DOMSplitViewController {
-        DOMSplitViewController(context: DOMPreviewFixtures.makeWebInspectorModelContext())
-    }
-}
 #endif

@@ -39,7 +39,7 @@ func productionNetworkContainerProvidesGenericQueriesToEveryContext() async thro
     let customContext = try await container.makeContext(
         isolation: MainActor.shared
     )
-    try await mainContext.waitUntilContainerReady()
+    try await mainContext.waitUntilReady()
 
     let mainRequests = try await mainContext.fetch(
         WebInspectorFetchDescriptor<NetworkRequest>()

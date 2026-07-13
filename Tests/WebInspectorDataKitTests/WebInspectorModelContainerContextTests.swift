@@ -149,8 +149,8 @@ private actor ModelContainerContextOwner {
         context?.appliedContainerRevisionForTesting
     }
 
-    func state() -> WebInspectorModelContext.State? {
-        context?.state
+    func isClosed() -> Bool? {
+        context?.isPersistentModelProjectionClosed
     }
 
     func closeContext() async {
@@ -180,7 +180,7 @@ func modelContainerMainContextIsStableAndClosesWithItsContainer() async {
 
     await container.close()
 
-    #expect(first.state == .closed)
+    #expect(first.isPersistentModelProjectionClosed)
     #expect(await container.core.metrics.activeContextRegistrationCount == 0)
 }
 
@@ -201,11 +201,11 @@ func modelContainerCreatesIndependentActorConfinedContexts() async throws {
     #expect(await container.core.metrics.activeContextRegistrationCount == 2)
 
     await firstOwner.closeContext()
-    #expect(await firstOwner.state() == .closed)
+    #expect(await firstOwner.isClosed() == true)
     #expect(await container.core.metrics.activeContextRegistrationCount == 1)
 
     await container.close()
-    #expect(await secondOwner.state() == .closed)
+    #expect(await secondOwner.isClosed() == true)
     #expect(await container.core.metrics.activeContextRegistrationCount == 0)
 }
 
@@ -213,16 +213,14 @@ func modelContainerCreatesIndependentActorConfinedContexts() async throws {
 @Test
 func modelContainerContextAppliesSchemaPayloadBeforeAcknowledgingRevision() async throws {
     let appliedValues = Mutex<[Int]>([])
-    let core = WebInspectorModelContainerCore(
-        configuredDomains: [],
+    let container = WebInspectorModelContainer(
+        configuration: .init(domains: []),
         modelSchemaRegistry: containerDriverSchemaRegistry { value in
             appliedValues.withLock { $0.append(value) }
         }
     )
-    let context = WebInspectorModelContext.mainContext(
-        for: core,
-        isolation: MainActor.shared
-    )
+    let core = container.core
+    let context = container.mainContext
     await expectEventually {
         context.appliedContainerRevisionForTesting == 0
     }
@@ -270,10 +268,11 @@ func modelContainerRejectsCustomContextCreationAfterClose() async {
 @MainActor
 @Test
 func lateMainContextUsesCurrentSnapshotAsItsInitialSchemaState() async throws {
-    let core = WebInspectorModelContainerCore(
-        configuredDomains: [],
+    let container = WebInspectorModelContainer(
+        configuration: .init(domains: []),
         modelSchemaRegistry: containerDriverSchemaRegistry { _ in }
     )
+    let core = container.core
     let commit = try #require(
         try await core.reduce(
             .reset(WebInspectorPage.Generation(rawValue: 1)),
@@ -281,10 +280,7 @@ func lateMainContextUsesCurrentSnapshotAsItsInitialSchemaState() async throws {
         )
     )
 
-    let context = WebInspectorModelContext.mainContext(
-        for: core,
-        isolation: MainActor.shared
-    )
+    let context = container.mainContext
     await expectEventually {
         context.appliedContainerRevisionForTesting == commit.toRevision
     }
@@ -308,7 +304,7 @@ func firstMainContextAccessAfterCloseReturnsOneClosedContext() async {
     let first = container.mainContext
     let second = container.mainContext
     #expect(first === second)
-    #expect(first.state == .closed)
+    #expect(first.isPersistentModelProjectionClosed)
     await #expect(throws: WebInspectorModelContextQueryError.closed) {
         _ = try await first.fetchIdentifiers(
             WebInspectorFetchDescriptor<ContainerDriverModel>()
@@ -320,18 +316,16 @@ func firstMainContextAccessAfterCloseReturnsOneClosedContext() async {
 @MainActor
 @Test
 func mainContextMaterializedBetweenCoreClosePhasesDoesNotUnregisterItsReservation() async throws {
-    let core = WebInspectorModelContainerCore(
-        configuredDomains: [],
+    let container = WebInspectorModelContainer(
+        configuration: .init(domains: []),
         modelSchemaRegistry: containerDriverSchemaRegistry { _ in }
     )
+    let core = container.core
     let close = await core.beginClose()
 
-    let context = WebInspectorModelContext.mainContext(
-        for: core,
-        isolation: MainActor.shared
-    )
-    try await context.waitUntilContainerReady()
-    #expect(context.state == .closed)
+    let context = container.mainContext
+    try await context.waitUntilReady()
+    #expect(context.isPersistentModelProjectionClosed)
 
     try await core.finishClose(close)
     #expect(await core.metrics.activeContextRegistrationCount == 0)
@@ -371,7 +365,7 @@ func canonicalNetworkClearReturnsAfterTwoActiveContextsApplyTheDeletion() async 
     let secondContext = try await container.makeContext(
         isolation: MainActor.shared
     )
-    try await firstContext.waitUntilContainerReady()
+    try await firstContext.waitUntilReady()
 
     let attachment = WebInspectorContainerAttachmentGeneration(rawValue: 1)
     let generation = WebInspectorPage.Generation(rawValue: 1)

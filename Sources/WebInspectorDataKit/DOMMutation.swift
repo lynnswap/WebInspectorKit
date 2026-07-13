@@ -23,43 +23,23 @@ public struct DOMMutationFailure: Error, Hashable, Sendable {
 
 /// A document-epoch-bound capability for undoing one accepted DOM/CSS change.
 public final class DOMUndoCapability {
-    private enum Commands {
-        case legacy(WebInspectorModelContext.DOMUndoRedoCommands)
-        case canonical(
-            core: WebInspectorModelContainerCore,
-            scope: WebInspectorDOMDocumentScopeStorage
-        )
-    }
-
-    private let commands: Commands
-
-    package init(commands: WebInspectorModelContext.DOMUndoRedoCommands) {
-        self.commands = .legacy(commands)
-    }
+    private let core: WebInspectorModelContainerCore
+    private let scope: WebInspectorDOMDocumentScopeStorage
 
     package init(
         core: WebInspectorModelContainerCore,
         scope: WebInspectorDOMDocumentScopeStorage
     ) {
-        commands = .canonical(core: core, scope: scope)
+        self.core = core
+        self.scope = scope
     }
 
     public nonisolated(nonsending) func undo() async throws {
-        switch commands {
-        case let .legacy(commands):
-            try await commands.undo()
-        case let .canonical(core, scope):
-            try await core.undoDOMChange(in: scope)
-        }
+        try await core.undoDOMChange(in: scope)
     }
 
     public nonisolated(nonsending) func redo() async throws {
-        switch commands {
-        case let .legacy(commands):
-            try await commands.redo()
-        case let .canonical(core, scope):
-            try await core.redoDOMChange(in: scope)
-        }
+        try await core.redoDOMChange(in: scope)
     }
 }
 

@@ -132,11 +132,10 @@ func consoleParameterGraphRoutesThroughItsPhysicalAgent() async throws {
         #expect(parameters.objectId == "child-object")
 
         try await fixture.container.core.closeRuntimeObjectGraph(graph.token)
-        #expect(
-            fixture.wire.observations.commands.contains {
-                $0.method == "Runtime.releaseObjectGroup"
-            } == false
-        )
+        let didReleaseBeforeGate = fixture.wire.observations.commands.contains {
+            $0.method == "Runtime.releaseObjectGroup"
+        }
+        #expect(!didReleaseBeforeGate)
     }
 }
 
@@ -189,18 +188,20 @@ func independentGroupCloseDrainsClaimsAndCallerCancellationOnlyLeavesWait()
                 in: group.token
             )
         }
-        #expect(
+        let didReleaseBeforeEvaluationFinished =
             fixture.wire.observations.commands.contains {
                 $0.method == "Runtime.releaseObjectGroup"
-            } == false
-        )
+            }
+        #expect(!didReleaseBeforeEvaluationFinished)
 
         evaluationGate.open()
         try await close.value
         try await core.closeRuntimeObjectGraph(group.token)
 
-        let releases = fixture.wire.observations.commands.filter {
-            $0.method == "Runtime.releaseObjectGroup"
+        let commands = fixture.wire.observations.commands
+        var releases = commands
+        releases.removeAll {
+            $0.method != "Runtime.releaseObjectGroup"
         }
         let release = try #require(releases.first)
         #expect(releases.count == 1)

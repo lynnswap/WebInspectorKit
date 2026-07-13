@@ -427,6 +427,26 @@ package extension WebInspectorModelContainerCore {
         }
         try await completion.value()
     }
+
+    func setCSSStyleText(
+        _ text: String,
+        for styleID: CSS.Style.ID,
+        resource lease: WebInspectorCanonicalCSSResourceLease
+    ) async throws -> CSS.Style {
+        try Task.checkCancellation()
+        let route = try cssResourceCommandRoute(for: lease)
+        guard styleID.targetScopeRawValue == nil
+            || styleID.targetScopeRawValue == route.agentTarget.id.rawValue
+        else {
+            throw WebInspectorDOMCSSCommandError.identityRouteMismatch
+        }
+        let completion: ReplyPromise<CSS.Style> = startDOMCSSCommand(
+            route: route
+        ) { target in
+            try await target.css.setStyleText(styleID, text: text)
+        }
+        return try await completion.value()
+    }
 }
 
 extension WebInspectorModelContainerCore {
@@ -684,6 +704,18 @@ extension WebInspectorModelContainerCore {
             for: nodeID,
             completionValidation: .cssResource(lease)
         )
+    }
+
+    func cssResourceCommandRoute(
+        for lease: WebInspectorCanonicalCSSResourceLease
+    ) throws -> WebInspectorDOMCSSCommandRoute {
+        let route = try cssResourceCommandRoute(for: lease.nodeID)
+        guard case let .cssResource(currentLease) = route.validation,
+            currentLease == lease
+        else {
+            throw WebInspectorDOMCSSCommandError.staleCascade
+        }
+        return route
     }
 
     func cssStyleSheetCommandRoute(

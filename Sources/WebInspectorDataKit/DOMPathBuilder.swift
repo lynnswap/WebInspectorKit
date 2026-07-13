@@ -31,22 +31,6 @@ private struct DOMPathSnapshot {
     let parentByNodeID: [DOMNode.ID: DOMNode.ID]
     let childrenByNodeID: [DOMNode.ID: [DOMNode.ID]]
 
-    init(_ snapshot: DOMTreeSnapshot) {
-        nodesByID = snapshot.nodesByID.mapValues {
-            DOMPathNode(
-                id: $0.id,
-                nodeName: $0.nodeName,
-                localName: $0.localName,
-                kind: $0.kind,
-                attributeList: $0.attributeList
-            )
-        }
-        parentByNodeID = snapshot.parentByNodeID
-        childrenByNodeID = snapshot.nodesByID.mapValues { node in
-            snapshot.children(of: node.id)
-        }
-    }
-
     init(_ snapshot: WebInspectorDOMTreeSnapshot) {
         nodesByID = snapshot.rowsByID.mapValues {
             DOMPathNode(
@@ -80,26 +64,6 @@ private struct DOMPathSnapshot {
 
     func children(of id: DOMNode.ID) -> [DOMNode.ID] {
         childrenByNodeID[id] ?? []
-    }
-}
-
-public extension DOMTreeSnapshot {
-    /// Returns a CSS selector path for the node, or an empty string when one cannot be built.
-    func selectorPath(for id: DOMNode.ID) -> String {
-        let pathSnapshot = DOMPathSnapshot(self)
-        guard let node = pathSnapshot.node(for: id) else {
-            return ""
-        }
-        return DOMPathBuilder(snapshot: pathSnapshot).selectorPath(for: node)
-    }
-
-    /// Returns an XPath expression for the node, or an empty string when one cannot be built.
-    func xPath(for id: DOMNode.ID) -> String {
-        let pathSnapshot = DOMPathSnapshot(self)
-        guard let node = pathSnapshot.node(for: id) else {
-            return ""
-        }
-        return DOMPathBuilder(snapshot: pathSnapshot).xPath(for: node)
     }
 }
 

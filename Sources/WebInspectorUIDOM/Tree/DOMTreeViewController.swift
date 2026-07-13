@@ -11,20 +11,15 @@ package final class DOMTreeViewController: UIViewController {
         treeView.undoManager
     }
 
-    package init(context: WebInspectorModelContext) {
-        treeView = Self.makeTreeView(context: context, model: nil)
-        super.init(nibName: nil, bundle: nil)
-    }
-
     package init(model: DOMPanelModel) {
-        treeView = Self.makeTreeView(context: model.context, model: model)
+        treeView = Self.makeTreeView(model: model)
         super.init(nibName: nil, bundle: nil)
     }
 
     private static func makeTreeView(
-        context: WebInspectorModelContext,
-        model: DOMPanelModel?
+        model: DOMPanelModel
     ) -> DOMTreeTextView {
+        let context = model.context
         let requestChildren: DOMTreeTextView.RequestChildrenAction = { [weak context] nodeID in
             guard let context else {
                 return false
@@ -53,13 +48,7 @@ package final class DOMTreeViewController: UIViewController {
             guard let context else {
                 return
             }
-            let selectedNode: DOMNode?
-            if let model {
-                selectedNode = model.selectedNode
-            } else {
-                selectedNode = try? context.selectedDOMNode
-            }
-            if let selectedNode {
+            if let selectedNode = model.selectedNode {
                 try await context.highlightDOMNode(selectedNode)
             } else {
                 try await context.hideDOMHighlight()
@@ -89,18 +78,8 @@ package final class DOMTreeViewController: UIViewController {
                 undoManager: undoManager
             )
         }
-        if let model {
-            return DOMTreeTextView(
-                model: model,
-                requestChildrenAction: requestChildren,
-                highlightNodeAction: highlightNode,
-                restoreHighlightAction: restoreHighlight,
-                copyNodeTextAction: copyNodeText,
-                deleteNodesAction: deleteNodes
-            )
-        }
         return DOMTreeTextView(
-            context: context,
+            model: model,
             requestChildrenAction: requestChildren,
             highlightNodeAction: highlightNode,
             restoreHighlightAction: restoreHighlight,
@@ -181,15 +160,4 @@ extension DOMTreeViewController {
 }
 #endif
 
-#Preview("DOM Tree") {
-    DOMTreeViewControllerPreview.makeViewController()
-}
-
-@MainActor
-private enum DOMTreeViewControllerPreview {
-    static func makeViewController() -> UINavigationController {
-        let viewController = DOMTreeViewController(context: DOMPreviewFixtures.makeWebInspectorModelContext())
-        return UINavigationController(rootViewController: viewController)
-    }
-}
 #endif

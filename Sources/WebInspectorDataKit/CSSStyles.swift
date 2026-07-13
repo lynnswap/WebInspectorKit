@@ -160,71 +160,6 @@ private func cssPropertiesByStyleID(
     return result
 }
 
-private actor CSSStylesOperationGate {
-    private struct Waiter {
-        var continuation: CheckedContinuation<Void, any Error>
-    }
-
-    private var isAcquired = false
-    private var waiters: [UInt64: Waiter] = [:]
-    private var waiterOrder: [UInt64] = []
-    private var nextWaiterID: UInt64 = 0
-
-    func acquire() async throws {
-        try Task.checkCancellation()
-        guard isAcquired else {
-            isAcquired = true
-            return
-        }
-        precondition(nextWaiterID < UInt64.max, "CSS operation waiter identity overflowed.")
-        nextWaiterID += 1
-        let waiterID = nextWaiterID
-        try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation {
-                (continuation: CheckedContinuation<Void, any Error>) in
-                if Task.isCancelled {
-                    continuation.resume(throwing: CancellationError())
-                    return
-                }
-                waiters[waiterID] = Waiter(continuation: continuation)
-                waiterOrder.append(waiterID)
-            }
-        } onCancel: {
-            Task {
-                await self.cancel(waiterID: waiterID)
-            }
-        }
-        do {
-            try Task.checkCancellation()
-        } catch {
-            // A release may win the race with the cancellation handler and
-            // hand this waiter ownership. Return that ownership before
-            // surfacing cancellation so the next waiter cannot deadlock.
-            release()
-            throw error
-        }
-    }
-
-    func release() {
-        precondition(isAcquired, "CSS operation gate released without an owner.")
-        while let waiterID = waiterOrder.first {
-            waiterOrder.removeFirst()
-            guard let waiter = waiters.removeValue(forKey: waiterID) else {
-                continue
-            }
-            waiter.continuation.resume(returning: ())
-            return
-        }
-        isAcquired = false
-    }
-
-    private func cancel(waiterID: UInt64) {
-        waiters.removeValue(forKey: waiterID)?.continuation.resume(
-            throwing: CancellationError()
-        )
-    }
-}
-
 /// Observable CSS state for one DOM element.
 @Observable
 public final class CSSStyles: Hashable, Identifiable, SendableMetatype {
@@ -276,7 +211,9 @@ public final class CSSStyles: Hashable, Identifiable, SendableMetatype {
     @ObservationIgnored private let inspectorBaselineStore: CSSInspectorBaselineStore
     @ObservationIgnored private var hasCompletedLoad: Bool
     @ObservationIgnored private var canonicalLoadGeneration: UInt64
-    @ObservationIgnored private let operationGate = CSSStylesOperationGate()
+    @ObservationIgnored private var canonicalLease:
+        WebInspectorCanonicalCSSResourceLease?
+    @ObservationIgnored private var operationIsActive: Bool
 
     init(nodeID: DOMNode.ID, modelContext: WebInspectorModelContext) {
         id = ID(nodeID: nodeID)
@@ -286,6 +223,8 @@ public final class CSSStyles: Hashable, Identifiable, SendableMetatype {
         inspectorBaselineStore = modelContext.cssInspectorBaselineStore
         hasCompletedLoad = false
         canonicalLoadGeneration = 0
+        canonicalLease = nil
+        operationIsActive = false
         self.modelContext = modelContext
     }
 
@@ -335,6 +274,7 @@ public final class CSSStyles: Hashable, Identifiable, SendableMetatype {
               modelContext != nil else {
             return false
         }
+        canonicalLease = resource.lease
         load(
             matchedStyles: resource.matchedStyles,
             inlineStyles: resource.inlineStyles,
@@ -345,6 +285,7 @@ public final class CSSStyles: Hashable, Identifiable, SendableMetatype {
 
     package func markCanonicalNeedsRefresh() {
         advanceCanonicalLoadGeneration()
+        canonicalLease = nil
         if modelContext != nil {
             markNeedsRefresh()
         }
@@ -352,15 +293,18 @@ public final class CSSStyles: Hashable, Identifiable, SendableMetatype {
 
     package func invalidateCanonicalOwner() {
         advanceCanonicalLoadGeneration()
+        canonicalLease = nil
         modelContext = nil
         markUnavailable()
     }
 
     func markNeedsRefresh() {
+        canonicalLease = nil
         phase = .needsRefresh
     }
 
     func markUnavailable() {
+        canonicalLease = nil
         sections = []
         computedProperties = []
         hasCompletedLoad = false
@@ -368,6 +312,7 @@ public final class CSSStyles: Hashable, Identifiable, SendableMetatype {
     }
 
     func fail(_ error: WebInspectorProxyError) {
+        canonicalLease = nil
         sections = []
         computedProperties = []
         hasCompletedLoad = false
@@ -492,33 +437,30 @@ public final class CSSStyles: Hashable, Identifiable, SendableMetatype {
                 normalizedSections,
                 preservingMutationOf: mutatedProperty
             )
-            phase = .needsRefresh
+            markNeedsRefresh()
         }
     }
 
-    func withExclusiveOperation<Output>(
-        isolation: isolated (any Actor)? = #isolation,
-        _ operation: () async throws -> Output
-    ) async throws -> Output {
-        _ = isolation
-        try await operationGate.acquire()
-        do {
-            try Task.checkCancellation()
-            let output = try await operation()
-            await operationGate.release()
-            return output
-        } catch {
-            await operationGate.release()
-            recoverLoadingPhaseAfterCancellation(error)
-            throw error
-        }
+    package var currentCanonicalLease:
+        WebInspectorCanonicalCSSResourceLease?
+    {
+        canonicalLease
     }
 
-    private func recoverLoadingPhaseAfterCancellation(_ error: any Error) {
-        guard error is CancellationError, phase == .loading else {
-            return
+    package func beginOperation() -> Bool {
+        guard !operationIsActive else {
+            return false
         }
-        cancelLoading()
+        operationIsActive = true
+        return true
+    }
+
+    package func endOperation() {
+        precondition(
+            operationIsActive,
+            "A CSS resource operation ended without owner admission."
+        )
+        operationIsActive = false
     }
 
     private func advanceCanonicalLoadGeneration() {
@@ -584,6 +526,11 @@ public final class CSSStyles: Hashable, Identifiable, SendableMetatype {
                 isEditable: section.isEditable,
                 propertyModels: properties
             )
+        }.map { section in
+            for property in section.style.properties {
+                property.bindOwner(self)
+            }
+            return section
         }
     }
 

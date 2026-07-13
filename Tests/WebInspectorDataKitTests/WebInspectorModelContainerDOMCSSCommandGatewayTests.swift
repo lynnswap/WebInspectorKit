@@ -136,7 +136,7 @@ func modelContextRoutesCanonicalDOMMutationAndUndoThroughContainerCore()
 {
     try await withMainActorDOMCSSGatewayRuntime(domains: [.dom]) { fixture in
         let context = fixture.container.mainContext
-        try await context.waitUntilContainerReady()
+        try await context.waitUntilReady()
         let storage = try await canonicalDOMNodeID(
             rawValue: "body",
             in: fixture.container.core
@@ -200,7 +200,7 @@ func modelContextRoutesCanonicalDOMReadsAndPageCommandsThroughContainerCore()
 {
     try await withMainActorDOMCSSGatewayRuntime(domains: [.dom]) { fixture in
         let context = fixture.container.mainContext
-        try await context.waitUntilContainerReady()
+        try await context.waitUntilReady()
         let storage = try await canonicalDOMNodeID(
             rawValue: "body",
             in: fixture.container.core

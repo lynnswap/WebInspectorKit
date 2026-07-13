@@ -17,23 +17,6 @@ package final class DOMCompactNavigationController: UINavigationController {
 
     package init(
         rootViewController: UIViewController,
-        context: WebInspectorModelContext
-    ) {
-        rootViewController.webInspectorDetachFromContainerForReuse()
-        super.init(rootViewController: rootViewController)
-        navigationBar.prefersLargeTitles = false
-        webInspectorApplyNavigationControllerBackground(to: self)
-        rootViewController.navigationItem.style = .browser
-        let treeViewController = rootViewController as? DOMTreeViewController
-        let navigationItems = DOMNavigationItems(context: context)
-        navigationItems.install(on: rootViewController.navigationItem) { [weak self, weak treeViewController] in
-            treeViewController?.domTreeUndoManager ?? self?.undoManager
-        }
-        domNavigationItems = navigationItems
-    }
-
-    package init(
-        rootViewController: UIViewController,
         model: DOMPanelModel
     ) {
         rootViewController.webInspectorDetachFromContainerForReuse()
@@ -116,15 +99,4 @@ extension DOMCompactNavigationController {
 }
 #endif
 
-#Preview("DOM Compact Tree") {
-    DOMCompactNavigationController(
-        rootViewController: DOMTreeViewController(context: DOMPreviewFixtures.makeWebInspectorModelContext())
-    )
-}
-
-#Preview("DOM Compact Element") {
-    DOMCompactNavigationController(
-        rootViewController: DOMElementViewController(context: DOMPreviewFixtures.makeWebInspectorModelContext())
-    )
-}
 #endif

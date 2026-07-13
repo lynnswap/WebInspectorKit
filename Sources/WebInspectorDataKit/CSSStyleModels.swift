@@ -457,6 +457,8 @@ public final class CSSStyleProperty: Identifiable {
     /// A Boolean value indicating whether this declaration has a submitted mutation awaiting completion.
     public private(set) var isMutationPending: Bool
 
+    @ObservationIgnored package weak var ownerStyles: CSSStyles?
+
     /// A Boolean value indicating whether the declaration is enabled.
     public var isEnabled: Bool {
         status != .disabled
@@ -493,6 +495,7 @@ public final class CSSStyleProperty: Identifiable {
         self.isEditable = isEditable
         self.isModifiedByInspector = isModifiedByInspector
         isMutationPending = false
+        ownerStyles = nil
     }
 
     package convenience init(_ property: CSS.Property) {
@@ -536,6 +539,10 @@ public final class CSSStyleProperty: Identifiable {
 
     package func endMutation() {
         isMutationPending = false
+    }
+
+    package func bindOwner(_ styles: CSSStyles) {
+        ownerStyles = styles
     }
 }
 

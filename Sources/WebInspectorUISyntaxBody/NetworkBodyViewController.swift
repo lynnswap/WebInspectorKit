@@ -373,20 +373,6 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
             case .detached, .synchronizing, .domainNotConfigured, .staleModel:
                 return String(localized: "network.body.fetch.error.unavailable", bundle: WebInspectorUILocalization.bundle)
             }
-        case .context(let error):
-            switch error {
-            case .bootstrap(_, let message):
-                return message
-            case .connection(let failure):
-                switch failure {
-                case .protocolViolation(let message), .transport(let message):
-                    return message
-                case .closed, .pageUnavailable:
-                    return String(localized: "network.body.fetch.error.unavailable", bundle: WebInspectorUILocalization.bundle)
-                }
-            }
-        case .transition:
-            return String(localized: "network.body.fetch.error.unavailable", bundle: WebInspectorUILocalization.bundle)
         case .proxy(let error):
             return localizedDescription(for: error)
         }

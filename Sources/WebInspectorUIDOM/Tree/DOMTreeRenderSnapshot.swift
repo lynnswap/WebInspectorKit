@@ -90,37 +90,6 @@ struct DOMTreeRenderSnapshot: Sendable {
     let nodesByID: [DOMNode.ID: Node]
     let parentByNodeID: [DOMNode.ID: DOMNode.ID]
 
-    init(_ snapshot: DOMTreeSnapshot) {
-        revision = snapshot.revision
-        rootNodeID = snapshot.rootNodeID
-        selectedNodeID = snapshot.selectedNodeID
-        nodesByID = snapshot.nodesByID.mapValues { node in
-            Node(
-                id: node.id,
-                parentID: snapshot.parentByNodeID[node.id],
-                nodeName: node.nodeName,
-                localName: node.localName,
-                nodeValue: node.nodeValue,
-                nodeType: node.nodeType,
-                frameID: node.frameID,
-                documentURL: node.documentURL,
-                baseURL: node.baseURL,
-                attributes: node.attributes,
-                attributeList: node.attributeList,
-                children: Self.makeChildren(node.children),
-                contentDocumentID: node.contentDocumentID,
-                shadowRootIDs: node.shadowRootIDs,
-                templateContentID: node.templateContentID,
-                beforePseudoElementID: node.beforePseudoElementID,
-                otherPseudoElementIDs: node.otherPseudoElementIDs,
-                afterPseudoElementID: node.afterPseudoElementID,
-                pseudoType: node.pseudoType,
-                shadowRootType: node.shadowRootType
-            )
-        }
-        parentByNodeID = snapshot.parentByNodeID
-    }
-
     fileprivate init(
         revision: UInt64,
         rootNodeID: DOMNode.ID?,
@@ -223,25 +192,11 @@ struct DOMTreeRenderSnapshot: Sendable {
         return result
     }
 
-    private static func makeChildren(
-        _ children: DOMTreeSnapshot.Node.Children
-    ) -> Node.Children {
-        switch children {
-        case let .unrequested(count):
-            .unrequested(count: count)
-        case let .loaded(ids):
-            .loaded(ids)
-        }
-    }
 }
 
 @MainActor
 final class DOMTreeRenderState {
     private(set) var snapshot: DOMTreeRenderSnapshot
-
-    init(_ snapshot: DOMTreeSnapshot) {
-        self.snapshot = DOMTreeRenderSnapshot(snapshot)
-    }
 
     init(selectedNodeID: DOMNode.ID? = nil) {
         snapshot = DOMTreeRenderSnapshot(
@@ -262,10 +217,6 @@ final class DOMTreeRenderState {
             snapshot: snapshot,
             selectedNodeID: selectedNodeID
         )
-    }
-
-    func replace(_ legacySnapshot: DOMTreeSnapshot) {
-        snapshot = DOMTreeRenderSnapshot(legacySnapshot)
     }
 
     func replace(

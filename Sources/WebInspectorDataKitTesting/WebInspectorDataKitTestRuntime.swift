@@ -95,6 +95,7 @@ public final class WebInspectorDataKitTestRuntime {
         public let responseHeaders: [String: String]
         public let mimeType: String
         public let resourceType: Network.ResourceType
+        public let initiatorNodeID: String?
         public let encodedDataLength: Int?
         public let body: Network.Body?
 
@@ -109,6 +110,7 @@ public final class WebInspectorDataKitTestRuntime {
             responseHeaders: [String: String] = [:],
             mimeType: String = "text/plain",
             resourceType: Network.ResourceType = .fetch,
+            initiatorNodeID: String? = nil,
             encodedDataLength: Int? = nil,
             body: Network.Body? = nil
         ) {
@@ -122,6 +124,7 @@ public final class WebInspectorDataKitTestRuntime {
             self.responseHeaders = responseHeaders
             self.mimeType = mimeType
             self.resourceType = resourceType
+            self.initiatorNodeID = initiatorNodeID
             self.encodedDataLength = encodedDataLength
             self.body = body
         }
@@ -641,7 +644,10 @@ private actor ScenarioDriver {
                         headers: request.requestHeaders,
                         postData: request.postData
                     ),
-                    initiator: .init(type: "other"),
+                    initiator: .init(
+                        type: "other",
+                        nodeId: request.initiatorNodeID
+                    ),
                     timestamp: 1,
                     type: request.resourceType.rawValue
                 )
@@ -742,6 +748,7 @@ private struct RequestWillBeSentParameters: Encodable {
 
     struct Initiator: Encodable {
         let type: String
+        let nodeId: String?
     }
 
     let requestId: String

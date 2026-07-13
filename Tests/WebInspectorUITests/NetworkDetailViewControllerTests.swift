@@ -3318,17 +3318,15 @@ struct NetworkDetailViewControllerTests {
         await wire.start()
         await wire.respond(to: "Page.enable")
         await wire.respond(to: "Network.enable")
-        let core = WebInspectorModelContainerCore(
-            configuredDomains: [.network],
+        let container = WebInspectorModelContainer(
+            configuration: .init(domains: [.network]),
             modelSchemaRegistry: WebInspectorModelSchemaRegistry(
                 WebInspectorNetworkModelSchemas.registrations
             )
         )
-        let context = WebInspectorModelContext.mainContext(
-            for: core,
-            isolation: MainActor.shared
-        )
-        try await context.waitUntilContainerReady()
+        let core = container.core
+        let context = container.mainContext
+        try await context.waitUntilReady()
         do {
             try await core.attach(owning: runtime.proxy)
         } catch {
@@ -3352,7 +3350,7 @@ struct NetworkDetailViewControllerTests {
 
         await wire.respond(to: "Network.disable")
         await wire.respond(to: "Page.disable")
-        await core.closeConnection()
+        await container.close()
         await runtime.close()
         await wire.stop()
         return try result.get()

@@ -365,7 +365,7 @@ package extension CanonicalNetworkRequestQueryProjection {
     var queryValue: NetworkRequest.QueryValue {
         precondition(
             insertionOrdinal <= UInt64(Int.max),
-            "A canonical Network insertion ordinal exceeded QueryValue's legacy Int surface."
+            "A canonical Network insertion ordinal exceeded QueryValue's Int surface."
         )
         return NetworkRequest.QueryValue(
             id: NetworkRequest.ID(canonical: id),

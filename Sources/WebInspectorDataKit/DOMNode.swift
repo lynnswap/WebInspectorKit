@@ -10,35 +10,10 @@ public final class DOMNode: WebInspectorPersistentModel {
         /// The persistent model identified by this value.
         public typealias Model = DOMNode
 
-        package enum Storage: Hashable, Sendable {
-            case legacyRaw(DOM.Node.ID)
-            case canonical(WebInspectorDOMNodeIdentityStorage)
-        }
-
-        package let storage: Storage
-
-        package init(_ proxyID: DOM.Node.ID) {
-            storage = .legacyRaw(proxyID)
-        }
+        package let canonicalStorage: WebInspectorDOMNodeIdentityStorage
 
         package init(canonical storage: WebInspectorDOMNodeIdentityStorage) {
-            self.storage = .canonical(storage)
-        }
-
-        package var canonicalStorage: WebInspectorDOMNodeIdentityStorage? {
-            guard case let .canonical(storage) = storage else {
-                return nil
-            }
-            return storage
-        }
-
-        package var proxyID: DOM.Node.ID {
-            switch storage {
-            case let .legacyRaw(proxyID):
-                proxyID
-            case let .canonical(storage):
-                storage.rawNodeID
-            }
+            canonicalStorage = storage
         }
     }
 
@@ -251,7 +226,7 @@ public final class DOMNode: WebInspectorPersistentModel {
     /// Loading state for regular child nodes.
     public var children: Children {
         guard let canonicalTopology else {
-            return legacyChildren
+            return .unrequested(count: childNodeCount)
         }
         switch canonicalTopology.children {
         case let .unrequested(count):
@@ -264,37 +239,31 @@ public final class DOMNode: WebInspectorPersistentModel {
     /// The content document for frame-like elements.
     public var contentDocument: DOMNode? {
         canonicalTopology?.contentDocumentID.map(requiredCanonicalModel)
-            ?? legacyContentDocument
     }
 
     /// Shadow roots attached to the node.
     public var shadowRoots: [DOMNode] {
-        canonicalTopology?.shadowRootIDs.map(requiredCanonicalModel)
-            ?? legacyShadowRoots
+        canonicalTopology?.shadowRootIDs.map(requiredCanonicalModel) ?? []
     }
 
     /// Template content associated with the node.
     public var templateContent: DOMNode? {
         canonicalTopology?.templateContentID.map(requiredCanonicalModel)
-            ?? legacyTemplateContent
     }
 
     /// The `::before` pseudo element, if present.
     public var beforePseudoElement: DOMNode? {
         canonicalTopology?.beforePseudoElementID.map(requiredCanonicalModel)
-            ?? legacyBeforePseudoElement
     }
 
     /// Additional pseudo elements reported by WebKit.
     public var otherPseudoElements: [DOMNode] {
-        canonicalTopology?.otherPseudoElementIDs.map(requiredCanonicalModel)
-            ?? legacyOtherPseudoElements
+        canonicalTopology?.otherPseudoElementIDs.map(requiredCanonicalModel) ?? []
     }
 
     /// The `::after` pseudo element, if present.
     public var afterPseudoElement: DOMNode? {
         canonicalTopology?.afterPseudoElementID.map(requiredCanonicalModel)
-            ?? legacyAfterPseudoElement
     }
 
     /// The node's pseudo-element kind.
@@ -306,13 +275,6 @@ public final class DOMNode: WebInspectorPersistentModel {
     /// CSS styles associated with the element, when styles have been requested.
     public private(set) var elementStyles: CSSStyles?
 
-    private var legacyChildren: Children
-    private var legacyContentDocument: DOMNode?
-    private var legacyShadowRoots: [DOMNode]
-    private var legacyTemplateContent: DOMNode?
-    private var legacyBeforePseudoElement: DOMNode?
-    private var legacyOtherPseudoElements: [DOMNode]
-    private var legacyAfterPseudoElement: DOMNode?
     private var canonicalTopology: WebInspectorDOMModelTopology?
 
     @ObservationIgnored weak var modelContext: WebInspectorModelContext?
@@ -321,32 +283,6 @@ public final class DOMNode: WebInspectorPersistentModel {
         let name = localName.isEmpty ? nodeName : localName
         let normalizedName = name.lowercased()
         return normalizedName == "iframe" || normalizedName == "frame"
-    }
-
-    init(node: DOM.Node) {
-        id = ID(node.id)
-        nodeName = node.nodeName
-        localName = node.localName
-        nodeValue = node.nodeValue
-        nodeType = node.nodeType
-        frameID = node.frameID
-        documentURL = node.documentURL
-        baseURL = node.baseURL
-        attributes = node.attributes
-        attributeList = node.attributeList.map(Attribute.init)
-        childNodeCount = node.childNodeCount
-        legacyChildren = .unrequested(count: node.childNodeCount)
-        legacyContentDocument = nil
-        legacyShadowRoots = []
-        legacyTemplateContent = nil
-        legacyBeforePseudoElement = nil
-        legacyOtherPseudoElements = []
-        legacyAfterPseudoElement = nil
-        canonicalTopology = nil
-        pseudoType = node.pseudoType
-        shadowRootType = node.shadowRootType
-        elementStyles = nil
-        modelContext = nil
     }
 
     package init(
@@ -369,13 +305,6 @@ public final class DOMNode: WebInspectorPersistentModel {
         attributes = record.canonical.queryValue.attributes
         attributeList = record.canonical.attributes.map(Attribute.init)
         childNodeCount = record.canonical.children.count
-        legacyChildren = .unrequested(count: record.canonical.children.count)
-        legacyContentDocument = nil
-        legacyShadowRoots = []
-        legacyTemplateContent = nil
-        legacyBeforePseudoElement = nil
-        legacyOtherPseudoElements = []
-        legacyAfterPseudoElement = nil
         canonicalTopology = record.topology
         pseudoType = record.canonical.pseudoType
         shadowRootType = record.canonical.shadowRootType
@@ -405,19 +334,11 @@ public final class DOMNode: WebInspectorPersistentModel {
     package func applyCanonicalTopology(
         _ topology: WebInspectorDOMModelTopology
     ) {
-        guard id.canonicalStorage != nil else {
-            preconditionFailure(
-                "Canonical topology cannot be installed on a legacy DOMNode."
-            )
-        }
         canonicalTopology = topology
         childNodeCount = topology.children.count
     }
 
     package func resetCanonicalOwnerProjection() {
-        guard id.canonicalStorage != nil else {
-            return
-        }
         canonicalTopology = nil
         invalidateCanonicalCSSResource()
     }
@@ -430,8 +351,8 @@ public final class DOMNode: WebInspectorPersistentModel {
     package func applyCanonicalResourceInvalidations(
         _ invalidations: Set<WebInspectorCanonicalResourceInvalidation>
     ) {
-        guard let storage = id.canonicalStorage,
-            invalidations.contains(where: {
+        let storage = id.canonicalStorage
+        guard invalidations.contains(where: {
                 canonicalResourceInvalidation($0, affects: storage)
             })
         else {
@@ -444,138 +365,8 @@ public final class DOMNode: WebInspectorPersistentModel {
         canonicalTopology?.ancestorIDs ?? []
     }
 
-    func update(from node: DOM.Node) {
-        nodeName = node.nodeName
-        localName = node.localName
-        nodeValue = node.nodeValue
-        nodeType = node.nodeType
-        frameID = node.frameID
-        documentURL = node.documentURL
-        baseURL = node.baseURL
-        attributes = node.attributes
-        attributeList = node.attributeList.map(Attribute.init)
-        childNodeCount = node.childNodeCount
-        pseudoType = node.pseudoType
-        shadowRootType = node.shadowRootType
-    }
-
-    func setChildren(_ nodes: [DOMNode]) {
-        childNodeCount = nodes.count
-        legacyChildren = .loaded(nodes)
-    }
-
-    func setChildrenUnrequested(count: Int) {
-        childNodeCount = count
-        legacyChildren = .unrequested(count: count)
-    }
-
-    func updateChildNodeCount(_ count: Int) {
-        childNodeCount = count
-        if case .unrequested = legacyChildren {
-            legacyChildren = .unrequested(count: count)
-        }
-    }
-
-    func setAttribute(name: String, value: String) {
-        attributes[name] = value
-        if let index = attributeList.firstIndex(where: { $0.name == name }) {
-            attributeList[index] = Attribute(name: name, value: value)
-        } else {
-            attributeList.append(Attribute(name: name, value: value))
-        }
-    }
-
-    func removeAttribute(name: String) {
-        attributes[name] = nil
-        attributeList.removeAll { $0.name == name }
-    }
-
-    func setNodeValue(_ value: String) {
-        nodeValue = value
-    }
-
     func setElementStyles(_ styles: CSSStyles?) {
         elementStyles = styles
-    }
-
-    func setAssociatedNodes(
-        contentDocument: DOMNode?,
-        shadowRoots: [DOMNode],
-        templateContent: DOMNode?,
-        beforePseudoElement: DOMNode?,
-        otherPseudoElements: [DOMNode],
-        afterPseudoElement: DOMNode?
-    ) {
-        legacyContentDocument = contentDocument
-        legacyShadowRoots = shadowRoots
-        legacyTemplateContent = templateContent
-        legacyBeforePseudoElement = beforePseudoElement
-        legacyOtherPseudoElements = otherPseudoElements
-        legacyAfterPseudoElement = afterPseudoElement
-    }
-
-    func setContentDocument(_ node: DOMNode?) {
-        legacyContentDocument = node
-    }
-
-    func appendShadowRoot(_ node: DOMNode) {
-        legacyShadowRoots.removeAll { $0.id == node.id }
-        legacyShadowRoots.append(node)
-    }
-
-    func removeShadowRoot(id: ID) -> DOMNode? {
-        guard let index = legacyShadowRoots.firstIndex(where: { $0.id == id }) else {
-            return nil
-        }
-        return legacyShadowRoots.remove(at: index)
-    }
-
-    func setPseudoElement(_ node: DOMNode) -> DOMNode? {
-        switch node.pseudoType {
-        case .before:
-            let previous = legacyBeforePseudoElement
-            legacyBeforePseudoElement = node
-            return previous?.id == node.id ? nil : previous
-        case .after:
-            let previous = legacyAfterPseudoElement
-            legacyAfterPseudoElement = node
-            return previous?.id == node.id ? nil : previous
-        case .other(_), nil:
-            if let index = legacyOtherPseudoElements.firstIndex(where: { $0.id == node.id }) {
-                legacyOtherPseudoElements[index] = node
-            } else {
-                legacyOtherPseudoElements.append(node)
-            }
-            return nil
-        }
-    }
-
-    func removePseudoElement(id: ID) -> DOMNode? {
-        if legacyBeforePseudoElement?.id == id {
-            let removed = legacyBeforePseudoElement
-            legacyBeforePseudoElement = nil
-            return removed
-        }
-        if legacyAfterPseudoElement?.id == id {
-            let removed = legacyAfterPseudoElement
-            legacyAfterPseudoElement = nil
-            return removed
-        }
-        guard let index = legacyOtherPseudoElements.firstIndex(where: { $0.id == id }) else {
-            return nil
-        }
-        return legacyOtherPseudoElements.remove(at: index)
-    }
-
-    func associatedSubtreeRoots() -> [DOMNode] {
-        [legacyContentDocument]
-            .compactMap { $0 }
-            + legacyShadowRoots
-            + [legacyTemplateContent, legacyBeforePseudoElement]
-            .compactMap { $0 }
-            + legacyOtherPseudoElements
-            + [legacyAfterPseudoElement]
-            .compactMap { $0 }
     }
 
     private func replaceCanonicalContent(

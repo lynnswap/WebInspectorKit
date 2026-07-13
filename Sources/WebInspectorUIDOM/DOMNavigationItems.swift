@@ -9,10 +9,11 @@ package final class DOMNavigationItems: NSObject {
     private typealias UndoManagerProvider = @MainActor () -> UndoManager?
 
     private let context: WebInspectorModelContext
-    private let panelModel: DOMPanelModel?
-    private var statusTask: Task<Void, Never>?
+    private let panelModel: DOMPanelModel
+    private var containerStateTask: Task<Void, Never>?
     private var panelObservation: PortableObservationTracking.Token?
     private var undoManagerProvider: UndoManagerProvider = { nil }
+    private var containerState: WebInspectorModelContainer.State
 
     package struct KeyCommandActions {
         package var undo: Selector
@@ -47,22 +48,16 @@ package final class DOMNavigationItems: NSObject {
         return item
     }()
 
-    package init(context: WebInspectorModelContext) {
-        self.context = context
-        panelModel = nil
-        super.init()
-        startObservingInspection()
-    }
-
     package init(model: DOMPanelModel) {
         context = model.context
         panelModel = model
+        containerState = model.context.container.state
         super.init()
         startObservingInspection()
     }
 
     isolated deinit {
-        statusTask?.cancel()
+        containerStateTask?.cancel()
         panelObservation?.cancel()
     }
 
@@ -122,22 +117,24 @@ package final class DOMNavigationItems: NSObject {
     }
 
     private func startObservingInspection() {
-        if let panelModel {
-            panelObservation = withPortableContinuousObservation { [weak self, weak panelModel] _ in
-                guard let self,
-                      let panelModel else {
+        panelObservation = withPortableContinuousObservation { [weak self, weak panelModel] _ in
+            guard let self,
+                  let panelModel else {
+                return
+            }
+            renderPickItem(
+                isEnabled: containerState == .attached,
+                isSelectingElement: panelModel.isPickingElement
+            )
+        }
+        let updates = context.container.stateUpdates
+        containerStateTask = Task { @MainActor [weak self] in
+            for await state in updates {
+                guard let self else {
                     return
                 }
-                renderPickItem(
-                    isEnabled: context.state == .attached,
-                    isSelectingElement: panelModel.isPickingElement
-                )
-            }
-            return
-        }
-        statusTask = Task { @MainActor [weak self, context] in
-            for await status in context.statusUpdates {
-                self?.renderPickItem(status: status)
+                containerState = state
+                updatePickItemAppearance()
             }
         }
     }
@@ -219,7 +216,7 @@ package final class DOMNavigationItems: NSObject {
         UIAction(
             title: String(localized: "reload", bundle: WebInspectorUILocalization.bundle),
             image: UIImage(systemName: "arrow.clockwise"),
-            attributes: context.state == .attached ? [] : [.disabled]
+            attributes: context.container.state == .attached ? [] : [.disabled]
         ) { [weak self] _ in
             self?.performReloadCommand()
         }
@@ -286,39 +283,13 @@ package final class DOMNavigationItems: NSObject {
 
     @objc
     private func toggleElementPicker() {
-        if let panelModel {
-            panelModel.toggleElementPicker()
-            return
-        }
-        Task { @MainActor [weak context] in
-            guard let context else {
-                return
-            }
-            do {
-                try await context.setElementPickerEnabled(!(try context.isElementPickerEnabled))
-            } catch {
-                WebInspectorUIDOMLog.debug("DOM picker toggle failed: \(String(describing: error))")
-            }
-        }
+        panelModel.toggleElementPicker()
     }
 
     private func updatePickItemAppearance() {
-        if let panelModel {
-            renderPickItem(
-                isEnabled: context.state == .attached,
-                isSelectingElement: panelModel.isPickingElement
-            )
-            return
-        }
         renderPickItem(
-            status: context.status
-        )
-    }
-
-    private func renderPickItem(status: WebInspectorModelContext.Status) {
-        renderPickItem(
-            isEnabled: status.state == .attached,
-            isSelectingElement: status.isElementPickerEnabled
+            isEnabled: containerState == .attached,
+            isSelectingElement: panelModel.isPickingElement
         )
     }
 
@@ -333,17 +304,14 @@ package final class DOMNavigationItems: NSObject {
     }
 
     private var currentSelectedNode: DOMNode? {
-        if let panelModel {
-            return panelModel.selectedNode
-        }
-        return try? context.selectedDOMNode
+        panelModel.selectedNode
     }
 }
 
 #if DEBUG
 extension DOMNavigationItems {
     var statusObservationTaskForTesting: Task<Void, Never>? {
-        statusTask
+        containerStateTask
     }
 
     var pickItemForTesting: UIBarButtonItem {

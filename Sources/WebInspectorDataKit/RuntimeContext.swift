@@ -10,38 +10,10 @@ public final class RuntimeContext: WebInspectorPersistentModel {
         /// The persistent model identified by this value.
         public typealias Model = RuntimeContext
 
-        enum Storage: Hashable, Sendable {
-            case canonical(CanonicalRuntimeContextIDStorage)
-            // Remove with RuntimeStateStore when the payload driver switches
-            // to the container schema registry. This case is never accepted by
-            // the canonical schema or converted into canonical authority.
-            case legacyProxy(Runtime.ExecutionContext.ID)
-        }
-
-        let storage: Storage
-
-        init(_ proxyID: Runtime.ExecutionContext.ID) {
-            storage = .legacyProxy(proxyID)
-        }
+        package let canonicalStorage: CanonicalRuntimeContextIDStorage
 
         package init(canonical storage: CanonicalRuntimeContextIDStorage) {
-            self.storage = .canonical(storage)
-        }
-
-        package var canonicalStorage: CanonicalRuntimeContextIDStorage? {
-            guard case let .canonical(storage) = storage else {
-                return nil
-            }
-            return storage
-        }
-
-        var proxyID: Runtime.ExecutionContext.ID {
-            switch storage {
-            case let .canonical(storage):
-                storage.rawContextID
-            case let .legacyProxy(proxyID):
-                proxyID
-            }
+            canonicalStorage = storage
         }
     }
 
@@ -86,14 +58,6 @@ public final class RuntimeContext: WebInspectorPersistentModel {
 
     @ObservationIgnored weak var modelContext: WebInspectorModelContext?
 
-    init(context: Runtime.ExecutionContext) {
-        id = ID(context.id)
-        name = context.name
-        frameID = context.frameID
-        kind = context.kind
-        modelContext = nil
-    }
-
     package init(
         id: ID,
         record: CanonicalRuntimeContextRecord,
@@ -108,12 +72,6 @@ public final class RuntimeContext: WebInspectorPersistentModel {
         frameID = record.frameID
         kind = record.kind
         self.modelContext = modelContext
-    }
-
-    func update(from context: Runtime.ExecutionContext) {
-        name = context.name
-        frameID = context.frameID
-        kind = context.kind
     }
 
     package func replace(

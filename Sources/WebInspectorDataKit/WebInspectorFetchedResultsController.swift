@@ -672,7 +672,7 @@ public final class WebInspectorFetchedResultsController<
         isolation: isolated (any Actor) = #isolation
     ) async throws where SectionName == Never {
         modelContext.preconditionOwnerIsolation()
-        try await modelContext.waitUntilContainerReady()
+        try await modelContext.waitUntilReady()
         let claim = try await modelContext.fetchedResultsQueryCore
             .prepareControllerRegistration(
                 Model.self,
@@ -698,7 +698,7 @@ public final class WebInspectorFetchedResultsController<
         isolation: isolated (any Actor) = #isolation
     ) async throws {
         modelContext.preconditionOwnerIsolation()
-        try await modelContext.waitUntilContainerReady()
+        try await modelContext.waitUntilReady()
         let claim = try await modelContext.fetchedResultsQueryCore
             .prepareControllerRegistration(
                 Model.self,

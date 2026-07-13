@@ -43,14 +43,14 @@ func dataKitTestingStartsContainerReadyWithCanonicalNetworkEntryAndBodyGateway()
     #expect(request.statusCode == 201)
     #expect(request.state == .finished)
 
-    let body = try await runtime.model.responseBody(for: request)
+    let body = try await request.responseBody.load()
     #expect(body.text == "ready body")
 
     await entryResults.close()
     await domResults.close()
     await runtime.close()
     #expect(runtime.container.state == .closed)
-    #expect(runtime.model.state == .closed)
+    #expect(runtime.model.isPersistentModelProjectionClosed)
 }
 
 @MainActor

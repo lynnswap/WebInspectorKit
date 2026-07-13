@@ -8,8 +8,7 @@ import UIKit
 @MainActor
 package final class DOMElementViewController: UICollectionViewController {
     private let context: WebInspectorModelContext
-    private let panelModel: DOMPanelModel?
-    private var statusTask: Task<Void, Never>?
+    private let panelModel: DOMPanelModel
     private var panelSelectionObservation: PortableObservationTracking.Token?
     private var styleHydrationTask: Task<Void, Never>?
     private var styleHydrationGeneration: UInt64 = 0
@@ -38,12 +37,6 @@ package final class DOMElementViewController: UICollectionViewController {
 
     private lazy var dataSource = makeDataSource()
 
-    package init(context: WebInspectorModelContext) {
-        self.context = context
-        panelModel = nil
-        super.init(collectionViewLayout: Self.makeLayout())
-    }
-
     package init(model: DOMPanelModel) {
         context = model.context
         panelModel = model
@@ -61,7 +54,6 @@ package final class DOMElementViewController: UICollectionViewController {
 #endif
         styleHydrationTask?.cancel()
         selectedStylesRenderTask?.cancel()
-        statusTask?.cancel()
         panelSelectionObservation?.cancel()
         selectedStylesObservation?.cancel()
     }
@@ -203,33 +195,18 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
     private func startObservingState() {
-        if let panelModel {
-            panelSelectionObservation = withPortableContinuousObservation { [weak self, weak panelModel] _ in
-                guard let self,
-                      let panelModel else {
-                    return
-                }
-                _ = panelModel.selectionRevision
-                bindSelectedNode(panelModel.selectedNode)
+        panelSelectionObservation = withPortableContinuousObservation { [weak self, weak panelModel] _ in
+            guard let self,
+                  let panelModel else {
+                return
             }
-            return
-        }
-        bindSelectedNode(currentSelectedNode)
-        statusTask = Task { @MainActor [weak self, context] in
-            for await status in context.statusUpdates {
-                guard let self else {
-                    return
-                }
-                bindSelectedNode(status.selectedNodeID.flatMap { try? context.domNode(id: $0) })
-            }
+            _ = panelModel.selectionRevision
+            bindSelectedNode(panelModel.selectedNode)
         }
     }
 
     private var currentSelectedNode: DOMNode? {
-        if let panelModel {
-            return panelModel.selectedNode
-        }
-        return try? context.selectedDOMNode
+        panelModel.selectedNode
     }
 
     private func bindSelectedNode(_ node: DOMNode?) {

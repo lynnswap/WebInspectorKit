@@ -10,29 +10,10 @@ public final class ConsoleMessage: WebInspectorPersistentModel {
         /// The persistent model identified by this value.
         public typealias Model = ConsoleMessage
 
-        enum Storage: Hashable, Sendable {
-            case canonical(CanonicalConsoleMessageIDStorage)
-            // Remove with ConsoleMessageStore when the payload driver switches
-            // to the container schema registry. This case is never accepted by
-            // the canonical schema or converted into canonical authority.
-            case legacyOrdinal(Int)
-        }
-
-        let storage: Storage
-
-        init(_ ordinal: Int) {
-            storage = .legacyOrdinal(ordinal)
-        }
+        package let canonicalStorage: CanonicalConsoleMessageIDStorage
 
         package init(canonical storage: CanonicalConsoleMessageIDStorage) {
-            self.storage = .canonical(storage)
-        }
-
-        package var canonicalStorage: CanonicalConsoleMessageIDStorage? {
-            guard case let .canonical(storage) = storage else {
-                return nil
-            }
-            return storage
+            canonicalStorage = storage
         }
     }
 
@@ -143,31 +124,6 @@ public final class ConsoleMessage: WebInspectorPersistentModel {
 
     @ObservationIgnored weak var modelContext: WebInspectorModelContext?
 
-    init(
-        id: ID,
-        message: Console.Message,
-        parameters: [RuntimeObject],
-        targetID: WebInspectorTarget.ID?,
-        modelContext: WebInspectorModelContext
-    ) {
-        self.id = id
-        source = message.source
-        level = message.level
-        kind = message.type
-        text = message.text
-        url = message.url
-        line = message.line
-        column = message.column
-        repeatCount = message.repeatCount
-        self.parameters = parameters
-        stackTrace = message.stackTrace
-        networkRequestID = message.networkRequestID.map(NetworkRequest.ID.init)
-        timestamp = message.timestamp
-        self.targetID = targetID
-        canonicalMembership = nil
-        self.modelContext = modelContext
-    }
-
     package init(
         id: ID,
         record: CanonicalConsoleMessageRecord,
@@ -274,11 +230,6 @@ public final class ConsoleMessage: WebInspectorPersistentModel {
         membership: CanonicalConsoleMessageMembership,
         seeds: [CanonicalConsoleParameterResourceSeed]
     ) {
-        guard id.canonicalStorage != nil else {
-            preconditionFailure(
-                "Canonical parameter graphs cannot be installed on a legacy ConsoleMessage."
-            )
-        }
         invalidateParameterGraphs()
         parameters = Self.makeCanonicalParameters(id: id, seeds: seeds)
         canonicalMembership = membership

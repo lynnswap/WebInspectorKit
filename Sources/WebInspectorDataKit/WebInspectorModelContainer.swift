@@ -156,7 +156,7 @@ public final class WebInspectorModelContainer: Equatable, Sendable {
 
     package let core: WebInspectorModelContainerCore
 
-    @MainActor private var cachedMainContext: WebInspectorModelContext? = nil
+    @MainActor private weak var cachedMainContext: WebInspectorModelContext?
 
     /// The current connection lifecycle state.
     public nonisolated var state: State {
@@ -175,7 +175,7 @@ public final class WebInspectorModelContainer: Equatable, Sendable {
             return cachedMainContext
         }
         let context = WebInspectorModelContext.mainContext(
-            for: core,
+            for: self,
             isolation: MainActor.shared
         )
         cachedMainContext = context
@@ -196,6 +196,20 @@ public final class WebInspectorModelContainer: Equatable, Sendable {
             modelSchemaRegistry: WebInspectorModelSchemaInventory.registry(
                 configuredDomains: modelDomains
             )
+        )
+    }
+
+    package nonisolated init(
+        configuration: Configuration,
+        modelSchemaRegistry: WebInspectorModelSchemaRegistry
+    ) {
+        let normalizedConfiguration = Configuration(
+            domains: configuration.domains
+        )
+        self.configuration = normalizedConfiguration
+        core = WebInspectorModelContainerCore(
+            configuredDomains: normalizedConfiguration.modelDomains,
+            modelSchemaRegistry: modelSchemaRegistry
         )
     }
 
@@ -291,7 +305,7 @@ public final class WebInspectorModelContainer: Equatable, Sendable {
 
         guard
             let context = WebInspectorModelContext.customContext(
-                for: core,
+                for: self,
                 registration: registration,
                 isolation: isolation
             )
@@ -300,7 +314,7 @@ public final class WebInspectorModelContainer: Equatable, Sendable {
             throw Failure.closed
         }
 
-        try await context.waitUntilContainerReady()
+        try await context.waitUntilReady()
         return context
     }
 
