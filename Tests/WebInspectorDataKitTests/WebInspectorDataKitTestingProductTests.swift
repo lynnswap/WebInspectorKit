@@ -155,6 +155,20 @@ func dataKitTestingDrivesIncrementalDOMEventsThroughTheProductionTreeStream()
 
     try await runtime.emitDOMChildNodeInserted(
         parentID: "body",
+        node: .element(id: "first", name: "em")
+    )
+    guard case let .changes(_, _, .delta(firstInsertionDelta)) =
+        await iterator.next()
+    else {
+        preconditionFailure("A zero previousNodeId must insert the first DOM child.")
+    }
+    let firstID = try #require(firstInsertionDelta.upsertedRows.first { row in
+        row.id.canonicalStorage.rawNodeID.rawValue == "first"
+    }?.id)
+    #expect(runtime.model.model(for: firstID)?.localName == "em")
+
+    try await runtime.emitDOMChildNodeInserted(
+        parentID: "body",
         previousNodeID: "span",
         node: .element(id: "strong", name: "strong")
     )

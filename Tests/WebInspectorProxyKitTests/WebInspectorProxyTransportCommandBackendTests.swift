@@ -1771,6 +1771,29 @@ func networkInitiatorTreatsUnboundDOMNodeSentinelAsMissing() throws {
 }
 
 @Test
+func DOMChildInsertionTreatsZeroPreviousNodeAsTheFirstChild() throws {
+    let event = ProtocolEvent(
+        sequence: 1,
+        domain: .dom,
+        method: "DOM.childNodeInserted",
+        targetID: nil,
+        paramsData: Data(#"{"parentNodeId":1,"previousNodeId":0,"node":{"nodeId":2,"nodeType":1,"nodeName":"DIV","localName":"div","nodeValue":""}}"#.utf8)
+    )
+
+    guard case let .dom(.childNodeInserted(parent, previous, node)) = try LiveProxyEventDecoder.proxyEvent(
+        from: event,
+        targetID: WebInspectorTarget.ID("page-main")
+    ) else {
+        Issue.record("Expected a decoded DOM child insertion event.")
+        return
+    }
+
+    #expect(parent == DOM.Node.ID("1"))
+    #expect(previous == nil)
+    #expect(node.id == DOM.Node.ID("2"))
+}
+
+@Test
 func networkRequestWillBeSentRequiresProtocolFrameAndLoaderMembership() {
     let missingLoader = ProtocolEvent(
         sequence: 1,

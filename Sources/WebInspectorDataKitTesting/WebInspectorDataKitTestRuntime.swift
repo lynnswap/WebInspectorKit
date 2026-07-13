@@ -689,7 +689,7 @@ private actor ScenarioDriver {
             parameters: try WebInspectorTestJSONObject(encoding:
                 DOMChildNodeInsertedParameters(
                     parentNodeId: parentID,
-                    previousNodeId: previousNodeID,
+                    previousNodeId: previousNodeID ?? "0",
                     node: DOMNodeWire(node: node)
                 )
             )
@@ -937,7 +937,7 @@ private struct DOMSetChildNodesParameters: Encodable {
 
 private struct DOMChildNodeInsertedParameters: Encodable {
     let parentNodeId: String
-    let previousNodeId: String?
+    let previousNodeId: String
     let node: DOMNodeWire
 }
 

@@ -135,7 +135,7 @@ private func rawDOMEvent(_ event: DOM.Event) throws -> RawWireEvent {
             "DOM.childNodeInserted",
             DOMChildNodeInsertedWire(
                 parentNodeId: parent.rawValue,
-                previousNodeId: previous?.rawValue,
+                previousNodeId: previous?.rawValue ?? "0",
                 node: DOMNodeWire(node)
             )
         )
@@ -468,7 +468,7 @@ private struct DOMSetChildNodesWire: Encodable {
 
 private struct DOMChildNodeInsertedWire: Encodable {
     let parentNodeId: String
-    let previousNodeId: String?
+    let previousNodeId: String
     let node: DOMNodeWire
 }
 
