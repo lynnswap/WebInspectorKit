@@ -3641,6 +3641,12 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         for request: NetworkRequest,
         isolation: isolated (any Actor) = #isolation
     ) async throws -> NetworkBody {
+        if request.id.canonicalStorage != nil {
+            return try await loadCanonicalResponseBody(
+                request.responseBody,
+                isolation: isolation
+            )
+        }
         let body = request.responseBody
         do {
             try requireConfigured(.network)
@@ -3728,6 +3734,89 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         return body
     }
 
+    package func loadCanonicalResponseBody(
+        _ body: NetworkBody,
+        isolation: isolated (any Actor) = #isolation
+    ) async throws -> NetworkBody {
+        _ = isolation
+        preconditionOwnerIsolation()
+        try requireConfigured(.network)
+        guard let requestID = body.boundCanonicalRequestID,
+            let storage = requestID.canonicalStorage,
+            let request: NetworkRequest = registeredModel(for: requestID),
+            request.responseBody === body,
+            request.modelContext === self
+        else {
+            throw WebInspectorModelError.staleModel
+        }
+
+        let coreForNewFetch: WebInspectorModelContainerCore?
+        if case .available = body.phase {
+            guard request.canFetchResponseBody else {
+                throw WebInspectorModelError.commandRejected(
+                    method: "Network.getResponseBody",
+                    message: "The response body is not available for this request."
+                )
+            }
+            guard let binding = containerRegistrationBinding else {
+                throw WebInspectorModelError.detached
+            }
+            coreForNewFetch = binding.core
+        } else {
+            coreForNewFetch = nil
+        }
+
+        let lease: NetworkBody.ResponseFetchLease
+        switch body.acquireResponseFetch() {
+        case .loaded:
+            return body
+        case let .failed(failure):
+            try Self.throwResponseBodyFailure(failure)
+        case let .waiter(existingLease):
+            lease = existingLease
+        case let .owner(newLease):
+            guard let core = coreForNewFetch else {
+                preconditionFailure(
+                    "An available canonical NetworkBody lost its Container Core preflight."
+                )
+            }
+            lease = newLease
+            let completion = newLease.completion
+            let task = Task { [weak body] in
+                _ = isolation
+                let result = await Self.loadCanonicalResponseBody(
+                    from: core,
+                    requestID: storage
+                )
+                guard let body else {
+                    completion.fulfill(
+                        .failure(WebInspectorProxyError.staleIdentifier)
+                    )
+                    return
+                }
+                body.finishResponseFetch(result, for: newLease)
+            }
+            body.installResponseFetchTask(task, for: newLease)
+        }
+
+        do {
+            _ = try await lease.completion.value()
+        } catch WebInspectorProxyError.staleIdentifier {
+            guard body.isCurrentResponseFetch(lease) else {
+                throw WebInspectorModelError.staleModel
+            }
+            throw WebInspectorProxyError.staleIdentifier
+        }
+        guard let current: NetworkRequest = registeredModel(for: requestID),
+            current === request,
+            current.responseBody === body,
+            body.isCurrentResponseFetch(lease)
+        else {
+            throw WebInspectorModelError.staleModel
+        }
+        return body
+    }
+
     private func responseBodyFetchIsCurrent(
         _ lease: NetworkBody.ResponseFetchLease,
         body: NetworkBody,
@@ -3774,6 +3863,43 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
             return .failure(.staleIdentifier)
         } catch let error as WebInspectorProxyError {
             return .failure(error)
+        } catch {
+            return .failure(.commandFailed(
+                domain: "Network",
+                method: "getResponseBody",
+                message: String(describing: error)
+            ))
+        }
+    }
+
+    private nonisolated static func loadCanonicalResponseBody(
+        from core: WebInspectorModelContainerCore,
+        requestID: CanonicalNetworkRequestIDStorage
+    ) async -> Result<Network.Body, WebInspectorProxyError> {
+        do {
+            return .success(
+                try await core.loadNetworkResponseBody(for: requestID)
+            )
+        } catch is CancellationError {
+            return .failure(.staleIdentifier)
+        } catch let error as WebInspectorNetworkResponseBodyCommandError {
+            switch error {
+            case .closed:
+                return .failure(.closed)
+            case .staleRequest, .requestNotFound, .staleResponse:
+                return .failure(.staleIdentifier)
+            case let .proxy(proxyError):
+                return .failure(proxyError)
+            case .detached, .domainNotConfigured, .foreignStore,
+                 .agentTargetUnavailable, .responseMissing,
+                 .responseNotFinished, .webSocketIneligible,
+                 .authorization, .invalidReply:
+                return .failure(.commandFailed(
+                    domain: "Network",
+                    method: "getResponseBody",
+                    message: String(describing: error)
+                ))
+            }
         } catch {
             return .failure(.commandFailed(
                 domain: "Network",

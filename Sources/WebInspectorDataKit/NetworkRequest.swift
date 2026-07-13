@@ -22,6 +22,9 @@ public struct NetworkRequestSnapshot: Equatable, Sendable {
     /// The request integrity metadata, if any.
     public let integrity: String?
 
+    /// The backend resource identity used by WebKit body lookup, if any.
+    public let backendResourceIdentifier: Network.BackendResourceID?
+
     /// Creates a request snapshot.
     public init(
         url: String,
@@ -29,7 +32,8 @@ public struct NetworkRequestSnapshot: Equatable, Sendable {
         headers: [String: String] = [:],
         postData: String? = nil,
         referrerPolicy: String? = nil,
-        integrity: String? = nil
+        integrity: String? = nil,
+        backendResourceIdentifier: Network.BackendResourceID? = nil
     ) {
         self.url = url
         self.method = method
@@ -37,6 +41,7 @@ public struct NetworkRequestSnapshot: Equatable, Sendable {
         self.postData = postData
         self.referrerPolicy = referrerPolicy
         self.integrity = integrity
+        self.backendResourceIdentifier = backendResourceIdentifier
     }
 
     init(_ request: Network.Request) {
@@ -46,7 +51,8 @@ public struct NetworkRequestSnapshot: Equatable, Sendable {
             headers: request.headers,
             postData: request.postData,
             referrerPolicy: request.referrerPolicy?.rawValue,
-            integrity: request.integrity
+            integrity: request.integrity,
+            backendResourceIdentifier: request.backendResourceIdentifier
         )
     }
 }
@@ -74,6 +80,9 @@ public struct NetworkResponseSnapshot: Equatable, Sendable {
     /// Request headers associated with the response, if reported.
     public let requestHeaders: [String: String]?
 
+    /// The response body size reported by WebKit, if any.
+    public let bodySize: Int?
+
     /// Creates a response snapshot.
     public init(
         url: String? = nil,
@@ -82,7 +91,8 @@ public struct NetworkResponseSnapshot: Equatable, Sendable {
         mimeType: String? = nil,
         headers: [String: String] = [:],
         source: String? = nil,
-        requestHeaders: [String: String]? = nil
+        requestHeaders: [String: String]? = nil,
+        bodySize: Int? = nil
     ) {
         self.url = url
         self.status = status
@@ -91,6 +101,7 @@ public struct NetworkResponseSnapshot: Equatable, Sendable {
         self.headers = headers
         self.source = source
         self.requestHeaders = requestHeaders
+        self.bodySize = bodySize
     }
 
     init(_ response: Network.Response) {
@@ -101,7 +112,8 @@ public struct NetworkResponseSnapshot: Equatable, Sendable {
             mimeType: response.mimeType,
             headers: response.headers,
             source: response.source?.rawValue,
-            requestHeaders: response.requestHeaders
+            requestHeaders: response.requestHeaders,
+            bodySize: response.bodySize
         )
     }
 }
@@ -117,15 +129,45 @@ public struct RedirectHop: Equatable, Sendable {
     /// The protocol timestamp for the redirect.
     public let timestamp: Double
 
+    /// The resource type associated with this completed hop.
+    public let resourceType: Network.ResourceType?
+
+    /// The timestamp when this hop's request was sent.
+    public let requestSentTimestamp: Double?
+
+    /// The timestamp when this hop's response was received.
+    public let responseReceivedTimestamp: Double?
+
+    /// The timestamp for this hop's last data event.
+    public let lastDataReceivedTimestamp: Double?
+
+    /// Decoded bytes attributed to this redirect hop.
+    public let decodedDataLength: Int
+
+    /// Encoded bytes attributed to this redirect hop.
+    public let encodedDataLength: Int
+
     /// Creates a redirect hop.
     public init(
         request: NetworkRequestSnapshot,
         response: NetworkResponseSnapshot,
-        timestamp: Double
+        timestamp: Double,
+        resourceType: Network.ResourceType? = nil,
+        requestSentTimestamp: Double? = nil,
+        responseReceivedTimestamp: Double? = nil,
+        lastDataReceivedTimestamp: Double? = nil,
+        decodedDataLength: Int = 0,
+        encodedDataLength: Int = 0
     ) {
         self.request = request
         self.response = response
         self.timestamp = timestamp
+        self.resourceType = resourceType
+        self.requestSentTimestamp = requestSentTimestamp
+        self.responseReceivedTimestamp = responseReceivedTimestamp
+        self.lastDataReceivedTimestamp = lastDataReceivedTimestamp
+        self.decodedDataLength = decodedDataLength
+        self.encodedDataLength = encodedDataLength
     }
 
     init(request: Network.Request, response: Network.Response, timestamp: Double) {
@@ -210,20 +252,39 @@ public final class WebSocketState {
     /// The current WebSocket ready state.
     public private(set) var readyState: ReadyState
 
+    /// The URL carried by the WebSocket creation event.
+    public private(set) var creationURL: String?
+
     /// The handshake request snapshot.
     public private(set) var handshakeRequest: NetworkRequestSnapshot?
 
     /// The handshake response snapshot.
     public private(set) var handshakeResponse: NetworkResponseSnapshot?
 
+    /// The timestamp associated with the handshake request.
+    public private(set) var handshakeRequestTimestamp: Double?
+
+    /// The timestamp associated with the handshake response.
+    public private(set) var handshakeResponseTimestamp: Double?
+
     /// Frames and errors observed for the WebSocket.
     public private(set) var frames: [Frame]
 
-    init(readyState: ReadyState = .connecting) {
+    /// The timestamp associated with the close event.
+    public private(set) var closedTimestamp: Double?
+
+    init(
+        readyState: ReadyState = .connecting,
+        creationURL: String? = nil
+    ) {
         self.readyState = readyState
+        self.creationURL = creationURL
         handshakeRequest = nil
         handshakeResponse = nil
+        handshakeRequestTimestamp = nil
+        handshakeResponseTimestamp = nil
         frames = []
+        closedTimestamp = nil
     }
 
     func markConnecting() {
@@ -238,14 +299,41 @@ public final class WebSocketState {
         readyState = .closed
     }
 
+    func updateCreationURL(_ url: String) {
+        creationURL = url
+    }
+
     func applyHandshakeRequest(_ request: Network.Request) {
         handshakeRequest = NetworkRequestSnapshot(request)
+        handshakeRequestTimestamp = nil
         readyState = .connecting
+    }
+
+    func applyHandshakeRequest(
+        _ request: Network.Request,
+        timestamp: Double?
+    ) {
+        applyHandshakeRequest(request)
+        handshakeRequestTimestamp = timestamp
     }
 
     func applyHandshakeResponse(_ response: Network.Response) {
         handshakeResponse = NetworkResponseSnapshot(response)
+        handshakeResponseTimestamp = nil
         readyState = .open
+    }
+
+    func applyHandshakeResponse(
+        _ response: Network.Response,
+        timestamp: Double?
+    ) {
+        applyHandshakeResponse(response)
+        handshakeResponseTimestamp = timestamp
+    }
+
+    func markClosed(timestamp: Double) {
+        markClosed()
+        closedTimestamp = timestamp
     }
 
     func appendFrame(
@@ -269,6 +357,78 @@ public final class WebSocketState {
             errorMessage: message,
             timestamp: timestamp
         ))
+    }
+
+    package convenience init(_ record: CanonicalNetworkWebSocketRecord) {
+        self.init()
+        replace(with: record)
+    }
+
+    package func replace(with record: CanonicalNetworkWebSocketRecord) {
+        creationURL = record.creationURL
+        readyState = Self.readyState(record.readyState)
+        handshakeRequest = record.handshakeRequest.map {
+            NetworkRequestSnapshot($0.request.proxyValue)
+        }
+        handshakeRequestTimestamp = record.handshakeRequest?.timestamp
+        handshakeResponse = record.handshakeResponse.map {
+            NetworkResponseSnapshot($0.response.proxyValue)
+        }
+        handshakeResponseTimestamp = record.handshakeResponse?.timestamp
+        frames = record.contents.map(Self.frame)
+        closedTimestamp = record.closedTimestamp
+    }
+
+    package func append(_ content: CanonicalNetworkWebSocketContent) {
+        frames.append(Self.frame(content))
+    }
+
+    package func setReadyState(
+        _ readyState: CanonicalNetworkWebSocketReadyState
+    ) {
+        self.readyState = Self.readyState(readyState)
+    }
+
+    private static func readyState(
+        _ state: CanonicalNetworkWebSocketReadyState
+    ) -> ReadyState {
+        switch state {
+        case .connecting:
+            .connecting
+        case .open:
+            .open
+        case .closed:
+            .closed
+        }
+    }
+
+    private static func frame(
+        _ content: CanonicalNetworkWebSocketContent
+    ) -> Frame {
+        switch content {
+        case let .frame(
+            direction,
+            opcode,
+            mask,
+            payloadData,
+            payloadLength,
+            timestamp
+        ):
+            return Frame(
+                direction: direction == .sent ? .sent : .received,
+                opcode: opcode,
+                mask: mask,
+                payloadData: payloadData,
+                payloadLength: payloadLength,
+                timestamp: timestamp
+            )
+        case let .error(message, timestamp):
+            return Frame(
+                direction: .error(message),
+                errorMessage: message,
+                timestamp: timestamp
+            )
+        }
     }
 }
 
@@ -435,6 +595,10 @@ public final class NetworkBody {
     @ObservationIgnored private var needsTextRepresentationInvalidation: Bool
     @ObservationIgnored private var responseRevision: UInt64
     @ObservationIgnored private var responseFetch: ResponseFetch?
+    @ObservationIgnored private weak var canonicalModelContext:
+        WebInspectorModelContext?
+    @ObservationIgnored private var canonicalRequestID: NetworkRequest.ID?
+    @ObservationIgnored private var hasCanonicalResponseMetadata: Bool
 
     package init(
         role: Role = .response,
@@ -461,6 +625,9 @@ public final class NetworkBody {
         needsTextRepresentationInvalidation = false
         responseRevision = 0
         responseFetch = nil
+        canonicalModelContext = nil
+        canonicalRequestID = nil
+        hasCanonicalResponseMetadata = false
         refreshTextRepresentation()
     }
 
@@ -610,6 +777,85 @@ public final class NetworkBody {
             "A NetworkBody exhausted its response revision space."
         )
         responseRevision += 1
+        resetPayloadForResponse(response, fallbackURL: fallbackURL)
+    }
+
+    package func bindCanonicalOwner(
+        _ modelContext: WebInspectorModelContext,
+        requestID: NetworkRequest.ID
+    ) {
+        precondition(
+            role == .response,
+            "Only a response NetworkBody can bind canonical command ownership."
+        )
+        precondition(
+            requestID.canonicalStorage != nil,
+            "A canonical response body requires a canonical request identity."
+        )
+        canonicalModelContext = modelContext
+        canonicalRequestID = requestID
+    }
+
+    package func synchronizeCanonicalResponse(
+        revision: UInt64,
+        response: Network.Response?,
+        fallbackURL: String
+    ) {
+        precondition(
+            role == .response,
+            "Only a response NetworkBody can adopt canonical response metadata."
+        )
+        precondition(
+            revision >= responseRevision,
+            "A NetworkBody cannot move its canonical response revision backward."
+        )
+        guard !hasCanonicalResponseMetadata || revision != responseRevision else {
+            return
+        }
+        responseRevision = revision
+        hasCanonicalResponseMetadata = true
+        resetPayloadForResponse(response, fallbackURL: fallbackURL)
+    }
+
+    package func invalidateCanonicalOwner() {
+        canonicalModelContext = nil
+        canonicalRequestID = nil
+        failResponseFetch(
+            .model(.staleModel),
+            completionError: WebInspectorModelError.staleModel
+        )
+    }
+
+    package var canonicalResponseRevision: UInt64 {
+        responseRevision
+    }
+
+    package var boundCanonicalRequestID: NetworkRequest.ID? {
+        canonicalRequestID
+    }
+
+    /// Loads this response body through its model container's canonical
+    /// Network command authority.
+    @discardableResult
+    public func load(
+        isolation: isolated (any Actor) = #isolation
+    ) async throws -> NetworkBody {
+        _ = isolation
+        guard let modelContext = canonicalModelContext,
+            canonicalRequestID != nil
+        else {
+            throw WebInspectorModelError.staleModel
+        }
+        return try await modelContext.loadCanonicalResponseBody(
+            self,
+            isolation: isolation
+        )
+    }
+
+    private func resetPayloadForResponse(
+        _ response: Network.Response?,
+        fallbackURL: String
+    ) {
         let hints = Self.bodyHints(
             mimeType: response?.mimeType,
             headers: response?.headers ?? [:],
@@ -996,6 +1242,9 @@ public final class NetworkRequest: WebInspectorPersistentModel {
     /// Timestamp when the request was sent.
     public private(set) var requestSentTimestamp: Double?
 
+    /// Timestamp when this redirect chain or WebSocket request began.
+    public private(set) var logicalStartTimestamp: Double?
+
     /// Timestamp when the response was received.
     public private(set) var responseReceivedTimestamp: Double?
 
@@ -1025,6 +1274,12 @@ public final class NetworkRequest: WebInspectorPersistentModel {
 
     /// Response body state. Its identity is stable for this request model.
     public let responseBody: NetworkBody
+
+    /// Whether WebKit permits later multipart response continuation events.
+    public private(set) var allowsMultipartContinuation: Bool
+
+    /// Whether WebKit served the current response from its memory cache.
+    public private(set) var wasServedFromMemoryCache: Bool
 
     @ObservationIgnored weak var modelContext: WebInspectorModelContext?
     @ObservationIgnored private var currentRequest: Network.Request
@@ -1070,6 +1325,7 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         requestHeaders = request.headers
         responseHeaders = [:]
         requestSentTimestamp = timestamp
+        logicalStartTimestamp = timestamp
         responseReceivedTimestamp = nil
         lastDataReceivedTimestamp = nil
         finishedOrFailedTimestamp = nil
@@ -1080,13 +1336,15 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         webSocket = resourceType == .webSocket ? WebSocketState() : nil
         requestBody = NetworkBody.makeRequestBody(for: request)
         responseBody = NetworkBody()
+        allowsMultipartContinuation = false
+        wasServedFromMemoryCache = false
         self.modelContext = modelContext
         currentRequest = request
     }
 
     /// A Boolean value indicating whether the response body can be fetched now.
     public var canFetchResponseBody: Bool {
-        guard state == .finished else {
+        guard state == .finished, hasResponseBody else {
             return false
         }
         return responseBody.needsFetch
@@ -1173,6 +1431,7 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         sourceMapURL = nil
         responseHeaders = [:]
         requestSentTimestamp = timestamp
+        logicalStartTimestamp = timestamp
         responseReceivedTimestamp = nil
         lastDataReceivedTimestamp = nil
         finishedOrFailedTimestamp = nil
@@ -1183,6 +1442,8 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         webSocket = resourceType == .webSocket ? WebSocketState() : nil
         requestBody = NetworkBody.makeRequestBody(for: request)
         responseBody.resetForResponse(fallbackURL: currentRequest.url)
+        allowsMultipartContinuation = false
+        wasServedFromMemoryCache = false
         state = .pending
     }
 
@@ -1220,6 +1481,8 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         metrics = nil
         requestBody = NetworkBody.makeRequestBody(for: request)
         responseBody.resetForResponse(fallbackURL: currentRequest.url)
+        allowsMultipartContinuation = false
+        wasServedFromMemoryCache = false
         state = .pending
     }
 
@@ -1250,6 +1513,7 @@ public final class NetworkRequest: WebInspectorPersistentModel {
             responseReceivedTimestamp = timestamp
         }
         responseBody.resetForResponse(response, fallbackURL: currentRequest.url)
+        wasServedFromMemoryCache = false
         state = .responded
     }
 
@@ -1305,6 +1569,7 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         }
         currentRequest = requestWithHeaders(requestHeaders)
         requestSentTimestamp = timestamp
+        logicalStartTimestamp = timestamp
         responseReceivedTimestamp = timestamp
         lastDataReceivedTimestamp = nil
         finishedOrFailedTimestamp = timestamp
@@ -1315,6 +1580,8 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         redirects = []
         requestBody = NetworkBody.makeRequestBody(for: currentRequest)
         responseBody.resetForResponse(response, fallbackURL: currentRequest.url)
+        allowsMultipartContinuation = false
+        wasServedFromMemoryCache = true
         state = .finished
     }
 
@@ -1326,7 +1593,7 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         self.url = url
         currentRequest = requestWithURL(url)
         resourceType = .webSocket
-        _ = ensureWebSocketState()
+        ensureWebSocketState().updateCreationURL(url)
     }
 
     func applyWebSocketHandshakeRequest(_ request: Network.Request, timestamp: Double?) {
@@ -1345,14 +1612,21 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         responseSource = nil
         if let timestamp {
             requestSentTimestamp = timestamp
+            logicalStartTimestamp = logicalStartTimestamp ?? timestamp
         }
         state = .pending
-        ensureWebSocketState().applyHandshakeRequest(request)
+        ensureWebSocketState().applyHandshakeRequest(
+            request,
+            timestamp: timestamp
+        )
     }
 
     func applyWebSocketHandshakeResponse(_ response: Network.Response, timestamp: Double?) {
         applyResponse(response, resourceType: .webSocket, timestamp: timestamp)
-        ensureWebSocketState().applyHandshakeResponse(response)
+        ensureWebSocketState().applyHandshakeResponse(
+            response,
+            timestamp: timestamp
+        )
     }
 
     func appendWebSocketFrame(
@@ -1371,9 +1645,253 @@ public final class NetworkRequest: WebInspectorPersistentModel {
     }
 
     func closeWebSocket(timestamp: Double) {
-        ensureWebSocketState().markClosed()
+        ensureWebSocketState().markClosed(timestamp: timestamp)
         finishedOrFailedTimestamp = timestamp
         state = .finished
+    }
+
+    package init(
+        canonical record: CanonicalNetworkRequestRecord,
+        modelContext: WebInspectorModelContext
+    ) {
+        let hop = record.currentHop
+        let response = hop.response?.proxyValue
+        let request = hop.request.proxyValue(
+            overridingHeaders: response?.requestHeaders
+        )
+        id = ID(canonical: record.id)
+        url = request.url
+        method = request.method
+        initiator = record.initialInitiator?.proxyValue
+        resourceType = hop.resourceType.map(Network.ResourceType.init(rawValue:))
+        state = Self.state(record.lifecycle)
+        status = response?.status
+        statusText = response?.statusText
+        responseURL = response?.url
+        mimeType = response?.mimeType
+        responseSource = response?.source?.rawValue
+        sourceMapURL = hop.sourceMapURL
+        requestHeaders = request.headers
+        responseHeaders = response?.headers ?? [:]
+        requestSentTimestamp = hop.requestSentTimestamp
+        logicalStartTimestamp = record.logicalStartTimestamp
+        responseReceivedTimestamp = hop.responseReceivedTimestamp
+        lastDataReceivedTimestamp = hop.transfer.lastDataReceivedTimestamp
+        finishedOrFailedTimestamp = hop.terminalTimestamp
+        decodedDataLength = hop.transfer.decodedDataLength
+        encodedDataLength = hop.transfer.encodedDataLength
+        metrics = hop.metrics?.proxyValue
+        redirects = record.redirects.map(\.publicValue)
+        webSocket = record.webSocket.map(WebSocketState.init)
+        requestBody = NetworkBody.makeRequestBody(for: request)
+        responseBody = NetworkBody()
+        allowsMultipartContinuation = record.allowsMultipartContinuation
+        wasServedFromMemoryCache = hop.servedFromMemoryCache
+        self.modelContext = modelContext
+        currentRequest = request
+
+        responseBody.bindCanonicalOwner(modelContext, requestID: id)
+        responseBody.synchronizeCanonicalResponse(
+            revision: record.responseBodyRevision,
+            response: response,
+            fallbackURL: request.url
+        )
+        applyCanonicalTerminalBodyState(record.lifecycle)
+    }
+
+    package func replaceCanonicalRecord(
+        _ record: CanonicalNetworkRequestRecord,
+        modelContext: WebInspectorModelContext
+    ) {
+        precondition(
+            id == ID(canonical: record.id),
+            "A NetworkRequest cannot adopt another canonical identity."
+        )
+        self.modelContext = modelContext
+        redirects = record.redirects.map(\.publicValue)
+        initiator = record.initialInitiator?.proxyValue
+        logicalStartTimestamp = record.logicalStartTimestamp
+        webSocket = record.webSocket.map(WebSocketState.init)
+        allowsMultipartContinuation = record.allowsMultipartContinuation
+        applyCanonicalCurrentHop(record.currentHop)
+        responseBody.bindCanonicalOwner(modelContext, requestID: id)
+        responseBody.synchronizeCanonicalResponse(
+            revision: record.responseBodyRevision,
+            response: record.currentHop.response?.proxyValue,
+            fallbackURL: record.currentHop.request.url
+        )
+        state = Self.state(record.lifecycle)
+        applyCanonicalTerminalBodyState(record.lifecycle)
+    }
+
+    package func applyCanonicalPatch(
+        _ patch: CanonicalNetworkRequestPatch
+    ) {
+        precondition(
+            id.canonicalStorage != nil,
+            "Canonical Network patches cannot target a legacy request identity."
+        )
+        switch patch {
+        case let .redirect(
+            appendedHop,
+            currentHop,
+            lifecycle,
+            allowsMultipartContinuation,
+            responseBodyRevision
+        ):
+            redirects.append(appendedHop.publicValue)
+            applyCanonicalCurrentHop(currentHop)
+            self.allowsMultipartContinuation = allowsMultipartContinuation
+            responseBody.synchronizeCanonicalResponse(
+                revision: responseBodyRevision,
+                response: currentHop.response?.proxyValue,
+                fallbackURL: currentHop.request.url
+            )
+            state = Self.state(lifecycle)
+            applyCanonicalTerminalBodyState(lifecycle)
+
+        case let .response(
+            currentHop,
+            lifecycle,
+            allowsMultipartContinuation,
+            responseBodyRevision
+        ):
+            applyCanonicalCurrentHop(currentHop)
+            self.allowsMultipartContinuation = allowsMultipartContinuation
+            responseBody.synchronizeCanonicalResponse(
+                revision: responseBodyRevision,
+                response: currentHop.response?.proxyValue,
+                fallbackURL: currentHop.request.url
+            )
+            state = Self.state(lifecycle)
+            applyCanonicalTerminalBodyState(lifecycle)
+
+        case let .transfer(transfer, lifecycle):
+            applyCanonicalTransfer(transfer)
+            state = Self.state(lifecycle)
+            applyCanonicalTerminalBodyState(lifecycle)
+
+        case let .terminal(currentHop, lifecycle):
+            applyCanonicalCurrentHop(currentHop)
+            state = Self.state(lifecycle)
+            applyCanonicalTerminalBodyState(lifecycle)
+
+        case let .webSocketHandshakeResponse(
+            handshake,
+            response,
+            responseReceivedTimestamp,
+            readyState,
+            lifecycle,
+            responseBodyRevision
+        ):
+            let response = response.proxyValue
+            resourceType = .webSocket
+            status = response.status
+            statusText = response.statusText
+            responseURL = response.url
+            mimeType = response.mimeType
+            responseSource = response.source?.rawValue
+            responseHeaders = response.headers
+            if let headers = response.requestHeaders {
+                requestHeaders = headers
+                currentRequest = currentRequest.replacingHeaders(headers)
+                requestBody = NetworkBody.makeRequestBody(for: currentRequest)
+            }
+            self.responseReceivedTimestamp = responseReceivedTimestamp
+            let webSocket = ensureWebSocketState()
+            webSocket.applyHandshakeResponse(
+                handshake.response.proxyValue,
+                timestamp: handshake.timestamp
+            )
+            webSocket.setReadyState(readyState)
+            responseBody.synchronizeCanonicalResponse(
+                revision: responseBodyRevision,
+                response: response,
+                fallbackURL: currentRequest.url
+            )
+            state = Self.state(lifecycle)
+            applyCanonicalTerminalBodyState(lifecycle)
+
+        case let .webSocketContentAppended(content, transfer):
+            ensureWebSocketState().append(content)
+            applyCanonicalTransfer(transfer)
+
+        case let .webSocketClosed(timestamp, lifecycle):
+            ensureWebSocketState().markClosed(timestamp: timestamp)
+            finishedOrFailedTimestamp = timestamp
+            state = Self.state(lifecycle)
+            applyCanonicalTerminalBodyState(lifecycle)
+        }
+    }
+
+    package func invalidateCanonicalRecord() {
+        modelContext = nil
+        responseBody.invalidateCanonicalOwner()
+    }
+
+    private func applyCanonicalCurrentHop(
+        _ hop: CanonicalNetworkCurrentHop
+    ) {
+        let response = hop.response?.proxyValue
+        let request = hop.request.proxyValue(
+            overridingHeaders: response?.requestHeaders
+        )
+        currentRequest = request
+        url = request.url
+        method = request.method
+        resourceType = hop.resourceType.map(Network.ResourceType.init(rawValue:))
+        status = response?.status
+        statusText = response?.statusText
+        responseURL = response?.url
+        mimeType = response?.mimeType
+        responseSource = response?.source?.rawValue
+        sourceMapURL = hop.sourceMapURL
+        requestHeaders = request.headers
+        responseHeaders = response?.headers ?? [:]
+        requestSentTimestamp = hop.requestSentTimestamp
+        responseReceivedTimestamp = hop.responseReceivedTimestamp
+        applyCanonicalTransfer(hop.transfer)
+        finishedOrFailedTimestamp = hop.terminalTimestamp
+        metrics = hop.metrics?.proxyValue
+        requestBody = NetworkBody.makeRequestBody(for: request)
+        wasServedFromMemoryCache = hop.servedFromMemoryCache
+        if resourceType != .webSocket {
+            webSocket = nil
+        }
+    }
+
+    private func applyCanonicalTransfer(
+        _ transfer: CanonicalNetworkTransfer
+    ) {
+        decodedDataLength = transfer.decodedDataLength
+        encodedDataLength = transfer.encodedDataLength
+        lastDataReceivedTimestamp = transfer.lastDataReceivedTimestamp
+    }
+
+    private func applyCanonicalTerminalBodyState(
+        _ lifecycle: CanonicalNetworkLifecycle
+    ) {
+        guard case let .failed(errorText, canceled) = lifecycle else {
+            return
+        }
+        responseBody.failResponseFetch(
+            .loadingFailed(errorText: errorText, canceled: canceled)
+        )
+    }
+
+    private static func state(
+        _ lifecycle: CanonicalNetworkLifecycle
+    ) -> State {
+        switch lifecycle {
+        case .pending:
+            .pending
+        case .responded:
+            .responded
+        case .finished:
+            .finished
+        case let .failed(errorText, canceled):
+            .failed(errorText: errorText, canceled: canceled)
+        }
     }
 
     private func requestPreservingCurrentURLIfNeeded(_ request: Network.Request) -> Network.Request {

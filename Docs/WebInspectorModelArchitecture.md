@@ -1336,7 +1336,9 @@ public final class NetworkEntry: WebInspectorPersistentModel {
 
     public struct QueryValue: Identifiable, Sendable {
         public let id: ID
-        public let startedAt: Double
+        public let startedAt: Double?
+        public let insertionOrdinal: UInt64
+        public let methods: [String]
         public let resourceCategories:
             Set<NetworkRequest.ResourceCategory>
         public let searchTexts: [String]
