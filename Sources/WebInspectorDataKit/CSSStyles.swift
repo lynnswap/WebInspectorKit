@@ -275,6 +275,7 @@ public final class CSSStyles: Hashable, Identifiable, SendableMetatype {
     @ObservationIgnored weak var modelContext: WebInspectorModelContext?
     @ObservationIgnored private let inspectorBaselineStore: CSSInspectorBaselineStore
     @ObservationIgnored private var hasCompletedLoad: Bool
+    @ObservationIgnored private var canonicalLoadGeneration: UInt64
     @ObservationIgnored private let operationGate = CSSStylesOperationGate()
 
     init(nodeID: DOMNode.ID, modelContext: WebInspectorModelContext) {
@@ -284,6 +285,7 @@ public final class CSSStyles: Hashable, Identifiable, SendableMetatype {
         computedProperties = []
         inspectorBaselineStore = modelContext.cssInspectorBaselineStore
         hasCompletedLoad = false
+        canonicalLoadGeneration = 0
         self.modelContext = modelContext
     }
 
@@ -313,6 +315,45 @@ public final class CSSStyles: Hashable, Identifiable, SendableMetatype {
         self.computedProperties = computedProperties.map(CSSComputedProperty.init)
         hasCompletedLoad = true
         phase = .loaded
+    }
+
+    package func beginCanonicalLoading() -> UInt64 {
+        advanceCanonicalLoadGeneration()
+        markLoading()
+        return canonicalLoadGeneration
+    }
+
+    package func load(
+        _ resource: WebInspectorCanonicalCSSResource,
+        generation: UInt64
+    ) -> Bool {
+        precondition(
+            id.nodeID.canonicalStorage == resource.lease.nodeID,
+            "A canonical CSS resource must match its DOMNode owner."
+        )
+        guard generation == canonicalLoadGeneration,
+              modelContext != nil else {
+            return false
+        }
+        load(
+            matchedStyles: resource.matchedStyles,
+            inlineStyles: resource.inlineStyles,
+            computedProperties: resource.computedProperties
+        )
+        return true
+    }
+
+    package func markCanonicalNeedsRefresh() {
+        advanceCanonicalLoadGeneration()
+        if modelContext != nil {
+            markNeedsRefresh()
+        }
+    }
+
+    package func invalidateCanonicalOwner() {
+        advanceCanonicalLoadGeneration()
+        modelContext = nil
+        markUnavailable()
     }
 
     func markNeedsRefresh() {
@@ -478,6 +519,14 @@ public final class CSSStyles: Hashable, Identifiable, SendableMetatype {
             return
         }
         cancelLoading()
+    }
+
+    private func advanceCanonicalLoadGeneration() {
+        precondition(
+            canonicalLoadGeneration < .max,
+            "Canonical CSS load generation exhausted."
+        )
+        canonicalLoadGeneration += 1
     }
 
     private func locateProperty(_ property: CSSStyleProperty) -> (sectionIndex: Int, propertyIndex: Int)? {

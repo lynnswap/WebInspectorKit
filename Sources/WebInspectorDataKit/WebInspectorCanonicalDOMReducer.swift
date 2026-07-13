@@ -201,6 +201,7 @@ package struct WebInspectorCanonicalDOMTransaction: Equatable, Sendable {
     package var deletedRecordIDs: Set<WebInspectorDOMNodeIdentityStorage> = []
     package var parentChanges: [WebInspectorCanonicalDOMParentChange] = []
     package var rootChanges: [WebInspectorCanonicalDOMRootChange] = []
+    package var topologyChangedNodeIDs: Set<WebInspectorDOMNodeIdentityStorage> = []
     package var queryValueUpserts: [WebInspectorDOMNodeIdentityStorage: WebInspectorCanonicalDOMQueryValue] = [:]
     package var queryValueDeletes: Set<WebInspectorDOMNodeIdentityStorage> = []
     package var resourceInvalidations: Set<WebInspectorCanonicalResourceInvalidation> = []
@@ -211,6 +212,7 @@ package struct WebInspectorCanonicalDOMTransaction: Equatable, Sendable {
             && deletedRecordIDs.isEmpty
             && parentChanges.isEmpty
             && rootChanges.isEmpty
+            && topologyChangedNodeIDs.isEmpty
             && queryValueUpserts.isEmpty
             && queryValueDeletes.isEmpty
             && resourceInvalidations.isEmpty
@@ -1628,6 +1630,9 @@ private extension WebInspectorCanonicalDOMReducer {
                         parentID: ownerID
                     )
                 )
+                transaction.topologyChangedNodeIDs.formUnion(
+                    requiredSubtreeIDs(rootedAt: rootID)
+                )
             }
         } else if let ownerID,
             var owner = recordsByID[ownerID],
@@ -1653,6 +1658,21 @@ private extension WebInspectorCanonicalDOMReducer {
                     nodeID: rootID,
                     parentID: nil
                 )
+            )
+            transaction.topologyChangedNodeIDs.formUnion(
+                requiredSubtreeIDs(rootedAt: rootID)
+            )
+        }
+    }
+
+    func requiredSubtreeIDs(
+        rootedAt rootID: WebInspectorDOMNodeIdentityStorage
+    ) -> Set<WebInspectorDOMNodeIdentityStorage> {
+        do {
+            return try collectSubtrees([rootID])
+        } catch {
+            preconditionFailure(
+                "A committed canonical DOM subtree lost valid topology: \(error)"
             )
         }
     }

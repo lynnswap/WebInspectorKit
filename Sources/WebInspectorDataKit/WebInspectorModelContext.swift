@@ -4364,7 +4364,7 @@ extension WebInspectorModelContext {
         for node: DOMNode
     ) async throws -> CSSStyles {
         try requireConfigured(.css)
-        try registeredNode(node)
+        try requireRegisteredDOMNode(node)
         guard node.nodeType == 1 else {
             throw WebInspectorModelError.commandRejected(
                 method: "CSS.getMatchedStylesForNode",
@@ -4393,7 +4393,7 @@ extension WebInspectorModelContext {
         for node: DOMNode
     ) async throws {
         try requireConfigured(.css)
-        try registeredNode(node)
+        try requireRegisteredDOMNode(node)
         guard let styles = node.elementStyles else {
             _ = try await cssStyles(for: node)
             return
@@ -4414,6 +4414,69 @@ extension WebInspectorModelContext {
         for node: DOMNode,
         into styles: CSSStyles
     ) async throws {
+        if let canonicalID = node.id.canonicalStorage {
+            guard let core = containerRegistrationBinding?.core else {
+                throw WebInspectorModelError.staleModel
+            }
+            let generation = styles.beginCanonicalLoading()
+            do {
+                let resource = try await core.loadCSSResource(
+                    for: canonicalID
+                )
+                try requireRegisteredDOMNode(node)
+                guard styles.load(
+                    resource,
+                    generation: generation
+                ) else {
+                    throw WebInspectorModelError.staleModel
+                }
+                return
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as WebInspectorModelError {
+                throw error
+            } catch let error as WebInspectorDOMCSSCommandError {
+                switch error {
+                case .staleCascade:
+                    styles.markCanonicalNeedsRefresh()
+                    throw WebInspectorModelError.staleModel
+                case .closed,
+                    .detached,
+                    .foreignStore,
+                    .staleDocument,
+                    .nodeNotFound,
+                    .identityRouteMismatch,
+                    .staleNode:
+                    styles.invalidateCanonicalOwner()
+                    throw WebInspectorModelError.staleModel
+                case .domainNotConfigured,
+                    .styleSheetNotFound,
+                    .agentTargetUnavailable,
+                    .staleStyleSheet,
+                    .proxy,
+                    .authorization,
+                    .invalidReply:
+                    let proxyError = WebInspectorProxyError.commandFailed(
+                        domain: "CSS",
+                        method:
+                            "getMatchedStylesForNode/getInlineStylesForNode/getComputedStyleForNode",
+                        message: String(describing: error)
+                    )
+                    styles.fail(proxyError)
+                    throw proxyError
+                }
+            } catch {
+                let proxyError = WebInspectorProxyError.commandFailed(
+                    domain: "CSS",
+                    method:
+                        "getMatchedStylesForNode/getInlineStylesForNode/getComputedStyleForNode",
+                    message: String(describing: error)
+                )
+                styles.fail(proxyError)
+                throw proxyError
+            }
+        }
+
         let target = try domTarget(owning: node.id.proxyID)
         styles.markLoading()
         do {
@@ -4444,6 +4507,18 @@ extension WebInspectorModelContext {
             styles.fail(proxyError)
             throw proxyError
         }
+    }
+
+    private func requireRegisteredDOMNode(
+        _ node: DOMNode
+    ) throws {
+        if node.id.canonicalStorage != nil {
+            guard registeredModel(for: node.id) === node else {
+                throw WebInspectorModelError.staleModel
+            }
+            return
+        }
+        _ = try registeredNode(node)
     }
 
     public nonisolated(nonsending) func setCSSProperty(
