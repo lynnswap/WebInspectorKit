@@ -3,7 +3,7 @@ import AVFoundation
 import ObservationBridge
 import Synchronization
 import Testing
-import WebInspectorDataKit
+@testable import WebInspectorDataKit
 import WebInspectorProxyKit
 import WebInspectorProxyKitTesting
 import WebInspectorTestSupport
@@ -37,35 +37,45 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func listShowsSimpleEmptyStateWithoutRequests() async throws {
-        let model = try await NetworkPanelModel.make(context: makeContext())
-        let viewController = NetworkListViewController(model: model)
-        let window = showInWindow(viewController)
-        defer { window.isHidden = true }
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let model = try await NetworkPanelModel.make(context: fixture.context)
+        do {
+            let viewController = NetworkListViewController(model: model)
+            let window = showInWindow(viewController)
 
-        #expect(viewController.collectionViewForTesting.isHidden)
-        #expect(viewController.contentUnavailableConfiguration != nil)
-        let configuration = viewController.contentUnavailableConfiguration as? UIContentUnavailableConfiguration
-        #expect(configuration?.text?.isEmpty == false)
-        #expect(configuration?.secondaryText == nil)
-        #expect(configuration?.image == nil)
-        #expect(configuration?.textProperties.color == .secondaryLabel)
+            #expect(viewController.collectionViewForTesting.isHidden)
+            #expect(viewController.contentUnavailableConfiguration != nil)
+            let configuration = viewController.contentUnavailableConfiguration as? UIContentUnavailableConfiguration
+            #expect(configuration?.text?.isEmpty == false)
+            #expect(configuration?.secondaryText == nil)
+            #expect(configuration?.image == nil)
+            #expect(configuration?.textProperties.color == .secondaryLabel)
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        await model.retire()
     }
 
     @Test
     func detailShowsEmptyStateWithoutSelection() async throws {
-        let model = try await NetworkPanelModel.make(context: makeContext())
-        let viewController = makeNetworkDetailViewController(model: model)
-        let window = showInWindow(viewController)
-        defer { window.isHidden = true }
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let model = try await NetworkPanelModel.make(context: fixture.context)
+        do {
+            let viewController = makeNetworkDetailViewController(model: model)
+            let window = showInWindow(viewController)
 
-        #expect(viewController.previewViewForTesting.isHidden)
-        #expect(viewController.headersTextViewForTesting.isHidden)
-        #expect(viewController.contentUnavailableConfiguration != nil)
-        let configuration = viewController.contentUnavailableConfiguration as? UIContentUnavailableConfiguration
-        #expect(configuration?.text?.isEmpty == false)
-        #expect(configuration?.secondaryText == nil)
-        #expect(configuration?.image == nil)
-        #expect(configuration?.textProperties.color == .secondaryLabel)
+            #expect(viewController.previewViewForTesting.isHidden)
+            #expect(viewController.headersTextViewForTesting.isHidden)
+            #expect(viewController.contentUnavailableConfiguration != nil)
+            let configuration = viewController.contentUnavailableConfiguration as? UIContentUnavailableConfiguration
+            #expect(configuration?.text?.isEmpty == false)
+            #expect(configuration?.secondaryText == nil)
+            #expect(configuration?.image == nil)
+            #expect(configuration?.textProperties.color == .secondaryLabel)
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        await model.retire()
     }
 
     @Test
@@ -74,15 +84,19 @@ struct NetworkDetailViewControllerTests {
             return
         }
 
-        let model = try await NetworkPanelModel.make(context: makeContext())
-        let viewController = makeNetworkDetailViewController(model: model)
-        viewController.traitOverrides.webInspectorDrawsBackground = false
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let model = try await NetworkPanelModel.make(context: fixture.context)
+        do {
+            let viewController = makeNetworkDetailViewController(model: model)
+            viewController.traitOverrides.webInspectorDrawsBackground = false
 
-        viewController.loadViewIfNeeded()
+            viewController.loadViewIfNeeded()
 
-        #expect(viewController.view.backgroundColor == .clear)
-        #expect(viewController.headersTextViewForTesting.backgroundColor == .clear)
-        #expect(viewController.syntaxBodyViewControllerForTesting.view.backgroundColor == .clear)
+            #expect(viewController.view.backgroundColor == .clear)
+            #expect(viewController.headersTextViewForTesting.backgroundColor == .clear)
+            #expect(viewController.syntaxBodyViewControllerForTesting.view.backgroundColor == .clear)
+        }
+        await model.retire()
     }
 
     @Test
@@ -129,64 +143,75 @@ struct NetworkDetailViewControllerTests {
             return
         }
 
-        let model = try await NetworkPanelModel.make(context: makeContext())
-        let viewController = NetworkListViewController(model: model)
-        viewController.traitOverrides.webInspectorDrawsBackground = false
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let model = try await NetworkPanelModel.make(context: fixture.context)
+        do {
+            let viewController = NetworkListViewController(model: model)
+            viewController.traitOverrides.webInspectorDrawsBackground = false
 
-        viewController.loadViewIfNeeded()
+            viewController.loadViewIfNeeded()
 
-        #expect(viewController.collectionViewForTesting.backgroundColor == .clear)
+            #expect(viewController.collectionViewForTesting.backgroundColor == .clear)
+        }
+        await model.retire()
     }
 
     @Test
     func listLoadDefersFilterMenuBuildUntilPresentation() async throws {
-        let model = try await NetworkPanelModel.make(context: makeContext())
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let model = try await NetworkPanelModel.make(context: fixture.context)
         model.setResourceFilter(.media, enabled: true)
         await model.waitForQueryUpdates()
-        let viewController = NetworkListViewController(model: model)
+        do {
+            let viewController = NetworkListViewController(model: model)
 
-        viewController.loadViewIfNeeded()
+            viewController.loadViewIfNeeded()
 
-        let filterItem = viewController.filterItemForTesting
-        #expect(filterItem.accessibilityIdentifier == "WebInspector.Network.FilterButton")
-        #expect(filterItem.isSelected)
-        #expect(viewController.filterMenuBuildCountForTesting == 0)
-        let menu = try #require(filterItem.menu)
-        #expect(menu.children.count == 1)
-        let child = try #require(menu.children.first)
-        #expect(child is UIDeferredMenuElement)
+            let filterItem = viewController.filterItemForTesting
+            #expect(filterItem.accessibilityIdentifier == "WebInspector.Network.FilterButton")
+            #expect(filterItem.isSelected)
+            #expect(viewController.filterMenuBuildCountForTesting == 0)
+            let menu = try #require(filterItem.menu)
+            #expect(menu.children.count == 1)
+            let child = try #require(menu.children.first)
+            #expect(child is UIDeferredMenuElement)
+        }
+        await model.retire()
     }
 
     @Test
     func listLoadDoesNotEvaluateDisplayRequestsUntilAppearing() async throws {
-        let context = makeContext()
-        _ = try #require(await applyRequest(
-            to: context,
-            requestID: "1",
+        let fixture = try await CanonicalNetworkPanelFixture()
+        _ = try await fixture.insert(
+            id: "1",
             url: "https://example.com/api/data.json",
-            responseHeaders: ["content-type": "application/json"],
-            responseMimeType: "application/json"
-        ))
-        let model = try await NetworkPanelModel.make(context: context)
-        let viewController = NetworkListViewController(model: model)
+            resourceType: .fetch,
+            timestamp: 1
+        )
+        let model = try await NetworkPanelModel.make(context: fixture.context)
+        do {
+            let viewController = NetworkListViewController(model: model)
 
-        viewController.loadViewIfNeeded()
+            viewController.loadViewIfNeeded()
 
-        #expect(viewController.entryIDsEvaluationCountForTesting == 0)
-        #expect(viewController.displayedEntryIDsForTesting.isEmpty)
+            #expect(viewController.entryIDsEvaluationCountForTesting == 0)
+            #expect(viewController.displayedEntryIDsForTesting.isEmpty)
 
-        let window = showInWindow(viewController)
-        defer { window.isHidden = true }
+            let window = showInWindow(viewController)
+            await viewController.flushPendingSnapshotUpdateForTesting()
 
-        await viewController.flushPendingSnapshotUpdateForTesting()
-
-        #expect(viewController.displayedEntryIDsForTesting == model.requests.snapshot.sectionIDs)
-        #expect(viewController.entryIDsEvaluationCountForTesting == 1)
+            #expect(viewController.displayedEntryIDsForTesting == model.entries.snapshot.itemIDs)
+            #expect(viewController.entryIDsEvaluationCountForTesting == 1)
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        await model.retire()
     }
 
     @Test
     func regularSplitKeepsPrimarySecondaryLayout() async throws {
-        let model = try await NetworkPanelModel.make(context: makeContext())
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let model = try await NetworkPanelModel.make(context: fixture.context)
         let listViewController = NetworkListViewController(model: model)
         let detailViewController = makeNetworkDetailViewController(model: model)
         let splitViewController = NetworkSplitViewController(
@@ -215,7 +240,8 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func detailContentKeepsPreviewRoleControlInSafeArea() async throws {
-        let model = try await NetworkPanelModel.make(context: makeContext())
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let model = try await NetworkPanelModel.make(context: fixture.context)
         let viewController = makeNetworkDetailViewController(model: model)
         viewController.additionalSafeAreaInsets = UIEdgeInsets(top: 44, left: 120, bottom: 10, right: 24)
         let window = showInWindow(viewController)
@@ -242,10 +268,11 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func detailModeControlSwitchesPreviewAndHeaders() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let request = try #require(
             await applyRequest(
-                to: context,
+                to: fixture,
                 requestID: "1",
                 url: "https://example.com/api/data.json",
                 requestHeaders: [
@@ -256,6 +283,11 @@ struct NetworkDetailViewControllerTests {
                 responseHeaders: ["content-type": "application/json"],
                 responseMimeType: "application/json"
             )
+        )
+        applyResponseBody(
+            to: fixture,
+            request: request,
+            body: #"{"response":true}"#
         )
         let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
@@ -299,9 +331,10 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func headersRenderRedirectChainBeforeFinalRequestAndResponse() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let requestID = Network.Request.ID("redirect-chain")
-        await context.apply(
+        try await fixture.apply(
             .requestWillBeSent(
                 id: requestID,
                 request: Network.Request(
@@ -316,7 +349,7 @@ struct NetworkDetailViewControllerTests {
                 timestamp: 1
             )
         )
-        await context.apply(
+        try await fixture.apply(
             .requestWillBeSent(
                 id: requestID,
                 request: Network.Request(
@@ -336,7 +369,7 @@ struct NetworkDetailViewControllerTests {
                 timestamp: 2
             )
         )
-        await context.apply(
+        try await fixture.apply(
             .responseReceived(
                 id: requestID,
                 response: Network.Response(
@@ -350,7 +383,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
 
-        let request = try #require(context.registeredRequest(forProxyID: requestID))
+        let request = try #require(fixture.request(rawID: requestID))
         let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
@@ -381,10 +414,11 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func previewRequestWithoutBodyReplacesPreviousBodyWithUnavailablePlaceholder() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let bodyRequest = try #require(
             await applyRequestWithoutResponse(
-                to: context,
+                to: fixture,
                 requestID: "body",
                 url: "https://example.com/form",
                 requestHeaders: ["content-type": "application/x-www-form-urlencoded"],
@@ -393,7 +427,7 @@ struct NetworkDetailViewControllerTests {
         )
         let emptyRequest = try #require(
             await applyRequestWithoutResponse(
-                to: context,
+                to: fixture,
                 requestID: "empty",
                 url: "https://example.com/no-body"
             )
@@ -426,10 +460,11 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func responseOnlyPreviewRoleExpandsToBothWithoutChangingLogicalSelection() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let responseOnlyRequest = try #require(
             await applyRequest(
-                to: context,
+                to: fixture,
                 requestID: "response-only",
                 url: "https://example.com/response.json",
                 responseHeaders: ["content-type": "application/json"],
@@ -438,7 +473,7 @@ struct NetworkDetailViewControllerTests {
         )
         let requestAndResponse = try #require(
             await applyRequest(
-                to: context,
+                to: fixture,
                 requestID: "both",
                 url: "https://example.com/both.json",
                 requestHeaders: ["content-type": "application/x-www-form-urlencoded"],
@@ -446,6 +481,16 @@ struct NetworkDetailViewControllerTests {
                 responseHeaders: ["content-type": "application/json"],
                 responseMimeType: "application/json"
             )
+        )
+        applyResponseBody(
+            to: fixture,
+            request: responseOnlyRequest,
+            body: #"{"responseOnly":true}"#
+        )
+        applyResponseBody(
+            to: fixture,
+            request: requestAndResponse,
+            body: #"{"both":true}"#
         )
         let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(responseOnlyRequest)
@@ -472,10 +517,11 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func requestPreviewRoleSurvivesResponseOnlySelection() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let requestAndResponse = try #require(
             await applyRequest(
-                to: context,
+                to: fixture,
                 requestID: "both",
                 url: "https://example.com/both.json",
                 requestHeaders: ["content-type": "application/x-www-form-urlencoded"],
@@ -486,14 +532,19 @@ struct NetworkDetailViewControllerTests {
         )
         let responseOnlyRequest = try #require(
             await applyRequest(
-                to: context,
+                to: fixture,
                 requestID: "response-only",
                 url: "https://example.com/response.txt",
                 responseHeaders: ["content-type": "text/plain"],
                 responseMimeType: "text/plain"
             )
         )
-        applyResponseBody(to: context, request: responseOnlyRequest, body: "response only body", base64Encoded: false)
+        applyResponseBody(
+            to: fixture,
+            request: requestAndResponse,
+            body: "both response body"
+        )
+        applyResponseBody(to: fixture, request: responseOnlyRequest, body: "response only body", base64Encoded: false)
         let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(requestAndResponse)
         let viewController = makeNetworkDetailViewController(model: model)
@@ -538,10 +589,11 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func previewRequestWithoutBodyRendersPlaceholderWhenBodySurfaceResumes() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let request = try #require(
             await applyRequestWithoutResponse(
-                to: context,
+                to: fixture,
                 requestID: "1",
                 url: "https://example.com/no-body"
             )
@@ -573,10 +625,11 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func detailUpdatesResponseHeadersAfterSelection() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let request = try #require(
             await applyRequestWithoutResponse(
-                to: context,
+                to: fixture,
                 requestID: "1",
                 url: "https://example.com/api/data.json"
             )
@@ -593,8 +646,8 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(didRenderRequestHeaders)
 
-        await applyResponseReceived(
-            to: context,
+        try await applyResponseReceived(
+                to: fixture,
             requestID: "1",
             url: "https://example.com/api/data.json",
             responseHeaders: ["content-type": "application/json"],
@@ -610,10 +663,11 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func detailModeControlUsesCoreBodyAvailabilityAndRendersRequestBody() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let request = try #require(
             await applyRequest(
-                to: context,
+                to: fixture,
                 requestID: "1",
                 url: "https://example.com/form",
                 requestHeaders: ["content-type": "application/x-www-form-urlencoded"],
@@ -621,6 +675,11 @@ struct NetworkDetailViewControllerTests {
                 responseHeaders: [:],
                 responseMimeType: "text/plain"
             )
+        )
+        applyResponseBody(
+            to: fixture,
+            request: request,
+            body: "response body"
         )
         let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
@@ -646,10 +705,11 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func detailModeControlDisablesWhenSelectedRequestDisappears() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let request = try #require(
             await applyRequest(
-                to: context,
+                to: fixture,
                 requestID: "1",
                 url: "https://example.com/form",
                 postData: "name=Jane+Doe"
@@ -666,7 +726,7 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(didEnableMenu)
 
-        await context.clearNetworkRequests()
+        try await fixture.clear()
 
         let didDisableMenu = await waitUntilRendered(in: viewController) {
             viewController.isDetailModeControlEnabledForTesting == false
@@ -679,8 +739,8 @@ struct NetworkDetailViewControllerTests {
     func responsePreviewRequestsRuntimeFetchWhenBodyIsAvailable() async throws {
         try await withLiveNetworkContext { fixture in
             let request = try #require(
-                await applyRequest(
-                    to: fixture.context,
+                try await applyRequest(
+                    to: fixture,
                     requestID: "1",
                     url: "https://example.com/api/data.json",
                     responseHeaders: ["content-type": "application/json"],
@@ -721,8 +781,8 @@ struct NetworkDetailViewControllerTests {
     func hiddenDetailDoesNotFetchResponseBodyUntilAppearingAgain() async throws {
         try await withLiveNetworkContext { fixture in
             let request = try #require(
-                await applyRequest(
-                    to: fixture.context,
+                try await applyRequest(
+                    to: fixture,
                     requestID: "1",
                     url: "https://example.com/api/data.json",
                     responseHeaders: ["content-type": "application/json"],
@@ -775,17 +835,18 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func hiddenDetailKeepsDisplayedBodyAndReconcilesBodyOnReturn() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let request = try #require(
             await applyRequest(
-                to: context,
+                to: fixture,
                 requestID: "1",
                 url: "https://example.com/api/data.json",
                 responseHeaders: ["content-type": "application/json"],
                 responseMimeType: "application/json"
             )
         )
-        applyResponseBody(to: context, request: request, body: #"{"visible":true}"#, base64Encoded: false)
+        applyResponseBody(to: fixture, request: request, body: #"{"visible":true}"#, base64Encoded: false)
         let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
@@ -800,7 +861,7 @@ struct NetworkDetailViewControllerTests {
 
         viewController.beginAppearanceTransition(false, animated: false)
         viewController.endAppearanceTransition()
-        applyResponseBody(to: context, request: request, body: #"{"hidden":true}"#, base64Encoded: false)
+        applyResponseBody(to: fixture, request: request, body: #"{"hidden":true}"#, base64Encoded: false)
 
         #expect(viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == renderedBodyBeforeHide)
 
@@ -815,10 +876,11 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func deeplyNestedJSONPreviewFallsBackToRawText() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let request = try #require(
             await applyRequest(
-                to: context,
+                to: fixture,
                 requestID: "1",
                 url: "https://example.com/api/deep.json",
                 responseHeaders: ["content-type": "application/json"],
@@ -826,7 +888,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         let bodyText = String(repeating: "[", count: 160) + "0" + String(repeating: "]", count: 160)
-        applyResponseBody(to: context, request: request, body: bodyText, base64Encoded: false)
+        applyResponseBody(to: fixture, request: request, body: bodyText, base64Encoded: false)
         let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
@@ -845,10 +907,11 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func jsonPreviewFormatsCRLFWhitespace() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let request = try #require(
             await applyRequest(
-                to: context,
+                to: fixture,
                 requestID: "1",
                 url: "https://example.com/api/data.json",
                 responseHeaders: ["content-type": "application/json"],
@@ -856,7 +919,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         let bodyText = "{\r\n\"a\":1,\r\n\"b\":[true]\r\n}"
-        applyResponseBody(to: context, request: request, body: bodyText, base64Encoded: false)
+        applyResponseBody(to: fixture, request: request, body: bodyText, base64Encoded: false)
         let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
@@ -979,17 +1042,18 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func hlsPreviewShowsPlayerImmediately() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let playlistURL = "https://media.example.com/live/master.m3u8"
         let request = try #require(await applyRequest(
-            to: context,
+                to: fixture,
             requestID: "playlist",
             url: playlistURL,
             responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
             responseMimeType: "application/vnd.apple.mpegurl",
             resourceType: .media
         ))
-        applyResponseBody(to: context, request: request, body: "#EXTM3U")
+        applyResponseBody(to: fixture, request: request, body: "#EXTM3U")
         let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
@@ -1092,8 +1156,8 @@ struct NetworkDetailViewControllerTests {
     func remoteHLSPreviewShowsPlayerWithoutFetchingResponseBody() async throws {
         try await withLiveNetworkContext { fixture in
             let playlistURL = "https://media.example.com/live/master.m3u8"
-            let request = try #require(await applyRequest(
-                to: fixture.context,
+            let request = try #require(try await applyRequest(
+                to: fixture,
                 requestID: "playlist",
                 url: playlistURL,
                 responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
@@ -1188,8 +1252,8 @@ struct NetworkDetailViewControllerTests {
         ]
         try await withLiveNetworkContext { fixture in
             for (index, input) in inputs.enumerated() {
-                let request = try #require(await applyRequest(
-                    to: fixture.context,
+                let request = try #require(try await applyRequest(
+                    to: fixture,
                     requestID: "unavailable-media-\(index)",
                     url: "https://media.example.com/unavailable-\(index).\(input.pathExtension)",
                     responseHeaders: ["content-type": input.mimeType],
@@ -1237,8 +1301,8 @@ struct NetworkDetailViewControllerTests {
     @Test
     func movieInstallsVisiblePlayerSurfaceBeforeResponseBodyLoads() async throws {
         try await withLiveNetworkContext { fixture in
-            let request = try #require(await applyRequest(
-                to: fixture.context,
+            let request = try #require(try await applyRequest(
+                to: fixture,
                 requestID: "full-movie",
                 url: "https://media.example.com/full.mp4",
                 responseHeaders: ["content-type": "video/mp4"],
@@ -1337,14 +1401,15 @@ struct NetworkDetailViewControllerTests {
                 let remoteURL = try #require(URL(
                     string: "https://media.example.com/partial-\(index).mp4"
                 ))
-                let request = try #require(await applyRequest(
-                    to: fixture.context,
+                let request = try #require(try await applyRequest(
+                    to: fixture,
                     requestID: input.id,
                     url: remoteURL.absoluteString,
                     responseHeaders: input.headers,
                     responseMimeType: "video/mp4",
                     responseStatus: input.status,
-                    resourceType: .media
+                    resourceType: .media,
+                    finishes: false
                 ))
                 let model = try await NetworkPanelModel.make(context: fixture.context)
                 model.selectRequest(request)
@@ -1375,8 +1440,8 @@ struct NetworkDetailViewControllerTests {
                 let updatedRemoteURL = try #require(URL(
                     string: "https://media.example.com/updated-partial-\(index).mp4"
                 ))
-                await applyResponseReceived(
-                    to: fixture.context,
+                try await applyResponseReceived(
+                    to: fixture,
                     requestID: input.id,
                     url: updatedRemoteURL.absoluteString,
                     responseHeaders: input.headers,
@@ -1415,8 +1480,8 @@ struct NetworkDetailViewControllerTests {
     @Test
     func nonMediaErrorResponseStillFetchesItsInspectableBody() async throws {
         try await withLiveNetworkContext { fixture in
-            let request = try #require(await applyRequest(
-                to: fixture.context,
+            let request = try #require(try await applyRequest(
+                to: fixture,
                 requestID: "error-json",
                 url: "https://example.com/error.json",
                 responseHeaders: ["content-type": "application/json"],
@@ -1453,10 +1518,11 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func groupedPreviewFollowsNewerPlaylist() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let nodeID = DOM.Node.ID("unplayed-video")
         let firstRequest = try #require(await applyRequest(
-            to: context,
+                to: fixture,
             requestID: "first-unplayed-playlist",
             url: "https://media.example.com/first-unplayed.m3u8",
             responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
@@ -1465,7 +1531,7 @@ struct NetworkDetailViewControllerTests {
             timestamp: 1,
             initiatorNodeID: nodeID
         ))
-        applyResponseBody(to: context, request: firstRequest, body: "#EXTM3U")
+        applyResponseBody(to: fixture, request: firstRequest, body: "#EXTM3U")
         let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(firstRequest)
         let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
@@ -1483,7 +1549,7 @@ struct NetworkDetailViewControllerTests {
         #expect(didShowFirstRequest)
 
         let secondRequest = try #require(await applyRequest(
-            to: context,
+                to: fixture,
             requestID: "second-unplayed-playlist",
             url: "https://media.example.com/second-unplayed.m3u8",
             responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
@@ -1492,7 +1558,7 @@ struct NetworkDetailViewControllerTests {
             timestamp: 2,
             initiatorNodeID: nodeID
         ))
-        applyResponseBody(to: context, request: secondRequest, body: "#EXTM3U")
+        applyResponseBody(to: fixture, request: secondRequest, body: "#EXTM3U")
 
         let didFollowSecondRequest = await waitUntilRendered(in: viewController) {
             model.selectedRequests.count == 2
@@ -1505,11 +1571,12 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func groupedPreviewKeepsMasterPlaylistAheadOfNewerPartialSegment() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let nodeID = DOM.Node.ID("hls-with-partial-segment")
         let playlistURL = "https://media.example.com/master.m3u8"
         let playlist = try #require(await applyRequest(
-            to: context,
+                to: fixture,
             requestID: "master-playlist",
             url: playlistURL,
             responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
@@ -1519,7 +1586,7 @@ struct NetworkDetailViewControllerTests {
             initiatorNodeID: nodeID
         ))
         let partialSegment = try #require(await applyRequest(
-            to: context,
+                to: fixture,
             requestID: "partial-segment",
             url: "https://media.example.com/segment.mp4",
             responseHeaders: [
@@ -1551,10 +1618,11 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func groupedPreviewSkipsCancelledAndNoContentMediaForHealthyMember() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let nodeID = DOM.Node.ID("healthy-media-candidate")
         let healthyRequest = try #require(await applyRequest(
-            to: context,
+                to: fixture,
             requestID: "healthy-playlist",
             url: "https://media.example.com/healthy.m3u8",
             responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
@@ -1564,7 +1632,7 @@ struct NetworkDetailViewControllerTests {
             initiatorNodeID: nodeID
         ))
         let cancelledRequest = try #require(await applyRequest(
-            to: context,
+                to: fixture,
             requestID: "cancelled-playlist",
             url: "https://media.example.com/cancelled.m3u8",
             responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
@@ -1574,15 +1642,15 @@ struct NetworkDetailViewControllerTests {
             initiatorNodeID: nodeID,
             finishes: false
         ))
-        await applyLoadingFailed(
-            to: context,
+        try await applyLoadingFailed(
+                to: fixture,
             requestID: "cancelled-playlist",
             errorText: "Cancelled",
             canceled: true,
             timestamp: 2.2
         )
         let noContentRequest = try #require(await applyRequest(
-            to: context,
+                to: fixture,
             requestID: "no-content-playlist",
             url: "https://media.example.com/no-content.m3u8",
             responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
@@ -1615,11 +1683,12 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func groupedHLSPreviewReplacesPlayerForNewRequestWithSameURL() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let nodeID = DOM.Node.ID("same-url-playlist")
         let playlistURL = "https://media.example.com/shared.m3u8"
         let firstRequest = try #require(await applyRequest(
-            to: context,
+                to: fixture,
             requestID: "first-shared-playlist",
             url: playlistURL,
             responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
@@ -1647,7 +1716,7 @@ struct NetworkDetailViewControllerTests {
         )
 
         let secondRequest = try #require(await applyRequest(
-            to: context,
+                to: fixture,
             requestID: "second-shared-playlist",
             url: playlistURL,
             responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
@@ -1670,10 +1739,11 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func filteredOutDetailSelectionRendersLaterMembersFromTheSameGroup() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let nodeID = DOM.Node.ID("filtered-detail-video")
         let playlist = try #require(await applyRequest(
-            to: context,
+                to: fixture,
             requestID: "playlist",
             url: "https://media.example.com/master.m3u8",
             responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
@@ -1693,10 +1763,10 @@ struct NetworkDetailViewControllerTests {
 
         model.setSearchText("does-not-match")
         await model.waitForQueryUpdates()
-        #expect(model.requests.snapshot.sections.isEmpty)
+        #expect(model.entries.snapshot.itemIDs.isEmpty)
 
         let segmentProxyID = Network.Request.ID("segment")
-        await context.apply(.requestWillBeSent(
+        try await fixture.apply(.requestWillBeSent(
             id: segmentProxyID,
             request: Network.Request(
                 id: segmentProxyID,
@@ -1708,7 +1778,7 @@ struct NetworkDetailViewControllerTests {
             redirectResponse: nil,
             timestamp: 2
         ))
-        _ = try #require(context.registeredRequest(forProxyID: segmentProxyID))
+        _ = try #require(fixture.request(rawID: segmentProxyID))
 
         let didRenderLaterMember = await waitUntilRendered(in: viewController) {
             let text = viewController.headersTextViewForTesting.renderedTextForTesting
@@ -1717,15 +1787,16 @@ struct NetworkDetailViewControllerTests {
                 && text.contains("segment-1.ts")
         }
         #expect(didRenderLaterMember)
-        #expect(model.requests.snapshot.sections.isEmpty)
+        #expect(model.entries.snapshot.itemIDs.isEmpty)
     }
 
     @Test
     func groupedPreviewTreatsPartialMediaAsAnOrdinaryMovieCandidate() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let nodeID = DOM.Node.ID("audio")
         let fullRequest = try #require(await applyRequest(
-            to: context,
+                to: fixture,
             requestID: "full",
             url: "https://media.example.com/full.mp4",
             responseHeaders: ["content-type": "video/mp4"],
@@ -1735,7 +1806,7 @@ struct NetworkDetailViewControllerTests {
             initiatorNodeID: nodeID
         ))
         let partialRequest = try #require(await applyRequest(
-            to: context,
+                to: fixture,
             requestID: "partial",
             url: "https://media.example.com/partial.mp4",
             requestHeaders: ["range": "bytes=0-1023"],
@@ -1750,7 +1821,7 @@ struct NetworkDetailViewControllerTests {
             initiatorNodeID: nodeID
         ))
         let ignoredRangeRequest = try #require(await applyRequest(
-            to: context,
+            to: fixture,
             requestID: "ignored-range",
             url: "https://media.example.com/ignored-range.mp4",
             requestHeaders: ["range": "bytes=0-1023"],
@@ -1761,9 +1832,9 @@ struct NetworkDetailViewControllerTests {
             timestamp: 2,
             initiatorNodeID: nodeID
         ))
-        applyResponseBody(to: context, request: fullRequest, body: "AAAA", base64Encoded: true)
-        applyResponseBody(to: context, request: ignoredRangeRequest, body: "AAAA", base64Encoded: true)
-        applyResponseBody(to: context, request: partialRequest, body: "AAAA", base64Encoded: true)
+        applyResponseBody(to: fixture, request: fullRequest, body: "AAAA", base64Encoded: true)
+        applyResponseBody(to: fixture, request: ignoredRangeRequest, body: "AAAA", base64Encoded: true)
+        applyResponseBody(to: fixture, request: partialRequest, body: "AAAA", base64Encoded: true)
         let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(partialRequest)
         let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
@@ -1781,17 +1852,18 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func mediaResponsePreviewReleasesPlayerAndTemporaryFileWhenShowingHeaders() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let request = try #require(
             await applyRequest(
-                to: context,
+                to: fixture,
                 requestID: "1",
                 url: "https://media.example.com/download.php",
                 responseHeaders: ["content-type": "video/mp4"],
                 responseMimeType: "video/mp4"
             )
         )
-        applyResponseBody(to: context, request: request, body: "not a real movie", base64Encoded: false)
+        applyResponseBody(to: fixture, request: request, body: "not a real movie", base64Encoded: false)
         let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
@@ -1834,18 +1906,19 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func mediaResponsePreviewReusesPlayerAndTemporaryFileWhenRequestUpdateDoesNotChangeBody() async throws {
-        let context = makeContext()
+    func mediaResponsePreviewReusesPlayerAndTemporaryFileForEquivalentBodyPublication() async throws {
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let request = try #require(
             await applyRequest(
-                to: context,
+                to: fixture,
                 requestID: "1",
                 url: "https://media.example.com/download.php",
                 responseHeaders: ["content-type": "video/mp4"],
                 responseMimeType: "video/mp4"
             )
         )
-        applyResponseBody(to: context, request: request, body: "not a real movie", base64Encoded: false)
+        applyResponseBody(to: fixture, request: request, body: "not a real movie", base64Encoded: false)
         let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
@@ -1867,15 +1940,13 @@ struct NetworkDetailViewControllerTests {
         let playerIdentity = try #require(viewController.syntaxBodyViewControllerForTesting.mediaPlayerIdentityForTesting)
         #expect(playerFactory.players.count == 1)
 
-        await applyDataReceived(
-            to: context,
-            requestID: "1",
-            dataLength: 128,
-            encodedDataLength: 64,
-            timestamp: 4
+        applyResponseBody(
+            to: fixture,
+            request: request,
+            body: "not a real movie",
+            base64Encoded: false
         )
 
-        #expect(request.encodedDataLength == 64)
         #expect(viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting == temporaryFileURL)
         #expect(viewController.syntaxBodyViewControllerForTesting.mediaPlayerIdentityForTesting == playerIdentity)
         #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
@@ -1884,9 +1955,9 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func movieBodyRevisionClearsSourceWithoutReplacingPlayerSurface() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
         let request = try #require(await applyRequest(
-            to: context,
+            to: fixture,
             requestID: "revisioned-movie",
             url: "https://media.example.com/revisioned.mp4",
             responseHeaders: ["content-type": "video/mp4"],
@@ -1895,7 +1966,7 @@ struct NetworkDetailViewControllerTests {
         ))
         let responseBody = request.responseBody
         applyResponseBody(
-            to: context,
+            to: fixture,
             request: request,
             body: "first movie payload",
             base64Encoded: false
@@ -1904,14 +1975,15 @@ struct NetworkDetailViewControllerTests {
         let viewController = NetworkBodyViewController(
             moviePreviewPlayerFactory: playerFactory.makePlayer
         )
-        viewController.setSurface(.body(
+        let surface = NetworkBodySurface.body(
             responseBody,
             metadata: NetworkMediaPreviewMetadata(
                 mimeType: "video/mp4",
                 url: request.url,
                 sourcePolicy: .body
             )
-        ))
+        )
+        viewController.setSurface(surface)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         viewController.resumeRendering()
@@ -1936,13 +2008,15 @@ struct NetworkDetailViewControllerTests {
         }
         defer { renderedLoading.cancel() }
 
-        await applyResponseReceived(
-            to: context,
-            requestID: "revisioned-movie",
-            url: request.url,
-            responseHeaders: ["content-type": "video/mp4"],
-            responseMimeType: "video/mp4",
-            timestamp: 4
+        responseBody.resetForResponse(
+            Network.Response(
+                url: request.url,
+                status: 200,
+                statusText: "OK",
+                mimeType: "video/mp4",
+                headers: ["content-type": "video/mp4"]
+            ),
+            fallbackURL: request.url
         )
 
         #expect(await renderedLoading.waitUntil { $0 } != nil)
@@ -1961,11 +2035,13 @@ struct NetworkDetailViewControllerTests {
         }
         defer { renderedReplacement.cancel() }
         applyResponseBody(
-            to: context,
+            to: fixture,
             request: request,
             body: "second movie payload",
             base64Encoded: false
         )
+        viewController.setSurface(surface)
+        await viewController.waitUntilMediaPreviewPreparationFinishedForTesting()
 
         #expect(await renderedReplacement.waitUntil { $0 } != nil)
         #expect(viewController.mediaPlayerViewControllerIdentityForTesting == playerViewControllerIdentity)
@@ -1976,17 +2052,18 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func mediaResponsePreviewPausesPlayerButKeepsSurfaceWhenHidden() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let request = try #require(
             await applyRequest(
-                to: context,
+                to: fixture,
                 requestID: "1",
                 url: "https://media.example.com/download.php",
                 responseHeaders: ["content-type": "video/mp4"],
                 responseMimeType: "video/mp4"
             )
         )
-        applyResponseBody(to: context, request: request, body: "not a real movie", base64Encoded: false)
+        applyResponseBody(to: fixture, request: request, body: "not a real movie", base64Encoded: false)
         let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
@@ -2027,17 +2104,18 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func mediaResponsePreviewReleasesPlayerAndTemporaryFileWhenSelectionClears() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let request = try #require(
             await applyRequest(
-                to: context,
+                to: fixture,
                 requestID: "1",
                 url: "https://media.example.com/download.php",
                 responseHeaders: ["content-type": "video/mp4"],
                 responseMimeType: "video/mp4"
             )
         )
-        applyResponseBody(to: context, request: request, body: "not a real movie", base64Encoded: false)
+        applyResponseBody(to: fixture, request: request, body: "not a real movie", base64Encoded: false)
         let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
@@ -2072,17 +2150,18 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func hiddenMediaResponsePreviewReleasesPlayerAndTemporaryFileWhenSelectionClearsBeforeReappearing() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let request = try #require(
             await applyRequest(
-                to: context,
+                to: fixture,
                 requestID: "1",
                 url: "https://media.example.com/download.php",
                 responseHeaders: ["content-type": "video/mp4"],
                 responseMimeType: "video/mp4"
             )
         )
-        applyResponseBody(to: context, request: request, body: "not a real movie", base64Encoded: false)
+        applyResponseBody(to: fixture, request: request, body: "not a real movie", base64Encoded: false)
         let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
@@ -2126,10 +2205,11 @@ struct NetworkDetailViewControllerTests {
     @Test
     func imageResponsePreviewUsesScrollViewAndFitsLargeImage() async throws {
         let imageSize = CGSize(width: 600, height: 1400)
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let request = try #require(
             await applyRequest(
-                to: context,
+                to: fixture,
                 requestID: "1",
                 url: "https://media.example.com/large.png",
                 postData: "metadata=1",
@@ -2137,7 +2217,7 @@ struct NetworkDetailViewControllerTests {
                 responseMimeType: "image/png"
             )
         )
-        applyResponseBody(to: context, request: request, body: pngBase64String(size: imageSize), base64Encoded: true)
+        applyResponseBody(to: fixture, request: request, body: pngBase64String(size: imageSize), base64Encoded: true)
         let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
@@ -2184,17 +2264,18 @@ struct NetworkDetailViewControllerTests {
     @Test
     func imageResponsePreviewKeepsAutoFitWhenBoundsShrink() async throws {
         let imageSize = CGSize(width: 600, height: 1400)
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let request = try #require(
             await applyRequest(
-                to: context,
+                to: fixture,
                 requestID: "1",
                 url: "https://media.example.com/large.png",
                 responseHeaders: ["content-type": "image/png"],
                 responseMimeType: "image/png"
             )
         )
-        applyResponseBody(to: context, request: request, body: pngBase64String(size: imageSize), base64Encoded: true)
+        applyResponseBody(to: fixture, request: request, body: pngBase64String(size: imageSize), base64Encoded: true)
         let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
@@ -2231,17 +2312,18 @@ struct NetworkDetailViewControllerTests {
     @Test
     func smallImageResponsePreviewStaysAtOneXAndCentersImage() async throws {
         let imageSize = CGSize(width: 24, height: 12)
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let request = try #require(
             await applyRequest(
-                to: context,
+                to: fixture,
                 requestID: "1",
                 url: "https://media.example.com/icon.png",
                 responseHeaders: ["content-type": "image/png"],
                 responseMimeType: "image/png"
             )
         )
-        applyResponseBody(to: context, request: request, body: pngBase64String(size: imageSize), base64Encoded: true)
+        applyResponseBody(to: fixture, request: request, body: pngBase64String(size: imageSize), base64Encoded: true)
         let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
@@ -2266,8 +2348,8 @@ struct NetworkDetailViewControllerTests {
     func responsePreviewWaitsForLoadingFinishedBeforeFetching() async throws {
         try await withLiveNetworkContext { fixture in
             let request = try #require(
-                await applyRequest(
-                    to: fixture.context,
+                try await applyRequest(
+                    to: fixture,
                     requestID: "1",
                     url: "https://example.com/api/data.json",
                     responseHeaders: ["content-type": "application/json"],
@@ -2291,7 +2373,11 @@ struct NetworkDetailViewControllerTests {
                 "Network.getResponseBody",
                 message: "Intentional response-body failure."
             )
-            await applyLoadingFinished(to: fixture.context, requestID: "1", timestamp: 3)
+            try await applyLoadingFinished(
+                to: fixture,
+                requestID: "1",
+                timestamp: 3
+            )
 
             let didFetch = await waitUntilRendered(in: viewController) {
                 guard case .failed = request.responseBody.phase else {
@@ -2310,8 +2396,8 @@ struct NetworkDetailViewControllerTests {
     func failedResponseBodyDoesNotRefetchFromRendering() async throws {
         try await withLiveNetworkContext { fixture in
             let request = try #require(
-                await applyRequest(
-                    to: fixture.context,
+                try await applyRequest(
+                    to: fixture,
                     requestID: "1",
                     url: "https://example.com/api/data.json",
                     responseHeaders: ["content-type": "application/json"],
@@ -2360,10 +2446,11 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func headersModeDoesNotFetchResponseBody() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let request = try #require(
             await applyRequest(
-                to: context,
+                to: fixture,
                 requestID: "1",
                 url: "https://example.com/api/data.json",
                 responseHeaders: ["content-type": "application/json"],
@@ -2387,10 +2474,11 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func headersModePreservesSelectionWhenRequestUpdateDoesNotChangeDocument() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let request = try #require(
             await applyRequest(
-                to: context,
+                to: fixture,
                 requestID: "1",
                 url: "https://example.com/api/data.json",
                 responseHeaders: ["content-type": "application/json"],
@@ -2414,8 +2502,8 @@ struct NetworkDetailViewControllerTests {
         viewController.headersTextViewForTesting.selectedRangeForTesting = selectedRange
         let assignmentCount = viewController.headersTextViewForTesting.attributedTextAssignmentCountForTesting
 
-        await applyDataReceived(
-            to: context,
+        try await applyDataReceived(
+            to: fixture,
             requestID: "1",
             dataLength: 128,
             encodedDataLength: 64,
@@ -2429,14 +2517,16 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func hiddenDetailKeepsHeadersAndRebindsSameSelectedRequestOnReturn() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let request = try #require(
             await applyRequest(
-                to: context,
+                to: fixture,
                 requestID: "1",
                 url: "https://example.com/api/data.json",
                 responseHeaders: ["x-request": "visible"],
-                responseMimeType: "application/json"
+                responseMimeType: "application/json",
+                finishes: false
             )
         )
         let model = try await NetworkPanelModel.make(context: context)
@@ -2454,8 +2544,8 @@ struct NetworkDetailViewControllerTests {
 
         viewController.beginAppearanceTransition(false, animated: false)
         viewController.endAppearanceTransition()
-        await applyResponseReceived(
-            to: context,
+        try await applyResponseReceived(
+            to: fixture,
             requestID: "1",
             url: "https://example.com/api/data.json",
             responseHeaders: ["x-request": "hidden-update"],
@@ -2476,10 +2566,11 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func requestPreviewRoleDoesNotFetchResponseBodyAfterLoadingFinishes() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let request = try #require(
             await applyRequest(
-                to: context,
+                to: fixture,
                 requestID: "1",
                 url: "https://example.com/api/data.json",
                 requestHeaders: ["content-type": "application/x-www-form-urlencoded"],
@@ -2516,7 +2607,7 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(didRenderRequestBody)
 
-        await applyLoadingFinished(to: context, requestID: "1", timestamp: 3)
+        try await applyLoadingFinished(to: fixture, requestID: "1", timestamp: 3)
 
         let didStayOnRequestBody = await waitUntilRendered(in: viewController) {
             viewController.currentPreviewRoleForTesting == .request
@@ -2529,23 +2620,26 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func selectedRequestRebindingIgnoresOldRequestMutations() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let firstRequest = try #require(
             await applyRequest(
-                to: context,
+                to: fixture,
                 requestID: "1",
                 url: "https://example.com/first.json",
                 responseHeaders: ["x-request": "first"],
-                responseMimeType: "application/json"
+                responseMimeType: "application/json",
+                finishes: false
             )
         )
         let secondRequest = try #require(
             await applyRequest(
-                to: context,
+                to: fixture,
                 requestID: "2",
                 url: "https://example.com/second.json",
                 responseHeaders: ["x-request": "second"],
-                responseMimeType: "application/json"
+                responseMimeType: "application/json",
+                finishes: false
             )
         )
         let model = try await NetworkPanelModel.make(context: context)
@@ -2566,8 +2660,8 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(didRenderSecond)
 
-        await applyResponseReceived(
-            to: context,
+        try await applyResponseReceived(
+            to: fixture,
             requestID: "1",
             url: "https://example.com/first.json",
             responseHeaders: ["x-old-request": "stale"],
@@ -2577,8 +2671,8 @@ struct NetworkDetailViewControllerTests {
 
         #expect(viewController.headersTextViewForTesting.renderedTextForTesting.contains("x-old-request: stale") == false)
 
-        await applyResponseReceived(
-            to: context,
+        try await applyResponseReceived(
+            to: fixture,
             requestID: "2",
             url: "https://example.com/second.json",
             responseHeaders: ["x-current-request": "updated"],
@@ -2651,8 +2745,9 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func compactContainerPushesAndPopsDetailFromSelection() async throws {
-        let context = makeContext()
-        let request = try #require(await applyRequest(to: context, requestID: "1", url: "https://example.com/app.js"))
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
+        let request = try #require(await applyRequest(to: fixture, requestID: "1", url: "https://example.com/app.js"))
         let model = try await NetworkPanelModel.make(context: context)
         let listViewController = NetworkListViewController(model: model)
         let detailViewController = makeNetworkDetailViewController(model: model)
@@ -2682,8 +2777,9 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func compactContainerCanPushSameRequestAfterBackNavigation() async throws {
-        let context = makeContext()
-        _ = try #require(await applyRequest(to: context, requestID: "1", url: "https://example.com/app.js"))
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
+        _ = try #require(await applyRequest(to: fixture, requestID: "1", url: "https://example.com/app.js"))
         let model = try await NetworkPanelModel.make(context: context)
         let listViewController = NetworkListViewController(model: model)
         let detailViewController = makeNetworkDetailViewController(model: model)
@@ -2723,9 +2819,10 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func compactContainerDoesNotReplayDeferredDetailAfterUserPop() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let request = try #require(
-            await applyRequest(to: context, requestID: "1", url: "https://example.com/app.js")
+            await applyRequest(to: fixture, requestID: "1", url: "https://example.com/app.js")
         )
         let model = try await NetworkPanelModel.make(context: context)
         let listViewController = NetworkListViewController(model: model)
@@ -2750,9 +2847,10 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func compactContainerDoesNotRepushDetailWhenUserPopOvertakesPushCompletion() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let request = try #require(
-            await applyRequest(to: context, requestID: "1", url: "https://example.com/app.js")
+            await applyRequest(to: fixture, requestID: "1", url: "https://example.com/app.js")
         )
         let model = try await NetworkPanelModel.make(context: context)
         let listViewController = NetworkListViewController(model: model)
@@ -2777,9 +2875,10 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func compactContainerKeepsDetailAfterCancelledUserPop() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let request = try #require(
-            await applyRequest(to: context, requestID: "1", url: "https://example.com/app.js")
+            await applyRequest(to: fixture, requestID: "1", url: "https://example.com/app.js")
         )
         let model = try await NetworkPanelModel.make(context: context)
         let listViewController = NetworkListViewController(model: model)
@@ -2802,12 +2901,13 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func compactContainerConvergesToReplacementSelectionAfterUserPop() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let firstRequest = try #require(
-            await applyRequest(to: context, requestID: "1", url: "https://example.com/first.js")
+            await applyRequest(to: fixture, requestID: "1", url: "https://example.com/first.js")
         )
         let secondRequest = try #require(
-            await applyRequest(to: context, requestID: "2", url: "https://example.com/second.js")
+            await applyRequest(to: fixture, requestID: "2", url: "https://example.com/second.js")
         )
         let model = try await NetworkPanelModel.make(context: context)
         let listViewController = NetworkListViewController(model: model)
@@ -2832,10 +2932,11 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func compactUserPopDoesNotClearSameGroupSelectionFromANewerSourceEpoch() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let nodeID = DOM.Node.ID("stable-media-node")
         let firstRequest = try #require(await applyRequest(
-            to: context,
+            to: fixture,
             requestID: "first",
             url: "https://media.example.com/first.ts",
             resourceType: .media,
@@ -2850,49 +2951,53 @@ struct NetworkDetailViewControllerTests {
             detailViewController: detailViewController
         )
         model.selectRequest(firstRequest)
-        let oldToken = try #require(model.selectionToken)
+        _ = try #require(model.selectionToken)
         navigationController.syncStackForTesting()
 
         var capturedReplacementToken: NetworkPanelSelectionToken?
         let poppedViewController = await navigationController.popDetailFromUserNavigationForTesting {
-            await context.clearNetworkRequests()
-            guard let replacementRequest = await applyRequest(
-                to: context,
-                requestID: "replacement",
-                url: "https://media.example.com/replacement.ts",
-                resourceType: .media,
-                timestamp: 2,
-                initiatorNodeID: nodeID
-            ) else {
-                Issue.record("Expected a replacement request")
+            do {
+                try await fixture.clear()
+                guard let replacementRequest = try await applyRequest(
+                    to: fixture,
+                    requestID: "replacement",
+                    url: "https://media.example.com/replacement.ts",
+                    resourceType: .media,
+                    timestamp: 2,
+                    initiatorNodeID: nodeID
+                ) else {
+                    Issue.record("Expected a replacement request")
+                    return
+                }
+                model.selectRequest(replacementRequest)
+                capturedReplacementToken = model.selectionToken
+                navigationController.syncStackForTesting()
+            } catch {
+                Issue.record(error)
                 return
             }
-            model.selectRequest(replacementRequest)
-            capturedReplacementToken = model.selectionToken
-            navigationController.syncStackForTesting()
         }
 
         let replacementToken = try #require(capturedReplacementToken)
         #expect(poppedViewController === detailViewController)
-        #expect(replacementToken.groupID == oldToken.groupID)
-        #expect(replacementToken.sourceEpoch != oldToken.sourceEpoch)
         #expect(model.selectionToken == replacementToken)
         #expect(navigationController.viewControllers == [listViewController, detailViewController])
     }
 
     @Test
     func compactContainerReleasesDetailMediaPreviewResourcesWhenDetailIsRemoved() async throws {
-        let context = makeContext()
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
         let request = try #require(
             await applyRequest(
-                to: context,
+                to: fixture,
                 requestID: "1",
                 url: "https://media.example.com/download.php",
                 responseHeaders: ["content-type": "video/mp4"],
                 responseMimeType: "video/mp4"
             )
         )
-        applyResponseBody(to: context, request: request, body: "not a real movie", base64Encoded: false)
+        applyResponseBody(to: fixture, request: request, body: "not a real movie", base64Encoded: false)
         let model = try await NetworkPanelModel.make(context: context)
         let listViewController = NetworkListViewController(model: model)
         let detailViewController = makeNetworkDetailViewController(model: model)
@@ -2939,8 +3044,9 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func compactContainerPopsDetailWhenSelectedRequestDisappears() async throws {
-        let context = makeContext()
-        let request = try #require(await applyRequest(to: context, requestID: "1", url: "https://example.com/app.js"))
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let context = fixture.context
+        let request = try #require(await applyRequest(to: fixture, requestID: "1", url: "https://example.com/app.js"))
         let model = try await NetworkPanelModel.make(context: context)
         let listViewController = NetworkListViewController(model: model)
         let detailViewController = makeNetworkDetailViewController(model: model)
@@ -2961,7 +3067,11 @@ struct NetworkDetailViewControllerTests {
         await waitForNavigationTransitionToFinish(in: navigationController)
 
         await withUIKitAnimationsDisabled {
-            await context.clearNetworkRequests()
+            do {
+                try await fixture.clear()
+            } catch {
+                Issue.record(error)
+            }
         }
         #expect(model.selectionToken == selectionToken)
         #expect(model.selectedEntryID == nil)
@@ -2974,549 +3084,158 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func pendingListUpdatesKeepLatestTopologyAndUnionDirtyEntries() async throws {
-        let model = try await NetworkPanelModel.make(context: makeContext())
+    func listRendersOneRowPerCanonicalEntryAndKeepsGroupedMembersInDetail() async throws {
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let playlistID = try await fixture.insert(
+            id: "playlist",
+            url: "https://media.example.test/master.m3u8",
+            resourceType: .media,
+            initiatorNodeID: "video",
+            timestamp: 1
+        )
+        let segmentID = try await fixture.insert(
+            id: "segment",
+            url: "https://media.example.test/segment.m4s",
+            resourceType: .media,
+            initiatorNodeID: "video",
+            timestamp: 2
+        )
+        let unrelatedID = try await fixture.insert(
+            id: "unrelated",
+            url: "https://example.test/app.js",
+            resourceType: .script,
+            timestamp: 3
+        )
+        let model = try await NetworkPanelModel.make(context: fixture.context)
         let listViewController = NetworkListViewController(model: model)
-        let window = showInWindow(listViewController, makeVisible: true)
+        let window = showInWindow(listViewController)
         defer { window.isHidden = true }
+
         await listViewController.flushPendingSnapshotUpdateForTesting()
 
-        let first: WebInspectorFetchSectionID = "first"
-        let second: WebInspectorFetchSectionID = "second"
+        let groupedEntryID = fixture.entryID(containing: playlistID)
+        #expect(groupedEntryID == fixture.entryID(containing: segmentID))
+        #expect(
+            listViewController.displayedEntryIDsForTesting == [
+                fixture.entryID(containing: unrelatedID),
+                groupedEntryID,
+            ]
+        )
+        model.selectEntry(groupedEntryID)
+        #expect(model.selectedRequests.map(\.id) == [playlistID, segmentID])
+        await model.retire()
+    }
+
+    @Test
+    func listAppliesGenericEntryInsertAndContentUpdatePublications() async throws {
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let firstRequestID = try await fixture.insert(
+            id: "first",
+            url: "https://example.test/first",
+            resourceType: .fetch,
+            timestamp: 1
+        )
+        let model = try await NetworkPanelModel.make(context: fixture.context)
+        let listViewController = NetworkListViewController(model: model)
+        let window = showInWindow(
+            listViewController,
+            useUIKitVisibility: true
+        )
+        defer { window.isHidden = true }
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+        let firstEntryID = fixture.entryID(containing: firstRequestID)
+
+        try await fixture.receiveResponse(
+            id: "first",
+            status: 404,
+            mimeType: "application/json",
+            resourceType: .fetch,
+            timestamp: 2
+        )
+        #expect(
+            await listViewController.waitForFetchedResultsRevisionForTesting(
+                model.entries.revision
+            )
+        )
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+        #expect(
+            listViewController.lastAppliedReconfigureEntryIDsForTesting
+                == [firstEntryID]
+        )
+
+        let secondRequestID = try await fixture.insert(
+            id: "second",
+            url: "https://example.test/second",
+            resourceType: .fetch,
+            timestamp: 3
+        )
+        #expect(
+            await listViewController.waitForFetchedResultsRevisionForTesting(
+                model.entries.revision
+            )
+        )
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+        #expect(
+            listViewController.displayedEntryIDsForTesting == [
+                fixture.entryID(containing: secondRequestID),
+                firstEntryID,
+            ]
+        )
+        await model.retire()
+    }
+
+    @Test
+    func pendingListUpdatesKeepLatestCanonicalTopologyAndUnionDirtyEntries() async throws {
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let firstRequestID = try await fixture.insert(
+            id: "first",
+            url: "https://example.test/first",
+            timestamp: 1
+        )
+        let secondRequestID = try await fixture.insert(
+            id: "second",
+            url: "https://example.test/second",
+            timestamp: 2
+        )
+        let model = try await NetworkPanelModel.make(context: fixture.context)
+        let listViewController = NetworkListViewController(model: model)
+        let window = showInWindow(listViewController)
+        defer { window.isHidden = true }
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+        let first = fixture.entryID(containing: firstRequestID)
+        let second = fixture.entryID(containing: secondRequestID)
+
         listViewController.beginSnapshotApplyForTesting()
         listViewController.queueSnapshotUpdateForTesting(
             entryIDs: [first],
             reconfigureEntryIDs: [first]
         )
         listViewController.queueSnapshotUpdateForTesting(
-            entryIDs: [second],
-            reconfigureEntryIDs: [first, second],
+            entryIDs: [second, first],
+            reconfigureEntryIDs: [second],
             requiresFullReconfigure: true
         )
-        listViewController.queueSnapshotUpdateForTesting(
-            entryIDs: [first],
-            reconfigureEntryIDs: [first]
-        )
 
-        #expect(listViewController.pendingRowsForTesting == [first])
-        #expect(listViewController.pendingReconfigureEntryIDsForTesting == [first, second])
+        #expect(listViewController.pendingRowsForTesting == [second, first])
+        #expect(
+            listViewController.pendingReconfigureEntryIDsForTesting
+                == [first, second]
+        )
         #expect(listViewController.pendingRequiresFullReconfigureForTesting)
 
         listViewController.finishSnapshotApplyForTesting()
         await listViewController.flushPendingSnapshotUpdateForTesting()
-        #expect(listViewController.displayedEntryIDsForTesting == [first])
-        #expect(listViewController.displayedUIKitSectionCountForTesting == 1)
-    }
 
-    @Test
-    func suspendedListKeepsPendingProjectionUntilResumeWithoutFullReload() async throws {
-        let model = try await NetworkPanelModel.make(context: makeContext())
-        let listViewController = NetworkListViewController(model: model)
-        let window = showInWindow(listViewController, makeVisible: true)
-        defer { window.isHidden = true }
-        await listViewController.flushPendingSnapshotUpdateForTesting()
-
-        let entryID: WebInspectorFetchSectionID = "pending"
-        let evaluationCount = listViewController.entryIDsEvaluationCountForTesting
-        listViewController.beginSnapshotApplyForTesting()
-        listViewController.queueSnapshotUpdateForTesting(entryIDs: [entryID])
-        listViewController.suspendRenderingForTesting()
-        listViewController.finishSnapshotApplyForTesting()
-
-        #expect(listViewController.hasPendingSnapshotUpdateForTesting)
-        #expect(listViewController.entryIDsEvaluationCountForTesting == evaluationCount)
-
-        listViewController.resumeRenderingForTesting()
-        await listViewController.flushPendingSnapshotUpdateForTesting()
-        #expect(listViewController.displayedEntryIDsForTesting == [entryID])
-        #expect(listViewController.entryIDsEvaluationCountForTesting == evaluationCount)
-    }
-
-    @Test
-    func sectionReducerHandlesNontrivialMultipleMoveOrder() async throws {
-        let model = try await NetworkPanelModel.make(context: makeContext())
-        let listViewController = NetworkListViewController(model: model)
-        let old: [WebInspectorFetchSectionID] = ["0", "1", "2", "3"]
-        let new: [WebInspectorFetchSectionID] = ["2", "1", "3", "0"]
-
-        let reduced = listViewController.reduceSectionChangesForTesting(
-            oldEntryIDs: old,
-            newEntryIDs: new,
-            changes: [
-                .move(sectionID: "2", from: 2, to: 0),
-                .move(sectionID: "3", from: 3, to: 2),
-                .move(sectionID: "0", from: 0, to: 3),
-            ]
+        #expect(
+            listViewController.displayedEntryIDsForTesting == [second, first]
         )
-
-        #expect(reduced == new)
-    }
-
-    @Test
-    func sectionReducerHandlesInsertDeleteAndMultipleMovesTogether() async throws {
-        let model = try await NetworkPanelModel.make(context: makeContext())
-        let listViewController = NetworkListViewController(model: model)
-        let old: [WebInspectorFetchSectionID] = ["0", "1", "2", "3"]
-        let new: [WebInspectorFetchSectionID] = ["2", "4", "1", "0"]
-
-        let reduced = listViewController.reduceSectionChangesForTesting(
-            oldEntryIDs: old,
-            newEntryIDs: new,
-            changes: [
-                .delete(sectionID: "3", index: 3),
-                .insert(sectionID: "4", index: 1),
-                .move(sectionID: "2", from: 2, to: 0),
-                .move(sectionID: "1", from: 1, to: 2),
-                .move(sectionID: "0", from: 0, to: 3),
-            ]
-        )
-
-        #expect(reduced == new)
-    }
-
-    @Test
-    func insertingSameGroupMemberReconfiguresOnlyItsSingleRow() async throws {
-        let context = makeContext()
-        let nodeID = DOM.Node.ID("video")
-        let firstRequest = try #require(await applyRequest(
-            to: context,
-            requestID: "playlist",
-            url: "https://media.example.com/master.m3u8",
-            responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
-            responseMimeType: "application/vnd.apple.mpegurl",
-            resourceType: .media,
-            timestamp: 1,
-            initiatorNodeID: nodeID
-        ))
-        let model = try await NetworkPanelModel.make(context: context)
-        let groupID = try #require(context.networkRequestGroupID(containing: firstRequest.id))
-        let listViewController = NetworkListViewController(model: model)
-        let window = showInWindow(listViewController, makeVisible: true)
-        defer { window.isHidden = true }
-        await listViewController.flushPendingSnapshotUpdateForTesting()
-        listViewController.collectionViewForTesting.layoutIfNeeded()
-        let cell = try #require(listViewController.networkListCellForTesting(
-            at: IndexPath(item: 0, section: 0)
-        ))
-
-        #expect(listViewController.displayedEntryIDsForTesting == [groupID])
-        #expect(listViewController.displayedUIKitSectionCountForTesting == 1)
-        let evaluationCount = listViewController.entryIDsEvaluationCountForTesting
-        let applyCount = listViewController.snapshotApplyCountForTesting
-        let cellReconfigureCount = listViewController.cellReconfigureCountForTesting
-        let fetchedResultsRevision = model.requests.revision
-
-        let segmentProxyID = Network.Request.ID("segment")
-        await context.apply(.requestWillBeSent(
-            id: segmentProxyID,
-            request: Network.Request(
-                id: segmentProxyID,
-                url: "https://media.example.com/segment-1.ts",
-                method: "GET"
-            ),
-            initiator: Network.Initiator(kind: "other", nodeID: nodeID),
-            resourceType: .media,
-            redirectResponse: nil,
-            timestamp: 2
-        ))
-        _ = try #require(context.registeredRequest(forProxyID: segmentProxyID))
-
-        #expect(await listViewController.waitForFetchedResultsRevisionForTesting(
-            fetchedResultsRevision + 1
-        ))
-        await listViewController.flushPendingSnapshotUpdateForTesting()
-        #expect(listViewController.displayedEntryIDsForTesting == [groupID])
-        #expect(listViewController.entryIDsEvaluationCountForTesting == evaluationCount)
-        #expect(listViewController.snapshotApplyCountForTesting == applyCount)
-        #expect(listViewController.cellReconfigureCountForTesting == cellReconfigureCount + 1)
-        #expect(listViewController.lastAppliedReconfigureEntryIDsForTesting == [groupID])
-
-        #expect(cell.fileTypeLabelForTesting?.hasSuffix("×2") == true)
-    }
-
-    @Test
-    func contentOnlyDataEventsDoNotScheduleNetworkListProjectionWork() async throws {
-        let context = makeContext()
-        _ = try #require(await applyRequest(
-            to: context,
-            requestID: "content-only-list",
-            url: "https://example.com/content-only.js"
-        ))
-        let model = try await NetworkPanelModel.make(context: context)
-        let listViewController = NetworkListViewController(model: model)
-        let window = showInWindow(listViewController, makeVisible: true)
-        defer { window.isHidden = true }
-        await listViewController.flushPendingSnapshotUpdateForTesting()
-        listViewController.collectionViewForTesting.layoutIfNeeded()
-        let cell = try #require(listViewController.networkListCellForTesting(
-            at: IndexPath(item: 0, section: 0)
-        ))
-
-        let snapshotApplyCount = listViewController.snapshotApplyCountForTesting
-        let cellReconfigureCount = listViewController.cellReconfigureCountForTesting
-        let cellRenderCount = cell.renderCountForTesting
-        let initialRevision = model.requests.revision
-
-        for index in 0..<100 {
-            await applyDataReceived(
-                to: context,
-                requestID: "content-only-list",
-                dataLength: 1,
-                encodedDataLength: 1,
-                timestamp: Double(index + 10)
-            )
-        }
-
-        #expect(model.requests.revision == initialRevision + 100)
-        #expect(await listViewController.waitForFetchedResultsRevisionForTesting(
-            model.requests.revision
-        ))
-        await listViewController.flushPendingSnapshotUpdateForTesting()
-        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCount)
-        #expect(listViewController.cellReconfigureCountForTesting == cellReconfigureCount)
-        #expect(cell.renderCountForTesting == cellRenderCount)
-
-        let revisionBeforeDisplayChange = model.requests.revision
-        await applyResponseReceived(
-            to: context,
-            requestID: "content-only-list",
-            url: "https://example.com/content-only.js",
-            responseHeaders: ["content-type": "text/css"],
-            responseMimeType: "text/css",
-            timestamp: 200
-        )
-        #expect(await listViewController.waitForFetchedResultsRevisionForTesting(
-            revisionBeforeDisplayChange + 1
-        ))
-        #expect(await waitForObservedCondition(
-            deliveries: {
-                [cell.requestObservationForTesting].compactMap { $0 }
-            },
-            sample: {
-                cell.fileTypeLabelForTesting == "css"
-            }
-        ))
-        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCount)
-        #expect(listViewController.cellReconfigureCountForTesting == cellReconfigureCount)
-        #expect(cell.renderCountForTesting > cellRenderCount)
-    }
-
-    @Test
-    func thousandMemberGroupUsesOneListRowAndRendersEveryDetailEntry() async throws {
-        let context = makeContext()
-        let nodeID = DOM.Node.ID("large-media-group")
-        for index in 0..<1_000 {
-            context.seedNetworkRequest(
-                requestID: "segment-\(index)",
-                url: "https://media.example.com/segment-\(index).ts",
-                resourceTypeRawValue: "Media",
-                responseMIMEType: "video/mp2t",
-                responseStatus: 200,
-                responseStatusText: "OK",
-                initiator: Network.Initiator(kind: "other", nodeID: nodeID),
-                timestamp: Double(index)
-            )
-        }
-        let model = try await NetworkPanelModel.make(context: context)
-        let groupID = try #require(model.requests.snapshot.sectionIDs.first)
-        let listViewController = NetworkListViewController(model: model)
-        let listWindow = showInWindow(listViewController, makeVisible: true)
-        defer { listWindow.isHidden = true }
-        await listViewController.flushPendingSnapshotUpdateForTesting()
-
-        #expect(listViewController.displayedEntryIDsForTesting == [groupID])
-        #expect(listViewController.displayedUIKitSectionCountForTesting == 1)
-        listViewController.collectionViewForTesting.layoutIfNeeded()
-        let cell = try #require(listViewController.networkListCellForTesting(
-            at: IndexPath(item: 0, section: 0)
-        ))
-        #expect(cell.fileTypeLabelForTesting?.hasSuffix("×1000") == true)
-
-        model.selectEntry(groupID)
-        let detailViewController = makeNetworkDetailViewController(model: model)
-        let detailWindow = showInWindow(detailViewController)
-        defer { detailWindow.isHidden = true }
-        let didRenderAllMembers = await waitUntilRendered(in: detailViewController) {
-            let text = detailViewController.headersTextViewForTesting.renderedTextForTesting
-            return model.selectedRequests.count == 1_000
-                && text.contains("segment-0.ts")
-                && text.contains("segment-999.ts")
-        }
-        #expect(didRenderAllMembers)
-    }
-
-    @Test
-    func visibleListAppliesLiveInsertThroughFetchedResultsUpdates() async throws {
-        let context = makeContext()
-        let firstRequest = try #require(await applyRequest(
-            to: context,
-            requestID: "1",
-            url: "https://example.com/first.js"
-        ))
-        let model = try await NetworkPanelModel.make(context: context)
-        let listViewController = NetworkListViewController(model: model)
-        let window = showInWindow(listViewController, makeVisible: true)
-        defer { window.isHidden = true }
-
-        await listViewController.flushPendingSnapshotUpdateForTesting()
-        #expect(listViewController.displayedEntryIDsForTesting == [try #require(context.networkRequestGroupID(containing: firstRequest.id))])
-
-        let evaluationCountBeforeInsert = listViewController.entryIDsEvaluationCountForTesting
-        let snapshotApplyCountBeforeInsert = listViewController.snapshotApplyCountForTesting
-        let fetchedResultsRevisionBeforeInsert = model.requests.revision
-        let secondProxyID = Network.Request.ID("2")
-        await context.apply(.requestWillBeSent(
-            id: secondProxyID,
-            request: Network.Request(
-                id: secondProxyID,
-                url: "https://example.com/second.js",
-                method: "GET"
-            ),
-            initiator: Network.Initiator(kind: "other"),
-            resourceType: .script,
-            redirectResponse: nil,
-            timestamp: 2
-        ))
-        let secondRequest = try #require(context.registeredRequest(forProxyID: secondProxyID))
-        let secondEntryID = try #require(context.networkRequestGroupID(containing: secondRequest.id))
-        let firstEntryID = try #require(context.networkRequestGroupID(containing: firstRequest.id))
-
-        let didRenderInsert = await waitUntilListShowsEntries(
-            [secondEntryID, firstEntryID],
-            in: listViewController,
-            afterFetchedResultsRevision: fetchedResultsRevisionBeforeInsert
-        )
-        #expect(didRenderInsert)
-        #expect(listViewController.entryIDsEvaluationCountForTesting == evaluationCountBeforeInsert)
-        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeInsert + 1)
-    }
-
-    @Test
-    func visibleListAppliesDescriptorResetThroughFetchedResultsUpdates() async throws {
-        let context = makeContext()
-        _ = try #require(await applyRequest(
-            to: context,
-            requestID: "1",
-            url: "https://media.example.com/clip.mp4",
-            responseHeaders: ["content-type": "video/mp4"],
-            responseMimeType: "video/mp4"
-        ))
-        let model = try await NetworkPanelModel.make(context: context)
-        model.setResourceFilter(.media, enabled: true)
-        await model.waitForQueryUpdates()
-        let listViewController = NetworkListViewController(model: model)
-        let window = showInWindow(listViewController, makeVisible: true)
-        defer { window.isHidden = true }
-
-        await listViewController.flushPendingSnapshotUpdateForTesting()
-        #expect(listViewController.displayedEntryIDsForTesting.count == 1)
-
-        let evaluationCountBeforeUpdate = listViewController.entryIDsEvaluationCountForTesting
-        let snapshotApplyCountBeforeUpdate = listViewController.snapshotApplyCountForTesting
-        let fetchedResultsRevisionBeforeUpdate = model.requests.revision
-
-        model.setSearchText("does-not-match")
-        await model.waitForQueryUpdates()
-        let didRenderReset = await waitUntilListShowsEntries(
-            [],
-            in: listViewController,
-            afterFetchedResultsRevision: fetchedResultsRevisionBeforeUpdate
-        )
-
-        #expect(didRenderReset)
-        #expect(model.requests.snapshot.sectionIDs.isEmpty)
-        #expect(listViewController.displayedEntryIDsForTesting.isEmpty)
-        #expect(listViewController.entryIDsEvaluationCountForTesting == evaluationCountBeforeUpdate)
-        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeUpdate + 1)
-    }
-
-    @Test
-    func hiddenListDefersSnapshotEvaluationUntilAppearingAgain() async throws {
-        let context = makeContext()
-        _ = try #require(await applyRequest(
-            to: context,
-            requestID: "1",
-            url: "https://media.example.com/clip.mp4",
-            responseHeaders: ["content-type": "video/mp4"],
-            responseMimeType: "video/mp4"
-        ))
-        let model = try await NetworkPanelModel.make(context: context)
-        let listViewController = NetworkListViewController(model: model)
-        let window = showInWindow(listViewController)
-        defer { window.isHidden = true }
-        await listViewController.flushPendingSnapshotUpdateForTesting()
-        #expect(listViewController.displayedEntryIDsForTesting.count == 1)
-
-        let evaluationCountBeforeHiddenUpdate = listViewController.entryIDsEvaluationCountForTesting
-        let fetchedResultsRevisionBeforeHiddenUpdate = model.requests.revision
-
-        listViewController.suspendRenderingForTesting()
-        model.setSearchText("does-not-match")
-        await model.waitForQueryUpdates()
-        #expect(await listViewController.waitForFetchedResultsRevisionForTesting(
-            fetchedResultsRevisionBeforeHiddenUpdate + 1
-        ))
-
-        #expect(listViewController.entryIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
-        #expect(listViewController.displayedEntryIDsForTesting.count == 1)
-
-        listViewController.resumeRenderingForTesting()
-        await listViewController.flushPendingSnapshotUpdateForTesting()
-        #expect(listViewController.displayedEntryIDsForTesting.isEmpty)
-        #expect(listViewController.entryIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate + 1)
-    }
-
-    @Test
-    func hiddenListDefersQueuedSnapshotApplyUntilAppearingAgain() async throws {
-        let context = makeContext()
-        let request = try #require(await applyRequest(
-            to: context,
-            requestID: "1",
-            url: "https://media.example.com/clip.mp4",
-            responseHeaders: ["content-type": "video/mp4"],
-            responseMimeType: "video/mp4"
-        ))
-        let model = try await NetworkPanelModel.make(context: context)
-        let listViewController = NetworkListViewController(model: model)
-        let window = showInWindow(listViewController)
-        defer { window.isHidden = true }
-        await listViewController.flushPendingSnapshotUpdateForTesting()
-        #expect(listViewController.displayedEntryIDsForTesting == [try #require(context.networkRequestGroupID(containing: request.id))])
-
-        let evaluationCountBeforeHiddenUpdate = listViewController.entryIDsEvaluationCountForTesting
-        let fetchedResultsRevisionBeforeHiddenUpdate = model.requests.revision
-        listViewController.beginSnapshotApplyForTesting()
-        listViewController.queueSnapshotUpdateForTesting(entryIDs: [])
-        #expect(listViewController.hasPendingSnapshotUpdateForTesting)
-
-        listViewController.suspendRenderingForTesting()
-        #expect(listViewController.hasPendingSnapshotUpdateForTesting)
-
-        model.setSearchText("does-not-match")
-        await model.waitForQueryUpdates()
-        #expect(await listViewController.waitForFetchedResultsRevisionForTesting(
-            fetchedResultsRevisionBeforeHiddenUpdate + 1
-        ))
-        #expect(listViewController.hasPendingSnapshotUpdateForTesting == false)
-        listViewController.finishSnapshotApplyForTesting()
-        await listViewController.flushPendingSnapshotUpdateForTesting()
-
-        #expect(listViewController.entryIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
-        #expect(listViewController.displayedEntryIDsForTesting == [try #require(context.networkRequestGroupID(containing: request.id))])
-
-        listViewController.resumeRenderingForTesting()
-        await listViewController.flushPendingSnapshotUpdateForTesting()
-        #expect(listViewController.displayedEntryIDsForTesting.isEmpty)
-        #expect(listViewController.entryIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate + 1)
-    }
-
-    @Test
-    func hiddenFilteredListDoesNotReapplyUnchangedRowTopology() async throws {
-        let context = makeContext()
-        let request = try #require(await applyRequest(
-            to: context,
-            requestID: "1",
-            url: "https://media.example.com/clip.mp4",
-            responseHeaders: ["content-type": "video/mp4"],
-            responseMimeType: "video/mp4"
-        ))
-        let model = try await NetworkPanelModel.make(context: context)
-        model.setResourceFilter(.media, enabled: true)
-        await model.waitForQueryUpdates()
-        let listViewController = NetworkListViewController(model: model)
-        listViewController.loadViewIfNeeded()
-        listViewController.resumeRenderingForTesting()
-        await listViewController.flushPendingSnapshotUpdateForTesting()
-        #expect(listViewController.displayedEntryIDsForTesting == [try #require(context.networkRequestGroupID(containing: request.id))])
-
-        let evaluationCountBeforeHiddenUpdate = listViewController.entryIDsEvaluationCountForTesting
-        let snapshotApplyCountBeforeHiddenUpdate = listViewController.snapshotApplyCountForTesting
-        listViewController.suspendRenderingForTesting()
-        await applyResponseReceived(
-            to: context,
-            requestID: "1",
-            url: request.url,
-            responseHeaders: [
-                "content-type": "video/mp4",
-                "x-hidden-update": "true",
-            ],
-            responseMimeType: "video/mp4",
-            timestamp: 4
-        )
-        #expect(await listViewController.waitForFetchedResultsRevisionForTesting(
-            model.requests.revision
-        ))
-
-        #expect(listViewController.entryIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
-        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeHiddenUpdate)
-        #expect(listViewController.displayedEntryIDsForTesting == [try #require(context.networkRequestGroupID(containing: request.id))])
-
-        listViewController.resumeRenderingForTesting()
-
-        #expect(listViewController.entryIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate + 1)
-        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeHiddenUpdate)
-        #expect(listViewController.displayedEntryIDsForTesting == [try #require(context.networkRequestGroupID(containing: request.id))])
-
-        await listViewController.flushPendingSnapshotUpdateForTesting()
-
-        #expect(listViewController.entryIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate + 1)
-        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeHiddenUpdate)
-        #expect(listViewController.displayedEntryIDsForTesting == [try #require(context.networkRequestGroupID(containing: request.id))])
-    }
-
-    @Test
-    func networkListCellObservesDisplayContentOnlyWhileRenderingIsActive() async throws {
-        let context = makeContext()
-        let request = try #require(await applyRequest(
-            to: context,
-            requestID: "1",
-            url: "https://media.example.com/clip.mp4",
-            responseHeaders: ["content-type": "video/mp4"],
-            responseMimeType: "video/mp4"
-        ))
-        let cell = NetworkListCell(frame: CGRect(x: 0, y: 0, width: 390, height: 44))
-        cell.bind(requests: [request], renderingActive: true)
-        #expect(cell.fileTypeLabelForTesting == "mp4")
-        #expect(cell.hasActiveRequestObservationForTesting)
-
-        await applyResponseReceived(
-            to: context,
-            requestID: "1",
-            url: request.url,
-            responseHeaders: ["content-type": "text/css"],
-            responseMimeType: "text/css",
-            timestamp: 4
-        )
-
-        #expect(await waitForObservedCondition(
-            deliveries: {
-                [cell.requestObservationForTesting].compactMap { $0 }
-            },
-            sample: {
-                cell.fileTypeLabelForTesting == "css"
-            }
-        ))
-
-        cell.setRenderingActive(false)
-        #expect(cell.hasActiveRequestObservationForTesting == false)
-        await applyResponseReceived(
-            to: context,
-            requestID: "1",
-            url: request.url,
-            responseHeaders: ["content-type": "image/png"],
-            responseMimeType: "image/png",
-            timestamp: 5
-        )
-        #expect(cell.fileTypeLabelForTesting == "css")
-
-        cell.setRenderingActive(true)
-        #expect(cell.hasActiveRequestObservationForTesting)
-        #expect(cell.fileTypeLabelForTesting == "png")
+        await model.retire()
     }
 
     @Test
     func listControllerDeallocatesWhileFetchedResultsUpdateTaskIsActive() async throws {
-        let model = try await NetworkPanelModel.make(context: makeContext())
+        let fixture = try await CanonicalNetworkPanelFixture()
+        let model = try await NetworkPanelModel.make(context: fixture.context)
         let deinitProbe = UITestDeinitProbe()
         weak var weakViewController: NetworkListViewController?
 
@@ -3532,16 +3251,63 @@ struct NetworkDetailViewControllerTests {
         let didDeallocate = await deinitProbe.wait()
         #expect(didDeallocate)
         #expect(weakViewController == nil)
+        await model.retire()
     }
 
-    private func makeContext() -> WebInspectorModelContext {
-        WebInspectorModelContext.preview()
-    }
-
+    @MainActor
     private struct LiveNetworkContextFixture {
+        let core: WebInspectorModelContainerCore
         let runtime: WebInspectorProxyTestRuntime
         let wire: WebInspectorRawWireDriver
         let context: WebInspectorModelContext
+
+        func apply(_ event: Network.Event) async throws {
+            let snapshot = await core.canonicalSnapshotForTesting()
+            guard let binding = snapshot.binding,
+                  let currentPageID = binding.currentPageID,
+                  let targetState = binding.targets.first(where: {
+                      $0.target.id == currentPageID
+                  }) else {
+                preconditionFailure(
+                    "An attached Network test container requires a current canonical page target."
+                )
+            }
+            let sequence = try #require(binding.lastSequence).addingReportingOverflow(1)
+            precondition(sequence.overflow == false)
+            guard let commit = try await core.reduce(
+                .event(
+                    sequence: sequence.partialValue,
+                    scope: ModelEventScope(
+                        generation: binding.pageGeneration,
+                        target: targetState.target,
+                        agentTarget: targetState.target,
+                        navigationEpoch: targetState.navigationEpoch,
+                        domBindingEpoch: targetState.domBindingEpoch,
+                        runtimeBindingEpoch: targetState.runtimeBindingEpoch,
+                        consoleBindingEpoch: targetState.consoleBindingEpoch
+                    ),
+                    payload: .network(event)
+                ),
+                attachmentGeneration: binding.attachmentGeneration
+            ) else {
+                return
+            }
+            let barrier = try await core.makeAcknowledgementBarrier(
+                through: commit.toRevision
+            )
+            try await core.waitForAcknowledgements(barrier)
+        }
+
+        func request(rawID: Network.Request.ID) async -> NetworkRequest? {
+            let record = await core.canonicalSnapshotForTesting()
+                .network?.requests.first(where: {
+                    $0.record.id.rawRequestID == rawID
+                })?.record
+            guard let record else {
+                return nil
+            }
+            return context.model(for: NetworkRequest.ID(canonical: record.id))
+        }
     }
 
     private func withLiveNetworkContext<Output>(
@@ -3552,11 +3318,19 @@ struct NetworkDetailViewControllerTests {
         await wire.start()
         await wire.respond(to: "Page.enable")
         await wire.respond(to: "Network.enable")
-        let context = WebInspectorModelContext(
-            configuration: .init(domains: [.network])
+        let core = WebInspectorModelContainerCore(
+            configuredDomains: [.network],
+            modelSchemaRegistry: WebInspectorModelSchemaRegistry(
+                WebInspectorNetworkModelSchemas.registrations
+            )
         )
+        let context = WebInspectorModelContext.mainContext(
+            for: core,
+            isolation: MainActor.shared
+        )
+        try await context.waitUntilContainerReady()
         do {
-            try await context.attach(to: runtime.proxy, isolation: MainActor.shared)
+            try await core.attach(owning: runtime.proxy)
         } catch {
             await runtime.close()
             await wire.stop()
@@ -3564,6 +3338,7 @@ struct NetworkDetailViewControllerTests {
         }
 
         let fixture = LiveNetworkContextFixture(
+            core: core,
             runtime: runtime,
             wire: wire,
             context: context
@@ -3577,14 +3352,14 @@ struct NetworkDetailViewControllerTests {
 
         await wire.respond(to: "Network.disable")
         await wire.respond(to: "Page.disable")
-        await context.close()
+        await core.closeConnection()
         await runtime.close()
         await wire.stop()
         return try result.get()
     }
 
     private func applyRequest(
-        to context: WebInspectorModelContext,
+        to fixture: LiveNetworkContextFixture,
         requestID rawRequestID: String,
         url: String,
         requestHeaders: [String: String] = [:],
@@ -3597,9 +3372,119 @@ struct NetworkDetailViewControllerTests {
         timestamp: Double = 1,
         initiatorNodeID: DOM.Node.ID? = nil,
         finishes: Bool = true
-    ) async -> NetworkRequest? {
+    ) async throws -> NetworkRequest? {
         let requestID = Network.Request.ID(rawRequestID)
-        await context.apply(
+        try await fixture.apply(
+            .requestWillBeSent(
+                id: requestID,
+                request: Network.Request(
+                    id: requestID,
+                    url: url,
+                    method: method ?? (postData == nil ? "GET" : "POST"),
+                    headers: requestHeaders,
+                    postData: postData
+                ),
+                initiator: Network.Initiator(
+                    kind: "other",
+                    nodeID: initiatorNodeID
+                ),
+                resourceType: resourceType,
+                redirectResponse: nil,
+                timestamp: timestamp
+            )
+        )
+        try await fixture.apply(
+            .responseReceived(
+                id: requestID,
+                response: Network.Response(
+                    url: url,
+                    status: responseStatus,
+                    statusText: responseStatus == 206
+                        ? "Partial Content"
+                        : "OK",
+                    mimeType: responseMimeType,
+                    headers: responseHeaders,
+                    source: Network.Source(rawValue: "network"),
+                    requestHeaders: requestHeaders
+                ),
+                resourceType: resourceType,
+                timestamp: timestamp + 0.1
+            )
+        )
+        if finishes {
+            try await fixture.apply(
+                .loadingFinished(
+                    id: requestID,
+                    timestamp: timestamp + 0.2,
+                    sourceMapURL: nil,
+                    metrics: nil
+                )
+            )
+        }
+        return await fixture.request(rawID: requestID)
+    }
+
+    private func applyResponseReceived(
+        to fixture: LiveNetworkContextFixture,
+        requestID rawRequestID: String,
+        url: String,
+        responseHeaders: [String: String],
+        responseMimeType: String,
+        responseStatus: Int = 200,
+        resourceType: Network.ResourceType = .script,
+        timestamp: Double
+    ) async throws {
+        try await fixture.apply(
+            .responseReceived(
+                id: Network.Request.ID(rawRequestID),
+                response: Network.Response(
+                    url: url,
+                    status: responseStatus,
+                    statusText: responseStatus == 206
+                        ? "Partial Content"
+                        : "OK",
+                    mimeType: responseMimeType,
+                    headers: responseHeaders,
+                    source: Network.Source(rawValue: "network")
+                ),
+                resourceType: resourceType,
+                timestamp: timestamp
+            )
+        )
+    }
+
+    private func applyLoadingFinished(
+        to fixture: LiveNetworkContextFixture,
+        requestID rawRequestID: String,
+        timestamp: Double
+    ) async throws {
+        try await fixture.apply(
+            .loadingFinished(
+                id: Network.Request.ID(rawRequestID),
+                timestamp: timestamp,
+                sourceMapURL: nil,
+                metrics: nil
+            )
+        )
+    }
+
+    private func applyRequest(
+        to fixture: CanonicalNetworkPanelFixture,
+        requestID rawRequestID: String,
+        url: String,
+        requestHeaders: [String: String] = [:],
+        postData: String? = nil,
+        responseHeaders: [String: String] = ["content-type": "text/javascript"],
+        responseMimeType: String = "text/javascript",
+        responseStatus: Int = 200,
+        resourceType: Network.ResourceType = .script,
+        method: String? = nil,
+        timestamp: Double = 1,
+        initiatorNodeID: DOM.Node.ID? = nil,
+        finishes: Bool = true
+    ) async throws -> NetworkRequest? {
+        let requestID = Network.Request.ID(rawRequestID)
+        try await fixture.apply(
             .requestWillBeSent(
                 id: requestID,
                 request: Network.Request(
@@ -3615,7 +3500,7 @@ struct NetworkDetailViewControllerTests {
                 timestamp: timestamp
             )
         )
-        await context.apply(
+        try await fixture.apply(
             .responseReceived(
                 id: requestID,
                 response: Network.Response(
@@ -3632,7 +3517,7 @@ struct NetworkDetailViewControllerTests {
             )
         )
         if finishes {
-            await context.apply(
+            try await fixture.apply(
                 .loadingFinished(
                     id: requestID,
                     timestamp: timestamp + 0.2,
@@ -3641,18 +3526,18 @@ struct NetworkDetailViewControllerTests {
                 )
             )
         }
-        return context.registeredRequest(forProxyID: requestID)
+        return fixture.request(rawID: requestID)
     }
 
     private func applyRequestWithoutResponse(
-        to context: WebInspectorModelContext,
+        to fixture: CanonicalNetworkPanelFixture,
         requestID rawRequestID: String,
         url: String,
         requestHeaders: [String: String] = [:],
         postData: String? = nil
-    ) async -> NetworkRequest? {
+    ) async throws -> NetworkRequest? {
         let requestID = Network.Request.ID(rawRequestID)
-        await context.apply(
+        try await fixture.apply(
             .requestWillBeSent(
                 id: requestID,
                 request: Network.Request(
@@ -3668,11 +3553,11 @@ struct NetworkDetailViewControllerTests {
                 timestamp: 1
             )
         )
-        return context.registeredRequest(forProxyID: requestID)
+        return fixture.request(rawID: requestID)
     }
 
     private func applyResponseReceived(
-        to context: WebInspectorModelContext,
+        to fixture: CanonicalNetworkPanelFixture,
         requestID rawRequestID: String,
         url: String,
         responseHeaders: [String: String],
@@ -3680,9 +3565,9 @@ struct NetworkDetailViewControllerTests {
         responseStatus: Int = 200,
         resourceType: Network.ResourceType = .script,
         timestamp: Double
-    ) async {
+    ) async throws {
         let requestID = Network.Request.ID(rawRequestID)
-        await context.apply(
+        try await fixture.apply(
             .responseReceived(
                 id: requestID,
                 response: Network.Response(
@@ -3700,13 +3585,13 @@ struct NetworkDetailViewControllerTests {
     }
 
     private func applyDataReceived(
-        to context: WebInspectorModelContext,
+        to fixture: CanonicalNetworkPanelFixture,
         requestID rawRequestID: String,
         dataLength: Int,
         encodedDataLength: Int,
         timestamp: Double
-    ) async {
-        await context.apply(
+    ) async throws {
+        try await fixture.apply(
             .dataReceived(
                 id: Network.Request.ID(rawRequestID),
                 dataLength: dataLength,
@@ -3717,11 +3602,11 @@ struct NetworkDetailViewControllerTests {
     }
 
     private func applyLoadingFinished(
-        to context: WebInspectorModelContext,
+        to fixture: CanonicalNetworkPanelFixture,
         requestID rawRequestID: String,
         timestamp: Double
-    ) async {
-        await context.apply(
+    ) async throws {
+        try await fixture.apply(
             .loadingFinished(
                 id: Network.Request.ID(rawRequestID),
                 timestamp: timestamp,
@@ -3732,13 +3617,13 @@ struct NetworkDetailViewControllerTests {
     }
 
     private func applyLoadingFailed(
-        to context: WebInspectorModelContext,
+        to fixture: CanonicalNetworkPanelFixture,
         requestID rawRequestID: String,
         errorText: String,
         canceled: Bool,
         timestamp: Double
-    ) async {
-        await context.apply(
+    ) async throws {
+        try await fixture.apply(
             .loadingFailed(
                 id: Network.Request.ID(rawRequestID),
                 errorText: errorText,
@@ -3749,12 +3634,15 @@ struct NetworkDetailViewControllerTests {
     }
 
     private func applyResponseBody(
-        to context: WebInspectorModelContext,
+        to fixture: CanonicalNetworkPanelFixture,
         request: NetworkRequest,
         body: String,
         base64Encoded: Bool = false
     ) {
-        context.seedResponseBody(for: request.id, body: body, base64Encoded: base64Encoded)
+        _ = fixture
+        request.responseBody.load(
+            Network.Body(data: body, base64Encoded: base64Encoded)
+        )
     }
 
     private func selectMode(
@@ -3870,7 +3758,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     private func waitUntilListShowsEntries(
-        _ entryIDs: [WebInspectorFetchSectionID],
+        _ entryIDs: [NetworkEntry.ID],
         in viewController: NetworkListViewController,
         afterFetchedResultsRevision fetchedResultsRevision: UInt64
     ) async -> Bool {

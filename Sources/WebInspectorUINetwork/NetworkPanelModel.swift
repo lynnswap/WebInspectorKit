@@ -56,6 +56,8 @@ package final class NetworkPanelModel {
 
     package let context: WebInspectorModelContext
     package let entries: WebInspectorFetchedResultsController<NetworkEntry, Never>
+    @ObservationIgnored private let allEntries:
+        WebInspectorFetchedResultsController<NetworkEntry, Never>
     package private(set) var selectionToken: NetworkPanelSelectionToken?
     package private(set) var searchText: String
     package private(set) var activeResourceFilters: Set<NetworkDisplay.ResourceFilter>
@@ -70,10 +72,12 @@ package final class NetworkPanelModel {
     private init(
         context: WebInspectorModelContext,
         entries: WebInspectorFetchedResultsController<NetworkEntry, Never>,
+        allEntries: WebInspectorFetchedResultsController<NetworkEntry, Never>,
         criteria: QueryCriteria
     ) {
         self.context = context
         self.entries = entries
+        self.allEntries = allEntries
         searchText = criteria.searchText
         activeResourceFilters = []
         queryRevision = 0
@@ -92,9 +96,20 @@ package final class NetworkPanelModel {
             modelContext: context,
             isolation: MainActor.shared
         )
+        let allEntries: WebInspectorFetchedResultsController<NetworkEntry, Never>
+        do {
+            allEntries = try await WebInspectorFetchedResultsController<NetworkEntry, Never>(
+                modelContext: context,
+                isolation: MainActor.shared
+            )
+        } catch {
+            await entries.close()
+            throw error
+        }
         return NetworkPanelModel(
             context: context,
             entries: entries,
+            allEntries: allEntries,
             criteria: criteria
         )
     }
@@ -116,7 +131,7 @@ package final class NetworkPanelModel {
     }
 
     package var hasClearableRequests: Bool {
-        entries.snapshot.itemIDs.isEmpty == false
+        allEntries.snapshot.itemIDs.isEmpty == false
     }
 
     package var effectiveResourceFilters: Set<NetworkDisplay.ResourceFilter> {
@@ -151,7 +166,7 @@ package final class NetworkPanelModel {
     package func selectEntry(_ id: NetworkEntry.ID?) {
         requireActive()
         guard let id,
-            entries.snapshot.itemIDs.contains(id),
+            allEntries.snapshot.itemIDs.contains(id),
             context.model(for: id) != nil
         else {
             selectionToken = nil
@@ -166,7 +181,7 @@ package final class NetworkPanelModel {
             selectionToken = nil
             return
         }
-        let entryID = entries.snapshot.itemIDs.first { entryID in
+        let entryID = allEntries.snapshot.itemIDs.first { entryID in
             context.model(for: entryID)?.requestIDs.contains(request.id) == true
         }
         selectEntry(entryID)
@@ -242,6 +257,7 @@ package final class NetworkPanelModel {
             lifecycle = .retiring(task)
             await task?.value
             await entries.close()
+            await allEntries.close()
             lifecycle = .retired
         case let .retiring(task):
             await task?.value
@@ -259,6 +275,12 @@ package final class NetworkPanelModel {
             task?.cancel()
         }
         lifecycle = .retired
+        let entries = entries
+        let allEntries = allEntries
+        Task { @MainActor in
+            await entries.close()
+            await allEntries.close()
+        }
     }
 
     /// Waits until the latest scheduled query replacement reaches a terminal state.
@@ -332,7 +354,7 @@ package final class NetworkPanelModel {
 
     private var liveSelectionToken: NetworkPanelSelectionToken? {
         guard let selectionToken,
-            entries.snapshot.itemIDs.contains(selectionToken.entryID),
+            allEntries.snapshot.itemIDs.contains(selectionToken.entryID),
             context.model(for: selectionToken.entryID) != nil
         else {
             return nil

@@ -117,10 +117,14 @@ private func makeNetworkSplitPreviewController(
 ) -> UIViewController {
     NetworkPreviewFixtures.makeViewController(mode: .detail) { model in
         if let selectedDisplayName,
-           let entry = model.requests.sections.first(where: {
-               $0.items.first?.displayName == selectedDisplayName
+           let entryID = model.entries.snapshot.itemIDs.first(where: { entryID in
+               guard let entry = model.context.model(for: entryID),
+                     let request = model.context.model(for: entry.primaryRequestID) else {
+                   return false
+               }
+               return request.displayName == selectedDisplayName
            }) {
-            model.selectEntry(entry.id)
+            model.selectEntry(entryID)
         }
         return NetworkCompactNavigationController(
             model: model,
