@@ -598,6 +598,7 @@ func schemaRegistryRunsOnACustomActorWithoutMainActorOwnership() async throws {
     #expect(try #require(await harness.primary(1)).value == 10)
 }
 
+#if os(macOS)
 @Test
 func schemaTransactionStageIsOneShot() async {
     await #expect(processExitsWith: .failure) {
@@ -728,6 +729,7 @@ func schemaCoreRejectsCloseWhileACombinedCommitIsOutstanding() async {
         _ = schemas.core.close()
     }
 }
+#endif
 
 @Test
 func schemaCoreCanCloseAfterAStagedCommitAborts() async throws {
@@ -766,6 +768,7 @@ func schemaCoreCanCloseAfterTransactionStagingFails() async throws {
     schemas.core.close().apply(on: schemas.owner, owner: owner)
 }
 
+#if os(macOS)
 @Test
 func schemaRegistryRejectsDuplicateModelTypes() async {
     await #expect(processExitsWith: .failure) {
@@ -844,6 +847,7 @@ func schemaSnapshotRejectsDuplicateCanonicalRanks() async {
         )
     }
 }
+#endif
 
 private struct SchemaPrimaryID: WebInspectorPersistentIdentifier {
     typealias Model = SchemaPrimaryModel
