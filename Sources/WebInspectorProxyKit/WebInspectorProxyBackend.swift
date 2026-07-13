@@ -48,14 +48,7 @@ package struct WebInspectorProxyCommand<Payload: Sendable, Result: Sendable>: Se
 
 package struct WebInspectorProxyCommandResult<Value: Sendable>: Sendable {
     package let value: Value
-    package let receivedSequence: UInt64
-    package let receivedDomainSequences: [WebInspectorProxyDomain: UInt64]
-
-    package func receivedSequence(
-        for domain: WebInspectorProxyDomain
-    ) -> UInt64 {
-        receivedDomainSequences[domain] ?? 0
-    }
+    package let modelFeedSequence: UInt64?
 }
 
 package enum WebInspectorProxyEvent: Sendable {

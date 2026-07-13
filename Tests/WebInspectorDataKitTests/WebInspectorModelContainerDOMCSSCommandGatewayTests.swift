@@ -622,6 +622,17 @@ func elementPickerWaitsForAnUnloadedNodeToReachItsModelContext()
                 #"{"parentId":"body","nodes":[{"nodeId":"selected-node","nodeType":1,"nodeName":"BUTTON","localName":"button","nodeValue":"","childNodeCount":0}]}"#
             )
         )
+        try await fixture.runtime.peer.createTarget(.init(
+            id: "unrelated-worker",
+            type: "worker"
+        ))
+        try await fixture.runtime.peer.emitTargetEvent(
+            targetID: "unrelated-worker",
+            method: "DOM.attributeModified",
+            parameters: try testJSONObject(
+                #"{"nodeId":"ignored-node","name":"data-ignored","value":"true"}"#
+            )
+        )
         requestNodeGate.open()
 
         let selectedID = try #require(try await operation.value)

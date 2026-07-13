@@ -57,7 +57,7 @@ func rawPeerRoutesFrameRequestNodeThroughCurrentPageDOMAgent() async throws {
 }
 
 @Test
-func modelFeedNodeResolutionCarriesTheDOMReplyWatermark() async throws {
+func modelFeedNodeResolutionRejectsACommandWithoutAModelFeed() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let page = try await runtime.proxy.waitForCurrentPage()
 
@@ -80,9 +80,15 @@ func modelFeedNodeResolutionCarriesTheDOMReplyWatermark() async throws {
         with: try jsonObject(#"{"nodeId":"selected-node"}"#)
     )
 
-    let resolution = try await operation.value
-    #expect(resolution.nodeID == DOM.Node.ID("selected-node"))
-    #expect(resolution.receivedDOMSequence > 0)
+    await #expect(
+        throws: WebInspectorProxyError.commandFailed(
+            domain: "DOM",
+            method: "requestNode",
+            message: "DOM.requestNode completed without an active model-feed watermark."
+        )
+    ) {
+        _ = try await operation.value
+    }
     await runtime.close()
 }
 

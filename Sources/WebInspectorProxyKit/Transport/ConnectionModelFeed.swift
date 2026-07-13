@@ -286,6 +286,22 @@ package enum ConnectionModelFeedRecord: Sendable {
         generation: WebInspectorPage.Generation,
         through: UInt64
     )
+
+    fileprivate var sequenceWatermark: UInt64? {
+        switch self {
+        case .reset:
+            nil
+        case let .targetSnapshot(_, through, _),
+            let .replayComplete(_, _, through),
+            let .bootstrapComplete(_, _, through),
+            let .synchronizationComplete(_, through):
+            through
+        case let .domDocumentInvalidated(sequence, _),
+            let .event(sequence, _, _),
+            let .bootstrapSnapshot(_, _, sequence, _):
+            sequence
+        }
+    }
 }
 
 package struct ConnectionModelFeedID: Hashable, Sendable {
@@ -360,6 +376,7 @@ package final class ConnectionModelFeedMailbox: Sendable {
         var waiter: CheckedContinuation<ConnectionModelFeedRecord?, any Error>?
         var terminal: Terminal?
         var iteratorWasCreated = false
+        var enqueuedThroughSequence: UInt64?
 
         mutating func removeFirstRecord() -> ConnectionModelFeedRecord? {
             guard pendingRecordStartIndex < pendingRecords.count else {
@@ -412,6 +429,14 @@ package final class ConnectionModelFeedMailbox: Sendable {
             guard state.terminal == nil else {
                 return (.terminated, nil)
             }
+            if let sequence = record.sequenceWatermark {
+                precondition(
+                    state.enqueuedThroughSequence.map({ $0 <= sequence })
+                        ?? true,
+                    "A connection model-feed watermark moved backward."
+                )
+                state.enqueuedThroughSequence = sequence
+            }
             if let waiter = state.waiter {
                 state.waiter = nil
                 return (.enqueued, waiter)
@@ -421,6 +446,10 @@ package final class ConnectionModelFeedMailbox: Sendable {
         }
         result.waiter?.resume(returning: record)
         return result.result
+    }
+
+    package var enqueuedThroughSequence: UInt64? {
+        state.withLock(\.enqueuedThroughSequence)
     }
 
     package func finish(throwing error: (any Error)? = nil) {

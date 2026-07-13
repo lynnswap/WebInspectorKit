@@ -209,10 +209,10 @@ private extension WebInspectorModelContainerCore {
         }
         let resolution = try await completion.value()
         WebInspectorDataKitLog.debug(
-            "Element picker wire resolved rawNode=\(resolution.nodeID.rawValue) domThrough=\(resolution.receivedDOMSequence)"
+            "Element picker wire resolved rawNode=\(resolution.nodeID.rawValue) feedThrough=\(resolution.modelFeedSequence)"
         )
         let admittedRevision = try await waitForModelFeed(
-            through: resolution.receivedDOMSequence,
+            through: resolution.modelFeedSequence,
             attachmentGeneration: documentScope.attachmentGeneration
         )
         guard let nodeID = try canonicalStore.domNodeID(

@@ -5260,6 +5260,7 @@ package actor ConnectionCore {
             targetID: pending.targetID,
             receivedSequence: eventSequence.sequence,
             receivedDomainSequences: eventSequence.receivedDomainSequences,
+            modelFeedSequence: modelFeed?.mailbox.enqueuedThroughSequence,
             resultData: parsed.resultData
         )
         do {

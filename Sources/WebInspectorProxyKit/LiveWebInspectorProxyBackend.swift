@@ -26,15 +26,7 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         )
         return WebInspectorProxyCommandResult(
             value: value,
-            receivedSequence: result.receivedSequence,
-            receivedDomainSequences: Dictionary(
-                uniqueKeysWithValues: result.receivedDomainSequences.compactMap {
-                    domain, sequence in
-                    WebInspectorProxyDomain(protocolDomain: domain).map {
-                        ($0, sequence)
-                    }
-                }
-            )
+            modelFeedSequence: result.modelFeedSequence
         )
     }
 
@@ -99,29 +91,6 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         return rawValue
     }
 
-}
-
-private extension WebInspectorProxyDomain {
-    init?(protocolDomain: ProtocolDomain) {
-        switch protocolDomain {
-        case .dom:
-            self = .dom
-        case .css:
-            self = .css
-        case .network:
-            self = .network
-        case .console:
-            self = .console
-        case .runtime:
-            self = .runtime
-        case .page:
-            self = .page
-        case .inspector:
-            self = .inspector
-        case .target, .storage, .other:
-            return nil
-        }
-    }
 }
 
 private enum LiveProxyCommandEncoder {

@@ -86,9 +86,16 @@ public struct DOM: Sendable, WebInspectorEventDomainHandle {
                 method: "requestNode",
                 payload: RequestNodePayload(objectID: objectID)
             )
+        guard let modelFeedSequence = result.modelFeedSequence else {
+            throw WebInspectorProxyError.commandFailed(
+                domain: Self.commandDomain.rawValue,
+                method: "requestNode",
+                message: "DOM.requestNode completed without an active model-feed watermark."
+            )
+        }
         return ModelFeedNodeResolution(
             nodeID: result.value,
-            receivedDOMSequence: result.receivedSequence(for: .dom)
+            modelFeedSequence: modelFeedSequence
         )
     }
 
@@ -631,7 +638,7 @@ public struct DOM: Sendable, WebInspectorEventDomainHandle {
 
 package struct ModelFeedNodeResolution: Sendable {
     package let nodeID: DOM.Node.ID
-    package let receivedDOMSequence: UInt64
+    package let modelFeedSequence: UInt64
 }
 
 package extension DOM.Node.ID {

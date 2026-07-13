@@ -80,6 +80,7 @@ package struct ProtocolCommand: Equatable, Sendable {
         package var targetID: ProtocolTarget.ID?
         package var receivedSequence: UInt64
         package var receivedDomainSequences: [ProtocolDomain: UInt64]
+        package var modelFeedSequence: UInt64?
         package var resultData: Data
 
         package init(
@@ -88,6 +89,7 @@ package struct ProtocolCommand: Equatable, Sendable {
             targetID: ProtocolTarget.ID?,
             receivedSequence: UInt64 = 0,
             receivedDomainSequences: [ProtocolDomain: UInt64] = [:],
+            modelFeedSequence: UInt64? = nil,
             resultData: Data
         ) {
             self.domain = domain
@@ -95,6 +97,7 @@ package struct ProtocolCommand: Equatable, Sendable {
             self.targetID = targetID
             self.receivedSequence = receivedSequence
             self.receivedDomainSequences = receivedDomainSequences
+            self.modelFeedSequence = modelFeedSequence
             self.resultData = resultData
         }
 
