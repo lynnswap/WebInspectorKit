@@ -4,8 +4,7 @@ import WebInspectorDataKit
 import WebInspectorUIBase
 
 package struct NetworkPanelSelectionToken: Hashable, Sendable {
-    package let groupID: WebInspectorFetchSectionID
-    package let sourceEpoch: UInt64
+    package let entryID: NetworkEntry.ID
 }
 
 @MainActor
@@ -14,26 +13,21 @@ private final class NetworkResponseBodyFetchCoordinator {
 
     init() {}
 
-    func fetchIfNeeded(
-        for request: NetworkRequest,
-        context: WebInspectorModelContext
-    ) {
+    func fetchIfNeeded(for request: NetworkRequest) {
         guard request.canFetchResponseBody,
-              fetchesInFlight.contains(request.id) == false else {
+            fetchesInFlight.contains(request.id) == false
+        else {
             return
         }
         fetchesInFlight.insert(request.id)
         let body = request.responseBody
-        Task { @MainActor in
+        Task { @MainActor [weak self] in
             defer {
-                fetchesInFlight.remove(request.id)
+                self?.fetchesInFlight.remove(request.id)
             }
             do {
-                _ = try await context.responseBody(for: request)
+                _ = try await body.load()
             } catch WebInspectorModelError.staleModel {
-                // A newer response can reset the stable body after the old
-                // fetch succeeds but before its waiter resumes. Rendering the
-                // new revision owns any subsequent fetch.
                 return
             } catch {
                 guard case .failed = body.phase else {
@@ -49,6 +43,11 @@ private final class NetworkResponseBodyFetchCoordinator {
 @MainActor
 @Observable
 package final class NetworkPanelModel {
+    private struct QueryCriteria: Equatable {
+        var searchText: String
+        var resourceCategories: Set<NetworkRequest.ResourceCategory>
+    }
+
     private enum Lifecycle {
         case active
         case retiring(Task<Void, Never>?)
@@ -56,50 +55,47 @@ package final class NetworkPanelModel {
     }
 
     package let context: WebInspectorModelContext
-    package let requests: WebInspectorFetchedResults<NetworkRequest>
-    private let collectionState: NetworkRequestCollectionState
+    package let entries: WebInspectorFetchedResultsController<NetworkEntry, Never>
     package private(set) var selectionToken: NetworkPanelSelectionToken?
     package private(set) var searchText: String
     package private(set) var activeResourceFilters: Set<NetworkDisplay.ResourceFilter>
-    package private(set) var query: NetworkQuery
     package private(set) var queryRevision: UInt64
     package private(set) var appliedQueryRevision: UInt64
     @ObservationIgnored private let responseBodyFetchCoordinator: NetworkResponseBodyFetchCoordinator
     @ObservationIgnored private var queryUpdateTask: Task<Void, Never>?
-    @ObservationIgnored private var queryUpdateTaskIsCommittedClear: Bool
     @ObservationIgnored private var queryGeneration: UInt64
+    @ObservationIgnored private var committedCriteria: QueryCriteria
     @ObservationIgnored private var lifecycle: Lifecycle
 
     private init(
         context: WebInspectorModelContext,
-        requests: WebInspectorFetchedResults<NetworkRequest>,
-        query: NetworkQuery
+        entries: WebInspectorFetchedResultsController<NetworkEntry, Never>,
+        criteria: QueryCriteria
     ) {
         self.context = context
-        self.requests = requests
-        self.collectionState = context.networkRequestsCollectionState
-        self.searchText = query.search ?? ""
-        self.activeResourceFilters = []
-        self.query = query
-        self.queryRevision = 0
-        self.appliedQueryRevision = 0
-        self.responseBodyFetchCoordinator = NetworkResponseBodyFetchCoordinator()
-        self.queryGeneration = 0
-        self.queryUpdateTaskIsCommittedClear = false
-        self.lifecycle = .active
+        self.entries = entries
+        searchText = criteria.searchText
+        activeResourceFilters = []
+        queryRevision = 0
+        appliedQueryRevision = 0
+        responseBodyFetchCoordinator = NetworkResponseBodyFetchCoordinator()
+        queryGeneration = 0
+        committedCriteria = criteria
+        lifecycle = .active
     }
 
-    /// Creates a ready Network panel after its atomic initial query snapshot is available.
+    /// Creates a ready Network panel after its atomic initial entry snapshot is available.
     package static func make(context: WebInspectorModelContext) async throws -> NetworkPanelModel {
-        let query = NetworkQuery(
-            sort: .requestTimeDescending,
-            section: .initiatorNode
+        let criteria = QueryCriteria(searchText: "", resourceCategories: [])
+        let entries = try await WebInspectorFetchedResultsController<NetworkEntry, Never>(
+            fetchDescriptor: makeFetchDescriptor(for: criteria),
+            modelContext: context,
+            isolation: MainActor.shared
         )
-        let requests = try await context.networkRequests(matching: query)
         return NetworkPanelModel(
             context: context,
-            requests: requests,
-            query: query
+            entries: entries,
+            criteria: criteria
         )
     }
 
@@ -107,8 +103,8 @@ package final class NetworkPanelModel {
         synchronouslyCancelForOwnerDeinit()
     }
 
-    package var selectedEntryID: WebInspectorFetchSectionID? {
-        liveSelectionToken?.groupID
+    package var selectedEntryID: NetworkEntry.ID? {
+        liveSelectionToken?.entryID
     }
 
     package var hasAvailableSelection: Bool {
@@ -116,15 +112,22 @@ package final class NetworkPanelModel {
     }
 
     package var isEmpty: Bool {
-        requests.snapshot.sections.isEmpty
+        entries.snapshot.itemIDs.isEmpty
     }
 
     package var hasClearableRequests: Bool {
-        collectionState.hasRequests
+        entries.snapshot.itemIDs.isEmpty == false
     }
 
     package var effectiveResourceFilters: Set<NetworkDisplay.ResourceFilter> {
         NetworkDisplay.ResourceFilter.normalizedSelection(activeResourceFilters)
+    }
+
+    package var selectedEntry: NetworkEntry? {
+        guard let token = liveSelectionToken else {
+            return nil
+        }
+        return context.model(for: token.entryID)
     }
 
     package var selectedRequest: NetworkRequest? {
@@ -132,26 +135,29 @@ package final class NetworkPanelModel {
     }
 
     package var selectedRequests: [NetworkRequest] {
-        guard let token = liveSelectionToken else {
+        guard let entry = selectedEntry else {
             return []
         }
-        return context.networkRequestGroup(id: token.groupID)?.items ?? []
+        return entry.requestIDs.map { requestID in
+            guard let request = context.model(for: requestID) else {
+                preconditionFailure(
+                    "A current NetworkEntry member must resolve in the same ModelContext."
+                )
+            }
+            return request
+        }
     }
 
-    package func selectEntry(_ id: WebInspectorFetchSectionID?) {
+    package func selectEntry(_ id: NetworkEntry.ID?) {
         requireActive()
-        guard let id else {
+        guard let id,
+            entries.snapshot.itemIDs.contains(id),
+            context.model(for: id) != nil
+        else {
             selectionToken = nil
             return
         }
-        guard context.networkRequestIDs(inGroup: id) != nil else {
-            selectionToken = nil
-            return
-        }
-        selectionToken = NetworkPanelSelectionToken(
-            groupID: id,
-            sourceEpoch: collectionState.sourceEpoch
-        )
+        selectionToken = NetworkPanelSelectionToken(entryID: id)
     }
 
     package func selectRequest(_ request: NetworkRequest?) {
@@ -160,7 +166,10 @@ package final class NetworkPanelModel {
             selectionToken = nil
             return
         }
-        selectEntry(context.networkRequestGroupID(containing: request.id))
+        let entryID = entries.snapshot.itemIDs.first { entryID in
+            context.model(for: entryID)?.requestIDs.contains(request.id) == true
+        }
+        selectEntry(entryID)
     }
 
     package func clearSelection(ifStillSelected token: NetworkPanelSelectionToken) {
@@ -208,53 +217,22 @@ package final class NetworkPanelModel {
     package func clearRequests() {
         requireActive()
         selectionToken = nil
-        precondition(queryGeneration < UInt64.max, "Network panel operation generation overflowed.")
-        queryGeneration += 1
-        let generation = queryGeneration
-        let revision = queryRevision
-        let query = query
-        let previousTask = queryUpdateTask
-        if queryUpdateTaskIsCommittedClear == false {
-            previousTask?.cancel()
-        }
-        queryUpdateTaskIsCommittedClear = true
         let context = context
-        let requests = requests
-        queryUpdateTask = Task { @MainActor [weak self] in
-            await previousTask?.value
-            guard Task.isCancelled == false else {
-                return
-            }
-            // Clear is a committed user operation, not a query candidate. Once
-            // scheduled it completes even if a later query supersedes this task.
-            await context.clearNetworkRequests()
-            guard self?.isActiveQueryGeneration(generation) == true else {
-                return
-            }
-            guard self?.appliedQueryRevision != revision else {
-                return
-            }
+        Task { @MainActor in
             do {
-                try await requests.update(query)
-            } catch is CancellationError {
-                return
+                try await context.clearNetworkRequests()
             } catch {
-                preconditionFailure("Network query restoration after clear failed: \(error)")
+                preconditionFailure("Canonical Network clear failed: \(error)")
             }
-            guard let self,
-                  isActiveQueryGeneration(generation) else {
-                return
-            }
-            appliedQueryRevision = revision
         }
     }
 
     package func fetchResponseBodyIfNeeded(for request: NetworkRequest) {
         requireActive()
-        responseBodyFetchCoordinator.fetchIfNeeded(for: request, context: context)
+        responseBodyFetchCoordinator.fetchIfNeeded(for: request)
     }
 
-    /// Cancels and awaits the current query replacement before releasing this owner.
+    /// Cancels query replacement and closes its fetched-results owner.
     package func retire() async {
         switch lifecycle {
         case .active:
@@ -263,6 +241,7 @@ package final class NetworkPanelModel {
             task?.cancel()
             lifecycle = .retiring(task)
             await task?.value
+            await entries.close()
             lifecycle = .retired
         case let .retiring(task):
             await task?.value
@@ -272,12 +251,10 @@ package final class NetworkPanelModel {
         }
     }
 
-    /// Synchronous backstop used only when the presentation resource owner is
-    /// itself deinitializing and can no longer await ``retire()``.
+    /// Synchronous backstop used only when the presentation resource owner is deinitializing.
     package func synchronouslyCancelForOwnerDeinit() {
         queryUpdateTask?.cancel()
         queryUpdateTask = nil
-        queryUpdateTaskIsCommittedClear = false
         if case let .retiring(task) = lifecycle {
             task?.cancel()
         }
@@ -297,11 +274,13 @@ package final class NetworkPanelModel {
     }
 
     private func scheduleQueryUpdate() {
-        let nextQuery = Self.makeNetworkQuery(
-            searchText: searchText,
-            filters: effectiveResourceFilters
+        let criteria = QueryCriteria(
+            searchText: Self.normalizedSearchText(searchText),
+            resourceCategories: NetworkRequest.ResourceCategory.networkCategories(
+                for: effectiveResourceFilters
+            )
         )
-        guard query != nextQuery else {
+        guard committedCriteria != criteria else {
             return
         }
 
@@ -309,32 +288,31 @@ package final class NetworkPanelModel {
         precondition(queryRevision < UInt64.max, "Network panel query revision overflowed.")
         queryGeneration += 1
         queryRevision += 1
-        query = nextQuery
 
         let generation = queryGeneration
         let revision = queryRevision
         let previousTask = queryUpdateTask
-        if queryUpdateTaskIsCommittedClear == false {
-            previousTask?.cancel()
-        }
-        queryUpdateTaskIsCommittedClear = false
-        let requests = requests
+        previousTask?.cancel()
+        let entries = entries
+        let descriptor = Self.makeFetchDescriptor(for: criteria)
         queryUpdateTask = Task { @MainActor [weak self] in
             await previousTask?.value
             guard self?.isActiveQueryGeneration(generation) == true else {
                 return
             }
             do {
-                try await requests.update(nextQuery)
+                try await entries.update(descriptor)
             } catch is CancellationError {
                 return
             } catch {
-                preconditionFailure("Network query replacement failed: \(error)")
+                preconditionFailure("Network entry query replacement failed: \(error)")
             }
             guard let self,
-                  isActiveQueryGeneration(generation) else {
+                isActiveQueryGeneration(generation)
+            else {
                 return
             }
+            committedCriteria = criteria
             appliedQueryRevision = revision
         }
     }
@@ -353,33 +331,65 @@ package final class NetworkPanelModel {
     }
 
     private var liveSelectionToken: NetworkPanelSelectionToken? {
-        _ = collectionState.topologyRevision
         guard let selectionToken,
-              selectionToken.sourceEpoch == collectionState.sourceEpoch,
-              context.networkRequestIDs(inGroup: selectionToken.groupID) != nil else {
+            entries.snapshot.itemIDs.contains(selectionToken.entryID),
+            context.model(for: selectionToken.entryID) != nil
+        else {
             return nil
         }
         return selectionToken
     }
 
     #if DEBUG
-    package var isRetiredForTesting: Bool {
-        if case .retired = lifecycle {
-            return true
+        package var isRetiredForTesting: Bool {
+            if case .retired = lifecycle {
+                return true
+            }
+            return false
         }
-        return false
-    }
     #endif
 
-    private static func makeNetworkQuery(
-        searchText: String,
-        filters: Set<NetworkDisplay.ResourceFilter>
-    ) -> NetworkQuery {
-        NetworkQuery(
-            search: searchText,
-            resourceCategories: NetworkRequest.ResourceCategory.networkCategories(for: filters),
-            sort: .requestTimeDescending,
-            section: .initiatorNode
+    private static func normalizedSearchText(_ searchText: String) -> String {
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func makeFetchDescriptor(
+        for criteria: QueryCriteria
+    ) -> WebInspectorFetchDescriptor<NetworkEntry> {
+        let searchText = normalizedSearchText(criteria.searchText)
+        let categories = criteria.resourceCategories
+        let predicate: Predicate<NetworkEntry.QueryValue>?
+        switch (searchText.isEmpty, categories.isEmpty) {
+        case (true, true):
+            predicate = nil
+        case (false, true):
+            predicate = #Predicate { entry in
+                entry.searchTexts.contains { text in
+                    text.localizedStandardContains(searchText)
+                }
+            }
+        case (true, false):
+            predicate = #Predicate { entry in
+                entry.resourceCategories.contains { category in
+                    categories.contains(category)
+                }
+            }
+        case (false, false):
+            predicate = #Predicate { entry in
+                entry.searchTexts.contains { text in
+                    text.localizedStandardContains(searchText)
+                }
+                    && entry.resourceCategories.contains { category in
+                        categories.contains(category)
+                    }
+            }
+        }
+        return WebInspectorFetchDescriptor(
+            predicate: predicate,
+            sortBy: [
+                SortDescriptor(\.startedAt, order: .reverse),
+                SortDescriptor(\.insertionOrdinal, order: .reverse),
+            ]
         )
     }
 }

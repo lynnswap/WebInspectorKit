@@ -7,20 +7,20 @@ import UIKit
 
 @MainActor
 package final class NetworkListViewController: UICollectionViewController, UISearchResultsUpdating {
-    package typealias EntrySelectionAction = @MainActor (WebInspectorFetchSectionID?) -> Void
+    package typealias EntrySelectionAction = @MainActor (NetworkEntry.ID?) -> Void
 
     private enum SectionIdentifier: Hashable {
         case main
     }
 
     private struct PendingSnapshotUpdate {
-        var snapshot: NSDiffableDataSourceSnapshot<SectionIdentifier, WebInspectorFetchSectionID>
-        var reconfigureEntryIDs: Set<WebInspectorFetchSectionID>
+        var snapshot: NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkEntry.ID>
+        var reconfigureEntryIDs: Set<NetworkEntry.ID>
         var requiresFullReconfigure: Bool
 
         mutating func merge(
-            snapshot: NSDiffableDataSourceSnapshot<SectionIdentifier, WebInspectorFetchSectionID>,
-            reconfigureEntryIDs: Set<WebInspectorFetchSectionID>,
+            snapshot: NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkEntry.ID>,
+            reconfigureEntryIDs: Set<NetworkEntry.ID>,
             requiresFullReconfigure: Bool
         ) {
             self.snapshot = snapshot
@@ -33,7 +33,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         var isRenderingActive = false
         var needsReloadOnNextAppearance = true
         var pendingUpdate: PendingSnapshotUpdate?
-        var projectedSnapshot: NSDiffableDataSourceSnapshot<SectionIdentifier, WebInspectorFetchSectionID>?
+        var projectedSnapshot: NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkEntry.ID>?
         var projectedRevision: UInt64?
         var state = NetworkListViewController.SnapshotState()
 
@@ -58,7 +58,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private let model: NetworkPanelModel
-    private let fetchedResults: WebInspectorFetchedResults<NetworkRequest>
+    private let fetchedResults: WebInspectorFetchedResultsController<NetworkEntry, Never>
     private var entrySelectionAction: EntrySelectionAction
     private var fetchedResultsUpdateTask: Task<Void, Never>?
     private var searchTextObservation: PortableObservationTracking.Token?
@@ -85,7 +85,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private var entryIDsEvaluationCountStorageForTesting = 0
     private var snapshotApplyCountStorageForTesting = 0
     private var cellReconfigureCountStorageForTesting = 0
-    private var lastAppliedReconfigureEntryIDsStorageForTesting: Set<WebInspectorFetchSectionID> = []
+    private var lastAppliedReconfigureEntryIDsStorageForTesting: Set<NetworkEntry.ID> = []
     private var filterMenuBuildCountStorageForTesting = 0
 #endif
     private lazy var filterHostingMenu = UIHostingMenu(
@@ -107,7 +107,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
     package init(model: NetworkPanelModel) {
         self.model = model
-        fetchedResults = model.requests
+        fetchedResults = model.entries
         entrySelectionAction = { [model] entryID in
             model.selectEntry(entryID)
         }
@@ -222,8 +222,16 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         fetchedResultsUpdateTask?.cancel()
         let updates = fetchedResults.updates()
         fetchedResultsUpdateTask = Task { @MainActor [weak self] in
-            for await update in updates {
-                self?.fetchedResultsDidPublish(update)
+            do {
+                for try await update in updates {
+                    self?.fetchedResultsDidPublish(update)
+                }
+            } catch WebInspectorFetchedResultsControllerError.closed {
+                return
+            } catch is CancellationError {
+                return
+            } catch {
+                preconditionFailure("Network entry updates failed: \(error)")
             }
         }
 
@@ -377,11 +385,11 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         (try? overflowHostingMenu.menu()) ?? UIMenu()
     }
 
-    private func makeDataSource() -> UICollectionViewDiffableDataSource<SectionIdentifier, WebInspectorFetchSectionID> {
-        let listCellRegistration = UICollectionView.CellRegistration<NetworkListCell, WebInspectorFetchSectionID> { [weak self] cell, _, id in
+    private func makeDataSource() -> UICollectionViewDiffableDataSource<SectionIdentifier, NetworkEntry.ID> {
+        let listCellRegistration = UICollectionView.CellRegistration<NetworkListCell, NetworkEntry.ID> { [weak self] cell, _, id in
             self?.bind(cell, to: id)
         }
-        return UICollectionViewDiffableDataSource<SectionIdentifier, WebInspectorFetchSectionID>(
+        return UICollectionViewDiffableDataSource<SectionIdentifier, NetworkEntry.ID>(
             collectionView: collectionView
         ) { collectionView, indexPath, item in
             collectionView.dequeueConfiguredReusableCell(
@@ -393,14 +401,14 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func makeSnapshot(
-        entryIDs: [WebInspectorFetchSectionID]
-    ) -> NSDiffableDataSourceSnapshot<SectionIdentifier, WebInspectorFetchSectionID> {
+        entryIDs: [NetworkEntry.ID]
+    ) -> NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkEntry.ID> {
         precondition(
             entryIDs.count == Set(entryIDs).count,
             "Duplicate row IDs detected in NetworkListViewController"
         )
 
-        var snapshot = NSDiffableDataSourceSnapshot<SectionIdentifier, WebInspectorFetchSectionID>()
+        var snapshot = NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkEntry.ID>()
         snapshot.appendSections([.main])
         snapshot.appendItems(entryIDs, toSection: .main)
         return snapshot
@@ -411,9 +419,9 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func requestSnapshotUpdate(
-        entryIDs: [WebInspectorFetchSectionID],
+        entryIDs: [NetworkEntry.ID],
         projectionRevision: UInt64,
-        reconfigureEntryIDs: Set<WebInspectorFetchSectionID> = [],
+        reconfigureEntryIDs: Set<NetworkEntry.ID> = [],
         requiresFullReconfigure: Bool = false
     ) {
         requestSnapshotUpdate(
@@ -425,9 +433,9 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func requestSnapshotUpdate(
-        snapshot: NSDiffableDataSourceSnapshot<SectionIdentifier, WebInspectorFetchSectionID>,
+        snapshot: NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkEntry.ID>,
         projectionRevision: UInt64,
-        reconfigureEntryIDs: Set<WebInspectorFetchSectionID>,
+        reconfigureEntryIDs: Set<NetworkEntry.ID>,
         requiresFullReconfigure: Bool
     ) {
         guard isCollectionViewVisible else {
@@ -444,9 +452,9 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func enqueueSnapshotUpdate(
-        snapshot: NSDiffableDataSourceSnapshot<SectionIdentifier, WebInspectorFetchSectionID>,
+        snapshot: NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkEntry.ID>,
         projectionRevision: UInt64,
-        reconfigureEntryIDs: Set<WebInspectorFetchSectionID>,
+        reconfigureEntryIDs: Set<NetworkEntry.ID>,
         requiresFullReconfigure: Bool
     ) {
         var update = snapshotCoordinator.pendingUpdate ?? PendingSnapshotUpdate(
@@ -495,7 +503,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
             return
         }
 
-        let reconfigureEntryIDs: [WebInspectorFetchSectionID]
+        let reconfigureEntryIDs: [NetworkEntry.ID]
         if update.requiresFullReconfigure {
             reconfigureEntryIDs = update.snapshot.itemIdentifiers.filter { entryID in
                 currentSnapshot.indexOfItem(entryID) != nil
@@ -525,9 +533,9 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func rebindVisibleCells(
-        entryIDs: Set<WebInspectorFetchSectionID>
-    ) -> Set<WebInspectorFetchSectionID> {
-        var reboundEntryIDs: Set<WebInspectorFetchSectionID> = []
+        entryIDs: Set<NetworkEntry.ID>
+    ) -> Set<NetworkEntry.ID> {
+        var reboundEntryIDs: Set<NetworkEntry.ID> = []
         for entryID in entryIDs {
             guard let indexPath = dataSource.indexPath(for: entryID),
                   let cell = collectionView.cellForItem(at: indexPath) as? NetworkListCell else {
@@ -541,15 +549,14 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
     private func bind(
         _ cell: NetworkListCell,
-        to entryID: WebInspectorFetchSectionID
+        to entryID: NetworkEntry.ID
     ) {
-        guard let requests = fetchedResults[section: entryID]?.items,
-              requests.isEmpty == false else {
+        guard let entry = model.context.model(for: entryID) else {
             cell.unbind()
             return
         }
         cell.bind(
-            requests: requests,
+            entry: entry,
             renderingActive: snapshotCoordinator.isRenderingActive
         )
     }
@@ -571,10 +578,11 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func fetchedResultsDidPublish(
-        _ update: WebInspectorLegacyFetchedResultsUpdate<NetworkRequest.ID>
+        _ update: WebInspectorFetchedResultsUpdate<NetworkEntry.ID, Never>
     ) {
         switch update {
-        case .initial(let revision, let snapshot):
+        case let .initial(revision, snapshot),
+             let .reset(revision, snapshot):
 #if DEBUG
             recordFetchedResultsUpdateDeliveryForTesting(revision: revision)
 #endif
@@ -586,7 +594,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
                 snapshotCoordinator.invalidateProjectionForHiddenUpdate()
                 return
             }
-            let entryIDs = snapshot.sectionIDs
+            let entryIDs = snapshot.itemIDs
             requestSnapshotUpdate(
                 entryIDs: entryIDs,
                 projectionRevision: revision,
@@ -594,12 +602,18 @@ package final class NetworkListViewController: UICollectionViewController, UISea
             )
             renderEmptyState(isEmpty: entryIDs.isEmpty)
 
-        case .transaction(let revision, let transaction, _):
+        case let .changes(
+            fromRevision,
+            toRevision,
+            _,
+            itemChanges,
+            updatedItemIDs
+        ):
 #if DEBUG
-            recordFetchedResultsUpdateDeliveryForTesting(revision: revision)
+            recordFetchedResultsUpdateDeliveryForTesting(revision: toRevision)
 #endif
             if let projectedRevision = snapshotCoordinator.projectedRevision,
-               revision <= projectedRevision {
+               toRevision <= projectedRevision {
                 return
             }
             guard snapshotCoordinator.isRenderingActive else {
@@ -610,196 +624,70 @@ package final class NetworkListViewController: UICollectionViewController, UISea
                 preconditionFailure("Active Network rendering requires an installed projection revision.")
             }
             precondition(
-                projectedRevision < .max,
-                "Network list projection revision overflowed."
+                projectedRevision == fromRevision,
+                "A Network entry change must continue the installed UIKit projection."
             )
-            let requiresFullReconfigure = transaction.isReset
-                || revision != projectedRevision + 1
-            if requiresFullReconfigure {
-                let entryIDs = transaction.newSnapshot.sectionIDs
-                requestSnapshotUpdate(
-                    entryIDs: entryIDs,
-                    projectionRevision: revision,
-                    requiresFullReconfigure: true
-                )
-                renderEmptyState(isEmpty: entryIDs.isEmpty)
-                return
-            }
-            applyIncrementalTransaction(
-                transaction,
-                revision: revision
+            applyIncrementalChanges(
+                itemChanges,
+                updatedItemIDs: updatedItemIDs,
+                revision: toRevision
             )
         }
     }
 
-    private func applyIncrementalTransaction(
-        _ transaction: WebInspectorFetchedResultsTransaction<NetworkRequest.ID>,
+    private func applyIncrementalChanges(
+        _ changes: [WebInspectorFetchedResultsItemChange<NetworkEntry.ID>],
+        updatedItemIDs: Set<NetworkEntry.ID>,
         revision: UInt64
     ) {
         guard var snapshot = snapshotCoordinator.projectedSnapshot else {
             preconditionFailure(
-                "A contiguous Network transaction requires an installed UIKit projection."
+                "A contiguous Network entry change requires an installed UIKit projection."
             )
         }
-        let reconfigureEntryIDs = affectedEntryIDs(transaction: transaction)
-        let changesRowTopology = transaction.sectionChanges.contains { change in
+
+        let removedIDs = changes.compactMap { change -> NetworkEntry.ID? in
             switch change {
-            case .insert, .delete, .move:
-                return true
-            case .update:
-                return false
+            case let .delete(itemID, _), let .move(itemID, _, _):
+                itemID
+            case .insert, .update:
+                nil
             }
         }
-        if changesRowTopology {
-            guard applySectionChanges(
-                transaction.sectionChanges,
-                newSemanticSnapshot: transaction.newSnapshot,
-                to: &snapshot
-            ) else {
-                preconditionFailure(
-                    "A contiguous Network section transaction did not match its UIKit projection."
+        snapshot.deleteItems(removedIDs.filter { snapshot.indexOfItem($0) != nil })
+
+        let placements = changes.compactMap { change -> (NetworkEntry.ID, Int)? in
+            switch change {
+            case let .insert(itemID, indexPath), let .move(itemID, _, indexPath):
+                precondition(
+                    indexPath.section == 0,
+                    "An unsectioned Network entry query published a nonzero section."
                 )
+                return (itemID, indexPath.item)
+            case .delete, .update:
+                return nil
             }
-        } else if reconfigureEntryIDs.isEmpty {
-            snapshotCoordinator.projectedRevision = revision
-            return
+        }
+        for (entryID, targetIndex) in placements.sorted(by: { $0.1 < $1.1 }) {
+            if targetIndex < snapshot.numberOfItems(inSection: .main) {
+                let successor = snapshot.itemIdentifiers(inSection: .main)[targetIndex]
+                snapshot.insertItems([entryID], beforeItem: successor)
+            } else {
+                precondition(
+                    targetIndex == snapshot.numberOfItems(inSection: .main),
+                    "A Network entry insertion exceeded the projected item count."
+                )
+                snapshot.appendItems([entryID], toSection: .main)
+            }
         }
 
         requestSnapshotUpdate(
             snapshot: snapshot,
             projectionRevision: revision,
-            reconfigureEntryIDs: reconfigureEntryIDs,
+            reconfigureEntryIDs: updatedItemIDs,
             requiresFullReconfigure: false
         )
-        renderEmptyState(isEmpty: transaction.newSnapshot.sections.isEmpty)
-    }
-
-    private func applySectionChanges(
-        _ changes: [WebInspectorFetchedResultsSectionChange<WebInspectorFetchSectionID>],
-        newSemanticSnapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID, WebInspectorFetchSectionID>,
-        to snapshot: inout NSDiffableDataSourceSnapshot<SectionIdentifier, WebInspectorFetchSectionID>
-    ) -> Bool {
-        var deletedEntryIDs: Set<WebInspectorFetchSectionID> = []
-        var insertionTargets: [WebInspectorFetchSectionID: Int] = [:]
-        var insertionTargetIndexes: Set<Int> = []
-
-        for change in changes {
-            switch change {
-            case .delete(let entryID, let index):
-                guard snapshot.indexOfItem(entryID) == index,
-                      snapshot.indexOfItem(entryID) != nil,
-                      deletedEntryIDs.insert(entryID).inserted else {
-                    return false
-                }
-
-            case .insert(let entryID, let index):
-                guard newSemanticSnapshot.sections.indices.contains(index),
-                      newSemanticSnapshot.sections[index].id == entryID,
-                      snapshot.indexOfItem(entryID) == nil,
-                      insertionTargetIndexes.insert(index).inserted,
-                      insertionTargets.updateValue(index, forKey: entryID) == nil else {
-                    return false
-                }
-
-            case .move(let entryID, let oldIndex, let targetIndex):
-                guard snapshot.indexOfItem(entryID) == oldIndex,
-                      newSemanticSnapshot.sections.indices.contains(targetIndex),
-                      newSemanticSnapshot.sections[targetIndex].id == entryID,
-                      snapshot.indexOfItem(entryID) != nil,
-                      insertionTargetIndexes.insert(targetIndex).inserted,
-                      insertionTargets.updateValue(targetIndex, forKey: entryID) == nil else {
-                    return false
-                }
-
-            case .update(let entryID, let index):
-                guard newSemanticSnapshot.sections.indices.contains(index),
-                      newSemanticSnapshot.sections[index].id == entryID,
-                      insertionTargets[entryID] == index
-                        || snapshot.indexOfItem(entryID) == index else {
-                    return false
-                }
-            }
-        }
-
-        guard deletedEntryIDs.isDisjoint(with: insertionTargets.keys) else {
-            return false
-        }
-
-        let movedEntryIDs = Set(insertionTargets.keys).filter { snapshot.indexOfItem($0) != nil }
-        snapshot.deleteItems(Array(deletedEntryIDs.union(movedEntryIDs)))
-
-        for (entryID, targetIndex) in insertionTargets.sorted(by: { $0.value > $1.value }) {
-            guard snapshot.indexOfItem(entryID) == nil else {
-                return false
-            }
-            if targetIndex + 1 < newSemanticSnapshot.sections.count {
-                let successorEntryID = newSemanticSnapshot.sections[targetIndex + 1].id
-                guard snapshot.indexOfItem(successorEntryID) != nil else {
-                    return false
-                }
-                snapshot.insertItems([entryID], beforeItem: successorEntryID)
-            } else {
-                snapshot.appendItems([entryID], toSection: .main)
-            }
-        }
-
-        guard snapshot.numberOfItems(inSection: .main) == newSemanticSnapshot.sections.count,
-              insertionTargets.allSatisfy({ snapshot.indexOfItem($0.key) == $0.value }) else {
-            return false
-        }
-        return true
-    }
-
-    private func affectedEntryIDs(
-        transaction: WebInspectorFetchedResultsTransaction<NetworkRequest.ID>
-    ) -> Set<WebInspectorFetchSectionID> {
-        var entryIDs: Set<WebInspectorFetchSectionID> = []
-        for change in transaction.sectionChanges {
-            switch change {
-            case .insert(let sectionID, _),
-                 .delete(let sectionID, _),
-                 .update(let sectionID, _):
-                entryIDs.insert(sectionID)
-            case .move:
-                break
-            }
-        }
-        for change in transaction.itemChanges {
-            switch change {
-            case .insert(_, let indexPath):
-                entryIDs.insert(entryID(
-                    atSectionIndex: indexPath.section,
-                    in: transaction.newSnapshot
-                ))
-            case .delete(_, let indexPath):
-                entryIDs.insert(entryID(
-                    atSectionIndex: indexPath.section,
-                    in: transaction.oldSnapshot
-                ))
-            case .move(_, let oldIndexPath, let newIndexPath):
-                entryIDs.insert(entryID(
-                    atSectionIndex: oldIndexPath.section,
-                    in: transaction.oldSnapshot
-                ))
-                entryIDs.insert(entryID(
-                    atSectionIndex: newIndexPath.section,
-                    in: transaction.newSnapshot
-                ))
-            case .update:
-                break
-            }
-        }
-        return entryIDs
-    }
-
-    private func entryID(
-        atSectionIndex sectionIndex: Int,
-        in snapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID, WebInspectorFetchSectionID>
-    ) -> WebInspectorFetchSectionID {
-        guard snapshot.sections.indices.contains(sectionIndex) else {
-            preconditionFailure("A Network transaction referenced an invalid semantic section index.")
-        }
-        return snapshot.sections[sectionIndex].id
+        renderEmptyState(isEmpty: snapshot.itemIdentifiers.isEmpty)
     }
 
     private func reloadDataFromModel(reconfigureAllSurvivingEntries: Bool = false) {
@@ -825,14 +713,14 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         renderEmptyState(isEmpty: true)
     }
 
-    private func entryIDsFromModel() -> [WebInspectorFetchSectionID] {
+    private func entryIDsFromModel() -> [NetworkEntry.ID] {
 #if DEBUG
         entryIDsEvaluationCountStorageForTesting += 1
 #endif
-        return fetchedResults.snapshot.sectionIDs
+        return fetchedResults.snapshot.itemIDs
     }
 
-    private func renderSelectedEntryID(_ selectedEntryID: WebInspectorFetchSectionID?) {
+    private func renderSelectedEntryID(_ selectedEntryID: NetworkEntry.ID?) {
         guard isViewLoaded else {
             return
         }
@@ -927,7 +815,7 @@ extension NetworkListViewController {
         filterMenuBuildCountStorageForTesting
     }
 
-    package var displayedEntryIDsForTesting: [WebInspectorFetchSectionID] {
+    package var displayedEntryIDsForTesting: [NetworkEntry.ID] {
         dataSource.snapshot().itemIdentifiers
     }
 
@@ -935,7 +823,7 @@ extension NetworkListViewController {
         dataSource.snapshot().sectionIdentifiers.count
     }
 
-    package var lastAppliedReconfigureEntryIDsForTesting: Set<WebInspectorFetchSectionID> {
+    package var lastAppliedReconfigureEntryIDsForTesting: Set<NetworkEntry.ID> {
         lastAppliedReconfigureEntryIDsStorageForTesting
     }
 
@@ -947,11 +835,11 @@ extension NetworkListViewController {
         snapshotCoordinator.pendingUpdate != nil
     }
 
-    package var pendingReconfigureEntryIDsForTesting: Set<WebInspectorFetchSectionID> {
+    package var pendingReconfigureEntryIDsForTesting: Set<NetworkEntry.ID> {
         snapshotCoordinator.pendingUpdate?.reconfigureEntryIDs ?? []
     }
 
-    package var pendingRowsForTesting: [WebInspectorFetchSectionID]? {
+    package var pendingRowsForTesting: [NetworkEntry.ID]? {
         snapshotCoordinator.pendingUpdate?.snapshot.itemIdentifiers
     }
 
@@ -959,34 +847,13 @@ extension NetworkListViewController {
         snapshotCoordinator.pendingUpdate?.requiresFullReconfigure ?? false
     }
 
-    package func reduceSectionChangesForTesting(
-        oldEntryIDs: [WebInspectorFetchSectionID],
-        newEntryIDs: [WebInspectorFetchSectionID],
-        changes: [WebInspectorFetchedResultsSectionChange<WebInspectorFetchSectionID>]
-    ) -> [WebInspectorFetchSectionID] {
-        var snapshot = makeSnapshot(entryIDs: oldEntryIDs)
-        let semanticSnapshot = WebInspectorFetchedResultsSnapshot<NetworkRequest.ID, WebInspectorFetchSectionID>(
-            sections: newEntryIDs.map { entryID in
-                .init(name: entryID, title: nil, itemIDs: [])
-            }
-        )
-        guard applySectionChanges(
-            changes,
-            newSemanticSnapshot: semanticSnapshot,
-            to: &snapshot
-        ) else {
-            preconditionFailure("Expected test section changes to match the supplied projection.")
-        }
-        return snapshot.itemIdentifiers
-    }
-
     package func beginSnapshotApplyForTesting() {
         _ = snapshotCoordinator.state.beginApplying()
     }
 
     package func queueSnapshotUpdateForTesting(
-        entryIDs: [WebInspectorFetchSectionID],
-        reconfigureEntryIDs: Set<WebInspectorFetchSectionID> = [],
+        entryIDs: [NetworkEntry.ID],
+        reconfigureEntryIDs: Set<NetworkEntry.ID> = [],
         requiresFullReconfigure: Bool = false
     ) {
         requestSnapshotUpdate(
