@@ -10,10 +10,35 @@ public final class DOMNode: WebInspectorPersistentModel {
         /// The persistent model identified by this value.
         public typealias Model = DOMNode
 
-        let proxyID: DOM.Node.ID
+        package enum Storage: Hashable, Sendable {
+            case legacyRaw(DOM.Node.ID)
+            case canonical(WebInspectorDOMNodeIdentityStorage)
+        }
+
+        package let storage: Storage
 
         package init(_ proxyID: DOM.Node.ID) {
-            self.proxyID = proxyID
+            storage = .legacyRaw(proxyID)
+        }
+
+        package init(canonical storage: WebInspectorDOMNodeIdentityStorage) {
+            self.storage = .canonical(storage)
+        }
+
+        package var canonicalStorage: WebInspectorDOMNodeIdentityStorage? {
+            guard case let .canonical(storage) = storage else {
+                return nil
+            }
+            return storage
+        }
+
+        package var proxyID: DOM.Node.ID {
+            switch storage {
+            case let .legacyRaw(proxyID):
+                proxyID
+            case let .canonical(storage):
+                storage.rawNodeID
+            }
         }
     }
 

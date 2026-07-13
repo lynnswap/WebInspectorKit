@@ -588,6 +588,18 @@ Consequences:
 - IDs from another container or an expired generation do not resolve.
 - Context reset/delete unregisters the model. Existing external references are
   stale and cannot be used for commands.
+
+During the build-green interval before the payload driver and legacy domain
+stores are removed together, the non-public storage of `NetworkRequest.ID` and
+`DOMNode.ID` explicitly distinguishes `.legacyRaw` from `.canonical`. The two
+cases never compare equal, the legacy case has no canonical accessor value, and
+no code parses or invents store, attachment, page, target, or binding authority
+to convert between them. Network persistent schemas accept and publish only the
+canonical case; `NetworkRequestStore` and `DOMStateStore` continue to create
+only the legacy case. This temporary enum is deleted—not retained as a
+compatibility layer—in the same commit series that connects canonical payloads
+to every Context and removes those legacy stores; each ID then stores only its
+canonical storage value.
 - Console ordinals are assigned by the canonical store, not independently by
   each context.
 - Reuse of one fully scoped DOM, Network, Runtime-context, or remote-object raw

@@ -809,10 +809,35 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         /// The persistent model identified by this value.
         public typealias Model = NetworkRequest
 
-        let proxyID: Network.Request.ID
+        package enum Storage: Hashable, Sendable {
+            case legacyRaw(Network.Request.ID)
+            case canonical(CanonicalNetworkRequestIDStorage)
+        }
+
+        package let storage: Storage
 
         init(_ proxyID: Network.Request.ID) {
-            self.proxyID = proxyID
+            storage = .legacyRaw(proxyID)
+        }
+
+        package init(canonical storage: CanonicalNetworkRequestIDStorage) {
+            self.storage = .canonical(storage)
+        }
+
+        package var canonicalStorage: CanonicalNetworkRequestIDStorage? {
+            guard case let .canonical(storage) = storage else {
+                return nil
+            }
+            return storage
+        }
+
+        package var proxyID: Network.Request.ID {
+            switch storage {
+            case let .legacyRaw(proxyID):
+                proxyID
+            case let .canonical(storage):
+                storage.rawRequestID
+            }
         }
     }
 
