@@ -365,7 +365,7 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         case inspectorSelection(
             dom: DOM,
             objectID: Runtime.RemoteObject.ID?,
-            feed: ConnectionModelFeed,
+            lease: ConnectionModelElementPickerLease,
             expectedSelectionRevision: UInt64
         )
 
@@ -416,7 +416,7 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
             case let .inspectorSelection(
                 dom,
                 objectID,
-                feed,
+                lease,
                 expectedSelectionRevision
             ):
                 let nodeID: DOM.Node.ID?
@@ -435,7 +435,7 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
                         let operationError = error
                         let failure: Failure
                         do {
-                            try await feed.releaseElementPicker()
+                            try await lease.release()
                             failure = WebInspectorModelContext.mapAttachmentFailure(
                                 operationError
                             )
@@ -456,7 +456,7 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
                     nodeID = nil
                 }
                 do {
-                    try await feed.releaseElementPicker()
+                    try await lease.release()
                 } catch {
                     return ReducerWorkResult(
                         commit: commit,
@@ -557,7 +557,8 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
     @ObservationIgnored private var isTerminallyClosed: Bool
     @ObservationIgnored private var pendingReducerCommitAction: PendingReducerCommitAction
     @ObservationIgnored private var didCompleteInitialAttachment: Bool
-    @ObservationIgnored private var ownsElementPickerLease: Bool
+    @ObservationIgnored private var elementPickerLease:
+        ConnectionModelElementPickerLease?
     @ObservationIgnored private var isElementPickerTransitioning: Bool
 
     /// The stable live DOM tree for the current document.
@@ -696,7 +697,7 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         isTerminallyClosed = false
         pendingReducerCommitAction = .none
         didCompleteInitialAttachment = false
-        ownsElementPickerLease = false
+        elementPickerLease = nil
         isElementPickerTransitioning = false
         currentPage = nil
         statusRelay = WebInspectorAsyncStreamRelay()
@@ -1244,7 +1245,7 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         pageGeneration = nil
         didPrepareAttachmentReset = false
         pendingReducerCommitAction = .none
-        ownsElementPickerLease = false
+        elementPickerLease = nil
         isElementPickerTransitioning = false
 
         let cleanup = Self.makeCleanupTask(
@@ -1849,7 +1850,7 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
             case .superseded:
                 followup = nil
             case let .selected(nodeID, expectedSelectionRevision):
-                ownsElementPickerLease = false
+                elementPickerLease = nil
                 isElementPickerTransitioning = false
                 if domState.selectionRevision == expectedSelectionRevision,
                    let nodeID {
@@ -1863,7 +1864,7 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
                 }
                 followup = nil
             case let .failed(failure):
-                ownsElementPickerLease = false
+                elementPickerLease = nil
                 isElementPickerTransitioning = false
                 pendingReducerCommitAction = .failure(failure)
                 followup = prepareSemanticReset()
@@ -2047,7 +2048,7 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         pageGeneration = nil
         currentPage = nil
         pendingReducerCommitAction = .none
-        ownsElementPickerLease = false
+        elementPickerLease = nil
         isElementPickerTransitioning = false
     }
 
@@ -2696,7 +2697,7 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
             return ReducerWork.none
 
         case let .inspector(event):
-            guard ownsElementPickerLease else {
+            guard let elementPickerLease else {
                 return ReducerWork.none
             }
             guard configuredDomains.contains(.dom),
@@ -2709,8 +2710,7 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
                   let authorizedTarget = authorizedTarget(
                       target,
                       documentEpoch: documentEpoch
-                  ),
-                  let activeFeed else {
+                  ) else {
                 return prepareProtocolFailure(
                     "An Inspector event referenced an unauthorized document target.",
                     token: token
@@ -2727,7 +2727,7 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
             return .inspectorSelection(
                 dom: authorizedTarget.dom,
                 objectID: objectID,
-                feed: activeFeed,
+                lease: elementPickerLease,
                 expectedSelectionRevision: domState.selectionRevision
             )
 
@@ -2855,7 +2855,7 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
             binding.didSynchronize = true
             self.binding = binding
             didCompleteInitialAttachment = true
-            if ownsElementPickerLease {
+            if elementPickerLease != nil {
                 applyDOMStateEffects(
                     domState.setElementPickerEnabled(true)
                 )
@@ -3498,6 +3498,16 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         try await domUndoRedoCommands().redo()
     }
 
+    package nonisolated(nonsending) func pickDOMNodeID() async throws
+        -> DOMNode.ID?
+    {
+        preconditionOwnerIsolation()
+        guard let core = containerRegistrationBinding?.core else {
+            throw WebInspectorModelError.staleModel
+        }
+        return try await core.pickDOMNode().map(DOMNode.ID.init(canonical:))
+    }
+
     /// Enables or disables WebKit's element picker.
     public nonisolated(nonsending) func setElementPickerEnabled(
         _ isEnabled: Bool
@@ -3509,7 +3519,7 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
                 message: "An element-picker transition is already in progress."
             )
         }
-        if isEnabled == ownsElementPickerLease {
+        if isEnabled == (elementPickerLease != nil) {
             return
         }
         guard state == .attached,
@@ -3524,17 +3534,18 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         }
 
         if isEnabled {
+            let lease = feed.makeElementPickerLease()
             var didAcquireLease = false
-            ownsElementPickerLease = true
+            elementPickerLease = lease
             do {
-                try await feed.acquireElementPicker()
+                try await lease.acquire()
                 didAcquireLease = true
                 guard attachmentGeneration == expectedAttachmentGeneration,
                       activeFeed === feed,
                       state == .attached else {
                     throw TransitionError.superseded
                 }
-                guard ownsElementPickerLease else {
+                guard elementPickerLease?.id == lease.id else {
                     return
                 }
                 applyDOMStateEffects(
@@ -3542,12 +3553,14 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
                 )
             } catch {
                 let operationError = error
-                ownsElementPickerLease = false
+                if elementPickerLease?.id == lease.id {
+                    elementPickerLease = nil
+                }
                 guard didAcquireLease else {
                     throw operationError
                 }
                 do {
-                    try await feed.releaseElementPicker()
+                    try await lease.release()
                 } catch {
                     throw WebInspectorScopeError(
                         operationError: operationError,
@@ -3559,14 +3572,21 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
             return
         }
 
+        guard let lease = elementPickerLease else {
+            preconditionFailure(
+                "An attached picker disable lost its caller-owned lease."
+            )
+        }
         let cleanupResult: Result<Void, any Error>
         do {
-            try await feed.releaseElementPicker()
+            try await lease.release()
             cleanupResult = .success(())
         } catch {
             cleanupResult = .failure(error)
         }
-        ownsElementPickerLease = false
+        if elementPickerLease?.id == lease.id {
+            elementPickerLease = nil
+        }
         applyDOMStateEffects(
             domState.setElementPickerEnabled(false)
         )

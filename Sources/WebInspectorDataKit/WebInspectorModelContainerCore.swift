@@ -167,6 +167,7 @@ package struct WebInspectorModelContainerCoreMetrics: Equatable, Sendable {
     package let activeContextRegistrationCount: Int
     package let networkResponseBodyOperationCount: Int
     package let domCSSCommandOperationCount: Int
+    package let elementPickerOperationCount: Int
     package let core: WebInspectorModelContainerCorePerformanceCounters
     package let canonicalStore: WebInspectorCanonicalModelStorePerformanceCounters
 }
@@ -296,6 +297,8 @@ package actor WebInspectorModelContainerCore {
     var domCSSCommandOperations: [UInt64: WebInspectorDOMCSSCommandOperation] = [:]
     var domCSSOperationIDByCSSResourceLease: [WebInspectorCanonicalCSSResourceLease: UInt64] = [:]
     var domCSSResourceCompletions: [UInt64: ReplyPromise<WebInspectorCanonicalCSSResource>] = [:]
+    var nextElementPickerOperationID: UInt64 = 0
+    var elementPickerOperation: WebInspectorElementPickerOperationState?
     var performanceCounters =
         WebInspectorModelContainerCorePerformanceCounters()
     package var nextAttachmentGeneration: UInt64 = 0
@@ -507,6 +510,7 @@ package actor WebInspectorModelContainerCore {
             networkResponseBodyOperationCount:
                 networkResponseBodyOperations.count,
             domCSSCommandOperationCount: domCSSCommandOperations.count,
+            elementPickerOperationCount: elementPickerOperation == nil ? 0 : 1,
             core: performanceCounters,
             canonicalStore: canonicalStore.performanceCounters
         )

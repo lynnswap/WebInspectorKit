@@ -49,7 +49,10 @@ enum ConnectionCapabilityLeaseOwner: Hashable, Sendable {
     case eventScope(WebInspectorProxyEventScopeID)
     case modelFeedNavigation(ConnectionModelFeedID)
     case modelFeed(ConnectionModelFeedID, ModelDomain)
-    case modelElementPicker(ConnectionModelFeedID)
+    case modelElementPicker(
+        ConnectionModelFeedID,
+        ConnectionModelElementPickerLeaseID
+    )
 }
 
 struct ConnectionEventScopeRegistry {

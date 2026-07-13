@@ -481,6 +481,9 @@ package extension WebInspectorModelContainerCore {
 
         isConnectionCloseRequested = true
         retireAllSynchronizationGenerations(with: .closed)
+        retireElementPickerOperation(
+            with: WebInspectorElementPickerError.closed
+        )
         connectionStatePublication.publish(.closing)
         for state in attachmentAttempts.values {
             state.attempt.control.invalidate(.closed)
@@ -551,6 +554,13 @@ package extension WebInspectorModelContainerCore {
             record,
             attachmentGeneration: generation
         )
+        if let commit {
+            applyCanonicalElementPickerActions(
+                commit.transaction.actions,
+                resourceID: resourceID,
+                generation: generation
+            )
+        }
         guard let commit,
             commit.transaction.feedChanges.contains(where: {
                 if case .synchronizationComplete = $0 {
@@ -725,6 +735,9 @@ private extension WebInspectorModelContainerCore {
                 with: .synchronizationFailed(failure)
             )
         }
+        retireElementPickerOperation(
+            with: WebInspectorElementPickerError.feedFailure(failure)
+        )
         let cleanupFailure = await webInspectorRunIgnoringCancellation {
             await self.detachCurrentAttachment(skipSupervisorWait: true)
         }
@@ -1048,6 +1061,9 @@ private extension WebInspectorModelContainerCore {
         skipSupervisorWait: Bool
     ) async -> WebInspectorModelContainer.Failure? {
         let resource = activeAttachment
+        retireElementPickerOperation(
+            with: WebInspectorElementPickerError.detached
+        )
         if let generation = resource?.generation {
             retireSynchronizationGeneration(
                 generation,

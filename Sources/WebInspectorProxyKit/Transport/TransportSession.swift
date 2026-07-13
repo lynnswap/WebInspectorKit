@@ -314,7 +314,9 @@ private struct ConnectionModelFeedRegistration: Sendable {
     let mailbox: ConnectionModelFeedMailbox
     var lifecycle: ConnectionModelFeedLifecycle
     var capabilityLeases: [ConnectionModelFeedCapabilityLease]
-    var elementPickerLease: ConnectionModelFeedCapabilityLease?
+    var elementPickerLeases: [
+        ConnectionModelElementPickerLeaseID: ConnectionModelFeedCapabilityLease
+    ]
     var targetSnapshotThrough: UInt64?
     var resetGeneration: WebInspectorPage.Generation
     var synchronization: ConnectionModelFeedSynchronizationState?
@@ -720,7 +722,7 @@ package actor ConnectionCore {
             mailbox: mailbox,
             lifecycle: .acquiring,
             capabilityLeases: [],
-            elementPickerLease: nil,
+            elementPickerLeases: [:],
             targetSnapshotThrough: nil,
             resetGeneration: resetGeneration,
             synchronization: nil,
@@ -858,8 +860,8 @@ package actor ConnectionCore {
         }
 
         let completion = ReplyPromise<Void>()
-        let elementPickerLease = registration.elementPickerLease
-        registration.elementPickerLease = nil
+        let elementPickerLeases = Array(registration.elementPickerLeases.values)
+        registration.elementPickerLeases.removeAll(keepingCapacity: false)
         registration.lifecycle = .closing(completion)
         modelFeed = registration
         let commandInvalidation = invalidateModelCommands(
@@ -871,7 +873,7 @@ package actor ConnectionCore {
         await cancelAndAwaitModelBootstrapTasks(feedID: id)
 
         var cleanupError: (any Swift.Error)?
-        if let elementPickerLease {
+        for elementPickerLease in elementPickerLeases.reversed() {
             if let error = await releaseElementPickerResources(
                 elementPickerLease.owner,
                 for: elementPickerLease.key
@@ -938,7 +940,8 @@ package actor ConnectionCore {
     }
 
     package func acquireModelFeedElementPicker(
-        _ feedID: ConnectionModelFeedID
+        _ feedID: ConnectionModelFeedID,
+        leaseID: ConnectionModelElementPickerLeaseID
     ) async throws {
         guard var registration = modelFeed,
               registration.id == feedID,
@@ -948,11 +951,14 @@ package actor ConnectionCore {
         guard registration.configuredDomains.contains(.dom) else {
             throw ConnectionModelCommandError.domainNotConfigured(.dom)
         }
-        guard registration.elementPickerLease == nil else {
+        guard registration.elementPickerLeases[leaseID] == nil else {
             return
         }
 
-        let leaseOwner = ConnectionCapabilityLeaseOwner.modelElementPicker(feedID)
+        let leaseOwner = ConnectionCapabilityLeaseOwner.modelElementPicker(
+            feedID,
+            leaseID
+        )
         let key = ConnectionCapabilityKey(
             route: .currentPage,
             targetID: .currentPage,
@@ -967,7 +973,7 @@ package actor ConnectionCore {
             for: key,
             generation: currentPageGeneration
         )
-        registration.elementPickerLease = lease
+        registration.elementPickerLeases[leaseID] = lease
         modelFeed = registration
 
         do {
@@ -981,8 +987,8 @@ package actor ConnectionCore {
             let operationError = error
             if var current = modelFeed,
                current.id == feedID,
-               current.elementPickerLease?.owner == leaseOwner {
-                current.elementPickerLease = nil
+               current.elementPickerLeases[leaseID]?.owner == leaseOwner {
+                current.elementPickerLeases[leaseID] = nil
                 modelFeed = current
             }
             if let cleanupError = await releaseElementPickerResources(
@@ -1000,7 +1006,7 @@ package actor ConnectionCore {
         guard let current = modelFeed,
               current.id == feedID,
               case .active = current.lifecycle,
-              current.elementPickerLease?.owner == leaseOwner else {
+              current.elementPickerLeases[leaseID]?.owner == leaseOwner else {
             if let cleanupError = await releaseElementPickerResources(
                 leaseOwner,
                 for: key
@@ -1012,14 +1018,16 @@ package actor ConnectionCore {
     }
 
     package func releaseModelFeedElementPicker(
-        _ feedID: ConnectionModelFeedID
+        _ feedID: ConnectionModelFeedID,
+        leaseID: ConnectionModelElementPickerLeaseID
     ) async throws {
         guard var registration = modelFeed,
               registration.id == feedID,
-              let lease = registration.elementPickerLease else {
+              let lease = registration.elementPickerLeases.removeValue(
+                forKey: leaseID
+              ) else {
             return
         }
-        registration.elementPickerLease = nil
         modelFeed = registration
         if let error = await releaseElementPickerResources(
             lease.owner,
@@ -6772,9 +6780,6 @@ package actor ConnectionCore {
                 return
             }
         }
-        let elementPickerOwner = ConnectionCapabilityLeaseOwner.modelElementPicker(
-            registration.id
-        )
         let elementPickerKey = ConnectionCapabilityKey(
             route: .currentPage,
             targetID: .currentPage,
@@ -6782,12 +6787,13 @@ package actor ConnectionCore {
         )
         let isElementPickerEvent = event.domain == .inspector
             && registration.configuredDomains.contains(.dom)
-            && registration.elementPickerLease != nil
-            && elementPickerShouldDeliver(
-                event.sequence,
-                to: elementPickerOwner,
-                key: elementPickerKey
-            )
+            && registration.elementPickerLeases.values.contains { lease in
+                elementPickerShouldDeliver(
+                    event.sequence,
+                    to: lease.owner,
+                    key: elementPickerKey
+                )
+            }
         let isOperationalRuntimeClear = event.domain == .runtime
             && event.method == "Runtime.executionContextsCleared"
             && registration.configuredDomains.contains(.console)

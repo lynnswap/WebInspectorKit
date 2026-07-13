@@ -404,8 +404,9 @@ func modelFeedElementPickerPublishesOnlyActivatedInspectAndClosesInWireOrder() a
     _ = try modelFeedRequireBootstrapCompletion(try await iterator.next())
     _ = try await modelFeedRequireSynchronization(iterator.next())
 
+    let pickerLease = feed.makeElementPickerLease()
     let acquireTask = Task {
-        try await feed.acquireElementPicker()
+        try await pickerLease.acquire()
     }
     let enable = try await backend.waitForTargetMessage(method: "Inspector.enable")
     await modelFeedRespond(to: enable, core: core)
@@ -453,6 +454,55 @@ func modelFeedElementPickerPublishesOnlyActivatedInspectAndClosesInWireOrder() a
 }
 
 @Test
+func modelFeedElementPickerLeasesReleaseOnlyTheirOwnPhysicalOwnership() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [.dom],
+        targetID: "page-main"
+    )
+    let first = feed.makeElementPickerLease()
+    let second = feed.makeElementPickerLease()
+
+    let firstAcquire = Task {
+        try await first.acquire()
+    }
+    try await modelFeedCompleteElementPickerAcquisition(
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        expectsInitialization: true
+    )
+    try await firstAcquire.value
+
+    let sharedModeBaseline = await backend.sentTargetMessages().count
+    try await second.acquire()
+    #expect(await backend.sentTargetMessages().count == sharedModeBaseline)
+
+    try await first.release()
+    #expect(await backend.sentTargetMessages().count == sharedModeBaseline)
+
+    let finalRelease = Task {
+        try await second.release()
+    }
+    try await modelFeedCompleteElementPickerRelease(
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        after: sharedModeBaseline
+    )
+    try await finalRelease.value
+    await core.close()
+}
+
+@Test
 func modelFeedElementPickerCancellationAwaitsPhysicalModeRollback() async throws {
     let backend = FakeTransportBackend()
     let core = ConnectionCore(backend: backend, responseTimeout: nil)
@@ -468,8 +518,9 @@ func modelFeedElementPickerCancellationAwaitsPhysicalModeRollback() async throws
         targetID: "page-main"
     )
 
+    let pickerLease = feed.makeElementPickerLease()
     let acquireTask = Task {
-        try await feed.acquireElementPicker()
+        try await pickerLease.acquire()
     }
     let enable = try await backend.waitForTargetMessage(
         method: "Inspector.enable"

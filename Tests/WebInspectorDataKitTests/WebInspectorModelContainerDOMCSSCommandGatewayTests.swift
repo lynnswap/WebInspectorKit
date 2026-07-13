@@ -361,6 +361,155 @@ func DOMHighlightUsesNodeAdmissionAndAttachmentCompletionLease()
 }
 
 @Test
+func elementPickerResolvesOneCanonicalNodeAndReleasesItsFeedLease()
+    async throws
+{
+    try await withDOMCSSGatewayRuntime(domains: [.dom]) { fixture in
+        await fixture.wire.respond(to: "Inspector.enable")
+        await fixture.wire.respond(to: "Inspector.initialized")
+        await fixture.wire.respond(to: "DOM.setInspectModeEnabled")
+        await fixture.wire.respond(
+            to: "DOM.requestNode",
+            with: try testJSONObject(#"{"nodeId":"body"}"#)
+        )
+        await fixture.wire.respond(to: "DOM.setInspectModeEnabled")
+        await fixture.wire.respond(to: "Inspector.disable")
+
+        let operation = Task {
+            try await fixture.container.core.pickDOMNode()
+        }
+        _ = await fixture.wire.observations.waitForCompletedCommands(
+            method: "DOM.setInspectModeEnabled",
+            count: 1
+        )
+        try await fixture.runtime.peer.emitTargetEvent(
+            targetID: "page-main",
+            method: "Inspector.inspect",
+            parameters: try testJSONObject(
+                #"{"object":{"objectId":"remote-body","type":"object","subtype":"node"},"hints":{}}"#
+            )
+        )
+
+        let selectedID = try #require(try await operation.value)
+        #expect(selectedID.rawNodeID == DOM.Node.ID("body"))
+        #expect(
+            await fixture.container.core.canonicalSnapshotForTesting()
+                .DOM?.records.contains { $0.id == selectedID } == true
+        )
+        #expect(
+            fixture.wire.observations.commands.filter {
+                $0.method == "DOM.setInspectModeEnabled"
+            }.count == 2
+        )
+        #expect(
+            fixture.wire.observations.commands.filter {
+                $0.method == "Inspector.disable"
+            }.count == 1
+        )
+        #expect(
+            await fixture.container.core.metrics.elementPickerOperationCount
+                == 0
+        )
+    }
+}
+
+@Test
+func elementPickerCallerCancellationReleasesOnlyItsOwnedLease()
+    async throws
+{
+    try await withDOMCSSGatewayRuntime(domains: [.dom]) { fixture in
+        await fixture.wire.respond(to: "Inspector.enable")
+        await fixture.wire.respond(to: "Inspector.initialized")
+        await fixture.wire.respond(to: "DOM.setInspectModeEnabled")
+        await fixture.wire.respond(to: "DOM.setInspectModeEnabled")
+        await fixture.wire.respond(to: "Inspector.disable")
+
+        let operation = Task {
+            try await fixture.container.core.pickDOMNode()
+        }
+        _ = await fixture.wire.observations.waitForCompletedCommands(
+            method: "DOM.setInspectModeEnabled",
+            count: 1
+        )
+        operation.cancel()
+        await #expect(throws: CancellationError.self) {
+            _ = try await operation.value
+        }
+
+        #expect(
+            fixture.wire.observations.commands.filter {
+                $0.method == "DOM.setInspectModeEnabled"
+            }.count == 2
+        )
+        #expect(
+            fixture.wire.observations.commands.filter {
+                $0.method == "Inspector.disable"
+            }.count == 1
+        )
+        #expect(
+            await fixture.container.core.metrics.elementPickerOperationCount
+                == 0
+        )
+        #expect(fixture.container.state == .attached)
+    }
+}
+
+@Test
+func elementPickerKeepsExclusiveOwnershipThroughPhysicalLeaseRelease()
+    async throws
+{
+    try await withDOMCSSGatewayRuntime(domains: [.dom]) { fixture in
+        await fixture.wire.respond(to: "Inspector.enable")
+        await fixture.wire.respond(to: "Inspector.initialized")
+        await fixture.wire.respond(to: "DOM.setInspectModeEnabled")
+        await fixture.wire.respond(
+            to: "DOM.requestNode",
+            with: try testJSONObject(#"{"nodeId":"body"}"#)
+        )
+        let releaseGate = await fixture.wire.deferReply(
+            to: "DOM.setInspectModeEnabled"
+        )
+        await fixture.wire.respond(to: "Inspector.disable")
+
+        let operation = Task {
+            try await fixture.container.core.pickDOMNode()
+        }
+        _ = await fixture.wire.observations.waitForCompletedCommands(
+            method: "DOM.setInspectModeEnabled",
+            count: 1
+        )
+        try await fixture.runtime.peer.emitTargetEvent(
+            targetID: "page-main",
+            method: "Inspector.inspect",
+            parameters: try testJSONObject(
+                #"{"object":{"objectId":"remote-body","type":"object","subtype":"node"},"hints":{}}"#
+            )
+        )
+        _ = await fixture.wire.observations.waitForCommands(
+            method: "DOM.setInspectModeEnabled",
+            count: 2
+        )
+
+        await #expect(
+            throws: WebInspectorElementPickerError.operationAlreadyActive
+        ) {
+            _ = try await fixture.container.core.pickDOMNode()
+        }
+        #expect(
+            await fixture.container.core.metrics.elementPickerOperationCount
+                == 1
+        )
+
+        releaseGate.open()
+        _ = try #require(try await operation.value)
+        #expect(
+            await fixture.container.core.metrics.elementPickerOperationCount
+                == 0
+        )
+    }
+}
+
+@Test
 func CSSGatewayCoalescesOnlyTheExactNodeCascadeResourceLease()
     async throws
 {

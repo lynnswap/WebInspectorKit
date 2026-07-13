@@ -296,6 +296,44 @@ package struct ConnectionModelFeedID: Hashable, Sendable {
     }
 }
 
+package struct ConnectionModelElementPickerLeaseID: Hashable, Sendable {
+    package let rawValue: UUID
+
+    package init(rawValue: UUID = UUID()) {
+        self.rawValue = rawValue
+    }
+}
+
+/// A caller-owned element-picker capability lease for one model feed.
+///
+/// Copies identify the same lease. The caller that creates a lease must
+/// balance a successful `acquire()` with `release()`; releasing another
+/// caller's picker mode is impossible because Core routes both operations by
+/// this identity.
+package struct ConnectionModelElementPickerLease: Sendable {
+    package let id: ConnectionModelElementPickerLeaseID
+    private let feedID: ConnectionModelFeedID
+    private let owner: ConnectionCore
+
+    package init(
+        id: ConnectionModelElementPickerLeaseID = .init(),
+        feedID: ConnectionModelFeedID,
+        owner: ConnectionCore
+    ) {
+        self.id = id
+        self.feedID = feedID
+        self.owner = owner
+    }
+
+    package func acquire() async throws {
+        try await owner.acquireModelFeedElementPicker(feedID, leaseID: id)
+    }
+
+    package func release() async throws {
+        try await owner.releaseModelFeedElementPicker(feedID, leaseID: id)
+    }
+}
+
 package enum ConnectionModelFeedDeliveryResult: Sendable {
     case enqueued
     case terminated
@@ -537,12 +575,10 @@ package actor ConnectionModelFeed {
         try await owner.closeModelFeed(id)
     }
 
-    package func acquireElementPicker() async throws {
-        try await owner.acquireModelFeedElementPicker(id)
-    }
-
-    package func releaseElementPicker() async throws {
-        try await owner.releaseModelFeedElementPicker(id)
+    package nonisolated func makeElementPickerLease()
+        -> ConnectionModelElementPickerLease
+    {
+        ConnectionModelElementPickerLease(feedID: id, owner: owner)
     }
 
     isolated deinit {
