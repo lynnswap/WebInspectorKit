@@ -37,7 +37,7 @@ public struct WebInspectorTab: Equatable, Hashable, Identifiable {
     public let image: UIImage?
 
     /// Model domains that must be ready before this tab is used.
-    public let requiredDomains: Set<WebInspectorModelContext.Domain>
+    public let requiredDomains: Set<WebInspectorModelContainer.Domain>
     package let content: Content
 
     package enum BuiltIn: Hashable {
@@ -77,7 +77,7 @@ public struct WebInspectorTab: Equatable, Hashable, Identifiable {
         title: String,
         image: UIImage?,
         builtIn: BuiltIn,
-        requiredDomains: Set<WebInspectorModelContext.Domain>
+        requiredDomains: Set<WebInspectorModelContainer.Domain>
     ) {
         self.id = id
         self.title = title
@@ -97,7 +97,7 @@ public struct WebInspectorTab: Equatable, Hashable, Identifiable {
         id: ID,
         title: String,
         image: UIImage? = nil,
-        requiredDomains: Set<WebInspectorModelContext.Domain> = [],
+        requiredDomains: Set<WebInspectorModelContainer.Domain> = [],
         makeViewController: @escaping @MainActor (_ session: WebInspectorSession) async throws -> UIViewController
     ) {
         self.id = id
@@ -112,7 +112,7 @@ public struct WebInspectorTab: Equatable, Hashable, Identifiable {
         id: ID,
         title: String,
         systemImage: String,
-        requiredDomains: Set<WebInspectorModelContext.Domain> = [],
+        requiredDomains: Set<WebInspectorModelContainer.Domain> = [],
         makeViewController: @escaping @MainActor (_ session: WebInspectorSession) async throws -> UIViewController
     ) {
         self.init(

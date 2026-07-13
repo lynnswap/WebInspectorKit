@@ -2,6 +2,7 @@
 import ObservationBridge
 import Testing
 import WebInspectorDataKit
+import WebInspectorDataKitTesting
 import WebInspectorProxyKit
 import WebInspectorProxyKitTesting
 import WebInspectorTestSupport
@@ -176,7 +177,7 @@ struct ParentContainerTests {
         }
 
         #expect(session.model === stableModel)
-        #expect(session.model.state == .attached)
+        #expect(session.modelContainer.state == .attached)
         #expect(observerRecorder.observers.count == 1)
         #expect(observerRecorder.observers.first?.isStarted == true)
         #expect(observerRecorder.observers.first?.isInvalidated == false)
@@ -203,7 +204,7 @@ struct ParentContainerTests {
             )
         }
         await firstModelAttachCompleted.waiter.wait()
-        #expect(session.model.state == .attached)
+        #expect(session.modelContainer.state == .attached)
 
         let secondAttach = Task { @MainActor in
             try await session.attachForTesting(
@@ -220,13 +221,13 @@ struct ParentContainerTests {
         await #expect(throws: CancellationError.self) {
             try await firstAttach.value
         }
-        #expect(session.model.state == .detached)
+        #expect(session.modelContainer.state == .detached)
 
         releaseSecondAttach.open()
         await #expect(throws: AttachmentFailure.self) {
             try await secondAttach.value
         }
-        #expect(session.model.state == .detached)
+        #expect(session.modelContainer.state == .detached)
     }
 
     @Test
@@ -258,7 +259,7 @@ struct ParentContainerTests {
         }
 
         #expect(session.model === stableModel)
-        #expect(session.model.state == .detached)
+        #expect(session.modelContainer.state == .detached)
         #expect(observerRecorder.observers.isEmpty)
         #expect(session.hasPageUserInterfaceStyleObserverForTesting == false)
         #expect(session.pageUserInterfaceStyle == .unspecified)
@@ -297,7 +298,7 @@ struct ParentContainerTests {
         )
 
         #expect(session.model === stableModel)
-        #expect(session.model.state == .attached)
+        #expect(session.modelContainer.state == .attached)
         #expect(hostAfterAttach !== initialHost)
         #expect(hostAfterAttach.readyViewControllerForTesting === initialContent)
         #expect(contentStore.customReadyViewControllerForTesting(for: key) === initialContent)
@@ -1026,7 +1027,7 @@ struct ParentContainerTests {
         #expect(session.detachCountForTesting == 1)
         #expect(contentStore.contentCountForTesting == 0)
         #expect(session.model === stableModel)
-        #expect(session.model.state == .detached)
+        #expect(session.modelContainer.state == .detached)
     }
 
     @Test
@@ -1233,7 +1234,9 @@ struct ParentContainerTests {
 
     @Test
     func compactFactoryUsesDomainNavigationControllers() async throws {
-        let session = WebInspectorSession(context: makeContext())
+        let session = WebInspectorSession(
+            modelContainer: WebInspectorModelContainer()
+        )
         let contentStore = PresentationContentStore()
 
         let domViewController = WebInspectorTab.ContentFactory.makeViewController(
@@ -1332,15 +1335,33 @@ struct ParentContainerTests {
 
     @Test
     func networkPanelModelSelectionIsSharedAcrossParentHosts() async throws {
-        let context = makeContext()
-        let session = WebInspectorSession(context: context)
-        let contentStore = PresentationContentStore()
-        let requestID = await applyRequest(
-            to: context,
-            requestID: "1",
-            url: "https://example.com/app.js"
+        let runtime = try await WebInspectorDataKitTestRuntime.start(
+            scenario: .init(
+                configuration: .init(domains: [.network]),
+                networkReplay: [
+                    .init(
+                        id: "1",
+                        url: "https://example.com/app.js",
+                        statusText: "OK",
+                        responseHeaders: [
+                            "content-type": "text/javascript"
+                        ],
+                        mimeType: "text/javascript",
+                        resourceType: .script
+                    )
+                ]
+            ),
+            isolation: MainActor.shared
         )
-        let request = try #require(try context.networkRequest(id: requestID))
+        let session = WebInspectorSession(modelContainer: runtime.container)
+        let contentStore = PresentationContentStore()
+        let request = try #require(
+            try await session.model.fetch(
+                WebInspectorFetchDescriptor<
+                    WebInspectorDataKit.NetworkRequest
+                >()
+            ).first
+        )
         let compactResourceViewController = try #require(
             WebInspectorTab.ContentFactory.makeViewController(
                 for: .network,
@@ -1394,6 +1415,8 @@ struct ParentContainerTests {
             detailViewController.headersTextViewForTesting.renderedTextForTesting.contains("GET /app.js")
         }
         #expect(didRenderDetail)
+        await contentStore.clear()
+        await runtime.close()
     }
 
     private func childViewController<T: UIViewController>(
@@ -1567,14 +1590,17 @@ struct ParentContainerTests {
     private func makeSessionWithNoOpAttachment(
         tabs: [WebInspectorTab] = [.dom, .network]
     ) -> WebInspectorSession {
-        WebInspectorSession(context: makeContext(), tabs: tabs)
+        WebInspectorSession(
+            modelContainer: WebInspectorModelContainer(),
+            tabs: tabs
+        )
     }
 
     private func makeAttachmentSession(
         tabs: [WebInspectorTab] = [.dom, .network]
     ) -> WebInspectorSession {
         WebInspectorSession(
-            context: WebInspectorModelContext.preview(
+            modelContainer: WebInspectorModelContainer(
                 configuration: .init(domains: [])
             ),
             tabs: tabs

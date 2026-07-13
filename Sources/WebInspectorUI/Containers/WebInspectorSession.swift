@@ -8,12 +8,14 @@ import WebInspectorUIBase
 
 /// The UIKit-facing inspection session used by `WebInspectorViewController`.
 ///
-/// A session owns attachment lifecycle, one stable DataKit model, and
-/// page-derived presentation preferences.
+/// A session owns one model container, its stable main context, attachment
+/// lifecycle, and page-derived presentation preferences.
 @MainActor
 @Observable
 public final class WebInspectorSession {
     package let interface: InterfaceModel
+    /// The container that owns the inspector connection and model contexts.
+    @ObservationIgnored public let modelContainer: WebInspectorModelContainer
     /// The stable semantic model used by built-in and custom tabs.
     @ObservationIgnored public let model: WebInspectorModelContext
     /// The user interface style inferred from the inspected page.
@@ -33,21 +35,24 @@ public final class WebInspectorSession {
     /// Creates a session with the provided inspector tabs.
     public init(
         tabs: [WebInspectorTab] = [.dom, .network],
-        additionalDomains: Set<WebInspectorModelContext.Domain> = []
+        additionalDomains: Set<WebInspectorModelContainer.Domain> = []
     ) {
+        let domains = tabs.reduce(into: additionalDomains) { domains, tab in
+            domains.formUnion(tab.requiredDomains)
+        }
+        let modelContainer = WebInspectorModelContainer(
+            configuration: .init(domains: domains)
+        )
         self.interface = InterfaceModel(tabs: tabs)
-        self.model = WebInspectorModelContext(configuration: .init(
-            domains: tabs.reduce(into: additionalDomains) { domains, tab in
-                domains.formUnion(tab.requiredDomains)
-            }
-        ))
+        self.modelContainer = modelContainer
+        self.model = modelContainer.mainContext
         self.makePageUserInterfaceStyleObserver = { webView, apply in
             WebInspectorPageUserInterfaceStyleObserver(webView: webView, apply: apply)
         }
     }
 
     package init(
-        context: WebInspectorModelContext,
+        modelContainer: WebInspectorModelContainer,
         tabs: [WebInspectorTab] = [.dom, .network],
         makePageUserInterfaceStyleObserver: @escaping @MainActor (
             WKWebView,
@@ -57,7 +62,8 @@ public final class WebInspectorSession {
         }
     ) {
         self.interface = InterfaceModel(tabs: tabs)
-        self.model = context
+        self.modelContainer = modelContainer
+        self.model = modelContainer.mainContext
         self.makePageUserInterfaceStyleObserver = makePageUserInterfaceStyleObserver
     }
 
@@ -82,7 +88,8 @@ public final class WebInspectorSession {
 
     package func attach(
         to webView: WKWebView,
-        makeProxy: @MainActor (WKWebView) async throws -> WebInspectorProxy
+        makeProxy: @escaping @MainActor @Sendable (WKWebView) async throws
+            -> WebInspectorProxy
     ) async throws {
         try await attach(
             makeProxy: {
@@ -95,7 +102,8 @@ public final class WebInspectorSession {
     }
 
     package func attachForTesting(
-        makeProxy: @escaping @MainActor () async throws -> WebInspectorProxy,
+        makeProxy: @escaping @MainActor @Sendable () async throws
+            -> WebInspectorProxy,
         makePageUserInterfaceStyleObserver: @escaping @MainActor (
             @escaping @MainActor (UIUserInterfaceStyle) -> Void
         ) -> (any WebInspectorPageUserInterfaceStyleObserving)? = { _ in nil },
@@ -109,7 +117,8 @@ public final class WebInspectorSession {
     }
 
     private func attach(
-        makeProxy: @MainActor () async throws -> WebInspectorProxy,
+        makeProxy: @escaping @MainActor @Sendable () async throws
+            -> WebInspectorProxy,
         makePageUserInterfaceStyleObserver: @MainActor (
             @escaping @MainActor (UIUserInterfaceStyle) -> Void
         ) -> (any WebInspectorPageUserInterfaceStyleObserving)?,
@@ -122,23 +131,11 @@ public final class WebInspectorSession {
             throw CancellationError()
         }
         do {
-            let proxy = try await makeProxy()
-            try Task.checkCancellation()
-            guard isCurrentAttachmentGeneration(generation) else {
-                await proxy.close()
-                throw CancellationError()
-            }
-            do {
-                try await model.attach(to: proxy, isolation: MainActor.shared)
-            } catch {
-                await proxy.close()
-                throw error
-            }
+            try await modelContainer.attach(makeProxy: makeProxy)
             if let afterModelAttach {
                 await afterModelAttach()
             }
             guard isCurrentAttachmentGeneration(generation) else {
-                await model.detachIfAttached(to: proxy)
                 throw CancellationError()
             }
             startPageUserInterfaceStyleObservation(makePageUserInterfaceStyleObserver)
@@ -162,47 +159,26 @@ public final class WebInspectorSession {
         detachCountForTesting += 1
         #endif
         stopPageUserInterfaceStyleObservation()
-        await model.detach()
+        await modelContainer.detach()
     }
 
     /// Permanently closes this session and its model connection.
     public func close() async {
         advanceAttachmentGeneration()
         stopPageUserInterfaceStyleObservation()
-        await model.close()
+        await modelContainer.close()
     }
 
     /// Disables transient page interaction without tearing down the connection.
     package func suspendBackendInteraction() async throws {
-        guard model.state == .attached else {
+        guard modelContainer.state == .attached else {
             return
         }
         guard model.configuredDomains.contains(.dom) else {
             return
         }
 
-        var pickerError: (any Error)?
-        if try model.isElementPickerEnabled {
-            do {
-                try await model.setElementPickerEnabled(false)
-            } catch {
-                pickerError = error
-            }
-        }
-        do {
-            try await model.hideDOMHighlight()
-        } catch {
-            if let pickerError {
-                throw WebInspectorScopeError(
-                    operationError: pickerError,
-                    cleanupError: error
-                )
-            }
-            throw error
-        }
-        if let pickerError {
-            throw pickerError
-        }
+        try await model.hideDOMHighlight()
     }
 
     private func startPageUserInterfaceStyleObservation(

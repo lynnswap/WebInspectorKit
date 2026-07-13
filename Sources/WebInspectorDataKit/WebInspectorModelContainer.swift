@@ -219,22 +219,26 @@ public final class WebInspectorModelContainer: Equatable, Sendable {
         to webView: WKWebView,
         proxyConfiguration: WebInspectorProxy.Configuration = .init()
     ) async throws {
+        try await attach {
+            try await WebInspectorProxy(
+                attachingTo: webView,
+                configuration: proxyConfiguration
+            )
+        }
+    }
+
+    package func attach(
+        makeProxy: @escaping @MainActor @Sendable () async throws
+            -> WebInspectorProxy
+    ) async throws {
         let core = core
         let attempt = try await core.reserveAttachmentAttempt()
-        let createProxy:
-            @MainActor @Sendable () async throws
-                -> WebInspectorProxy = {
-                    try await WebInspectorProxy(
-                        attachingTo: webView,
-                        configuration: proxyConfiguration
-                    )
-                }
         try await withTaskCancellationHandler {
             let nativeTask = Task.detached {
                 try await attempt.waitForNativeCreationStart()
                 try await core.beginNativeProxyCreation(for: attempt)
                 try Task.checkCancellation()
-                return try await createProxy()
+                return try await makeProxy()
             }
             await core.installNativeProxyCreationTask(
                 nativeTask,

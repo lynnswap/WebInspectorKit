@@ -220,6 +220,7 @@ let package = Package(
             name: "WebInspectorUITests",
             dependencies: [
                 "WebInspectorDataKit",
+                "WebInspectorDataKitTesting",
                 "WebInspectorProxyKit",
                 "WebInspectorProxyKitTesting",
                 "WebInspectorUIBase",
