@@ -32,7 +32,7 @@ UIKit Web Inspector for `WKWebView`.
 | --- | --- |
 | `WebInspectorKit` | You want the built-in UIKit inspector UI. |
 | `WebInspectorDataKit` | You want observable DOM, Network, Console, Runtime, and CSS models for a custom UI. |
-| `WebInspectorDataKitTesting` | You want a ready DataKit model scenario with replay, picker, replacement, and failure controls. |
+| `WebInspectorDataKitTesting` | You want a ready DataKit model scenario with raw replay, target replacement, and attachment-failure controls. |
 | `WebInspectorProxyKit` | You want typed Web Inspector protocol commands and events directly over an inspected `WKWebView`. |
 | `WebInspectorProxyKitTesting` | You want to drive ProxyKit's production connection path from a concrete raw WebKit peer in tests. |
 
@@ -128,6 +128,7 @@ It answers only the protocol bootstrap owned by the scenario; replay and target
 replacement still traverse ProxyKit's production connection core:
 
 ```swift
+import WebInspectorDataKit
 import WebInspectorDataKitTesting
 
 let runtime = try await WebInspectorDataKitTestRuntime.start(
@@ -141,8 +142,13 @@ let runtime = try await WebInspectorDataKitTestRuntime.start(
     )
 )
 
-let selected = try await runtime.selectElementWithPicker(nodeID: "button")
-precondition(selected.localName == "button")
+let nodes = try await WebInspectorFetchedResultsController<DOMNode, Never>(
+    modelContext: runtime.model
+)
+precondition(nodes.snapshot.itemIDs.contains { id in
+    runtime.model.model(for: id)?.localName == "button"
+})
+await nodes.close()
 await runtime.close()
 ```
 

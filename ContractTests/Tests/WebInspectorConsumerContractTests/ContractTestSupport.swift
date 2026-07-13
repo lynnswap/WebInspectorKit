@@ -252,7 +252,6 @@ actor ContractDataKitActor {
         try context.selectDOMNode(root)
         #expect(try context.selectedDOMNode === root)
         try context.selectDOMNode(nil)
-        await context.clearNetworkRequests()
         #expect(try context.selectedDOMNode == nil)
         #expect(try context.runtimeContexts.isEmpty)
     }

@@ -11,6 +11,7 @@ package struct WebInspectorModelContextRegistrationID: Hashable, Sendable {
 
 package enum WebInspectorModelContainerCoreError: Error, Equatable, Sendable {
     case closed
+    case detached
     case canonicalStore(WebInspectorCanonicalModelStoreError)
     case contextRegistrationNotFound(WebInspectorModelContextRegistrationID)
     case acknowledgementRevisionAhead(current: UInt64, proposed: UInt64)
@@ -26,6 +27,33 @@ package enum WebInspectorModelContainerCoreError: Error, Equatable, Sendable {
     case detachInProgress
     case detachTransactionMismatch
     case closeTransactionMismatch
+    case foreignSynchronizationCheckpoint
+    case staleSynchronizationGeneration(
+        expected: WebInspectorContainerAttachmentGeneration,
+        actual: WebInspectorContainerAttachmentGeneration
+    )
+    case synchronizationFailed(WebInspectorModelContainer.Failure)
+}
+
+package struct WebInspectorModelContainerSynchronizationCursor:
+    Equatable,
+    Sendable
+{
+    fileprivate let coreIdentity: WebInspectorModelContainerCoreIdentity
+    fileprivate let attachmentGeneration:
+        WebInspectorContainerAttachmentGeneration
+    fileprivate let ordinal: UInt64
+    fileprivate let revision: UInt64
+
+    package static func == (
+        lhs: WebInspectorModelContainerSynchronizationCursor,
+        rhs: WebInspectorModelContainerSynchronizationCursor
+    ) -> Bool {
+        lhs.coreIdentity === rhs.coreIdentity
+            && lhs.attachmentGeneration == rhs.attachmentGeneration
+            && lhs.ordinal == rhs.ordinal
+            && lhs.revision == rhs.revision
+    }
 }
 
 package enum WebInspectorNetworkResponseBodyCommandError: Error, Equatable, Sendable {
@@ -193,6 +221,11 @@ package actor WebInspectorModelContainerCore {
         let waiter: WebInspectorModelContextAcknowledgementWaiter
     }
 
+    private struct SynchronizationWaiterState {
+        let checkpoint: WebInspectorModelContainerSynchronizationCursor
+        let waiter: WebInspectorModelContainerSynchronizationWaiter
+    }
+
     private struct NetworkResponseBodyCommandRoute: Sendable {
         let lease: CanonicalNetworkResponseBodyLease
         let resourceID: UInt64
@@ -242,6 +275,15 @@ package actor WebInspectorModelContainerCore {
     private var contextRegistrations: [WebInspectorModelContextRegistrationID: ContextRegistrationState] = [:]
     private var nextAcknowledgementBarrierID: UInt64 = 0
     private var acknowledgementBarriers: [UInt64: AcknowledgementBarrierState] = [:]
+    private var nextSynchronizationOrdinal: UInt64 = 0
+    private var latestSynchronizationCursorByGeneration:
+        [
+            WebInspectorContainerAttachmentGeneration:
+                WebInspectorModelContainerSynchronizationCursor
+        ] = [:]
+    private var nextSynchronizationWaiterID: UInt64 = 0
+    private var synchronizationWaiters:
+        [UInt64: SynchronizationWaiterState] = [:]
     private var detachTransaction: WebInspectorModelContainerReset?
     private var completedDetachTransactionID: UInt64?
     private var closeTransaction: WebInspectorModelContainerClose?
@@ -330,6 +372,85 @@ package actor WebInspectorModelContainerCore {
 
     package var isClosed: Bool {
         lifecycle == .closed
+    }
+
+    package var synchronizationWaiterCountForTesting: Int {
+        synchronizationWaiters.count
+    }
+
+    package func synchronizationCheckpoint()
+        throws(WebInspectorModelContainerCoreError)
+        -> WebInspectorModelContainerSynchronizationCursor
+    {
+        guard !isConnectionCloseRequested, lifecycle == .open else {
+            throw .closed
+        }
+        guard let generation = activeAttachment?.generation else {
+            throw .detached
+        }
+        guard let cursor = latestSynchronizationCursorByGeneration[generation]
+        else {
+            preconditionFailure(
+                "An attached Model Container must retain its completed initial synchronization."
+            )
+        }
+        return cursor
+    }
+
+    package func waitForSynchronization(
+        after checkpoint: WebInspectorModelContainerSynchronizationCursor
+    ) async throws -> WebInspectorModelContainerSynchronizationCursor {
+        guard checkpoint.coreIdentity === identity else {
+            throw WebInspectorModelContainerCoreError
+                .foreignSynchronizationCheckpoint
+        }
+        guard !isConnectionCloseRequested, lifecycle == .open else {
+            throw WebInspectorModelContainerCoreError.closed
+        }
+        guard let generation = activeAttachment?.generation else {
+            throw WebInspectorModelContainerCoreError.detached
+        }
+        guard checkpoint.attachmentGeneration == generation else {
+            throw WebInspectorModelContainerCoreError
+                .staleSynchronizationGeneration(
+                    expected: generation,
+                    actual: checkpoint.attachmentGeneration
+                )
+        }
+        guard let cursor = latestSynchronizationCursorByGeneration[generation]
+        else {
+            preconditionFailure(
+                "An attached Model Container must retain its completed initial synchronization."
+            )
+        }
+        precondition(
+            checkpoint.ordinal <= cursor.ordinal
+                && checkpoint.revision <= cursor.revision,
+            "A synchronization checkpoint cannot lead its attachment generation."
+        )
+        if cursor.ordinal > checkpoint.ordinal {
+            return cursor
+        }
+
+        precondition(
+            nextSynchronizationWaiterID < UInt64.max,
+            "Model Container exhausted synchronization waiter identifiers."
+        )
+        nextSynchronizationWaiterID += 1
+        let waiterID = nextSynchronizationWaiterID
+        let waiter = WebInspectorModelContainerSynchronizationWaiter()
+        synchronizationWaiters[waiterID] = SynchronizationWaiterState(
+            checkpoint: checkpoint,
+            waiter: waiter
+        )
+        do {
+            let cursor = try await waiter.wait()
+            synchronizationWaiters[waiterID] = nil
+            return cursor
+        } catch {
+            synchronizationWaiters[waiterID] = nil
+            throw error
+        }
     }
 
     package func runtimeCommandEnvironment()
@@ -1392,7 +1513,102 @@ private extension WebInspectorModelContainerCore {
     }
 }
 
-private final class WebInspectorModelContainerCoreIdentity: Sendable {}
+package extension WebInspectorModelContainerCore {
+    func recordSynchronizationCompletion(
+        resourceID: UInt64,
+        generation: WebInspectorContainerAttachmentGeneration,
+        through revision: UInt64
+    ) throws(WebInspectorModelContainerCoreError) {
+        guard !isConnectionCloseRequested, lifecycle == .open else {
+            throw .closed
+        }
+        let isActiveResource = activeAttachment.map {
+            $0.id == resourceID && $0.generation == generation
+        } ?? false
+        let isProvisionalResource = attachmentAttempts[generation]?
+            .provisionalResource?.id == resourceID
+        guard isActiveResource || isProvisionalResource else {
+            guard let activeGeneration = activeAttachment?.generation else {
+                throw .detached
+            }
+            throw .staleSynchronizationGeneration(
+                expected: activeGeneration,
+                actual: generation
+            )
+        }
+        precondition(
+            revision <= self.revision,
+            "A synchronization completion cannot acknowledge a future canonical revision."
+        )
+        precondition(
+            nextSynchronizationOrdinal < UInt64.max,
+            "Model Container exhausted synchronization cursor ordinals."
+        )
+        nextSynchronizationOrdinal += 1
+        let cursor = WebInspectorModelContainerSynchronizationCursor(
+            coreIdentity: identity,
+            attachmentGeneration: generation,
+            ordinal: nextSynchronizationOrdinal,
+            revision: revision
+        )
+        if let previous = latestSynchronizationCursorByGeneration[generation] {
+            precondition(
+                previous.ordinal < cursor.ordinal
+                    && previous.revision <= cursor.revision,
+                "Model Container synchronization cursors must advance monotonically."
+            )
+        }
+        latestSynchronizationCursorByGeneration[generation] = cursor
+
+        for waiterID in Array(synchronizationWaiters.keys) {
+            guard let state = synchronizationWaiters[waiterID] else {
+                continue
+            }
+            guard state.checkpoint.attachmentGeneration == generation,
+                state.checkpoint.ordinal < cursor.ordinal
+            else {
+                continue
+            }
+            synchronizationWaiters[waiterID] = nil
+            state.waiter.finish(.success(cursor))
+        }
+    }
+
+    func retireSynchronizationGeneration(
+        _ generation: WebInspectorContainerAttachmentGeneration,
+        with error: WebInspectorModelContainerCoreError
+    ) {
+        latestSynchronizationCursorByGeneration[generation] = nil
+        failSynchronizationWaiters(for: generation, with: error)
+    }
+
+    func retireAllSynchronizationGenerations(
+        with error: WebInspectorModelContainerCoreError
+    ) {
+        latestSynchronizationCursorByGeneration.removeAll(keepingCapacity: false)
+        failSynchronizationWaiters(with: error)
+    }
+
+    private func failSynchronizationWaiters(
+        for generation: WebInspectorContainerAttachmentGeneration? = nil,
+        with error: WebInspectorModelContainerCoreError
+    ) {
+        for waiterID in Array(synchronizationWaiters.keys) {
+            guard let state = synchronizationWaiters[waiterID] else {
+                continue
+            }
+            guard generation.map({
+                $0 == state.checkpoint.attachmentGeneration
+            }) ?? true else {
+                continue
+            }
+            synchronizationWaiters[waiterID] = nil
+            state.waiter.finish(.failure(error))
+        }
+    }
+}
+
+fileprivate final class WebInspectorModelContainerCoreIdentity: Sendable {}
 
 private final class WebInspectorModelContextAdmissionGate: Sendable {
     private enum State {
@@ -1562,5 +1778,81 @@ private final class WebInspectorModelContextAcknowledgementWaiter: Sendable {
                 return continuation
             }
         continuation?.resume(returning: .cancelled)
+    }
+}
+
+private final class WebInspectorModelContainerSynchronizationWaiter: Sendable {
+    private enum Delivery: Sendable {
+        case completed(
+            Result<
+                WebInspectorModelContainerSynchronizationCursor,
+                WebInspectorModelContainerCoreError
+            >
+        )
+        case cancelled
+    }
+
+    private struct State {
+        var delivery: Delivery?
+        var continuation: CheckedContinuation<Delivery, Never>?
+    }
+
+    private let state = Mutex(State())
+
+    func wait() async throws -> WebInspectorModelContainerSynchronizationCursor {
+        let delivery = await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                let immediate = state.withLock { state -> Delivery? in
+                    if let delivery = state.delivery {
+                        return delivery
+                    }
+                    precondition(
+                        state.continuation == nil,
+                        "A synchronization waiter supports one caller."
+                    )
+                    state.continuation = continuation
+                    return nil
+                }
+                if let immediate {
+                    continuation.resume(returning: immediate)
+                }
+            }
+        } onCancel: { [self] in
+            cancel()
+        }
+
+        switch delivery {
+        case let .completed(result):
+            return try result.get()
+        case .cancelled:
+            throw CancellationError()
+        }
+    }
+
+    func finish(
+        _ result: Result<
+            WebInspectorModelContainerSynchronizationCursor,
+            WebInspectorModelContainerCoreError
+        >
+    ) {
+        complete(.completed(result))
+    }
+
+    private func cancel() {
+        complete(.cancelled)
+    }
+
+    private func complete(_ delivery: Delivery) {
+        let continuation: CheckedContinuation<Delivery, Never>? =
+            state.withLock { state in
+                guard case nil = state.delivery else {
+                    return nil
+                }
+                state.delivery = delivery
+                let continuation = state.continuation
+                state.continuation = nil
+                return continuation
+            }
+        continuation?.resume(returning: delivery)
     }
 }

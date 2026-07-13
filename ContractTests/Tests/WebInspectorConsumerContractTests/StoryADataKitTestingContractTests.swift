@@ -22,31 +22,34 @@ func readyDataKitScenarioIsUsableFromAConsumerPackage() async throws {
         isolation: MainActor.shared
     )
 
-    let requests = try await runtime.model.networkRequests()
-    #expect(requests.items.map(\.url) == ["https://example.test/contract"])
-    let body = try await runtime.model.responseBody(for: requests.items[0])
-    #expect(body.text == "contract body")
-    let selected = try await runtime.selectElementWithPicker(
-        nodeID: "contract-button"
+    let entries = try await WebInspectorFetchedResultsController<NetworkEntry, Never>(
+        modelContext: runtime.model
     )
-    #expect(selected.localName == "button")
+    let entryID = try #require(entries.snapshot.itemIDs.first)
+    let entry = try #require(runtime.model.model(for: entryID))
+    let request = try #require(runtime.model.model(for: entry.primaryRequestID))
+    #expect(request.url == "https://example.test/contract")
+    let body = try await runtime.model.responseBody(for: request)
+    #expect(body.text == "contract body")
+    try await runtime.model.clearNetworkRequests()
+    #expect(entries.snapshot.itemIDs.isEmpty)
+
+    let nodes = try await WebInspectorFetchedResultsController<DOMNode, Never>(
+        modelContext: runtime.model
+    )
+    #expect(nodes.snapshot.itemIDs.contains { id in
+        runtime.model.model(for: id)?.localName == "button"
+    })
 
     try await runtime.replacePage(with: .init())
-    #expect(try runtime.model.rootDOMNode?.nodeName == "#document")
-    let selectedDocument = try await runtime.selectElementWithPicker(
-        nodeID: "document"
-    )
-    #expect(selectedDocument.nodeName == "#document")
-    do {
-        _ = try await runtime.selectElementWithPicker(nodeID: "missing")
-        Issue.record("Expected a missing picker fixture failure.")
-    } catch let error as WebInspectorDataKitTestRuntime.RuntimeError {
-        #expect(error == .selectedNodeMissing("missing"))
-    } catch {
-        Issue.record("Expected a DataKit testing runtime failure, got \(error).")
-    }
+    #expect(nodes.snapshot.itemIDs.count == 1)
+    let documentID = try #require(nodes.snapshot.itemIDs.first)
+    #expect(runtime.model.model(for: documentID)?.nodeName == "#document")
 
+    await nodes.close()
+    await entries.close()
     await runtime.close()
+    #expect(runtime.container.state == .closed)
     #expect(runtime.model.state == .closed)
 }
 
@@ -65,7 +68,7 @@ func dataKitScenarioCanInjectAnAttachmentFailure() async {
             isolation: MainActor.shared
         )
         Issue.record("Expected the scenario attachment to fail.")
-    } catch let failure as WebInspectorModelContext.Failure {
+    } catch let failure as WebInspectorModelContainer.Failure {
         guard case let .bootstrap(domain, message) = failure else {
             Issue.record("Expected a bootstrap failure, got \(failure).")
             return

@@ -63,6 +63,309 @@ func modelContainerOwnsAttachDetachAndTerminalClose() async throws {
     await proxyRuntime.finish()
 }
 
+@MainActor
+@Test
+func synchronizationCursorCompletesConcurrentAndLateWaitersAfterContextACK()
+    async throws
+{
+    let container = WebInspectorModelContainer(
+        configuration: .init(domains: [])
+    )
+    let context = container.mainContext
+    let proxyRuntime = try await ModelContainerProxyRuntime.start()
+    try await container.attach(owning: proxyRuntime.runtime.proxy)
+    let checkpoint = try await container.synchronizationCheckpoint()
+
+    let first = Task {
+        try await container.waitForSynchronization(after: checkpoint)
+    }
+    let second = Task {
+        try await container.waitForSynchronization(after: checkpoint)
+    }
+    await waitForSynchronizationWaiterCount(2, in: container.core)
+
+    try await commitReplacementPage(
+        using: proxyRuntime.runtime.peer,
+        oldTargetID: "page-main",
+        newTargetID: "page-replacement"
+    )
+    let firstCursor = try await first.value
+    let secondCursor = try await second.value
+    let synchronizedRevision = await container.core.currentRevision
+
+    #expect(firstCursor == secondCursor)
+    #expect(firstCursor != checkpoint)
+    #expect(
+        context.appliedContainerRevisionForTesting
+            == synchronizedRevision
+    )
+    #expect(
+        try await container.waitForSynchronization(after: checkpoint)
+            == firstCursor
+    )
+
+    await container.close()
+    await proxyRuntime.finish()
+}
+
+@Test
+func synchronizationCursorDoesNotAdvanceBeforeEveryContextAcknowledges()
+    async throws
+{
+    let container = WebInspectorModelContainer(
+        configuration: .init(domains: [])
+    )
+    let core = container.core
+    let proxyRuntime = try await ModelContainerProxyRuntime.start()
+    try await container.attach(owning: proxyRuntime.runtime.proxy)
+
+    let registration = try await core.registerContext()
+    #expect(registration.claimForMaterialization() == .admitted)
+    try await core.activateContext(registration.id)
+    var updates = registration.updates.makeAsyncIterator()
+    guard case let .initial(initialRevision, _) = await updates.next() else {
+        Issue.record("Expected current initial state.")
+        return
+    }
+    try await core.acknowledgeContext(
+        registration.id,
+        through: initialRevision
+    )
+
+    let acknowledgementGate = WebInspectorTestGate()
+    let didReceiveReplacement = AsyncStream<Void>.makeStream()
+    let didBlock = Mutex(false)
+    let contextDriver = Task.detached {
+        while let update = await updates.next() {
+            let revision: UInt64
+            switch update {
+            case let .initial(currentRevision, _):
+                revision = currentRevision
+            case let .changes(_, toRevision, _):
+                revision = toRevision
+            case let .resetRequired(_, token):
+                let rebase = try await core.rebaseContext(
+                    token,
+                    for: registration.id
+                )
+                revision = rebase.revision
+            }
+            let shouldBlock = didBlock.withLock { didBlock in
+                guard revision > initialRevision, !didBlock else {
+                    return false
+                }
+                didBlock = true
+                return true
+            }
+            if shouldBlock {
+                didReceiveReplacement.continuation.yield()
+                await acknowledgementGate.waiter.wait()
+            }
+            try await core.acknowledgeContext(
+                registration.id,
+                through: revision
+            )
+        }
+    }
+    var replacementIterator = didReceiveReplacement.stream.makeAsyncIterator()
+    let checkpoint = try await container.synchronizationCheckpoint()
+    let didFinishWait = Mutex(false)
+    let wait = Task {
+        let cursor = try await container.waitForSynchronization(
+            after: checkpoint
+        )
+        didFinishWait.withLock { $0 = true }
+        return cursor
+    }
+
+    try await commitReplacementPage(
+        using: proxyRuntime.runtime.peer,
+        oldTargetID: "page-main",
+        newTargetID: "page-replacement"
+    )
+    _ = await replacementIterator.next()
+    #expect(!didFinishWait.withLock { $0 })
+
+    acknowledgementGate.open()
+    #expect(try await wait.value != checkpoint)
+    _ = await core.unregisterContext(registration.id)
+    try await contextDriver.value
+    didReceiveReplacement.continuation.finish()
+
+    await container.close()
+    await proxyRuntime.finish()
+}
+
+@MainActor
+@Test
+func synchronizationWaitCancellationRemovesOnlyThatWaiter() async throws {
+    let container = WebInspectorModelContainer(
+        configuration: .init(domains: [])
+    )
+    let proxyRuntime = try await ModelContainerProxyRuntime.start()
+    try await container.attach(owning: proxyRuntime.runtime.proxy)
+    let checkpoint = try await container.synchronizationCheckpoint()
+    let cancelledWait = Task {
+        try await container.waitForSynchronization(after: checkpoint)
+    }
+    let survivingWait = Task {
+        try await container.waitForSynchronization(after: checkpoint)
+    }
+    await waitForSynchronizationWaiterCount(2, in: container.core)
+
+    cancelledWait.cancel()
+    await #expect(throws: CancellationError.self) {
+        try await cancelledWait.value
+    }
+    await waitForSynchronizationWaiterCount(1, in: container.core)
+    #expect(container.state == .attached)
+
+    try await commitReplacementPage(
+        using: proxyRuntime.runtime.peer,
+        oldTargetID: "page-main",
+        newTargetID: "page-replacement"
+    )
+    #expect(try await survivingWait.value != checkpoint)
+    #expect(await container.core.synchronizationWaiterCountForTesting == 0)
+
+    await container.close()
+    await proxyRuntime.finish()
+}
+
+@MainActor
+@Test
+func synchronizationWaitersFailOnDetachCloseAndFeedTerminal() async throws {
+    do {
+        let container = WebInspectorModelContainer(
+            configuration: .init(domains: [])
+        )
+        let proxyRuntime = try await ModelContainerProxyRuntime.start()
+        try await container.attach(owning: proxyRuntime.runtime.proxy)
+        let checkpoint = try await container.synchronizationCheckpoint()
+        let wait = Task {
+            try await container.waitForSynchronization(after: checkpoint)
+        }
+        await waitForSynchronizationWaiterCount(1, in: container.core)
+
+        await container.detach()
+        await #expect(
+            throws: WebInspectorModelContainerCoreError.detached
+        ) {
+            try await wait.value
+        }
+        await container.close()
+        await proxyRuntime.finish()
+    }
+
+    do {
+        let container = WebInspectorModelContainer(
+            configuration: .init(domains: [])
+        )
+        let proxyRuntime = try await ModelContainerProxyRuntime.start()
+        try await container.attach(owning: proxyRuntime.runtime.proxy)
+        let checkpoint = try await container.synchronizationCheckpoint()
+        let wait = Task {
+            try await container.waitForSynchronization(after: checkpoint)
+        }
+        await waitForSynchronizationWaiterCount(1, in: container.core)
+
+        await container.close()
+        await #expect(
+            throws: WebInspectorModelContainerCoreError.closed
+        ) {
+            try await wait.value
+        }
+        await proxyRuntime.finish()
+    }
+
+    do {
+        let container = WebInspectorModelContainer(
+            configuration: .init(domains: [])
+        )
+        let proxyRuntime = try await ModelContainerProxyRuntime.start()
+        try await container.attach(owning: proxyRuntime.runtime.proxy)
+        let checkpoint = try await container.synchronizationCheckpoint()
+        let wait = Task {
+            try await container.waitForSynchronization(after: checkpoint)
+        }
+        await waitForSynchronizationWaiterCount(1, in: container.core)
+
+        await proxyRuntime.runtime.peer.failConnection(
+            with: "injected terminal synchronization failure"
+        )
+        do {
+            _ = try await wait.value
+            Issue.record("Expected the feed-terminal wait to fail.")
+        } catch let error as WebInspectorModelContainerCoreError {
+            #expect(
+                error
+                    == .synchronizationFailed(
+                        .connection(
+                            .transport(
+                                "injected terminal synchronization failure"
+                            )
+                        )
+                    )
+            )
+        } catch {
+            Issue.record("Expected a synchronization error, got \(error).")
+        }
+        await container.close()
+        await proxyRuntime.finish()
+    }
+}
+
+@MainActor
+@Test
+func synchronizationCheckpointRejectsForeignAndStaleAttachments() async throws {
+    let firstContainer = WebInspectorModelContainer(
+        configuration: .init(domains: [])
+    )
+    let firstRuntime = try await ModelContainerProxyRuntime.start()
+    try await firstContainer.attach(owning: firstRuntime.runtime.proxy)
+    let firstCheckpoint = try await firstContainer
+        .synchronizationCheckpoint()
+
+    let foreignContainer = WebInspectorModelContainer(
+        configuration: .init(domains: [])
+    )
+    let foreignRuntime = try await ModelContainerProxyRuntime.start()
+    try await foreignContainer.attach(owning: foreignRuntime.runtime.proxy)
+    await #expect(
+        throws:
+            WebInspectorModelContainerCoreError
+            .foreignSynchronizationCheckpoint
+    ) {
+        try await foreignContainer.waitForSynchronization(
+            after: firstCheckpoint
+        )
+    }
+
+    let replacementRuntime = try await ModelContainerProxyRuntime.start()
+    try await firstContainer.attach(owning: replacementRuntime.runtime.proxy)
+    do {
+        _ = try await firstContainer.waitForSynchronization(
+            after: firstCheckpoint
+        )
+        Issue.record("Expected the retired attachment checkpoint to be stale.")
+    } catch let error as WebInspectorModelContainerCoreError {
+        guard case let .staleSynchronizationGeneration(expected, actual) = error
+        else {
+            Issue.record("Expected a stale generation error, got \(error).")
+            return
+        }
+        #expect(expected != actual)
+    } catch {
+        Issue.record("Expected a synchronization error, got \(error).")
+    }
+
+    await firstContainer.close()
+    await foreignContainer.close()
+    await firstRuntime.finish()
+    await foreignRuntime.finish()
+    await replacementRuntime.finish()
+}
+
 @Test
 func concurrentAttachKeepsOnlyTheNewestIntentAndClosesTheOlderProxy()
     async throws
@@ -301,25 +604,45 @@ func nativeCreationFailurePreservesThePreviouslyAdoptedAttachment()
     )
     let proxyRuntime = try await ModelContainerProxyRuntime.start()
     try await container.attach(owning: proxyRuntime.runtime.proxy)
+    let activeCheckpoint = try await container.synchronizationCheckpoint()
 
     let attempt = try await container.core.reserveAttachmentAttempt()
+    let creationStarted = AsyncStream<Void>.makeStream()
+    var creationStartedIterator = creationStarted.stream.makeAsyncIterator()
+    let failureGate = WebInspectorTestGate()
     let nativeTask = Task<WebInspectorProxy, any Error> {
         try await attempt.waitForNativeCreationStart()
         try await container.core.beginNativeProxyCreation(for: attempt)
+        creationStarted.continuation.yield()
+        await failureGate.waiter.wait()
         throw WebInspectorProxyError.attachFailed("replacement failed")
     }
     await container.core.installNativeProxyCreationTask(
         nativeTask,
         for: attempt
     )
+    let replacement = Task {
+        try await container.core.completeAttachmentAttempt(attempt)
+    }
+    _ = await creationStartedIterator.next()
+    #expect(
+        try await container.synchronizationCheckpoint()
+            == activeCheckpoint
+    )
+    failureGate.open()
     await #expect(
         throws: WebInspectorModelContainer.Failure.connection(
             .transport("replacement failed")
         )
     ) {
-        try await container.core.completeAttachmentAttempt(attempt)
+        try await replacement.value
     }
+    creationStarted.continuation.finish()
     #expect(container.state == .attached)
+    #expect(
+        try await container.synchronizationCheckpoint()
+            == activeCheckpoint
+    )
 
     await container.close()
     await proxyRuntime.finish()
@@ -720,4 +1043,40 @@ func modelContainerAttachWaitsForCapturedContextAcknowledgement() async throws {
     try await contextDriver.value
     receivedUpdate.continuation.finish()
     await proxyRuntime.finish()
+}
+
+private func commitReplacementPage(
+    using peer: WebInspectorTestPeer,
+    oldTargetID: String,
+    newTargetID: String
+) async throws {
+    try await peer.createTarget(.init(
+        id: newTargetID,
+        type: "page",
+        frameID: "replacement-frame",
+        isProvisional: true
+    ))
+    try await peer.commitProvisionalTarget(
+        from: oldTargetID,
+        to: newTargetID
+    )
+}
+
+private func waitForSynchronizationWaiterCount(
+    _ expectedCount: Int,
+    in core: WebInspectorModelContainerCore,
+    sourceLocation: SourceLocation = #_sourceLocation
+) async {
+    for _ in 0..<1_000 {
+        if await core.synchronizationWaiterCountForTesting
+            == expectedCount
+        {
+            return
+        }
+        await Task.yield()
+    }
+    Issue.record(
+        "The synchronization waiter count did not reach \(expectedCount).",
+        sourceLocation: sourceLocation
+    )
 }

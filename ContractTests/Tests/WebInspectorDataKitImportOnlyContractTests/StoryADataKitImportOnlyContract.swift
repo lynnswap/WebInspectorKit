@@ -32,7 +32,7 @@ private actor DataKitImportOnlyActor {
         _ = try context.isElementPickerEnabled
         _ = try context.runtimeContexts.first?.name
 
-        await context.clearNetworkRequests()
+        try await context.clearNetworkRequests()
         let treeController = try context.domTree
         let treeSnapshot: DOMTreeSnapshot = treeController.snapshot
         _ = treeSnapshot.rootNodeID

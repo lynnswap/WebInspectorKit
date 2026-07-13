@@ -1622,8 +1622,8 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
                         for: registrationID
                     )
                     precondition(
-                        latestRevision == rebase.revision,
-                        "A container rebase changed its advertised canonical revision."
+                        latestRevision <= rebase.revision,
+                        "A container rebase cannot precede its advertised canonical revision."
                     )
                     switch rebase.disposition {
                     case .initial:
@@ -1637,8 +1637,8 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
                         )
                     case .reset:
                         precondition(
-                            appliedRevision != nil,
-                            "A context cannot reset before establishing initial schema state."
+                            appliedRevision.map { $0 < rebase.revision } == true,
+                            "A context reset must advance established schema state."
                         )
                         transaction = schemaCore.reset(
                             at: rebase.revision,

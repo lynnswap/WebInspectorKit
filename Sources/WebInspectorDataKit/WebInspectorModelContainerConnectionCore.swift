@@ -480,6 +480,7 @@ package extension WebInspectorModelContainerCore {
         }
 
         isConnectionCloseRequested = true
+        retireAllSynchronizationGenerations(with: .closed)
         connectionStatePublication.publish(.closing)
         for state in attachmentAttempts.values {
             state.attempt.control.invalidate(.closed)
@@ -587,6 +588,15 @@ package extension WebInspectorModelContainerCore {
             guard state.provisionalResource?.id == resourceID else {
                 continue
             }
+            guard let generation = state.provisionalResource?.generation else {
+                preconditionFailure(
+                    "A matched provisional feed resource lost its attachment generation."
+                )
+            }
+            retireSynchronizationGeneration(
+                generation,
+                with: .synchronizationFailed(failure)
+            )
             state.provisionalResource?.synchronization.fulfill(
                 .failure(failure)
             )
@@ -708,6 +718,12 @@ private extension WebInspectorModelContainerCore {
         guard activeAttachment?.id == resourceID else {
             turn.finish()
             return
+        }
+        if let generation = activeAttachment?.generation {
+            retireSynchronizationGeneration(
+                generation,
+                with: .synchronizationFailed(failure)
+            )
         }
         let cleanupFailure = await webInspectorRunIgnoringCancellation {
             await self.detachCurrentAttachment(skipSupervisorWait: true)
@@ -877,6 +893,11 @@ private extension WebInspectorModelContainerCore {
                 )
                 if let barrier = application.synchronizationBarrier {
                     try await core.waitForAcknowledgements(barrier)
+                    try await core.recordSynchronizationCompletion(
+                        resourceID: resourceID,
+                        generation: generation,
+                        through: barrier.revision
+                    )
                     synchronization.fulfill(
                         .success(barrier.revision)
                     )
@@ -935,6 +956,13 @@ private extension WebInspectorModelContainerCore {
             resource = activeAttachment
             activeAttachment = nil
         }
+
+        retireSynchronizationGeneration(
+            attempt.generation,
+            with: .synchronizationFailed(
+                Self.mapConnectionFailure(operationError)
+            )
+        )
 
         var cleanupFailure: WebInspectorModelContainer.Failure?
         if let resource {
@@ -1020,6 +1048,12 @@ private extension WebInspectorModelContainerCore {
         skipSupervisorWait: Bool
     ) async -> WebInspectorModelContainer.Failure? {
         let resource = activeAttachment
+        if let generation = resource?.generation {
+            retireSynchronizationGeneration(
+                generation,
+                with: .detached
+            )
+        }
         activeAttachment = nil
         let resetFailure = await resetCanonicalStateForDetach()
         let resourceFailure: WebInspectorModelContainer.Failure?

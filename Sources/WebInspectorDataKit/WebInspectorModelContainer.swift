@@ -251,6 +251,18 @@ public final class WebInspectorModelContainer: Equatable, Sendable {
         try await core.attach(owning: proxy)
     }
 
+    package func synchronizationCheckpoint() async throws
+        -> WebInspectorModelContainerSynchronizationCursor
+    {
+        try await core.synchronizationCheckpoint()
+    }
+
+    package func waitForSynchronization(
+        after checkpoint: WebInspectorModelContainerSynchronizationCursor
+    ) async throws -> WebInspectorModelContainerSynchronizationCursor {
+        try await core.waitForSynchronization(after: checkpoint)
+    }
+
     /// Creates an independently owned context on the caller's actor.
     public func makeContext(
         isolation: isolated (any Actor) = #isolation

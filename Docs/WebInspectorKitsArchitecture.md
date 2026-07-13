@@ -1938,16 +1938,31 @@ let runtime = try await WebInspectorDataKitTestRuntime.start(
     )
 )
 
-let selected = try await runtime.selectElementWithPicker(nodeID: "button")
+let nodes = try await WebInspectorFetchedResultsController<DOMNode, Never>(
+    modelContext: runtime.model
+)
+precondition(nodes.snapshot.itemIDs.contains { id in
+    runtime.model.model(for: id)?.localName == "button"
+})
 try await runtime.replacePage(with: .init())
+await nodes.close()
 await runtime.close()
 ```
 
 The scenario driver replies to the configured domain bootstrap, emits replay
 before the matching enable reply, and fails unknown commands immediately. Raw
 wire tests remain in ProxyKitTesting; DataKitTesting is the ready-model consumer
-contract. The runtime and model inherit the actor supplied to `start`, while
+contract. The runtime owns a production `WebInspectorModelContainer`, and its
+container-vended model context inherits the actor supplied to `start`, while
 fixture values are Sendable.
+
+Target replacement takes an opaque, attachment-scoped synchronization
+checkpoint before emitting raw target events. The Container Core advances that
+cursor only after the feed's synchronization marker and every captured Context
+acknowledgement complete. Fetched-results snapshots validate the expected DOM
+and Network membership after that boundary; presentation changes are not the
+replacement-completion signal. Detach, close, feed failure, or attachment
+generation replacement terminates waiters for the retired generation.
 
 ## Isolation and Deterministic Teardown
 
@@ -2243,9 +2258,10 @@ Tests are added before each owner is replaced. Required cases:
     machine without a root/task cycle.
 33. UI presentation retirement awaits picker/highlight cleanup, preserves the
    model connection when configured not to detach, and reports cleanup failure.
-34. DataKitTesting creates a ready model context, seeds replay, emits picker and
-   target-replacement events, injects attach failure, and closes
-   deterministically without raw startup scripting.
+34. DataKitTesting owns a production model container and a container-vended
+   context, drives replay and target replacement through a concrete raw peer,
+   injects attach failure, and closes deterministically without a semantic
+   seed path.
 35. Existing DOM and Network UIKit behavior, including snapshot-plus-delta
     collection topology, reveal intent, selection, editing, and lazy body
     loading, remains covered.
