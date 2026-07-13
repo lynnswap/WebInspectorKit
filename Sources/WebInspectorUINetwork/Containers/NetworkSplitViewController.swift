@@ -93,47 +93,4 @@ private final class NetworkListColumnNavigationController: UINavigationControlle
     }
 }
 
-#Preview("Network Split") {
-    NetworkPreviewFixtures.makeViewController(mode: .detail) { model in
-        NetworkCompactNavigationController(
-            model: model,
-            listViewController: NetworkListViewController(model: model),
-            detailViewController: NetworkDetailViewController(model: model)
-        )
-    }
-}
-
-#Preview("Network Split Log Preview") {
-    makeNetworkSplitPreviewController(
-        initialMode: .preview,
-        selectedDisplayName: "log"
-    )
-}
-
-@MainActor
-private func makeNetworkSplitPreviewController(
-    initialMode: NetworkDetailViewController.Mode = .headers,
-    selectedDisplayName: String? = nil
-) -> UIViewController {
-    NetworkPreviewFixtures.makeViewController(mode: .detail) { model in
-        if let selectedDisplayName,
-           let entryID = model.entries.snapshot.itemIDs.first(where: { entryID in
-               guard let entry = model.context.model(for: entryID),
-                     let request = model.context.model(for: entry.primaryRequestID) else {
-                   return false
-               }
-               return request.displayName == selectedDisplayName
-           }) {
-            model.selectEntry(entryID)
-        }
-        return NetworkCompactNavigationController(
-            model: model,
-            listViewController: NetworkListViewController(model: model),
-            detailViewController: NetworkDetailViewController(
-                model: model,
-                initialMode: initialMode
-            )
-        )
-    }
-}
 #endif

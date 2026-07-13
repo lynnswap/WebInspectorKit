@@ -988,19 +988,4 @@ extension NetworkListViewController {
 }
 #endif
 
-#Preview("Network List") {
-    NetworkPreviewFixtures.makeViewController(mode: .root) { model in
-        UINavigationController(
-            rootViewController: NetworkListViewController(model: model)
-        )
-    }
-}
-
-#Preview("Network List Long Title") {
-    NetworkPreviewFixtures.makeViewController(mode: .rootLongTitle) { model in
-        UINavigationController(
-            rootViewController: NetworkListViewController(model: model)
-        )
-    }
-}
 #endif

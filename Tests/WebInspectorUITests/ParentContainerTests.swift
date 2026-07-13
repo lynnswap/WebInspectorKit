@@ -668,15 +668,6 @@ struct ParentContainerTests {
     }
 
     @Test
-    func viewControllerPreviewSessionInjectsMockDOMAndNetworkModels() async throws {
-        let session = WebInspectorViewControllerPreviewFixtures.makeSession()
-        let model = try await NetworkPanelModel.make(context: session.model)
-
-        #expect(try session.model.rootDOMNode?.nodeName == "#document")
-        #expect(model.entries.snapshot.itemIDs.count >= 2)
-    }
-
-    @Test
     func displayProjectionKeepsCompactElementTabAndRegularCombinedDOM() {
         let tabs: [WebInspectorTab] = [.dom, .network]
         let projection = WebInspectorTab.DisplayProjection()

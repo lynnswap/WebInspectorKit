@@ -167,6 +167,17 @@ let package = Package(
             swiftSettings: strictSwiftSettings
         ),
         .target(
+            name: "WebInspectorUIPreviews",
+            dependencies: [
+                "WebInspectorDataKit",
+                "WebInspectorDataKitTesting",
+                "WebInspectorProxyKit",
+                "WebInspectorUINetwork",
+                "WebInspectorUISyntaxBody",
+            ],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
             name: "WebInspectorKit",
             dependencies: [
                 "WebInspectorUI",
@@ -216,6 +227,7 @@ let package = Package(
                 "WebInspectorUINetwork",
                 "WebInspectorUISyntaxBody",
                 "WebInspectorUI",
+                "WebInspectorUIPreviews",
                 "WebInspectorTestSupport",
                 .product(name: "SyntaxEditorUI", package: "SyntaxEditorUI", condition: .when(platforms: [.iOS]))
             ],
