@@ -146,7 +146,10 @@ func supersededNativeSuccessClosesItsAttemptOwnedProxyExactlyOnce() async throws
             closeCount.withLock { $0 += 1 }
         }
     )
-    let core = WebInspectorModelContainerCore(configuredDomains: [])
+    let core = WebInspectorModelContainerCore(
+        configuredDomains: [],
+        modelSchemaRegistry: WebInspectorModelSchemaRegistry([])
+    )
     let first = try await core.reserveAttachmentAttempt()
     let nativeTask = Task<WebInspectorProxy, any Error> {
         proxy
@@ -179,7 +182,10 @@ func supersededNativeSuccessClosesItsAttemptOwnedProxyExactlyOnce() async throws
 func detachBeforeNativeTaskInstallCancelsBeforeCreationAndWaitsForQuiescence()
     async throws
 {
-    let core = WebInspectorModelContainerCore(configuredDomains: [])
+    let core = WebInspectorModelContainerCore(
+        configuredDomains: [],
+        modelSchemaRegistry: WebInspectorModelSchemaRegistry([])
+    )
     let attempt = try await core.reserveAttachmentAttempt()
     let nativeCreationStarted = Mutex(false)
     let proxy = WebInspectorProxy(localStateOnly: ())
@@ -217,7 +223,10 @@ func detachBeforeNativeTaskInstallCancelsBeforeCreationAndWaitsForQuiescence()
 func closeBeforeNativeTaskInstallCancelsBeforeCreationAndWaitsForQuiescence()
     async throws
 {
-    let core = WebInspectorModelContainerCore(configuredDomains: [])
+    let core = WebInspectorModelContainerCore(
+        configuredDomains: [],
+        modelSchemaRegistry: WebInspectorModelSchemaRegistry([])
+    )
     let attempt = try await core.reserveAttachmentAttempt()
     let nativeCreationStarted = Mutex(false)
     let proxy = WebInspectorProxy(localStateOnly: ())
@@ -254,7 +263,10 @@ func closeBeforeNativeTaskInstallCancelsBeforeCreationAndWaitsForQuiescence()
 func nativeCreationFailureWithoutAnAdoptedProxyPublishesFailedThenDetaches()
     async throws
 {
-    let core = WebInspectorModelContainerCore(configuredDomains: [])
+    let core = WebInspectorModelContainerCore(
+        configuredDomains: [],
+        modelSchemaRegistry: WebInspectorModelSchemaRegistry([])
+    )
     let attempt = try await core.reserveAttachmentAttempt()
     let nativeTask = Task<WebInspectorProxy, any Error> {
         try await attempt.waitForNativeCreationStart()

@@ -316,6 +316,10 @@ package struct WebInspectorModelSchemaRegistry: Sendable {
         Set(definitions.map(\.modelTypeID))
     }
 
+    package var configuredModelTypeIDsInOrder: [ObjectIdentifier] {
+        definitions.map(\.modelTypeID)
+    }
+
     package init(
         _ registrations: [WebInspectorModelSchemaRegistration]
     ) {

@@ -189,9 +189,13 @@ public final class WebInspectorModelContainer: Equatable, Sendable {
         let normalizedConfiguration = Configuration(
             domains: configuration.domains
         )
+        let modelDomains = normalizedConfiguration.modelDomains
         self.configuration = normalizedConfiguration
         core = WebInspectorModelContainerCore(
-            configuredDomains: normalizedConfiguration.modelDomains
+            configuredDomains: modelDomains,
+            modelSchemaRegistry: WebInspectorModelSchemaInventory.registry(
+                configuredDomains: modelDomains
+            )
         )
     }
 

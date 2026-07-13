@@ -363,25 +363,15 @@ func releasedCustomContextUnregistersItsSubscription() async throws {
 @MainActor
 @Test
 func canonicalNetworkClearReturnsAfterTwoActiveContextsApplyTheDeletion() async throws {
-    let core = WebInspectorModelContainerCore(
-        configuredDomains: [.network],
-        modelSchemaRegistry: WebInspectorModelSchemaRegistry(
-            WebInspectorNetworkModelSchemas.registrations
-        )
+    let container = WebInspectorModelContainer(
+        configuration: .init(domains: [.network])
     )
-    let firstContext = WebInspectorModelContext.mainContext(
-        for: core,
+    let core = container.core
+    let firstContext = container.mainContext
+    let secondContext = try await container.makeContext(
         isolation: MainActor.shared
     )
-    let secondRegistration = try await core.registerContext()
-    let secondContextCandidate = WebInspectorModelContext.customContext(
-        for: core,
-        registration: secondRegistration,
-        isolation: MainActor.shared
-    )
-    let secondContext = try #require(secondContextCandidate)
     try await firstContext.waitUntilContainerReady()
-    try await secondContext.waitUntilContainerReady()
 
     let attachment = WebInspectorContainerAttachmentGeneration(rawValue: 1)
     let generation = WebInspectorPage.Generation(rawValue: 1)
@@ -456,6 +446,7 @@ func canonicalNetworkClearReturnsAfterTwoActiveContextsApplyTheDeletion() async 
     #expect(firstEntryID == secondEntryID)
     let firstEntry = try #require(firstContext.model(for: firstEntryID))
     let secondEntry = try #require(secondContext.model(for: secondEntryID))
+    #expect(firstEntry !== secondEntry)
 
     try await firstContext.clearNetworkRequests()
 
@@ -469,8 +460,8 @@ func canonicalNetworkClearReturnsAfterTwoActiveContextsApplyTheDeletion() async 
 
     await firstController.close()
     await secondController.close()
-    await firstContext.close()
     await secondContext.close()
+    await container.close()
 }
 
 @MainActor

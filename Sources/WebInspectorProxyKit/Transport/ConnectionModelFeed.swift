@@ -22,7 +22,7 @@ package enum ModelDomain: Hashable, Sendable {
         acquisitionOrder.filter(domains.contains)
     }
 
-    static func normalized(
+    package static func normalized(
         _ domains: Set<ModelDomain>
     ) -> Set<ModelDomain> {
         guard domains.contains(.css) else {

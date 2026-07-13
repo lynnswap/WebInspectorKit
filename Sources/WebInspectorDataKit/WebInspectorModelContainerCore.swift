@@ -269,8 +269,7 @@ package actor WebInspectorModelContainerCore {
     package init(
         storeID: WebInspectorContainerStoreID = WebInspectorContainerStoreID(),
         configuredDomains: Set<ModelDomain>,
-        modelSchemaRegistry: WebInspectorModelSchemaRegistry =
-            WebInspectorModelSchemaRegistry([]),
+        modelSchemaRegistry: WebInspectorModelSchemaRegistry,
         connectionStatePublication:
             WebInspectorModelContainerStatePublication =
             WebInspectorModelContainerStatePublication()

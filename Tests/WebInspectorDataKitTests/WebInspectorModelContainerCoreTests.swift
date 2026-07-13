@@ -18,7 +18,8 @@ private struct ModelContainerCoreFixture {
 
     init(domains: Set<ModelDomain> = [.network]) {
         core = WebInspectorModelContainerCore(
-            configuredDomains: domains
+            configuredDomains: domains,
+            modelSchemaRegistry: WebInspectorModelSchemaRegistry([])
         )
     }
 
@@ -115,7 +116,8 @@ private func registerActiveContext(
 @Test
 func modelContainerCoreInstallsOneStableInactiveMainContextSeed() async throws {
     let core = WebInspectorModelContainerCore(
-        configuredDomains: [.network]
+        configuredDomains: [.network],
+        modelSchemaRegistry: WebInspectorModelSchemaRegistry([])
     )
     let seed = core.mainContextSeed
     let sameSeed = core.mainContextSeed
@@ -206,7 +208,8 @@ func modelContainerCoreClaimedSeedIsCapturedBeforeActorActivation() async throws
 @Test
 func modelContainerCoreCloseWinsAnUnclaimedCustomReservation() async throws {
     let core = WebInspectorModelContainerCore(
-        configuredDomains: [.network]
+        configuredDomains: [.network],
+        modelSchemaRegistry: WebInspectorModelSchemaRegistry([])
     )
     let reservation = try await core.registerContext()
     #expect(await core.metrics.activeContextRegistrationCount == 0)
@@ -222,7 +225,8 @@ func modelContainerCoreCloseWinsAnUnclaimedCustomReservation() async throws {
 @Test
 func modelContainerCoreClaimWinsCloseAndRequiresSupervisorCompletion() async throws {
     let core = WebInspectorModelContainerCore(
-        configuredDomains: [.network]
+        configuredDomains: [.network],
+        modelSchemaRegistry: WebInspectorModelSchemaRegistry([])
     )
     let registration = try await core.registerContext()
     #expect(registration.claimForMaterialization() == .admitted)
@@ -249,7 +253,8 @@ func modelContainerCoreClaimWinsCloseAndRequiresSupervisorCompletion() async thr
 @Test
 func modelContainerCoreCloseWaitsForTheDriverSupervisorAcknowledgement() async throws {
     let core = WebInspectorModelContainerCore(
-        configuredDomains: [.network]
+        configuredDomains: [.network],
+        modelSchemaRegistry: WebInspectorModelSchemaRegistry([])
     )
     let registration = try await registerActiveContext(core)
     let consumedInitial = AsyncStream<Void>.makeStream()
@@ -279,7 +284,8 @@ func modelContainerCoreCloseWaitsForTheDriverSupervisorAcknowledgement() async t
 @Test
 func modelContainerCoreCancelledFinishCloseCanRetryTheSameTransaction() async throws {
     let core = WebInspectorModelContainerCore(
-        configuredDomains: [.network]
+        configuredDomains: [.network],
+        modelSchemaRegistry: WebInspectorModelSchemaRegistry([])
     )
     let registration = try await registerActiveContext(core)
     var iterator = registration.updates.makeAsyncIterator()
@@ -377,7 +383,8 @@ func modelContainerCoreCloseSupersedesAnOutstandingRebase() async throws {
 @Test
 func modelContainerCoreAbandonsAFailedCustomConstruction() async throws {
     let core = WebInspectorModelContainerCore(
-        configuredDomains: [.network]
+        configuredDomains: [.network],
+        modelSchemaRegistry: WebInspectorModelSchemaRegistry([])
     )
     let registration = try await core.registerContext()
 
@@ -1016,7 +1023,8 @@ func modelContainerCoreTerminalCloseFinishesStreamsAndRejectsNewWork() async thr
 @Test
 func modelContainerCoreCloseReleasesDetachedAllDomainStorage() async throws {
     let core = WebInspectorModelContainerCore(
-        configuredDomains: [.dom, .network, .console, .runtime, .css]
+        configuredDomains: [.dom, .network, .console, .runtime, .css],
+        modelSchemaRegistry: WebInspectorModelSchemaRegistry([])
     )
 
     let close = await core.beginClose()
@@ -1207,7 +1215,8 @@ func modelContainerCoreFastSubscriberConsumesTenThousandDeltasWithoutSnapshots()
     func modelContainerCoreSeedRejectsASecondMaterializationOwner() async {
         await #expect(processExitsWith: .failure) {
             let core = WebInspectorModelContainerCore(
-                configuredDomains: [.network]
+                configuredDomains: [.network],
+                modelSchemaRegistry: WebInspectorModelSchemaRegistry([])
             )
             let seed = core.mainContextSeed
             _ = seed.claimForMaterialization()
@@ -1219,7 +1228,8 @@ func modelContainerCoreFastSubscriberConsumesTenThousandDeltasWithoutSnapshots()
     func modelContainerCoreRegistrationSequenceRejectsASecondIterator() async {
         await #expect(processExitsWith: .failure) {
             let core = WebInspectorModelContainerCore(
-                configuredDomains: [.network]
+                configuredDomains: [.network],
+                modelSchemaRegistry: WebInspectorModelSchemaRegistry([])
             )
             let registration = try await core.registerContext()
             let copy = registration.updates

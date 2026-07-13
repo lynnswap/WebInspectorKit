@@ -309,10 +309,7 @@ package struct WebInspectorCanonicalModelStore: Sendable {
         configuredDomains: Set<ModelDomain>
     ) {
         self.storeID = storeID
-        var normalizedDomains = configuredDomains
-        if normalizedDomains.contains(.css) {
-            normalizedDomains.insert(.dom)
-        }
+        let normalizedDomains = ModelDomain.normalized(configuredDomains)
         self.configuredDomains = normalizedDomains
         binding = nil
         lastResetScope = nil
