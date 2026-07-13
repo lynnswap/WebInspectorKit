@@ -1,6 +1,7 @@
 # WebInspector model container and context architecture
 
 - Status: approved design gate (2026-07-12)
+- Completion amendment: big-bang legacy removal approved (2026-07-13)
 - Scope amendment: navigation and DOM-binding epochs separated (2026-07-12)
 - Lifecycle amendment: stable container owns attach/detach/reattach (2026-07-12)
 - Baseline branch: `codex/network-grouped-entries`
@@ -32,6 +33,12 @@ This is a breaking migration. Repository consumers move to the new API in the
 same branch. The migration does not retain the current exclusive-context path,
 domain-specific fetched-results path, or section-as-Network-row path as
 compatibility layers.
+
+The completion migration is atomic at the repository boundary. The direct
+Context attachment/feed path, legacy stores and identifiers, Context connection
+state, dual UIKit initializers, and production preview fixtures are removed in
+the same migration series. A build-green compatibility branch inside
+`WebInspectorModelContext` is not an accepted intermediate architecture.
 
 ## Scope contract
 
@@ -293,6 +300,13 @@ learn about persistent models or queries.
 | Selection | UIKit panel/navigation model | Stores stable `NetworkEntry.ID`, never a section wrapper. |
 | Element-picker operation | container command gateway plus the UI-owned operation Task | The Core owns the command lease; the UI derives presentation state from its one operation instead of storing lifecycle in the Context. |
 | Rendering | UIKit controllers/views | Resolves IDs, observes models, installs native artifacts. |
+
+The owner-delivery endpoint is not another actor and owns no work. It is the
+single audited dynamic hop required because a Context may belong to any caller
+actor. It retains no Proxy, task, lifecycle state, command lease, query state,
+or model state. Container and Context Core actors prepare Sendable values; the
+endpoint only invokes a closed set of owner operations on the actor that owns
+the Context.
 
 `WebInspectorModelContainerCore` is the single cross-domain canonical actor.
 There is no additional Network/Console/DOM store actor and no second canonical
@@ -754,6 +768,8 @@ public final class WebInspectorModelContainer: Equatable, Sendable {
 }
 
 public final class WebInspectorModelContext: Equatable, SendableMetatype {
+    public nonisolated let container: WebInspectorModelContainer
+
     public nonisolated static func == (
         lhs: WebInspectorModelContext,
         rhs: WebInspectorModelContext
@@ -808,6 +824,25 @@ unavailable `Sendable` conformance gives the same explicit diagnostic shape as
 SwiftData. The instance remains in the caller isolation supplied to the
 container factory; its internal context core and record cache are separate
 Sendable owners.
+
+Like SwiftData's `ModelContext.container`, `WebInspectorModelContext.container`
+identifies the stack owner that vended the Context. The public Container keeps
+only a weak main-context cache, while each live Context strongly retains its
+Container. This avoids a Container/MainContext retain cycle and preserves one
+main-context instance for as long as any consumer retains it.
+
+Every async Context resource or command API follows one three-phase contract:
+
+1. On the Context owner actor, validate context-local identity, create an
+   immutable command intent and operation token, and publish any loading phase.
+2. Await Container Core command admission and ProxyKit work using only Sendable
+   values. The caller actor is suspended; it does not perform that work.
+3. Back on the same Context owner actor, revalidate the token and identity, then
+   apply the result to context-local Observable resources.
+
+An actor gate must not execute an arbitrary async closure that captures a
+Context model. Serialization and coalescing belong to the Container command
+gateway; owner model mutation remains an explicit Context operation.
 
 `fetchIdentifiers(_:)` evaluates one immutable query-value snapshot entirely
 in the context core and does not materialize Observable models.
