@@ -2845,6 +2845,7 @@ package actor ConnectionCore {
             return false
         }
         reevaluateModelCommandReadinessWaiters()
+        startCSSBootstrapIfNeeded()
         return isOpen
     }
 
@@ -3622,6 +3623,12 @@ package actor ConnectionCore {
             capabilities.states[key] = capability
             return
         }
+        if key.domain == .css,
+           cssRequiresModelSnapshot(capability),
+           !domBootstrapCanOwnCSSSnapshot() {
+            capabilities.states[key] = capability
+            return
+        }
 
         switch capability.physical {
         case .inactive where capability.desiredCount > 0:
@@ -3954,6 +3961,23 @@ package actor ConnectionCore {
         startCSSBootstrapIfNeeded()
     }
 
+    private func domBootstrapCanOwnCSSSnapshot() -> Bool {
+        guard let registration = modelFeed,
+              let domBootstrap = registration.domBootstrap,
+              domBootstrap.generation == currentPageGeneration,
+              !domBootstrap.needsCompletionMarker else {
+            return false
+        }
+        return domBootstrap.orderedTargetIDs.allSatisfy { targetID in
+            guard let target = domBootstrap.targetsByID[targetID] else {
+                preconditionFailure(
+                    "A CSS bootstrap prerequisite lost its DOM target state."
+                )
+            }
+            return target.completedEpoch == modelDOMBindingEpoch(for: targetID)
+        }
+    }
+
     private func startCSSBootstrapIfNeeded() {
         guard isOpen,
               let registration = modelFeed,
@@ -3961,6 +3985,9 @@ package actor ConnectionCore {
               bootstrap.generation == currentPageGeneration,
               bootstrap.needsSnapshot,
               bootstrap.activeOperation == nil else {
+            return
+        }
+        guard domBootstrapCanOwnCSSSnapshot() else {
             return
         }
         switch registration.lifecycle {
@@ -3978,14 +4005,28 @@ package actor ConnectionCore {
               capability.desiredLeaseOwners.contains(
                   .modelFeed(registration.id, .css)
               ),
-              case .enabled(currentPageGeneration) = capability.physical else {
+              capabilityDependenciesAreEnabled(
+                  for: key,
+                  generation: currentPageGeneration
+              ) else {
             return
         }
-        startCSSCapabilitySnapshot(
-            for: key,
-            generation: currentPageGeneration,
-            ensuringEnabled: false
-        )
+        switch capability.physical {
+        case .inactive, .unknown:
+            startCSSCapabilitySnapshot(
+                for: key,
+                generation: currentPageGeneration,
+                ensuringEnabled: true
+            )
+        case .replayRequired, .enabled:
+            startCSSCapabilitySnapshot(
+                for: key,
+                generation: currentPageGeneration,
+                ensuringEnabled: false
+            )
+        case .enabling, .disabling:
+            return
+        }
     }
 
     private func finishCSSBootstrapOperation(
@@ -5111,6 +5152,10 @@ package actor ConnectionCore {
             reservedEventSequence: eventSequence
         )
         await completeEventEmissionEffects(emission)
+        finalizeCSSStyleSheetRegistryMutation(
+            method: method,
+            paramsData: parsed.paramsData
+        )
         guard isOpen else {
             return
         }
@@ -5184,6 +5229,10 @@ package actor ConnectionCore {
             paramsData: parsed.paramsData
         )
         await completeEventEmissionEffects(emission)
+        finalizeCSSStyleSheetRegistryMutation(
+            method: method,
+            paramsData: parsed.paramsData
+        )
     }
 
     private func resolve(
@@ -6516,13 +6565,45 @@ package actor ConnectionCore {
                 )
             }
         case "CSS.styleSheetRemoved":
-            guard let params = try? TransportMessageParser.decode(CSSStyleSheetIDParams.self, from: paramsData) else {
-                return
-            }
-            styleSheetRouting.remove(styleSheetID: params.styleSheetID)
+            // Removal is finalized after event projection. The registry is
+            // the authority that distinguishes a current-document delta from
+            // a late notification for a stylesheet retired by a newer
+            // authoritative snapshot.
+            return
         default:
             return
         }
+    }
+
+    private func finalizeCSSStyleSheetRegistryMutation(
+        method: String,
+        paramsData: Data
+    ) {
+        guard method == "CSS.styleSheetRemoved",
+              let params = try? TransportMessageParser.decode(
+                  CSSStyleSheetIDParams.self,
+                  from: paramsData
+              ) else {
+            return
+        }
+        styleSheetRouting.remove(styleSheetID: params.styleSheetID)
+    }
+
+    private func modelCSSStyleSheetDeltaBelongsToCurrentSnapshot(
+        _ event: ProtocolEvent
+    ) -> Bool {
+        guard event.method == "CSS.styleSheetChanged"
+                || event.method == "CSS.styleSheetRemoved" else {
+            return true
+        }
+        guard let params = try? TransportMessageParser.decode(
+                  CSSStyleSheetIDParams.self,
+                  from: event.paramsData
+              ),
+              let targetID = event.targetID else {
+            return false
+        }
+        return styleSheetRouting.targetID(for: params.styleSheetID) == targetID
     }
 
     private func resolvePendingStyleSheets(
@@ -6760,6 +6841,10 @@ package actor ConnectionCore {
         let configuredDomain = modelDomain(for: event.domain)
         if let configuredDomain,
            modelReplaySuppressedDomains[configuredDomain] == currentPageGeneration {
+            return
+        }
+        if configuredDomain == .css,
+           !modelCSSStyleSheetDeltaBelongsToCurrentSnapshot(event) {
             return
         }
         if configuredDomain == .dom {

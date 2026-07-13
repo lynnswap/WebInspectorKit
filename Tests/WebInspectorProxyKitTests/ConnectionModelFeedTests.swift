@@ -1382,7 +1382,7 @@ func modelFeedRejectsAnEventFromAnAgentTargetAfterTargetLoss() async throws {
 }
 
 @Test
-func navigationEpochRejectsInflightDOMAndCSSBootstrapReplies() async throws {
+func navigationEpochRejectsInflightDOMReplyBeforeCSSBootstrap() async throws {
     let backend = FakeTransportBackend()
     let core = ConnectionCore(backend: backend, responseTimeout: nil)
     _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
@@ -1399,12 +1399,6 @@ func navigationEpochRejectsInflightDOMAndCSSBootstrapReplies() async throws {
     )
     let pageEnable = try await backend.waitForTargetMessage(method: "Page.enable")
     await modelFeedRespond(to: pageEnable, core: core)
-    let cssEnable = try await backend.waitForTargetMessage(method: "CSS.enable")
-    await modelFeedRespond(to: cssEnable, core: core)
-    let staleCSS = try await backend.waitForTargetMessage(
-        method: "CSS.getAllStyleSheets",
-        ordinal: 0
-    )
 
     _ = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
         targetID: "page-main",
@@ -1419,19 +1413,16 @@ func navigationEpochRejectsInflightDOMAndCSSBootstrapReplies() async throws {
         method: "DOM.getDocument",
         ordinal: 1
     )
-    await modelFeedRespondWithStyleSheets(
-        to: staleCSS,
-        core: core,
-        styleSheetID: "stale-sheet"
-    )
-    let freshCSS = try await backend.waitForTargetMessage(
-        method: "CSS.getAllStyleSheets",
-        ordinal: 1
-    )
     await modelFeedRespondWithDocument(
         to: freshDOM,
         core: core,
         nodeID: "fresh-document"
+    )
+    let cssEnable = try await backend.waitForTargetMessage(method: "CSS.enable")
+    await modelFeedRespond(to: cssEnable, core: core)
+    let freshCSS = try await backend.waitForTargetMessage(
+        method: "CSS.getAllStyleSheets",
+        ordinal: 0
     )
     await modelFeedRespondWithStyleSheets(
         to: freshCSS,
@@ -2453,6 +2444,10 @@ func modelFeedCapabilityFailureRollsBackSuccessfulPrefixInReverseOrder(
             configuredDomains: configuredDomains
         )
     }
+    let initialDocument = try await backend.waitForTargetMessage(
+        method: "DOM.getDocument"
+    )
+    await modelFeedRespondWithDocument(to: initialDocument, core: core)
 
     for index in 0...failureIndex {
         let message = try await backend.waitForTargetMessage(
@@ -2553,9 +2548,14 @@ func modelFeedRollbackCancelsPendingCSSAuthoritativeSnapshot() async throws {
         targetID: "page-main",
         message: #"{"method":"DOM.documentUpdated","params":{}}"#
     ))
-    _ = try await backend.waitForTargetMessage(
+    let refreshedDocument = try await backend.waitForTargetMessage(
         method: "DOM.getDocument",
         ordinal: 1
+    )
+    await modelFeedRespondWithDocument(
+        to: refreshedDocument,
+        core: core,
+        nodeID: "refreshed"
     )
     _ = try await backend.waitForTargetMessage(
         method: "CSS.getAllStyleSheets",
@@ -3671,31 +3671,21 @@ func domDocumentInvalidationPrecedesMainTargetDeltasAndFreshBootstrap() async th
         frameID: "main-frame"
     ))
 
-    let openTask = Task {
-        try await core.openModelFeed(configuredDomains: [.css])
-    }
-    let staleDocument = try await backend.waitForTargetMessage(
-        method: "DOM.getDocument",
-        ordinal: 0
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [.css],
+        targetID: "page-main"
     )
-    let pageEnable = try await backend.waitForTargetMessage(method: "Page.enable")
-    await modelFeedRespond(to: pageEnable, core: core)
-    let cssEnable = try await backend.waitForTargetMessage(method: "CSS.enable")
-    await modelFeedRespond(to: cssEnable, core: core)
-    let initialCSSSnapshotCommand = try await backend.waitForTargetMessage(
-        method: "CSS.getAllStyleSheets",
-        ordinal: 0
-    )
-    await modelFeedRespondWithStyleSheets(
-        to: initialCSSSnapshotCommand,
-        core: core
-    )
-    let feed = try await openTask.value
     var iterator = feed.records.makeAsyncIterator()
     let reset = try await modelFeedRequireReset(iterator.next())
     let targetSnapshot = try await modelFeedRequireTargetSnapshot(iterator.next())
+    _ = try await modelFeedRequireDOMBootstrapSnapshot(iterator.next())
+    #expect(try await modelFeedRequireBootstrapCompletion(iterator.next()).domain == .dom)
     _ = try await modelFeedRequireCSSBootstrapSnapshot(iterator.next())
     #expect(try await modelFeedRequireBootstrapCompletion(iterator.next()).domain == .css)
+    let initialSync = try await modelFeedRequireSynchronization(iterator.next())
+    #expect(initialSync.generation == targetSnapshot.generation)
 
     let oldAuthorization = ConnectionModelCommandAuthorization(
         feedID: feed.id,
@@ -3712,7 +3702,9 @@ func domDocumentInvalidationPrecedesMainTargetDeltasAndFreshBootstrap() async th
             authority: oldAuthorization
         ))
     }
-    await core.waitForModelCommandReadinessWaiterCountForTesting(1)
+    let oldCommandMessage = try await backend.waitForTargetMessage(
+        method: "DOM.querySelector"
+    )
 
     let invalidationSequence = await core.receiveRootMessage(
         modelFeedTargetDispatchMessage(
@@ -3723,6 +3715,7 @@ func domDocumentInvalidationPrecedesMainTargetDeltasAndFreshBootstrap() async th
     await #expect(throws: WebInspectorProxyError.staleIdentifier) {
         try await oldCommand.value
     }
+    await modelFeedRespond(to: oldCommandMessage, core: core)
     let invalidation = try await modelFeedRequireDOMDocumentInvalidation(iterator.next())
     #expect(invalidation.generation == reset)
     #expect(invalidation.sequence == invalidationSequence)
@@ -3730,10 +3723,6 @@ func domDocumentInvalidationPrecedesMainTargetDeltasAndFreshBootstrap() async th
     #expect(invalidation.agentTarget.id == WebInspectorTarget.ID("page-main"))
     #expect(invalidation.documentEpoch == ModelDOMBindingEpoch(rawValue: 1))
 
-    let refreshedCSSCommand = try await backend.waitForTargetMessage(
-        method: "CSS.getAllStyleSheets",
-        ordinal: 1
-    )
     let suppressedDOMSequence = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
         targetID: "page-main",
         message: #"{"method":"DOM.childNodeCountUpdated","params":{"nodeId":1,"childNodeCount":2}}"#
@@ -3743,6 +3732,32 @@ func domDocumentInvalidationPrecedesMainTargetDeltasAndFreshBootstrap() async th
         message: #"{"method":"CSS.styleSheetAdded","params":{"header":{"styleSheetId":"sheet-main","origin":"author"}}}"#
     ))
 
+    let refreshedDocument = try await backend.waitForTargetMessage(
+        method: "DOM.getDocument",
+        ordinal: 1
+    )
+    #expect(refreshedDocument.targetIdentifier == ProtocolTarget.ID("page-main"))
+    await modelFeedRespondWithDocument(
+        to: refreshedDocument,
+        core: core,
+        nodeID: "fresh"
+    )
+    let refreshedDOMBootstrap = try await modelFeedRequireDOMBootstrapSnapshot(
+        iterator.next()
+    )
+    #expect(refreshedDOMBootstrap.generation == reset)
+    #expect(refreshedDOMBootstrap.documentEpoch == ModelDOMBindingEpoch(rawValue: 1))
+    #expect(refreshedDOMBootstrap.root.id == DOM.Node.ID("fresh"))
+    #expect(suppressedDOMSequence < refreshedDOMBootstrap.sequence)
+    let refreshedDOMCompletion = try await modelFeedRequireBootstrapCompletion(
+        iterator.next()
+    )
+    #expect(refreshedDOMCompletion.through == refreshedDOMBootstrap.sequence)
+
+    let refreshedCSSCommand = try await backend.waitForTargetMessage(
+        method: "CSS.getAllStyleSheets",
+        ordinal: 1
+    )
     await modelFeedRespondWithStyleSheets(to: refreshedCSSCommand, core: core)
     let refreshedCSSRecord = try #require(await iterator.next())
     guard case let .bootstrapSnapshot(_, .css, cssSnapshotSequence, _) = refreshedCSSRecord else {
@@ -3761,26 +3776,6 @@ func domDocumentInvalidationPrecedesMainTargetDeltasAndFreshBootstrap() async th
     )
     #expect(suppressedCSSSequence <= cssSnapshotSequence)
     #expect(refreshedCSSCompletion.through == cssSnapshotSequence)
-
-    await modelFeedRespondWithDocument(to: staleDocument, core: core, nodeID: "stale")
-    let retryDocument = try await backend.waitForTargetMessage(
-        method: "DOM.getDocument",
-        ordinal: 1
-    )
-    #expect(retryDocument.targetIdentifier == ProtocolTarget.ID("page-main"))
-    await modelFeedRespondWithDocument(to: retryDocument, core: core, nodeID: "fresh")
-
-    let initialBootstrap = try await modelFeedRequireDOMBootstrapSnapshot(iterator.next())
-    #expect(initialBootstrap.generation == reset)
-    #expect(initialBootstrap.target.id == WebInspectorTarget.ID("page-main"))
-    #expect(initialBootstrap.agentTarget.id == WebInspectorTarget.ID("page-main"))
-    #expect(initialBootstrap.documentEpoch == ModelDOMBindingEpoch(rawValue: 1))
-    #expect(initialBootstrap.root.id == DOM.Node.ID("fresh"))
-    #expect(suppressedDOMSequence < initialBootstrap.sequence)
-    let initialCompletion = try await modelFeedRequireBootstrapCompletion(iterator.next())
-    let initialSync = try await modelFeedRequireSynchronization(iterator.next())
-    #expect(initialCompletion.through == initialBootstrap.sequence)
-    #expect(initialSync.generation == targetSnapshot.generation)
 
     let domSequence = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
         targetID: "page-main",
@@ -3846,6 +3841,16 @@ func cssBootstrapRetriesStaleScopeAndPublishesOnlyTheLatestBinding() async throw
         method: "DOM.getDocument",
         ordinal: 1
     )
+    await modelFeedRespondWithDocument(
+        to: firstDOMSnapshot,
+        core: core,
+        nodeID: "first"
+    )
+    let firstDOMRecord = try await modelFeedRequireDOMBootstrapSnapshot(
+        iterator.next()
+    )
+    #expect(firstDOMRecord.documentEpoch == ModelDOMBindingEpoch(rawValue: 1))
+    #expect(try await modelFeedRequireBootstrapCompletion(iterator.next()).domain == .dom)
     let firstCSSSnapshot = try await backend.waitForTargetMessage(
         method: "CSS.getAllStyleSheets",
         ordinal: 1
@@ -3863,6 +3868,21 @@ func cssBootstrapRetriesStaleScopeAndPublishesOnlyTheLatestBinding() async throw
     ))
 
     await modelFeedRespondWithStyleSheets(to: firstCSSSnapshot, core: core)
+    let secondDOMSnapshot = try await backend.waitForTargetMessage(
+        method: "DOM.getDocument",
+        ordinal: 2
+    )
+    await modelFeedRespondWithDocument(
+        to: secondDOMSnapshot,
+        core: core,
+        nodeID: "current"
+    )
+    let domSnapshot = try await modelFeedRequireDOMBootstrapSnapshot(iterator.next())
+    #expect(domSnapshot.generation == generation)
+    #expect(domSnapshot.documentEpoch == ModelDOMBindingEpoch(rawValue: 2))
+    #expect(domSnapshot.root.id == DOM.Node.ID("current"))
+    #expect(try await modelFeedRequireBootstrapCompletion(iterator.next()).domain == .dom)
+
     let secondCSSSnapshot = try await backend.waitForTargetMessage(
         method: "CSS.getAllStyleSheets",
         ordinal: 2
@@ -3889,11 +3909,18 @@ func cssBootstrapRetriesStaleScopeAndPublishesOnlyTheLatestBinding() async throw
     #expect(cssCompletion.domain == .css)
     #expect(cssCompletion.through == snapshotSequence)
 
+    let lateRemovalSequence = await core.receiveRootMessage(
+        modelFeedTargetDispatchMessage(
+            targetID: "page-main",
+            message: #"{"method":"CSS.styleSheetRemoved","params":{"styleSheetId":"subsumed-sheet"}}"#
+        )
+    )
     let postSnapshotSequence = await core.receiveRootMessage(modelFeedTargetDispatchMessage(
         targetID: "page-main",
         message: #"{"method":"CSS.styleSheetChanged","params":{"styleSheetId":"restored-sheet"}}"#
     ))
     let postSnapshotEvent = try await modelFeedRequireEvent(iterator.next())
+    #expect(lateRemovalSequence < postSnapshotSequence)
     #expect(postSnapshotEvent.sequence == postSnapshotSequence)
     #expect(postSnapshotEvent.sequence > snapshotSequence)
     #expect(postSnapshotEvent.domBindingEpoch == ModelDOMBindingEpoch(rawValue: 2))
@@ -3901,18 +3928,6 @@ func cssBootstrapRetriesStaleScopeAndPublishesOnlyTheLatestBinding() async throw
         Issue.record("Expected the post-snapshot CSS delta.")
         return
     }
-
-    await modelFeedRespondWithDocument(to: firstDOMSnapshot, core: core, nodeID: "stale")
-    let secondDOMSnapshot = try await backend.waitForTargetMessage(
-        method: "DOM.getDocument",
-        ordinal: 2
-    )
-    await modelFeedRespondWithDocument(to: secondDOMSnapshot, core: core, nodeID: "current")
-    let domSnapshot = try await modelFeedRequireDOMBootstrapSnapshot(iterator.next())
-    #expect(domSnapshot.generation == generation)
-    #expect(domSnapshot.documentEpoch == ModelDOMBindingEpoch(rawValue: 2))
-    #expect(domSnapshot.root.id == DOM.Node.ID("current"))
-    #expect(try await modelFeedRequireBootstrapCompletion(iterator.next()).domain == .dom)
 
     try await modelFeedCloseSuccessfully(
         feed,
@@ -4536,9 +4551,14 @@ func closingCSSModelFeedCancelsPendingAuthoritativeSnapshot() async throws {
         targetID: "page-main",
         message: #"{"method":"DOM.documentUpdated","params":{}}"#
     ))
-    _ = try await backend.waitForTargetMessage(
+    let refreshedDocument = try await backend.waitForTargetMessage(
         method: "DOM.getDocument",
         after: baseline
+    )
+    await modelFeedRespondWithDocument(
+        to: refreshedDocument,
+        core: core,
+        nodeID: "refreshed"
     )
     _ = try await backend.waitForTargetMessage(
         method: "CSS.getAllStyleSheets",
@@ -5698,8 +5718,8 @@ func documentRefreshInvalidatesDocumentCommandsButPreservesBindingCommands() asy
         targetID: "page-main",
         message: #"{"method":"DOM.documentUpdated","params":{}}"#
     ))
-    let refreshedCSSSnapshot = try await backend.waitForTargetMessage(
-        method: "CSS.getAllStyleSheets",
+    let refreshedDOMSnapshot = try await backend.waitForTargetMessage(
+        method: "DOM.getDocument",
         ordinal: 1
     )
     await #expect(throws: WebInspectorProxyError.staleIdentifier) {
@@ -5711,6 +5731,15 @@ func documentRefreshInvalidatesDocumentCommandsButPreservesBindingCommands() asy
     await modelFeedRespond(to: domMessage, core: core)
     await modelFeedRespond(to: cssMessage, core: core)
     await modelFeedRespond(to: networkMessage, core: core)
+    await modelFeedRespondWithDocument(
+        to: refreshedDOMSnapshot,
+        core: core,
+        nodeID: "refreshed"
+    )
+    let refreshedCSSSnapshot = try await backend.waitForTargetMessage(
+        method: "CSS.getAllStyleSheets",
+        ordinal: 1
+    )
     await modelFeedRespondWithStyleSheets(to: refreshedCSSSnapshot, core: core)
     _ = try await networkTask.value
 
@@ -5767,25 +5796,18 @@ func documentRefreshInvalidatesDocumentCommandsButPreservesBindingCommands() asy
             authority: freshAuthorization
         ))
     }
-    await core.waitForModelCommandReadinessWaiterCountForTesting(3)
-    let beforeFreshBootstrap = await backend.sentTargetMessages().count
-    let refreshBootstrap = try await backend.waitForTargetMessage(
-        method: "DOM.getDocument",
-        after: baseline
-    )
-    #expect(await backend.sentTargetMessages().count == beforeFreshBootstrap)
-    await modelFeedRespondWithDocument(to: refreshBootstrap, core: core, nodeID: "fresh")
+    let beforeFreshCommands = await backend.sentTargetMessages().count
     let freshDOMMessage = try await backend.waitForTargetMessage(
         method: "DOM.querySelector",
-        after: beforeFreshBootstrap
+        after: beforeFreshCommands
     )
     let freshCSSMessage = try await backend.waitForTargetMessage(
         method: "CSS.getMatchedStylesForNode",
-        after: beforeFreshBootstrap
+        after: beforeFreshCommands
     )
     let freshPickerMessage = try await backend.waitForTargetMessage(
         method: "Inspector.setInspectModeEnabled",
-        after: beforeFreshBootstrap
+        after: beforeFreshCommands
     )
     await modelFeedRespond(to: freshDOMMessage, core: core)
     await modelFeedRespond(to: freshCSSMessage, core: core)
