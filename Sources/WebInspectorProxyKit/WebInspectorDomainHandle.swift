@@ -52,6 +52,26 @@ package struct DomainEndpoint: Sendable {
         )
     }
 
+    package func dispatchResult<Payload: Sendable, Result: Sendable>(
+        domain: WebInspectorProxyDomain,
+        method: String,
+        payload: Payload,
+        returning resultType: Result.Type = Result.self
+    ) async throws -> WebInspectorProxyCommandResult<Result> {
+        _ = resultType
+        guard let proxy = proxyReference.resolve() else {
+            throw WebInspectorProxyError.closed
+        }
+        return try await proxy.dispatchCommandResult(
+            targetID: targetID,
+            route: route,
+            domain: domain,
+            method: method,
+            payload: payload,
+            authority: authority
+        )
+    }
+
     package func withEvents<Element: Sendable, Output>(
         domain: WebInspectorProxyEventDomain,
         buffering: WebInspectorEventBufferingPolicy,

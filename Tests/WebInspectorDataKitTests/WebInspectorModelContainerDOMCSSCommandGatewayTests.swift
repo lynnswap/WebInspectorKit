@@ -557,6 +557,82 @@ func elementPickerResolvesOneCanonicalNodeAndReleasesItsFeedLease()
     }
 }
 
+@MainActor
+@Test
+func elementPickerWaitsForAnUnloadedNodeToReachItsModelContext()
+    async throws
+{
+    let document = DOM.Node(
+        id: DOM.Node.ID("document"),
+        nodeType: 9,
+        nodeName: "#document",
+        frameID: FrameID("main-frame"),
+        childNodeCount: 1,
+        children: [
+            DOM.Node(
+                id: DOM.Node.ID("body"),
+                nodeType: 1,
+                nodeName: "BODY",
+                localName: "body",
+                childNodeCount: 1
+            )
+        ]
+    )
+    try await withMainActorDOMCSSGatewayRuntime(
+        domains: [.dom],
+        document: document
+    ) { fixture in
+        let context = fixture.container.mainContext
+        let results = try await WebInspectorFetchedResultsController<
+            DOMNode,
+            Never
+        >(modelContext: context)
+        await fixture.wire.respond(to: "Inspector.enable")
+        await fixture.wire.respond(to: "Inspector.initialized")
+        await fixture.wire.respond(to: "DOM.setInspectModeEnabled")
+        let requestNodeGate = await fixture.wire.deferReply(
+            to: "DOM.requestNode",
+            with: try testJSONObject(#"{"nodeId":"selected-node"}"#)
+        )
+        await fixture.wire.respond(to: "DOM.setInspectModeEnabled")
+        await fixture.wire.respond(to: "Inspector.disable")
+
+        let operation = Task {
+            try await fixture.container.core.pickDOMNode()
+        }
+        _ = await fixture.wire.observations.waitForCompletedCommands(
+            method: "DOM.setInspectModeEnabled",
+            count: 1
+        )
+        try await fixture.wire.emitTargetEvent(
+            targetID: "page-main",
+            method: "Inspector.inspect",
+            parameters: try testJSONObject(
+                #"{"object":{"objectId":"remote-selected","type":"object","subtype":"node"},"hints":{}}"#
+            )
+        )
+        _ = await fixture.wire.observations.waitForCommands(
+            method: "DOM.requestNode",
+            count: 1
+        )
+        try await fixture.wire.emitTargetEvent(
+            targetID: "page-main",
+            method: "DOM.setChildNodes",
+            parameters: try testJSONObject(
+                #"{"parentId":"body","nodes":[{"nodeId":"selected-node","nodeType":1,"nodeName":"BUTTON","localName":"button","nodeValue":"","childNodeCount":0}]}"#
+            )
+        )
+        requestNodeGate.open()
+
+        let selectedID = try #require(try await operation.value)
+        let modelID = DOMNode.ID(canonical: selectedID)
+        #expect(context.model(for: modelID)?.localName == "button")
+        #expect(results.snapshot.itemIDs.contains(modelID))
+
+        await results.close()
+    }
+}
+
 @Test
 func elementPickerCallerCancellationReleasesOnlyItsOwnedLease()
     async throws

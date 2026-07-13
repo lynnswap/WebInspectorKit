@@ -46,6 +46,18 @@ package struct WebInspectorProxyCommand<Payload: Sendable, Result: Sendable>: Se
     }
 }
 
+package struct WebInspectorProxyCommandResult<Value: Sendable>: Sendable {
+    package let value: Value
+    package let receivedSequence: UInt64
+    package let receivedDomainSequences: [WebInspectorProxyDomain: UInt64]
+
+    package func receivedSequence(
+        for domain: WebInspectorProxyDomain
+    ) -> UInt64 {
+        receivedDomainSequences[domain] ?? 0
+    }
+}
+
 package enum WebInspectorProxyEvent: Sendable {
     case targetLifecycle(WebInspectorTargetLifecycleEvent)
     case dom(DOM.Event)
@@ -59,7 +71,7 @@ package enum WebInspectorProxyEvent: Sendable {
 package protocol WebInspectorProxyBackend: Sendable {
     func dispatchCommand<Payload: Sendable, Result: Sendable>(
         _ command: WebInspectorProxyCommand<Payload, Result>
-    ) async throws -> Result
+    ) async throws -> WebInspectorProxyCommandResult<Result>
 
     func acquireEventScope<Element: Sendable>(
         route: RoutingTargetID,

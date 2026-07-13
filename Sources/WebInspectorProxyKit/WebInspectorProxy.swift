@@ -224,6 +224,24 @@ public actor WebInspectorProxy {
         payload: Payload,
         authority: WebInspectorCommandAuthority = .direct
     ) async throws -> Result {
+        try await dispatchCommandResult(
+            targetID: targetID,
+            route: route,
+            domain: domain,
+            method: method,
+            payload: payload,
+            authority: authority
+        ).value
+    }
+
+    package func dispatchCommandResult<Payload: Sendable, Result: Sendable>(
+        targetID: WebInspectorTarget.ID,
+        route: RoutingTargetID,
+        domain: WebInspectorProxyDomain,
+        method: String,
+        payload: Payload,
+        authority: WebInspectorCommandAuthority = .direct
+    ) async throws -> WebInspectorProxyCommandResult<Result> {
         do {
             try await core.requireOpen()
         } catch TransportSession.Error.transportClosed {

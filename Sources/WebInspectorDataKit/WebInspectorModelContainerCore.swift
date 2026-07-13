@@ -227,6 +227,12 @@ package actor WebInspectorModelContainerCore {
         let waiter: WebInspectorModelContainerSynchronizationWaiter
     }
 
+    private struct ModelFeedWatermarkWaiterState {
+        let attachmentGeneration: WebInspectorContainerAttachmentGeneration
+        let throughSequence: UInt64
+        let completion: ReplyPromise<UInt64>
+    }
+
     private struct NetworkResponseBodyCommandRoute: Sendable {
         let lease: CanonicalNetworkResponseBodyLease
         let resourceID: UInt64
@@ -285,6 +291,9 @@ package actor WebInspectorModelContainerCore {
     private var nextSynchronizationWaiterID: UInt64 = 0
     private var synchronizationWaiters:
         [UInt64: SynchronizationWaiterState] = [:]
+    private var nextModelFeedWatermarkWaiterID: UInt64 = 0
+    private var modelFeedWatermarkWaiters:
+        [UInt64: ModelFeedWatermarkWaiterState] = [:]
     private var detachTransaction: WebInspectorModelContainerReset?
     private var completedDetachTransactionID: UInt64?
     private var closeTransaction: WebInspectorModelContainerClose?
@@ -452,6 +461,56 @@ package actor WebInspectorModelContainerCore {
             return cursor
         } catch {
             synchronizationWaiters[waiterID] = nil
+            throw error
+        }
+    }
+
+    package func waitForModelFeed(
+        through sequence: UInt64,
+        attachmentGeneration: WebInspectorContainerAttachmentGeneration
+    ) async throws -> UInt64 {
+        guard !isConnectionCloseRequested, lifecycle == .open else {
+            throw WebInspectorModelContainerCoreError.closed
+        }
+        guard let resource = activeAttachment else {
+            throw WebInspectorModelContainerCoreError.detached
+        }
+        guard resource.generation == attachmentGeneration else {
+            throw WebInspectorModelContainerCoreError
+                .staleSynchronizationGeneration(
+                    expected: resource.generation,
+                    actual: attachmentGeneration
+                )
+        }
+        guard let binding = canonicalStore.bindingSnapshot,
+            binding.attachmentGeneration == attachmentGeneration
+        else {
+            throw WebInspectorModelContainerCoreError.detached
+        }
+        if (binding.lastSequence.map({ $0 >= sequence }) ?? false)
+            || sequence == 0
+        {
+            return revision
+        }
+
+        precondition(
+            nextModelFeedWatermarkWaiterID < UInt64.max,
+            "Model Container exhausted model-feed watermark waiter identifiers."
+        )
+        nextModelFeedWatermarkWaiterID += 1
+        let waiterID = nextModelFeedWatermarkWaiterID
+        let completion = ReplyPromise<UInt64>()
+        modelFeedWatermarkWaiters[waiterID] = ModelFeedWatermarkWaiterState(
+            attachmentGeneration: attachmentGeneration,
+            throughSequence: sequence,
+            completion: completion
+        )
+        do {
+            let revision = try await completion.value()
+            modelFeedWatermarkWaiters[waiterID] = nil
+            return revision
+        } catch {
+            modelFeedWatermarkWaiters[waiterID] = nil
             throw error
         }
     }
@@ -790,7 +849,18 @@ package actor WebInspectorModelContainerCore {
         invalidateStaleNetworkResponseBodyOperations()
         applyRuntimeCommandInvalidations(from: transaction)
         invalidateStaleDOMCSSOperations(applying: transaction)
-        return publish(transaction)
+        let commit = publish(transaction)
+        if let binding = canonicalStore.bindingSnapshot,
+            binding.attachmentGeneration == attachmentGeneration,
+            let lastSequence = binding.lastSequence
+        {
+            resumeModelFeedWatermarkWaiters(
+                for: attachmentGeneration,
+                through: lastSequence,
+                at: revision
+            )
+        }
+        return commit
     }
 
     /// Publishes one canonical Network clear and returns only after every
@@ -1587,6 +1657,7 @@ package extension WebInspectorModelContainerCore {
     ) {
         latestSynchronizationCursorByGeneration[generation] = nil
         failSynchronizationWaiters(for: generation, with: error)
+        failModelFeedWatermarkWaiters(for: generation, with: error)
     }
 
     func retireAllSynchronizationGenerations(
@@ -1594,6 +1665,7 @@ package extension WebInspectorModelContainerCore {
     ) {
         latestSynchronizationCursorByGeneration.removeAll(keepingCapacity: false)
         failSynchronizationWaiters(with: error)
+        failModelFeedWatermarkWaiters(with: error)
     }
 
     private func failSynchronizationWaiters(
@@ -1611,6 +1683,38 @@ package extension WebInspectorModelContainerCore {
             }
             synchronizationWaiters[waiterID] = nil
             state.waiter.finish(.failure(error))
+        }
+    }
+
+    private func resumeModelFeedWatermarkWaiters(
+        for generation: WebInspectorContainerAttachmentGeneration,
+        through sequence: UInt64,
+        at revision: UInt64
+    ) {
+        for waiterID in Array(modelFeedWatermarkWaiters.keys) {
+            guard let state = modelFeedWatermarkWaiters[waiterID],
+                state.attachmentGeneration == generation,
+                state.throughSequence <= sequence
+            else {
+                continue
+            }
+            modelFeedWatermarkWaiters[waiterID] = nil
+            _ = state.completion.fulfill(.success(revision))
+        }
+    }
+
+    private func failModelFeedWatermarkWaiters(
+        for generation: WebInspectorContainerAttachmentGeneration? = nil,
+        with error: WebInspectorModelContainerCoreError
+    ) {
+        for waiterID in Array(modelFeedWatermarkWaiters.keys) {
+            guard let state = modelFeedWatermarkWaiters[waiterID],
+                generation.map({ $0 == state.attachmentGeneration }) ?? true
+            else {
+                continue
+            }
+            modelFeedWatermarkWaiters[waiterID] = nil
+            _ = state.completion.fulfill(.failure(error))
         }
     }
 }

@@ -9,7 +9,7 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
 
     package func dispatchCommand<Payload: Sendable, Result: Sendable>(
         _ command: WebInspectorProxyCommand<Payload, Result>
-    ) async throws -> Result {
+    ) async throws -> WebInspectorProxyCommandResult<Result> {
         let protocolCommand = try LiveProxyCommandEncoder.protocolCommand(for: command)
         let result: ProtocolCommand.Result
         do {
@@ -18,11 +18,23 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
             throw mapTransportError(error, domain: command.domain.rawValue, method: command.method)
         }
         let targetScopeRawValue = await targetScopeRawValue(for: command.route)
-        return try LiveProxyCommandDecoder.decode(
+        let value = try LiveProxyCommandDecoder.decode(
             Result.self,
             for: command,
             targetScopeRawValue: targetScopeRawValue,
             from: result
+        )
+        return WebInspectorProxyCommandResult(
+            value: value,
+            receivedSequence: result.receivedSequence,
+            receivedDomainSequences: Dictionary(
+                uniqueKeysWithValues: result.receivedDomainSequences.compactMap {
+                    domain, sequence in
+                    WebInspectorProxyDomain(protocolDomain: domain).map {
+                        ($0, sequence)
+                    }
+                }
+            )
         )
     }
 
@@ -87,6 +99,29 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         return rawValue
     }
 
+}
+
+private extension WebInspectorProxyDomain {
+    init?(protocolDomain: ProtocolDomain) {
+        switch protocolDomain {
+        case .dom:
+            self = .dom
+        case .css:
+            self = .css
+        case .network:
+            self = .network
+        case .console:
+            self = .console
+        case .runtime:
+            self = .runtime
+        case .page:
+            self = .page
+        case .inspector:
+            self = .inspector
+        case .target, .storage, .other:
+            return nil
+        }
+    }
 }
 
 private enum LiveProxyCommandEncoder {

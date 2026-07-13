@@ -57,6 +57,36 @@ func rawPeerRoutesFrameRequestNodeThroughCurrentPageDOMAgent() async throws {
 }
 
 @Test
+func modelFeedNodeResolutionCarriesTheDOMReplyWatermark() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let page = try await runtime.proxy.waitForCurrentPage()
+
+    let operation = Task {
+        try await page.dom.requestNodeForModelFeed(
+            forRemoteObject: Runtime.RemoteObject.ID("remote-node")
+        )
+    }
+    let command = try await runtime.peer.commands.next()
+    #expect(command.method == "DOM.requestNode")
+    try await runtime.peer.emitTargetEvent(
+        targetID: "page-main",
+        method: "DOM.setChildNodes",
+        parameters: try jsonObject(
+            #"{"parentId":"document","nodes":[{"nodeId":"selected-node","nodeType":1,"nodeName":"BUTTON","localName":"button","nodeValue":"","childNodeCount":0}]}"#
+        )
+    )
+    try await runtime.peer.reply(
+        to: command,
+        with: try jsonObject(#"{"nodeId":"selected-node"}"#)
+    )
+
+    let resolution = try await operation.value
+    #expect(resolution.nodeID == DOM.Node.ID("selected-node"))
+    #expect(resolution.receivedDOMSequence > 0)
+    await runtime.close()
+}
+
+@Test
 func rawElementPickerResolvesInspectorEventThroughProductionCommandPath() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let eventTask = Task {

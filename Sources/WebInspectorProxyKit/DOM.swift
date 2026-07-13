@@ -77,6 +77,21 @@ public struct DOM: Sendable, WebInspectorEventDomainHandle {
         )
     }
 
+    package func requestNodeForModelFeed(
+        forRemoteObject objectID: Runtime.RemoteObject.ID
+    ) async throws -> ModelFeedNodeResolution {
+        let result: WebInspectorProxyCommandResult<Node.ID> = try await endpoint
+            .dispatchResult(
+                domain: Self.commandDomain,
+                method: "requestNode",
+                payload: RequestNodePayload(objectID: objectID)
+            )
+        return ModelFeedNodeResolution(
+            nodeID: result.value,
+            receivedDOMSequence: result.receivedSequence(for: .dom)
+        )
+    }
+
     /// Returns serialized outer HTML for a node.
     public func outerHTML(of id: Node.ID) async throws -> String {
         try await dispatch(
@@ -612,6 +627,11 @@ public struct DOM: Sendable, WebInspectorEventDomainHandle {
         case unknown(RawEvent)
     }
 
+}
+
+package struct ModelFeedNodeResolution: Sendable {
+    package let nodeID: DOM.Node.ID
+    package let receivedDOMSequence: UInt64
 }
 
 package extension DOM.Node.ID {

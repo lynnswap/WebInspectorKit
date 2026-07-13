@@ -63,6 +63,9 @@ package extension WebInspectorModelContainerCore {
             cleanupCompletion: ReplyPromise(),
             phase: .waitingForSelection
         )
+        WebInspectorDataKitLog.debug(
+            "Element picker acquiring operation=\(operationID) generation=\(resource.generation.rawValue)"
+        )
 
         do {
             try await lease.acquire()
@@ -75,6 +78,9 @@ package extension WebInspectorModelContainerCore {
                     task.cancel()
                 }
             }
+            WebInspectorDataKitLog.error(
+                "Element picker activation failed operation=\(operationID) error=\(String(describing: error))"
+            )
             throw Self.mapElementPickerError(error)
         }
 
@@ -89,6 +95,9 @@ package extension WebInspectorModelContainerCore {
                 ? WebInspectorElementPickerError.closed
                 : WebInspectorElementPickerError.detached
         }
+        WebInspectorDataKitLog.debug(
+            "Element picker active operation=\(operationID) generation=\(resource.generation.rawValue)"
+        )
 
         do {
             return try await completion.value()
@@ -191,18 +200,40 @@ private extension WebInspectorModelContainerCore {
             for: documentScope,
             completionValidation: .document(documentScope)
         )
-        let completion: ReplyPromise<DOM.Node.ID> = startDOMCSSCommand(
+        let completion: ReplyPromise<ModelFeedNodeResolution> = startDOMCSSCommand(
             route: route
         ) { target in
-            try await target.dom.requestNode(forRemoteObject: objectID)
+            try await target.dom.requestNodeForModelFeed(
+                forRemoteObject: objectID
+            )
         }
-        let rawNodeID = try await completion.value()
+        let resolution = try await completion.value()
+        WebInspectorDataKitLog.debug(
+            "Element picker wire resolved rawNode=\(resolution.nodeID.rawValue) domThrough=\(resolution.receivedDOMSequence)"
+        )
+        let admittedRevision = try await waitForModelFeed(
+            through: resolution.receivedDOMSequence,
+            attachmentGeneration: documentScope.attachmentGeneration
+        )
         guard let nodeID = try canonicalStore.domNodeID(
-            for: rawNodeID,
+            for: resolution.nodeID,
             in: scope
         ) else {
             throw WebInspectorElementPickerError.nodeNotFound
         }
+        let acknowledgementBarrier = try makeAcknowledgementBarrier(
+            through: admittedRevision
+        )
+        try await waitForAcknowledgements(acknowledgementBarrier)
+        guard try canonicalStore.domNodeID(
+            for: resolution.nodeID,
+            in: scope
+        ) == nodeID else {
+            throw WebInspectorElementPickerError.staleDocument
+        }
+        WebInspectorDataKitLog.debug(
+            "Element picker model admitted rawNode=\(resolution.nodeID.rawValue) revision=\(admittedRevision)"
+        )
         return nodeID
     }
 
@@ -256,6 +287,16 @@ private extension WebInspectorModelContainerCore {
                 "A current element-picker operation completed twice."
             )
         }
+        switch terminal {
+        case let .success(nodeID):
+            WebInspectorDataKitLog.debug(
+                "Element picker completed operation=\(operationID) selected=\(String(describing: nodeID))"
+            )
+        case let .failure(error):
+            WebInspectorDataKitLog.error(
+                "Element picker failed operation=\(operationID) error=\(String(describing: error))"
+            )
+        }
     }
 
     func cancelElementPickerOperation(_ operationID: UInt64) async throws {
@@ -297,10 +338,16 @@ private extension WebInspectorModelContainerCore {
                     .failure(CancellationError())
                 )
             }
+            WebInspectorDataKitLog.debug(
+                "Element picker cancelled operation=\(operationID)"
+            )
         case let .failure(cleanupError):
             if remainedCurrent {
                 _ = operation.completion.fulfill(.failure(cleanupError))
             }
+            WebInspectorDataKitLog.error(
+                "Element picker cancellation failed operation=\(operationID) error=\(String(describing: cleanupError))"
+            )
             throw cleanupError
         }
     }
@@ -346,6 +393,32 @@ private extension WebInspectorModelContainerCore {
         }
         if let error = error as? ConnectionModelCommandError {
             return WebInspectorElementPickerError.authorization(error)
+        }
+        if let error = error as? WebInspectorModelContainerCoreError {
+            switch error {
+            case .closed:
+                return WebInspectorElementPickerError.closed
+            case .detached:
+                return WebInspectorElementPickerError.detached
+            case .staleSynchronizationGeneration:
+                return WebInspectorElementPickerError.staleDocument
+            case .canonicalStore,
+                .contextRegistrationNotFound,
+                .acknowledgementRevisionAhead,
+                .acknowledgementRevisionMovedBackward,
+                .rebaseTokenMismatch,
+                .rebase,
+                .foreignAcknowledgementBarrier,
+                .contextNotActivated,
+                .detachInProgress,
+                .detachTransactionMismatch,
+                .closeTransactionMismatch,
+                .foreignSynchronizationCheckpoint,
+                .synchronizationFailed:
+                return WebInspectorElementPickerError.invalidReply(
+                    String(reflecting: error)
+                )
+            }
         }
         return WebInspectorElementPickerError.invalidReply(
             String(reflecting: error)
