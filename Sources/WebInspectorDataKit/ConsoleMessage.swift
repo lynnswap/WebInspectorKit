@@ -6,19 +6,33 @@ import WebInspectorProxyKit
 @Observable
 public final class ConsoleMessage: WebInspectorPersistentModel {
     /// Stable identity for a console message within a context.
-    public struct ID: Comparable, WebInspectorPersistentIdentifier {
+    public struct ID: WebInspectorPersistentIdentifier {
         /// The persistent model identified by this value.
         public typealias Model = ConsoleMessage
 
-        let ordinal: Int
-
-        init(_ ordinal: Int) {
-            self.ordinal = ordinal
+        enum Storage: Hashable, Sendable {
+            case canonical(CanonicalConsoleMessageIDStorage)
+            // Remove with ConsoleMessageStore when the payload driver switches
+            // to the container schema registry. This case is never accepted by
+            // the canonical schema or converted into canonical authority.
+            case legacyOrdinal(Int)
         }
 
-        /// Orders console messages by insertion ordinal.
-        public static func < (lhs: ID, rhs: ID) -> Bool {
-            lhs.ordinal < rhs.ordinal
+        let storage: Storage
+
+        init(_ ordinal: Int) {
+            storage = .legacyOrdinal(ordinal)
+        }
+
+        package init(canonical storage: CanonicalConsoleMessageIDStorage) {
+            self.storage = .canonical(storage)
+        }
+
+        package var canonicalStorage: CanonicalConsoleMessageIDStorage? {
+            guard case let .canonical(storage) = storage else {
+                return nil
+            }
+            return storage
         }
     }
 
@@ -124,6 +138,9 @@ public final class ConsoleMessage: WebInspectorPersistentModel {
     public private(set) var timestamp: Double?
     let targetID: WebInspectorTarget.ID?
 
+    @ObservationIgnored
+    private var canonicalMembership: CanonicalConsoleMessageMembership?
+
     @ObservationIgnored weak var modelContext: WebInspectorModelContext?
 
     init(
@@ -147,11 +164,174 @@ public final class ConsoleMessage: WebInspectorPersistentModel {
         networkRequestID = message.networkRequestID.map(NetworkRequest.ID.init)
         timestamp = message.timestamp
         self.targetID = targetID
+        canonicalMembership = nil
         self.modelContext = modelContext
+    }
+
+    package init(
+        id: ID,
+        record: CanonicalConsoleMessageRecord,
+        modelContext: WebInspectorModelContext
+    ) {
+        precondition(
+            id.canonicalStorage == record.id,
+            "A canonical ConsoleMessage must use its record identity."
+        )
+        self.id = id
+        source = record.source
+        level = record.level
+        kind = record.kind
+        text = record.text
+        url = record.url
+        line = record.line
+        column = record.column
+        repeatCount = record.repeatCount
+        parameters = Self.makeCanonicalParameters(record)
+        stackTrace = record.stackTrace.map(Self.stackTrace)
+        networkRequestID = Self.networkRequestID(record.networkRequestReference)
+        timestamp = record.timestamp
+        targetID = record.membership.semanticTargetID
+        canonicalMembership = record.membership
+        self.modelContext = modelContext
+    }
+
+    package func replace(
+        with record: CanonicalConsoleMessageRecord,
+        modelContext: WebInspectorModelContext
+    ) {
+        precondition(
+            id.canonicalStorage == record.id,
+            "A ConsoleMessage replacement must preserve canonical identity."
+        )
+        invalidateParameterGraphs()
+        source = record.source
+        level = record.level
+        kind = record.kind
+        text = record.text
+        url = record.url
+        line = record.line
+        column = record.column
+        repeatCount = record.repeatCount
+        parameters = Self.makeCanonicalParameters(record)
+        stackTrace = record.stackTrace.map(Self.stackTrace)
+        networkRequestID = Self.networkRequestID(record.networkRequestReference)
+        timestamp = record.timestamp
+        canonicalMembership = record.membership
+        self.modelContext = modelContext
+    }
+
+    package func apply(_ patch: CanonicalConsoleMessagePatch) {
+        switch patch {
+        case let .repeatCount(count, timestamp):
+            updateRepeatCount(count, timestamp: timestamp)
+        case let .networkRequestReference(reference):
+            networkRequestID = Self.networkRequestID(reference)
+        }
+    }
+
+    package func invalidate() {
+        invalidateParameterGraphs()
+        canonicalMembership = nil
+        modelContext = nil
+    }
+
+    package func invalidateParameterGraphs(
+        matching invalidation: CanonicalConsoleRuntimeResourceInvalidation
+    ) {
+        guard let membership = canonicalMembership else {
+            return
+        }
+        let matches = switch invalidation {
+        case let .runtimeBinding(agentTargetID, epoch):
+            membership.agentTargetID == agentTargetID
+                && membership.runtimeBindingEpoch != epoch
+        case let .consoleBinding(agentTargetID, epoch):
+            membership.agentTargetID == agentTargetID
+                && membership.consoleBindingEpoch != epoch
+        case let .semanticNavigation(semanticTargetID, navigationEpoch):
+            membership.semanticTargetID == semanticTargetID
+                && membership.navigationEpoch != navigationEpoch
+        case .frameDetached:
+            true
+        case let .targetLost(targetID):
+            membership.semanticTargetID == targetID
+                || membership.agentTargetID == targetID
+        case .attachmentDetached, .attachmentReset:
+            true
+        }
+        if matches {
+            invalidateParameterGraphs()
+        }
+    }
+
+    package func invalidateParameterGraphs() {
+        for parameter in parameters {
+            parameter.invalidateCanonicalResource()
+        }
+    }
+
+    package func replaceParameterGraphs(
+        membership: CanonicalConsoleMessageMembership,
+        seeds: [CanonicalConsoleParameterResourceSeed]
+    ) {
+        guard id.canonicalStorage != nil else {
+            preconditionFailure(
+                "Canonical parameter graphs cannot be installed on a legacy ConsoleMessage."
+            )
+        }
+        invalidateParameterGraphs()
+        parameters = Self.makeCanonicalParameters(id: id, seeds: seeds)
+        canonicalMembership = membership
     }
 
     func updateRepeatCount(_ count: Int, timestamp: Double?) {
         repeatCount = count
         self.timestamp = timestamp
+    }
+
+    private static func makeCanonicalParameters(
+        _ record: CanonicalConsoleMessageRecord
+    ) -> [RuntimeObject] {
+        makeCanonicalParameters(
+            id: ID(canonical: record.id),
+            seeds: record.parameters
+        )
+    }
+
+    private static func makeCanonicalParameters(
+        id: ID,
+        seeds: [CanonicalConsoleParameterResourceSeed]
+    ) -> [RuntimeObject] {
+        seeds.enumerated().map { index, seed in
+            RuntimeObject(
+                consoleMessageID: id,
+                parameterIndex: index,
+                payload: seed.payload
+            )
+        }
+    }
+
+    private static func stackTrace(
+        _ stackTrace: CanonicalConsoleStackTrace
+    ) -> Console.StackTrace {
+        Console.StackTrace(
+            callFrames: stackTrace.callFrames.map { frame in
+                Console.CallFrame(
+                    functionName: frame.functionName,
+                    url: frame.url,
+                    line: frame.line,
+                    column: frame.column
+                )
+            }
+        )
+    }
+
+    private static func networkRequestID(
+        _ reference: CanonicalConsoleNetworkRequestReference?
+    ) -> NetworkRequest.ID? {
+        guard case let .resolved(_, storage)? = reference else {
+            return nil
+        }
+        return NetworkRequest.ID(canonical: storage)
     }
 }

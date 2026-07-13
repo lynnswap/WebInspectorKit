@@ -1569,6 +1569,14 @@ direct ProxyKit consumer is lowered to `package`/`internal` or deleted.
 No item above remains as a parallel compatibility path after its replacement is
 integrated.
 
+During the payload-driver cutover, `ConsoleMessage.ID` and `RuntimeContext.ID`
+temporarily distinguish legacy-store identity from canonical storage so the
+old stores continue to compile without manufacturing container authority. The
+canonical schemas accept and emit only `CanonicalConsoleMessageIDStorage` and
+`CanonicalRuntimeContextIDStorage`; there is no conversion between the cases.
+Delete the legacy cases in the same change that removes `ConsoleMessageStore`
+and `RuntimeStateStore` from Session payload delivery.
+
 ## Avoided shapes
 
 - Do not add a `WebInspectorModelContainer` wrapper that forwards all state to

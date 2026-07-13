@@ -8,18 +8,40 @@ public final class RuntimeObject: Hashable, Identifiable, SendableMetatype {
     /// Stable identity for a runtime object within a context.
     public struct ID: Hashable, Sendable {
         enum Storage: Hashable, Sendable {
-            case remote(Runtime.RemoteObject.ID)
-            case synthetic(Int)
+            case legacyRemote(Runtime.RemoteObject.ID)
+            case legacySynthetic(Int)
+            case consoleParameter(
+                messageID: ConsoleMessage.ID,
+                parameterIndex: Int
+            )
         }
 
         let storage: Storage
 
         init(remote id: Runtime.RemoteObject.ID) {
-            storage = .remote(id)
+            storage = .legacyRemote(id)
         }
 
         init(synthetic ordinal: Int) {
-            storage = .synthetic(ordinal)
+            storage = .legacySynthetic(ordinal)
+        }
+
+        package init(
+            consoleMessageID: ConsoleMessage.ID,
+            parameterIndex: Int
+        ) {
+            precondition(
+                consoleMessageID.canonicalStorage != nil,
+                "A Console parameter resource requires a canonical message owner."
+            )
+            precondition(
+                parameterIndex >= 0,
+                "A Console parameter index cannot be negative."
+            )
+            storage = .consoleParameter(
+                messageID: consoleMessageID,
+                parameterIndex: parameterIndex
+            )
         }
     }
 
@@ -81,11 +103,15 @@ public final class RuntimeObject: Hashable, Identifiable, SendableMetatype {
     /// A compact preview for the value, if included in the payload.
     public private(set) var preview: Runtime.ObjectPreview?
 
+    private var isCanonicalResourceInvalidated: Bool
+    private let canonicalResourceHasRemoteIdentity: Bool
+
     @ObservationIgnored var proxyID: Runtime.RemoteObject.ID?
 
     /// A Boolean value indicating whether this object has a live remote handle.
     public var canRequestProperties: Bool {
-        proxyID != nil
+        isCanonicalResourceInvalidated == false
+            && (canonicalResourceHasRemoteIdentity || proxyID != nil)
     }
 
     init(
@@ -100,7 +126,33 @@ public final class RuntimeObject: Hashable, Identifiable, SendableMetatype {
         description = remoteObject.description
         size = remoteObject.size
         preview = remoteObject.preview
+        isCanonicalResourceInvalidated = false
+        canonicalResourceHasRemoteIdentity = false
         proxyID = remoteObject.id
+    }
+
+    package init(
+        consoleMessageID: ConsoleMessage.ID,
+        parameterIndex: Int,
+        payload: CanonicalRuntimeRemoteObjectPayload
+    ) {
+        id = ID(
+            consoleMessageID: consoleMessageID,
+            parameterIndex: parameterIndex
+        )
+        kind = payload.kind
+        subtype = payload.subtype
+        className = payload.className
+        value = payload.value
+        description = payload.description
+        size = payload.size
+        preview = payload.preview?.objectPreview
+        isCanonicalResourceInvalidated = false
+        canonicalResourceHasRemoteIdentity = payload.rawObjectID != nil
+        // Canonical command authority is the Console message/index owner in
+        // `id`, which the Runtime gateway exchanges for a graph token. The raw
+        // WebKit handle stays in the Core-owned canonical seed.
+        proxyID = nil
     }
 
     /// Compares Runtime resources by object identity.
@@ -121,7 +173,41 @@ public final class RuntimeObject: Hashable, Identifiable, SendableMetatype {
         description = remoteObject.description
         size = remoteObject.size
         preview = remoteObject.preview
+        isCanonicalResourceInvalidated = false
         proxyID = remoteObject.id
+    }
+
+    package func invalidateCanonicalResource() {
+        guard case .consoleParameter = id.storage else {
+            return
+        }
+        isCanonicalResourceInvalidated = true
+        proxyID = nil
+    }
+}
+
+private extension CanonicalRuntimeObjectPreview {
+    var objectPreview: Runtime.ObjectPreview {
+        Runtime.ObjectPreview(
+            kind: kind,
+            subtype: subtype,
+            description: description,
+            lossless: lossless,
+            overflow: overflow,
+            properties: properties.map { preview in
+                Runtime.PropertyPreview(
+                    name: preview.name,
+                    value: preview.value
+                )
+            },
+            entries: entries.map { preview in
+                Runtime.EntryPreview(
+                    key: preview.key,
+                    value: preview.value
+                )
+            },
+            size: size
+        )
     }
 }
 

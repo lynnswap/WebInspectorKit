@@ -23,7 +23,11 @@ package struct CanonicalRuntimeContextQueryProjection: Equatable, Sendable {
     package let kind: Runtime.ContextKind
 }
 
-package struct CanonicalRuntimeContextRecord: Equatable, Sendable {
+package struct CanonicalRuntimeContextPatch: Equatable, Sendable {
+    private init() {}
+}
+
+package struct CanonicalRuntimeContextRecord: Equatable, Sendable, WebInspectorModelRecord {
     package let id: CanonicalRuntimeContextIDStorage
     package let insertionOrdinal: UInt64
     package let membership: CanonicalRuntimeContextMembership
@@ -38,6 +42,10 @@ package struct CanonicalRuntimeContextRecord: Equatable, Sendable {
             frameID: frameID,
             kind: kind
         )
+    }
+
+    package mutating func apply(_ patch: CanonicalRuntimeContextPatch) {
+        _ = patch
     }
 }
 
@@ -201,7 +209,7 @@ package struct CanonicalConsoleMessageQueryProjection: Equatable, Sendable {
     package let timestamp: Double?
 }
 
-package struct CanonicalConsoleMessageRecord: Equatable, Sendable {
+package struct CanonicalConsoleMessageRecord: Equatable, Sendable, WebInspectorModelRecord {
     package let id: CanonicalConsoleMessageIDStorage
     package let membership: CanonicalConsoleMessageMembership
     package let source: Console.Source

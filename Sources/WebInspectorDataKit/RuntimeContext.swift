@@ -10,10 +10,38 @@ public final class RuntimeContext: WebInspectorPersistentModel {
         /// The persistent model identified by this value.
         public typealias Model = RuntimeContext
 
-        let proxyID: Runtime.ExecutionContext.ID
+        enum Storage: Hashable, Sendable {
+            case canonical(CanonicalRuntimeContextIDStorage)
+            // Remove with RuntimeStateStore when the payload driver switches
+            // to the container schema registry. This case is never accepted by
+            // the canonical schema or converted into canonical authority.
+            case legacyProxy(Runtime.ExecutionContext.ID)
+        }
+
+        let storage: Storage
 
         init(_ proxyID: Runtime.ExecutionContext.ID) {
-            self.proxyID = proxyID
+            storage = .legacyProxy(proxyID)
+        }
+
+        package init(canonical storage: CanonicalRuntimeContextIDStorage) {
+            self.storage = .canonical(storage)
+        }
+
+        package var canonicalStorage: CanonicalRuntimeContextIDStorage? {
+            guard case let .canonical(storage) = storage else {
+                return nil
+            }
+            return storage
+        }
+
+        var proxyID: Runtime.ExecutionContext.ID {
+            switch storage {
+            case let .canonical(storage):
+                storage.rawContextID
+            case let .legacyProxy(proxyID):
+                proxyID
+            }
         }
     }
 
@@ -56,16 +84,53 @@ public final class RuntimeContext: WebInspectorPersistentModel {
     /// The kind of execution context reported by WebKit.
     public private(set) var kind: Runtime.ContextKind
 
+    @ObservationIgnored weak var modelContext: WebInspectorModelContext?
+
     init(context: Runtime.ExecutionContext) {
         id = ID(context.id)
         name = context.name
         frameID = context.frameID
         kind = context.kind
+        modelContext = nil
+    }
+
+    package init(
+        id: ID,
+        record: CanonicalRuntimeContextRecord,
+        modelContext: WebInspectorModelContext
+    ) {
+        precondition(
+            id.canonicalStorage == record.id,
+            "A canonical RuntimeContext must use its record identity."
+        )
+        self.id = id
+        name = record.name
+        frameID = record.frameID
+        kind = record.kind
+        self.modelContext = modelContext
     }
 
     func update(from context: Runtime.ExecutionContext) {
         name = context.name
         frameID = context.frameID
         kind = context.kind
+    }
+
+    package func replace(
+        with record: CanonicalRuntimeContextRecord,
+        modelContext: WebInspectorModelContext
+    ) {
+        precondition(
+            id.canonicalStorage == record.id,
+            "A RuntimeContext replacement must preserve canonical identity."
+        )
+        name = record.name
+        frameID = record.frameID
+        kind = record.kind
+        self.modelContext = modelContext
+    }
+
+    package func invalidate() {
+        modelContext = nil
     }
 }
