@@ -141,7 +141,7 @@ public final class WebInspectorSession {
             startPageUserInterfaceStyleObservation(makePageUserInterfaceStyleObserver)
         } catch {
             guard isCurrentAttachmentGeneration(generation) else {
-                throw error
+                throw CancellationError()
             }
             stopPageUserInterfaceStyleObservation()
             throw error
