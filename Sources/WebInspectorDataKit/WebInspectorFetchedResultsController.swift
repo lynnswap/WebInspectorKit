@@ -746,6 +746,9 @@ public final class WebInspectorFetchedResultsController<
             guard modelContext.isPersistentModelProjectionClosed == false else {
                 throw WebInspectorFetchedResultsControllerError.closed
             }
+            WebInspectorDataKitLog.debug(
+                "Fetched Results ready model=\(String(reflecting: Model.self)) owner=\(ownerID.rawValue) revision=\(backing.revision) items=\(backing.snapshot.itemIDs.count)"
+            )
         } catch {
             lease.cancel()
             publication.finish()

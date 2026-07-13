@@ -1563,6 +1563,9 @@ package extension WebInspectorModelContainerCore {
             )
         }
         latestSynchronizationCursorByGeneration[generation] = cursor
+        WebInspectorDataKitLog.debug(
+            "Model Container synchronized generation=\(generation.rawValue) ordinal=\(cursor.ordinal) revision=\(revision) contexts=\(contextRegistrations.count)"
+        )
 
         for waiterID in Array(synchronizationWaiters.keys) {
             guard let state = synchronizationWaiters[waiterID] else {
