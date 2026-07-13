@@ -1069,7 +1069,9 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             selectionRevealState.clearPendingSelection()
             return
         }
-        if selectionRevealPolicy != .none {
+        if selectionRevealPolicy != .none,
+            !rowIndex.contains(nodeID: selectedNode.id)
+        {
             openAncestors(of: selectedNode)
         }
     }
@@ -2631,6 +2633,12 @@ extension DOMTreeTextView {
 
     func routeCurrentSelectionInvalidationForTesting() {
         routeSelectionInvalidation(selectionRevision: selectionRevision)
+    }
+
+    var selectionObservationDeliveryForTesting:
+        PortableObservationTracking.Token?
+    {
+        selectionObservation
     }
 
     func waitForPageHighlightTaskForTesting() async {

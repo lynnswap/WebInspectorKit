@@ -48,7 +48,7 @@ package final class DOMTreeViewController: UIViewController {
             guard let context else {
                 return
             }
-            if let selectedNode = model.selectedNode {
+            if let selectedNode = model?.selectedNode {
                 try await context.highlightDOMNode(selectedNode)
             } else {
                 try await context.hideDOMHighlight()

@@ -174,7 +174,7 @@ public final class WebInspectorSession {
         guard modelContainer.state == .attached else {
             return
         }
-        guard model.configuredDomains.contains(.dom) else {
+        guard modelContainer.configuration.domains.contains(.dom) else {
             return
         }
 

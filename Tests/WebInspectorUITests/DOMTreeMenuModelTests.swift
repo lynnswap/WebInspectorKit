@@ -2,6 +2,7 @@
 import Testing
 import UIKit
 @testable import WebInspectorDataKit
+import WebInspectorDataKitTesting
 @testable import WebInspectorProxyKit
 @testable import WebInspectorUI
 @testable import WebInspectorUISyntaxBody
@@ -12,8 +13,8 @@ import UIKit
 @MainActor
 struct DOMTreeMenuModelTests {
     @Test
-    func singleNodeSelectionEnablesTextAndNodeActions() throws {
-        let fixture = try makeMenuFixture()
+    func singleNodeSelectionEnablesTextAndNodeActions() async throws {
+        let fixture = try await makeMenuFixture()
         let model = DOMTreeMenuModel(
             context: fixture.context,
             copyNodeTextAction: { _, kind in
@@ -44,11 +45,12 @@ struct DOMTreeMenuModelTests {
         #expect(model.canCopySelectorPath)
         #expect(model.canCopyXPath)
         #expect(model.canDelete)
+        await fixture.runtime.close()
     }
 
     @Test
-    func singleNodeSelectionDisablesDeleteWhenHandlerIsMissing() throws {
-        let fixture = try makeMenuFixture()
+    func singleNodeSelectionDisablesDeleteWhenHandlerIsMissing() async throws {
+        let fixture = try await makeMenuFixture()
         let model = DOMTreeMenuModel(
             context: fixture.context,
             copyNodeTextAction: nil,
@@ -69,11 +71,12 @@ struct DOMTreeMenuModelTests {
         #expect(model.canCopySelectorPath)
         #expect(model.canCopyXPath)
         #expect(!model.canDelete)
+        await fixture.runtime.close()
     }
 
     @Test
-    func multiNodeSelectionUsesSharedHTMLCopyAndMultiDeleteState() throws {
-        let fixture = try makeMenuFixture()
+    func multiNodeSelectionUsesSharedHTMLCopyAndMultiDeleteState() async throws {
+        let fixture = try await makeMenuFixture()
         let model = DOMTreeMenuModel(
             context: fixture.context,
             copyNodeTextAction: { _, kind in
@@ -99,11 +102,12 @@ struct DOMTreeMenuModelTests {
         #expect(!model.canCopySelectorPath)
         #expect(!model.canCopyXPath)
         #expect(model.canDelete)
+        await fixture.runtime.close()
     }
 
     @Test
     func deleteSelectionClearsLocalSelectionOnlyAfterSuccessfulAction() async throws {
-        let fixture = try makeMenuFixture()
+        let fixture = try await makeMenuFixture()
         var clearCount = 0
         let failingModel = DOMTreeMenuModel(
             context: fixture.context,
@@ -149,68 +153,62 @@ struct DOMTreeMenuModelTests {
         await successfulTask.value
         #expect(deletedNodeIDs == [fixture.divID])
         #expect(clearCount == 1)
+        await fixture.runtime.close()
     }
 }
 
 private struct DOMTreeMenuModelFixture {
+    var runtime: WebInspectorDataKitTestRuntime
     var context: WebInspectorModelContext
     var divID: DOMNode.ID
     var inputID: DOMNode.ID
 }
 
 @MainActor
-private func makeMenuFixture() throws -> DOMTreeMenuModelFixture {
-    let context = WebInspectorModelContext.preview()
-    context.seedDOMDocument(menuFixtureDocument())
-    let divID = DOMNode.ID(DOM.Node.ID("div"))
-    let inputID = DOMNode.ID(DOM.Node.ID("input"))
-    _ = try #require(try context.domNode(id: divID))
-    _ = try #require(try context.domNode(id: inputID))
-    return DOMTreeMenuModelFixture(context: context, divID: divID, inputID: inputID)
+private func makeMenuFixture() async throws -> DOMTreeMenuModelFixture {
+    let runtime = try await WebInspectorDataKitTestRuntime.start(
+        scenario: .init(
+            configuration: .init(domains: [.dom]),
+            document: menuFixtureDocument()
+        ),
+        isolation: MainActor.shared
+    )
+    let nodes = try await runtime.model.fetch(
+        WebInspectorFetchDescriptor<DOMNode>()
+    )
+    let divID = try #require(nodes.first(where: { $0.localName == "div" })?.id)
+    let inputID = try #require(nodes.first(where: { $0.localName == "input" })?.id)
+    return DOMTreeMenuModelFixture(
+        runtime: runtime,
+        context: runtime.model,
+        divID: divID,
+        inputID: inputID
+    )
 }
 
-private func menuFixtureDocument() -> DOM.Node {
-    DOM.Node(
-        id: .init("document"),
-        nodeType: 9,
-        nodeName: "#document",
-        childNodeCount: 1,
+private func menuFixtureDocument() -> WebInspectorDataKitTestRuntime.Document {
+    WebInspectorDataKitTestRuntime.Document(
         children: [
-            DOM.Node(
-                id: .init("html"),
-                nodeType: 1,
-                nodeName: "HTML",
-                localName: "html",
-                childNodeCount: 1,
+            .element(
+                id: "html",
+                name: "html",
                 children: [
-                    DOM.Node(
-                        id: .init("body"),
-                        nodeType: 1,
-                        nodeName: "BODY",
-                        localName: "body",
-                        childNodeCount: 2,
+                    .element(
+                        id: "body",
+                        name: "body",
                         children: [
-                            DOM.Node(
-                                id: .init("div"),
-                                nodeType: 1,
-                                nodeName: "DIV",
-                                localName: "div",
+                            .element(
+                                id: "div",
+                                name: "div",
                                 attributes: [
                                     "id": "start-of-content",
                                     "data-testid": "cellInnerDiv",
-                                ],
-                                attributeList: [
-                                    DOM.Attribute(name: "id", value: "start-of-content"),
-                                    DOM.Attribute(name: "data-testid", value: "cellInnerDiv"),
                                 ]
                             ),
-                            DOM.Node(
-                                id: .init("input"),
-                                nodeType: 1,
-                                nodeName: "INPUT",
-                                localName: "input",
-                                attributes: ["disabled": ""],
-                                attributeList: [DOM.Attribute(name: "disabled", value: "")]
+                            .element(
+                                id: "input",
+                                name: "input",
+                                attributes: ["disabled": ""]
                             ),
                         ]
                     ),

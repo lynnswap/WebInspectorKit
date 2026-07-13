@@ -97,8 +97,7 @@ package struct DOMTabController: WebInspectorTab.BuiltInController {
                         model: model,
                         contentStore: contentStore
                     ),
-                    context: model.context,
-                    panelModel: model
+                    model: model
                 )
             )
         }

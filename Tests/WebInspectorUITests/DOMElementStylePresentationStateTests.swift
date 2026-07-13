@@ -11,7 +11,9 @@ extension WebInspectorUIRenderingTests {
 @Suite
 struct DOMElementStyleSnapshotCoordinatorTests {
     /// Keeps the weak `CSSStyles.modelContext` alive for the test lifetime.
-    private let modelContext = WebInspectorModelContext.preview()
+    private let modelContext = WebInspectorModelContainer(
+        configuration: .init(domains: [.dom, .css])
+    ).mainContext
 
     @Test
     func coordinatorRequestsNonAnimatedDiffForInitialLoadedSelection() throws {
@@ -364,8 +366,22 @@ struct DOMElementStyleSnapshotCoordinatorTests {
     }
 
     private func makeStyles(nodeID: String = "node-1") -> CSSStyles {
-        CSSStyles(
-            nodeID: DOMNode.ID(DOM.Node.ID(nodeID)),
+        let targetID = WebInspectorTarget.ID("presentation-test")
+        let documentScope = WebInspectorDOMDocumentScopeStorage(
+            storeID: WebInspectorContainerStoreID(),
+            attachmentGeneration: .init(rawValue: 1),
+            pageGeneration: .init(rawValue: 1),
+            semanticTargetID: targetID,
+            agentTargetID: targetID,
+            domBindingEpoch: .init(rawValue: 1)
+        )
+        return CSSStyles(
+            nodeID: DOMNode.ID(
+                canonical: WebInspectorDOMNodeIdentityStorage(
+                    documentScope: documentScope,
+                    rawNodeID: DOM.Node.ID(nodeID)
+                )
+            ),
             modelContext: modelContext
         )
     }

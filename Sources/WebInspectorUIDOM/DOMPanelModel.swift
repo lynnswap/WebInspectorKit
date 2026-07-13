@@ -158,6 +158,9 @@ package final class DOMPanelModel {
         pickerGeneration += 1
         let generation = pickerGeneration
         isPickingElement = true
+        WebInspectorUIDOMLog.debug(
+            "DOM picker started generation=\(generation)"
+        )
         let context = context
         pickerTask = Task { @MainActor [weak self] in
             let selectedID: DOMNode.ID?
@@ -182,6 +185,9 @@ package final class DOMPanelModel {
             }
             pickerTask = nil
             isPickingElement = false
+            WebInspectorUIDOMLog.debug(
+                "DOM picker finished generation=\(generation) selected=\(String(describing: selectedID))"
+            )
             if let selectedID {
                 selectNode(selectedID, reveal: .selectAndScroll)
             }

@@ -98,7 +98,9 @@ struct DOMTreeRenderSnapshot: Sendable {
     ) {
         precondition(
             rootNodeID.map { nodesByID[$0] != nil } ?? nodesByID.isEmpty,
-            "A DOM render tree must contain its root and cannot contain nodes without one."
+            "A DOM render tree must contain its root and cannot contain nodes without one "
+                + "revision=\(revision) root=\(String(describing: rootNodeID)) "
+                + "nodes=\(nodesByID.count)."
         )
         self.revision = revision
         self.rootNodeID = rootNodeID
@@ -284,10 +286,18 @@ final class DOMTreeRenderState {
             }
         }
 
-        let rootID = delta.primaryRootChange?.rootID ?? snapshot.rootNodeID
         let rootChanged = delta.primaryRootChange != nil
+        let rootID: DOMNode.ID?
+        if let primaryRootChange = delta.primaryRootChange {
+            rootID = primaryRootChange.rootID
+        } else {
+            rootID = snapshot.rootNodeID
+        }
         if rootChanged {
             kind = .root
+            WebInspectorUIDOMLog.debug(
+                "DOM render root changed revision=\(toRevision) root=\(String(describing: rootID)) nodes=\(nodes.count)"
+            )
         }
         snapshot = DOMTreeRenderSnapshot(
             revision: toRevision,

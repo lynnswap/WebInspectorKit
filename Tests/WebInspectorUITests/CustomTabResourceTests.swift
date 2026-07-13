@@ -156,7 +156,7 @@ struct CustomTabResourceTests {
         )
 
         #expect(
-            session.model.configuredDomains
+            session.modelContainer.configuration.domains
                 == [.network, .console, .css, .dom, .runtime]
         )
     }

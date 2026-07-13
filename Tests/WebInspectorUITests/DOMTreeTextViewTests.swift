@@ -1,14 +1,12 @@
 #if canImport(UIKit)
+import Foundation
 import Testing
 import UIKit
-import WebInspectorTestSupport
 @testable import WebInspectorDataKit
+import WebInspectorDataKitTesting
 @testable import WebInspectorProxyKit
-@testable import WebInspectorUI
-@testable import WebInspectorUISyntaxBody
-@testable import WebInspectorUINetwork
+import WebInspectorTestSupport
 @testable import WebInspectorUIDOM
-@testable import WebInspectorUIBase
 
 @MainActor
 @Suite(.serialized)
@@ -16,7 +14,7 @@ struct DOMTreeTextViewTests {
     @Test
     func selectionRevealStateKeepsSelectionOnlyRequestsOutOfTheScrollQueue() {
         let state = DOMTreeTextView.SelectionRevealState()
-        let selectedNodeID = nodeID(1000)
+        let selectedNodeID = testDOMNodeID(1000)
 
         let observation = state.observe(
             selectedNodeID: selectedNodeID,
@@ -32,7 +30,7 @@ struct DOMTreeTextViewTests {
     @Test
     func selectionRevealStateRequeuesTheSameNodeForANewerScrollRequest() {
         let state = DOMTreeTextView.SelectionRevealState()
-        let selectedNodeID = nodeID(1000)
+        let selectedNodeID = testDOMNodeID(1000)
 
         _ = state.observe(
             selectedNodeID: selectedNodeID,
@@ -53,7 +51,7 @@ struct DOMTreeTextViewTests {
     @Test
     func selectionRevealStatePreservesPendingScrollUntilItCanBeConsumed() {
         let state = DOMTreeTextView.SelectionRevealState()
-        let selectedNodeID = nodeID(1000)
+        let selectedNodeID = testDOMNodeID(1000)
 
         _ = state.observe(
             selectedNodeID: selectedNodeID,
@@ -72,7 +70,7 @@ struct DOMTreeTextViewTests {
     @Test
     func selectionRevealStateCancelsPendingScrollForANewerNonScrollRequest() {
         let state = DOMTreeTextView.SelectionRevealState()
-        let selectedNodeID = nodeID(1000)
+        let selectedNodeID = testDOMNodeID(1000)
 
         _ = state.observe(
             selectedNodeID: selectedNodeID,
@@ -90,9 +88,9 @@ struct DOMTreeTextViewTests {
 
     @Test
     func canonicalRenderStateAppliesContentAndTopologyDeltasInPlace() {
-        let documentID = nodeID(1000)
-        let bodyID = nodeID(1001)
-        let childID = nodeID(1002)
+        let documentID = testDOMNodeID(1000)
+        let bodyID = testDOMNodeID(1001)
+        let childID = testDOMNodeID(1002)
         let document = makeCanonicalRenderRow(
             id: documentID,
             nodeType: 9,
@@ -104,8 +102,7 @@ struct DOMTreeTextViewTests {
             parentID: documentID,
             nodeName: "BODY",
             localName: "body",
-            attributes: ["class": "before"],
-            children: .loaded([])
+            attributes: ["class": "before"]
         )
         let state = DOMTreeRenderState(
             revision: 0,
@@ -128,8 +125,7 @@ struct DOMTreeTextViewTests {
                         parentID: documentID,
                         nodeName: "BODY",
                         localName: "body",
-                        attributes: ["class": "after"],
-                        children: .loaded([])
+                        attributes: ["class": "after"]
                     )
                 ],
                 deletedRowIDs: []
@@ -176,130 +172,53 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
-    func rendersDOMMarkupFromDataKitContext() async throws {
-        let view = await makeTreeView()
-        let text = view.documentTextForTesting
-
-        #expect(!text.contains("#document"))
-        #expect(text.contains("<!DOCTYPE html>"))
-        #expect(text.contains("<html lang=\"en\">"))
-        #expect(text.contains("<head>…</head>"))
-        #expect(text.contains("<body class=\"logged-in env-production\">"))
-        #expect(text.contains("<div id=\"start-of-content\" data-testid=\"cellInnerDiv\"></div>"))
-        #expect(text.contains("<input disabled>"))
-        #expect(text.contains("<article>…</article>"))
-        #expect(text.contains("\"Introducing luma for iOS 26\""))
-        #expect(text.contains("<!-- comment text -->"))
-    }
-
-    @Test
-    func collapsedDescendantMutationDoesNotRouteCollapsedSubtreeBuild() async throws {
-        let session = makeDOMTreeFixture()
-        let view = await makeTreeView(fixture: session)
-        let articleID = nodeID(8)
-        let nestedChildID = nodeID(9)
-        let baselineAppliedTreeRevision = view.rowDocumentAppliedTreeRevisionForTesting
-        let baselineBuildCount = view.buildRowRenderPlanCallCountForTesting
-
-        #expect(view.documentTextForTesting.contains("<article>…</article>"))
-        #expect(!view.documentTextForTesting.contains("data-state=\"ready\""))
-
-        session.applyAttributeModified(nestedChildID, name: "data-state", value: "ready")
-        let expectedTreeRevision = session.treeRevision
-        let didObserveTreeRevision = await view.waitForObservedTreeRevisionForTesting(expectedTreeRevision)
-
-        #expect(didObserveTreeRevision)
-        #expect(view.buildRowRenderPlanCallCountForTesting == baselineBuildCount)
-        #expect(DOMTreeTextView.RowRenderBuilder.lastCollectedNodeIDsForTesting.contains(articleID))
-        #expect(!DOMTreeTextView.RowRenderBuilder.lastCollectedNodeIDsForTesting.contains(nestedChildID))
-        #expect(view.rowDocumentAppliedTreeRevisionForTesting == baselineAppliedTreeRevision)
-        #expect(!view.documentTextForTesting.contains("data-state=\"ready\""))
-    }
-
-    @Test
-    func coalescedVisibleThenCollapsedMutationStillRoutesVisibleUpdate() async throws {
-        let session = makeDOMTreeFixture()
-        let view = await makeTreeView(fixture: session)
-        let visibleDivID = nodeID(7)
-        let nestedChildID = nodeID(9)
-
-        #expect(view.documentTextForTesting.contains("<div id=\"start-of-content\" data-testid=\"cellInnerDiv\"></div>"))
-        #expect(view.documentTextForTesting.contains("<article>…</article>"))
-        #expect(!view.documentTextForTesting.contains("data-hidden=\"ready\""))
-
-        let didRenderVisibleAttribute = await waitForRenderedDocumentTreeUpdate(
-            in: view,
-            fixture: session,
-            update: {
-                session.applyAttributeModified(visibleDivID, name: "data-visible", value: "ready")
-                session.applyAttributeModified(nestedChildID, name: "data-hidden", value: "ready")
-            },
-            until: {
-                view.documentTextForTesting.contains("data-visible=\"ready\"")
-            }
+    func rendersAndSelectsDOMThroughContainerOwnedPanelModel() async throws {
+        let runtime = try await WebInspectorDataKitTestRuntime.start(
+            scenario: .init(
+                configuration: .init(domains: [.dom]),
+                document: .init(children: [
+                    .element(
+                        id: "html",
+                        name: "html",
+                        attributes: ["lang": "en"],
+                        children: [
+                            .element(
+                                id: "body",
+                                name: "body",
+                                children: [
+                                    .element(
+                                        id: "input",
+                                        name: "input",
+                                        attributes: ["disabled": ""]
+                                    )
+                                ]
+                            )
+                        ]
+                    )
+                ])
+            ),
+            isolation: MainActor.shared
         )
+        let panelModel = try await DOMPanelModel.make(context: runtime.model)
+        let view = DOMTreeTextView(model: panelModel)
+        view.setUsesInlineRowRenderBuildsForTesting(true)
+        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
+        view.setRenderingActive(true)
 
-        #expect(didRenderVisibleAttribute)
-        #expect(view.documentTextForTesting.contains("data-visible=\"ready\""))
-        #expect(!view.documentTextForTesting.contains("data-hidden=\"ready\""))
-    }
+        #expect(await view.waitForRowDocumentForTesting())
+        #expect(view.documentTextForTesting.contains("<html lang=\"en\">"))
+        #expect(view.documentTextForTesting.contains("<input disabled>"))
 
-    @Test
-    func documentRootStructureMutationRoutesHiddenRenderRoot() async throws {
-        let session = makeDOMTreeFixture(
-            root: DOM.Node(
-                id: proxyNodeID(1),
-                nodeType: 9,
-                nodeName: "#document",
-                childNodeCount: 1
-            )
-        )
-        let view = await makeTreeView(fixture: session)
-        let rootID = try #require(session.currentPageRootNode?.id)
+        let inputID = try #require(panelModel.nodes.snapshot.itemIDs.first { id in
+            runtime.model.model(for: id)?.localName == "input"
+        })
+        panelModel.selectNode(inputID, reveal: .selectOnly)
+        #expect(await view.waitForRowDocumentForTesting())
+        #expect(panelModel.selectedNodeID == inputID)
 
-        #expect(view.documentTextForTesting.isEmpty)
-
-        let didRenderDocumentElement = await waitForRenderedDocumentTreeUpdate(
-            in: view,
-            fixture: session,
-            update: {
-                session.applySetChildNodes(
-                    parent: rootID,
-                    children: [
-                        DOM.Node(
-                            id: proxyNodeID(2),
-                            nodeType: 1,
-                            nodeName: "HTML",
-                            localName: "html"
-                        ),
-                    ],
-                    eventSequence: 1
-                )
-            },
-            until: {
-                view.documentTextForTesting.contains("<html")
-            }
-        )
-
-        #expect(didRenderDocumentElement)
-        #expect(view.documentTextForTesting.contains("<html"))
-    }
-
-    @Test
-    func rowDocumentStoresTokenForegroundAttributes() async throws {
-        let view = await makeTreeView()
-
-        let baseForeground = try #require(view.rowDocumentBaseForegroundColorForTesting)
-        let tagNameStorageForeground = try #require(view.rowDocumentForegroundColorForTesting(containing: "input"))
-        let attributeNameStorageForeground = try #require(view.rowDocumentForegroundColorForTesting(containing: "disabled"))
-        let tagNameTokenForeground = try #require(view.tokenForegroundColorForTesting(kind: "tagName"))
-        let attributeNameTokenForeground = try #require(view.tokenForegroundColorForTesting(kind: "attributeName"))
-
-        #expect(!colorsEqual(tagNameStorageForeground, baseForeground))
-        #expect(!colorsEqual(attributeNameStorageForeground, baseForeground))
-        #expect(colorsEqual(tagNameStorageForeground, tagNameTokenForeground))
-        #expect(colorsEqual(attributeNameStorageForeground, attributeNameTokenForeground))
-        #expect(view.disclosureAttachmentSnapshotsForTesting.contains { $0.hasAttachment })
+        view.setRenderingActive(false)
+        await panelModel.retire()
+        await runtime.close()
     }
 
     @Test
@@ -322,58 +241,23 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
-    func textDocumentLayoutFragmentsExposeRowIdentity() throws {
-        let document = DOMTreeTextDocument()
-        let rows = makeRowDocumentRows(["alpha", "beta"])
-        document.replaceDocument(with: attributedRowDocument(rows: rows), rows: rows)
-        document.textContainer.size = CGSize(width: 1_000, height: 1_000)
-
-        let fullRange = try #require(document.textRange(for: NSRange(location: 0, length: document.utf16Length)))
-        document.layoutManager.ensureLayout(for: fullRange)
-        var fragments: [NSTextLayoutFragment] = []
-        document.layoutManager.enumerateTextLayoutFragments(
-            from: fullRange.location,
-            options: []
-        ) { fragment in
-            fragments.append(fragment)
-            return true
-        }
-
-        let firstFragment = try #require(fragments.first)
-        #expect(document.rowIdentity(for: firstFragment) == rows[0].identity)
-        #expect(document.row(for: firstFragment) == rows[0])
-    }
-
-    @Test
     func textDocumentSingleRowReplacementPreservesSurroundingRowIdentities() throws {
         let document = DOMTreeTextDocument()
         let initialRows = makeRowDocumentRows(["first", "middle", "third"])
-        document.replaceDocument(with: attributedRowDocument(rows: initialRows), rows: initialRows)
-
+        document.replaceDocument(
+            with: attributedRowDocument(rows: initialRows),
+            rows: initialRows
+        )
         let nextRows = makeRowDocumentRows(["first", "second", "third"])
+
         document.replaceCharacters(
             in: initialRows[1].documentRange,
             with: attributedRowDocument(rows: [nextRows[1]]),
             rows: nextRows
         )
 
-        let firstParagraph = try #require(document.textContentStorage(
-            document.textContentStorage,
-            textParagraphWith: nextRows[0].documentRange
-        ) as? DOMTreeRowParagraph)
-        let middleParagraph = try #require(document.textContentStorage(
-            document.textContentStorage,
-            textParagraphWith: nextRows[1].documentRange
-        ) as? DOMTreeRowParagraph)
-        let lastParagraph = try #require(document.textContentStorage(
-            document.textContentStorage,
-            textParagraphWith: nextRows[2].documentRange
-        ) as? DOMTreeRowParagraph)
-
         #expect(document.string == "first\nsecond\nthird")
-        #expect(firstParagraph.identity == nextRows[0].identity)
-        #expect(middleParagraph.identity == nextRows[1].identity)
-        #expect(lastParagraph.identity == nextRows[2].identity)
+        #expect(document.rowIndex.rows.map(\.identity) == nextRows.map(\.identity))
     }
 
     @Test
@@ -432,1036 +316,580 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
-    func selectingNodeUpdatesDataKitSelectionAndRowDecoration() async throws {
-        let session = makeDOMTreeFixture()
-        let view = await makeTreeView(fixture: session)
+    func textDocumentLayoutFragmentsExposeRowIdentity() throws {
+        let document = DOMTreeTextDocument()
+        let rows = makeRowDocumentRows(["alpha", "beta"])
+        document.replaceDocument(
+            with: attributedRowDocument(rows: rows),
+            rows: rows
+        )
+        document.textContainer.size = CGSize(width: 1_000, height: 1_000)
 
-        view.selectRowForTesting(containing: "<input disabled>")
-        view.layoutIfNeeded()
+        let fullRange = try #require(document.textRange(for: NSRange(
+            location: 0,
+            length: document.utf16Length
+        )))
+        document.layoutManager.ensureLayout(for: fullRange)
+        var fragments: [NSTextLayoutFragment] = []
+        document.layoutManager.enumerateTextLayoutFragments(
+            from: fullRange.location,
+            options: []
+        ) { fragment in
+            fragments.append(fragment)
+            return true
+        }
 
-        #expect(session.selectedNode?.localName == "input")
-        #expect(view.selectedRowRectsForTesting().count == 1)
+        let firstFragment = try #require(fragments.first)
+        #expect(document.rowIdentity(for: firstFragment) == rows[0].identity)
+        #expect(document.row(for: firstFragment) == rows[0])
     }
 
     @Test
-    func primaryClickingRowUpdatesDataKitSelection() async throws {
-        let session = makeDOMTreeFixture()
-        let view = await makeTreeView(fixture: session)
+    func canonicalDeltaSkipsCollapsedDescendantRendering() async throws {
+        let fixture = try await DOMTreeRuntimeFixture.start()
+        let view = await fixture.makeView()
+        let baselineRevision = view.rowDocumentAppliedTreeRevisionForTesting
+        let baselineBuildCount = view.buildRowRenderPlanCallCountForTesting
 
-        view.primaryClickRowForTesting(containing: "<input disabled>")
-        view.layoutIfNeeded()
+        #expect(view.documentTextForTesting.contains("<article>…</article>"))
+        #expect(!view.documentTextForTesting.contains("data-state=\"ready\""))
 
-        #expect(session.selectedNode?.localName == "input")
-        #expect(view.selectedRowRectsForTesting().count == 1)
+        let revision = try await fixture.modifyAttribute(
+            nodeID: "span",
+            name: "data-state",
+            value: "ready"
+        )
+        #expect(await view.waitForObservedTreeRevisionForTesting(revision))
+
+        #expect(view.buildRowRenderPlanCallCountForTesting == baselineBuildCount)
+        #expect(view.rowDocumentAppliedTreeRevisionForTesting == baselineRevision)
+        #expect(!view.documentTextForTesting.contains("data-state=\"ready\""))
+        await fixture.close(view: view)
     }
 
     @Test
-    func hitTestingVisibleRowCentersReturnsTheMatchingRow() async throws {
-        let view = await makeTreeView()
-        view.layoutIfNeeded()
-        let visibleFragments = view.rowFragmentSnapshotsForTesting.prefix(16)
+    func canonicalVisibleDeltaUsesIncrementalTextStorageUpdate() async throws {
+        let fixture = try await DOMTreeRuntimeFixture.start()
+        let view = await fixture.makeView()
+        view.resetPerformanceCountersForTesting()
 
-        for fragment in visibleFragments {
+        let revision = try await fixture.modifyAttribute(
+            nodeID: "visible-div",
+            name: "data-state",
+            value: "ready"
+        )
+        #expect(
+            await view.waitForRowDocumentAppliedTreeRevisionForTesting(revision)
+        )
+
+        #expect(view.documentTextForTesting.contains("data-state=\"ready\""))
+        #expect(view.incrementalRowDocumentEditCallCountForTesting > 0)
+        #expect(view.replaceRowDocumentCallCountForTesting == 0)
+        await fixture.close(view: view)
+    }
+
+    @Test
+    func hiddenCanonicalDeltaRendersOnlyAfterRenderingResumes() async throws {
+        let fixture = try await DOMTreeRuntimeFixture.start()
+        let view = await fixture.makeView()
+        view.setRenderingActive(false)
+
+        let revision = try await fixture.modifyAttribute(
+            nodeID: "visible-div",
+            name: "data-hidden-update",
+            value: "ready"
+        )
+        #expect(await view.waitForObservedTreeRevisionForTesting(revision))
+        #expect(
+            !view.documentTextForTesting.contains(
+                "data-hidden-update=\"ready\""
+            )
+        )
+
+        view.setRenderingActive(true)
+        #expect(
+            await view.waitForRowDocumentAppliedTreeRevisionForTesting(revision)
+        )
+        #expect(
+            view.documentTextForTesting.contains(
+                "data-hidden-update=\"ready\""
+            )
+        )
+        await fixture.close(view: view)
+    }
+
+    @Test
+    func rowSelectionAndDisclosureUseTheSharedPanelModel() async throws {
+        let fixture = try await DOMTreeRuntimeFixture.start()
+        let view = await fixture.makeView()
+        view.layoutIfNeeded()
+
+        #expect(view.primaryClickRowForTesting(containing: "<input disabled>"))
+        let inputID = try fixture.nodeID("input")
+        #expect(fixture.model.selectedNodeID == inputID)
+        #expect(view.selectedRowRectsForTesting().count == 1)
+
+        let disclosurePoint = try #require(
+            view.disclosureHitPointForTesting(containing: "<article")
+        )
+        view.primaryClickContentPointForTesting(disclosurePoint)
+        #expect(await view.waitForRowDocumentForTesting())
+        #expect(
+            view.documentTextForTesting.contains(
+                "<span id=\"nested-child\"></span>"
+            )
+        )
+        await fixture.close(view: view)
+    }
+
+    @Test
+    func rowDocumentStoresTokenForegroundAttributes() async throws {
+        let fixture = try await DOMTreeRuntimeFixture.start()
+        let view = await fixture.makeView()
+
+        let baseForeground = try #require(
+            view.rowDocumentBaseForegroundColorForTesting
+        )
+        let tagNameStorageForeground = try #require(
+            view.rowDocumentForegroundColorForTesting(containing: "input")
+        )
+        let attributeNameStorageForeground = try #require(
+            view.rowDocumentForegroundColorForTesting(containing: "disabled")
+        )
+        let tagNameTokenForeground = try #require(
+            view.tokenForegroundColorForTesting(kind: "tagName")
+        )
+        let attributeNameTokenForeground = try #require(
+            view.tokenForegroundColorForTesting(kind: "attributeName")
+        )
+
+        #expect(tagNameStorageForeground != baseForeground)
+        #expect(attributeNameStorageForeground != baseForeground)
+        #expect(tagNameStorageForeground == tagNameTokenForeground)
+        #expect(attributeNameStorageForeground == attributeNameTokenForeground)
+        #expect(
+            view.disclosureAttachmentSnapshotsForTesting.contains {
+                $0.hasAttachment
+            }
+        )
+        await fixture.close(view: view)
+    }
+
+    @Test
+    func visibleRowCentersHitTestTheirRenderedRows() async throws {
+        let fixture = try await DOMTreeRuntimeFixture.start()
+        let view = await fixture.makeView()
+        view.layoutIfNeeded()
+
+        for fragment in view.rowFragmentSnapshotsForTesting.prefix(16) {
             let point = CGPoint(
                 x: max(4, fragment.frame.minX + 4),
                 y: fragment.frame.midY
             )
-            #expect(view.hitTestedLineTextForTesting(atContentPoint: point) == fragment.text)
+            #expect(
+                view.hitTestedLineTextForTesting(atContentPoint: point)
+                    == fragment.text
+            )
         }
+        await fixture.close(view: view)
     }
 
     @Test
-    func primaryClickingDisclosurePointTogglesRowExpansion() async throws {
-        let view = await makeTreeView()
-        view.layoutIfNeeded()
-        let point = try #require(view.disclosureHitPointForTesting(containing: "<article"))
-
-        #expect(view.disclosureHitTestedLineTextForTesting(atContentPoint: point)?.contains("<article") == true)
-        view.primaryClickContentPointForTesting(point)
-        #expect(await view.waitForRowDocumentForTesting())
-
-        #expect(view.documentTextForTesting.contains("<span id=\"nested-child\"></span>"))
-    }
-
-    @Test
-    func primaryClickingRowHighlightsSelectedPageNode() async throws {
-        let session = makeDOMTreeFixture()
-        let recorder = NodeActionRecorder()
-        let view = DOMTreeTextView(
-            context: session.context,
+    func selectionAndHoverRouteTheirPageHighlightOwners() async throws {
+        let fixture = try await DOMTreeRuntimeFixture.start()
+        let highlights = DOMTreeNodeActionRecorder()
+        let restores = DOMTreeVoidActionRecorder()
+        let view = await fixture.makeView(
             highlightNodeAction: { nodeID, owner in
-                recorder.record(nodeID, owner: owner)
+                highlights.record(nodeID, owner: owner)
+            },
+            restoreHighlightAction: {
+                restores.record()
             }
         )
-        configureTreeViewForDeterministicTesting(view)
-        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
-        view.layoutIfNeeded()
-        view.setRenderingActive(true)
-        #expect(await view.waitForRowDocumentForTesting())
 
-        view.primaryClickRowForTesting(containing: "<input disabled>")
-        let highlightedNodeID = await recorder.nextNodeID()
+        #expect(view.primaryClickRowForTesting(containing: "<input disabled>"))
+        let selectedID = await highlights.nextNodeID()
+        #expect(fixture.model.selectedNodeID == selectedID)
+        #expect(highlights.recordedOwners == [.selection])
 
-        #expect(session.selectedNode?.id == highlightedNodeID)
-        #expect(session.node(for: highlightedNodeID)?.localName == "input")
-        #expect(recorder.recordedOwners == [.selection])
+        view.hoverRowForTesting(containing: "<article")
+        let hoveredID = await highlights.nextNodeID(after: selectedID)
+        #expect(try fixture.nodeID("article") == hoveredID)
+        #expect(highlights.recordedOwners == [.selection, .transient])
+
+        view.endHoverForTesting()
+        await restores.next()
+        #expect(restores.recordCount == 1)
+        await fixture.close(view: view)
     }
 
     @Test
-    func duplicateSelectionInvalidationCoalescesInFlightPageHighlight() async throws {
-        let session = makeDOMTreeFixture()
-        let recorder = ControlledNodeActionRecorder()
-        let view = DOMTreeTextView(
-            context: session.context,
+    func duplicateSelectionInvalidationCoalescesInFlightPageHighlight()
+        async throws
+    {
+        let fixture = try await DOMTreeRuntimeFixture.start()
+        let highlights = DOMTreeControlledNodeActionRecorder()
+        let view = await fixture.makeView(
             highlightNodeAction: { nodeID, owner in
-                try await recorder.run(nodeID, owner: owner)
+                try await highlights.run(nodeID, owner: owner)
             }
         )
-        configureTreeViewForDeterministicTesting(view)
-        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
-        view.layoutIfNeeded()
-        view.setRenderingActive(true)
-        #expect(await view.waitForRowDocumentForTesting())
 
-        view.primaryClickRowForTesting(containing: "<input disabled>")
-        await recorder.waitForInvocationCount(1)
-        #expect(await view.waitForObservedTreeRevisionForTesting(session.treeRevision))
-
+        #expect(view.primaryClickRowForTesting(containing: "<input disabled>"))
+        await highlights.waitForInvocationCount(1)
         view.routeCurrentSelectionInvalidationForTesting()
         view.routeCurrentSelectionInvalidationForTesting()
         await Task.yield()
 
-        #expect(recorder.invocationCount == 1)
-        await recorder.resolveInvocation(at: 0, as: .success)
+        #expect(highlights.invocationCount == 1)
+        highlights.resolveInvocation(at: 0, as: .success)
         await view.waitForPageHighlightTaskForTesting()
-        #expect(recorder.recordedOwners == [.selection])
+        #expect(highlights.recordedOwners == [.selection])
+        await fixture.close(view: view)
     }
 
     @Test
     func changingSelectionReplacesInFlightPageHighlight() async throws {
-        let session = makeDOMTreeFixture()
-        let recorder = ControlledNodeActionRecorder()
-        let view = DOMTreeTextView(
-            context: session.context,
+        let fixture = try await DOMTreeRuntimeFixture.start()
+        let highlights = DOMTreeControlledNodeActionRecorder()
+        let view = await fixture.makeView(
             highlightNodeAction: { nodeID, owner in
-                try await recorder.run(nodeID, owner: owner)
+                try await highlights.run(nodeID, owner: owner)
             }
         )
-        configureTreeViewForDeterministicTesting(view)
-        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
-        view.layoutIfNeeded()
-        view.setRenderingActive(true)
-        #expect(await view.waitForRowDocumentForTesting())
 
-        view.primaryClickRowForTesting(containing: "<input disabled>")
-        await recorder.waitForInvocationCount(1)
-        let firstNodeID = try #require(session.selectedNode?.id)
+        #expect(view.primaryClickRowForTesting(containing: "<input disabled>"))
+        await highlights.waitForInvocationCount(1)
+        #expect(view.primaryClickRowForTesting(containing: "<article"))
+        await highlights.waitForInvocationCount(2)
 
-        view.primaryClickRowForTesting(containing: "<article")
-        await recorder.waitForInvocationCount(2)
-        let secondNodeID = try #require(session.selectedNode?.id)
-        #expect(firstNodeID != secondNodeID)
-
-        // The cancelled A completion must not clear B's operation token and
-        // allow a duplicate B invalidation to launch a third wire command.
-        await Task.yield()
+        #expect(highlights.recordedNodeIDs == [
+            try fixture.nodeID("input"),
+            try fixture.nodeID("article"),
+        ])
         view.routeCurrentSelectionInvalidationForTesting()
         await Task.yield()
-        #expect(recorder.invocationCount == 2)
-        #expect(recorder.recordedNodeIDs == [firstNodeID, secondNodeID])
+        #expect(highlights.invocationCount == 2)
 
-        await recorder.resolveInvocation(at: 1, as: .success)
+        highlights.resolveInvocation(at: 1, as: .success)
         await view.waitForPageHighlightTaskForTesting()
-        #expect(recorder.recordedOwners == [.selection, .selection])
-    }
-
-    @Test
-    func staleSelectionHighlightCompletionCannotClearCurrentABAIntent() async throws {
-        let session = makeDOMTreeFixture()
-        let recorder = ControlledNodeActionRecorder(ignoresCancellation: true)
-        let view = DOMTreeTextView(
-            context: session.context,
-            highlightNodeAction: { nodeID, owner in
-                try await recorder.run(nodeID, owner: owner)
-            }
-        )
-        configureTreeViewForDeterministicTesting(view)
-        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
-        view.layoutIfNeeded()
-        view.setRenderingActive(true)
-        #expect(await view.waitForRowDocumentForTesting())
-
-        view.primaryClickRowForTesting(containing: "<input disabled>")
-        await recorder.waitForInvocationCount(1)
-        let nodeA = try #require(session.selectedNode?.id)
-
-        view.primaryClickRowForTesting(containing: "<article")
-        await recorder.waitForInvocationCount(2)
-        let nodeB = try #require(session.selectedNode?.id)
-
-        view.primaryClickRowForTesting(containing: "<input disabled>")
-        await recorder.waitForInvocationCount(3)
-        #expect(session.selectedNode?.id == nodeA)
-
-        // Complete stale A1 and B2 after A3 is current. Neither completion
-        // owns A3's intent, even though A1 has the same semantic node ID.
-        await recorder.resolveInvocation(at: 0, as: .success)
-        await recorder.resolveInvocation(at: 1, as: .success)
-        await recorder.resolveInvocation(at: 2, as: .failure)
-        await view.waitForPageHighlightTaskForTesting()
-
-        view.routeCurrentSelectionInvalidationForTesting()
-        await recorder.waitForInvocationCount(4)
-        #expect(recorder.recordedNodeIDs == [nodeA, nodeB, nodeA, nodeA])
-        await recorder.resolveInvocation(at: 3, as: .success)
-        await view.waitForPageHighlightTaskForTesting()
+        await fixture.close(view: view)
     }
 
     @Test
     func selectionHighlightFailureAllowsLaterInvalidationRetry() async throws {
-        let session = makeDOMTreeFixture()
-        let recorder = ControlledNodeActionRecorder()
-        let view = DOMTreeTextView(
-            context: session.context,
+        let fixture = try await DOMTreeRuntimeFixture.start()
+        let highlights = DOMTreeControlledNodeActionRecorder()
+        let view = await fixture.makeView(
             highlightNodeAction: { nodeID, owner in
-                try await recorder.run(nodeID, owner: owner)
+                try await highlights.run(nodeID, owner: owner)
             }
         )
-        configureTreeViewForDeterministicTesting(view)
-        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
-        view.layoutIfNeeded()
-        view.setRenderingActive(true)
-        #expect(await view.waitForRowDocumentForTesting())
 
-        view.primaryClickRowForTesting(containing: "<input disabled>")
-        await recorder.waitForInvocationCount(1)
-        #expect(await view.waitForObservedTreeRevisionForTesting(session.treeRevision))
-        await recorder.resolveInvocation(at: 0, as: .failure)
+        #expect(view.primaryClickRowForTesting(containing: "<input disabled>"))
+        await highlights.waitForInvocationCount(1)
+        highlights.resolveInvocation(at: 0, as: .failure)
         await view.waitForPageHighlightTaskForTesting()
 
         view.routeCurrentSelectionInvalidationForTesting()
-        await recorder.waitForInvocationCount(2)
-        await recorder.resolveInvocation(at: 1, as: .success)
+        await highlights.waitForInvocationCount(2)
+        highlights.resolveInvocation(at: 1, as: .success)
         await view.waitForPageHighlightTaskForTesting()
 
-        #expect(recorder.recordedNodeIDs.count == 2)
-        #expect(recorder.recordedNodeIDs[0] == recorder.recordedNodeIDs[1])
-        #expect(recorder.recordedOwners == [.selection, .selection])
-    }
-
-    @Test
-    func hoverEndRestoresSelectedPageHighlight() async throws {
-        let session = makeDOMTreeFixture()
-        let restoreRecorder = VoidActionRecorder()
-        let view = DOMTreeTextView(
-            context: session.context,
-            highlightNodeAction: { _, _ in },
-            restoreHighlightAction: {
-                restoreRecorder.record()
-            }
-        )
-        configureTreeViewForDeterministicTesting(view)
-        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
-        view.layoutIfNeeded()
-        view.setRenderingActive(true)
-        #expect(await view.waitForRowDocumentForTesting())
-
-        view.primaryClickRowForTesting(containing: "<input disabled>")
-        view.hoverRowForTesting(containing: "<article")
-        view.endHoverForTesting()
-        await restoreRecorder.next()
-
-        #expect(session.selectedNode?.localName == "input")
-    }
-
-    @Test
-    func repeatedHoverEndCancelsPendingRestoreHighlight() async throws {
-        let session = makeDOMTreeFixture()
-        let restoreRecorder = VoidActionRecorder()
-        let view = DOMTreeTextView(
-            context: session.context,
-            highlightNodeAction: { _, _ in },
-            restoreHighlightAction: {
-                restoreRecorder.record()
-            }
-        )
-        configureTreeViewForDeterministicTesting(view)
-        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
-        view.layoutIfNeeded()
-        view.setRenderingActive(true)
-        #expect(await view.waitForRowDocumentForTesting())
-
-        view.primaryClickRowForTesting(containing: "<input disabled>")
-        view.hoverRowForTesting(containing: "<article")
-        view.endHoverForTesting()
-        view.endHoverForTesting()
-        await restoreRecorder.next()
-        await view.waitForPageHighlightTaskForTesting()
-
-        #expect(session.selectedNode?.localName == "input")
-        #expect(restoreRecorder.recordCount == 1)
-    }
-
-    @Test
-    func hidingWithHoveredPageHighlightRestoresHighlightWhileRenderingInactive() async throws {
-        let session = makeDOMTreeFixture()
-        let highlightRecorder = NodeActionRecorder()
-        let restoreRecorder = VoidActionRecorder()
-        let view = DOMTreeTextView(
-            context: session.context,
-            highlightNodeAction: { nodeID, owner in
-                highlightRecorder.record(nodeID, owner: owner)
-            },
-            restoreHighlightAction: {
-                restoreRecorder.record()
-            }
-        )
-        configureTreeViewForDeterministicTesting(view)
-        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
-        view.layoutIfNeeded()
-        view.setRenderingActive(true)
-        #expect(await view.waitForRowDocumentForTesting())
-
-        view.hoverRowForTesting(containing: "<article")
-        _ = await highlightRecorder.nextNodeID()
-
-        view.setRenderingActive(false)
-        await restoreRecorder.next()
-
-        #expect(highlightRecorder.recordedOwners == [.transient])
-        #expect(restoreRecorder.recordCount == 1)
-    }
-
-    @Test
-    func hidingWithQueuedHoverRestorePreservesHighlightRestoreTask() async throws {
-        let session = makeDOMTreeFixture()
-        let restoreRecorder = VoidActionRecorder()
-        let view = DOMTreeTextView(
-            context: session.context,
-            highlightNodeAction: { _, _ in },
-            restoreHighlightAction: {
-                restoreRecorder.record()
-            }
-        )
-        configureTreeViewForDeterministicTesting(view)
-        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
-        view.layoutIfNeeded()
-        view.setRenderingActive(true)
-        #expect(await view.waitForRowDocumentForTesting())
-
-        view.primaryClickRowForTesting(containing: "<input disabled>")
-        view.hoverRowForTesting(containing: "<article")
-        view.endHoverForTesting()
-        view.setRenderingActive(false)
-        await restoreRecorder.next()
-
-        #expect(session.selectedNode?.localName == "input")
-        #expect(restoreRecorder.recordCount == 1)
-    }
-
-    @Test
-    func hidingWithQueuedSelectionHighlightRequeuesHighlightOnResume() async throws {
-        let session = makeDOMTreeFixture()
-        let highlightRecorder = NodeActionRecorder()
-        let view = DOMTreeTextView(
-            context: session.context,
-            highlightNodeAction: { nodeID, owner in
-                highlightRecorder.record(nodeID, owner: owner)
-            }
-        )
-        configureTreeViewForDeterministicTesting(view)
-        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
-        view.layoutIfNeeded()
-        view.setRenderingActive(true)
-        #expect(await view.waitForRowDocumentForTesting())
-
-        view.primaryClickRowForTesting(containing: "<input disabled>")
-        view.setRenderingActive(false)
-        await view.waitForPageHighlightTaskForTesting()
-
-        #expect(highlightRecorder.recordedNodeIDs.isEmpty)
-
-        view.setRenderingActive(true)
-        let highlightedNodeID = await highlightRecorder.nextNodeID()
-
-        #expect(session.selectedNode?.id == highlightedNodeID)
-        #expect(session.node(for: highlightedNodeID)?.localName == "input")
-        #expect(highlightRecorder.recordedOwners == [.selection])
-    }
-
-    @Test
-    func hoverHighlightCancelsPendingRestoreHighlight() async throws {
-        let session = makeDOMTreeFixture()
-        let highlightRecorder = NodeActionRecorder()
-        let restoreRecorder = CancellableVoidActionRecorder()
-        let view = DOMTreeTextView(
-            context: session.context,
-            highlightNodeAction: { nodeID, owner in
-                highlightRecorder.record(nodeID, owner: owner)
-            },
-            restoreHighlightAction: {
-                await restoreRecorder.run()
-            }
-        )
-        configureTreeViewForDeterministicTesting(view)
-        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
-        view.layoutIfNeeded()
-        view.setRenderingActive(true)
-        #expect(await view.waitForRowDocumentForTesting())
-
-        view.primaryClickRowForTesting(containing: "<input disabled>")
-        view.hoverRowForTesting(containing: "<article")
-        view.endHoverForTesting()
-        await restoreRecorder.nextStart()
-        highlightRecorder.removeAll()
-
-        view.hoverRowForTesting(containing: "<input disabled>")
-        await restoreRecorder.nextCancellation()
-        let highlightedNodeID = await highlightRecorder.nextNodeID()
-
-        #expect(session.node(for: highlightedNodeID)?.localName == "input")
-        #expect(highlightRecorder.recordedOwners == [.transient])
-    }
-
-    @Test
-    func pageHighlightActionsOverrideElementPickerState() async throws {
-        let session = makeDOMTreeFixture()
-        session.isSelectingElement = true
-        let highlightRecorder = NodeActionRecorder()
-        let restoreRecorder = VoidActionRecorder()
-        let view = DOMTreeTextView(
-            context: session.context,
-            highlightNodeAction: { nodeID, owner in
-                highlightRecorder.record(nodeID, owner: owner)
-            },
-            restoreHighlightAction: {
-                restoreRecorder.record()
-            }
-        )
-        configureTreeViewForDeterministicTesting(view)
-        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
-        view.layoutIfNeeded()
-        view.setRenderingActive(true)
-        #expect(await view.waitForRowDocumentForTesting())
-
-        view.primaryClickRowForTesting(containing: "<input disabled>")
-        let selectionHighlightedNodeID = await highlightRecorder.nextNodeID()
-
-        #expect(session.selectedNode?.id == selectionHighlightedNodeID)
-        #expect(session.node(for: selectionHighlightedNodeID)?.localName == "input")
-        #expect(highlightRecorder.recordedOwners == [.selection])
-        highlightRecorder.removeAll()
-
-        view.hoverRowForTesting(containing: "<article")
-        let hoverHighlightedNodeID = await highlightRecorder.nextNodeID()
-
-        #expect(session.node(for: hoverHighlightedNodeID)?.localName == "article")
-        #expect(highlightRecorder.recordedOwners == [.transient])
-
-        view.endHoverForTesting()
-        await restoreRecorder.next()
-
-        #expect(session.selectedNode?.localName == "input")
-        #expect(restoreRecorder.recordCount == 1)
+        #expect(highlights.recordedNodeIDs.count == 2)
+        #expect(highlights.recordedNodeIDs[0] == highlights.recordedNodeIDs[1])
+        await fixture.close(view: view)
     }
 
     @Test
     func expandedElementRendersChildrenAndClosingTag() async throws {
-        let view = await makeTreeView()
+        let fixture = try await DOMTreeRuntimeFixture.start()
+        let view = await fixture.makeView()
 
         view.toggleRowForTesting(containing: "<article")
         #expect(await view.waitForRowDocumentForTesting())
 
-        let text = view.documentTextForTesting
-        #expect(text.contains("<article>"))
-        #expect(text.contains("<span id=\"nested-child\"></span>"))
-        #expect(text.contains("</article>"))
-        #expect(!text.contains("<article>…</article>"))
+        #expect(view.documentTextForTesting.contains("<article>"))
+        #expect(
+            view.documentTextForTesting.contains(
+                "<span id=\"nested-child\"></span>"
+            )
+        )
+        #expect(view.documentTextForTesting.contains("</article>"))
+        #expect(!view.documentTextForTesting.contains("<article>…</article>"))
+        await fixture.close(view: view)
     }
 
     @Test
-    func localMarkupLookupUsesIndexedOpeningRow() async throws {
-        let session = makeDOMTreeFixture()
-        let view = await makeTreeView(fixture: session)
-
+    func localMarkupLookupAndCacheDistinguishOpeningAndClosingRows()
+        async throws
+    {
+        let fixture = try await DOMTreeRuntimeFixture.start()
+        let view = await fixture.makeView()
         view.toggleRowForTesting(containing: "<article")
         #expect(await view.waitForRowDocumentForTesting())
+        let articleID = try fixture.nodeID("article")
 
-        let articleID = try #require(
-            session.snapshot().nodesByID.first { entry in
-                entry.value.localName == "article"
-            }?.key
+        #expect(
+            view.localMarkupTextByNodeIDForTesting([articleID])[articleID]
+                == "      <article>"
         )
-
-        let markupByNodeID = view.localMarkupTextByNodeIDForTesting([articleID])
-        #expect(markupByNodeID[articleID] == "      <article>")
-        #expect(view.documentTextForTesting.contains("</article>"))
+        #expect(view.cachedMarkupKeysForTesting.contains(.init(
+            nodeID: articleID,
+            isClosingTag: false
+        )))
+        #expect(view.cachedMarkupKeysForTesting.contains(.init(
+            nodeID: articleID,
+            isClosingTag: true
+        )))
 
         view.removeRowIndexForTesting(containing: "<article>")
         #expect(view.localMarkupTextByNodeIDForTesting([articleID]).isEmpty)
+        await fixture.close(view: view)
     }
 
     @Test
-    func markupCacheSeparatesOpeningAndClosingRowsForSameNode() async throws {
-        let session = makeDOMTreeFixture()
-        let view = await makeTreeView(fixture: session)
+    func multiSelectionUsesRenderedDisplayOrder() async throws {
+        let fixture = try await DOMTreeRuntimeFixture.start()
+        let view = await fixture.makeView()
 
-        view.toggleRowForTesting(containing: "<article")
-        #expect(await view.waitForRowDocumentForTesting())
+        #expect(view.primaryClickRowForTesting(
+            containing: "<article",
+            modifiers: .command
+        ))
+        #expect(view.primaryClickRowForTesting(
+            containing: "<div data-testid=\"cellInnerDiv\"",
+            modifiers: .command
+        ))
+        #expect(view.primaryClickRowForTesting(
+            containing: "<input disabled>",
+            modifiers: .command
+        ))
 
-        let articleID = try #require(
-            session.snapshot().nodesByID.first { entry in
-                entry.value.localName == "article"
-            }?.key
-        )
-        let cachedKeys = view.cachedMarkupKeysForTesting
-
-        #expect(cachedKeys.contains(DOMTreeTextView.MarkupCacheKey(nodeID: articleID, isClosingTag: false)))
-        #expect(cachedKeys.contains(DOMTreeTextView.MarkupCacheKey(nodeID: articleID, isClosingTag: true)))
-    }
-
-    @Test
-    func multiSelectionDisplayOrderUsesRenderedRowIndexes() async throws {
-        let view = await makeTreeView()
-
-        view.primaryClickRowForTesting(containing: "<article", modifiers: .command)
-        view.primaryClickRowForTesting(containing: "<div id=\"start-of-content\"", modifiers: .command)
-        view.primaryClickRowForTesting(containing: "<input disabled>", modifiers: .command)
-
-        let selectedRows = view.multiSelectedRowSnapshotsInDisplayOrderForTesting
-        #expect(selectedRows.map(\.text) == [
-            "      <div id=\"start-of-content\" data-testid=\"cellInnerDiv\"></div>",
+        let rows = view.multiSelectedRowSnapshotsInDisplayOrderForTesting
+        #expect(rows.map(\.text) == [
+            "      <div data-testid=\"cellInnerDiv\" id=\"start-of-content\"></div>",
             "      <input disabled>",
             "      <article>…</article>",
         ])
-        #expect(selectedRows.map(\.rowIndex) == selectedRows.map(\.rowIndex).sorted())
+        #expect(rows.map(\.rowIndex) == rows.map(\.rowIndex).sorted())
+        await fixture.close(view: view)
     }
 
     @Test
-    func expandedDescendantMutationRerendersAfterExpansionDependencyRefresh() async throws {
-        let session = makeDOMTreeFixture()
-        let view = await makeTreeView(fixture: session)
-
+    func expandedDescendantMutationRendersCanonicalDelta() async throws {
+        let fixture = try await DOMTreeRuntimeFixture.start()
+        let view = await fixture.makeView()
         view.toggleRowForTesting(containing: "<article")
         #expect(await view.waitForRowDocumentForTesting())
-        #expect(view.documentTextForTesting.contains("<span id=\"nested-child\"></span>"))
 
-        let nestedChildID = nodeID(9)
-
-        let didRenderAttribute = await waitForRenderedDocumentTreeUpdate(
-            in: view,
-            fixture: session,
-            update: {
-                session.applyAttributeModified(nestedChildID, name: "data-state", value: "ready")
-            },
-            until: {
-                view.documentTextForTesting.contains("<span id=\"nested-child\" data-state=\"ready\"></span>")
-            }
+        let revision = try await fixture.modifyAttribute(
+            nodeID: "span",
+            name: "data-state",
+            value: "ready"
         )
-        #expect(didRenderAttribute)
-        #expect(view.documentTextForTesting.contains("<span id=\"nested-child\" data-state=\"ready\"></span>"))
-    }
-
-    @Test
-    func visibleContentMutationUsesIncrementalTextStorageUpdate() async throws {
-        let session = makeDOMTreeFixture()
-        let view = await makeTreeView(fixture: session)
-
-        view.toggleRowForTesting(containing: "<article")
-        #expect(await view.waitForRowDocumentForTesting())
-        view.resetPerformanceCountersForTesting()
-
-        let nestedChildID = nodeID(9)
-
-        let didRenderAttribute = await waitForRenderedDocumentTreeUpdate(
-            in: view,
-            fixture: session,
-            update: {
-                session.applyAttributeModified(nestedChildID, name: "data-state", value: "ready")
-            },
-            until: {
-                view.documentTextForTesting.contains("<span id=\"nested-child\" data-state=\"ready\"></span>")
-            }
+        #expect(
+            await view.waitForRowDocumentAppliedTreeRevisionForTesting(revision)
         )
-
-        #expect(didRenderAttribute)
-        #expect(view.incrementalRowDocumentEditCallCountForTesting == 1)
-        #expect(view.replaceRowDocumentCallCountForTesting == 0)
-        #expect(view.resetTextFragmentViewsCallCountForTesting == 0)
-        #expect(view.rowSpanDisplayInvalidationCallCountForTesting == 1)
+        #expect(
+            view.documentTextForTesting.contains(
+                "<span id=\"nested-child\" data-state=\"ready\"></span>"
+            )
+        )
+        await fixture.close(view: view)
     }
 
     @Test
-    func hiddenVisibleMutationDefersRenderingUntilRenderingResumes() async throws {
-        let session = makeDOMTreeFixture()
-        let view = await makeTreeView(fixture: session)
-        let visibleDivID = nodeID(7)
-        let baselineText = view.documentTextForTesting
-        view.resetPerformanceCountersForTesting()
-
-        view.setRenderingActive(false)
-        session.applyAttributeModified(visibleDivID, name: "data-visible", value: "deferred")
-        let hiddenRevision = session.treeRevision
-        #expect(await view.waitForPendingDOMInvalidationForTesting(hiddenRevision))
-
-        #expect(view.rowDocumentAppliedTreeRevisionForTesting < hiddenRevision)
-        #expect(view.buildRowRenderPlanCallCountForTesting == 0)
-        #expect(view.documentTextForTesting == baselineText)
-        #expect(!view.documentTextForTesting.contains("data-visible=\"deferred\""))
-
-        view.setRenderingActive(true)
-        #expect(await view.waitForRowDocumentForTesting())
-
-        #expect(view.buildRowRenderPlanCallCountForTesting == 1)
-        #expect(view.documentTextForTesting.contains("data-visible=\"deferred\""))
-    }
-
-    @Test
-    func inFlightExpansionMutationRebuildsAgainstNewSnapshot() async throws {
-        let session = makeDOMTreeFixture()
-        let view = await makeTreeView(fixture: session)
-        let nestedChildID = nodeID(9)
-
+    func inFlightExpansionMutationRebuildsAgainstLatestCanonicalSnapshot()
+        async throws
+    {
+        let fixture = try await DOMTreeRuntimeFixture.start()
+        let view = await fixture.makeView()
+        view.setUsesInlineRowRenderBuildsForTesting(false)
         view.suspendNextRowRenderBuildForTesting()
         view.toggleRowForTesting(containing: "<article")
         await view.waitForRowRenderBuildSuspensionForTesting()
 
-        let didRenderAttribute = await waitForRenderedDocumentTreeUpdate(
-            in: view,
-            fixture: session,
-            update: {
-                session.applyAttributeModified(nestedChildID, name: "data-state", value: "ready")
-            },
-            until: {
-                view.documentTextForTesting.contains("<span id=\"nested-child\" data-state=\"ready\"></span>")
-            }
+        let revision = try await fixture.modifyAttribute(
+            nodeID: "span",
+            name: "data-state",
+            value: "ready"
         )
-
-        #expect(didRenderAttribute)
-        #expect(view.documentTextForTesting.contains("<span id=\"nested-child\" data-state=\"ready\"></span>"))
+        view.resumeRowRenderBuildForTesting()
+        #expect(
+            await view.waitForRowDocumentAppliedTreeRevisionForTesting(revision)
+        )
+        #expect(
+            view.documentTextForTesting.contains(
+                "<span id=\"nested-child\" data-state=\"ready\"></span>"
+            )
+        )
+        await fixture.close(view: view)
     }
 
     @Test
-    func hidingDuringInFlightRowRenderBuildCancelsStaleApply() async throws {
-        let session = makeDOMTreeFixture()
-        let view = await makeTreeView(fixture: session)
-
+    func hidingDuringInFlightBuildCancelsStaleApplyUntilResume() async throws {
+        let fixture = try await DOMTreeRuntimeFixture.start()
+        let view = await fixture.makeView()
+        view.setUsesInlineRowRenderBuildsForTesting(false)
         view.suspendNextRowRenderBuildForTesting()
         view.toggleRowForTesting(containing: "<article")
         await view.waitForRowRenderBuildSuspensionForTesting()
 
         view.setRenderingActive(false)
-        #expect(await view.waitForRowDocumentForTesting())
-
-        #expect(!view.documentTextForTesting.contains("<span id=\"nested-child\"></span>"))
-
         view.resumeRowRenderBuildForTesting()
         #expect(await view.waitForRowDocumentForTesting())
-
-        #expect(!view.documentTextForTesting.contains("<span id=\"nested-child\"></span>"))
+        #expect(!view.documentTextForTesting.contains("nested-child"))
 
         view.setRenderingActive(true)
         #expect(await view.waitForRowDocumentForTesting())
-
-        #expect(view.documentTextForTesting.contains("<span id=\"nested-child\"></span>"))
+        #expect(view.documentTextForTesting.contains("nested-child"))
+        await fixture.close(view: view)
     }
 
     @Test
-    func selectionChangeUpdatesDecorationsWithoutRebuildingRowRender() async throws {
-        let session = makeDOMTreeFixture()
-        let view = await makeTreeView(fixture: session)
+    func selectionChangeUpdatesDecorationsWithoutRebuildingRows() async throws {
+        let fixture = try await DOMTreeRuntimeFixture.start()
+        let view = await fixture.makeView()
         view.resetPerformanceCountersForTesting()
 
-        let htmlID = try #require(
-            session.snapshot().nodesByID.first { entry in
-                entry.value.localName == "html"
-            }?.key
+        fixture.model.selectNode(
+            try fixture.nodeID("input"),
+            reveal: .selectOnly
         )
-        session.selectNode(htmlID)
-        #expect(await view.waitForObservedTreeRevisionForTesting(session.selectionRevision))
-        view.routeCurrentSelectionInvalidationForTesting()
+        #expect(await waitForObservedCondition(
+            deliveries: {
+                [view.selectionObservationDeliveryForTesting].compactMap { $0 }
+            },
+            sample: {
+                view.selectedRowRectsForTesting().count == 1
+            }
+        ))
         view.layoutIfNeeded()
 
         #expect(view.selectedRowRectsForTesting().count == 1)
         #expect(view.buildRowRenderPlanCallCountForTesting == 0)
+        await fixture.close(view: view)
     }
 
     @Test
-    func hiddenSelectionChangeDefersRevealUntilRenderingResumes() async throws {
-        let session = makeDOMTreeFixture(root: selectionRevealRaceDocument())
-        let view = await makeTreeView(fixture: session)
-        view.frame = CGRect(x: 0, y: 0, width: 360, height: 96)
-        view.layoutIfNeeded()
-        let bodyID = nodeID(3)
-        let targetID = nodeID(4)
-        session.applySetChildNodes(
-            parent: bodyID,
-            children: selectionRevealRaceBodyChildren(prefixCount: 80),
-            eventSequence: 10
+    func documentRootStructureMutationRendersFromCanonicalEvent() async throws {
+        let fixture = try await DOMTreeRuntimeFixture.start(document: .init())
+        let view = await fixture.makeView()
+        #expect(view.documentTextForTesting.isEmpty)
+
+        let revision = try await fixture.setChildren(
+            parentID: "document",
+            children: [.element(id: "replacement-html", name: "html")]
         )
-        #expect(await view.waitForRowDocumentForTesting())
-        view.contentOffset = .zero
-        view.clearDrawnSelectedRowRectsForTesting()
-
-        view.setRenderingActive(false)
-        session.selectNode(targetID)
-        let hiddenSelectionRevision = session.selectionRevision
-        #expect(await view.waitForObservedTreeRevisionForTesting(hiddenSelectionRevision))
-
-        #expect(view.contentOffset.y == 0)
-        #expect(view.drawnSelectedRowRectsForTesting.isEmpty)
-
-        view.setRenderingActive(true)
-        #expect(await view.waitForRowDocumentForTesting())
-        view.layoutIfNeeded()
-
-        let revealState = renderedSelectionRevealState(in: view, containing: "selected-target")
-        #expect(revealState.isSelectedRowRevealed)
-        #expect(view.drawnSelectedRowRectsForTesting.isEmpty == false)
+        #expect(
+            await view.waitForRowDocumentAppliedTreeRevisionForTesting(revision)
+        )
+        #expect(view.documentTextForTesting.contains("<html"))
+        await fixture.close(view: view)
     }
 
     @Test
-    func hiddenSelectionChangeClearsMultiSelectionBeforePendingDOMInvalidationFlush() async throws {
-        let session = makeDOMTreeFixture()
-        let view = await makeTreeView(fixture: session)
-        let visibleDivID = nodeID(7)
-        let inputID = nodeID(12)
-
-        view.primaryClickRowForTesting(containing: "<div id=\"start-of-content\"", modifiers: .command)
-        view.primaryClickRowForTesting(containing: "<input disabled>", modifiers: .command)
-        view.primaryClickRowForTesting(containing: "<article", modifiers: .command)
-        #expect(view.multiSelectedRowSnapshotsInDisplayOrderForTesting.map(\.text) == [
-            "      <div id=\"start-of-content\" data-testid=\"cellInnerDiv\"></div>",
-            "      <input disabled>",
-            "      <article>…</article>",
-        ])
-
-        view.setRenderingActive(false)
-        session.applyAttributeModified(visibleDivID, name: "data-visible", value: "while-hidden")
-        session.selectNode(inputID)
-        let hiddenTreeRevision = session.treeRevision
-        let hiddenSelectionRevision = session.selectionRevision
-        #expect(await view.waitForObservedTreeRevisionForTesting(hiddenSelectionRevision))
-        #expect(hiddenSelectionRevision >= hiddenTreeRevision)
-
-        #expect(view.rowDocumentAppliedTreeRevisionForTesting < hiddenTreeRevision)
-        #expect(!view.documentTextForTesting.contains("data-visible=\"while-hidden\""))
-        #expect(view.multiSelectedRowSnapshotsInDisplayOrderForTesting.count == 3)
-
-        view.setRenderingActive(true)
-        #expect(await view.waitForRowDocumentForTesting())
-        view.layoutIfNeeded()
-
-        #expect(view.documentTextForTesting.contains("data-visible=\"while-hidden\""))
-        #expect(view.multiSelectedRowSnapshotsInDisplayOrderForTesting.isEmpty)
-        #expect(view.selectedRowRectsForTesting().count == 1)
-    }
-
-    @Test
-    func hiddenSelectionChangeAwayAndBackStillClearsMultiSelectionOnResume() async throws {
-        let session = makeDOMTreeFixture()
-        let view = await makeTreeView(fixture: session)
-        let snapshot = session.snapshot()
-        let inputID = try #require(
-            snapshot.nodesByID.first { entry in
-                entry.value.localName == "input"
-            }?.key
-        )
-        let articleID = try #require(
-            snapshot.nodesByID.first { entry in
-                entry.value.localName == "article"
-            }?.key
-        )
-
-        view.primaryClickRowForTesting(containing: "<input disabled>")
-        view.primaryClickRowForTesting(containing: "<div id=\"start-of-content\"", modifiers: .command)
-        view.primaryClickRowForTesting(containing: "<article", modifiers: .command)
-        #expect(view.multiSelectedRowSnapshotsInDisplayOrderForTesting.count == 3)
-        #expect(session.selectedNode?.id == inputID)
-        view.routeCurrentSelectionInvalidationForTesting()
-        #expect(view.multiSelectedRowSnapshotsInDisplayOrderForTesting.count == 3)
-
-        view.setRenderingActive(false)
-        session.selectNode(articleID)
-        session.selectNode(inputID)
-        let hiddenSelectionRevision = session.selectionRevision
-        #expect(await view.waitForObservedTreeRevisionForTesting(hiddenSelectionRevision))
-
-        #expect(view.multiSelectedRowSnapshotsInDisplayOrderForTesting.count == 3)
-
-        view.setRenderingActive(true)
-        #expect(await view.waitForRowDocumentForTesting())
-        view.layoutIfNeeded()
-
-        #expect(view.multiSelectedRowSnapshotsInDisplayOrderForTesting.isEmpty)
-        #expect(view.selectedRowRectsForTesting().count == 1)
-    }
-
-    @Test
-    func selectionRevealWaitsForInFlightRowRenderBuild() async throws {
-        let session = makeDOMTreeFixture(root: selectionRevealRaceDocument())
-        let view = await makeTreeView(fixture: session)
-        view.frame = CGRect(x: 0, y: 0, width: 360, height: 96)
-        view.layoutIfNeeded()
-
-        let bodyID = nodeID(3)
-        let targetID = nodeID(4)
-
-        view.suspendNextRowRenderBuildForTesting()
-        session.applySetChildNodes(
-            parent: bodyID,
-            children: selectionRevealRaceBodyChildren(prefixCount: 80)
-        )
-        await view.waitForRowRenderBuildSuspensionForTesting()
-
-        session.selectNode(targetID)
-        view.routeCurrentSelectionInvalidationForTesting()
-
-        view.resumeRowRenderBuildForTesting()
-        #expect(await view.waitForRowDocumentForTesting())
-
-        let selectedLine = try #require(
-            view.rowSnapshotsForTesting.first { snapshot in
-                snapshot.text.contains("id=\"selected-target\"")
-            }
-        )
-        let selectedRowY = CGFloat(selectedLine.rowIndex) * view.rowHeightForTesting
-        let visibleMinY = view.contentOffset.y
-        let visibleMaxY = view.contentOffset.y + view.bounds.height
-
-        #expect(view.contentOffset.y > view.bounds.height)
-        #expect(selectedRowY >= visibleMinY - view.rowHeightForTesting)
-        #expect(selectedRowY + view.rowHeightForTesting <= visibleMaxY + view.rowHeightForTesting)
-    }
-
-    @Test
-    func selectionRevealUsesLatestSelectionDuringInFlightRowRenderBuild() async throws {
-        let session = makeDOMTreeFixture(root: selectionRevealRaceDocument())
-        let view = await makeTreeView(fixture: session)
-        view.frame = CGRect(x: 0, y: 0, width: 360, height: 96)
-        view.layoutIfNeeded()
-
-        let initialSnapshot = session.snapshot()
-        let bodyID = try #require(
-            initialSnapshot.nodesByID.first { entry in
-                entry.value.localName == "body"
-            }?.key
-        )
-        let oldSelectedNodeID = nodeID(4)
-        let latestSelectedNodeID = nodeID(1_070)
-
-        view.suspendNextRowRenderBuildForTesting()
-        session.applySetChildNodes(
-            parent: bodyID,
-            children: selectionRevealRaceBodyChildren(prefixCount: 80)
-        )
-        await view.waitForRowRenderBuildSuspensionForTesting()
-
-        session.selectNode(oldSelectedNodeID)
-        #expect(await view.waitForObservedTreeRevisionForTesting(session.selectionRevision))
-        view.routeCurrentSelectionInvalidationForTesting()
-        session.selectNode(latestSelectedNodeID)
-        #expect(await view.waitForObservedTreeRevisionForTesting(session.selectionRevision))
-        view.routeCurrentSelectionInvalidationForTesting()
-
-        view.resumeRowRenderBuildForTesting()
-        #expect(await view.waitForRowDocumentForTesting())
-
-        let revealState = renderedSelectionRevealState(
-            in: view,
-            containing: "id=\"prefix-70\""
-        )
-        #expect(session.selectedNode?.id == latestSelectedNodeID)
-        #expect(revealState.contentOffsetY > revealState.boundsHeight)
-        #expect(revealState.isSelectedRowVisible)
-    }
-
-    @Test
-    func documentResetClearsLocalExpansionStateEvenWhenNodeIDsRepeat() async throws {
-        let session = makeDOMTreeFixture()
-        let view = await makeTreeView(fixture: session)
-
+    func childInsertionAndRemovalUpdateExpandedParentIncrementally() async throws {
+        let fixture = try await DOMTreeRuntimeFixture.start()
+        let view = await fixture.makeView()
         view.toggleRowForTesting(containing: "<article")
         #expect(await view.waitForRowDocumentForTesting())
-        #expect(view.documentTextForTesting.contains("<span id=\"nested-child\"></span>"))
+        view.resetPerformanceCountersForTesting()
 
-        let didRenderResetDocument = await waitForRenderedDocumentTreeUpdate(
-            in: view,
-            fixture: session,
-            update: {
-                session.replaceDocumentRoot(documentNode())
-            },
-            until: {
-                let text = view.documentTextForTesting
-                return text.contains("<article>…</article>")
-                    && !text.contains("<span id=\"nested-child\"></span>")
-            }
+        let insertionRevision = try await fixture.insertChild(
+            parentID: "article",
+            previousNodeID: "span",
+            node: .element(id: "emphasis", name: "em")
         )
-        #expect(didRenderResetDocument)
+        #expect(
+            await view.waitForRowDocumentAppliedTreeRevisionForTesting(
+                insertionRevision
+            )
+        )
+        #expect(view.documentTextForTesting.contains("<em></em>"))
+
+        let removalRevision = try await fixture.removeChild(
+            parentID: "article",
+            nodeID: "emphasis"
+        )
+        #expect(
+            await view.waitForRowDocumentAppliedTreeRevisionForTesting(
+                removalRevision
+            )
+        )
+        #expect(!view.documentTextForTesting.contains("<em></em>"))
+        #expect(view.incrementalRowDocumentEditCallCountForTesting > 0)
+        await fixture.close(view: view)
+    }
+
+    @Test
+    func pageReplacementClearsExpansionForReusedRawNodeIDs() async throws {
+        let fixture = try await DOMTreeRuntimeFixture.start()
+        let view = await fixture.makeView()
+        view.toggleRowForTesting(containing: "<article")
+        #expect(await view.waitForRowDocumentForTesting())
+        #expect(view.documentTextForTesting.contains("nested-child"))
+
+        let revision = try await fixture.replacePage(
+            with: DOMTreeRuntimeFixture.document()
+        )
+        #expect(await view.waitForObservedTreeRevisionForTesting(revision))
+        #expect(await view.waitForRowDocumentForTesting())
 
         #expect(view.documentTextForTesting.contains("<article>…</article>"))
-        #expect(!view.documentTextForTesting.contains("<span id=\"nested-child\"></span>"))
-    }
-
-    @Test
-    func openingUnloadedRowRequestsChildrenThroughInjectedAction() async throws {
-        let session = makeDOMTreeFixture(root: documentWithDeferredArticle())
-        let recorder = NodeRequestRecorder()
-        let view = DOMTreeTextView(
-            context: session.context,
-            requestChildrenAction: { nodeID in
-                recorder.record(nodeID)
-                return true
-            }
-        )
-        configureTreeViewForDeterministicTesting(view)
-        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
-        view.layoutIfNeeded()
-        view.setRenderingActive(true)
-        #expect(await view.waitForRowDocumentForTesting())
-
-        view.toggleRowForTesting(containing: "<article")
-        let requestedNodeID = await recorder.next()
-
-        #expect(session.node(for: requestedNodeID)?.localName == "article")
-    }
-
-    @Test
-    func initialSelectionOpensProjectedFrameAncestors() async throws {
-        let fixture = makeProjectedFrameFixture()
-        fixture.session.selectNode(fixture.selectedNodeID)
-
-        let view = await makeTreeView(fixture: fixture.session)
-
-        #expect(fixture.session.snapshot().ancestorNodeIDs(of: fixture.selectedNodeID).contains(fixture.frameRootID))
-        #expect(view.documentTextForTesting.contains("#document"))
-        #expect(view.documentTextForTesting.contains("<img id=\"ad-node\">"))
-        #expect(view.selectedRowRectsForTesting().count == 1)
-    }
-
-    @Test
-    func selectingProjectedFrameNodeOpensComposedAncestors() async throws {
-        let fixture = makeProjectedFrameFixture()
-        let view = await makeTreeView(fixture: fixture.session)
-
-        let sampleRenderedState: @MainActor @Sendable () -> RenderedDOMTreeState = {
-            view.layoutIfNeeded()
-            return RenderedDOMTreeState(
-                text: view.documentTextForTesting,
-                selectedRowCount: view.selectedRowRectsForTesting().count
-            )
-        }
-        let didRenderSelection = await waitForSelectionObservationRender(
-            in: view,
-            fixture: fixture.session,
-            update: {
-                fixture.session.selectNode(fixture.selectedNodeID)
-            },
-            until: {
-                sampleRenderedState().hasProjectedFrameSelection
-            }
-        )
-
-        #expect(fixture.session.snapshot().ancestorNodeIDs(of: fixture.selectedNodeID).contains(fixture.frameRootID))
-        #expect(didRenderSelection)
-    }
-}
-
-private struct RenderedDOMTreeState: Equatable, Sendable {
-    var text: String
-    var selectedRowCount: Int
-
-    var hasProjectedFrameSelection: Bool {
-        text.contains("#document")
-            && text.contains("<img id=\"ad-node\">")
-            && selectedRowCount == 1
-    }
-}
-
-private struct RenderedSelectionRevealState: Equatable, Sendable {
-    var contentOffsetY: Double
-    var boundsHeight: Double
-    var selectedRowY: Double?
-    var rowHeight: Double
-
-    var isSelectedRowRevealed: Bool {
-        contentOffsetY > boundsHeight && isSelectedRowVisible
-    }
-
-    var isSelectedRowVisible: Bool {
-        guard let selectedRowY else {
-            return false
-        }
-        let visibleMinY = contentOffsetY
-        let visibleMaxY = contentOffsetY + boundsHeight
-        return selectedRowY >= visibleMinY - rowHeight
-            && selectedRowY + rowHeight <= visibleMaxY + rowHeight
-    }
-}
-
-private func colorsEqual(_ lhs: UIColor, _ rhs: UIColor) -> Bool {
-    CFEqual(lhs.cgColor, rhs.cgColor)
-}
-
-@MainActor
-private final class NodeRequestRecorder {
-    private var nodeID: DOMNode.ID?
-    private var continuation: CheckedContinuation<DOMNode.ID, Never>?
-
-    func record(_ nodeID: DOMNode.ID) {
-        self.nodeID = nodeID
-        continuation?.resume(returning: nodeID)
-        continuation = nil
-    }
-
-    func next() async -> DOMNode.ID {
-        if let nodeID {
-            return nodeID
-        }
-        return await withCheckedContinuation { continuation in
-            self.continuation = continuation
-        }
+        #expect(!view.documentTextForTesting.contains("nested-child"))
+        await fixture.close(view: view)
     }
 }
 
 @MainActor
-private final class NodeActionRecorder {
+private final class DOMTreeNodeActionRecorder {
     private var nodeIDs: [DOMNode.ID] = []
-    private var owners: [DOMTreePageHighlightOwner] = []
-    private var continuation: CheckedContinuation<DOMNode.ID, Never>?
-
-    func record(_ nodeID: DOMNode.ID, owner: DOMTreePageHighlightOwner) {
-        nodeIDs.append(nodeID)
-        owners.append(owner)
-        continuation?.resume(returning: nodeID)
-        continuation = nil
-    }
-
-    func nextNodeID() async -> DOMNode.ID {
-        if let nodeID = nodeIDs.first {
-            return nodeID
-        }
-        return await withCheckedContinuation { continuation in
-            self.continuation = continuation
-        }
-    }
+    private(set) var recordedOwners: [DOMTreePageHighlightOwner] = []
+    private var continuations: [CheckedContinuation<DOMNode.ID, Never>] = []
 
     var recordedNodeIDs: [DOMNode.ID] {
         nodeIDs
     }
 
-    var recordedOwners: [DOMTreePageHighlightOwner] {
-        owners
+    func record(_ nodeID: DOMNode.ID, owner: DOMTreePageHighlightOwner) {
+        nodeIDs.append(nodeID)
+        recordedOwners.append(owner)
+        if let continuation = continuations.first {
+            continuations.removeFirst()
+            continuation.resume(returning: nodeID)
+        }
     }
 
-    func removeAll() {
-        nodeIDs.removeAll(keepingCapacity: true)
-        owners.removeAll(keepingCapacity: true)
+    func nextNodeID() async -> DOMNode.ID {
+        await nextNodeID(at: 0)
+    }
+
+    func nextNodeID(after nodeID: DOMNode.ID) async -> DOMNode.ID {
+        if let index = nodeIDs.firstIndex(of: nodeID),
+            nodeIDs.indices.contains(index + 1)
+        {
+            return nodeIDs[index + 1]
+        }
+        return await withCheckedContinuation { continuation in
+            continuations.append(continuation)
+        }
+    }
+
+    private func nextNodeID(at index: Int) async -> DOMNode.ID {
+        if nodeIDs.indices.contains(index) {
+            return nodeIDs[index]
+        }
+        return await withCheckedContinuation { continuation in
+            continuations.append(continuation)
+        }
     }
 }
 
 @MainActor
-private final class ControlledNodeActionRecorder {
+private final class DOMTreeControlledNodeActionRecorder {
     enum Resolution {
         case success
         case failure
@@ -1469,61 +897,36 @@ private final class ControlledNodeActionRecorder {
 
     private struct IntentionalFailure: Error {}
 
-    private enum Gate {
-        case cancellationAware(WebInspectorTestGate)
-        case cancellationIgnoring(CancellationIgnoringGate)
-
-        @MainActor
-        func wait() async {
-            switch self {
-            case let .cancellationAware(gate):
-                await gate.waiter.wait()
-            case let .cancellationIgnoring(gate):
-                await gate.wait()
-            }
-        }
-
-        @MainActor
-        func open() {
-            switch self {
-            case let .cancellationAware(gate):
-                gate.open()
-            case let .cancellationIgnoring(gate):
-                gate.open()
-            }
-        }
-    }
-
     private var nodeIDs: [DOMNode.ID] = []
-    private var owners: [DOMTreePageHighlightOwner] = []
-    private var gates: [Gate] = []
+    private(set) var recordedOwners: [DOMTreePageHighlightOwner] = []
+    private var gates: [WebInspectorTestGate] = []
     private var failedInvocationIndexes: Set<Int> = []
     private var invocationWaiters: [(
         count: Int,
         continuation: CheckedContinuation<Void, Never>
     )] = []
-    private let ignoresCancellation: Bool
 
-    init(ignoresCancellation: Bool = false) {
-        self.ignoresCancellation = ignoresCancellation
+    var invocationCount: Int {
+        nodeIDs.count
     }
 
-    func run(_ nodeID: DOMNode.ID, owner: DOMTreePageHighlightOwner) async throws {
+    var recordedNodeIDs: [DOMNode.ID] {
+        nodeIDs
+    }
+
+    func run(
+        _ nodeID: DOMNode.ID,
+        owner: DOMTreePageHighlightOwner
+    ) async throws {
         let invocationIndex = nodeIDs.count
-        let gate: Gate = if ignoresCancellation {
-            .cancellationIgnoring(CancellationIgnoringGate())
-        } else {
-            .cancellationAware(WebInspectorTestGate())
-        }
+        let gate = WebInspectorTestGate()
         nodeIDs.append(nodeID)
-        owners.append(owner)
+        recordedOwners.append(owner)
         gates.append(gate)
         resumeInvocationWaitersIfNeeded()
 
-        await gate.wait()
-        if !ignoresCancellation {
-            try Task.checkCancellation()
-        }
+        await gate.waiter.wait()
+        try Task.checkCancellation()
         if failedInvocationIndexes.contains(invocationIndex) {
             throw IntentionalFailure()
         }
@@ -1542,73 +945,27 @@ private final class ControlledNodeActionRecorder {
         }
     }
 
-    func resolveInvocation(at index: Int, as resolution: Resolution) async {
-        precondition(gates.indices.contains(index), "The controlled highlight invocation must exist before resolution.")
+    func resolveInvocation(at index: Int, as resolution: Resolution) {
+        precondition(gates.indices.contains(index))
         if case .failure = resolution {
             failedInvocationIndexes.insert(index)
         }
         gates[index].open()
     }
 
-    var invocationCount: Int {
-        nodeIDs.count
-    }
-
-    var recordedNodeIDs: [DOMNode.ID] {
-        nodeIDs
-    }
-
-    var recordedOwners: [DOMTreePageHighlightOwner] {
-        owners
-    }
-
     private func resumeInvocationWaitersIfNeeded() {
-        var pending: [(
-            count: Int,
-            continuation: CheckedContinuation<Void, Never>
-        )] = []
-        for waiter in invocationWaiters {
-            if nodeIDs.count >= waiter.count {
-                waiter.continuation.resume()
-            } else {
-                pending.append(waiter)
+        invocationWaiters.removeAll { waiter in
+            guard nodeIDs.count >= waiter.count else {
+                return false
             }
+            waiter.continuation.resume()
+            return true
         }
-        invocationWaiters = pending
     }
 }
 
 @MainActor
-private final class CancellationIgnoringGate {
-    private var isOpen = false
-    private var continuation: CheckedContinuation<Void, Never>?
-
-    func wait() async {
-        guard !isOpen else {
-            return
-        }
-        await withCheckedContinuation { continuation in
-            if isOpen {
-                continuation.resume()
-            } else {
-                precondition(self.continuation == nil, "A controlled highlight gate supports one waiter.")
-                self.continuation = continuation
-            }
-        }
-    }
-
-    func open() {
-        guard !isOpen else {
-            return
-        }
-        isOpen = true
-        continuation?.resume()
-        continuation = nil
-    }
-}
-
-@MainActor
-private final class VoidActionRecorder {
+private final class DOMTreeVoidActionRecorder {
     private(set) var recordCount = 0
     private var continuation: CheckedContinuation<Void, Never>?
 
@@ -1619,7 +976,7 @@ private final class VoidActionRecorder {
     }
 
     func next() async {
-        if recordCount > 0 {
+        guard recordCount == 0 else {
             return
         }
         await withCheckedContinuation { continuation in
@@ -1629,260 +986,275 @@ private final class VoidActionRecorder {
 }
 
 @MainActor
-private final class CancellableVoidActionRecorder {
-    private(set) var startedCount = 0
-    private(set) var cancellationCount = 0
-    private var startContinuation: CheckedContinuation<Void, Never>?
-    private var cancellationContinuation: CheckedContinuation<Void, Never>?
-    private var runContinuation: CheckedContinuation<Void, Never>?
-    private var didRecordCancellation = false
+private final class DOMTreeRuntimeFixture {
+    let runtime: WebInspectorDataKitTestRuntime
+    let model: DOMPanelModel
+    private var updates: WebInspectorDOMTreeUpdateSequence.AsyncIterator
+    private var revision: UInt64
 
-    func run() async {
-        startedCount += 1
-        startContinuation?.resume()
-        startContinuation = nil
-        if Task.isCancelled {
-            recordCancellation()
-            return
+    private init(
+        runtime: WebInspectorDataKitTestRuntime,
+        model: DOMPanelModel,
+        updates: WebInspectorDOMTreeUpdateSequence.AsyncIterator,
+        revision: UInt64
+    ) {
+        self.runtime = runtime
+        self.model = model
+        self.updates = updates
+        self.revision = revision
+    }
+
+    static func start(
+        document: WebInspectorDataKitTestRuntime.Document = document()
+    ) async throws -> DOMTreeRuntimeFixture {
+        let runtime = try await WebInspectorDataKitTestRuntime.start(
+            scenario: .init(
+                configuration: .init(domains: [.dom]),
+                document: document
+            ),
+            isolation: MainActor.shared
+        )
+        let model = try await DOMPanelModel.make(context: runtime.model)
+        var updates = model.treeUpdates().makeAsyncIterator()
+        guard case let .initial(revision, _) = await updates.next() else {
+            preconditionFailure(
+                "A DOM tree test fixture requires an initial canonical snapshot."
+            )
         }
-        await withTaskCancellationHandler {
-            await withCheckedContinuation { continuation in
-                if didRecordCancellation {
-                    continuation.resume()
-                } else {
-                    runContinuation = continuation
+        return DOMTreeRuntimeFixture(
+            runtime: runtime,
+            model: model,
+            updates: updates,
+            revision: revision
+        )
+    }
+
+    func makeView(
+        requestChildrenAction: DOMTreeTextView.RequestChildrenAction? = nil,
+        highlightNodeAction: DOMTreeTextView.HighlightNodeAction? = nil,
+        restoreHighlightAction: DOMTreeTextView.RestoreHighlightAction? = nil
+    ) async -> DOMTreeTextView {
+        let view = DOMTreeTextView(
+            model: model,
+            requestChildrenAction: requestChildrenAction,
+            highlightNodeAction: highlightNodeAction,
+            restoreHighlightAction: restoreHighlightAction
+        )
+        view.setUsesInlineRowRenderBuildsForTesting(true)
+        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
+        view.layoutIfNeeded()
+        view.setRenderingActive(true)
+        #expect(await view.waitForRowDocumentForTesting())
+        return view
+    }
+
+    func nodeID(_ rawValue: String) throws -> DOMNode.ID {
+        try #require(model.nodes.snapshot.itemIDs.first { id in
+            id.canonicalStorage.rawNodeID.rawValue == rawValue
+        })
+    }
+
+    func modifyAttribute(
+        nodeID: String,
+        name: String,
+        value: String
+    ) async throws -> UInt64 {
+        try await runtime.emitDOMAttributeModified(
+            nodeID: nodeID,
+            name: name,
+            value: value
+        )
+        return try await nextRevision()
+    }
+
+    func setChildren(
+        parentID: String,
+        children: [WebInspectorDataKitTestRuntime.Node]
+    ) async throws -> UInt64 {
+        try await runtime.emitDOMSetChildNodes(
+            parentID: parentID,
+            children: children
+        )
+        return try await nextRevision()
+    }
+
+    func insertChild(
+        parentID: String,
+        previousNodeID: String? = nil,
+        node: WebInspectorDataKitTestRuntime.Node
+    ) async throws -> UInt64 {
+        try await runtime.emitDOMChildNodeInserted(
+            parentID: parentID,
+            previousNodeID: previousNodeID,
+            node: node
+        )
+        return try await nextRevision()
+    }
+
+    func removeChild(
+        parentID: String,
+        nodeID: String
+    ) async throws -> UInt64 {
+        try await runtime.emitDOMChildNodeRemoved(
+            parentID: parentID,
+            nodeID: nodeID
+        )
+        return try await nextRevision()
+    }
+
+    func replacePage(
+        with document: WebInspectorDataKitTestRuntime.Document
+    ) async throws -> UInt64 {
+        try await runtime.replacePage(
+            with: document,
+            isolation: MainActor.shared
+        )
+        let expectedRootID = runtime.model.domTreeSnapshot.primaryRootID
+        while true {
+            var iterator = updates
+            let next = await iterator.next()
+            updates = iterator
+            guard let update = next else {
+                break
+            }
+            switch update {
+            case let .initial(nextRevision, snapshot):
+                revision = nextRevision
+                if snapshot.primaryRootID == expectedRootID {
+                    return nextRevision
+                }
+            case let .changes(_, toRevision, changes):
+                revision = toRevision
+                switch changes {
+                case let .reset(snapshot):
+                    if snapshot.primaryRootID == expectedRootID {
+                        return toRevision
+                    }
+                case let .delta(delta):
+                    if let rootChange = delta.primaryRootChange,
+                        rootChange.rootID == expectedRootID
+                    {
+                        return toRevision
+                    }
+                }
+            case let .resetRequired(_, token):
+                let rebase = try model.rebaseTree(token)
+                revision = rebase.revision
+                if rebase.snapshot.primaryRootID == expectedRootID {
+                    return rebase.revision
                 }
             }
-        } onCancel: {
-            Task { @MainActor [weak self] in
-                self?.recordCancellation()
+        }
+        preconditionFailure(
+            "A live DOM tree test fixture cannot terminate during page replacement."
+        )
+    }
+
+    func close(view: DOMTreeTextView) async {
+        view.setRenderingActive(false)
+        updates.cancel()
+        await model.retire()
+        await runtime.close()
+    }
+
+    private func nextRevision() async throws -> UInt64 {
+        while true {
+            var iterator = updates
+            let next = await iterator.next()
+            updates = iterator
+            guard let update = next else {
+                break
+            }
+            switch update {
+            case let .initial(nextRevision, _):
+                revision = nextRevision
+            case let .changes(_, toRevision, _):
+                revision = toRevision
+                return toRevision
+            case let .resetRequired(_, token):
+                let rebase = try model.rebaseTree(token)
+                revision = rebase.revision
+                return rebase.revision
             }
         }
+        preconditionFailure(
+            "A live DOM tree test fixture cannot terminate its update sequence."
+        )
     }
 
-    private func recordCancellation() {
-        guard !didRecordCancellation else {
-            return
-        }
-        didRecordCancellation = true
-        let continuation = runContinuation
-        runContinuation = nil
-        continuation?.resume()
-        cancellationCount += 1
-        cancellationContinuation?.resume()
-        cancellationContinuation = nil
-    }
-
-    func nextStart() async {
-        if startedCount > 0 {
-            return
-        }
-        await withCheckedContinuation { continuation in
-            self.startContinuation = continuation
-        }
-    }
-
-    func nextCancellation() async {
-        if cancellationCount > 0 {
-            return
-        }
-        await withCheckedContinuation { continuation in
-            self.cancellationContinuation = continuation
-        }
-    }
-}
-
-@MainActor
-private final class DOMTreeTestFixture {
-    let context: WebInspectorModelContext
-    let treeController: DOMTreeController
-
-    init(root: DOM.Node) {
-        let context = WebInspectorModelContext.preview()
-        context.seedDOMDocument(root)
-        self.context = context
-        self.treeController = context.rootTreeController()
-    }
-
-    var currentPageRootNode: DOMNode? {
-        try? context.rootDOMNode
-    }
-
-    var selectedNode: DOMNode? {
-        try? context.selectedDOMNode
-    }
-
-    var treeRevision: UInt64 {
-        treeController.snapshot.revision
-    }
-
-    var selectionRevision: UInt64 {
-        treeController.snapshot.revision
-    }
-
-    var isSelectingElement: Bool {
-        get {
-            (try? context.isElementPickerEnabled) == true
-        }
-        set {
-            context.seedElementPickerEnabled(newValue)
-        }
-    }
-
-    func snapshot() -> DOMTreeSnapshot {
-        treeController.snapshot
-    }
-
-    func node(for id: DOMNode.ID) -> DOMNode? {
-        try? context.requiredNode(for: id)
-    }
-
-    func selectNode(_ id: DOMNode.ID) {
-        try? context.selectNode(id)
-    }
-
-    func applyAttributeModified(_ id: DOMNode.ID, name: String, value: String) {
-        context.apply(.attributeModified(id.proxyID, name: name, value: value))
-    }
-
-    func applySetChildNodes(parent: DOMNode.ID, children: [DOM.Node], eventSequence: Int = 0) {
-        _ = eventSequence
-        context.apply(.setChildNodes(parent: parent.proxyID, nodes: children))
-    }
-
-    func replaceDocumentRoot(_ root: DOM.Node) {
-        context.seedDOMDocument(root)
+    static func document() -> WebInspectorDataKitTestRuntime.Document {
+        .init(children: [
+            .init(
+                id: "doctype",
+                nodeType: 10,
+                nodeName: "html"
+            ),
+            .element(
+                id: "html",
+                name: "html",
+                attributes: ["lang": "en"],
+                children: [
+                    .element(
+                        id: "body",
+                        name: "body",
+                        attributes: [
+                            "class": "logged-in env-production"
+                        ],
+                        children: [
+                            .element(
+                                id: "visible-div",
+                                name: "div",
+                                attributes: [
+                                    "id": "start-of-content",
+                                    "data-testid": "cellInnerDiv",
+                                ]
+                            ),
+                            .element(
+                                id: "input",
+                                name: "input",
+                                attributes: ["disabled": ""]
+                            ),
+                            .element(
+                                id: "article",
+                                name: "article",
+                                children: [
+                                    .element(
+                                        id: "span",
+                                        name: "span",
+                                        attributes: [
+                                            "id": "nested-child"
+                                        ]
+                                    )
+                                ]
+                            ),
+                            .text(
+                                id: "text",
+                                value: "Introducing luma for iOS 26"
+                            ),
+                        ]
+                    )
+                ]
+            ),
+        ])
     }
 }
 
-@MainActor
-private func makeTreeView(root: DOM.Node = documentNode()) async -> DOMTreeTextView {
-    await makeTreeView(fixture: makeDOMTreeFixture(root: root))
-}
+private let testDOMDocumentScope = WebInspectorDOMDocumentScopeStorage(
+    storeID: WebInspectorContainerStoreID(),
+    attachmentGeneration: .init(rawValue: 1),
+    pageGeneration: .init(rawValue: 1),
+    semanticTargetID: WebInspectorTarget.ID("dom-render-test"),
+    agentTargetID: WebInspectorTarget.ID("dom-render-test"),
+    domBindingEpoch: .init(rawValue: 1)
+)
 
-@MainActor
-private func makeTreeView(fixture: DOMTreeTestFixture) async -> DOMTreeTextView {
-    let view = DOMTreeTextView(context: fixture.context)
-    configureTreeViewForDeterministicTesting(view)
-    view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
-    view.layoutIfNeeded()
-    view.setRenderingActive(true)
-    #expect(await view.waitForRowDocumentForTesting())
-    return view
-}
-
-@MainActor
-private func configureTreeViewForDeterministicTesting(_ view: DOMTreeTextView) {
-    view.setUsesInlineRowRenderBuildsForTesting(true)
-}
-
-@MainActor
-private func waitForRenderedDocumentTreeUpdate(
-    in view: DOMTreeTextView,
-    fixture: DOMTreeTestFixture,
-    timeout: Duration = .seconds(1),
-    update: @MainActor () -> Void,
-    until condition: @escaping @MainActor @Sendable () -> Bool
-) async -> Bool {
-    update()
-    let expectedTreeRevision = fixture.treeRevision
-    let didApplyTreeRevision = await view.waitForRowDocumentAppliedTreeRevisionForTesting(
-        expectedTreeRevision,
-        timeout: timeout
+private func testDOMNodeID(_ value: Int) -> DOMNode.ID {
+    DOMNode.ID(
+        canonical: WebInspectorDOMNodeIdentityStorage(
+            documentScope: testDOMDocumentScope,
+            rawNodeID: DOM.Node.ID(String(value))
+        )
     )
-    view.layoutIfNeeded()
-    return didApplyTreeRevision && condition()
-}
-
-@MainActor
-private func waitForSelectionObservationRender(
-    in view: DOMTreeTextView,
-    fixture: DOMTreeTestFixture,
-    timeout: Duration = .seconds(1),
-    update: @MainActor () -> Void,
-    until condition: @escaping @MainActor @Sendable () -> Bool
-) async -> Bool {
-    let baselineRevision = fixture.selectionRevision
-    update()
-    let expectedSelectionRevision = fixture.selectionRevision
-    if expectedSelectionRevision > baselineRevision {
-        _ = await view.waitForRowDocumentAppliedTreeRevisionForTesting(expectedSelectionRevision, timeout: timeout)
-    }
-
-    guard await view.waitForRowDocumentForTesting() else {
-        return false
-    }
-    view.layoutIfNeeded()
-    return condition()
-}
-
-@MainActor
-private func waitForSelectionRenderedState<State: Sendable>(
-    in view: DOMTreeTextView,
-    fixture: DOMTreeTestFixture,
-    timeout: Duration = .seconds(1),
-    update: @MainActor () -> Void,
-    sample: @escaping @MainActor @Sendable () -> State,
-    until condition: @escaping @Sendable (State) -> Bool
-) async -> State? {
-    let baselineRevision = fixture.selectionRevision
-    update()
-    let expectedSelectionRevision = fixture.selectionRevision
-    if expectedSelectionRevision > baselineRevision {
-        _ = await view.waitForRowDocumentAppliedTreeRevisionForTesting(expectedSelectionRevision, timeout: timeout)
-    }
-    let fallbackState = sample()
-    return condition(fallbackState) ? fallbackState : nil
-}
-
-@MainActor
-private func renderedSelectionRevealState(
-    in view: DOMTreeTextView,
-    containing selectedText: String
-) -> RenderedSelectionRevealState {
-    view.layoutIfNeeded()
-    let selectedLine = view.rowSnapshotsForTesting.first { snapshot in
-        snapshot.text.contains(selectedText)
-    }
-    return RenderedSelectionRevealState(
-        contentOffsetY: Double(view.contentOffset.y),
-        boundsHeight: Double(view.bounds.height),
-        selectedRowY: selectedLine.map { Double(CGFloat($0.rowIndex) * view.rowHeightForTesting) },
-        rowHeight: Double(view.rowHeightForTesting)
-    )
-}
-
-@MainActor
-private func makeDOMTreeFixture(root: DOM.Node = documentNode()) -> DOMTreeTestFixture {
-    DOMTreeTestFixture(root: root)
-}
-
-@MainActor
-private struct ProjectedFrameFixture {
-    var session: DOMTreeTestFixture
-    var frameRootID: DOMNode.ID
-    var selectedNodeID: DOMNode.ID
-}
-
-@MainActor
-private func makeProjectedFrameFixture() -> ProjectedFrameFixture {
-    ProjectedFrameFixture(
-        session: makeDOMTreeFixture(root: projectedPageDocument()),
-        frameRootID: nodeID(101),
-        selectedNodeID: nodeID(108)
-    )
-}
-
-private func proxyNodeID(_ value: Int) -> DOM.Node.ID {
-    DOM.Node.ID(String(value))
-}
-
-private func proxyNodeID(_ value: String) -> DOM.Node.ID {
-    DOM.Node.ID(value)
-}
-
-private func nodeID(_ value: Int) -> DOMNode.ID {
-    DOMNode.ID(proxyNodeID(value))
 }
 
 private func makeCanonicalRenderRow(
@@ -1920,282 +1292,6 @@ private func makeCanonicalRenderRow(
     )
 }
 
-private func attributesDictionary(_ attributes: [DOM.Attribute]) -> [String: String] {
-    Dictionary(uniqueKeysWithValues: attributes.map { ($0.name, $0.value) })
-}
-
-private func documentNode() -> DOM.Node {
-    DOM.Node(
-        id: proxyNodeID(1),
-        nodeType: 9,
-        nodeName: "#document",
-        childNodeCount: 2,
-        children: [
-            DOM.Node(id: proxyNodeID(2), nodeType: 10, nodeName: "html"),
-            DOM.Node(
-                id: proxyNodeID(3),
-                nodeType: 1,
-                nodeName: "HTML",
-                localName: "html",
-                attributes: ["lang": "en"],
-                attributeList: [DOM.Attribute(name: "lang", value: "en")],
-                childNodeCount: 2,
-                children: [
-                    DOM.Node(
-                        id: proxyNodeID(4),
-                        nodeType: 1,
-                        nodeName: "HEAD",
-                        localName: "head",
-                        childNodeCount: 1,
-                        children: [
-                            DOM.Node(id: proxyNodeID(5), nodeType: 1, nodeName: "TITLE", localName: "title"),
-                        ]
-                    ),
-                    bodyNode(article: articleNode()),
-                ]
-            ),
-        ]
-    )
-}
-
-private func documentWithDeferredArticle() -> DOM.Node {
-    DOM.Node(
-        id: proxyNodeID(1),
-        nodeType: 9,
-        nodeName: "#document",
-        childNodeCount: 1,
-        children: [
-            DOM.Node(
-                id: proxyNodeID(3),
-                nodeType: 1,
-                nodeName: "HTML",
-                localName: "html",
-                childNodeCount: 1,
-                children: [
-                    bodyNode(
-                        article: DOM.Node(
-                            id: proxyNodeID(8),
-                            nodeType: 1,
-                            nodeName: "ARTICLE",
-                            localName: "article",
-                            childNodeCount: 1
-                        )
-                    ),
-                ]
-            ),
-        ]
-    )
-}
-
-private func selectionRevealRaceDocument() -> DOM.Node {
-    DOM.Node(
-        id: proxyNodeID(1),
-        nodeType: 9,
-        nodeName: "#document",
-        childNodeCount: 1,
-        children: [
-            DOM.Node(
-                id: proxyNodeID(2),
-                nodeType: 1,
-                nodeName: "HTML",
-                localName: "html",
-                childNodeCount: 1,
-                children: [
-                    DOM.Node(
-                        id: proxyNodeID(3),
-                        nodeType: 1,
-                        nodeName: "BODY",
-                        localName: "body",
-                        childNodeCount: 1,
-                        children: [
-                            selectionRevealRaceTargetNode(),
-                        ]
-                    ),
-                ]
-            ),
-        ]
-    )
-}
-
-private func selectionRevealRaceBodyChildren(prefixCount: Int) -> [DOM.Node] {
-    (0..<prefixCount).map { index in
-        let attributes = [DOM.Attribute(name: "id", value: "prefix-\(index)")]
-        return DOM.Node(
-            id: proxyNodeID(1_000 + index),
-            nodeType: 1,
-            nodeName: "DIV",
-            localName: "div",
-            attributes: attributesDictionary(attributes),
-            attributeList: attributes
-        )
-    } + [selectionRevealRaceTargetNode()]
-}
-
-private func selectionRevealRaceTargetNode() -> DOM.Node {
-    let attributes = [DOM.Attribute(name: "id", value: "selected-target")]
-    return DOM.Node(
-        id: proxyNodeID(4),
-        nodeType: 1,
-        nodeName: "DIV",
-        localName: "div",
-        attributes: attributesDictionary(attributes),
-        attributeList: attributes
-    )
-}
-
-private func projectedPageDocument() -> DOM.Node {
-    let iframeAttributes = [DOM.Attribute(name: "src", value: "https://frame.example/ad")]
-    return DOM.Node(
-        id: proxyNodeID(1),
-        nodeType: 9,
-        nodeName: "#document",
-        childNodeCount: 1,
-        children: [
-            DOM.Node(
-                id: proxyNodeID(2),
-                nodeType: 1,
-                nodeName: "HTML",
-                localName: "html",
-                childNodeCount: 1,
-                children: [
-                    DOM.Node(
-                        id: proxyNodeID(3),
-                        nodeType: 1,
-                        nodeName: "BODY",
-                        localName: "body",
-                        childNodeCount: 1,
-                        children: [
-                            DOM.Node(
-                                id: proxyNodeID(20),
-                                nodeType: 1,
-                                nodeName: "IFRAME",
-                                localName: "iframe",
-                                attributes: attributesDictionary(iframeAttributes),
-                                attributeList: iframeAttributes,
-                                childNodeCount: 1,
-                                contentDocument: projectedFrameDocument()
-                            ),
-                        ]
-                    ),
-                ]
-            ),
-        ]
-    )
-}
-
-private func projectedFrameDocument() -> DOM.Node {
-    DOM.Node(
-        id: proxyNodeID(101),
-        nodeType: 9,
-        nodeName: "#document",
-        documentURL: "https://frame.example/ad",
-        childNodeCount: 1,
-        children: [
-            DOM.Node(
-                id: proxyNodeID(102),
-                nodeType: 1,
-                nodeName: "HTML",
-                localName: "html",
-                childNodeCount: 1,
-                children: [
-                    DOM.Node(
-                        id: proxyNodeID(103),
-                        nodeType: 1,
-                        nodeName: "BODY",
-                        localName: "body",
-                        childNodeCount: 1,
-                        children: [
-                            frameImageNode(),
-                        ]
-                    ),
-                ]
-            ),
-        ]
-    )
-}
-
-private func frameImageNode() -> DOM.Node {
-    let attributes = [DOM.Attribute(name: "id", value: "ad-node")]
-    return DOM.Node(
-        id: proxyNodeID(108),
-        nodeType: 1,
-        nodeName: "IMG",
-        localName: "img",
-        attributes: attributesDictionary(attributes),
-        attributeList: attributes
-    )
-}
-
-private func bodyNode(article: DOM.Node) -> DOM.Node {
-    let bodyAttributes = [DOM.Attribute(name: "class", value: "logged-in env-production")]
-    let divAttributes = [
-        DOM.Attribute(name: "id", value: "start-of-content"),
-        DOM.Attribute(name: "data-testid", value: "cellInnerDiv"),
-    ]
-    let inputAttributes = [DOM.Attribute(name: "disabled", value: "")]
-    return DOM.Node(
-        id: proxyNodeID(6),
-        nodeType: 1,
-        nodeName: "BODY",
-        localName: "body",
-        attributes: attributesDictionary(bodyAttributes),
-        attributeList: bodyAttributes,
-        childNodeCount: 5,
-        children: [
-            DOM.Node(
-                id: proxyNodeID(7),
-                nodeType: 1,
-                nodeName: "DIV",
-                localName: "div",
-                attributes: attributesDictionary(divAttributes),
-                attributeList: divAttributes
-            ),
-            DOM.Node(
-                id: proxyNodeID(12),
-                nodeType: 1,
-                nodeName: "INPUT",
-                localName: "input",
-                attributes: attributesDictionary(inputAttributes),
-                attributeList: inputAttributes
-            ),
-            article,
-            DOM.Node(
-                id: proxyNodeID(10),
-                nodeType: 3,
-                nodeName: "#text",
-                nodeValue: "Introducing luma for iOS 26"
-            ),
-            DOM.Node(
-                id: proxyNodeID(11),
-                nodeType: 8,
-                nodeName: "#comment",
-                nodeValue: "comment text"
-            ),
-        ]
-    )
-}
-
-private func articleNode() -> DOM.Node {
-    let nestedAttributes = [DOM.Attribute(name: "id", value: "nested-child")]
-    return DOM.Node(
-        id: proxyNodeID(8),
-        nodeType: 1,
-        nodeName: "ARTICLE",
-        localName: "article",
-        childNodeCount: 1,
-        children: [
-            DOM.Node(
-                id: proxyNodeID(9),
-                nodeType: 1,
-                nodeName: "SPAN",
-                localName: "span",
-                attributes: attributesDictionary(nestedAttributes),
-                attributeList: nestedAttributes
-            ),
-        ]
-    )
-}
-
 private func makeRowDocumentRows(_ texts: [String]) -> [DOMTreeRowRenderPlan] {
     var utf16Location = 0
     return texts.enumerated().map { index, text in
@@ -2205,13 +1301,16 @@ private func makeRowDocumentRows(_ texts: [String]) -> [DOMTreeRowRenderPlan] {
         }
         return DOMTreeRowRenderPlan(
             identity: DOMTreeRowIdentity(
-                nodeID: nodeID(index + 1),
+                nodeID: testDOMNodeID(index + 1),
                 kind: .opening
             ),
             depth: 0,
             rowIndex: index,
             text: text,
-            documentRange: NSRange(location: utf16Location, length: utf16Length),
+            documentRange: NSRange(
+                location: utf16Location,
+                length: utf16Length
+            ),
             markupRange: NSRange(location: 0, length: utf16Length),
             tokens: [],
             displayColumnCount: utf16Length,
@@ -2221,7 +1320,9 @@ private func makeRowDocumentRows(_ texts: [String]) -> [DOMTreeRowRenderPlan] {
     }
 }
 
-private func attributedRowDocument(rows: [DOMTreeRowRenderPlan]) -> NSAttributedString {
+private func attributedRowDocument(
+    rows: [DOMTreeRowRenderPlan]
+) -> NSAttributedString {
     let attributedString = NSMutableAttributedString()
     for (index, row) in rows.enumerated() {
         if index > 0 {
@@ -2229,9 +1330,7 @@ private func attributedRowDocument(rows: [DOMTreeRowRenderPlan]) -> NSAttributed
         }
         attributedString.append(NSAttributedString(
             string: row.text,
-            attributes: [
-                DOMTreeTextDocument.rowIdentityAttribute: row.identity,
-            ]
+            attributes: [DOMTreeTextDocument.rowIdentityAttribute: row.identity]
         ))
     }
     return attributedString
