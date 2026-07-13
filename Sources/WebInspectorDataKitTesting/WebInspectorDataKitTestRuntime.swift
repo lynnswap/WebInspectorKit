@@ -355,6 +355,20 @@ public final class WebInspectorDataKitTestRuntime {
         )
     }
 
+    /// Emits one `DOM.childNodeCountUpdated` event on the current page target.
+    public nonisolated(nonsending) func emitDOMChildNodeCountUpdated(
+        nodeID: String,
+        count: Int
+    ) async throws {
+        guard !isClosed else {
+            throw RuntimeError.closed
+        }
+        try await driver.emitDOMChildNodeCountUpdated(
+            nodeID: nodeID,
+            count: count
+        )
+    }
+
     /// Emits one `DOM.childNodeInserted` event on the current page target.
     public nonisolated(nonsending) func emitDOMChildNodeInserted(
         parentID: String,
@@ -678,6 +692,22 @@ private actor ScenarioDriver {
         )
     }
 
+    func emitDOMChildNodeCountUpdated(
+        nodeID: String,
+        count: Int
+    ) async throws {
+        try await peer.emitTargetEvent(
+            targetID: currentTargetID,
+            method: "DOM.childNodeCountUpdated",
+            parameters: try WebInspectorTestJSONObject(encoding:
+                DOMChildNodeCountUpdatedParameters(
+                    nodeId: nodeID,
+                    childNodeCount: count
+                )
+            )
+        )
+    }
+
     func emitDOMChildNodeInserted(
         parentID: String,
         previousNodeID: String?,
@@ -935,6 +965,11 @@ private struct DOMSetChildNodesParameters: Encodable {
     let nodes: [DOMNodeWire]
 }
 
+private struct DOMChildNodeCountUpdatedParameters: Encodable {
+    let nodeId: String
+    let childNodeCount: Int
+}
+
 private struct DOMChildNodeInsertedParameters: Encodable {
     let parentNodeId: String
     let previousNodeId: String
@@ -956,7 +991,7 @@ private struct DOMNodeWire: Encodable {
     let documentURL: String?
     let attributes: [String]
     let childNodeCount: Int
-    let children: [DOMNodeWire]
+    let children: [DOMNodeWire]?
 
     init(document: WebInspectorDataKitTestRuntime.Document) {
         nodeId = document.id
@@ -968,7 +1003,9 @@ private struct DOMNodeWire: Encodable {
         documentURL = document.url
         attributes = []
         childNodeCount = document.children.count
-        children = document.children.map(DOMNodeWire.init(node:))
+        children = document.children.isEmpty
+            ? nil
+            : document.children.map(DOMNodeWire.init(node:))
     }
 
     init(node: WebInspectorDataKitTestRuntime.Node) {
@@ -981,7 +1018,9 @@ private struct DOMNodeWire: Encodable {
         documentURL = nil
         attributes = node.attributes.sorted { $0.key < $1.key }.flatMap { [$0.key, $0.value] }
         childNodeCount = node.children.count
-        children = node.children.map(DOMNodeWire.init(node:))
+        children = node.children.isEmpty
+            ? nil
+            : node.children.map(DOMNodeWire.init(node:))
     }
 }
 

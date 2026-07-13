@@ -501,6 +501,47 @@ func canonicalDOMAppliesEveryLocalPatchWithoutRebuildingTheGraph() throws {
 }
 
 @Test
+func canonicalDOMMatchesWebKitCountAndFirstInsertionSemantics() throws {
+    let fixture = canonicalDOMReducerFixture()
+    var reducer = fixture.reducer
+    let unrequestedParent = canonicalDOMNode(id: "unrequested", childCount: 0)
+    let loadedParent = canonicalDOMNode(
+        id: "loaded",
+        children: [canonicalDOMNode(id: "existing")]
+    )
+    let root = canonicalDOMNode(
+        id: "document",
+        type: 9,
+        name: "#document",
+        children: [unrequestedParent, loadedParent]
+    )
+    _ = try reducer.bootstrap(scope: fixture.scope, root: root)
+    let documentScope = try canonicalDocumentScope(fixture, eventScope: fixture.scope)
+    let unrequestedID = canonicalDOMID("unrequested", scope: documentScope)
+    let loadedID = canonicalDOMID("loaded", scope: documentScope)
+    let existingID = canonicalDOMID("existing", scope: documentScope)
+    let insertedID = canonicalDOMID("inserted", scope: documentScope)
+
+    let insertion = try reducer.apply(
+        scope: fixture.scope,
+        event: .childNodeInserted(
+            parent: DOM.Node.ID("unrequested"),
+            previous: nil,
+            node: canonicalDOMNode(id: "inserted")
+        )
+    )
+    #expect(insertion.insertedRecords.map(\.id) == [insertedID])
+    #expect(reducer.record(for: unrequestedID)?.children == .loaded([insertedID]))
+
+    let countOnly = try reducer.apply(
+        scope: fixture.scope,
+        event: .childNodeCountUpdated(DOM.Node.ID("loaded"), count: 99)
+    )
+    #expect(countOnly.isEmpty)
+    #expect(reducer.record(for: loadedID)?.children == .loaded([existingID]))
+}
+
+@Test
 func canonicalDOMRejectsInvalidDeltaAndTombstonedIDReuseWithStrongGuarantee() throws {
     let fixture = canonicalDOMReducerFixture()
     var reducer = fixture.reducer

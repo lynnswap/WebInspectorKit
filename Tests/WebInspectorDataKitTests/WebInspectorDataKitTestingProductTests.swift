@@ -139,6 +139,20 @@ func dataKitTestingDrivesIncrementalDOMEventsThroughTheProductionTreeStream()
     #expect(body.attributes["data-state"] == "ready")
     #expect(runtime.model.model(for: bodyID) === body)
 
+    try await runtime.emitDOMChildNodeInserted(
+        parentID: "body",
+        node: .element(id: "first", name: "em")
+    )
+    guard case let .changes(_, _, .delta(firstInsertionDelta)) =
+        await iterator.next()
+    else {
+        preconditionFailure("An empty requested parent must accept its first inserted child.")
+    }
+    let firstID = try #require(firstInsertionDelta.upsertedRows.first { row in
+        row.id.canonicalStorage.rawNodeID.rawValue == "first"
+    }?.id)
+    #expect(runtime.model.model(for: firstID)?.localName == "em")
+
     try await runtime.emitDOMSetChildNodes(
         parentID: "body",
         children: [.element(id: "span", name: "span")]
@@ -153,19 +167,22 @@ func dataKitTestingDrivesIncrementalDOMEventsThroughTheProductionTreeStream()
     }?.id)
     #expect(runtime.model.model(for: spanID)?.localName == "span")
 
-    try await runtime.emitDOMChildNodeInserted(
-        parentID: "body",
-        node: .element(id: "first", name: "em")
+    try await runtime.emitDOMChildNodeCountUpdated(
+        nodeID: "body",
+        count: 99
     )
-    guard case let .changes(_, _, .delta(firstInsertionDelta)) =
+    try await runtime.emitDOMAttributeModified(
+        nodeID: "body",
+        name: "data-after-count",
+        value: "alive"
+    )
+    guard case .changes(_, _, .delta) =
         await iterator.next()
     else {
-        preconditionFailure("A zero previousNodeId must insert the first DOM child.")
+        preconditionFailure("A count-only event must not terminate the production tree stream.")
     }
-    let firstID = try #require(firstInsertionDelta.upsertedRows.first { row in
-        row.id.canonicalStorage.rawNodeID.rawValue == "first"
-    }?.id)
-    #expect(runtime.model.model(for: firstID)?.localName == "em")
+    #expect(body.childNodeCount == 1)
+    #expect(body.attributes["data-after-count"] == "alive")
 
     try await runtime.emitDOMChildNodeInserted(
         parentID: "body",

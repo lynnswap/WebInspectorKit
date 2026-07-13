@@ -1123,7 +1123,18 @@ private extension WebInspectorCanonicalDOMReducer {
         guard var parentRecord = recordsByID[parentID] else {
             throw WebInspectorCanonicalDOMError.missingNode(parentID)
         }
-        guard case var .loaded(childIDs) = parentRecord.children else {
+        var childIDs: [WebInspectorDOMNodeIdentityStorage]
+        switch parentRecord.children {
+        case let .loaded(loadedChildIDs):
+            childIDs = loadedChildIDs
+        case .unrequested(count: 0):
+            if let rawPreviousID {
+                throw WebInspectorCanonicalDOMError.invalidPreviousSibling(
+                    nodeID(rawPreviousID, in: scope)
+                )
+            }
+            childIDs = []
+        case .unrequested:
             throw WebInspectorCanonicalDOMError.invalidParent(parentID)
         }
         let insertionIndex: Int
@@ -1206,10 +1217,7 @@ private extension WebInspectorCanonicalDOMReducer {
                 return WebInspectorCanonicalDOMTransaction()
             }
             record.children = .unrequested(count: count)
-        case let .loaded(ids):
-            guard ids.count == count else {
-                throw WebInspectorCanonicalDOMError.invalidChildCount(id)
-            }
+        case .loaded:
             performanceCounters.incrementalNodeVisitCount += 1
             return WebInspectorCanonicalDOMTransaction()
         }
