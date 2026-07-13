@@ -78,6 +78,17 @@ package typealias WebInspectorDOMTreeUpdateSequence =
         Never
     >
 
+#if DEBUG
+    package struct WebInspectorDOMTreeProjectionPerformanceCounters:
+        Equatable,
+        Sendable
+    {
+        package fileprivate(set) var fullSnapshotAccessCount = 0
+        package fileprivate(set) var appliedDeltaCount = 0
+        package fileprivate(set) var appliedDeltaRowMutationCount = 0
+    }
+#endif
+
 package final class WebInspectorDOMTreeProjectionState {
     private typealias Publication = WebInspectorRevisionedSnapshotPublication<
         WebInspectorDOMTreeSnapshot,
@@ -92,15 +103,17 @@ package final class WebInspectorDOMTreeProjectionState {
     }
 
     private var revision: UInt64 = 0
-    private var snapshot = WebInspectorDOMTreeSnapshot(
-        primaryRootID: nil,
-        rowsByID: [:]
-    )
+    private var primaryRootID: DOMNode.ID?
+    private var rowsByID: [DOMNode.ID: WebInspectorDOMTreeRow] = [:]
     private var pending: Pending?
     private var resetWasPrepared = false
     private var isEstablished = false
     private var isClosed = false
     private let publication = Publication()
+    #if DEBUG
+        package private(set) var performanceCounters =
+            WebInspectorDOMTreeProjectionPerformanceCounters()
+    #endif
 
     package func subscribe() -> WebInspectorDOMTreeUpdateSequence {
         precondition(!isClosed, "A closed DOM tree projection cannot be observed.")
@@ -108,7 +121,10 @@ package final class WebInspectorDOMTreeProjectionState {
             isEstablished && pending == nil,
             "A DOM tree projection can be observed only after its initial schema transaction."
         )
-        return publication.subscribe(revision: revision, snapshot: snapshot)
+        return publication.subscribe(
+            revision: revision,
+            snapshot: makeSnapshot()
+        )
     }
 
     package var currentSnapshot: WebInspectorDOMTreeSnapshot {
@@ -116,7 +132,7 @@ package final class WebInspectorDOMTreeProjectionState {
             isEstablished && pending == nil,
             "A DOM tree snapshot is available only after its initial schema transaction."
         )
-        return snapshot
+        return makeSnapshot()
     }
 
     package func rebase(
@@ -125,7 +141,7 @@ package final class WebInspectorDOMTreeProjectionState {
         try publication.rebase(
             token,
             revision: revision,
-            snapshot: snapshot
+            snapshot: makeSnapshot()
         )
     }
 
@@ -166,7 +182,7 @@ package final class WebInspectorDOMTreeProjectionState {
         switch pending {
         case let .initial(snapshot):
             precondition(!isEstablished)
-            self.snapshot = snapshot
+            install(snapshot)
             isEstablished = true
 
         case let .reset(snapshot):
@@ -175,7 +191,8 @@ package final class WebInspectorDOMTreeProjectionState {
                 snapshot.rowsByID.values,
                 registeredModel: registeredModel
             )
-            publish(.reset(snapshot), replacingWith: snapshot)
+            install(snapshot)
+            publish(.reset(snapshot))
 
         case let .delta(delta):
             precondition(isEstablished)
@@ -183,7 +200,8 @@ package final class WebInspectorDOMTreeProjectionState {
                 delta.upsertedRows,
                 registeredModel: registeredModel
             )
-            publish(.delta(delta), replacingWith: applying(delta))
+            apply(delta)
+            publish(.delta(delta))
         }
     }
 
@@ -196,14 +214,10 @@ package final class WebInspectorDOMTreeProjectionState {
         publication.finish()
     }
 
-    private func publish(
-        _ change: WebInspectorDOMTreePublicationChange,
-        replacingWith snapshot: WebInspectorDOMTreeSnapshot
-    ) {
+    private func publish(_ change: WebInspectorDOMTreePublicationChange) {
         precondition(revision < UInt64.max)
         let previousRevision = revision
         revision += 1
-        self.snapshot = snapshot
         publication.publish(
             from: previousRevision,
             to: revision,
@@ -211,19 +225,36 @@ package final class WebInspectorDOMTreeProjectionState {
         )
     }
 
-    private func applying(
-        _ delta: WebInspectorDOMTreeDelta
-    ) -> WebInspectorDOMTreeSnapshot {
-        var rowsByID = snapshot.rowsByID
+    private func apply(_ delta: WebInspectorDOMTreeDelta) {
         for id in delta.deletedRowIDs {
             rowsByID.removeValue(forKey: id)
         }
         for row in delta.upsertedRows {
             rowsByID[row.id] = row
         }
-        let primaryRootID =
-            delta.primaryRootChange?.rootID
-            ?? snapshot.primaryRootID
+        if let primaryRootChange = delta.primaryRootChange {
+            primaryRootID = primaryRootChange.rootID
+        }
+        precondition(
+            primaryRootID.map { rowsByID[$0] != nil } ?? rowsByID.isEmpty,
+            "A context DOM tree delta must retain its primary root and cannot retain rows without one."
+        )
+        #if DEBUG
+            performanceCounters.appliedDeltaCount += 1
+            performanceCounters.appliedDeltaRowMutationCount +=
+                delta.deletedRowIDs.count + delta.upsertedRows.count
+        #endif
+    }
+
+    private func install(_ snapshot: WebInspectorDOMTreeSnapshot) {
+        primaryRootID = snapshot.primaryRootID
+        rowsByID = snapshot.rowsByID
+    }
+
+    private func makeSnapshot() -> WebInspectorDOMTreeSnapshot {
+        #if DEBUG
+            performanceCounters.fullSnapshotAccessCount += 1
+        #endif
         return WebInspectorDOMTreeSnapshot(
             primaryRootID: primaryRootID,
             rowsByID: rowsByID
@@ -275,6 +306,15 @@ package extension WebInspectorModelContext {
         preconditionOwnerIsolation()
         return requiredDOMTreeProjectionState().currentSnapshot
     }
+
+    #if DEBUG
+        var domTreeProjectionPerformanceCountersForTesting:
+            WebInspectorDOMTreeProjectionPerformanceCounters
+        {
+            preconditionOwnerIsolation()
+            return requiredDOMTreeProjectionState().performanceCounters
+        }
+    #endif
 
     func rebaseDOMTree(
         _ token: WebInspectorRevisionedSnapshotRebaseToken

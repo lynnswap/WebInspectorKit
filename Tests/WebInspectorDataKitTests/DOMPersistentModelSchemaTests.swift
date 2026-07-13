@@ -162,6 +162,10 @@ func domTreeProjectionPublishesInitialDeltaAndResetWithoutMaterializingGraph() a
     }
     #expect(revision == 0)
     #expect(initial == context.domTreeSnapshot)
+    #if DEBUG
+        let countersBeforeDelta =
+            context.domTreeProjectionPerformanceCountersForTesting
+    #endif
 
     let host = try #require(context.model(for: hostID))
     let controller = try await WebInspectorFetchedResultsController<DOMNode, Never>(
@@ -197,6 +201,22 @@ func domTreeProjectionPublishesInitialDeltaAndResetWithoutMaterializingGraph() a
     #expect(delta.upsertedRows.map(\.id) == [hostID])
     #expect(delta.deletedRowIDs.isEmpty)
     #expect(delta.upsertedRows[0].attributes == ["class": "after"])
+    #if DEBUG
+        let countersAfterDelta =
+            context.domTreeProjectionPerformanceCountersForTesting
+        #expect(
+            countersAfterDelta.fullSnapshotAccessCount
+                == countersBeforeDelta.fullSnapshotAccessCount
+        )
+        #expect(
+            countersAfterDelta.appliedDeltaCount
+                == countersBeforeDelta.appliedDeltaCount + 1
+        )
+        #expect(
+            countersAfterDelta.appliedDeltaRowMutationCount
+                == countersBeforeDelta.appliedDeltaRowMutationCount + 1
+        )
+    #endif
     #expect(context.registeredModel(for: documentID) == nil)
     #expect(secondContext.domTreeSnapshot == secondInitialSnapshot)
     #expect(
