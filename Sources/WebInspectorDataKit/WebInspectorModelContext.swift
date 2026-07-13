@@ -3077,13 +3077,17 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         return networkRequests.request(forProxyID: id)
     }
 
-    /// Clears retained Network requests and emits reset transactions.
-    public nonisolated(nonsending) func clearNetworkRequests() async {
+    /// Clears canonical Network membership for every context of this model
+    /// container and waits until all contexts at the commit boundary apply it.
+    public nonisolated(nonsending) func clearNetworkRequests() async throws {
         preconditionOwnerIsolation()
         guard configuredDomains.contains(.network) else {
             return
         }
-        await networkRequests.clear()
+        guard let binding = containerRegistrationBinding else {
+            throw WebInspectorModelError.staleModel
+        }
+        try await binding.core.clearNetworkRequests()
     }
 
     /// Returns the registered Console message for an identifier.

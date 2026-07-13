@@ -433,6 +433,39 @@ package struct CanonicalConsoleRuntimeStore: Equatable, Sendable {
         return CanonicalConsoleRuntimeTransaction(consoleMessageChanges: changes)
     }
 
+    /// Invalidates resolved references after the Network owner clears its
+    /// canonical membership while retaining the Console message and raw ID.
+    package mutating func invalidateNetworkRequestReferences()
+        -> CanonicalConsoleRuntimeTransaction?
+    {
+        var replacements: [CanonicalConsoleMessageIDStorage: CanonicalConsoleMessageRecord] = [:]
+        var changes: [CanonicalConsoleMessageChange] = []
+        for id in consoleMessagesByID.keys.sorted(by: { $0.ordinal < $1.ordinal }) {
+            guard var record = consoleMessagesByID[id],
+                case let .resolved(rawRequestID, _)? = record.networkRequestReference
+            else {
+                continue
+            }
+            let reference = CanonicalConsoleNetworkRequestReference.unresolved(
+                rawRequestID: rawRequestID
+            )
+            let patch = CanonicalConsoleMessagePatch.networkRequestReference(reference)
+            record.apply(patch)
+            replacements[id] = record
+            changes.append(.update(id: id, patch: patch, query: nil))
+            unresolvedConsoleMessageIDsByRawRequestID[rawRequestID, default: []]
+                .insert(id)
+        }
+        guard changes.isEmpty == false else {
+            return nil
+        }
+        for (id, record) in replacements {
+            consoleMessagesByID[id] = record
+        }
+        recordIncrementalVisits(replacements.count)
+        return CanonicalConsoleRuntimeTransaction(consoleMessageChanges: changes)
+    }
+
     /// Invalidates agent-owned Runtime resources when the transport observes a
     /// new document loader. Persistent RuntimeContext membership is handled by
     /// the frame or semantic-target navigation boundary separately.

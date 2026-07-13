@@ -606,6 +606,26 @@ package struct WebInspectorCanonicalModelStore: Sendable {
         return transaction
     }
 
+    /// Clears only canonical Network membership. Console messages remain, but
+    /// any resolved Network identity is returned to its unresolved raw-ID form
+    /// in the same owner-atomic transaction.
+    package mutating func clearNetworkRequests()
+        -> WebInspectorCanonicalModelTransaction
+    {
+        guard configuredDomains.contains(.network) else {
+            return WebInspectorCanonicalModelTransaction()
+        }
+        let networkTransaction = networkStore.clear()
+        let consoleRuntimeTransaction =
+            configuredDomains.contains(.console)
+            ? consoleRuntimeStore.invalidateNetworkRequestReferences()
+            : nil
+        return WebInspectorCanonicalModelTransaction(
+            network: networkTransaction,
+            consoleRuntime: consoleRuntimeTransaction
+        )
+    }
+
     /// Replaces every semantic store after terminal publication has finished.
     /// Unlike detach, terminal close has no subscriber that needs a reset
     /// transaction, retained capacity, tombstones, or a reset snapshot.

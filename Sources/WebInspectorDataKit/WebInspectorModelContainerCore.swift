@@ -669,6 +669,26 @@ package actor WebInspectorModelContainerCore {
         return publish(transaction)
     }
 
+    /// Publishes one canonical Network clear and returns only after every
+    /// materialized context at the commit boundary has applied or unregistered.
+    package func clearNetworkRequests() async throws {
+        guard lifecycle == .open else {
+            if lifecycle == .detaching {
+                throw WebInspectorModelContainerCoreError.detachInProgress
+            }
+            throw WebInspectorModelContainerCoreError.closed
+        }
+        let transaction = canonicalStore.clearNetworkRequests()
+        invalidateStaleNetworkResponseBodyOperations()
+        guard let commit = publish(transaction) else {
+            return
+        }
+        let barrier = makeRevisionAcknowledgementBarrier(
+            through: commit.toRevision
+        )
+        try await waitForAcknowledgements(barrier)
+    }
+
     /// Loads one current canonical response body through the physical Network
     /// agent that allocated its opaque request identifier.
     ///
