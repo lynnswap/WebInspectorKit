@@ -649,56 +649,6 @@ func responseReplacementReportsJoinedBodyWaitersAsStaleModels() async throws {
 
 @MainActor
 @Test
-func clearingNetworkInvalidatesEveryJoinedResponseBodyWaiter() async throws {
-    try await withAttachedModelContext(
-        configuration: .init(domains: [.network])
-    ) { fixture in
-        let requestID = Network.Request.ID("cleared-body")
-        try await emitFinishedRequest(
-            id: requestID,
-            target: fixture.target,
-            wire: fixture.runtime.wire
-        )
-        let request = try await requireRequest(
-            requestID,
-            in: fixture.context
-        )
-        let body = request.responseBody
-        let gate = await fixture.runtime.wire.deferReply(
-            to: "Network.getResponseBody",
-            with: try rawNetworkBodyResult(
-                Network.Body(data: "late", base64Encoded: false)
-            )
-        )
-        let first = Task {
-            _ = try await fixture.context.responseBody(for: request)
-        }
-        let second = Task {
-            _ = try await fixture.context.responseBody(for: request)
-        }
-        _ = await fixture.runtime.wire.observations.waitForCommands(
-            method: "Network.getResponseBody",
-            count: 1
-        )
-
-        await fixture.context.clearNetworkRequests()
-        await #expect(throws: WebInspectorProxyError.staleIdentifier) {
-            try await first.value
-        }
-        await #expect(throws: WebInspectorProxyError.staleIdentifier) {
-            try await second.value
-        }
-        guard case .failed(.proxy(.staleIdentifier)) = body.phase else {
-            Issue.record("Expected the cleared response body to become stale.")
-            return
-        }
-        #expect(try fixture.context.networkRequest(id: NetworkRequest.ID(requestID)) == nil)
-        gate.open()
-    }
-}
-
-@MainActor
-@Test
 func responseBodyPreflightFailurePublishesTypedBodyFailure() async {
     let context = WebInspectorModelContext.preview(
         configuration: .init(domains: [.network])

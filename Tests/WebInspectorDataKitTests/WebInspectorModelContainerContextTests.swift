@@ -361,6 +361,119 @@ func releasedCustomContextUnregistersItsSubscription() async throws {
 }
 
 @MainActor
+@Test
+func canonicalNetworkClearReturnsAfterTwoActiveContextsApplyTheDeletion() async throws {
+    let core = WebInspectorModelContainerCore(
+        configuredDomains: [.network],
+        modelSchemaRegistry: WebInspectorModelSchemaRegistry(
+            WebInspectorNetworkModelSchemas.registrations
+        )
+    )
+    let firstContext = WebInspectorModelContext.mainContext(
+        for: core,
+        isolation: MainActor.shared
+    )
+    let secondRegistration = try await core.registerContext()
+    let secondContextCandidate = WebInspectorModelContext.customContext(
+        for: core,
+        registration: secondRegistration,
+        isolation: MainActor.shared
+    )
+    let secondContext = try #require(secondContextCandidate)
+    try await firstContext.waitUntilContainerReady()
+    try await secondContext.waitUntilContainerReady()
+
+    let attachment = WebInspectorContainerAttachmentGeneration(rawValue: 1)
+    let generation = WebInspectorPage.Generation(rawValue: 1)
+    let page = ModelTarget(
+        id: WebInspectorTarget.ID("page"),
+        kind: .page,
+        frameID: FrameID("main-frame"),
+        parentFrameID: nil
+    )
+    _ = try await core.reduce(
+        .reset(generation),
+        attachmentGeneration: attachment
+    )
+    _ = try await core.reduce(
+        .targetSnapshot(
+            generation: generation,
+            through: 0,
+            snapshot: ModelTargetSnapshot(
+                currentPageID: page.id,
+                targets: [
+                    ModelTargetState(
+                        target: page,
+                        navigationEpoch: ModelNavigationEpoch(rawValue: 1),
+                        domBindingEpoch: nil,
+                        runtimeBindingEpoch: nil,
+                        consoleBindingEpoch: nil
+                    )
+                ]
+            )
+        ),
+        attachmentGeneration: attachment
+    )
+    let insertion = try #require(
+        try await core.reduce(
+            .event(
+                sequence: 1,
+                scope: ModelEventScope(
+                    generation: generation,
+                    target: page,
+                    agentTarget: page,
+                    navigationEpoch: ModelNavigationEpoch(rawValue: 1),
+                    domBindingEpoch: nil,
+                    runtimeBindingEpoch: nil,
+                    consoleBindingEpoch: nil
+                ),
+                payload: .network(
+                    canonicalRequestWillBeSent(
+                        id: "shared",
+                        url: "https://example.test/shared",
+                        timestamp: 1
+                    )
+                )
+            ),
+            attachmentGeneration: attachment
+        )
+    )
+    let insertionBarrier = try await core.makeAcknowledgementBarrier(
+        through: insertion.toRevision
+    )
+    try await core.waitForAcknowledgements(insertionBarrier)
+
+    let firstController = try await WebInspectorFetchedResultsController<
+        NetworkEntry,
+        Never
+    >(modelContext: firstContext, isolation: MainActor.shared)
+    let secondController = try await WebInspectorFetchedResultsController<
+        NetworkEntry,
+        Never
+    >(modelContext: secondContext, isolation: MainActor.shared)
+    let firstEntryID = try #require(firstController.snapshot.itemIDs.first)
+    let secondEntryID = try #require(secondController.snapshot.itemIDs.first)
+    #expect(firstEntryID == secondEntryID)
+    let firstEntry = try #require(firstContext.model(for: firstEntryID))
+    let secondEntry = try #require(secondContext.model(for: secondEntryID))
+
+    try await firstContext.clearNetworkRequests()
+
+    let clearedRevision = await core.currentRevision
+    #expect(firstContext.appliedContainerRevisionForTesting == clearedRevision)
+    #expect(secondContext.appliedContainerRevisionForTesting == clearedRevision)
+    #expect(firstController.snapshot.itemIDs.isEmpty)
+    #expect(secondController.snapshot.itemIDs.isEmpty)
+    #expect(firstEntry.isInvalidated)
+    #expect(secondEntry.isInvalidated)
+
+    await firstController.close()
+    await secondController.close()
+    await firstContext.close()
+    await secondContext.close()
+}
+
+@MainActor
 private func expectEventually(
     _ condition: @MainActor () -> Bool,
     sourceLocation: SourceLocation = #_sourceLocation

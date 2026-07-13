@@ -319,6 +319,52 @@ func networkBodyGatewayCoalescesCallersAndIsolatesWaiterCancellation()
 }
 
 @Test
+func canonicalNetworkClearInvalidatesAnInFlightResponseBodyCommand() async throws {
+    try await withNetworkBodyGatewayRuntime { fixture in
+        let requestID = try await emitFinishedCanonicalRequest(
+            rawID: "clear-in-flight",
+            wire: fixture.wire,
+            core: fixture.container.core
+        )
+        let gate = await fixture.wire.deferReply(
+            to: "Network.getResponseBody",
+            with: try rawNetworkBodyResult(
+                Network.Body(data: "obsolete", base64Encoded: false)
+            )
+        )
+        let core = fixture.container.core
+        let operation = Task.detached {
+            try await core.loadNetworkResponseBody(for: requestID)
+        }
+        _ = await fixture.wire.observations.waitForCommands(
+            method: "Network.getResponseBody",
+            count: 1
+        )
+
+        try await core.clearNetworkRequests()
+
+        await #expect(
+            throws: WebInspectorNetworkResponseBodyCommandError.staleResponse
+        ) {
+            _ = try await operation.value
+        }
+        gate.open()
+        for _ in 0..<1_000 {
+            if await core.metrics.networkResponseBodyOperationCount == 0 {
+                break
+            }
+            await Task.yield()
+        }
+        let metrics = await core.metrics
+        #expect(metrics.networkResponseBodyOperationCount == 0)
+        #expect(metrics.core.networkResponseBodyInvalidationCount == 1)
+        let snapshot = await core.canonicalSnapshotForTesting()
+        #expect(snapshot.network?.requests.isEmpty == true)
+        #expect(snapshot.network?.entries.isEmpty == true)
+    }
+}
+
+@Test
 func networkBodyGatewayRejectsMultipartResponseRevisionRace() async throws {
     try await withNetworkBodyGatewayRuntime { fixture in
         let rawID = Network.Request.ID("multipart-race")

@@ -558,6 +558,74 @@ func canonicalModelStoreKeepsSemanticAndAgentTargetsDistinctAndResolvesConsoleRe
 }
 
 @Test
+func canonicalNetworkClearDeletesRequestsAndEntriesAndInvalidatesConsoleReferencesAtomically() throws {
+    var fixture = try CanonicalModelStoreFixture(
+        domains: [.network, .console, .runtime]
+    )
+    let scope = fixture.scope(
+        runtimeBindingEpoch: 1,
+        consoleBindingEpoch: 1
+    )
+    let insertion = try fixture.event(
+        .network(
+            canonicalRequestWillBeSent(
+                id: "clear-me",
+                url: "https://example.test/clear-me",
+                timestamp: 1
+            )
+        ),
+        scope: scope
+    )
+    guard case let .insert(requestRecord, _) = try #require(
+        insertion.network?.requestChanges.first
+    ) else {
+        Issue.record("Expected a Network request insertion.")
+        return
+    }
+    let requestID = requestRecord.id
+    let consoleInsertion = try fixture.event(
+        .console(
+            .messageAdded(
+                canonicalModelConsoleMessage(
+                    text: "clear reference",
+                    networkRequestID: "clear-me"
+                )
+            )
+        ),
+        scope: scope
+    )
+    guard case let .insert(messageRecord, _) = try #require(
+        consoleInsertion.consoleRuntime?.consoleMessageChanges.first
+    ) else {
+        Issue.record("Expected a Console message insertion.")
+        return
+    }
+    let messageID = messageRecord.id
+
+    let clear = fixture.store.clearNetworkRequests()
+
+    #expect(clear.network?.requestChanges == [.delete(requestID)])
+    #expect(clear.network?.entryChanges.count == 1)
+    guard case let .update(
+        clearedMessageID,
+        .networkRequestReference(reference),
+        nil
+    ) = try #require(clear.consoleRuntime?.consoleMessageChanges.first) else {
+        Issue.record("Expected Network clear to invalidate the Console reference.")
+        return
+    }
+    #expect(clearedMessageID == messageID)
+    #expect(reference == .unresolved(rawRequestID: Network.Request.ID("clear-me")))
+    let snapshot = fixture.store.snapshot(reason: .onDemandRebase)
+    #expect(snapshot.network?.requests.isEmpty == true)
+    #expect(snapshot.network?.entries.isEmpty == true)
+    #expect(
+        snapshot.consoleRuntime?.consoleMessages.first?.record.networkRequestReference
+            == .unresolved(rawRequestID: Network.Request.ID("clear-me"))
+    )
+}
+
+@Test
 func canonicalModelStoreResolvesNetworkRequestOriginWithoutReplacingUnknownTargets() throws {
     let page = canonicalModelPageTarget()
     let frame = canonicalModelFrameTarget()
