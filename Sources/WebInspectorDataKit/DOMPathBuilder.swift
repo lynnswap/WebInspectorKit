@@ -18,34 +18,119 @@ private extension UnicodeScalar {
     }
 }
 
+private struct DOMPathNode {
+    let id: DOMNode.ID
+    let nodeName: String
+    let localName: String
+    let kind: DOMNode.Kind
+    let attributeList: [DOMNode.Attribute]
+}
+
+private struct DOMPathSnapshot {
+    let nodesByID: [DOMNode.ID: DOMPathNode]
+    let parentByNodeID: [DOMNode.ID: DOMNode.ID]
+    let childrenByNodeID: [DOMNode.ID: [DOMNode.ID]]
+
+    init(_ snapshot: DOMTreeSnapshot) {
+        nodesByID = snapshot.nodesByID.mapValues {
+            DOMPathNode(
+                id: $0.id,
+                nodeName: $0.nodeName,
+                localName: $0.localName,
+                kind: $0.kind,
+                attributeList: $0.attributeList
+            )
+        }
+        parentByNodeID = snapshot.parentByNodeID
+        childrenByNodeID = snapshot.nodesByID.mapValues { node in
+            snapshot.children(of: node.id)
+        }
+    }
+
+    init(_ snapshot: WebInspectorDOMTreeSnapshot) {
+        nodesByID = snapshot.rowsByID.mapValues {
+            DOMPathNode(
+                id: $0.id,
+                nodeName: $0.nodeName,
+                localName: $0.localName,
+                kind: DOMNode.Kind(rawValue: $0.nodeType),
+                attributeList: $0.attributeList
+            )
+        }
+        parentByNodeID = snapshot.rowsByID.reduce(into: [:]) { result, element in
+            if let parentID = element.value.parentID {
+                result[element.key] = parentID
+            }
+        }
+        childrenByNodeID = snapshot.rowsByID.mapValues { row in
+            guard case let .loaded(ids) = row.children else {
+                return []
+            }
+            return ids
+        }
+    }
+
+    func node(for id: DOMNode.ID) -> DOMPathNode? {
+        nodesByID[id]
+    }
+
+    func parent(of id: DOMNode.ID) -> DOMNode.ID? {
+        parentByNodeID[id]
+    }
+
+    func children(of id: DOMNode.ID) -> [DOMNode.ID] {
+        childrenByNodeID[id] ?? []
+    }
+}
+
 public extension DOMTreeSnapshot {
     /// Returns a CSS selector path for the node, or an empty string when one cannot be built.
     func selectorPath(for id: DOMNode.ID) -> String {
-        guard let node = node(for: id) else {
+        let pathSnapshot = DOMPathSnapshot(self)
+        guard let node = pathSnapshot.node(for: id) else {
             return ""
         }
-        return DOMPathBuilder(snapshot: self).selectorPath(for: node)
+        return DOMPathBuilder(snapshot: pathSnapshot).selectorPath(for: node)
     }
 
     /// Returns an XPath expression for the node, or an empty string when one cannot be built.
     func xPath(for id: DOMNode.ID) -> String {
-        guard let node = node(for: id) else {
+        let pathSnapshot = DOMPathSnapshot(self)
+        guard let node = pathSnapshot.node(for: id) else {
             return ""
         }
-        return DOMPathBuilder(snapshot: self).xPath(for: node)
+        return DOMPathBuilder(snapshot: pathSnapshot).xPath(for: node)
+    }
+}
+
+package extension WebInspectorDOMTreeSnapshot {
+    func selectorPath(for id: DOMNode.ID) -> String {
+        let pathSnapshot = DOMPathSnapshot(self)
+        guard let node = pathSnapshot.node(for: id) else {
+            return ""
+        }
+        return DOMPathBuilder(snapshot: pathSnapshot).selectorPath(for: node)
+    }
+
+    func xPath(for id: DOMNode.ID) -> String {
+        let pathSnapshot = DOMPathSnapshot(self)
+        guard let node = pathSnapshot.node(for: id) else {
+            return ""
+        }
+        return DOMPathBuilder(snapshot: pathSnapshot).xPath(for: node)
     }
 }
 
 private struct DOMPathBuilder {
-    let snapshot: DOMTreeSnapshot
+    let snapshot: DOMPathSnapshot
 
-    func selectorPath(for node: DOMTreeSnapshot.Node) -> String {
+    func selectorPath(for node: DOMPathNode) -> String {
         guard nodeIsElementLike(node) else {
             return ""
         }
 
         var components: [String] = []
-        var current: DOMTreeSnapshot.Node? = node
+        var current: DOMPathNode? = node
         while let candidate = current {
             guard let component = selectorPathComponent(for: candidate) else {
                 break
@@ -60,13 +145,13 @@ private struct DOMPathBuilder {
         return components.reversed().joined(separator: " > ")
     }
 
-    func xPath(for node: DOMTreeSnapshot.Node) -> String {
+    func xPath(for node: DOMPathNode) -> String {
         if node.kind == .document {
             return "/"
         }
 
         var components: [String] = []
-        var current: DOMTreeSnapshot.Node? = node
+        var current: DOMPathNode? = node
         while let candidate = current {
             if candidate.kind == .document {
                 current = parent(of: candidate)
@@ -85,14 +170,14 @@ private struct DOMPathBuilder {
         return "/" + components.reversed().joined(separator: "/")
     }
 
-    private func parent(of node: DOMTreeSnapshot.Node) -> DOMTreeSnapshot.Node? {
+    private func parent(of node: DOMPathNode) -> DOMPathNode? {
         guard let parentID = snapshot.parent(of: node.id) else {
             return nil
         }
         return snapshot.node(for: parentID)
     }
 
-    private func selectorTraversalParent(for node: DOMTreeSnapshot.Node) -> DOMTreeSnapshot.Node? {
+    private func selectorTraversalParent(for node: DOMPathNode) -> DOMPathNode? {
         guard let parent = parent(of: node) else {
             return nil
         }
@@ -102,7 +187,7 @@ private struct DOMPathBuilder {
         return parent
     }
 
-    private func selectorPathComponent(for node: DOMTreeSnapshot.Node) -> (value: String, done: Bool)? {
+    private func selectorPathComponent(for node: DOMPathNode) -> (value: String, done: Bool)? {
         guard nodeIsElementLike(node) else {
             return nil
         }
@@ -163,7 +248,7 @@ private struct DOMPathBuilder {
         return (selector, false)
     }
 
-    private func xPathComponent(for node: DOMTreeSnapshot.Node) -> String? {
+    private func xPathComponent(for node: DOMPathNode) -> String? {
         func elementComponent() -> String? {
             let nodeName = selectorNodeName(for: node)
             guard !nodeName.isEmpty else {
@@ -192,7 +277,7 @@ private struct DOMPathBuilder {
         }
     }
 
-    private func xPathIndex(for node: DOMTreeSnapshot.Node) -> Int {
+    private func xPathIndex(for node: DOMPathNode) -> Int {
         guard let parent = parent(of: node) else {
             return 0
         }
@@ -227,7 +312,7 @@ private struct DOMPathBuilder {
         return foundIndex > 0 ? foundIndex : 0
     }
 
-    private func xPathNodesAreSimilar(_ lhs: DOMTreeSnapshot.Node, _ rhs: DOMTreeSnapshot.Node) -> Bool {
+    private func xPathNodesAreSimilar(_ lhs: DOMPathNode, _ rhs: DOMPathNode) -> Bool {
         if lhs.id == rhs.id {
             return true
         }
@@ -243,7 +328,7 @@ private struct DOMPathBuilder {
         return lhs.kind == rhs.kind
     }
 
-    private func selectorSiblingElements(for node: DOMTreeSnapshot.Node) -> [DOMTreeSnapshot.Node] {
+    private func selectorSiblingElements(for node: DOMPathNode) -> [DOMPathNode] {
         guard let parent = parent(of: node) else {
             return [node]
         }
@@ -252,12 +337,12 @@ private struct DOMPathBuilder {
             .filter(nodeIsElementLike)
     }
 
-    private func selectorNodeName(for node: DOMTreeSnapshot.Node) -> String {
+    private func selectorNodeName(for node: DOMPathNode) -> String {
         let rawName = node.localName.isEmpty ? node.nodeName : node.localName
         return rawName.lowercased()
     }
 
-    private func nodeIsElementLike(_ node: DOMTreeSnapshot.Node) -> Bool {
+    private func nodeIsElementLike(_ node: DOMPathNode) -> Bool {
         guard node.kind == .element else {
             return false
         }
@@ -265,7 +350,7 @@ private struct DOMPathBuilder {
         return !nodeName.isEmpty && !nodeName.hasPrefix("#")
     }
 
-    private func classNames(for node: DOMTreeSnapshot.Node) -> [String] {
+    private func classNames(for node: DOMPathNode) -> [String] {
         guard let classValue = attributeValue(named: "class", on: node) else {
             return []
         }
@@ -276,11 +361,11 @@ private struct DOMPathBuilder {
             .filter { !$0.isEmpty }
     }
 
-    private func attributeValue(named name: String, on node: DOMTreeSnapshot.Node) -> String? {
+    private func attributeValue(named name: String, on node: DOMPathNode) -> String? {
         node.attributeList.first(where: { $0.name == name })?.value
     }
 
-    private func nodeIsInsideEmbeddedDocument(_ node: DOMTreeSnapshot.Node) -> Bool {
+    private func nodeIsInsideEmbeddedDocument(_ node: DOMPathNode) -> Bool {
         var current = parent(of: node)
         while let currentNode = current {
             if currentNode.kind == .document, parent(of: currentNode) != nil {

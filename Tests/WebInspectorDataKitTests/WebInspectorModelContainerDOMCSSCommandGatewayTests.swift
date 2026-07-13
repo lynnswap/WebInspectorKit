@@ -77,6 +77,30 @@ private func withDOMCSSGatewayRuntime<Output: Sendable>(
     }
 }
 
+@MainActor
+private func withMainActorDOMCSSGatewayRuntime<Output: Sendable>(
+    domains: Set<WebInspectorModelContainer.Domain> = [.css],
+    document: DOM.Node = gatewayDocument(),
+    initialTarget: WebInspectorTestPeer.Target = .initialPage,
+    _ operation: @escaping @MainActor @Sendable (
+        DOMCSSGatewayRuntime
+    ) async throws -> Output
+) async throws -> Output {
+    let runtime = try await DOMCSSGatewayRuntime.start(
+        domains: domains,
+        document: document,
+        initialTarget: initialTarget
+    )
+    do {
+        let output = try await operation(runtime)
+        await runtime.close()
+        return output
+    } catch {
+        await runtime.close()
+        throw error
+    }
+}
+
 @Test
 func DOMGatewayRoutesCurrentCanonicalNodeThroughItsPhysicalAgent()
     async throws
@@ -102,6 +126,126 @@ func DOMGatewayRoutesCurrentCanonicalNodeThroughItsPhysicalAgent()
         #expect(command.destination == .target("page-main"))
         let parameters = try command.parameters.decode(DOMNodeParameters.self)
         #expect(parameters.nodeId == "body")
+    }
+}
+
+@MainActor
+@Test
+func modelContextRoutesCanonicalDOMMutationAndUndoThroughContainerCore()
+    async throws
+{
+    try await withMainActorDOMCSSGatewayRuntime(domains: [.dom]) { fixture in
+        let context = fixture.container.mainContext
+        try await context.waitUntilContainerReady()
+        let storage = try await canonicalDOMNodeID(
+            rawValue: "body",
+            in: fixture.container.core
+        )
+        let node = try #require(
+            context.model(for: DOMNode.ID(canonical: storage))
+        )
+        #expect(try context.selectorPath(for: node) == "body")
+        #expect(try context.xPath(for: node) == "/body")
+        await fixture.wire.respond(to: "DOM.setAttributeValue")
+        await fixture.wire.respond(to: "DOM.markUndoableState")
+        await fixture.wire.respond(to: "DOM.undo")
+        await fixture.wire.respond(to: "DOM.redo")
+
+        let outcome = try await context.setDOMAttribute(
+            "data-state",
+            value: "ready",
+            on: node
+        )
+        #expect(outcome.requestedNodeIDs == [node.id])
+        #expect(outcome.appliedNodeIDs == [node.id])
+        #expect(outcome.failures.isEmpty)
+        let undo = try #require(outcome.undo)
+        try await undo.undo()
+        try await undo.redo()
+
+        let mutation = try #require(
+            fixture.wire.observations.commands.first {
+                $0.method == "DOM.setAttributeValue"
+            }
+        )
+        #expect(mutation.destination == .target("page-main"))
+        let parameters = try mutation.parameters.decode(
+            DOMAttributeMutationParameters.self
+        )
+        #expect(parameters.nodeId == "body")
+        #expect(parameters.name == "data-state")
+        #expect(parameters.value == "ready")
+        #expect(
+            fixture.wire.observations.commands.filter {
+                $0.method == "DOM.markUndoableState"
+            }.count == 1
+        )
+        #expect(
+            fixture.wire.observations.commands.filter {
+                $0.method == "DOM.undo"
+            }.count == 1
+        )
+        #expect(
+            fixture.wire.observations.commands.filter {
+                $0.method == "DOM.redo"
+            }.count == 1
+        )
+    }
+}
+
+@MainActor
+@Test
+func modelContextRoutesCanonicalDOMReadsAndPageCommandsThroughContainerCore()
+    async throws
+{
+    try await withMainActorDOMCSSGatewayRuntime(domains: [.dom]) { fixture in
+        let context = fixture.container.mainContext
+        try await context.waitUntilContainerReady()
+        let storage = try await canonicalDOMNodeID(
+            rawValue: "body",
+            in: fixture.container.core
+        )
+        let node = try #require(
+            context.model(for: DOMNode.ID(canonical: storage))
+        )
+        await fixture.wire.respond(to: "DOM.requestChildNodes")
+        await fixture.wire.respond(
+            to: "DOM.getOuterHTML",
+            with: try testJSONObject(#"{"outerHTML":"<body></body>"}"#)
+        )
+        await fixture.wire.respond(to: "DOM.highlightNode")
+        await fixture.wire.respond(to: "DOM.hideHighlight")
+        await fixture.wire.respond(to: "Page.reload")
+
+        try await context.requestDOMChildren(of: node, depth: 2)
+        #expect(try await context.copyText(.html, for: node) == "<body></body>")
+        #expect(try await context.copyText(.selectorPath, for: node) == "body")
+        #expect(try await context.copyText(.xPath, for: node) == "/body")
+        try await context.highlightDOMNode(node)
+        try await context.hideDOMHighlight()
+        try await context.reload(ignoringCache: true)
+
+        let childRequest = try #require(
+            fixture.wire.observations.commands.first {
+                $0.method == "DOM.requestChildNodes"
+            }
+        )
+        #expect(childRequest.destination == .target("page-main"))
+        let childParameters = try childRequest.parameters.decode(
+            DOMChildRequestParameters.self
+        )
+        #expect(childParameters.nodeId == "body")
+        #expect(childParameters.depth == 2)
+        let reload = try #require(
+            fixture.wire.observations.commands.first {
+                $0.method == "Page.reload"
+            }
+        )
+        #expect(reload.destination == .target("page-main"))
+        #expect(
+            try reload.parameters.decode(PageReloadParameters.self)
+                .ignoreCache
+        )
     }
 }
 
@@ -902,6 +1046,21 @@ func DOMCSSGatewayRejectsNewCommandsAfterBeginClose() async throws {
 
 private struct DOMNodeParameters: Decodable {
     let nodeId: String
+}
+
+private struct DOMAttributeMutationParameters: Decodable {
+    let nodeId: String
+    let name: String
+    let value: String
+}
+
+private struct DOMChildRequestParameters: Decodable {
+    let nodeId: String
+    let depth: Int
+}
+
+private struct PageReloadParameters: Decodable {
+    let ignoreCache: Bool
 }
 
 private struct CSSStyleSheetTextParameters: Decodable {

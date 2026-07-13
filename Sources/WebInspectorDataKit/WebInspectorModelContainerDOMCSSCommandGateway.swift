@@ -130,6 +130,17 @@ struct WebInspectorDOMCSSCommandOperation: Sendable {
 }
 
 package extension WebInspectorModelContainerCore {
+    func reloadPage(ignoringCache: Bool) async throws {
+        try Task.checkCancellation()
+        let route = try domAttachmentCommandRoute()
+        let completion: ReplyPromise<Void> = startDOMCSSCommand(
+            route: route
+        ) { target in
+            try await target.page.reload(ignoringCache: ignoringCache)
+        }
+        try await completion.value()
+    }
+
     /// Requests child-node delivery for one current canonical node.
     func requestDOMChildren(
         of nodeID: WebInspectorDOMNodeIdentityStorage,

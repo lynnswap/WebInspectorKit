@@ -3091,10 +3091,23 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
     /// Returns the current DOM identity for an identifier.
     public func domNode(id: DOMNode.ID) throws -> DOMNode? {
         try requireConfigured(.dom)
+        if containerRegistrationBinding != nil {
+            guard id.canonicalStorage != nil else {
+                return nil
+            }
+            return model(for: id)
+        }
         return domState.node(for: id)
     }
 
     package func requiredNode(for id: DOMNode.ID) throws -> DOMNode {
+        if containerRegistrationBinding != nil {
+            guard id.canonicalStorage != nil,
+                  let node = model(for: id) else {
+                throw WebInspectorModelError.staleModel
+            }
+            return node
+        }
         return try domState.requiredNode(for: id)
     }
 
@@ -3201,7 +3214,12 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
     ) async throws {
         precondition(depth >= 0, "DOM child request depth must be non-negative.")
         try requireConfigured(.dom)
-        try registeredNode(node)
+        try requireRegisteredDOMNode(node)
+        if let storage = node.id.canonicalStorage,
+           let core = containerRegistrationBinding?.core {
+            try await core.requestDOMChildren(of: storage, depth: depth)
+            return
+        }
         let target = try domTarget(owning: node.id.proxyID)
         try await target.dom.requestChildNodes(node.id.proxyID, depth: depth)
     }
@@ -3214,7 +3232,27 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         undo: WebInspectorUndoPolicy = .automatic
     ) async throws -> DOMMutationOutcome {
         try requireConfigured(.dom)
-        try registeredNode(node)
+        try requireRegisteredDOMNode(node)
+        if let storage = node.id.canonicalStorage,
+           let core = containerRegistrationBinding?.core {
+            try await core.setDOMAttributeValue(name, value: value, on: storage)
+            let options = DOMMutationPolicy(undo: undo)
+            try await markCanonicalDOMUndoableStateIfNeeded(
+                core: core,
+                scope: storage.documentScope,
+                options: options
+            )
+            return DOMMutationOutcome(
+                requestedNodeIDs: [node.id],
+                appliedNodeIDs: [node.id],
+                failures: [],
+                undo: makeCanonicalDOMUndoCapability(
+                    core: core,
+                    scope: storage.documentScope,
+                    policy: undo
+                )
+            )
+        }
         let target = try domTarget(owning: node.id.proxyID)
         try await target.dom.setAttributeValue(
             node.id.proxyID,
@@ -3239,7 +3277,27 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         undo: WebInspectorUndoPolicy = .automatic
     ) async throws -> DOMMutationOutcome {
         try requireConfigured(.dom)
-        try registeredNode(node)
+        try requireRegisteredDOMNode(node)
+        if let storage = node.id.canonicalStorage,
+           let core = containerRegistrationBinding?.core {
+            try await core.setDOMOuterHTML(html, of: storage)
+            let options = DOMMutationPolicy(undo: undo)
+            try await markCanonicalDOMUndoableStateIfNeeded(
+                core: core,
+                scope: storage.documentScope,
+                options: options
+            )
+            return DOMMutationOutcome(
+                requestedNodeIDs: [node.id],
+                appliedNodeIDs: [node.id],
+                failures: [],
+                undo: makeCanonicalDOMUndoCapability(
+                    core: core,
+                    scope: storage.documentScope,
+                    policy: undo
+                )
+            )
+        }
         let target = try domTarget(owning: node.id.proxyID)
         try await target.dom.setOuterHTML(node.id.proxyID, html: html)
         let options = DOMMutationPolicy(undo: undo)
@@ -3259,6 +3317,13 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         undo: WebInspectorUndoPolicy = .automatic
     ) async throws -> DOMMutationOutcome {
         try requireConfigured(.dom)
+        if let core = containerRegistrationBinding?.core {
+            return try await removeCanonicalDOMNodes(
+                nodes,
+                core: core,
+                undo: undo
+            )
+        }
         let deletion = try domState.sortedDeletionNodes(for: nodes)
         let targets = try validatedDeletionTargets(for: deletion.nodes)
         let options = DOMMutationPolicy(undo: undo)
@@ -3300,6 +3365,127 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
             return nil
         }
         return DOMUndoCapability(commands: domUndoRedoCommands())
+    }
+
+    private func makeCanonicalDOMUndoCapability(
+        core: WebInspectorModelContainerCore,
+        scope: WebInspectorDOMDocumentScopeStorage,
+        policy: WebInspectorUndoPolicy
+    ) -> DOMUndoCapability? {
+        guard policy == .automatic else {
+            return nil
+        }
+        return DOMUndoCapability(core: core, scope: scope)
+    }
+
+    private nonisolated(nonsending) func markCanonicalDOMUndoableStateIfNeeded(
+        core: WebInspectorModelContainerCore,
+        scope: WebInspectorDOMDocumentScopeStorage,
+        options: DOMMutationPolicy
+    ) async throws {
+        guard options.undo == .automatic else {
+            return
+        }
+        try await core.markDOMUndoableState(in: scope)
+    }
+
+    private nonisolated(nonsending) func removeCanonicalDOMNodes(
+        _ nodes: [DOMNode],
+        core: WebInspectorModelContainerCore,
+        undo: WebInspectorUndoPolicy
+    ) async throws -> DOMMutationOutcome {
+        var seenNodeIDs: Set<DOMNode.ID> = []
+        let registeredNodes = try nodes
+            .map { node -> (DOMNode, WebInspectorDOMNodeIdentityStorage) in
+                try requireRegisteredDOMNode(node)
+                guard let storage = node.id.canonicalStorage else {
+                    throw WebInspectorModelError.staleModel
+                }
+                return (node, storage)
+            }
+            .filter { seenNodeIDs.insert($0.0.id).inserted }
+        let documentScope = try validatedCanonicalDeletionScope(
+            for: registeredNodes.map(\.1)
+        )
+        let tree = domTreeSnapshot
+        let sortedNodes = try registeredNodes.sorted { lhs, rhs in
+            try canonicalDOMTreeDepth(of: lhs.0.id, in: tree)
+                > canonicalDOMTreeDepth(of: rhs.0.id, in: tree)
+        }
+        let options = DOMMutationPolicy(undo: undo)
+        var appliedNodeIDs: [DOMNode.ID] = []
+        var failures: [DOMMutationFailure] = []
+        for (node, storage) in sortedNodes {
+            do {
+                try await core.removeDOMNode(storage)
+                try await markCanonicalDOMUndoableStateIfNeeded(
+                    core: core,
+                    scope: storage.documentScope,
+                    options: options
+                )
+                appliedNodeIDs.append(node.id)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                failures.append(
+                    DOMMutationFailure(
+                        nodeID: node.id,
+                        message: String(describing: error)
+                    )
+                )
+            }
+        }
+        return DOMMutationOutcome(
+            requestedNodeIDs: nodes.map(\.id),
+            appliedNodeIDs: appliedNodeIDs,
+            failures: failures,
+            undo: appliedNodeIDs.isEmpty ? nil : documentScope.flatMap {
+                makeCanonicalDOMUndoCapability(
+                    core: core,
+                    scope: $0,
+                    policy: undo
+                )
+            }
+        )
+    }
+
+    private func validatedCanonicalDeletionScope(
+        for nodeIDs: [WebInspectorDOMNodeIdentityStorage]
+    ) throws -> WebInspectorDOMDocumentScopeStorage? {
+        guard let documentScope = nodeIDs.first?.documentScope else {
+            return nil
+        }
+        guard nodeIDs.dropFirst().allSatisfy({
+            $0.documentScope == documentScope
+        }) else {
+            throw WebInspectorProxyError.commandFailed(
+                domain: "DOM",
+                method: "removeNode",
+                message: "Deleting nodes from multiple DOM documents in one mutation is not supported."
+            )
+        }
+        return documentScope
+    }
+
+    private func canonicalDOMTreeDepth(
+        of id: DOMNode.ID,
+        in snapshot: WebInspectorDOMTreeSnapshot
+    ) throws -> Int {
+        guard snapshot.rowsByID[id] != nil else {
+            throw WebInspectorModelError.staleModel
+        }
+        var depth = 0
+        var visited: Set<DOMNode.ID> = [id]
+        var current = snapshot.rowsByID[id]?.parentID
+        while let ancestorID = current {
+            guard visited.insert(ancestorID).inserted,
+                  let ancestor = snapshot.rowsByID[ancestorID] else {
+                throw WebInspectorModelError.staleModel
+            }
+            depth += 1
+            current = ancestor.parentID
+        }
+        return depth
     }
 
     package func setDOMAttribute(
@@ -3380,7 +3566,18 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         for node: DOMNode
     ) async throws -> String {
         try requireConfigured(.dom)
-        try registeredNode(node)
+        try requireRegisteredDOMNode(node)
+        if let storage = node.id.canonicalStorage,
+           let core = containerRegistrationBinding?.core {
+            switch kind {
+            case .html:
+                return try await core.domOuterHTML(of: storage)
+            case .selectorPath:
+                return domTreeSnapshot.selectorPath(for: node.id)
+            case .xPath:
+                return domTreeSnapshot.xPath(for: node.id)
+            }
+        }
         switch kind {
         case .html:
             let target = try domTarget(owning: node.id.proxyID)
@@ -3460,7 +3657,12 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
     /// Highlights a DOM node in the inspected page.
     public nonisolated(nonsending) func highlightDOMNode(_ node: DOMNode) async throws {
         try requireConfigured(.dom)
-        try registeredNode(node)
+        try requireRegisteredDOMNode(node)
+        if let storage = node.id.canonicalStorage,
+           let core = containerRegistrationBinding?.core {
+            try await core.highlightDOMNode(storage)
+            return
+        }
         let target = try domTarget(owning: node.id.proxyID)
         if node.id.proxyID.targetScopeRawValue == nil {
             domState.recordPageHighlight()
@@ -3475,6 +3677,10 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
     /// Clears the current DOM highlight in the inspected page.
     public nonisolated(nonsending) func hideDOMHighlight() async throws {
         try requireConfigured(.dom)
+        if let core = containerRegistrationBinding?.core {
+            try await core.hideDOMHighlight()
+            return
+        }
         let targetID = try targetID(for: nil)
         let target = try authorizedDocumentTarget(id: targetID)
         try await target.dom.hideHighlight()
@@ -3603,6 +3809,10 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         ignoringCache: Bool = false
     ) async throws {
         preconditionOwnerIsolation()
+        if let core = containerRegistrationBinding?.core {
+            try await core.reloadPage(ignoringCache: ignoringCache)
+            return
+        }
         let page = try currentPageOrThrow()
         try await page.page.reload(ignoringCache: ignoringCache)
     }
@@ -3610,7 +3820,10 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
     /// Returns a CSS selector path for a DOM node.
     public func selectorPath(for node: DOMNode) throws -> String {
         try requireConfigured(.dom)
-        try registeredNode(node)
+        try requireRegisteredDOMNode(node)
+        if node.id.canonicalStorage != nil {
+            return domTreeSnapshot.selectorPath(for: node.id)
+        }
         return try domState.currentTreeSnapshot(
             containing: [node]
         ).selectorPath(for: node.id)
@@ -3623,7 +3836,10 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
     /// Returns an XPath expression for a DOM node.
     public func xPath(for node: DOMNode) throws -> String {
         try requireConfigured(.dom)
-        try registeredNode(node)
+        try requireRegisteredDOMNode(node)
+        if node.id.canonicalStorage != nil {
+            return domTreeSnapshot.xPath(for: node.id)
+        }
         return try domState.currentTreeSnapshot(
             containing: [node]
         ).xPath(for: node.id)
