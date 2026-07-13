@@ -225,6 +225,7 @@ package actor WebInspectorModelContainerCore {
 
     package nonisolated let storeID: WebInspectorContainerStoreID
     package nonisolated let configuredDomains: Set<ModelDomain>
+    package nonisolated let modelSchemaRegistry: WebInspectorModelSchemaRegistry
     package nonisolated let mainContextSeed: WebInspectorModelContextSeed
     package nonisolated let connectionStatePublication: WebInspectorModelContainerStatePublication
 
@@ -260,6 +261,8 @@ package actor WebInspectorModelContainerCore {
     package init(
         storeID: WebInspectorContainerStoreID = WebInspectorContainerStoreID(),
         configuredDomains: Set<ModelDomain>,
+        modelSchemaRegistry: WebInspectorModelSchemaRegistry =
+            WebInspectorModelSchemaRegistry([]),
         connectionStatePublication:
             WebInspectorModelContainerStatePublication =
             WebInspectorModelContainerStatePublication()
@@ -283,6 +286,7 @@ package actor WebInspectorModelContainerCore {
         self.storeID = storeID
         self.canonicalStore = canonicalStore
         self.configuredDomains = canonicalStore.configuredDomains
+        self.modelSchemaRegistry = modelSchemaRegistry
         self.publication = publication
         self.connectionStatePublication = connectionStatePublication
         self.lifecycleOperationTail = lifecycleOperationTail

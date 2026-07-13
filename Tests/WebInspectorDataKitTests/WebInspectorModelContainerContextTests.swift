@@ -1,5 +1,142 @@
+import Observation
+import Synchronization
 import Testing
 @testable import WebInspectorDataKit
+import WebInspectorProxyKit
+
+private struct ContainerDriverModelID: WebInspectorPersistentIdentifier {
+    typealias Model = ContainerDriverModel
+
+    let rawValue: Int
+}
+
+private struct ContainerDriverQueryValue: Identifiable, Sendable {
+    let id: ContainerDriverModelID
+    let value: Int
+}
+
+private struct ContainerDriverRecord: WebInspectorModelRecord {
+    enum Patch: Sendable {
+        case value(Int)
+    }
+
+    var value: Int
+
+    mutating func apply(_ patch: Patch) {
+        switch patch {
+        case let .value(value):
+            self.value = value
+        }
+    }
+}
+
+private enum ContainerDriverOwnerEffect: Sendable {
+    case unused
+}
+
+@Observable
+private final class ContainerDriverModel: WebInspectorPersistentModel {
+    typealias ID = ContainerDriverModelID
+    typealias QueryValue = ContainerDriverQueryValue
+
+    nonisolated let id: ID
+    private(set) var value: Int
+    private(set) var isInvalidated = false
+
+    init(id: ID, record: ContainerDriverRecord) {
+        self.id = id
+        value = record.value
+    }
+
+    func replace(with record: ContainerDriverRecord) {
+        value = record.value
+    }
+
+    func apply(_ patch: ContainerDriverRecord.Patch) {
+        switch patch {
+        case let .value(value):
+            self.value = value
+        }
+    }
+
+    func invalidate() {
+        isInvalidated = true
+    }
+}
+
+private func containerDriverSchemaRegistry(
+    didApplyValue: @escaping @Sendable (Int) -> Void
+) -> WebInspectorModelSchemaRegistry {
+    let id = ContainerDriverModelID(rawValue: 1)
+    let schema = WebInspectorModelSchema<ContainerDriverModel>(
+        snapshot: { snapshot in
+            let value = snapshot.binding == nil ? 0 : 1
+            return WebInspectorModelSchemaSnapshot<
+                ContainerDriverModel,
+                ContainerDriverRecord,
+                ContainerDriverOwnerEffect
+            >(
+                entries: [
+                    WebInspectorModelSchemaSnapshotEntry(
+                        id: id,
+                        record: ContainerDriverRecord(value: value),
+                        queryValue: ContainerDriverQueryValue(
+                            id: id,
+                            value: value
+                        ),
+                        canonicalRank: .init(rawValue: 0)
+                    )
+                ]
+            )
+        },
+        delta: { _, records in
+            let value = (records.record(for: id)?.value ?? 0) + 1
+            return WebInspectorModelSchemaDelta<
+                ContainerDriverModel,
+                ContainerDriverRecord,
+                ContainerDriverOwnerEffect
+            >(
+                changes: [
+                    .update(
+                        id: id,
+                        patches: WebInspectorModelRecordPatchBatch([
+                            .value(value)
+                        ]),
+                        queryValue: ContainerDriverQueryValue(
+                            id: id,
+                            value: value
+                        ),
+                        canonicalRank: .init(rawValue: 0)
+                    )
+                ]
+            )
+        },
+        makeModel: { _, id, record in
+            ContainerDriverModel(id: id, record: record)
+        },
+        replaceModel: { _, model, record in
+            model.replace(with: record)
+            didApplyValue(record.value)
+        },
+        applyPatch: { _, model, patch in
+            model.apply(patch)
+            didApplyValue(model.value)
+        },
+        invalidateModel: { _, model in
+            model.invalidate()
+        },
+        applyOwnerEffect: { _, effect in
+            switch effect {
+            case .unused:
+                return
+            }
+        },
+        resetOwnerProjection: { _ in }
+    )
+    return WebInspectorModelSchemaRegistry([
+        WebInspectorModelSchemaRegistration(schema)
+    ])
+}
 
 private actor ModelContainerContextOwner {
     private var context: WebInspectorModelContext?
@@ -74,6 +211,49 @@ func modelContainerCreatesIndependentActorConfinedContexts() async throws {
 
 @MainActor
 @Test
+func modelContainerContextAppliesSchemaPayloadBeforeAcknowledgingRevision() async throws {
+    let appliedValues = Mutex<[Int]>([])
+    let core = WebInspectorModelContainerCore(
+        configuredDomains: [],
+        modelSchemaRegistry: containerDriverSchemaRegistry { value in
+            appliedValues.withLock { $0.append(value) }
+        }
+    )
+    let context = WebInspectorModelContext.mainContext(
+        for: core,
+        isolation: MainActor.shared
+    )
+    await expectEventually {
+        context.appliedContainerRevisionForTesting == 0
+    }
+    let models = try await context.fetch(
+        WebInspectorFetchDescriptor<ContainerDriverModel>()
+    )
+    let model = try #require(models.first)
+    #expect(models.count == 1)
+    #expect(model.value == 0)
+
+    let commit = try #require(
+        try await core.reduce(
+            .reset(WebInspectorPage.Generation(rawValue: 1)),
+            attachmentGeneration: .init(rawValue: 1)
+        )
+    )
+    let barrier = try await core.makeAcknowledgementBarrier(
+        through: commit.toRevision
+    )
+    try await core.waitForAcknowledgements(barrier)
+
+    #expect(model.value == 1)
+    #expect(appliedValues.withLock { $0 } == [1])
+    #expect(context.appliedContainerRevisionForTesting == commit.toRevision)
+
+    await context.close()
+    #expect(model.isInvalidated)
+}
+
+@MainActor
+@Test
 func modelContainerRejectsCustomContextCreationAfterClose() async {
     let container = WebInspectorModelContainer(
         configuration: .init(domains: [])
@@ -89,6 +269,35 @@ func modelContainerRejectsCustomContextCreationAfterClose() async {
 
 @MainActor
 @Test
+func lateMainContextUsesCurrentSnapshotAsItsInitialSchemaState() async throws {
+    let core = WebInspectorModelContainerCore(
+        configuredDomains: [],
+        modelSchemaRegistry: containerDriverSchemaRegistry { _ in }
+    )
+    let commit = try #require(
+        try await core.reduce(
+            .reset(WebInspectorPage.Generation(rawValue: 1)),
+            attachmentGeneration: .init(rawValue: 1)
+        )
+    )
+
+    let context = WebInspectorModelContext.mainContext(
+        for: core,
+        isolation: MainActor.shared
+    )
+    await expectEventually {
+        context.appliedContainerRevisionForTesting == commit.toRevision
+    }
+    let models = try await context.fetch(
+        WebInspectorFetchDescriptor<ContainerDriverModel>()
+    )
+    #expect(models.map(\.value) == [1])
+
+    await context.close()
+}
+
+@MainActor
+@Test
 func firstMainContextAccessAfterCloseReturnsOneClosedContext() async {
     let container = WebInspectorModelContainer(
         configuration: .init(domains: [])
@@ -100,7 +309,32 @@ func firstMainContextAccessAfterCloseReturnsOneClosedContext() async {
     let second = container.mainContext
     #expect(first === second)
     #expect(first.state == .closed)
+    await #expect(throws: WebInspectorModelContextQueryError.closed) {
+        _ = try await first.fetchIdentifiers(
+            WebInspectorFetchDescriptor<ContainerDriverModel>()
+        )
+    }
     #expect(await container.core.metrics.activeContextRegistrationCount == 0)
+}
+
+@MainActor
+@Test
+func mainContextMaterializedBetweenCoreClosePhasesDoesNotUnregisterItsReservation() async throws {
+    let core = WebInspectorModelContainerCore(
+        configuredDomains: [],
+        modelSchemaRegistry: containerDriverSchemaRegistry { _ in }
+    )
+    let close = await core.beginClose()
+
+    let context = WebInspectorModelContext.mainContext(
+        for: core,
+        isolation: MainActor.shared
+    )
+    try await context.waitUntilContainerReady()
+    #expect(context.state == .closed)
+
+    try await core.finishClose(close)
+    #expect(await core.metrics.activeContextRegistrationCount == 0)
 }
 
 @MainActor

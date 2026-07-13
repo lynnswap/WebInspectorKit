@@ -22,12 +22,20 @@ public enum WebInspectorModelError: Error, Equatable, Sendable {
 /// invariants prevent it from becoming a second
 /// model owner or a lifecycle edge.
 private final class WebInspectorModelDeliveryBridge: @unchecked Sendable {
+    enum ContainerOwnerDelivery: Equatable, Sendable {
+        case applied(revision: UInt64)
+        case closing
+    }
+
     enum Request: Sendable {
         case prepareAttachment(token: UInt64)
         case prepareRecord(ConnectionModelFeedRecord, token: UInt64)
         case commit(WebInspectorModelContext.ReducerWorkResult, token: UInt64)
-        case commitContainerRevision(UInt64)
-        case closeContainerProjection
+        case applyContainerTransaction(
+            WebInspectorModelSchemaTransactionCommit
+        )
+        case beginClosingContainerProjection
+        case finishClosingContainerProjection(WebInspectorModelSchemaClose)
         case accept(
             feed: ConnectionModelFeed,
             proxy: WebInspectorProxy,
@@ -41,6 +49,7 @@ private final class WebInspectorModelDeliveryBridge: @unchecked Sendable {
         case prepared(WebInspectorModelContext.PreparedReducerStep?)
         case committed(WebInspectorModelContext.ReducerCommitDecision)
         case accepted(Bool)
+        case containerOwnerDelivery(ContainerOwnerDelivery)
     }
 
     private let mutex = Mutex(())
@@ -110,12 +119,16 @@ private final class WebInspectorModelDeliveryBridge: @unchecked Sendable {
             return .prepared(context.prepare(record, token: token))
         case let .commit(result, token):
             return .committed(context.commit(result, token: token))
-        case let .commitContainerRevision(revision):
-            return .accepted(
-                context.commitContainerRevision(revision)
+        case let .applyContainerTransaction(commit):
+            return .containerOwnerDelivery(
+                context.applyContainerTransaction(commit)
             )
-        case .closeContainerProjection:
-            return .accepted(context.closeContainerProjection())
+        case .beginClosingContainerProjection:
+            return .accepted(context.beginClosingContainerProjection())
+        case let .finishClosingContainerProjection(close):
+            return .accepted(
+                context.finishClosingContainerProjection(close)
+            )
         case let .accept(feed, proxy, token):
             return .accepted(
                 context.accept(feed: feed, proxy: proxy, token: token)
@@ -935,7 +948,10 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
     ) -> PreparedContainerContext {
         let domains = Set(core.configuredDomains.map(Self.domain))
         let context = WebInspectorModelContext(
-            configuration: Configuration(domains: domains)
+            configuration: Configuration(domains: domains),
+            modelSchemaRegistry: core.modelSchemaRegistry,
+            configuredFetchedResultsModelTypeIDs:
+                core.modelSchemaRegistry.configuredModelTypeIDs
         )
         context.bindOwner(isolation)
         context.containerRegistrationBinding = ContainerRegistrationBinding(
@@ -951,6 +967,8 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
             updates: updates,
             startGate: startGate,
             readiness: readiness,
+            contextCore: context.fetchedResultsQueryCore,
+            schemaCore: context.modelSchemaContextCore,
             bridge: context.deliveryBridge
         )
         return PreparedContainerContext(
@@ -1032,7 +1050,6 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
     public nonisolated(nonsending) func detach() async {
         preconditionOwnerIsolation()
         if containerRegistrationBinding != nil {
-            await closePersistentModelProjection()
             await closeContainerRegistration()
             return
         }
@@ -1051,11 +1068,11 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
 
     public nonisolated(nonsending) func close() async {
         preconditionOwnerIsolation()
-        await closePersistentModelProjection()
         if containerRegistrationBinding != nil {
             await closeContainerRegistration()
             return
         }
+        await closePersistentModelProjection()
         await tearDown(terminal: true)
     }
 
@@ -1064,8 +1081,9 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
             return
         }
         let task = containerDriverTask
-        if containerProjectionIsClosing == false {
-            containerProjectionIsClosing = true
+        let shouldBeginCoreClose = containerProjectionIsClosing == false
+        _ = beginClosingContainerProjection()
+        if shouldBeginCoreClose {
             do {
                 _ = try await binding.core.beginContextClose(
                     binding.registrationID
@@ -1090,35 +1108,66 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         deliveryBridge.preconditionOwnerIsolation()
     }
 
-    fileprivate func commitContainerRevision(_ revision: UInt64) -> Bool {
+    fileprivate func applyContainerTransaction(
+        _ commit: WebInspectorModelSchemaTransactionCommit
+    ) -> WebInspectorModelDeliveryBridge.ContainerOwnerDelivery {
         guard
             containerRegistrationBinding != nil,
             containerProjectionIsClosing == false,
             isTerminallyClosed == false
         else {
-            return false
+            return .closing
         }
+        let revision = commit.canonicalRevision
         if let appliedContainerRevision {
             precondition(
                 appliedContainerRevision < revision,
                 "A model context must apply canonical revisions monotonically."
             )
         }
+        precondition(
+            publish(commit),
+            "A container schema transaction must publish exactly once."
+        )
         appliedContainerRevision = revision
-        return true
+        return .applied(revision: revision)
     }
 
-    fileprivate func closeContainerProjection() -> Bool {
+    fileprivate func beginClosingContainerProjection() -> Bool {
         guard containerRegistrationBinding != nil else {
             return false
         }
-        guard isTerminallyClosed == false else {
+        guard persistentModelProjectionIsClosed == false else {
             return true
         }
         containerProjectionIsClosing = true
-        isTerminallyClosed = true
+        persistentModelProjectionIsClosed = true
+        fetchedResultsControllerRegistry.closeAll()
+        return true
+    }
+
+    fileprivate func finishClosingContainerProjection(
+        _ close: WebInspectorModelSchemaClose
+    ) -> Bool {
+        guard containerRegistrationBinding != nil else {
+            return false
+        }
+        if persistentModelProjectionIsClosed == false {
+            _ = beginClosingContainerProjection()
+        }
+        precondition(
+            persistentModelProjectionIsClosed,
+            "A container projection must enter closing before owner teardown."
+        )
+        close.apply(
+            on: modelSchemaOwnerRegistry,
+            owner: self
+        )
+        if isTerminallyClosed == false {
+            isTerminallyClosed = true
+            transition(to: .closed)
+        }
         containerDriverTask = nil
-        transition(to: .closed)
         return true
     }
 
@@ -1447,6 +1496,8 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         updates: WebInspectorCanonicalModelUpdateSequence,
         startGate: ReplyPromise<Bool>,
         readiness: ReplyPromise<Void>,
+        contextCore: WebInspectorModelContextCore,
+        schemaCore: WebInspectorModelSchemaContextCore,
         bridge: WebInspectorModelDeliveryBridge
     ) -> Task<Void, Never> {
         Task.detached(priority: .userInitiated) {
@@ -1456,6 +1507,8 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
                 updates: updates,
                 startGate: startGate,
                 readiness: readiness,
+                contextCore: contextCore,
+                schemaCore: schemaCore,
                 bridge: bridge
             )
         }
@@ -1467,11 +1520,18 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         updates: WebInspectorCanonicalModelUpdateSequence,
         startGate: ReplyPromise<Bool>,
         readiness: ReplyPromise<Void>,
+        contextCore: WebInspectorModelContextCore,
+        schemaCore: WebInspectorModelSchemaContextCore,
         bridge: WebInspectorModelDeliveryBridge
     ) async {
-        guard
-            (try? await startGate.valueIgnoringCancellation()) == true
-        else {
+        guard (try? await startGate.valueIgnoringCancellation()) == true else {
+            await beginClosingContainerProjection(bridge: bridge)
+            await contextCore.close()
+            let schemaClose = schemaCore.close()
+            await finishClosingContainerProjection(
+                schemaClose,
+                bridge: bridge
+            )
             readiness.fulfill(.success(()))
             return
         }
@@ -1479,27 +1539,76 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         do {
             try await core.activateContext(registrationID)
             var iterator = updates.makeAsyncIterator()
+            var appliedRevision: UInt64?
             while let update = await iterator.next() {
-                let revision: UInt64
+                let transaction: WebInspectorModelSchemaTransaction
                 switch update {
-                case let .initial(initialRevision, _):
-                    revision = initialRevision
-                case let .changes(_, toRevision, _):
-                    revision = toRevision
-                case let .resetRequired(_, token):
+                case let .initial(revision, snapshot):
+                    precondition(
+                        appliedRevision == nil,
+                        "A container context can apply initial schema state only once."
+                    )
+                    transaction = schemaCore.initial(
+                        at: revision,
+                        snapshot: snapshot
+                    )
+                case let .changes(fromRevision, toRevision, changes):
+                    precondition(
+                        appliedRevision == fromRevision
+                            && toRevision == fromRevision + 1,
+                        "A container context requires contiguous canonical changes."
+                    )
+                    transaction = schemaCore.changes(
+                        at: toRevision,
+                        transaction: changes
+                    )
+                case let .resetRequired(latestRevision, token):
                     let rebase = try await core.rebaseContext(
                         token,
                         for: registrationID
                     )
-                    revision = rebase.revision
+                    precondition(
+                        latestRevision == rebase.revision,
+                        "A container rebase changed its advertised canonical revision."
+                    )
+                    switch rebase.disposition {
+                    case .initial:
+                        precondition(
+                            appliedRevision == nil,
+                            "Only an uninitialized context can consume an initial rebase."
+                        )
+                        transaction = schemaCore.initial(
+                            at: rebase.revision,
+                            snapshot: rebase.snapshot
+                        )
+                    case .reset:
+                        precondition(
+                            appliedRevision != nil,
+                            "A context cannot reset before establishing initial schema state."
+                        )
+                        transaction = schemaCore.reset(
+                            at: rebase.revision,
+                            snapshot: rebase.snapshot
+                        )
+                    }
                 }
 
-                guard await commitContainerRevision(
-                    revision,
+                let commit = try await transaction.stage(on: contextCore)
+                let delivery = await applyContainerTransaction(
+                    commit,
                     bridge: bridge
-                ) else {
+                )
+                guard case let .applied(revision) = delivery else {
+                    _ = await commit.abort(
+                        throwing: WebInspectorModelContextQueryError.closed
+                    )
                     break
                 }
+                precondition(
+                    revision == transaction.canonicalRevision,
+                    "Owner delivery acknowledged a different canonical revision."
+                )
+                appliedRevision = revision
                 try await core.acknowledgeContext(
                     registrationID,
                     through: revision
@@ -1507,12 +1616,24 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
                 readiness.fulfill(.success(()))
             }
         } catch let error {
-            if error != .closed {
+            if let coreError = error as? WebInspectorModelContainerCoreError,
+                coreError == .closed
+            {
+                // Container teardown owns the same terminal boundary.
+            } else if error is CancellationError {
+                // Context release cancels only this registration driver.
+            } else {
                 terminalFailure = error
             }
         }
 
-        await closeContainerProjection(bridge: bridge)
+        await beginClosingContainerProjection(bridge: bridge)
+        await contextCore.close()
+        let schemaClose = schemaCore.close()
+        await finishClosingContainerProjection(
+            schemaClose,
+            bridge: bridge
+        )
         _ = await core.unregisterContext(registrationID)
         if let terminalFailure {
             readiness.fulfill(.failure(terminalFailure))
@@ -1523,30 +1644,43 @@ public final class WebInspectorModelContext: Equatable, SendableMetatype {
         readiness.fulfill(.success(()))
     }
 
-    private static func commitContainerRevision(
-        _ revision: UInt64,
+    private static func applyContainerTransaction(
+        _ commit: WebInspectorModelSchemaTransactionCommit,
         bridge: WebInspectorModelDeliveryBridge
-    ) async -> Bool {
+    ) async -> WebInspectorModelDeliveryBridge.ContainerOwnerDelivery {
         guard let owner = bridge.resolveActor() else {
-            return false
+            return .closing
         }
-        guard case let .accepted(accepted)? = await bridge.deliver(
-            .commitContainerRevision(revision),
+        guard case let .containerOwnerDelivery(delivery)? = await bridge.deliver(
+            .applyContainerTransaction(commit),
             isolation: owner
         ) else {
-            return false
+            return .closing
         }
-        return accepted
+        return delivery
     }
 
-    private static func closeContainerProjection(
+    private static func beginClosingContainerProjection(
         bridge: WebInspectorModelDeliveryBridge
     ) async {
         guard let owner = bridge.resolveActor() else {
             return
         }
         _ = await bridge.deliver(
-            .closeContainerProjection,
+            .beginClosingContainerProjection,
+            isolation: owner
+        )
+    }
+
+    private static func finishClosingContainerProjection(
+        _ close: WebInspectorModelSchemaClose,
+        bridge: WebInspectorModelDeliveryBridge
+    ) async {
+        guard let owner = bridge.resolveActor() else {
+            return
+        }
+        _ = await bridge.deliver(
+            .finishClosingContainerProjection(close),
             isolation: owner
         )
     }
