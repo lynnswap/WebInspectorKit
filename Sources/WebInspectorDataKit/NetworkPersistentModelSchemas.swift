@@ -61,12 +61,12 @@ package enum WebInspectorNetworkModelSchemas {
             invalidateModel: { _, model in
                 model.invalidateCanonicalRecord()
             },
-            applyOwnerEffect: { _, _ in
+            applyOwnerEffect: { _, _, _ in
                 preconditionFailure(
                     "Network persistent schemas do not publish owner effects."
                 )
             },
-            resetOwnerProjection: { _ in }
+            resetOwnerProjection: { _, _ in }
         ) as WebInspectorModelSchema<NetworkRequest>
     }
 
@@ -117,12 +117,12 @@ package enum WebInspectorNetworkModelSchemas {
             invalidateModel: { _, model in
                 model.invalidateCanonicalRecord()
             },
-            applyOwnerEffect: { _, _ in
+            applyOwnerEffect: { _, _, _ in
                 preconditionFailure(
                     "Network persistent schemas do not publish owner effects."
                 )
             },
-            resetOwnerProjection: { _ in }
+            resetOwnerProjection: { _, _ in }
         ) as WebInspectorModelSchema<NetworkEntry>
     }
 }

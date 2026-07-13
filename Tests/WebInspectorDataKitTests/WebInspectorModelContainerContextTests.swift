@@ -125,13 +125,13 @@ private func containerDriverSchemaRegistry(
         invalidateModel: { _, model in
             model.invalidate()
         },
-        applyOwnerEffect: { _, effect in
+        applyOwnerEffect: { _, effect, _ in
             switch effect {
             case .unused:
                 return
             }
         },
-        resetOwnerProjection: { _ in }
+        resetOwnerProjection: { _, _ in }
     )
     return WebInspectorModelSchemaRegistry([
         WebInspectorModelSchemaRegistration(schema)
