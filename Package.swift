@@ -2,6 +2,7 @@
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import PackageDescription
+import CompilerPluginSupport
 
 let strictSwiftSettings: [SwiftSetting] = [
     .swiftLanguageMode(.v6),
@@ -33,6 +34,10 @@ let package = Package(
             targets: ["WebInspectorDataKitTesting"]
         ),
         .library(
+            name: "WebInspectorSwiftUI",
+            targets: ["WebInspectorSwiftUI"]
+        ),
+        .library(
             name: "WebInspectorKit",
             targets: ["WebInspectorKit"]
         )
@@ -53,6 +58,10 @@ let package = Package(
         .package(
             url: "https://github.com/p-x9/MachOKit.git",
             exact: "0.51.0"
+        ),
+        .package(
+            url: "https://github.com/swiftlang/swift-syntax.git",
+            exact: "603.0.2"
         ),
         .package(
             url: "https://github.com/swiftlang/swift-docc-plugin",
@@ -77,7 +86,18 @@ let package = Package(
         .target(
             name: "WebInspectorDataKit",
             dependencies: [
-                "WebInspectorProxyKit"
+                "WebInspectorProxyKit",
+                "WebInspectorDataKitMacros",
+            ],
+            swiftSettings: strictSwiftSettings
+        ),
+        .macro(
+            name: "WebInspectorDataKitMacros",
+            dependencies: [
+                .product(name: "SwiftCompilerPlugin", package: "swift-syntax"),
+                .product(name: "SwiftSyntax", package: "swift-syntax"),
+                .product(name: "SwiftSyntaxBuilder", package: "swift-syntax"),
+                .product(name: "SwiftSyntaxMacros", package: "swift-syntax"),
             ],
             swiftSettings: strictSwiftSettings
         ),
@@ -122,7 +142,6 @@ let package = Package(
             name: "WebInspectorUIDOM",
             dependencies: [
                 "WebInspectorDataKit",
-                "WebInspectorProxyKit",
                 "WebInspectorUIBase",
                 .product(name: "ObservationBridge", package: "ObservationBridge"),
                 .product(name: "UIHostingMenu", package: "UIHostingMenu", condition: .when(platforms: [.iOS]))
@@ -135,34 +154,15 @@ let package = Package(
                 "WebInspectorDataKit",
                 "WebInspectorUIBase",
                 .product(name: "ObservationBridge", package: "ObservationBridge"),
-                .product(name: "UIHostingMenu", package: "UIHostingMenu", condition: .when(platforms: [.iOS]))
-            ],
-            swiftSettings: strictSwiftSettings
-        ),
-        .target(
-            name: "WebInspectorUISyntaxBody",
-            dependencies: [
-                "WebInspectorDataKit",
-                "WebInspectorProxyKit",
-                "WebInspectorUIBase",
-                "WebInspectorUINetwork",
-                .product(name: "ObservationBridge", package: "ObservationBridge"),
+                .product(name: "UIHostingMenu", package: "UIHostingMenu", condition: .when(platforms: [.iOS])),
                 .product(name: "SyntaxEditorUI", package: "SyntaxEditorUI", condition: .when(platforms: [.iOS]))
             ],
             swiftSettings: strictSwiftSettings
         ),
         .target(
-            name: "WebInspectorUI",
+            name: "WebInspectorSwiftUI",
             dependencies: [
                 "WebInspectorDataKit",
-                "WebInspectorUIBase",
-                "WebInspectorUIDOM",
-                "WebInspectorUINetwork",
-                "WebInspectorUISyntaxBody",
-                .product(name: "ObservationBridge", package: "ObservationBridge")
-            ],
-            exclude: [
-                "README.md"
             ],
             swiftSettings: strictSwiftSettings
         ),
@@ -171,17 +171,20 @@ let package = Package(
             dependencies: [
                 "WebInspectorDataKit",
                 "WebInspectorDataKitTesting",
-                "WebInspectorProxyKit",
+                "WebInspectorUIDOM",
                 "WebInspectorUINetwork",
-                "WebInspectorUISyntaxBody",
             ],
             swiftSettings: strictSwiftSettings
         ),
         .target(
             name: "WebInspectorKit",
             dependencies: [
-                "WebInspectorUI",
-                "WebInspectorDataKit"
+                "WebInspectorProxyKit",
+                "WebInspectorDataKit",
+                "WebInspectorUIBase",
+                "WebInspectorUIDOM",
+                "WebInspectorUINetwork",
+                .product(name: "ObservationBridge", package: "ObservationBridge"),
             ],
             swiftSettings: strictSwiftSettings
         ),
@@ -217,6 +220,25 @@ let package = Package(
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(
+            name: "WebInspectorDataKitMacroTests",
+            dependencies: [
+                "WebInspectorDataKitMacros",
+                .product(name: "SwiftSyntaxMacrosTestSupport", package: "swift-syntax"),
+            ],
+            path: "Tests/WebInspectorDataKitMacroTests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "WebInspectorSwiftUITests",
+            dependencies: [
+                "WebInspectorDataKit",
+                "WebInspectorDataKitTesting",
+                "WebInspectorSwiftUI",
+            ],
+            path: "Tests/WebInspectorSwiftUITests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
             name: "WebInspectorUITests",
             dependencies: [
                 "WebInspectorDataKit",
@@ -226,8 +248,7 @@ let package = Package(
                 "WebInspectorUIBase",
                 "WebInspectorUIDOM",
                 "WebInspectorUINetwork",
-                "WebInspectorUISyntaxBody",
-                "WebInspectorUI",
+                "WebInspectorKit",
                 "WebInspectorUIPreviews",
                 "WebInspectorTestSupport",
                 .product(name: "SyntaxEditorUI", package: "SyntaxEditorUI", condition: .when(platforms: [.iOS]))

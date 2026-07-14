@@ -6,6 +6,7 @@ import WebInspectorUIBase
 @MainActor
 package final class CompactTabBarController: UITabBarController, UITabBarControllerDelegate {
     private let session: WebInspectorSession
+    private let interface: InterfaceModel
     private let contentStore: PresentationContentStore
     private let tabTransitionAnimator = NoAnimationTabTransitionAnimator()
     private var nativeTabByItemID: [WebInspectorTab.DisplayItem.ID: UITab] = [:]
@@ -14,9 +15,11 @@ package final class CompactTabBarController: UITabBarController, UITabBarControl
 
     package init(
         session: WebInspectorSession,
+        interface: InterfaceModel,
         contentStore: PresentationContentStore
     ) {
         self.session = session
+        self.interface = interface
         self.contentStore = contentStore
         super.init(nibName: nil, bundle: nil)
 
@@ -65,18 +68,18 @@ package final class CompactTabBarController: UITabBarController, UITabBarControl
         guard isRenderingSelection == false else {
             return
         }
-        session.interface.selectItem(withID: selectedTab.identifier)
+        interface.selectItem(withID: selectedTab.identifier)
     }
 
     private func bindInterface() {
         interfaceObservation = withPortableContinuousObservation { [weak self] event in
             guard let self else { return }
-            renderInterface(session.interface, animated: event.kind != .initial)
+            renderInterface(interface, animated: event.kind != .initial)
         }
     }
 
     private func renderTabsAndSelection(animated: Bool) {
-        renderInterface(session.interface, animated: animated)
+        renderInterface(interface, animated: animated)
     }
 
     private func renderInterface(_ interface: InterfaceModel, animated: Bool) {
@@ -128,8 +131,9 @@ package final class CompactTabBarController: UITabBarController, UITabBarControl
             return nativeTab
         }
 
-        let descriptor = session.interface.descriptor(for: displayItem)
+        let descriptor = interface.descriptor(for: displayItem)
         let session = session
+        let interface = interface
         let contentStore = contentStore
         let nativeTab = UITab(
             title: descriptor?.title ?? "",
@@ -142,6 +146,7 @@ package final class CompactTabBarController: UITabBarController, UITabBarControl
             WebInspectorTab.ContentFactory.makeViewController(
                 for: displayItem,
                 session: session,
+                interface: interface,
                 contentStore: contentStore,
                 hostLayout: .compact
             )

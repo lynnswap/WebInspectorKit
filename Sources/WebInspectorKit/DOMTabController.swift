@@ -4,7 +4,7 @@ import WebInspectorUIBase
 import WebInspectorUIDOM
 
 @MainActor
-package struct DOMTabController: WebInspectorTab.BuiltInController {
+package struct DOMTabController {
     package let tabID = WebInspectorTab.dom.id
     package let descriptor = WebInspectorTab.DisplayDescriptor(
         title: WebInspectorTab.dom.title,
@@ -34,8 +34,6 @@ package struct DOMTabController: WebInspectorTab.BuiltInController {
         switch displayItem {
         case let .tab(tabID):
             tabID == self.tabID ? descriptor : nil
-        case .customTab:
-            nil
         case let .domElement(parent):
             parent == tabID ? elementDescriptor : nil
         }
@@ -43,16 +41,11 @@ package struct DOMTabController: WebInspectorTab.BuiltInController {
 
     package func makeViewController(
         for displayItem: WebInspectorTab.DisplayItem,
-        session: WebInspectorSession,
+        context: WebInspectorTab.Context,
         contentStore: PresentationContentStore,
         layout: WebInspectorTab.HostLayout
     ) -> UIViewController {
-        if case .customTab = displayItem {
-            return UIViewController()
-        }
-        return contentStore.domViewController(
-            context: session.model
-        ) { model in
+        return contentStore.domViewController { model in
             makeReadyViewController(
                 for: displayItem,
                 model: model,
@@ -84,8 +77,6 @@ package struct DOMTabController: WebInspectorTab.BuiltInController {
                     contentStore: contentStore
                 )
             )
-        case (_, .customTab):
-            UIViewController()
         case (.regular, _):
             RegularSplitRootViewController(
                 contentViewController: DOMSplitViewController(

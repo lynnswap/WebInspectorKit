@@ -1,6 +1,5 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
-import WebInspectorUINetwork
 
 @MainActor
 package enum NetworkBodyPreviewFactory {

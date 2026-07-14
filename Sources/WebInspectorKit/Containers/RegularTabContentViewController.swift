@@ -6,6 +6,7 @@ import WebInspectorUIBase
 @MainActor
 package final class RegularTabContentViewController: UINavigationController {
     private let session: WebInspectorSession
+    private let interface: InterfaceModel
     private let contentStore: PresentationContentStore
     private var segmentDisplayItemIDs: [WebInspectorTab.DisplayItem.ID] = []
     private var displayedDisplayItemID: WebInspectorTab.DisplayItem.ID?
@@ -30,9 +31,11 @@ package final class RegularTabContentViewController: UINavigationController {
 
     package init(
         session: WebInspectorSession,
+        interface: InterfaceModel,
         contentStore: PresentationContentStore
     ) {
         self.session = session
+        self.interface = interface
         self.contentStore = contentStore
         super.init(nibName: nil, bundle: nil)
 
@@ -75,18 +78,18 @@ package final class RegularTabContentViewController: UINavigationController {
         guard segmentDisplayItemIDs.indices.contains(sender.selectedSegmentIndex) else {
             return
         }
-        session.interface.selectItem(withID: segmentDisplayItemIDs[sender.selectedSegmentIndex])
+        interface.selectItem(withID: segmentDisplayItemIDs[sender.selectedSegmentIndex])
     }
 
     private func bindInterface() {
         interfaceObservation = withPortableContinuousObservation { [weak self] _ in
             guard let self else { return }
-            renderInterface(session.interface)
+            renderInterface(interface)
         }
     }
 
     private func renderTabsAndSelection() {
-        renderInterface(session.interface)
+        renderInterface(interface)
     }
 
     private func renderInterface(_ interface: InterfaceModel) {
@@ -111,7 +114,7 @@ package final class RegularTabContentViewController: UINavigationController {
         segmentedControl.removeAllSegments()
         for (index, displayItem) in displayItems.enumerated() {
             segmentedControl.insertSegment(
-                withTitle: session.interface.descriptor(for: displayItem)?.title,
+                withTitle: interface.descriptor(for: displayItem)?.title,
                 at: index,
                 animated: false
             )
@@ -152,6 +155,7 @@ package final class RegularTabContentViewController: UINavigationController {
         let viewController = WebInspectorTab.ContentFactory.makeViewController(
             for: displayItem,
             session: session,
+            interface: interface,
             contentStore: contentStore,
             hostLayout: .regular
         )

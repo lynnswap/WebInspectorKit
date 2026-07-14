@@ -1,14 +1,10 @@
 #if canImport(UIKit)
 import UIKit
 import WebInspectorUIBase
+import WebInspectorUIDOM
 
-/// Native loading/failure host for one presentation of a custom tab resource.
-///
-/// UIKit owns this wrapper's identity. The root presentation store owns the
-/// single ready content controller and moves it between wrappers as host layout
-/// changes.
 @MainActor
-package final class CustomTabResourceViewController: UIViewController {
+package final class DOMTabResourceViewController: UIViewController {
     package enum Phase: Equatable {
         case loading
         case ready
@@ -16,68 +12,57 @@ package final class CustomTabResourceViewController: UIViewController {
     }
 
     private let retryAction: @MainActor () -> Void
+    private let makeReadyViewController: @MainActor (DOMPanelModel)
+        -> UIViewController
     private var readyViewController: UIViewController?
     package private(set) var phase: Phase = .loading
-    package private(set) var resourceRevision: UInt64 = 0
 
-    package init(retryAction: @escaping @MainActor () -> Void) {
+    package init(
+        retryAction: @escaping @MainActor () -> Void,
+        makeReadyViewController: @escaping @MainActor (DOMPanelModel)
+            -> UIViewController
+    ) {
         self.retryAction = retryAction
+        self.makeReadyViewController = makeReadyViewController
         super.init(nibName: nil, bundle: nil)
-        showLoading(revision: 0)
+        showLoading()
     }
 
     @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        nil
-    }
+    required init?(coder: NSCoder) { nil }
 
-    package func showLoading(revision: UInt64) {
-        guard revision >= resourceRevision else {
-            return
-        }
-        resourceRevision = revision
+    package func showLoading() {
         phase = .loading
         removeReadyViewController()
         var configuration = UIContentUnavailableConfiguration.loading()
         configuration.text = String(
-            localized: "custom.loading.title",
-            defaultValue: "Loading…",
+            localized: "dom.loading.title",
+            defaultValue: "Loading DOM…",
             bundle: WebInspectorUILocalization.bundle
         )
         contentUnavailableConfiguration = configuration
     }
 
-    package func showReady(
-        _ viewController: UIViewController,
-        revision: UInt64
-    ) {
-        guard revision >= resourceRevision else {
-            return
-        }
-        resourceRevision = revision
+    package func showReady(_ model: DOMPanelModel) {
         phase = .ready
         contentUnavailableConfiguration = nil
-        installReadyViewController(viewController)
+        installReadyViewController(makeReadyViewController(model))
     }
 
-    package func showFailure(_ message: String, revision: UInt64) {
-        guard revision >= resourceRevision else {
-            return
-        }
-        resourceRevision = revision
+    package func showFailure(_ message: String) {
         phase = .failed(message)
         removeReadyViewController()
         var configuration = UIContentUnavailableConfiguration.empty()
         configuration.image = UIImage(systemName: "exclamationmark.triangle")
         configuration.text = String(
-            localized: "custom.loading.failed.title",
-            defaultValue: "Content Unavailable",
+            localized: "dom.loading.failed.title",
+            defaultValue: "DOM Unavailable",
             bundle: WebInspectorUILocalization.bundle
         )
         configuration.secondaryText = message
         configuration.button = .bordered()
         configuration.button.title = String(
-            localized: "custom.loading.retry",
+            localized: "resource.retry",
             defaultValue: "Retry",
             bundle: WebInspectorUILocalization.bundle
         )
@@ -88,19 +73,11 @@ package final class CustomTabResourceViewController: UIViewController {
     }
 
     package func synchronouslyResetForOwnerDeinit() {
-        showLoading(revision: .max)
+        showLoading()
     }
 
     private func installReadyViewController(_ viewController: UIViewController) {
-        if readyViewController === viewController,
-           viewController.parent === self {
-            return
-        }
-        if let previousHost = viewController.parent as? CustomTabResourceViewController {
-            previousHost.removeReadyViewController()
-        } else {
-            viewController.webInspectorDetachFromContainerForReuse()
-        }
+        guard readyViewController !== viewController else { return }
         removeReadyViewController()
         addChild(viewController)
         viewController.view.translatesAutoresizingMaskIntoConstraints = false
@@ -113,27 +90,25 @@ package final class CustomTabResourceViewController: UIViewController {
         ])
         viewController.didMove(toParent: self)
         readyViewController = viewController
+        navigationItem.leadingItemGroups = viewController.navigationItem.leadingItemGroups
+        navigationItem.trailingItemGroups = viewController.navigationItem.trailingItemGroups
+        navigationItem.additionalOverflowItems = viewController.navigationItem.additionalOverflowItems
     }
 
     private func removeReadyViewController() {
-        guard let readyViewController else {
-            return
-        }
-        if readyViewController.parent === self {
-            readyViewController.willMove(toParent: nil)
-            readyViewController.viewIfLoaded?.removeFromSuperview()
-            readyViewController.removeFromParent()
-        }
+        guard let readyViewController else { return }
+        readyViewController.willMove(toParent: nil)
+        readyViewController.viewIfLoaded?.removeFromSuperview()
+        readyViewController.removeFromParent()
         self.readyViewController = nil
+        navigationItem.leadingItemGroups = []
+        navigationItem.trailingItemGroups = []
+        navigationItem.additionalOverflowItems = nil
     }
 
     #if DEBUG
     package var readyViewControllerForTesting: UIViewController? {
         readyViewController
-    }
-
-    package func retryForTesting() {
-        retryAction()
     }
     #endif
 }

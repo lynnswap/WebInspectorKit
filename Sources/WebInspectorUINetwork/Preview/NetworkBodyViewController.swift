@@ -2,9 +2,7 @@
 import AVFoundation
 import AVKit
 import WebInspectorDataKit
-import WebInspectorProxyKit
 import WebInspectorUIBase
-import WebInspectorUINetwork
 import Observation
 import ObservationBridge
 import SyntaxEditorUI
@@ -541,7 +539,7 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
     }
 
     private func showMoviePreview(_ preview: NetworkMoviePreview) {
-        installMoviePreviewSurfaceIfNeeded(bodyID: preview.bodyID)
+        let player = installMoviePreviewSurfaceIfNeeded(bodyID: preview.bodyID)
         if failedMediaPlayerPreview == preview {
             displayMoviePreviewFailure(
                 preview,
@@ -562,18 +560,17 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
         mediaPlayerItemID = itemID
         observeMoviePreviewItem(item, itemID: itemID, preview: preview)
 
-        guard let player = mediaPlayerViewController?.player else {
-            preconditionFailure("An installed movie preview surface must own its player.")
-        }
         player.replaceCurrentItem(with: item)
         hideMoviePreviewStatus()
         previewRenderState.showMovie(preview.url)
     }
 
-    private func installMoviePreviewSurfaceIfNeeded(bodyID: ObjectIdentifier) {
+    private func installMoviePreviewSurfaceIfNeeded(
+        bodyID: ObjectIdentifier
+    ) -> AVPlayer {
         if mediaPlayerSurfaceBodyID == bodyID,
-           mediaPlayerViewController != nil {
-            return
+           let player = mediaPlayerViewController?.player {
+            return player
         }
 
         removeMediaPlayerViewController()
@@ -582,7 +579,8 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
         scrollEdgeSink?.contentScrollView = nil
 
         let playerViewController = AVPlayerViewController()
-        playerViewController.player = moviePreviewPlayerFactory()
+        let player = moviePreviewPlayerFactory()
+        playerViewController.player = player
         playerViewController.view.translatesAutoresizingMaskIntoConstraints = false
         addChild(playerViewController)
         view.addSubview(playerViewController.view)
@@ -595,6 +593,7 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
         playerViewController.didMove(toParent: self)
         mediaPlayerSurfaceBodyID = bodyID
         mediaPlayerViewController = playerViewController
+        return player
     }
 
     private func clearMoviePreviewSourceIfNeeded(
@@ -624,7 +623,7 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
     private func showMoviePreviewStatus(_ configuration: UIContentUnavailableConfiguration) {
         guard let playerViewController = mediaPlayerViewController,
               let overlayView = playerViewController.contentOverlayView else {
-            preconditionFailure("An installed movie preview surface must provide its content overlay view.")
+            return
         }
         let statusView: UIContentUnavailableView
         if let mediaPlayerStatusView {

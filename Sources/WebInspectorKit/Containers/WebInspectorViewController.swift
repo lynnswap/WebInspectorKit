@@ -1,13 +1,7 @@
 #if canImport(UIKit)
-import OSLog
 import UIKit
 import WebKit
 import WebInspectorUIBase
-
-private let lifecycleLogger = Logger(
-    subsystem: "com.lynnswap.WebInspectorKit",
-    category: "WebInspectorUI.Lifecycle"
-)
 
 @MainActor
 private final class WebInspectorRootPresentationLifecycleCoordinator {
@@ -140,11 +134,8 @@ public final class WebInspectorViewController: UIViewController {
 
     /// The inspection session backing the view controller.
     public let session: WebInspectorSession
+    private let interface: InterfaceModel
     private let presentationContentStore: PresentationContentStore
-
-    /// A Boolean value indicating whether the controller detaches its session
-    /// after the root presentation ends.
-    public var automaticallyDetachesOnDismiss = true
     private var drawsBackgroundStorage = true
     private let presentationLifecycleCoordinator = WebInspectorRootPresentationLifecycleCoordinator()
     private lazy var presentationHostWindowObserver: WebInspectorPresentationHostWindowObserverView = {
@@ -175,16 +166,17 @@ public final class WebInspectorViewController: UIViewController {
     }
 
     /// Creates a view controller backed by an inspection session.
-    public init(session: WebInspectorSession = WebInspectorSession()) {
+    public init(
+        session: WebInspectorSession = .init(),
+        catalog: WebInspectorTabCatalog = .standard
+    ) {
         self.session = session
-        self.presentationContentStore = PresentationContentStore()
+        self.interface = InterfaceModel(catalog: catalog)
+        self.presentationContentStore = PresentationContentStore(
+            context: WebInspectorTab.Context(session: session)
+        )
         super.init(nibName: nil, bundle: nil)
         webInspectorSetDrawsBackgroundTraitOverride(drawsBackgroundStorage)
-    }
-
-    /// Creates a view controller with a custom tab set.
-    public convenience init(tabs: [WebInspectorTab]) {
-        self.init(session: WebInspectorSession(tabs: tabs))
     }
 
     @available(*, unavailable)
@@ -296,7 +288,6 @@ public final class WebInspectorViewController: UIViewController {
         presentationLifecycleCoordinator.finishIfNeeded { [
             session,
             presentationContentStore,
-            automaticallyDetachesOnDismiss,
             presentationLifecycleCoordinator,
         ] generation in
             removeActiveHost()
@@ -318,17 +309,7 @@ public final class WebInspectorViewController: UIViewController {
                 guard presentationLifecycleCoordinator.isCurrentPresentation(generation) else {
                     return
                 }
-                if automaticallyDetachesOnDismiss {
-                    await session.detach()
-                } else {
-                    do {
-                        try await session.suspendBackendInteraction()
-                    } catch {
-                        lifecycleLogger.error(
-                            "Root presentation cleanup failed: \(String(describing: error), privacy: .public)"
-                        )
-                    }
-                }
+                await session.close()
             }
         }
     }
@@ -391,11 +372,13 @@ public final class WebInspectorViewController: UIViewController {
         case .compact:
             host = CompactTabBarController(
                 session: session,
+                interface: interface,
                 contentStore: presentationContentStore
             )
         case .regular:
             host = RegularTabContentViewController(
                 session: session,
+                interface: interface,
                 contentStore: presentationContentStore
             )
         }
@@ -431,6 +414,8 @@ public final class WebInspectorViewController: UIViewController {
     package var activeHostViewControllerForTesting: UIViewController? {
         activeHost
     }
+
+    package var interfaceForTesting: InterfaceModel { interface }
 
     #if DEBUG
     package var presentationContentStoreForTesting: PresentationContentStore {

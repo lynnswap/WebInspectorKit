@@ -2,12 +2,11 @@
 import UIKit
 import WebInspectorUIBase
 import WebInspectorUINetwork
-import WebInspectorUISyntaxBody
 
 @MainActor
-package struct NetworkTabController: WebInspectorTab.BuiltInController {
+package struct NetworkTabController {
     package let tabID = WebInspectorTab.network.id
-    package let descriptor = WebInspectorTab.DisplayDescriptor(
+package let descriptor = WebInspectorTab.DisplayDescriptor(
         title: WebInspectorTab.network.title,
         image: WebInspectorTab.network.image
     )
@@ -17,18 +16,25 @@ package struct NetworkTabController: WebInspectorTab.BuiltInController {
         static let detail = "detail"
     }
 
+    package func displayItems(
+        for layout: WebInspectorTab.HostLayout
+    ) -> [WebInspectorTab.DisplayItem] {
+        [.tab(tabID)]
+    }
+
+    package func descriptor(
+        for displayItem: WebInspectorTab.DisplayItem
+    ) -> WebInspectorTab.DisplayDescriptor? {
+        displayItem == .tab(tabID) ? descriptor : nil
+    }
+
     package func makeViewController(
         for displayItem: WebInspectorTab.DisplayItem,
-        session: WebInspectorSession,
+        context: WebInspectorTab.Context,
         contentStore: PresentationContentStore,
         layout: WebInspectorTab.HostLayout
     ) -> UIViewController {
-        return contentStore.networkViewController(
-            context: session.model
-        ) { [weak contentStore] model in
-            guard let contentStore else {
-                preconditionFailure("A Network resource lost its presentation content store.")
-            }
+        return contentStore.networkViewController { model in
             return readyViewController(
                 layout: layout,
                 contentStore: contentStore,

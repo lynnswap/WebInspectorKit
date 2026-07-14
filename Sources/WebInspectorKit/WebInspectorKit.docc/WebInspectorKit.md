@@ -1,13 +1,13 @@
-# ``WebInspectorUI``
+# ``WebInspectorKit``
 
 UIKit Web Inspector components for presenting and extending the built-in inspector.
 
 ## Overview
 
-Use WebInspectorUI when you want to present the built-in UIKit inspector or add
-UIKit tabs to the inspector surface. Application code normally imports
-`WebInspectorKit`, which re-exports this module, but the symbols documented here
-are the UI entry points behind that product.
+Use WebInspectorKit when you want to present the built-in UIKit inspector or add
+UIKit tabs to the inspector surface. Application code imports
+`WebInspectorKit`; lower-level model consumers can instead import
+`WebInspectorDataKit` or `WebInspectorSwiftUI` directly.
 
 Create a ``WebInspectorViewController``, attach it to a `WKWebView`, and present
 it from your app UI:
@@ -37,18 +37,19 @@ app needs a UIKit panel that shares the same inspection session:
 
 ```swift
 let consoleTab = WebInspectorTab(
-    id: "app_console",
+    id: .init(rawValue: "app_console"),
     title: "Console",
     systemImage: "terminal",
-    requiredDomains: [.console]
-) { session in
-    let messages = try await session.model.consoleMessages()
-    return ConsoleViewController(messages: messages)
+    requiredFeatures: [.consoleRuntime]
+) { context in
+    ConsoleViewController(
+        modelContext: context.modelContext,
+        console: context.modelContainer.console
+    )
 }
 
-let inspector = WebInspectorViewController(
-    tabs: [.dom, .network, consoleTab]
-)
+let catalog = try WebInspectorTabCatalog([.dom, .network, consoleTab])
+let inspector = WebInspectorViewController(catalog: catalog)
 ```
 
 Use ``WebInspectorSession`` when you need explicit access to attachment

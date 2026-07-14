@@ -3,7 +3,6 @@ import UIKit
 import WebInspectorUIBase
 import WebInspectorUINetwork
 
-/// Native loading/failure container for one Network tab host presentation.
 @MainActor
 package final class NetworkTabResourceViewController: UIViewController {
     package enum Phase: Equatable {
@@ -12,30 +11,27 @@ package final class NetworkTabResourceViewController: UIViewController {
         case failed(String)
     }
 
-    private let makeReadyViewController: @MainActor (NetworkPanelModel) -> UIViewController
+    private let retryAction: @MainActor () -> Void
+    private let makeReadyViewController: @MainActor (NetworkPanelModel)
+        -> UIViewController
     private var readyViewController: UIViewController?
-    private var hasRenderedResourceState = false
     package private(set) var phase: Phase = .loading
-    package private(set) var resourceRevision: UInt64 = 0
 
     package init(
-        makeReadyViewController: @escaping @MainActor (NetworkPanelModel) -> UIViewController
+        retryAction: @escaping @MainActor () -> Void,
+        makeReadyViewController: @escaping @MainActor (NetworkPanelModel)
+            -> UIViewController
     ) {
+        self.retryAction = retryAction
         self.makeReadyViewController = makeReadyViewController
         super.init(nibName: nil, bundle: nil)
-        showLoading(revision: 0)
+        showLoading()
     }
 
     @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        nil
-    }
+    required init?(coder: NSCoder) { nil }
 
-    package func showLoading(revision: UInt64) {
-        guard shouldRender(revision: revision) else {
-            return
-        }
-        resourceRevision = revision
+    package func showLoading() {
         phase = .loading
         removeReadyViewController()
         var configuration = UIContentUnavailableConfiguration.loading()
@@ -47,22 +43,13 @@ package final class NetworkTabResourceViewController: UIViewController {
         contentUnavailableConfiguration = configuration
     }
 
-    package func showReady(_ model: NetworkPanelModel, revision: UInt64) {
-        guard shouldRender(revision: revision) else {
-            return
-        }
-        resourceRevision = revision
+    package func showReady(_ model: NetworkPanelModel) {
         phase = .ready
         contentUnavailableConfiguration = nil
-        let viewController = makeReadyViewController(model)
-        installReadyViewController(viewController)
+        installReadyViewController(makeReadyViewController(model))
     }
 
-    package func showFailure(_ message: String, revision: UInt64) {
-        guard shouldRender(revision: revision) else {
-            return
-        }
-        resourceRevision = revision
+    package func showFailure(_ message: String) {
         phase = .failed(message)
         removeReadyViewController()
         var configuration = UIContentUnavailableConfiguration.empty()
@@ -73,26 +60,24 @@ package final class NetworkTabResourceViewController: UIViewController {
             bundle: WebInspectorUILocalization.bundle
         )
         configuration.secondaryText = message
+        configuration.button = .bordered()
+        configuration.button.title = String(
+            localized: "resource.retry",
+            defaultValue: "Retry",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        configuration.buttonProperties.primaryAction = UIAction { [weak self] _ in
+            self?.retryAction()
+        }
         contentUnavailableConfiguration = configuration
     }
 
-    /// Drops ready content when the root resource owner can no longer publish.
     package func synchronouslyResetForOwnerDeinit() {
-        showLoading(revision: .max)
-    }
-
-    private func shouldRender(revision: UInt64) -> Bool {
-        guard hasRenderedResourceState == false || resourceRevision < revision else {
-            return false
-        }
-        hasRenderedResourceState = true
-        return true
+        showLoading()
     }
 
     private func installReadyViewController(_ viewController: UIViewController) {
-        guard readyViewController !== viewController else {
-            return
-        }
+        guard readyViewController !== viewController else { return }
         removeReadyViewController()
         addChild(viewController)
         viewController.view.translatesAutoresizingMaskIntoConstraints = false
@@ -108,9 +93,7 @@ package final class NetworkTabResourceViewController: UIViewController {
     }
 
     private func removeReadyViewController() {
-        guard let readyViewController else {
-            return
-        }
+        guard let readyViewController else { return }
         readyViewController.willMove(toParent: nil)
         readyViewController.viewIfLoaded?.removeFromSuperview()
         readyViewController.removeFromParent()
