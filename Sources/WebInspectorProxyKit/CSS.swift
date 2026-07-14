@@ -2,20 +2,13 @@ import Foundation
 
 /// A target-scoped handle for Web Inspector CSS commands and events.
 public struct CSS: Sendable, WebInspectorEventDomainHandle {
-    package static let commandDomain = WebInspectorProxyDomain.css
-    package static let eventDomain = WebInspectorProxyEventDomain.css
+    package static let eventDecoder = CSSWireCoding.eventDecoder
+    package static let eventCapability = CSSWireCoding.capability
 
     package let endpoint: DomainEndpoint
 
     package init(endpoint: DomainEndpoint) {
         self.endpoint = endpoint
-    }
-
-    package static func extractEvent(_ event: WebInspectorProxyEvent) -> Event? {
-        guard case let .css(value) = event else {
-            return nil
-        }
-        return value
     }
 
     /// Runs an operation with an atomically registered CSS event scope.
@@ -35,64 +28,37 @@ public struct CSS: Sendable, WebInspectorEventDomainHandle {
 
     /// Returns cascade information for the supplied DOM node.
     public func matchedStyles(for node: DOM.Node.ID) async throws -> MatchedStyles {
-        try await dispatch(
-            method: "getMatchedStylesForNode",
-            payload: GetMatchedStylesForNodePayload(node: node),
-            returning: MatchedStyles.self
-        )
+        try await endpoint.dispatch(CSSWireCoding.matchedStyles(node))
     }
 
     /// Returns the computed CSS properties for the supplied DOM node.
     public func computedStyle(for node: DOM.Node.ID) async throws -> [ComputedProperty] {
-        try await dispatch(
-            method: "getComputedStyleForNode",
-            payload: GetComputedStyleForNodePayload(node: node),
-            returning: [ComputedProperty].self
-        )
+        try await endpoint.dispatch(CSSWireCoding.computedStyle(node))
     }
 
     /// Returns the inline and attribute-derived style declarations for the node.
     public func inlineStyles(for node: DOM.Node.ID) async throws -> InlineStyles {
-        try await dispatch(
-            method: "getInlineStylesForNode",
-            payload: GetInlineStylesForNodePayload(node: node),
-            returning: InlineStyles.self
-        )
+        try await endpoint.dispatch(CSSWireCoding.inlineStyles(node))
     }
 
     /// Replaces the declaration text for a style and returns the updated style.
     public func setStyleText(_ id: Style.ID, text: String) async throws -> Style {
-        try await dispatch(
-            method: "setStyleText",
-            payload: SetStyleTextPayload(id: id, text: text),
-            returning: Style.self
-        )
+        try await endpoint.dispatch(CSSWireCoding.setStyleText(id, text: text))
     }
 
     /// Replaces the full text of a stylesheet.
     public func setStyleSheetText(_ id: StyleSheet.ID, text: String) async throws {
-        try await dispatchVoid(
-            method: "setStyleSheetText",
-            payload: SetStyleSheetTextPayload(id: id, text: text)
-        )
+        try await endpoint.dispatch(CSSWireCoding.setStyleSheetText(id, text: text))
     }
 
     /// Replaces the selector text for a rule and returns the updated rule.
     public func setRuleSelector(_ id: Rule.ID, selector: String) async throws -> Rule {
-        try await dispatch(
-            method: "setRuleSelector",
-            payload: SetRuleSelectorPayload(id: id, selector: selector),
-            returning: Rule.self
-        )
+        try await endpoint.dispatch(CSSWireCoding.setRuleSelector(id, selector: selector))
     }
 
     /// Replaces the grouping header for a nested rule and returns the updated grouping.
     public func setGroupingHeaderText(_ id: Rule.ID, text: String) async throws -> Rule.Grouping {
-        try await dispatch(
-            method: "setGroupingHeaderText",
-            payload: SetGroupingHeaderTextPayload(id: id, text: text),
-            returning: Rule.Grouping.self
-        )
+        try await endpoint.dispatch(CSSWireCoding.setGroupingHeaderText(id, text: text))
     }
 
     package struct GetMatchedStylesForNodePayload: Sendable {

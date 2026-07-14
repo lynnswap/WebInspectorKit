@@ -1,8 +1,8 @@
 import Foundation
 
 package struct Inspector: Sendable, WebInspectorEventDomainHandle {
-    package static let commandDomain = WebInspectorProxyDomain.inspector
-    package static let eventDomain = WebInspectorProxyEventDomain.inspector
+    package static let eventDecoder = InspectorWireCoding.eventDecoder
+    package static let eventCapability = InspectorWireCoding.capability
 
     package let endpoint: DomainEndpoint
 
@@ -10,34 +10,16 @@ package struct Inspector: Sendable, WebInspectorEventDomainHandle {
         self.endpoint = endpoint
     }
 
-    package static func extractEvent(
-        _ event: WebInspectorProxyEvent
-    ) -> Event? {
-        guard case let .inspector(value) = event else {
-            return nil
-        }
-        return value
-    }
-
     package func enable() async throws {
-        try await dispatchVoid(
-            method: "enable",
-            payload: EnablePayload()
-        )
+        try await endpoint.dispatch(InspectorWireCoding.enable)
     }
 
     package func disable() async throws {
-        try await dispatchVoid(
-            method: "disable",
-            payload: DisablePayload()
-        )
+        try await endpoint.dispatch(InspectorWireCoding.disable)
     }
 
     package func initialized() async throws {
-        try await dispatchVoid(
-            method: "initialized",
-            payload: InitializedPayload()
-        )
+        try await endpoint.dispatch(InspectorWireCoding.initialized)
     }
 
     package struct EnablePayload: Sendable {

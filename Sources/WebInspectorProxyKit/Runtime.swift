@@ -2,20 +2,13 @@ import Foundation
 
 /// A target-scoped handle for Web Inspector Runtime commands and events.
 public struct Runtime: Sendable, WebInspectorEventDomainHandle {
-    package static let commandDomain = WebInspectorProxyDomain.runtime
-    package static let eventDomain = WebInspectorProxyEventDomain.runtime
+    package static let eventDecoder = RuntimeWireCoding.eventDecoder
+    package static let eventCapability = RuntimeWireCoding.capability
 
     package let endpoint: DomainEndpoint
 
     package init(endpoint: DomainEndpoint) {
         self.endpoint = endpoint
-    }
-
-    package static func extractEvent(_ event: WebInspectorProxyEvent) -> Event? {
-        guard case let .runtime(value) = event else {
-            return nil
-        }
-        return value
     }
 
     /// Runs an operation with an atomically registered Runtime event scope.
@@ -39,15 +32,11 @@ public struct Runtime: Sendable, WebInspectorEventDomainHandle {
         in context: ExecutionContext.ID? = nil,
         objectGroup: ObjectGroup? = nil
     ) async throws -> EvaluationResult {
-        try await dispatch(
-            method: "evaluate",
-            payload: EvaluatePayload(
-                expression: expression,
-                context: context,
-                objectGroup: objectGroup
-            ),
-            returning: EvaluationResult.self
-        )
+        try await endpoint.dispatch(RuntimeWireCoding.evaluate(
+            expression: expression,
+            context: context,
+            objectGroup: objectGroup
+        ))
     }
 
     /// Returns property descriptors for a remote object.
@@ -55,45 +44,30 @@ public struct Runtime: Sendable, WebInspectorEventDomainHandle {
         of object: RemoteObject.ID,
         ownProperties: Bool = true
     ) async throws -> [PropertyDescriptor] {
-        try await dispatch(
-            method: "getProperties",
-            payload: GetPropertiesPayload(object: object, ownProperties: ownProperties),
-            returning: [PropertyDescriptor].self
-        )
+        try await endpoint.dispatch(RuntimeWireCoding.properties(
+            object: object,
+            ownProperties: ownProperties
+        ))
     }
 
     /// Returns a compact preview for a remote object.
     public func preview(of object: RemoteObject.ID) async throws -> ObjectPreview {
-        try await dispatch(
-            method: "getPreview",
-            payload: GetPreviewPayload(object: object),
-            returning: ObjectPreview.self
-        )
+        try await endpoint.dispatch(RuntimeWireCoding.preview(object))
     }
 
     /// Returns entries for an array-like, map-like, or set-like remote object.
     public func collectionEntries(of object: RemoteObject.ID) async throws -> [CollectionEntry] {
-        try await dispatch(
-            method: "getCollectionEntries",
-            payload: GetCollectionEntriesPayload(object: object),
-            returning: [CollectionEntry].self
-        )
+        try await endpoint.dispatch(RuntimeWireCoding.collectionEntries(object))
     }
 
     /// Releases one remote object handle.
     public func releaseObject(_ id: RemoteObject.ID) async throws {
-        try await dispatchVoid(
-            method: "releaseObject",
-            payload: ReleaseObjectPayload(id: id)
-        )
+        try await endpoint.dispatch(RuntimeWireCoding.releaseObject(id))
     }
 
     /// Releases all remote object handles in an object group.
     public func releaseObjectGroup(_ group: ObjectGroup) async throws {
-        try await dispatchVoid(
-            method: "releaseObjectGroup",
-            payload: ReleaseObjectGroupPayload(group: group)
-        )
+        try await endpoint.dispatch(RuntimeWireCoding.releaseObjectGroup(group))
     }
 
     package struct EvaluatePayload: Sendable {

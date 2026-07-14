@@ -183,7 +183,7 @@ public actor WebInspectorTestPeer {
     /// Commands emitted by ProxyKit through this peer's transport endpoint.
     public nonisolated let commands: Commands
     private weak var core: ConnectionCore?
-    private var receiver: TransportReceiver?
+    private var receiver: ConnectionReceiver?
     private var state: State
     private var nextCommandOrdinal: UInt64
     private var outstandingCommands: [UInt64: ReplyRoute]
@@ -314,7 +314,7 @@ public actor WebInspectorTestPeer {
         _ = try? await core.waitUntilClosed()
     }
 
-    fileprivate func attach(core: ConnectionCore, receiver: TransportReceiver) {
+    fileprivate func attach(core: ConnectionCore, receiver: ConnectionReceiver) {
         precondition(
             state == .unattached,
             "A WebInspectorTestPeer can attach to only one connection."
@@ -422,8 +422,7 @@ public actor WebInspectorTestPeer {
                 throw WebInspectorTestPeerError.connectionClosed
             }
         } catch {
-            let terminalCause = await admittedCore.terminalCause
-            if terminalCause == .explicitClose {
+            if await admittedCore.wasExplicitlyClosed {
                 // Explicit owner close may begin immediately after the reply
                 // fulfills its command. Wait for an active receiver drain to
                 // become quiescent before deciding whether this input was
@@ -611,7 +610,7 @@ public actor WebInspectorTestPeer {
     }
 }
 
-private final class WebInspectorTestPeerTransportBackend: TransportBackend {
+private final class WebInspectorTestPeerTransportBackend: ConnectionBackend {
     private let peer: WebInspectorTestPeer
 
     init(peer: WebInspectorTestPeer) {
@@ -803,7 +802,7 @@ extension WebInspectorTestPeer {
     func makeConnection(
         configuration: WebInspectorProxy.Configuration
     ) async -> ConnectionCore {
-        let receiver = TransportReceiver()
+        let receiver = ConnectionReceiver()
         let backend = WebInspectorTestPeerTransportBackend(peer: self)
         let core = ConnectionCore(
             backend: backend,

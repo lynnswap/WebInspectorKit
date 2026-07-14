@@ -1,6 +1,4 @@
-import Foundation
-
-package protocol TransportBackend: Sendable {
+package protocol ConnectionBackend: Sendable {
     func sendJSONString(_ message: String) async throws
     func detach() async
 }

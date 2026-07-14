@@ -2,20 +2,13 @@ import Foundation
 
 /// A target-scoped handle for Web Inspector Network commands and events.
 public struct Network: Sendable, WebInspectorEventDomainHandle {
-    package static let commandDomain = WebInspectorProxyDomain.network
-    package static let eventDomain = WebInspectorProxyEventDomain.network
+    package static let eventDecoder = NetworkWireCoding.eventDecoder
+    package static let eventCapability = NetworkWireCoding.capability
 
     package let endpoint: DomainEndpoint
 
     package init(endpoint: DomainEndpoint) {
         self.endpoint = endpoint
-    }
-
-    package static func extractEvent(_ event: WebInspectorProxyEvent) -> Event? {
-        guard case let .network(value) = event else {
-            return nil
-        }
-        return value
     }
 
     /// Runs an operation with an atomically registered Network event scope.
@@ -41,11 +34,10 @@ public struct Network: Sendable, WebInspectorEventDomainHandle {
         for id: Request.ID,
         backendResourceIdentifier: BackendResourceID? = nil
     ) async throws -> Body {
-        try await dispatch(
-            method: "getResponseBody",
-            payload: GetResponseBodyPayload(id: id, backendResourceIdentifier: backendResourceIdentifier),
-            returning: Body.self
-        )
+        try await endpoint.dispatch(NetworkWireCoding.responseBody(
+            id: id,
+            backendResourceIdentifier: backendResourceIdentifier
+        ))
     }
 
     package struct GetResponseBodyPayload: Sendable {
@@ -66,29 +58,15 @@ public struct Network: Sendable, WebInspectorEventDomainHandle {
             package let frameID: FrameID
             package let loaderID: String
             package let targetID: String?
-            package let mappedFrameTargetID: WebInspectorTarget.ID?
 
             package init(
                 frameID: FrameID,
                 loaderID: String,
-                targetID: String?,
-                mappedFrameTargetID: WebInspectorTarget.ID? = nil
+                targetID: String?
             ) {
                 self.frameID = frameID
                 self.loaderID = loaderID
                 self.targetID = targetID
-                self.mappedFrameTargetID = mappedFrameTargetID
-            }
-
-            package func mappingFrame(
-                to targetID: WebInspectorTarget.ID?
-            ) -> Self {
-                Self(
-                    frameID: frameID,
-                    loaderID: loaderID,
-                    targetID: self.targetID,
-                    mappedFrameTargetID: targetID
-                )
             }
         }
 

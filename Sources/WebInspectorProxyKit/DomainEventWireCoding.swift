@@ -1,167 +1,110 @@
 import Foundation
 
-enum LiveProxyEventDecoder {
-    static func proxyEvent(
-        from event: ProtocolEvent,
-        targetID: WebInspectorTarget.ID,
-        lifecycleTarget: WebInspectorLifecycleTarget? = nil
-    ) throws -> WebInspectorProxyEvent {
-        switch event.domain {
-        case .target:
-            return try .targetLifecycle(targetLifecycleEvent(from: event, targetID: targetID, target: lifecycleTarget))
-        case .dom:
-            return try .dom(domEvent(from: event))
-        case .inspector:
-            return try .inspector(inspectorEvent(from: event))
-        case .css:
-            return try .css(cssEvent(from: event))
-        case .network:
-            return try .network(networkEvent(from: event))
-        case .console:
-            return try .console(Console.TargetedEvent(
-                event: consoleEvent(from: event),
-                targetID: event.targetID.map { WebInspectorTarget.ID($0.rawValue) }
-            ))
-        case .runtime:
-            return try .runtime(runtimeEvent(from: event, targetID: targetID))
-        case .page:
-            return try .targetLifecycle(pageLifecycleEvent(from: event))
-        case .storage, .other:
-            return .dom(.unknown(rawEvent(from: event)))
-        }
-    }
-
-    private static func targetLifecycleEvent(
-        from event: ProtocolEvent,
-        targetID: WebInspectorTarget.ID,
-        target: WebInspectorLifecycleTarget?
-    ) throws -> WebInspectorTargetLifecycleEvent {
-        switch event.method {
-        case "Target.didCommitProvisionalTarget":
-            _ = try decode(TargetCommittedParams.self, from: event)
-            guard let lifecycleTarget = target else {
-                return .unknown(rawEvent(from: event))
-            }
-            return .didCommitProvisionalTarget(WebInspectorTargetCommitLifecycle(
-                oldTargetID: targetID,
-                newTarget: lifecycleTarget
-            ))
-        case "Target.targetDestroyed":
-            _ = try decode(TargetDestroyedParams.self, from: event)
-            return .targetDestroyed(targetID: targetID)
-        default:
-            return .unknown(rawEvent(from: event))
-        }
-    }
-
-    private static func pageLifecycleEvent(from event: ProtocolEvent) throws -> WebInspectorTargetLifecycleEvent {
-        switch event.method {
-        case "Page.frameNavigated":
-            let params = try decode(PageFrameNavigatedParams.self, from: event)
-            return .frameNavigated(params.frame.proxyFrame)
-        case "Page.frameDetached":
-            let params = try decode(PageFrameDetachedParams.self, from: event)
-            return .frameDetached(frameID: FrameID(params.frameId))
-        default:
-            return .unknown(rawEvent(from: event))
-        }
-    }
-
-    private static func domEvent(from event: ProtocolEvent) throws -> DOM.Event {
-        switch event.method {
+package extension DOMWireCoding {
+    static let eventDecoder = WebInspectorEventDecoder<DOM.Event>(domain: eventDomain) { envelope in
+        let event: DOM.Event
+        switch envelope.method.rawValue {
         case "DOM.documentUpdated":
-            return .documentUpdated
+            event = .documentUpdated
         case "DOM.inspect":
-            let params = try decode(DOMInspectParams.self, from: event)
-            return .inspect(DOM.Node.ID(params.nodeId))
+            let params = try decodeWire(DOMInspectParams.self, from: envelope)
+            event = .inspect(DOM.Node.ID(params.nodeId))
         case "DOM.setChildNodes":
-            let params = try decode(SetChildNodesParams.self, from: event)
+            let params = try decodeWire(SetChildNodesParams.self, from: envelope)
             let nodes = try params.nodes.map { try $0.proxyNode() }
             if params.parentId == "0", let root = nodes.first {
-                return .detachedRoot(root)
+                event = .detachedRoot(root)
+            } else {
+                event = .setChildNodes(parent: DOM.Node.ID(params.parentId), nodes: nodes)
             }
-            return .setChildNodes(parent: DOM.Node.ID(params.parentId), nodes: nodes)
         case "DOM.childNodeInserted":
-            let params = try decode(ChildNodeInsertedParams.self, from: event)
-            return try .childNodeInserted(
+            let params = try decodeWire(ChildNodeInsertedParams.self, from: envelope)
+            event = try .childNodeInserted(
                 parent: DOM.Node.ID(params.parentNodeId),
                 previous: params.previousNodeID,
                 node: params.node.proxyNode()
             )
         case "DOM.childNodeRemoved":
-            let params = try decode(ChildNodeRemovedParams.self, from: event)
-            return .childNodeRemoved(parent: DOM.Node.ID(params.parentNodeId), node: DOM.Node.ID(params.nodeId))
+            let params = try decodeWire(ChildNodeRemovedParams.self, from: envelope)
+            event = .childNodeRemoved(parent: DOM.Node.ID(params.parentNodeId), node: DOM.Node.ID(params.nodeId))
         case "DOM.childNodeCountUpdated":
-            let params = try decode(ChildNodeCountUpdatedParams.self, from: event)
-            return .childNodeCountUpdated(DOM.Node.ID(params.nodeId), count: params.childNodeCount)
+            let params = try decodeWire(ChildNodeCountUpdatedParams.self, from: envelope)
+            event = .childNodeCountUpdated(DOM.Node.ID(params.nodeId), count: params.childNodeCount)
         case "DOM.attributeModified":
-            let params = try decode(AttributeModifiedParams.self, from: event)
-            return .attributeModified(DOM.Node.ID(params.nodeId), name: params.name, value: params.value)
+            let params = try decodeWire(AttributeModifiedParams.self, from: envelope)
+            event = .attributeModified(DOM.Node.ID(params.nodeId), name: params.name, value: params.value)
         case "DOM.attributeRemoved":
-            let params = try decode(AttributeRemovedParams.self, from: event)
-            return .attributeRemoved(DOM.Node.ID(params.nodeId), name: params.name)
+            let params = try decodeWire(AttributeRemovedParams.self, from: envelope)
+            event = .attributeRemoved(DOM.Node.ID(params.nodeId), name: params.name)
         case "DOM.inlineStyleInvalidated":
-            let params = try decode(InlineStyleInvalidatedParams.self, from: event)
-            return .inlineStyleInvalidated(params.nodeIds.map(DOM.Node.ID.init))
+            let params = try decodeWire(InlineStyleInvalidatedParams.self, from: envelope)
+            event = .inlineStyleInvalidated(params.nodeIds.map(DOM.Node.ID.init))
         case "DOM.characterDataModified":
-            let params = try decode(CharacterDataModifiedParams.self, from: event)
-            return .characterDataModified(DOM.Node.ID(params.nodeId), value: params.characterData)
+            let params = try decodeWire(CharacterDataModifiedParams.self, from: envelope)
+            event = .characterDataModified(DOM.Node.ID(params.nodeId), value: params.characterData)
         case "DOM.shadowRootPushed":
-            let params = try decode(ShadowRootPushedParams.self, from: event)
-            return try .shadowRootPushed(host: DOM.Node.ID(params.hostId), root: params.root.proxyNode())
+            let params = try decodeWire(ShadowRootPushedParams.self, from: envelope)
+            event = try .shadowRootPushed(host: DOM.Node.ID(params.hostId), root: params.root.proxyNode())
         case "DOM.shadowRootPopped":
-            let params = try decode(ShadowRootPoppedParams.self, from: event)
-            return .shadowRootPopped(host: DOM.Node.ID(params.hostId), root: DOM.Node.ID(params.rootId))
+            let params = try decodeWire(ShadowRootPoppedParams.self, from: envelope)
+            event = .shadowRootPopped(host: DOM.Node.ID(params.hostId), root: DOM.Node.ID(params.rootId))
         case "DOM.pseudoElementAdded":
-            let params = try decode(PseudoElementAddedParams.self, from: event)
-            return try .pseudoElementAdded(parent: DOM.Node.ID(params.parentId), element: params.pseudoElement.proxyNode())
+            let params = try decodeWire(PseudoElementAddedParams.self, from: envelope)
+            event = try .pseudoElementAdded(parent: DOM.Node.ID(params.parentId), element: params.pseudoElement.proxyNode())
         case "DOM.pseudoElementRemoved":
-            let params = try decode(PseudoElementRemovedParams.self, from: event)
-            return .pseudoElementRemoved(parent: DOM.Node.ID(params.parentId), element: DOM.Node.ID(params.pseudoElementId))
+            let params = try decodeWire(PseudoElementRemovedParams.self, from: envelope)
+            event = .pseudoElementRemoved(parent: DOM.Node.ID(params.parentId), element: DOM.Node.ID(params.pseudoElementId))
         case "DOM.willDestroyDOMNode":
-            let params = try decode(WillDestroyDOMNodeParams.self, from: event)
-            return .willDestroyDOMNode(DOM.Node.ID(params.nodeId))
+            let params = try decodeWire(WillDestroyDOMNodeParams.self, from: envelope)
+            event = .willDestroyDOMNode(DOM.Node.ID(params.nodeId))
         default:
-            return .unknown(rawEvent(from: event))
+            return .unknown(RawEvent(envelope))
         }
+        return envelope.targetScopeRawValue.map { DomainEventIdentityScope.domEvent(event, target: $0) } ?? event
     }
+}
 
-    private static func inspectorEvent(from event: ProtocolEvent) throws -> Inspector.Event {
-        switch event.method {
+package extension InspectorWireCoding {
+    static let eventDecoder = WebInspectorEventDecoder<Inspector.Event>(domain: eventDomain) { envelope in
+        switch envelope.method.rawValue {
         case "Inspector.inspect":
-            let params = try decode(InspectorInspectParams.self, from: event)
-            return .inspect(params.object.proxyObject, hints: params.hints?.proxyValue)
+            let params = try decodeWire(InspectorInspectParams.self, from: envelope)
+            let event = Inspector.Event.inspect(params.object.proxyObject, hints: params.hints?.proxyValue)
+            return envelope.targetScopeRawValue.map { DomainEventIdentityScope.inspectorEvent(event, target: $0) } ?? event
         default:
-            return .unknown(rawEvent(from: event))
+            return .unknown(RawEvent(envelope))
         }
     }
+}
 
-    private static func cssEvent(from event: ProtocolEvent) throws -> CSS.Event {
-        switch event.method {
+package extension CSSWireCoding {
+    static let eventDecoder = WebInspectorEventDecoder<CSS.Event>(domain: eventDomain) { envelope in
+        let event: CSS.Event
+        switch envelope.method.rawValue {
         case "CSS.styleSheetChanged":
-            let params = try decode(StyleSheetChangedParams.self, from: event)
-            return .styleSheetChanged(CSS.StyleSheet.ID(params.styleSheetId))
+            event = .styleSheetChanged(CSS.StyleSheet.ID(try decodeWire(StyleSheetChangedParams.self, from: envelope).styleSheetId))
         case "CSS.styleSheetRemoved":
-            let params = try decode(StyleSheetRemovedParams.self, from: event)
-            return .styleSheetRemoved(CSS.StyleSheet.ID(params.styleSheetId))
+            event = .styleSheetRemoved(CSS.StyleSheet.ID(try decodeWire(StyleSheetRemovedParams.self, from: envelope).styleSheetId))
         case "CSS.styleSheetAdded":
-            let params = try decode(StyleSheetAddedParams.self, from: event)
-            return .styleSheetAdded(params.header.proxyHeader)
+            event = .styleSheetAdded(try decodeWire(StyleSheetAddedParams.self, from: envelope).header.proxyHeader)
         case "CSS.mediaQueryResultChanged":
-            return .mediaQueryResultChanged
+            event = .mediaQueryResultChanged
         case "CSS.nodeLayoutFlagsChanged":
-            let params = try decode(NodeLayoutFlagsChangedParams.self, from: event)
-            return .nodeLayoutFlagsChanged(DOM.Node.ID(params.nodeId))
+            event = .nodeLayoutFlagsChanged(DOM.Node.ID(try decodeWire(NodeLayoutFlagsChangedParams.self, from: envelope).nodeId))
         default:
-            return .unknown(rawEvent(from: event))
+            return .unknown(RawEvent(envelope))
         }
+        return envelope.targetScopeRawValue.map { DomainEventIdentityScope.cssEvent(event, target: $0) } ?? event
     }
+}
 
-    private static func networkEvent(from event: ProtocolEvent) throws -> Network.Event {
-        switch event.method {
+package extension NetworkWireCoding {
+    static let eventDecoder = WebInspectorEventDecoder<Network.Event>(domain: eventDomain) { envelope in
+        let event: Network.Event
+        switch envelope.method.rawValue {
         case "Network.requestWillBeSent":
-            let params = try decode(RequestWillBeSentParams.self, from: event)
-            return .requestWillBeSent(
+            let params = try decodeWire(RequestWillBeSentParams.self, from: envelope)
+            event = .requestWillBeSent(
                 id: Network.Request.ID(params.requestId),
                 request: params.request.proxyRequest(
                     id: params.requestId,
@@ -178,40 +121,40 @@ enum LiveProxyEventDecoder {
                 timestamp: params.timestamp
             )
         case "Network.responseReceived":
-            let params = try decode(ResponseReceivedParams.self, from: event)
-            return .responseReceived(
+            let params = try decodeWire(ResponseReceivedParams.self, from: envelope)
+            event = .responseReceived(
                 id: Network.Request.ID(params.requestId),
                 response: params.response.proxyResponse(fallbackURL: nil),
                 resourceType: params.type.map(Network.ResourceType.init(rawValue:)),
                 timestamp: params.timestamp
             )
         case "Network.dataReceived":
-            let params = try decode(DataReceivedParams.self, from: event)
-            return .dataReceived(
+            let params = try decodeWire(DataReceivedParams.self, from: envelope)
+            event = .dataReceived(
                 id: Network.Request.ID(params.requestId),
                 dataLength: params.dataLength,
                 encodedDataLength: params.encodedDataLength,
                 timestamp: params.timestamp
             )
         case "Network.loadingFinished":
-            let params = try decode(LoadingFinishedParams.self, from: event)
-            return .loadingFinished(
+            let params = try decodeWire(LoadingFinishedParams.self, from: envelope)
+            event = .loadingFinished(
                 id: Network.Request.ID(params.requestId),
                 timestamp: params.timestamp,
                 sourceMapURL: params.sourceMapURL,
                 metrics: params.metrics?.proxyMetrics(timestamp: params.timestamp)
             )
         case "Network.loadingFailed":
-            let params = try decode(LoadingFailedParams.self, from: event)
-            return .loadingFailed(
+            let params = try decodeWire(LoadingFailedParams.self, from: envelope)
+            event = .loadingFailed(
                 id: Network.Request.ID(params.requestId),
                 errorText: params.errorText,
                 canceled: params.canceled ?? false,
                 timestamp: params.timestamp
             )
         case "Network.requestServedFromMemoryCache":
-            let params = try decode(RequestServedFromMemoryCacheParams.self, from: event)
-            return .requestServedFromMemoryCache(
+            let params = try decodeWire(RequestServedFromMemoryCacheParams.self, from: envelope)
+            event = .requestServedFromMemoryCache(
                 id: Network.Request.ID(params.requestId),
                 response: params.resource.proxyResponse,
                 initiator: params.initiator.proxyInitiator,
@@ -219,102 +162,108 @@ enum LiveProxyEventDecoder {
                 timestamp: params.timestamp
             )
         case "Network.webSocketCreated":
-            let params = try decode(WebSocketCreatedParams.self, from: event)
-            return .webSocket(.created(id: Network.Request.ID(params.requestId), url: params.url))
+            let params = try decodeWire(WebSocketCreatedParams.self, from: envelope)
+            event = .webSocket(.created(id: Network.Request.ID(params.requestId), url: params.url))
         case "Network.webSocketWillSendHandshakeRequest":
-            let params = try decode(WebSocketWillSendHandshakeRequestParams.self, from: event)
-            return .webSocket(.handshakeRequest(
+            let params = try decodeWire(WebSocketWillSendHandshakeRequestParams.self, from: envelope)
+            event = .webSocket(.handshakeRequest(
                 id: Network.Request.ID(params.requestId),
                 request: params.request.proxyRequest(id: params.requestId),
                 timestamp: params.timestamp
             ))
         case "Network.webSocketHandshakeResponseReceived":
-            let params = try decode(WebSocketHandshakeResponseReceivedParams.self, from: event)
-            return .webSocket(.handshakeResponse(
+            let params = try decodeWire(WebSocketHandshakeResponseReceivedParams.self, from: envelope)
+            event = .webSocket(.handshakeResponse(
                 id: Network.Request.ID(params.requestId),
                 response: params.response.proxyResponse(fallbackURL: nil),
                 timestamp: params.timestamp
             ))
         case "Network.webSocketFrameReceived":
-            let params = try decode(WebSocketFrameParams.self, from: event)
-            return .webSocket(.frameReceived(
+            let params = try decodeWire(WebSocketFrameParams.self, from: envelope)
+            event = .webSocket(.frameReceived(
                 id: Network.Request.ID(params.requestId),
                 frame: params.response.proxyFrame,
                 timestamp: params.timestamp
             ))
         case "Network.webSocketFrameSent":
-            let params = try decode(WebSocketFrameParams.self, from: event)
-            return .webSocket(.frameSent(
+            let params = try decodeWire(WebSocketFrameParams.self, from: envelope)
+            event = .webSocket(.frameSent(
                 id: Network.Request.ID(params.requestId),
                 frame: params.response.proxyFrame,
                 timestamp: params.timestamp
             ))
         case "Network.webSocketFrameError":
-            let params = try decode(WebSocketFrameErrorParams.self, from: event)
-            return .webSocket(.error(
+            let params = try decodeWire(WebSocketFrameErrorParams.self, from: envelope)
+            event = .webSocket(.error(
                 id: Network.Request.ID(params.requestId),
                 message: params.errorMessage,
                 timestamp: params.timestamp
             ))
         case "Network.webSocketClosed":
-            let params = try decode(WebSocketClosedParams.self, from: event)
-            return .webSocket(.closed(id: Network.Request.ID(params.requestId), timestamp: params.timestamp))
+            let params = try decodeWire(WebSocketClosedParams.self, from: envelope)
+            event = .webSocket(.closed(id: Network.Request.ID(params.requestId), timestamp: params.timestamp))
         default:
-            return .unknown(rawEvent(from: event))
+            return .unknown(RawEvent(envelope))
         }
+        return envelope.targetScopeRawValue.map { DomainEventIdentityScope.networkEvent(event, target: $0) } ?? event
     }
+}
 
-    private static func consoleEvent(from event: ProtocolEvent) throws -> Console.Event {
-        switch event.method {
+package extension ConsoleWireCoding {
+    static let eventDecoder = WebInspectorEventDecoder<Console.Event>(domain: eventDomain) { envelope in
+        let event: Console.Event
+        switch envelope.method.rawValue {
         case "Console.messageAdded":
-            let params = try decode(MessageAddedParams.self, from: event)
-            return .messageAdded(params.message.proxyMessage)
+            event = .messageAdded(try decodeWire(MessageAddedParams.self, from: envelope).message.proxyMessage)
         case "Console.messageRepeatCountUpdated":
-            let params = try decode(MessageRepeatCountUpdatedParams.self, from: event)
-            return .messageRepeatCountUpdated(count: params.count, timestamp: params.timestamp)
+            let params = try decodeWire(MessageRepeatCountUpdatedParams.self, from: envelope)
+            event = .messageRepeatCountUpdated(count: params.count, timestamp: params.timestamp)
         case "Console.messagesCleared":
-            let params = try decode(MessagesClearedParams.self, from: event)
-            return .messagesCleared(reason: Console.ClearReason(rawValue: params.reason))
+            event = .messagesCleared(reason: Console.ClearReason(rawValue: try decodeWire(MessagesClearedParams.self, from: envelope).reason))
         default:
-            return .unknown(rawEvent(from: event))
+            return .unknown(RawEvent(envelope))
         }
+        return envelope.targetScopeRawValue.map { DomainEventIdentityScope.consoleEvent(event, target: $0) } ?? event
     }
+}
 
-    private static func runtimeEvent(from event: ProtocolEvent, targetID: WebInspectorTarget.ID) throws -> Runtime.Event {
-        switch event.method {
+package extension RuntimeWireCoding {
+    static let eventDecoder = WebInspectorEventDecoder<Runtime.Event>(domain: eventDomain) { envelope in
+        let event: Runtime.Event
+        switch envelope.method.rawValue {
         case "Runtime.executionContextCreated":
-            let params = try decode(ExecutionContextCreatedParams.self, from: event)
-            return .executionContextCreated(params.context.proxyContext)
+            event = .executionContextCreated(try decodeWire(ExecutionContextCreatedParams.self, from: envelope).context.proxyContext)
         case "Runtime.executionContextDestroyed":
-            let params = try decode(ExecutionContextDestroyedParams.self, from: event)
-            return .executionContextDestroyed(Runtime.ExecutionContext.ID(params.executionContextId))
+            event = .executionContextDestroyed(Runtime.ExecutionContext.ID(
+                try decodeWire(ExecutionContextDestroyedParams.self, from: envelope).executionContextId
+            ))
         case "Runtime.executionContextsCleared":
-            return .executionContextsCleared
+            event = .executionContextsCleared
         default:
-            return .unknown(rawEvent(from: event))
+            return .unknown(RawEvent(envelope))
+        }
+        return envelope.targetScopeRawValue.map { DomainEventIdentityScope.runtimeEvent(event, target: $0) } ?? event
+    }
+}
+
+package extension PageWireCoding {
+    static let eventDecoder = WebInspectorEventDecoder<Page.Event>(domain: eventDomain) { envelope in
+        switch envelope.method.rawValue {
+        case "Page.frameNavigated":
+            return .frameNavigated(try decodeWire(PageFrameNavigatedParams.self, from: envelope).frame.proxyFrame)
+        case "Page.frameDetached":
+            return .frameDetached(FrameID(try decodeWire(PageFrameDetachedParams.self, from: envelope).frameId))
+        default:
+            return .unknown(RawEvent(envelope))
         }
     }
-
-    private static func decode<T: Decodable>(_ type: T.Type, from event: ProtocolEvent) throws -> T {
-        try liveProxyDecode(type, from: event.paramsData)
-    }
-
-    private static func rawEvent(from event: ProtocolEvent) -> RawEvent {
-        RawEvent(domain: event.domain.description, method: shortMethodName(event.method), params: event.paramsData)
-    }
-
-    private static func shortMethodName(_ method: String) -> String {
-        method.split(separator: ".", maxSplits: 1).last.map(String.init) ?? method
-    }
 }
 
-private struct TargetCommittedParams: Decodable {
-    var oldTargetId: String
-    var newTargetId: String
-}
-
-private struct TargetDestroyedParams: Decodable {
-    var targetId: String
+private func decodeWire<Value: Decodable>(
+    _ type: Value.Type,
+    from envelope: WebInspectorRoutedEventEnvelope
+) throws -> Value {
+    try liveProxyDecode(type, from: envelope.parameters)
 }
 
 private struct PageFrameNavigatedParams: Decodable {
@@ -334,8 +283,8 @@ private struct PageFramePayload: Decodable {
     var securityOrigin: String?
     var mimeType: String?
 
-    var proxyFrame: WebInspectorPageFrameLifecycle {
-        WebInspectorPageFrameLifecycle(
+    var proxyFrame: Page.Frame {
+        Page.Frame(
             id: FrameID(id),
             parentID: parentId.map(FrameID.init),
             loaderID: loaderId,
@@ -1211,3 +1160,4 @@ private extension Runtime.Kind {
         }
     }
 }
+

@@ -5,7 +5,7 @@ import WebInspectorNativeBridge
 /// The native attachment's actual variation boundary: asynchronous explicit
 /// detach versus synchronous deinitialization backstop. Both production and
 /// tests use the same `NativeAttachment` lifecycle implementation.
-package protocol NativeAttachmentBackend: TransportBackend {
+package protocol NativeAttachmentBackend: ConnectionBackend {
     @MainActor func detachSynchronously()
 }
 
@@ -47,7 +47,7 @@ package final class NativeInspectorBackend: NativeAttachmentBackend {
     package nonisolated func sendJSONString(_ message: String) async throws {
         try await MainActor.run {
             guard let bridge else {
-                throw TransportSession.Error.transportClosed
+                throw ConnectionError.closed
             }
             try bridge.sendJSONString(message)
         }

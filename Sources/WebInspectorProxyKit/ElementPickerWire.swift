@@ -30,7 +30,11 @@ package func elementPickerModeParametersData(
         ]
     }
     guard JSONSerialization.isValidJSONObject(object) else {
-        throw TransportSession.Error.malformedMessage
+        throw WebInspectorProxyError.commandFailed(
+            domain: "DOM",
+            method: "setInspectModeEnabled",
+            message: "Invalid inspect-mode configuration."
+        )
     }
     return try JSONSerialization.data(withJSONObject: object)
 }

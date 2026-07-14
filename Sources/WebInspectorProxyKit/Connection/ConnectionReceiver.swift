@@ -1,6 +1,6 @@
 import Synchronization
 
-package final class TransportReceiver: Sendable {
+package final class ConnectionReceiver: Sendable {
     // Swift cannot store a weak actor reference directly in this Sendable value
     // state. Every read and write of this box is protected by `state`'s Mutex;
     // the box never escapes the receiver. The unchecked conformance represents
@@ -76,7 +76,7 @@ package final class TransportReceiver: Sendable {
             guard !state.isClosed else {
                 return (ordinal: nil as UInt64?, drainGeneration: nil as UInt64?)
             }
-            precondition(state.tailOrdinal < UInt64.max, "TransportReceiver exhausted its message ordinal space.")
+            precondition(state.tailOrdinal < UInt64.max, "ConnectionReceiver exhausted its message ordinal space.")
             state.tailOrdinal += 1
             let ordinal = state.tailOrdinal
             state.messages.append(QueuedMessage(ordinal: ordinal, payload: message))
@@ -119,7 +119,7 @@ package final class TransportReceiver: Sendable {
             let result = state.withLock { state in
                 precondition(
                     ordinal <= state.tailOrdinal,
-                    "Cannot wait for a TransportReceiver ordinal that has not been accepted."
+                    "Cannot wait for a ConnectionReceiver ordinal that has not been accepted."
                 )
                 guard !state.isClosed, state.completedOrdinal < ordinal else {
                     return (
@@ -267,7 +267,7 @@ package final class TransportReceiver: Sendable {
         let readyWaiters = state.withLock { state in
             precondition(
                 ordinal == state.completedOrdinal &+ 1,
-                "TransportReceiver completed messages outside FIFO order."
+                "ConnectionReceiver completed messages outside FIFO order."
             )
             state.completedOrdinal = ordinal
             return Self.takeReadyDrainWaiters(from: &state)

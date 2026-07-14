@@ -32,6 +32,18 @@ public enum WebInspectorProxyError: Error, Sendable, Equatable {
     /// A structured event subscriber could not retain another pending event.
     case eventBufferOverflow(capacity: Int)
 
+    /// A bounded event scope requires a positive capacity.
+    case invalidEventBufferCapacity(Int)
+
+    /// A scope command was started while another reply boundary was outstanding.
+    case replyBoundaryAlreadyOutstanding
+
+    /// A requested reply boundary could not be reached before scope delivery ended.
+    case replyBoundaryUnavailable
+
+    /// More than one task attempted to consume the same ordered scope concurrently.
+    case concurrentScopeConsumption
+
     /// Another exclusive consumer already owns this connection.
     case connectionInUse
 
@@ -42,10 +54,12 @@ public enum WebInspectorProxyError: Error, Sendable, Equatable {
     case timeout(domain: String, method: String)
 }
 
-package func unimplementedCommand(domain: String, method: String) -> WebInspectorProxyError {
-    .commandFailed(
-        domain: domain,
-        method: method,
-        message: "WebInspectorProxyKit shell does not implement \(domain).\(method)."
-    )
+package enum ConnectionError: Error, Sendable, Equatable {
+    case closed
+    case failed(String)
+    case unreadableEnvelope
+    case malformedTargetControlPlane(String)
+    case missingTarget(String)
+    case replyTimeout(method: String)
+    case remoteError(method: String, message: String)
 }

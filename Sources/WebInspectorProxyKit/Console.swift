@@ -2,20 +2,13 @@ import Foundation
 
 /// A target-scoped handle for Web Inspector Console commands and events.
 public struct Console: Sendable, WebInspectorEventDomainHandle {
-    package static let commandDomain = WebInspectorProxyDomain.console
-    package static let eventDomain = WebInspectorProxyEventDomain.console
+    package static let eventDecoder = ConsoleWireCoding.eventDecoder
+    package static let eventCapability = ConsoleWireCoding.capability
 
     package let endpoint: DomainEndpoint
 
     package init(endpoint: DomainEndpoint) {
         self.endpoint = endpoint
-    }
-
-    package static func extractEvent(_ event: WebInspectorProxyEvent) -> Event? {
-        guard case let .console(value) = event else {
-            return nil
-        }
-        return value.event
     }
 
     /// Runs an operation with an atomically registered Console event scope.
@@ -35,18 +28,12 @@ public struct Console: Sendable, WebInspectorEventDomainHandle {
 
     /// Clears console messages in the inspected target.
     public func clearMessages() async throws {
-        try await dispatchVoid(
-            method: "clearMessages",
-            payload: ClearMessagesPayload()
-        )
+        try await endpoint.dispatch(ConsoleWireCoding.clearMessages)
     }
 
     /// Sets the logging level for a WebKit logging channel.
     public func setLoggingChannelLevel(_ source: ChannelSource, level: ChannelLevel) async throws {
-        try await dispatchVoid(
-            method: "setLoggingChannelLevel",
-            payload: SetLoggingChannelLevelPayload(source: source, level: level)
-        )
+        try await endpoint.dispatch(ConsoleWireCoding.setLoggingChannelLevel(source, level))
     }
 
     package struct ClearMessagesPayload: Sendable {
@@ -244,16 +231,6 @@ public struct Console: Sendable, WebInspectorEventDomainHandle {
 
         /// An event that is not modeled by this package.
         case unknown(RawEvent)
-    }
-
-    package struct TargetedEvent: Sendable {
-        package let event: Event
-        package let targetID: WebInspectorTarget.ID?
-
-        package init(event: Event, targetID: WebInspectorTarget.ID?) {
-            self.event = event
-            self.targetID = targetID
-        }
     }
 
 }

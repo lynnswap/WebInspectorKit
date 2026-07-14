@@ -25,7 +25,7 @@ public struct WebInspectorProxyTestRuntime: Sendable {
         do {
             try await peer.createTarget(initialTarget)
             let proxy = try await WebInspectorProxy(
-                transport: core,
+                connection: core,
                 configuration: configuration
             )
             return WebInspectorProxyTestRuntime(

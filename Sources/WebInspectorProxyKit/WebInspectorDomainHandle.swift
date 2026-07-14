@@ -2,150 +2,32 @@ import Foundation
 
 package struct DomainEndpoint: Sendable {
     package let proxyReference: WebInspectorProxyReference
-    package let targetID: WebInspectorTarget.ID
-    package let route: RoutingTargetID
-    package let authority: WebInspectorCommandAuthority
+    package let route: WebInspectorRoute
 
-    package init(
-        proxy: WebInspectorProxy,
-        targetID: WebInspectorTarget.ID,
-        route: RoutingTargetID,
-        authority: WebInspectorCommandAuthority = .direct
-    ) {
-        self.init(
-            proxyReference: WebInspectorProxyReference(proxy),
-            targetID: targetID,
-            route: route,
-            authority: authority
-        )
-    }
-
-    package init(
-        proxyReference: WebInspectorProxyReference,
-        targetID: WebInspectorTarget.ID,
-        route: RoutingTargetID,
-        authority: WebInspectorCommandAuthority
-    ) {
-        self.proxyReference = proxyReference
-        self.targetID = targetID
-        self.route = route
-        self.authority = authority
-    }
-
-    package func dispatch<Payload: Sendable, Result: Sendable>(
-        domain: WebInspectorProxyDomain,
-        method: String,
-        payload: Payload,
-        returning resultType: Result.Type = Result.self
+    package func dispatch<Result: Sendable>(
+        _ command: WebInspectorWireCommand<Result>
     ) async throws -> Result {
-        _ = resultType
-        guard let proxy = proxyReference.resolve() else {
-            throw WebInspectorProxyError.closed
-        }
-        return try await proxy.dispatchCommand(
-            targetID: targetID,
-            route: route,
-            domain: domain,
-            method: method,
-            payload: payload,
-            authority: authority
-        )
+        guard let proxy = proxyReference.resolve() else { throw WebInspectorProxyError.closed }
+        return try await proxy.send(command, route: route)
     }
 
-    package func dispatchResult<Payload: Sendable, Result: Sendable>(
-        domain: WebInspectorProxyDomain,
-        method: String,
-        payload: Payload,
-        returning resultType: Result.Type = Result.self
-    ) async throws -> WebInspectorProxyCommandResult<Result> {
-        _ = resultType
-        guard let proxy = proxyReference.resolve() else {
-            throw WebInspectorProxyError.closed
-        }
-        return try await proxy.dispatchCommandResult(
-            targetID: targetID,
-            route: route,
-            domain: domain,
-            method: method,
-            payload: payload,
-            authority: authority
-        )
+    package func openScope<Element: Sendable>(
+        descriptor: WebInspectorOrderedScopeDescriptor<Element>,
+        buffering: WebInspectorEventBufferingPolicy
+    ) async throws -> WebInspectorOrderedEventScope<Element> {
+        guard let proxy = proxyReference.resolve() else { throw WebInspectorProxyError.closed }
+        return try await proxy.openScope(descriptor: descriptor, buffering: buffering)
     }
-
-    package func withEvents<Element: Sendable, Output>(
-        domain: WebInspectorProxyEventDomain,
-        buffering: WebInspectorEventBufferingPolicy,
-        isolation: isolated (any Actor)? = #isolation,
-        extract: @escaping @Sendable (WebInspectorProxyEvent) -> Element?,
-        _ operation: (
-            AsyncThrowingStream<WebInspectorPageEvent<Element>, any Error>
-        ) async throws -> Output
-    ) async throws -> Output {
-        let backend: any WebInspectorProxyBackend = try {
-            guard let proxy = proxyReference.resolve() else {
-                throw WebInspectorProxyError.closed
-            }
-            guard let backend = proxy.structuredEventBackend else {
-                throw unimplementedCommand(domain: domain.rawValue, method: "withEvents")
-            }
-            return backend
-        }()
-        return try await withWebInspectorEventScope(
-            backend: backend,
-            targetID: targetID,
-            route: route,
-            domain: domain,
-            buffering: buffering,
-            isolation: isolation,
-            extract: extract,
-            operation
-        )
-    }
-
 }
 
-/// Package-owned contract shared by the closed set of Web Inspector domain
-/// handles. The protocol is not public because ProxyKit does not support
-/// consumer-defined protocol domains.
 package protocol WebInspectorDomainHandle: Sendable {
-    static var commandDomain: WebInspectorProxyDomain { get }
-
     var endpoint: DomainEndpoint { get }
 }
 
-package extension WebInspectorDomainHandle {
-    func dispatch<Payload: Sendable, Result: Sendable>(
-        method: String,
-        payload: Payload,
-        returning resultType: Result.Type = Result.self
-    ) async throws -> Result {
-        try await endpoint.dispatch(
-            domain: Self.commandDomain,
-            method: method,
-            payload: payload,
-            returning: resultType
-        )
-    }
-
-    func dispatchVoid<Payload: Sendable>(
-        method: String,
-        payload: Payload
-    ) async throws {
-        let _: Void = try await dispatch(
-            method: method,
-            payload: payload,
-            returning: Void.self
-        )
-    }
-}
-
-/// Package-owned contract for domain handles that vend structured events.
 package protocol WebInspectorEventDomainHandle: WebInspectorDomainHandle {
     associatedtype Event: Sendable
-
-    static var eventDomain: WebInspectorProxyEventDomain { get }
-
-    static func extractEvent(_ event: WebInspectorProxyEvent) -> Event?
+    static var eventDecoder: WebInspectorEventDecoder<Event> { get }
+    static var eventCapability: WebInspectorDomainCapabilityDescriptor { get }
 }
 
 package extension WebInspectorEventDomainHandle {
@@ -156,12 +38,23 @@ package extension WebInspectorEventDomainHandle {
             AsyncThrowingStream<WebInspectorPageEvent<Event>, any Error>
         ) async throws -> Output
     ) async throws -> Output {
-        try await endpoint.withEvents(
-            domain: Self.eventDomain,
-            buffering: buffering,
-            isolation: isolation,
-            extract: Self.extractEvent,
-            operation
+        _ = isolation
+        let scope = try await endpoint.openScope(
+            descriptor: WebInspectorOrderedScopeDescriptor(
+                decoders: [Self.eventDecoder],
+                capabilities: [Self.eventCapability]
+            ),
+            buffering: buffering
         )
+
+        let operationResult: Result<Output, any Error>
+        do { operationResult = .success(try await operation(scope.events)) }
+        catch { operationResult = .failure(error) }
+        await scope.close()
+
+        switch operationResult {
+        case let .success(value): return value
+        case let .failure(error): throw error
+        }
     }
 }

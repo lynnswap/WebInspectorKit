@@ -2,20 +2,13 @@ import Foundation
 
 /// A target-scoped handle for Web Inspector DOM commands and events.
 public struct DOM: Sendable, WebInspectorEventDomainHandle {
-    package static let commandDomain = WebInspectorProxyDomain.dom
-    package static let eventDomain = WebInspectorProxyEventDomain.dom
+    package static let eventDecoder = DOMWireCoding.eventDecoder
+    package static let eventCapability = DOMWireCoding.capability
 
     package let endpoint: DomainEndpoint
 
     package init(endpoint: DomainEndpoint) {
         self.endpoint = endpoint
-    }
-
-    package static func extractEvent(_ event: WebInspectorProxyEvent) -> Event? {
-        guard case let .dom(value) = event else {
-            return nil
-        }
-        return value
     }
 
     /// A DOM element attribute.
@@ -50,19 +43,12 @@ public struct DOM: Sendable, WebInspectorEventDomainHandle {
 
     /// Returns the root document node for the target.
     public func getDocument() async throws -> Node {
-        try await dispatch(
-            method: "getDocument",
-            payload: GetDocumentPayload(),
-            returning: Node.self
-        )
+        try await endpoint.dispatch(DOMWireCoding.getDocument())
     }
 
     /// Requests child-node events for a node up to the supplied depth.
     public func requestChildNodes(_ id: Node.ID, depth: Int = 1) async throws {
-        try await dispatchVoid(
-            method: "requestChildNodes",
-            payload: RequestChildNodesPayload(id: id, depth: depth)
-        )
+        try await endpoint.dispatch(DOMWireCoding.requestChildNodes(id, depth: depth))
     }
 
     /// Resolves a runtime object through the current page DOM agent.
@@ -70,221 +56,71 @@ public struct DOM: Sendable, WebInspectorEventDomainHandle {
     /// WebKit does not implement this command for frame targets. The returned
     /// identity therefore belongs to the unscoped current-page DOM namespace.
     public func requestNode(forRemoteObject objectID: Runtime.RemoteObject.ID) async throws -> Node.ID {
-        try await dispatch(
-            method: "requestNode",
-            payload: RequestNodePayload(objectID: objectID),
-            returning: Node.ID.self
-        )
-    }
-
-    package func requestNodeForModelFeed(
-        forRemoteObject objectID: Runtime.RemoteObject.ID
-    ) async throws -> ModelFeedNodeResolution {
-        let result: WebInspectorProxyCommandResult<Node.ID> = try await endpoint
-            .dispatchResult(
-                domain: Self.commandDomain,
-                method: "requestNode",
-                payload: RequestNodePayload(objectID: objectID)
-            )
-        guard let modelFeedSequence = result.modelFeedSequence else {
-            throw WebInspectorProxyError.commandFailed(
-                domain: Self.commandDomain.rawValue,
-                method: "requestNode",
-                message: "DOM.requestNode completed without an active model-feed watermark."
-            )
-        }
-        return ModelFeedNodeResolution(
-            nodeID: result.value,
-            modelFeedSequence: modelFeedSequence
-        )
+        try await endpoint.dispatch(DOMWireCoding.requestNode(objectID))
     }
 
     /// Returns serialized outer HTML for a node.
     public func outerHTML(of id: Node.ID) async throws -> String {
-        try await dispatch(
-            method: "getOuterHTML",
-            payload: GetOuterHTMLPayload(id: id),
-            returning: String.self
-        )
+        try await endpoint.dispatch(DOMWireCoding.outerHTML(id))
     }
 
     /// Returns the current attributes for a node.
     public func attributes(of id: Node.ID) async throws -> [Attribute] {
-        try await dispatch(
-            method: "getAttributes",
-            payload: GetAttributesPayload(id: id),
-            returning: [Attribute].self
-        )
+        try await endpoint.dispatch(DOMWireCoding.attributes(id))
     }
 
     /// Sets a single attribute value on a node.
     public func setAttributeValue(_ id: Node.ID, name: String, value: String) async throws {
-        try await dispatchVoid(
-            method: "setAttributeValue",
-            payload: SetAttributeValuePayload(id: id, name: name, value: value)
-        )
+        try await endpoint.dispatch(DOMWireCoding.setAttribute(id, name: name, value: value))
     }
 
     /// Replaces attributes on a node using raw attribute text.
     public func setAttributesAsText(_ id: Node.ID, text: String, name: String? = nil) async throws {
-        try await dispatchVoid(
-            method: "setAttributesAsText",
-            payload: SetAttributesAsTextPayload(id: id, text: text, name: name)
-        )
+        try await endpoint.dispatch(DOMWireCoding.setAttributes(id, text: text, name: name))
     }
 
     /// Removes an attribute from a node.
     public func removeAttribute(_ id: Node.ID, name: String) async throws {
-        try await dispatchVoid(
-            method: "removeAttribute",
-            payload: RemoveAttributePayload(id: id, name: name)
-        )
+        try await endpoint.dispatch(DOMWireCoding.removeAttribute(id, name: name))
     }
 
     /// Replaces a node with the supplied outer HTML.
     public func setOuterHTML(_ id: Node.ID, html: String) async throws {
-        try await dispatchVoid(
-            method: "setOuterHTML",
-            payload: SetOuterHTMLPayload(id: id, html: html)
-        )
+        try await endpoint.dispatch(DOMWireCoding.setOuterHTML(id, html: html))
     }
 
     /// Removes a node from the document.
     public func removeNode(_ id: Node.ID) async throws {
-        try await dispatchVoid(
-            method: "removeNode",
-            payload: RemoveNodePayload(id: id)
-        )
+        try await endpoint.dispatch(DOMWireCoding.removeNode(id))
     }
 
     /// Marks the current DOM state as an undoable editing checkpoint.
     public func markUndoableState() async throws {
-        try await dispatchVoid(
-            method: "markUndoableState",
-            payload: MarkUndoableStatePayload()
-        )
+        try await endpoint.dispatch(DOMWireCoding.markUndoableState)
     }
 
     /// Highlights a DOM node in the inspected page.
     public func highlightNode(_ id: Node.ID) async throws {
-        // WebKit cannot highlight frame-owned DOM nodes from frame targets
-        // yet; its frontend intentionally no-ops these nodes instead of
-        // routing a scoped id to the wrong page node.
-        guard id.targetScopeRawValue == nil else {
-            return
-        }
-        try await dispatchVoid(
-            method: "highlightNode",
-            payload: HighlightNodePayload(id: id)
-        )
+        try await endpoint.dispatch(DOMWireCoding.highlightNode(id))
     }
 
     /// Clears the current DOM highlight.
     public func hideHighlight() async throws {
-        try await dispatchVoid(
-            method: "hideHighlight",
-            payload: HideHighlightPayload()
-        )
+        try await endpoint.dispatch(DOMWireCoding.hideHighlight)
     }
 
     package func setInspectMode(enabled: Bool) async throws {
-        try await dispatchVoid(
-            method: "setInspectModeEnabled",
-            payload: SetInspectModeEnabledPayload(enabled: enabled)
-        )
-    }
-
-    /// Runs an operation while WebKit's element picker is enabled.
-    ///
-    /// The Inspector capability and its event subscriber are installed before
-    /// inspect mode is enabled. The scope disables inspect mode and releases
-    /// the capability on success, failure, and cancellation.
-    public func withElementPicker<Output>(
-        buffering: WebInspectorEventBufferingPolicy = .bounded(16),
-        isolation: isolated (any Actor)? = #isolation,
-        _ operation: (
-            AsyncThrowingStream<WebInspectorPageEvent<Node.ID>, any Error>
-        ) async throws -> Output
-    ) async throws -> Output {
-        let inspector = Inspector(endpoint: endpoint)
-        return try await inspector._withEvents(
-            buffering: buffering,
-            isolation: isolation
-        ) { inspectorEvents in
-            let pair = AsyncThrowingStream.makeStream(
-                of: WebInspectorPageEvent<Node.ID>.self
-            )
-            let projectionTask = Task {
-                do {
-                    for try await pageEvent in inspectorEvents {
-                        switch pageEvent {
-                        case let .reset(generation):
-                            pair.continuation.yield(.reset(generation))
-                        case let .event(generation, event):
-                            guard case let .inspect(object, _) = event,
-                                  object.subtype?.rawValue == "node",
-                                  let objectID = object.id else {
-                                continue
-                            }
-                            let nodeID: Node.ID
-                            do {
-                                nodeID = try await requestNode(
-                                    forRemoteObject: objectID
-                                )
-                            } catch WebInspectorProxyError.staleIdentifier {
-                                continue
-                            } catch WebInspectorProxyError.pageUnavailable {
-                                continue
-                            }
-                            pair.continuation.yield(
-                                .event(generation, nodeID)
-                            )
-                        }
-                    }
-                    pair.continuation.finish()
-                } catch {
-                    pair.continuation.finish(throwing: error)
-                }
-            }
-            pair.continuation.onTermination = { _ in
-                projectionTask.cancel()
-            }
-
-            let operationResult: Result<Output, any Error>
-            do {
-                operationResult = .success(
-                    try await operation(pair.stream)
-                )
-            } catch {
-                operationResult = .failure(error)
-            }
-
-            projectionTask.cancel()
-            await projectionTask.value
-            pair.continuation.finish()
-            switch operationResult {
-            case let .success(output):
-                return output
-            case let .failure(error):
-                throw error
-            }
-        }
+        try await endpoint.dispatch(DOMWireCoding.setInspectMode(enabled))
     }
 
     /// Undoes the most recent DOM edit recorded by WebKit.
     public func undo() async throws {
-        try await dispatchVoid(
-            method: "undo",
-            payload: UndoPayload()
-        )
+        try await endpoint.dispatch(DOMWireCoding.undo)
     }
 
     /// Redoes the most recent DOM edit recorded by WebKit.
     public func redo() async throws {
-        try await dispatchVoid(
-            method: "redo",
-            payload: RedoPayload()
-        )
+        try await endpoint.dispatch(DOMWireCoding.redo)
     }
 
     package struct GetDocumentPayload: Sendable {
@@ -636,10 +472,6 @@ public struct DOM: Sendable, WebInspectorEventDomainHandle {
 
 }
 
-package struct ModelFeedNodeResolution: Sendable {
-    package let nodeID: DOM.Node.ID
-    package let modelFeedSequence: UInt64
-}
 
 package extension DOM.Node.ID {
     private static var targetScopeSeparator: Character { "\u{1E}" }

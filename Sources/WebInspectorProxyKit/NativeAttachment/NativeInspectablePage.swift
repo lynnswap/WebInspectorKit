@@ -25,7 +25,7 @@ package enum NativeConnectionCoreFactory {
         responseTimeout: Duration?,
         fatalFailureHandler: @escaping @Sendable (String) -> Void = { _ in }
     ) async throws -> ConnectionCore {
-        let receiver = TransportReceiver()
+        let receiver = ConnectionReceiver()
         let page = NativeInspectablePage(webView: webView)
         var core: ConnectionCore?
         var attachment: NativeAttachment?
@@ -87,7 +87,7 @@ package enum NativeConnectionCoreFactory {
     /// messages do not extend this attachment barrier.
     @MainActor
     package static func awaitInitialTargetDiscovery(
-        receiver: TransportReceiver,
+        receiver: ConnectionReceiver,
         core: ConnectionCore
     ) async throws {
         await withCheckedContinuation { continuation in
@@ -103,13 +103,13 @@ package enum NativeConnectionCoreFactory {
 
 @MainActor
 package final class NativeAttachment {
-    private let receiver: TransportReceiver
+    private let receiver: ConnectionReceiver
     private let backend: any NativeAttachmentBackend
     private let page: NativeInspectablePage
     private var isClosed = false
 
     package init(
-        receiver: TransportReceiver,
+        receiver: ConnectionReceiver,
         backend: any NativeAttachmentBackend,
         page: NativeInspectablePage
     ) {
