@@ -159,9 +159,8 @@ to GitHub Pages.
 
 | Document | Purpose |
 | --- | --- |
-| [Model Architecture](Docs/WebInspectorModelArchitecture.md) | Container, context-local identity, generic query, and snapshot/delta contracts. |
+| [Architecture](Docs/Architecture.md) | Approved target architecture and one-pass cutover contract; public API examples remain current until that cutover lands. |
 | [Migration Guide](Docs/MIGRATION.md) | Version-by-version source migration notes for app code. |
-| [WebInspectorUI](Sources/WebInspectorUI/README.md) | UIKit inspector implementation notes and UI/DataKit ownership boundaries. |
 | [WebKit Version Mapping](Docs/WebKitVersionMapping.md) | Local notes for mapping iOS WebKit framework versions to public WebKit source refs. |
 
 ## Project Structure
