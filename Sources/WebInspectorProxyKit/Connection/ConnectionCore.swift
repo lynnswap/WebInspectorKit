@@ -275,9 +275,9 @@ package actor ConnectionCore {
             guard case .open = state else { return }
             try await handleRoot(parsed)
         } catch let error as ConnectionError {
-            await failPhysical(error)
+            _ = beginTerminal(.failure(error))
         } catch {
-            await failPhysical(.unreadableEnvelope)
+            _ = beginTerminal(.failure(.unreadableEnvelope))
         }
     }
 
@@ -722,47 +722,78 @@ package actor ConnectionCore {
         capabilities.set(entry, for: key)
         appendLease(.init(scopeID: scopeID, key: key))
 
-        switch entry.physical {
-        case .enabled, .retained:
-            acquired.insert(key)
-            return
-        case let .enabling(_, completion), let .disabling(_, completion):
-            try await completion.valueIgnoringCancellation()
-            acquired.insert(key)
-            return
-        case .inactive, .unknown:
-            break
-        }
-
-        guard let enable = descriptor.enable else {
-            entry.physical = .enabled
-            capabilities.set(entry, for: key)
-            acquired.insert(key)
-            return
-        }
-
-        let completion = ReplyPromise<Void>()
-        let operationID = capabilities.allocateOperationID()
-        entry.physical = .enabling(operationID: operationID, completion: completion)
-        capabilities.set(entry, for: key)
         do {
-            _ = try await send(enable, route: route(for: agentTargetID))
-            guard var current = capabilities.entries[key] else { return }
-            if case let .enabling(activeID, _) = current.physical, activeID == operationID {
-                current.physical = .enabled
-                capabilities.set(current, for: key)
-                completion.fulfill(.success(()))
-            }
-            try await completion.valueIgnoringCancellation()
+            try await ensureCapabilityActive(key)
             acquired.insert(key)
         } catch {
             if var current = capabilities.entries[key] {
-                current.physical = .unknown
                 current.owners.remove(scopeID)
                 capabilities.set(current, for: key)
             }
-            completion.fulfill(.failure(error))
             throw error
+        }
+    }
+
+    private func ensureCapabilityActive(_ key: ConnectionCapabilityKey) async throws {
+        while true {
+            guard var entry = capabilities.entries[key] else {
+                throw WebInspectorProxyError.pageUnavailable
+            }
+
+            switch entry.physical {
+            case .enabled:
+                return
+
+            case .retained:
+                switch entry.descriptor.reacquisition {
+                case .retainPhysicalState:
+                    return
+                case .enable:
+                    entry.physical = .inactive
+                    capabilities.set(entry, for: key)
+                    continue
+                }
+
+            case let .enabling(_, completion), let .disabling(_, completion):
+                try await completion.valueIgnoringCancellation()
+                continue
+
+            case .inactive, .unknown:
+                guard let enable = entry.descriptor.enable else {
+                    entry.physical = .enabled
+                    capabilities.set(entry, for: key)
+                    return
+                }
+
+                let completion = ReplyPromise<Void>()
+                let operationID = capabilities.allocateOperationID()
+                entry.physical = .enabling(operationID: operationID, completion: completion)
+                capabilities.set(entry, for: key)
+                do {
+                    _ = try await send(enable, route: route(for: key.agentTargetID))
+                    guard var current = capabilities.entries[key] else {
+                        throw WebInspectorProxyError.pageUnavailable
+                    }
+                    guard case let .enabling(activeID, _) = current.physical,
+                          activeID == operationID else {
+                        try await completion.valueIgnoringCancellation()
+                        continue
+                    }
+                    current.physical = .enabled
+                    capabilities.set(current, for: key)
+                    completion.fulfill(.success(()))
+                    return
+                } catch {
+                    if var current = capabilities.entries[key],
+                       case let .enabling(activeID, _) = current.physical,
+                       activeID == operationID {
+                        current.physical = .unknown
+                        capabilities.set(current, for: key)
+                    }
+                    completion.fulfill(.failure(error))
+                    throw error
+                }
+            }
         }
     }
 

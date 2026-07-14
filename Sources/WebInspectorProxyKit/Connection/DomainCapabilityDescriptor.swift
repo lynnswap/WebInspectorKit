@@ -21,7 +21,6 @@ package enum WebInspectorCapabilityAgentResolution: Hashable, Sendable {
 
 package enum WebInspectorCapabilityReacquisitionPolicy: Hashable, Sendable {
     case enable
-    case disableThenEnable
     case retainPhysicalState
 }
 

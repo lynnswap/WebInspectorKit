@@ -29,7 +29,7 @@ public enum WebInspectorProxyError: Error, Sendable, Equatable {
     /// A known protocol envelope or event payload was malformed.
     case protocolViolation(String)
 
-    /// A structured event subscriber could not retain another pending event.
+    /// An ordered event scope could not retain another pending event.
     case eventBufferOverflow(capacity: Int)
 
     /// A bounded event scope requires a positive capacity.

@@ -4,11 +4,11 @@ Drive ProxyKit's production connection path from a concrete raw WebKit peer.
 
 ## Overview
 
-`WebInspectorProxyKitTesting` replaces the native WebKit transport, not
-ProxyKit's semantics. ``WebInspectorProxyTestRuntime`` connects
+`WebInspectorProxyKitTesting` replaces the native WebKit transport, not the
+connection core. ``WebInspectorProxyTestRuntime`` connects
 ``WebInspectorTestPeer`` below the real connection core, so target discovery,
-routing, command and event JSON codecs, reply correlation, model feeds, and
-command authority all run exactly as they do for a native attachment.
+routing, command and event JSON codecs, reply correlation, reply boundaries,
+and capability leases all run exactly as they do for a native attachment.
 
 Start a runtime, perform work through the real proxy, then receive and complete
 the resulting raw command:

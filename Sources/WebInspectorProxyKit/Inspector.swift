@@ -22,18 +22,6 @@ package struct Inspector: Sendable, WebInspectorEventDomainHandle {
         try await endpoint.dispatch(InspectorWireCoding.initialized)
     }
 
-    package struct EnablePayload: Sendable {
-        package init() {}
-    }
-
-    package struct DisablePayload: Sendable {
-        package init() {}
-    }
-
-    package struct InitializedPayload: Sendable {
-        package init() {}
-    }
-
     package enum Event: Sendable {
         case inspect(Runtime.RemoteObject, hints: Runtime.JSONValue?)
         case unknown(RawEvent)

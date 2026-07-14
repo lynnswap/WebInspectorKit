@@ -37,14 +37,6 @@ public struct Page: Sendable, WebInspectorEventDomainHandle {
         try await endpoint.dispatch(PageWireCoding.resourceContent(frameID: frameID, url: url))
     }
 
-    package struct ReloadPayload: Sendable {
-        package let ignoringCache: Bool
-
-        package init(ignoringCache: Bool) {
-            self.ignoringCache = ignoringCache
-        }
-    }
-
     /// A page lifecycle event reported by WebKit.
     public enum Event: Sendable {
         case frameNavigated(Frame)

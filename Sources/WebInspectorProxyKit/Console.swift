@@ -36,20 +36,6 @@ public struct Console: Sendable, WebInspectorEventDomainHandle {
         try await endpoint.dispatch(ConsoleWireCoding.setLoggingChannelLevel(source, level))
     }
 
-    package struct ClearMessagesPayload: Sendable {
-        package init() {}
-    }
-
-    package struct SetLoggingChannelLevelPayload: Sendable {
-        package let source: ChannelSource
-        package let level: ChannelLevel
-
-        package init(source: ChannelSource, level: ChannelLevel) {
-            self.source = source
-            self.level = level
-        }
-    }
-
     /// A console message payload reported by WebKit.
     public struct Message: Sendable {
         /// The source that produced the message.

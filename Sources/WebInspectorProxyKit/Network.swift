@@ -40,20 +40,10 @@ public struct Network: Sendable, WebInspectorEventDomainHandle {
         ))
     }
 
-    package struct GetResponseBodyPayload: Sendable {
-        package let id: Request.ID
-        package let backendResourceIdentifier: BackendResourceID?
-
-        package init(id: Request.ID, backendResourceIdentifier: BackendResourceID? = nil) {
-            self.id = id
-            self.backendResourceIdentifier = backendResourceIdentifier
-        }
-    }
-
     /// A network request payload reported by WebKit.
     public struct Request: Identifiable, Sendable {
         /// Exact protocol membership carried by
-        /// `Network.requestWillBeSent` before canonical model routing.
+        /// `Network.requestWillBeSent` before any consumer-side reduction.
         package struct Origin: Equatable, Sendable {
             package let frameID: FrameID
             package let loaderID: String
@@ -103,8 +93,8 @@ public struct Network: Sendable, WebInspectorEventDomainHandle {
         /// The backend resource identity used for some body lookups.
         public let backendResourceIdentifier: BackendResourceID?
 
-        /// Request membership is package-owned because public command callers
-        /// do not synthesize protocol event authority.
+        /// Protocol-reported request membership, kept package-owned so public
+        /// command callers cannot manufacture event provenance.
         package let origin: Origin?
 
         /// Creates a network request payload.

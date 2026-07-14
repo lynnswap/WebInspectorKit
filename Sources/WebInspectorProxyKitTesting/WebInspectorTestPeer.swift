@@ -28,7 +28,7 @@ public enum WebInspectorTestPeerError: Error, Equatable, Sendable {
 ///
 /// The peer implements only the transport boundary. Commands and events still
 /// pass through ProxyKit's production connection core, registry, router, JSON
-/// codecs, model feed, and authority checks.
+/// codecs, reply boundaries, and capability leases.
 public actor WebInspectorTestPeer {
     /// One outbound Web Inspector protocol command.
     public struct Command: Equatable, Sendable {

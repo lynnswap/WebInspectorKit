@@ -172,6 +172,32 @@ func capabilityLeasesCoalesceEnableAndDisableAtLastRelease() async throws {
 }
 
 @Test
+func capabilityReacquiredDuringDisableIsEnabledBeforeScopeReturns() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    defer { Task { await runtime.close() } }
+
+    let firstTask = Task { try await openConsoleScope(on: runtime.page) }
+    try await replyNext(runtime.peer, method: "Console.enable")
+    let first = try await firstTask.value
+
+    let firstClose = Task { await first.close() }
+    let disable = try await runtime.peer.commands.next()
+    #expect(disable.method == "Console.disable")
+
+    let replacementTask = Task { try await openConsoleScope(on: runtime.page) }
+    try await runtime.peer.reply(to: disable)
+    let reenable = try await runtime.peer.commands.next()
+    #expect(reenable.method == "Console.enable")
+    try await runtime.peer.reply(to: reenable)
+
+    let replacement = try await replacementTask.value
+    await firstClose.value
+    let replacementClose = Task { await replacement.close() }
+    try await replyNext(runtime.peer, method: "Console.disable")
+    await replacementClose.value
+}
+
+@Test
 func descendantWorkerIsEnrolledAndEnabledAfterScopeRegistration() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     defer { Task { await runtime.close() } }

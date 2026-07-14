@@ -70,64 +70,6 @@ public struct Runtime: Sendable, WebInspectorEventDomainHandle {
         try await endpoint.dispatch(RuntimeWireCoding.releaseObjectGroup(group))
     }
 
-    package struct EvaluatePayload: Sendable {
-        package let expression: String
-        package let context: ExecutionContext.ID?
-        package let objectGroup: ObjectGroup?
-
-        package init(
-            expression: String,
-            context: ExecutionContext.ID?,
-            objectGroup: ObjectGroup?
-        ) {
-            self.expression = expression
-            self.context = context
-            self.objectGroup = objectGroup
-        }
-    }
-
-    package struct GetPropertiesPayload: Sendable {
-        package let object: RemoteObject.ID
-        package let ownProperties: Bool
-
-        package init(object: RemoteObject.ID, ownProperties: Bool) {
-            self.object = object
-            self.ownProperties = ownProperties
-        }
-    }
-
-    package struct GetPreviewPayload: Sendable {
-        package let object: RemoteObject.ID
-
-        package init(object: RemoteObject.ID) {
-            self.object = object
-        }
-    }
-
-    package struct GetCollectionEntriesPayload: Sendable {
-        package let object: RemoteObject.ID
-
-        package init(object: RemoteObject.ID) {
-            self.object = object
-        }
-    }
-
-    package struct ReleaseObjectPayload: Sendable {
-        package let id: RemoteObject.ID
-
-        package init(id: RemoteObject.ID) {
-            self.id = id
-        }
-    }
-
-    package struct ReleaseObjectGroupPayload: Sendable {
-        package let group: ObjectGroup
-
-        package init(group: ObjectGroup) {
-            self.group = group
-        }
-    }
-
     /// A JavaScript value or object handle owned by WebKit.
     public struct RemoteObject: Sendable {
         /// Stable identity for a remote object handle.
