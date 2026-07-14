@@ -1,7 +1,6 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
 import WebInspectorDataKit
-import WebInspectorProxyKit
 import ObservationBridge
 import UIKit
 
@@ -256,25 +255,24 @@ package final class DOMElementViewController: UICollectionViewController {
         switch node.elementStyles?.phase {
         case nil, .unavailable:
             operation = { [context] in
-                _ = try await context.cssStyles(for: node)
+                _ = try await context.container.dom.loadStyles(for: node.id)
             }
         case .failed where retryFailure:
             operation = { [context] in
-                _ = try await context.cssStyles(for: node)
+                _ = try await context.container.dom.loadStyles(for: node.id)
             }
         case .needsRefresh:
+            guard let stylesID = node.elementStyles?.id else {
+                return
+            }
             operation = { [context] in
-                try await context.refreshCSSStyles(for: node)
+                try await context.container.dom.refreshStyles(stylesID)
             }
         case .loading, .loaded, .failed:
             return
         }
 
-        precondition(
-            styleHydrationGeneration < UInt64.max,
-            "DOM style hydration generation overflowed."
-        )
-        styleHydrationGeneration += 1
+        styleHydrationGeneration &+= 1
         let generation = styleHydrationGeneration
         styleHydrationTask = Task { @MainActor [weak self] in
             do {
@@ -298,11 +296,7 @@ package final class DOMElementViewController: UICollectionViewController {
     private func cancelStyleHydration() {
         styleHydrationTask?.cancel()
         styleHydrationTask = nil
-        precondition(
-            styleHydrationGeneration < UInt64.max,
-            "DOM style hydration generation overflowed."
-        )
-        styleHydrationGeneration += 1
+        styleHydrationGeneration &+= 1
     }
 
     /// Observation callbacks only sample dependencies. Rendering is deferred
@@ -346,11 +340,7 @@ package final class DOMElementViewController: UICollectionViewController {
     private func cancelSelectedStylesRender() {
         selectedStylesRenderTask?.cancel()
         selectedStylesRenderTask = nil
-        precondition(
-            selectedStylesRenderGeneration < UInt64.max,
-            "DOM style render generation overflowed."
-        )
-        selectedStylesRenderGeneration += 1
+        selectedStylesRenderGeneration &+= 1
     }
 
     /// Renders the selected node's latest styles after the observation
@@ -365,16 +355,13 @@ package final class DOMElementViewController: UICollectionViewController {
 
     private func applySnapshotUpdate(_ update: DOMElementStyleSnapshotCoordinator.SnapshotUpdate) {
         applyPlaceholder(update.placeholderMode)
-        switch update.applyMode {
+        switch update.application {
         case .none:
             applyVisibleBindings(update)
 #if DEBUG
             finishStyleRenderForTesting()
 #endif
-        case let .diff(animated):
-            guard let snapshot = update.snapshot else {
-                preconditionFailure("A CSS structural diff requires a snapshot.")
-            }
+        case let .diff(snapshot, animated):
 #if DEBUG
             let applyMode = DOMElementStyleSnapshotCoordinator.ApplyMode.diff(animated: animated)
             lastSnapshotApplyModeForTesting = applyMode
@@ -485,8 +472,8 @@ package final class DOMElementViewController: UICollectionViewController {
                 return false
             }
             do {
-                _ = try await context.setCSSProperty(
-                    property,
+                _ = try await context.container.dom.setProperty(
+                    property.id,
                     enabled: enabled,
                     undo: .automatic
                 )

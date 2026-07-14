@@ -2,7 +2,6 @@
 import WebInspectorUIBase
 import Foundation
 import WebInspectorDataKit
-import WebInspectorProxyKit
 
 extension DOMTreeTextView {
     @MainActor
@@ -90,6 +89,7 @@ extension DOMTreeTextView {
         }
 
         func startBuild(
+            baseDocumentRevision: UInt64,
             previousRowCapacity: Int,
             previousTextCapacity: Int,
             isCurrentBuild: @escaping IsCurrentBuild,
@@ -98,6 +98,7 @@ extension DOMTreeTextView {
             didFinish: FinishBuild? = nil
         ) {
             let request = builder.makeBuildRequest(
+                baseDocumentRevision: baseDocumentRevision,
                 previousRowCapacity: previousRowCapacity,
                 previousTextCapacity: previousTextCapacity
             )
@@ -247,6 +248,7 @@ extension DOMTreeTextView {
         }
 
         func makeBuildRequest(
+            baseDocumentRevision: UInt64,
             previousRowCapacity: Int,
             previousTextCapacity: Int
         ) -> DOMTreeTextView.RowRenderBuildRequest {
@@ -254,6 +256,7 @@ extension DOMTreeTextView {
             return DOMTreeTextView.RowRenderBuildRequest(
                 snapshot: snapshotProvider(),
                 expansionState: expansionSnapshot,
+                baseDocumentRevision: baseDocumentRevision,
                 previousRowCapacity: previousRowCapacity,
                 previousTextCapacity: previousTextCapacity,
                 markupCache: markupCache
@@ -348,6 +351,7 @@ extension DOMTreeTextView {
     struct RowRenderBuildRequest: Sendable {
         let snapshot: DOMTreeRenderSnapshot
         let expansionState: [DOMNode.ID: Bool]
+        let baseDocumentRevision: UInt64
         let previousRowCapacity: Int
         let previousTextCapacity: Int
         let markupCache: [DOMTreeTextView.MarkupCacheKey: DOMTreeTextView.CachedMarkup]
@@ -355,12 +359,14 @@ extension DOMTreeTextView {
         init(
             snapshot: DOMTreeRenderSnapshot,
             expansionState: [DOMNode.ID: Bool],
+            baseDocumentRevision: UInt64,
             previousRowCapacity: Int,
             previousTextCapacity: Int,
             markupCache: [DOMTreeTextView.MarkupCacheKey: DOMTreeTextView.CachedMarkup]
         ) {
             self.snapshot = snapshot
             self.expansionState = expansionState
+            self.baseDocumentRevision = baseDocumentRevision
             self.previousRowCapacity = previousRowCapacity
             self.previousTextCapacity = previousTextCapacity
             self.markupCache = markupCache
@@ -686,31 +692,15 @@ extension DOMTreeTextView {
     }
 }
 
-private extension DOM.PseudoType {
+private extension DOMPseudoElementKind {
     var domTreeDisplayName: String {
-        switch self {
-        case .before:
-            return "before"
-        case .after:
-            return "after"
-        case let .other(value):
-            return value
-        }
+        rawValue
     }
 }
 
-private extension DOM.ShadowRootType {
+private extension DOMShadowRootKind {
     var domTreeDisplayName: String {
-        switch self {
-        case .open:
-            return "open"
-        case .closed:
-            return "closed"
-        case .userAgent:
-            return "user-agent"
-        case let .other(value):
-            return value
-        }
+        rawValue
     }
 }
 #endif

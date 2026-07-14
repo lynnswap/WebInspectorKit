@@ -106,8 +106,12 @@ package final class DOMElementStyleSnapshotCoordinator {
     }
 
     package struct SnapshotUpdate {
-        package var snapshot: Snapshot?
-        package var applyMode: ApplyMode
+        package enum Application {
+            case none
+            case diff(snapshot: Snapshot, animated: Bool)
+        }
+
+        package var application: Application
         package var placeholderMode: PlaceholderMode
         /// The selected CSS resource changed while its diffable identifiers
         /// remained equal. Visible cells must bind the replacement property
@@ -118,18 +122,58 @@ package final class DOMElementStyleSnapshotCoordinator {
         /// diffable snapshots do not reconfigure supplementary views.
         package var updatedSectionIDs: Set<CSSStyleSection.ID>
 
-        init(
-            snapshot: Snapshot?,
-            applyMode: ApplyMode,
+        private init(
+            application: Application,
             placeholderMode: PlaceholderMode,
             rebindVisiblePropertyRows: Bool = false,
             updatedSectionIDs: Set<CSSStyleSection.ID> = []
         ) {
-            self.snapshot = snapshot
-            self.applyMode = applyMode
+            self.application = application
             self.placeholderMode = placeholderMode
             self.rebindVisiblePropertyRows = rebindVisiblePropertyRows
             self.updatedSectionIDs = updatedSectionIDs
+        }
+
+        package static func none(
+            placeholderMode: PlaceholderMode,
+            rebindVisiblePropertyRows: Bool = false,
+            updatedSectionIDs: Set<CSSStyleSection.ID> = []
+        ) -> SnapshotUpdate {
+            SnapshotUpdate(
+                application: .none,
+                placeholderMode: placeholderMode,
+                rebindVisiblePropertyRows: rebindVisiblePropertyRows,
+                updatedSectionIDs: updatedSectionIDs
+            )
+        }
+
+        package static func diff(
+            snapshot: Snapshot,
+            animated: Bool,
+            placeholderMode: PlaceholderMode,
+            rebindVisiblePropertyRows: Bool = false,
+            updatedSectionIDs: Set<CSSStyleSection.ID> = []
+        ) -> SnapshotUpdate {
+            SnapshotUpdate(
+                application: .diff(snapshot: snapshot, animated: animated),
+                placeholderMode: placeholderMode,
+                rebindVisiblePropertyRows: rebindVisiblePropertyRows,
+                updatedSectionIDs: updatedSectionIDs
+            )
+        }
+
+        package var snapshot: Snapshot? {
+            guard case let .diff(snapshot, _) = application else { return nil }
+            return snapshot
+        }
+
+        package var applyMode: ApplyMode {
+            switch application {
+            case .none:
+                .none
+            case let .diff(_, animated):
+                .diff(animated: animated)
+            }
         }
     }
 
@@ -224,9 +268,9 @@ package final class DOMElementStyleSnapshotCoordinator {
             oldItemIDs: oldItemIDs,
             snapshot: snapshot
         ) else {
-            return SnapshotUpdate(snapshot: nil, applyMode: .none, placeholderMode: .none)
+            return .none(placeholderMode: .none)
         }
-        return SnapshotUpdate(snapshot: snapshot, applyMode: .diff(animated: true), placeholderMode: .none)
+        return .diff(snapshot: snapshot, animated: true, placeholderMode: .none)
     }
 
     package func section(for sectionID: CSSStyleSection.ID) -> CSSStyleSection? {
@@ -277,41 +321,37 @@ package final class DOMElementStyleSnapshotCoordinator {
 
         if replacesSelection {
             if hasStructuralChanges {
-                return SnapshotUpdate(
+                return .diff(
                     snapshot: snapshot,
-                    applyMode: .diff(animated: false),
+                    animated: false,
                     placeholderMode: .none,
                     rebindVisiblePropertyRows: true,
                     updatedSectionIDs: updatedSectionIDs
                 )
             }
-            return SnapshotUpdate(
-                snapshot: nil,
-                applyMode: .none,
+            return .none(
                 placeholderMode: .none,
                 rebindVisiblePropertyRows: true,
                 updatedSectionIDs: updatedSectionIDs
             )
         }
         if hasStructuralChanges {
-            return SnapshotUpdate(
+            return .diff(
                 snapshot: snapshot,
-                applyMode: .diff(animated: true),
+                animated: true,
                 placeholderMode: .none,
                 rebindVisiblePropertyRows: replacedPropertyIDs.isEmpty == false,
                 updatedSectionIDs: updatedSectionIDs
             )
         }
         if updatedSectionIDs.isEmpty == false || replacedPropertyIDs.isEmpty == false {
-            return SnapshotUpdate(
-                snapshot: nil,
-                applyMode: .none,
+            return .none(
                 placeholderMode: .none,
                 rebindVisiblePropertyRows: replacedPropertyIDs.isEmpty == false,
                 updatedSectionIDs: updatedSectionIDs
             )
         }
-        return SnapshotUpdate(snapshot: nil, applyMode: .none, placeholderMode: .none)
+        return .none(placeholderMode: .none)
     }
 
     /// Pending phases (`loading`/`needsRefresh`) keep the displayed row
@@ -323,7 +363,7 @@ package final class DOMElementStyleSnapshotCoordinator {
             return updateUnavailableSnapshot()
         }
         guard selectionEpoch?.hasRenderedLoadedSnapshot == true else {
-            return SnapshotUpdate(snapshot: nil, applyMode: .none, placeholderMode: .none)
+            return .none(placeholderMode: .none)
         }
 
         let prospectiveVisibleSections = DOMElementStyleDiffableSnapshotBuilder.visibleSections(
@@ -338,7 +378,7 @@ package final class DOMElementStyleSnapshotCoordinator {
             oldItemIDs: visibleItemIDs,
             snapshot: snapshot
         ) == false else {
-            return SnapshotUpdate(snapshot: nil, applyMode: .none, placeholderMode: .none)
+            return .none(placeholderMode: .none)
         }
 
         displayedSections = sections
@@ -354,9 +394,7 @@ package final class DOMElementStyleSnapshotCoordinator {
             old: oldRenderContent.propertyObjectIDs,
             new: newRenderContent.propertyObjectIDs
         )
-        return SnapshotUpdate(
-            snapshot: nil,
-            applyMode: .none,
+        return .none(
             placeholderMode: .none,
             rebindVisiblePropertyRows: replacedPropertyIDs.isEmpty == false,
             updatedSectionIDs: updatedSectionIDs
@@ -371,12 +409,19 @@ package final class DOMElementStyleSnapshotCoordinator {
         visibleSections = []
         visibleRenderContent = .empty
         let snapshot = diffableSnapshot()
-        let applyMode: ApplyMode = Self.hasStructuralChanges(
+        let hasStructuralChanges = Self.hasStructuralChanges(
             oldSectionIDs: oldSectionIDs,
             oldItemIDs: oldItemIDs,
             snapshot: snapshot
-        ) ? .diff(animated: false) : .none
-        return SnapshotUpdate(snapshot: snapshot, applyMode: applyMode, placeholderMode: .unavailable)
+        )
+        if hasStructuralChanges {
+            return .diff(
+                snapshot: snapshot,
+                animated: false,
+                placeholderMode: .unavailable
+            )
+        }
+        return .none(placeholderMode: .unavailable)
     }
 
     private func rebuildVisibleSections() {

@@ -39,6 +39,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     private let context: WebInspectorModelContext
     private let panelModel: DOMPanelModel
     private let treeRenderState: DOMTreeRenderState
+    private let treeRenderProjector = DOMTreeRenderProjector()
     private var currentTreeSnapshot: DOMTreeRenderSnapshot {
         treeRenderState.snapshot
     }
@@ -91,6 +92,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     private var pendingDOMTreeRenderInvalidationRequiresRoute = false
     private var domTreeRenderInvalidationTask: Task<Void, Never>?
     private var lastObservedTreeContent: DOMTreeTextView.ObservedContent?
+    private var rowDocumentRevision: UInt64 = 0
     private var lastRoutedSelectedNodeID: DOMNode.ID?
     private var isRenderingActive = false
     private var selectionReconciliationState = SelectionReconciliationState()
@@ -401,7 +403,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         if multiSelection.selectedCount > 1, multiSelection.contains(row.nodeID) {
             nodeIDs = multiSelectedNodeIDsInDisplayOrder()
         } else {
-            guard (try? context.requiredNode(for: row.nodeID)) != nil,
+            guard context.model(for: row.nodeID) != nil,
                   select(row.nodeID) else {
                 return
             }
@@ -590,78 +592,101 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func startObservingCanonicalDocument(model: DOMPanelModel) {
-        let updates = model.treeUpdates()
-        treeTransactionTask = Task { @MainActor [weak self, model] in
-            var iterator = updates.makeAsyncIterator()
-            defer {
-                iterator.cancel()
-            }
-            while let update = await iterator.next() {
-                guard let self else {
-                    return
-                }
-                switch update {
-                case let .initial(revision, snapshot):
-                    let invalidation = treeRenderState.replace(
-                        revision: revision,
-                        snapshot: snapshot,
-                        selectedNodeID: model.selectedNodeID,
-                        resetsLocalDocumentState: false
-                    )
-#if DEBUG
-                    recordObservedTreeRevisionForTesting(revision)
-#endif
-                    scheduleDOMInvalidation(
-                        invalidation,
-                        isInitial: lastRoutedTreeRevision == nil
-                    )
+        let updates = model.nodes.updates
+        let projector = treeRenderProjector
+        treeTransactionTask = Task { @MainActor [weak self, model, projector] in
+            for await update in updates {
+                guard let self else { return }
 
-                case let .changes(fromRevision, toRevision, changes):
-                    let invalidation: DOMTreeRenderInvalidation
-                    switch changes {
-                    case let .reset(snapshot):
-                        precondition(currentTreeSnapshot.revision == fromRevision)
-                        invalidation = treeRenderState.replace(
-                            revision: toRevision,
-                            snapshot: snapshot,
-                            selectedNodeID: model.selectedNodeID,
-                            startRevision: fromRevision,
-                            resetsLocalDocumentState: true
-                        )
-                    case let .delta(delta):
-                        invalidation = treeRenderState.apply(
-                            delta,
-                            fromRevision: fromRevision,
-                            toRevision: toRevision,
+                let projection: DOMTreeRenderProjection
+                switch update {
+                case let .initial(revision, _),
+                     let .reset(revision, _):
+                    guard let queryValues = model.nodes.fetchedQueryValues else {
+                        continue
+                    }
+                    do {
+                        projection = try await projector.replace(
+                            revision: revision.rawValue,
+                            queryValues: queryValues,
                             selectedNodeID: model.selectedNodeID
                         )
-                    }
-#if DEBUG
-                    recordObservedTreeRevisionForTesting(toRevision)
-#endif
-                    scheduleDOMInvalidation(invalidation, isInitial: false)
-
-                case let .resetRequired(_, token):
-                    let rebase: WebInspectorRevisionedSnapshotRebase<WebInspectorDOMTreeSnapshot>
-                    do {
-                        rebase = try model.rebaseTree(token)
                     } catch {
-                        preconditionFailure("Canonical DOM tree rebase failed: \(error)")
+                        WebInspectorUIDOMLog.error(
+                            "DOM render projection rejected replacement revision=\(revision.rawValue): "
+                                + String(describing: error)
+                        )
+                        continue
                     }
-                    let invalidation = treeRenderState.replace(
-                        revision: rebase.revision,
-                        snapshot: rebase.snapshot,
-                        selectedNodeID: model.selectedNodeID,
-                        resetsLocalDocumentState: rebase.disposition == .reset
-                    )
-#if DEBUG
-                    recordObservedTreeRevisionForTesting(rebase.revision)
-#endif
-                    scheduleDOMInvalidation(
-                        invalidation,
-                        isInitial: rebase.disposition == .initial
-                    )
+
+                case let .changes(
+                    fromRevision,
+                    toRevision,
+                    itemChanges,
+                    updatedItemIDs
+                ):
+                    var deletedNodeIDs: Set<DOMNode.ID> = []
+                    var upsertedNodeIDs = updatedItemIDs
+                    for change in itemChanges {
+                        switch change {
+                        case let .insert(itemID, _):
+                            upsertedNodeIDs.insert(itemID)
+                        case let .delete(itemID, _):
+                            deletedNodeIDs.insert(itemID)
+                        case .move:
+                            break
+                        }
+                    }
+                    upsertedNodeIDs.subtract(deletedNodeIDs)
+                    let queryValues = upsertedNodeIDs.compactMap {
+                        model.nodes.fetchedQueryValue(for: $0)
+                    }
+
+                    do {
+                        guard queryValues.count == upsertedNodeIDs.count else {
+                            throw DOMTreeRenderProjectionError.missingUpdatedQueryValue
+                        }
+                        projection = try await projector.apply(
+                            fromRevision: fromRevision.rawValue,
+                            toRevision: toRevision.rawValue,
+                            deletedNodeIDs: deletedNodeIDs,
+                            upsertedQueryValues: queryValues,
+                            selectedNodeID: model.selectedNodeID
+                        )
+                    } catch {
+                        guard let acceptedQueryValues = model.nodes.fetchedQueryValues else {
+                            continue
+                        }
+                        WebInspectorUIDOMLog.error(
+                            "DOM render projection rebuilt after rejected delta from=\(fromRevision.rawValue) "
+                                + "to=\(toRevision.rawValue): \(String(describing: error))"
+                        )
+                        do {
+                            projection = try await projector.replace(
+                                revision: toRevision.rawValue,
+                                queryValues: acceptedQueryValues,
+                                selectedNodeID: model.selectedNodeID
+                            )
+                        } catch {
+                            WebInspectorUIDOMLog.error(
+                                "DOM render projection rejected authoritative replacement revision=\(toRevision.rawValue): "
+                                    + String(describing: error)
+                            )
+                            continue
+                        }
+                    }
                 }
+
+                guard Task.isCancelled == false else { return }
+                treeRenderState.accept(projection.snapshot)
+                _ = treeRenderState.setSelectedNodeID(model.selectedNodeID)
+#if DEBUG
+                recordObservedTreeRevisionForTesting(projection.snapshot.revision)
+#endif
+                scheduleDOMInvalidation(
+                    projection.invalidation,
+                    isInitial: lastRoutedTreeRevision == nil
+                )
             }
         }
     }
@@ -944,6 +969,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             return
         }
         rowRenderBuildCoordinator.startBuild(
+            baseDocumentRevision: rowDocumentRevision,
             previousRowCapacity: rows.count,
             previousTextCapacity: documentText.count,
             isCurrentBuild: { [weak self] request, result in
@@ -951,6 +977,14 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
                     return false
                 }
                 guard isRenderingActive else {
+                    return false
+                }
+                guard rowDocumentRevision == request.baseDocumentRevision else {
+                    scheduleDOMInvalidation(
+                        .initial(snapshot: currentTreeSnapshot),
+                        isInitial: false,
+                        forceRoute: true
+                    )
                     return false
                 }
                 guard currentTreeSnapshot.revision == request.treeRevision else {
@@ -1053,7 +1087,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         let nextSelectedNodeID = currentTreeSnapshot.selectedNodeID
         let selectedNodeIDChanged = lastRoutedSelectedNodeID != nextSelectedNodeID
         lastRoutedSelectedNodeID = nextSelectedNodeID
-        let selectedNode = nextSelectedNodeID.flatMap { try? context.requiredNode(for: $0) }
+        let selectedNode = nextSelectedNodeID.flatMap { context.model(for: $0) }
         let observation = selectionRevealState.observe(
             selectedNodeID: selectedNode?.id,
             requestRevision: selectionRevision,
@@ -1225,7 +1259,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
 
     private func multiSelectedNodeIDsInDisplayOrder() -> [DOMNode.ID] {
         multiSelection.selectedNodeIDsInDisplayOrder(rowIndex: rowIndex).filter {
-            (try? context.requiredNode(for: $0)) != nil
+            context.model(for: $0) != nil
         }
     }
 
@@ -1537,7 +1571,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     private func uniqueNodeIDsInDisplayOrder(for rows: [DOMTreeRowRenderPlan]) -> [DOMNode.ID] {
         var seenNodeIDs: Set<DOMNode.ID> = []
         return rows.compactMap { row in
-            seenNodeIDs.insert(row.nodeID).inserted && (try? context.requiredNode(for: row.nodeID)) != nil ? row.nodeID : nil
+            seenNodeIDs.insert(row.nodeID).inserted && context.model(for: row.nodeID) != nil ? row.nodeID : nil
         }
     }
 
@@ -1602,6 +1636,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             with: attributedDocumentText(for: rows),
             rows: rows
         )
+        rowDocumentRevision &+= 1
         invalidateTextLayout()
     }
 
@@ -1620,6 +1655,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
                 with: attributedDocumentText(for: nextRows),
                 rows: nextRows
             )
+            rowDocumentRevision &+= 1
             return
         }
 
@@ -1631,6 +1667,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         )
         let replacement = attributedReplacementText(nextRows: nextRows, diff: diff)
         textDocument.replaceCharacters(in: edit.range, with: replacement, rows: nextRows)
+        rowDocumentRevision &+= 1
 #if DEBUG
         performanceCounters.incrementalRowDocumentEditCallCount += 1
 #endif

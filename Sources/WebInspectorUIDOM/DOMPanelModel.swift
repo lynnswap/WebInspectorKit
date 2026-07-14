@@ -10,43 +10,55 @@ package struct DOMPanelSelection: Equatable, Sendable {
 @MainActor
 @Observable
 package final class DOMPanelModel {
-    private enum Lifecycle {
-        case active
-        case retiring(Task<Void, Never>?, Task<Void, Never>?)
-        case retired
-    }
-
     package let context: WebInspectorModelContext
-    package let nodes: WebInspectorFetchedResultsController<DOMNode, Never>
+    package let nodes: WebInspectorFetchedResultsController<DOMNode>
     package private(set) var selection: DOMPanelSelection?
-    package private(set) var isPickingElement = false
+    package private(set) var elementPickerState: WebInspectorElementPickerState = .idle
     package private(set) var selectionRevision: UInt64 = 0
+
     @ObservationIgnored private var nodeUpdatesTask: Task<Void, Never>?
+    @ObservationIgnored private var pickerStateTask: Task<Void, Never>?
     @ObservationIgnored private var pickerTask: Task<Void, Never>?
-    @ObservationIgnored private var pickerGeneration: UInt64 = 0
-    @ObservationIgnored private var lifecycle: Lifecycle = .active
+    @ObservationIgnored private var retirementTask: Task<Void, Never>?
+    @ObservationIgnored private var isActive = true
 
     private init(
         context: WebInspectorModelContext,
-        nodes: WebInspectorFetchedResultsController<DOMNode, Never>
+        nodes: WebInspectorFetchedResultsController<DOMNode>
     ) {
         self.context = context
         self.nodes = nodes
         startObservingNodeMembership()
+        startObservingPickerState()
     }
 
     package static func make(
         context: WebInspectorModelContext
     ) async throws -> DOMPanelModel {
-        let nodes = try await WebInspectorFetchedResultsController<DOMNode, Never>(
-            modelContext: context,
-            isolation: MainActor.shared
+        let nodes = WebInspectorFetchedResultsController<DOMNode>(
+            modelContext: context
         )
+        do {
+            try await nodes.performFetch()
+        } catch {
+            await nodes.close()
+            throw error
+        }
         return DOMPanelModel(context: context, nodes: nodes)
     }
 
     isolated deinit {
         synchronouslyCancelForOwnerDeinit()
+        nodes.synchronouslyInvalidateRegistration()
+    }
+
+    package var isPickingElement: Bool {
+        switch elementPickerState {
+        case .idle, .unavailable:
+            false
+        case .enabling, .active, .resolvingSelection, .disabling:
+            true
+        }
     }
 
     package var selectedNodeID: DOMNode.ID? {
@@ -54,33 +66,17 @@ package final class DOMPanelModel {
     }
 
     package var selectedNode: DOMNode? {
-        guard let selection = liveSelection else {
-            return nil
-        }
-        return context.model(for: selection.nodeID)
-    }
-
-    package func treeUpdates() -> WebInspectorDOMTreeUpdateSequence {
-        requireActive()
-        return context.domTreeUpdates()
-    }
-
-    package func rebaseTree(
-        _ token: WebInspectorRevisionedSnapshotRebaseToken
-    ) throws -> WebInspectorRevisionedSnapshotRebase<WebInspectorDOMTreeSnapshot> {
-        requireActive()
-        return try context.rebaseDOMTree(token)
+        liveSelection.flatMap { context.model(for: $0.nodeID) }
     }
 
     package func selectNode(
         _ nodeID: DOMNode.ID?,
         reveal: DOMRevealPolicy
     ) {
-        requireActive()
+        guard isActive else { return }
         guard let nodeID,
-            nodes.snapshot.itemIDs.contains(nodeID),
-            context.model(for: nodeID) != nil
-        else {
+              nodeIDs.contains(nodeID),
+              context.model(for: nodeID) != nil else {
             publishSelection(nil, reveal: .none)
             return
         }
@@ -88,120 +84,112 @@ package final class DOMPanelModel {
     }
 
     package func toggleElementPicker() {
-        requireActive()
-        if let pickerTask {
-            pickerTask.cancel()
-            return
+        guard isActive else { return }
+        switch elementPickerState {
+        case .idle:
+            startElementPicker()
+        case .unavailable:
+            Task { [dom = context.container.dom] in
+                await dom.retryElementPicker()
+            }
+        case .enabling, .active, .resolvingSelection, .disabling:
+            cancelElementPicker()
         }
-        startElementPicker()
     }
 
     package func cancelElementPicker() {
+        guard isActive else { return }
         pickerTask?.cancel()
+        Task { [dom = context.container.dom] in
+            await dom.cancelElementPicker()
+        }
     }
 
     package func retire() async {
-        switch lifecycle {
-        case .active:
-            let nodeTask = nodeUpdatesTask
-            let pickerTask = pickerTask
-            nodeUpdatesTask = nil
-            self.pickerTask = nil
-            nodeTask?.cancel()
-            pickerTask?.cancel()
-            lifecycle = .retiring(nodeTask, pickerTask)
-            await nodeTask?.value
-            await pickerTask?.value
-            await nodes.close()
-            lifecycle = .retired
-        case let .retiring(nodeTask, pickerTask):
-            await nodeTask?.value
-            await pickerTask?.value
-            lifecycle = .retired
-        case .retired:
+        if let retirementTask {
+            await retirementTask.value
             return
         }
+        guard isActive else { return }
+        isActive = false
+        let nodeUpdatesTask = nodeUpdatesTask
+        let pickerStateTask = pickerStateTask
+        let pickerTask = pickerTask
+        self.nodeUpdatesTask = nil
+        self.pickerStateTask = nil
+        self.pickerTask = nil
+        nodeUpdatesTask?.cancel()
+        pickerStateTask?.cancel()
+        pickerTask?.cancel()
+        let nodes = nodes
+        let dom = context.container.dom
+        let task = Task { @MainActor in
+            await dom.cancelElementPicker()
+            await nodeUpdatesTask?.value
+            await pickerStateTask?.value
+            await pickerTask?.value
+            await nodes.close()
+        }
+        retirementTask = task
+        await task.value
+        retirementTask = nil
     }
 
     package func synchronouslyCancelForOwnerDeinit() {
+        isActive = false
         nodeUpdatesTask?.cancel()
+        pickerStateTask?.cancel()
         pickerTask?.cancel()
+        retirementTask?.cancel()
         nodeUpdatesTask = nil
+        pickerStateTask = nil
         pickerTask = nil
-        if case let .retiring(nodeTask, pickerTask) = lifecycle {
-            nodeTask?.cancel()
-            pickerTask?.cancel()
-        }
-        lifecycle = .retired
     }
 
     private func startObservingNodeMembership() {
-        let updates = nodes.updates()
+        let updates = nodes.updates
         nodeUpdatesTask = Task { @MainActor [weak self] in
-            do {
-                for try await _ in updates {
-                    self?.reconcileSelectionMembership()
-                }
-            } catch WebInspectorFetchedResultsControllerError.closed {
-                return
-            } catch is CancellationError {
-                return
-            } catch {
-                preconditionFailure("DOM node membership updates failed: \(error)")
+            for await _ in updates {
+                guard Task.isCancelled == false else { return }
+                self?.reconcileSelectionMembership()
+            }
+        }
+    }
+
+    private func startObservingPickerState() {
+        let states = context.container.dom.elementPickerStateUpdates
+        pickerStateTask = Task { @MainActor [weak self] in
+            for await state in states {
+                guard Task.isCancelled == false else { return }
+                self?.elementPickerState = state
             }
         }
     }
 
     private func startElementPicker() {
-        precondition(pickerTask == nil)
-        precondition(pickerGeneration < UInt64.max)
-        pickerGeneration += 1
-        let generation = pickerGeneration
-        isPickingElement = true
-        WebInspectorUIDOMLog.debug(
-            "DOM picker started generation=\(generation)"
-        )
-        let context = context
-        pickerTask = Task { @MainActor [weak self] in
-            let selectedID: DOMNode.ID?
+        guard pickerTask == nil else { return }
+        let dom = context.container.dom
+        pickerTask = Task { @MainActor [weak self, dom] in
+            defer { self?.pickerTask = nil }
             do {
-                selectedID = try await context.pickDOMNodeID()
+                let selectedID = try await dom.pickElement()
+                guard Task.isCancelled == false else { return }
+                self?.selectNode(selectedID, reveal: .selectAndScroll)
             } catch is CancellationError {
-                selectedID = nil
-            } catch WebInspectorElementPickerError.detached,
-                WebInspectorElementPickerError.closed
-            {
-                selectedID = nil
+                return
             } catch {
-                WebInspectorUIDOMLog.debug(
+                WebInspectorUIDOMLog.error(
                     "DOM picker failed: \(String(describing: error))"
                 )
-                selectedID = nil
-            }
-            guard let self,
-                isCurrentPickerGeneration(generation)
-            else {
-                return
-            }
-            pickerTask = nil
-            isPickingElement = false
-            WebInspectorUIDOMLog.debug(
-                "DOM picker finished generation=\(generation) selected=\(String(describing: selectedID))"
-            )
-            if let selectedID {
-                selectNode(selectedID, reveal: .selectAndScroll)
             }
         }
     }
 
     private func reconcileSelectionMembership() {
-        guard let selection,
-            nodes.snapshot.itemIDs.contains(selection.nodeID),
-            context.model(for: selection.nodeID) != nil
-        else {
-            if selection != nil {
-                publishSelection(nil, reveal: .none)
-            }
+        guard let selection else { return }
+        guard nodeIDs.contains(selection.nodeID),
+              context.model(for: selection.nodeID) != nil else {
+            publishSelection(nil, reveal: .none)
             return
         }
     }
@@ -211,12 +199,10 @@ package final class DOMPanelModel {
         reveal: DOMRevealPolicy
     ) {
         guard selection?.nodeID != nodeID
-                || (nodeID != nil && reveal != .none)
-        else {
+                || (nodeID != nil && reveal != .none) else {
             return
         }
-        precondition(selectionRevision < UInt64.max)
-        selectionRevision += 1
+        selectionRevision &+= 1
         selection = nodeID.map {
             DOMPanelSelection(
                 nodeID: $0,
@@ -228,33 +214,18 @@ package final class DOMPanelModel {
 
     private var liveSelection: DOMPanelSelection? {
         guard let selection,
-            nodes.snapshot.itemIDs.contains(selection.nodeID),
-            context.model(for: selection.nodeID) != nil
-        else {
+              nodeIDs.contains(selection.nodeID),
+              context.model(for: selection.nodeID) != nil else {
             return nil
         }
         return selection
     }
 
-    private func isCurrentPickerGeneration(_ generation: UInt64) -> Bool {
-        guard case .active = lifecycle else {
-            return false
-        }
-        return pickerGeneration == generation
-    }
-
-    private func requireActive() {
-        guard case .active = lifecycle else {
-            preconditionFailure("A retired DOMPanelModel cannot accept new work.")
-        }
+    private var nodeIDs: [DOMNode.ID] {
+        nodes.snapshot?.itemIDs ?? []
     }
 
     #if DEBUG
-        package var isRetiredForTesting: Bool {
-            if case .retired = lifecycle {
-                return true
-            }
-            return false
-        }
+    package var isRetiredForTesting: Bool { isActive == false }
     #endif
 }

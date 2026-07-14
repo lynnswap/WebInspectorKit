@@ -123,7 +123,7 @@ package final class DOMNavigationItems: NSObject {
                 return
             }
             renderPickItem(
-                isEnabled: containerState == .attached,
+                isEnabled: containerState.isAttached,
                 isSelectingElement: panelModel.isPickingElement
             )
         }
@@ -216,7 +216,7 @@ package final class DOMNavigationItems: NSObject {
         UIAction(
             title: String(localized: "reload", bundle: WebInspectorUILocalization.bundle),
             image: UIImage(systemName: "arrow.clockwise"),
-            attributes: context.container.state == .attached ? [] : [.disabled]
+            attributes: context.container.state.isAttached ? [] : [.disabled]
         ) { [weak self] _ in
             self?.performReloadCommand()
         }
@@ -228,7 +228,7 @@ package final class DOMNavigationItems: NSObject {
                 return
             }
             do {
-                try await context.reload()
+                try await context.container.page.reload()
             } catch {
                 WebInspectorUIDOMLog.debug("DOM reload failed: \(String(describing: error))")
             }
@@ -259,7 +259,7 @@ package final class DOMNavigationItems: NSObject {
             return
         }
         do {
-            let result = try await context.removeDOMNodes([selectedNode])
+            let result = try await context.container.dom.removeNodes([selectedNode.id])
             guard let undo = result.undo else {
                 return
             }
@@ -288,7 +288,7 @@ package final class DOMNavigationItems: NSObject {
 
     private func updatePickItemAppearance() {
         renderPickItem(
-            isEnabled: containerState == .attached,
+            isEnabled: containerState.isAttached,
             isSelectingElement: panelModel.isPickingElement
         )
     }
@@ -305,6 +305,15 @@ package final class DOMNavigationItems: NSObject {
 
     private var currentSelectedNode: DOMNode? {
         panelModel.selectedNode
+    }
+}
+
+private extension WebInspectorModelContainer.State {
+    var isAttached: Bool {
+        if case .attached = self {
+            return true
+        }
+        return false
     }
 }
 

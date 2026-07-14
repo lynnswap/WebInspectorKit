@@ -5,7 +5,7 @@ import Observation
 import SwiftUI
 import UIKit
 
-typealias DOMTreeMenuCopyNodeTextAction = @MainActor (DOMNode.ID, DOMNode.CopyTextKind) async -> String?
+typealias DOMTreeMenuCopyNodeTextAction = @MainActor (DOMNode.ID, DOMTextRepresentation) async -> String?
 typealias DOMTreeMenuDeleteNodesAction = @MainActor ([DOMNode.ID], UndoManager?) async -> Bool
 
 @MainActor
@@ -51,7 +51,7 @@ final class DOMTreeMenuModel {
     }
 
     var availableNodeIDs: [DOMNode.ID] {
-        nodeIDs.filter { (try? context.requiredNode(for: $0)) != nil }
+        nodeIDs.filter { context.model(for: $0) != nil }
     }
 
     var showsSelectedTextCopy: Bool {
@@ -121,7 +121,7 @@ final class DOMTreeMenuModel {
     private var singleNodeID: DOMNode.ID? {
         guard !isMultiNodeMenu,
               let nodeID = nodeIDs.first,
-              (try? context.requiredNode(for: nodeID)) != nil else {
+              context.model(for: nodeID) != nil else {
             return nil
         }
         return nodeID
@@ -135,7 +135,7 @@ final class DOMTreeMenuModel {
         copyHTMLNodeIDs
     }
 
-    private func copy(_ kind: DOMNode.CopyTextKind, for nodeID: DOMNode.ID) {
+    private func copy(_ kind: DOMTextRepresentation, for nodeID: DOMNode.ID) {
         Task { @MainActor in
             guard let text = await copyText(kind, for: nodeID),
                   !text.isEmpty else {
@@ -179,37 +179,29 @@ final class DOMTreeMenuModel {
         }
     }
 
-    func canCopyText(_ kind: DOMNode.CopyTextKind, for nodeID: DOMNode.ID) -> Bool {
-        guard (try? context.requiredNode(for: nodeID)) != nil else {
+    func canCopyText(_ kind: DOMTextRepresentation, for nodeID: DOMNode.ID) -> Bool {
+        guard context.model(for: nodeID) != nil else {
             return false
         }
         switch kind {
         case .html:
             return copyNodeTextAction != nil || !(localMarkupTextByNodeID[nodeID]?.isEmpty ?? true)
         case .selectorPath:
-            guard let path = try? context.selectorPath(for: nodeID) else {
-                return false
-            }
-            return !path.isEmpty
+            return copyNodeTextAction != nil
         case .xPath:
-            guard let path = try? context.xPath(for: nodeID) else {
-                return false
-            }
-            return !path.isEmpty
+            return copyNodeTextAction != nil
         }
     }
 
-    private func copyText(_ kind: DOMNode.CopyTextKind, for nodeID: DOMNode.ID) async -> String? {
+    private func copyText(_ kind: DOMTextRepresentation, for nodeID: DOMNode.ID) async -> String? {
         if let copyNodeTextAction {
             return await copyNodeTextAction(nodeID, kind)
         }
         switch kind {
         case .html:
             return localMarkupTextByNodeID[nodeID]
-        case .selectorPath:
-            return try? context.selectorPath(for: nodeID)
-        case .xPath:
-            return try? context.xPath(for: nodeID)
+        case .selectorPath, .xPath:
+            return nil
         }
     }
 
