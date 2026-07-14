@@ -2,9 +2,7 @@
 import UIKit
 import WebInspectorDataKit
 import WebInspectorDataKitTesting
-import WebInspectorProxyKit
 import WebInspectorUINetwork
-import WebInspectorUISyntaxBody
 
 @MainActor
 private enum NetworkPreviewFixtures {
@@ -46,7 +44,7 @@ private enum NetworkPreviewFixtures {
                  .detailRequestAndResponseShort,
                  .detailResponseOnlyLong,
                  .detailRequestAndResponseLong:
-                model.selectEntry(model.entries.snapshot.itemIDs.first)
+                model.selectEntry(model.entries.snapshot?.itemIDs.first)
             case .root, .rootLongTitle:
                 break
             }
@@ -366,7 +364,7 @@ private func networkSplitPreview(
 ) -> UIViewController {
     NetworkPreviewFixtures.makeViewController(mode: .detail) { model in
         if let selectedDisplayName,
-           let entryID = model.entries.snapshot.itemIDs.first(where: { entryID in
+           let entryID = model.entries.snapshot?.itemIDs.first(where: { entryID in
                guard let entry = model.context.model(for: entryID),
                      let request = model.context.model(for: entry.primaryRequestID) else {
                    return false

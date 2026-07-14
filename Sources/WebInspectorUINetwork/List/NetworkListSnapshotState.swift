@@ -8,26 +8,17 @@ extension NetworkListViewController {
             applyingGeneration != nil
         }
 
-        mutating func beginApplying() -> UInt64 {
-            precondition(
-                applyingGeneration == nil,
-                "Network list cannot start a second snapshot apply before completion."
-            )
-            precondition(
-                nextGeneration < .max,
-                "Network list snapshot apply generation overflowed."
-            )
-            nextGeneration += 1
+        mutating func beginApplying() -> UInt64? {
+            guard applyingGeneration == nil else { return nil }
+            nextGeneration &+= 1
             applyingGeneration = nextGeneration
             return nextGeneration
         }
 
-        mutating func finishApplying(generation: UInt64) {
-            precondition(
-                applyingGeneration == generation,
-                "Network list snapshot completion must match the active apply generation."
-            )
+        mutating func finishApplying(generation: UInt64) -> Bool {
+            guard applyingGeneration == generation else { return false }
             applyingGeneration = nil
+            return true
         }
     }
 }

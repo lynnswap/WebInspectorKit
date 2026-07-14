@@ -404,7 +404,8 @@ package final class NetworkDetailViewController: UIViewController {
 
     private func renderHeadersSurface(selectedRequests requests: [NetworkRequest]) {
         guard let representativeRequest = requests.first else {
-            preconditionFailure("A selected Network entry must contain at least one request.")
+            clearSelectedRequestPresentation(bodySurface: .none)
+            return
         }
         observedRequest = representativeRequest
         title = representativeRequest.displayName
@@ -687,7 +688,7 @@ package final class NetworkDetailViewController: UIViewController {
                     latestUnavailableMedia = candidate
                 }
             case .standard:
-                preconditionFailure("A classified media request cannot be a standard preview candidate.")
+                return candidate
             }
         }
         return latestBodyMedia

@@ -70,7 +70,10 @@ final class NetworkHeadersTextView: UIView {
         requests: [NetworkRequest],
         forceDocumentAssignment: Bool
     ) {
-        precondition(requests.isEmpty == false, "Network headers require at least one request.")
+        guard requests.isEmpty == false else {
+            clear()
+            return
+        }
         renderedRequests = requests
         let document = NetworkHeadersTextDocumentBuilder(requests: requests).makeDocument()
         let documentText = document.attributedString.string

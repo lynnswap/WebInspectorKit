@@ -34,7 +34,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         var needsReloadOnNextAppearance = true
         var pendingUpdate: PendingSnapshotUpdate?
         var projectedSnapshot: NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkEntry.ID>?
-        var projectedRevision: UInt64?
+        var projectedRevision: WebInspectorFetchedResultsRevision?
         var state = NetworkListViewController.SnapshotState()
 
         mutating func resumeRendering() {
@@ -58,7 +58,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private let model: NetworkPanelModel
-    private let fetchedResults: WebInspectorFetchedResultsController<NetworkEntry, Never>
+    private let fetchedResults: WebInspectorFetchedResultsController<NetworkEntry>
     private var entrySelectionAction: EntrySelectionAction
     private var fetchedResultsUpdateTask: Task<Void, Never>?
     private var searchTextObservation: PortableObservationTracking.Token?
@@ -81,7 +81,8 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private var fetchedResultsUpdateDeliveryWaitersForTesting: [FetchedResultsUpdateDeliveryWaiter] = []
     private var fetchedResultsUpdateDeliveryWaiterIDStorageForTesting = 0
     private var fetchedResultsUpdateDeliveryCountStorageForTesting = 0
-    private var lastFetchedResultsUpdateRevisionStorageForTesting: UInt64?
+    private var lastFetchedResultsUpdateRevisionStorageForTesting:
+        WebInspectorFetchedResultsRevision?
     private var entryIDsEvaluationCountStorageForTesting = 0
     private var snapshotApplyCountStorageForTesting = 0
     private var cellReconfigureCountStorageForTesting = 0
@@ -220,18 +221,11 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
     private func startObservingFetchedResultsUpdates() {
         fetchedResultsUpdateTask?.cancel()
-        let updates = fetchedResults.updates()
+        let updates = fetchedResults.updates
         fetchedResultsUpdateTask = Task { @MainActor [weak self] in
-            do {
-                for try await update in updates {
-                    self?.fetchedResultsDidPublish(update)
-                }
-            } catch WebInspectorFetchedResultsControllerError.closed {
-                return
-            } catch is CancellationError {
-                return
-            } catch {
-                preconditionFailure("Network entry updates failed: \(error)")
+            for await update in updates {
+                guard Task.isCancelled == false else { return }
+                self?.fetchedResultsDidPublish(update)
             }
         }
 
@@ -403,11 +397,6 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private func makeSnapshot(
         entryIDs: [NetworkEntry.ID]
     ) -> NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkEntry.ID> {
-        precondition(
-            entryIDs.count == Set(entryIDs).count,
-            "Duplicate row IDs detected in NetworkListViewController"
-        )
-
         var snapshot = NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkEntry.ID>()
         snapshot.appendSections([.main])
         snapshot.appendItems(entryIDs, toSection: .main)
@@ -420,7 +409,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
     private func requestSnapshotUpdate(
         entryIDs: [NetworkEntry.ID],
-        projectionRevision: UInt64,
+        projectionRevision: WebInspectorFetchedResultsRevision,
         reconfigureEntryIDs: Set<NetworkEntry.ID> = [],
         requiresFullReconfigure: Bool = false
     ) {
@@ -434,7 +423,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
     private func requestSnapshotUpdate(
         snapshot: NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkEntry.ID>,
-        projectionRevision: UInt64,
+        projectionRevision: WebInspectorFetchedResultsRevision,
         reconfigureEntryIDs: Set<NetworkEntry.ID>,
         requiresFullReconfigure: Bool
     ) {
@@ -453,7 +442,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
     private func enqueueSnapshotUpdate(
         snapshot: NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkEntry.ID>,
-        projectionRevision: UInt64,
+        projectionRevision: WebInspectorFetchedResultsRevision,
         reconfigureEntryIDs: Set<NetworkEntry.ID>,
         requiresFullReconfigure: Bool
     ) {
@@ -521,7 +510,10 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 #if DEBUG
         lastAppliedReconfigureEntryIDsStorageForTesting = Set(reconfigureEntryIDs)
 #endif
-        let generation = snapshotCoordinator.state.beginApplying()
+        guard let generation = snapshotCoordinator.state.beginApplying() else {
+            snapshotCoordinator.pendingUpdate = update
+            return
+        }
 
         let completion: () -> Void = { [weak self] in
             self?.snapshotUpdateDidFinish(generation: generation)
@@ -569,7 +561,10 @@ package final class NetworkListViewController: UICollectionViewController, UISea
             resumeSnapshotUpdateCompletionWaitersForTesting()
         }
 #endif
-        snapshotCoordinator.state.finishApplying(generation: generation)
+        guard snapshotCoordinator.state.finishApplying(generation: generation)
+        else {
+            return
+        }
         guard snapshotCoordinator.isRenderingActive else {
             return
         }
@@ -578,7 +573,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func fetchedResultsDidPublish(
-        _ update: WebInspectorFetchedResultsUpdate<NetworkEntry.ID, Never>
+        _ update: WebInspectorFetchedResultsUpdate<NetworkEntry.ID>
     ) {
         switch update {
         case let .initial(revision, snapshot),
@@ -605,7 +600,6 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         case let .changes(
             fromRevision,
             toRevision,
-            _,
             itemChanges,
             updatedItemIDs
         ):
@@ -620,13 +614,10 @@ package final class NetworkListViewController: UICollectionViewController, UISea
                 snapshotCoordinator.invalidateProjectionForHiddenUpdate()
                 return
             }
-            guard let projectedRevision = snapshotCoordinator.projectedRevision else {
-                preconditionFailure("Active Network rendering requires an installed projection revision.")
+            guard snapshotCoordinator.projectedRevision == fromRevision else {
+                reloadDataFromModel(reconfigureAllSurvivingEntries: true)
+                return
             }
-            precondition(
-                projectedRevision == fromRevision,
-                "A Network entry change must continue the installed UIKit projection."
-            )
             applyIncrementalChanges(
                 itemChanges,
                 updatedItemIDs: updatedItemIDs,
@@ -638,19 +629,18 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private func applyIncrementalChanges(
         _ changes: [WebInspectorFetchedResultsItemChange<NetworkEntry.ID>],
         updatedItemIDs: Set<NetworkEntry.ID>,
-        revision: UInt64
+        revision: WebInspectorFetchedResultsRevision
     ) {
         guard var snapshot = snapshotCoordinator.projectedSnapshot else {
-            preconditionFailure(
-                "A contiguous Network entry change requires an installed UIKit projection."
-            )
+            reloadDataFromModel(reconfigureAllSurvivingEntries: true)
+            return
         }
 
         let removedIDs = changes.compactMap { change -> NetworkEntry.ID? in
             switch change {
             case let .delete(itemID, _), let .move(itemID, _, _):
                 itemID
-            case .insert, .update:
+            case .insert:
                 nil
             }
         }
@@ -658,13 +648,9 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
         let placements = changes.compactMap { change -> (NetworkEntry.ID, Int)? in
             switch change {
-            case let .insert(itemID, indexPath), let .move(itemID, _, indexPath):
-                precondition(
-                    indexPath.section == 0,
-                    "An unsectioned Network entry query published a nonzero section."
-                )
-                return (itemID, indexPath.item)
-            case .delete, .update:
+            case let .insert(itemID, index), let .move(itemID, _, index):
+                return (itemID, index)
+            case .delete:
                 return nil
             }
         }
@@ -673,10 +659,11 @@ package final class NetworkListViewController: UICollectionViewController, UISea
                 let successor = snapshot.itemIdentifiers(inSection: .main)[targetIndex]
                 snapshot.insertItems([entryID], beforeItem: successor)
             } else {
-                precondition(
-                    targetIndex == snapshot.numberOfItems(inSection: .main),
-                    "A Network entry insertion exceeded the projected item count."
-                )
+                guard targetIndex == snapshot.numberOfItems(inSection: .main)
+                else {
+                    reloadDataFromModel(reconfigureAllSurvivingEntries: true)
+                    return
+                }
                 snapshot.appendItems([entryID], toSection: .main)
             }
         }
@@ -695,7 +682,10 @@ package final class NetworkListViewController: UICollectionViewController, UISea
             snapshotCoordinator.invalidateProjectionForHiddenUpdate()
             return
         }
-        let revision = fetchedResults.revision
+        guard let revision = fetchedResults.revision else {
+            renderEmptyState(isEmpty: true)
+            return
+        }
         let entryIDs = entryIDsFromModel()
         requestSnapshotUpdate(
             entryIDs: entryIDs,
@@ -717,7 +707,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 #if DEBUG
         entryIDsEvaluationCountStorageForTesting += 1
 #endif
-        return fetchedResults.snapshot.itemIDs
+        return fetchedResults.snapshot?.itemIDs ?? []
     }
 
     private func renderSelectedEntryID(_ selectedEntryID: NetworkEntry.ID?) {
@@ -866,7 +856,7 @@ extension NetworkListViewController {
 
     package func finishSnapshotApplyForTesting() {
         guard let generation = snapshotCoordinator.state.applyingGeneration else {
-            preconditionFailure("Expected a Network list snapshot apply generation.")
+            return
         }
         snapshotUpdateDidFinish(generation: generation)
     }
@@ -922,6 +912,7 @@ extension NetworkListViewController {
         _ revision: UInt64,
         timeout: Duration = .seconds(1)
     ) async -> Bool {
+        let revision = WebInspectorFetchedResultsRevision(rawValue: revision)
         while lastFetchedResultsUpdateRevisionStorageForTesting.map({ $0 >= revision }) != true {
             let baselineCount = fetchedResultsUpdateDeliveryCountStorageForTesting
             guard await waitForFetchedResultsUpdateDeliveryForTesting(
@@ -955,7 +946,9 @@ extension NetworkListViewController {
         }
     }
 
-    private func recordFetchedResultsUpdateDeliveryForTesting(revision: UInt64) {
+    private func recordFetchedResultsUpdateDeliveryForTesting(
+        revision: WebInspectorFetchedResultsRevision
+    ) {
         lastFetchedResultsUpdateRevisionStorageForTesting = revision
         fetchedResultsUpdateDeliveryCountStorageForTesting &+= 1
         resolveFetchedResultsUpdateDeliveryWaitersForTesting(result: true)

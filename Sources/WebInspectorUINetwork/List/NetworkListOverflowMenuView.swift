@@ -12,7 +12,6 @@ package struct NetworkListOverflowMenuView: View {
         } label: {
             Label(String(localized: "network.controls.clear", bundle: WebInspectorUILocalization.bundle), systemImage: "trash")
         }
-        .disabled(model.hasClearableRequests == false)
     }
 }
 #endif
