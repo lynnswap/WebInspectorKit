@@ -509,13 +509,19 @@ package actor ConnectionCore {
             do { payload = try WebInspectorWireJSON.decode(TargetCreatedParameters.self, from: parameters) }
             catch { throw ConnectionError.malformedTargetControlPlane(method.rawValue) }
             let info = payload.targetInfo
+            let isProvisional = info.isProvisional ?? false
             let record = ProtocolTarget.Record(
                 id: info.targetID,
-                kind: ProtocolTarget.Kind(protocolType: info.type),
+                kind: targets.targetKind(
+                    protocolType: info.type,
+                    frameID: info.frameID,
+                    parentFrameID: info.parentFrameID,
+                    isProvisional: isProvisional
+                ),
                 frameID: info.frameID,
                 parentFrameID: info.parentFrameID,
                 advertisedDomains: info.domains.map { Set($0.map(WebInspectorProtocolDomainToken.init(rawValue:))) },
-                isProvisional: info.isProvisional ?? false,
+                isProvisional: isProvisional,
                 isPaused: info.isPaused ?? false
             )
             let bindingChanged = targets.insert(record)
@@ -537,10 +543,12 @@ package actor ConnectionCore {
             let payload: TargetCommittedParameters
             do { payload = try WebInspectorWireJSON.decode(TargetCommittedParameters.self, from: parameters) }
             catch { throw ConnectionError.malformedTargetControlPlane(method.rawValue) }
-            let bindingChanged = targets.commit(old: payload.oldTargetID, new: payload.newTargetID)
-            failPendingReplies(for: payload.oldTargetID)
-            _ = capabilities.targetDisappeared(payload.oldTargetID)
-            if bindingChanged { advanceGeneration() }
+            let mutation = targets.commit(old: payload.oldTargetID, new: payload.newTargetID)
+            if let retiredTargetID = mutation.retiredTargetID {
+                failPendingReplies(for: retiredTargetID)
+                _ = capabilities.targetDisappeared(retiredTargetID)
+            }
+            if mutation.bindingChanged { advanceGeneration() }
             resumeCurrentPageWaitersIfPossible()
             reconcileScopesAfterTargetMutation()
 

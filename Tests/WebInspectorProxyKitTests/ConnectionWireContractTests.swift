@@ -238,6 +238,68 @@ func descendantWorkerIsEnrolledAndEnabledAfterScopeRegistration() async throws {
 }
 
 @Test
+func currentPageScopeIncludesWebPageTypedFrameDescendants() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    defer { Task { await runtime.close() } }
+    try await runtime.peer.createTarget(.init(
+        id: "frame-one",
+        type: "web-page",
+        frameID: "child-frame",
+        parentFrameID: "main-frame"
+    ))
+
+    let scope = try await runtime.page.orderedScope(
+        descriptor: WebInspectorOrderedScopeDescriptor(
+            decoders: [DOMWireCoding.eventDecoder.routed()],
+            capabilities: [DOMWireCoding.capability]
+        ),
+        buffering: .bounded(4)
+    )
+    var iterator = scope.events.makeAsyncIterator()
+    _ = try await iterator.next()
+    try await runtime.peer.emitTargetEvent(
+        targetID: "frame-one",
+        method: "DOM.documentUpdated"
+    )
+    guard case let .event(_, event) = try await iterator.next() else {
+        Issue.record("Expected the descendant frame event.")
+        return
+    }
+    #expect(event.semanticTarget?.id == .currentPage)
+    #expect(event.agentTarget?.id.rawValue == "frame-one")
+    #expect(event.agentTarget?.kind == .frame)
+    await scope.close()
+}
+
+@Test
+func subframeCommitCannotConsumeTheCurrentPageBinding() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    defer { Task { await runtime.close() } }
+    try await runtime.peer.createTarget(.init(
+        id: "frame-provisional",
+        type: "page",
+        frameID: "child-frame",
+        parentFrameID: "main-frame",
+        isProvisional: true
+    ))
+    try await runtime.peer.commitProvisionalTarget(
+        from: "page-main",
+        to: "frame-provisional"
+    )
+
+    #expect(try await runtime.page.generation.rawValue == 1)
+    let documentTask = Task { try await runtime.page.dom.getDocument() }
+    let command = try await runtime.peer.commands.next()
+    #expect(command.destination == .target("page-main"))
+    #expect(command.method == "DOM.getDocument")
+    try await runtime.peer.reply(
+        to: command,
+        with: try WebInspectorTestJSONObject(json: domDocumentResult)
+    )
+    #expect(try await documentTask.value.id.unscopedRawValue == "1")
+}
+
+@Test
 func malformedTargetControlPlaneTerminatesThePhysicalConnection() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     do {

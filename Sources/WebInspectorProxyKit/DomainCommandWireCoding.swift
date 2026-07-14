@@ -177,6 +177,7 @@ package enum NetworkWireCoding {
 
     package static let capability = WebInspectorDomainCapabilityDescriptor(
         domain: eventDomain,
+        agentResolution: .currentPage,
         enable: DomainCommandJSON.emptyVoid("Network", "enable"),
         release: .retainEnabled,
         reacquisition: .retainPhysicalState,
@@ -407,6 +408,7 @@ package enum PageWireCoding {
 
     package static let capability = WebInspectorDomainCapabilityDescriptor(
         domain: eventDomain,
+        agentResolution: .currentPage,
         enable: DomainCommandJSON.emptyVoid("Page", "enable"),
         release: .disable(DomainCommandJSON.emptyVoid("Page", "disable")),
         mutationOwner: .init(rawValue: "Page")

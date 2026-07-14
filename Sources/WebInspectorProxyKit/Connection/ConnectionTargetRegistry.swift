@@ -1,6 +1,11 @@
 import Foundation
 
 package struct ConnectionTargetRegistry: Sendable {
+    package struct CommitMutation: Sendable {
+        package let bindingChanged: Bool
+        package let retiredTargetID: ProtocolTarget.ID?
+    }
+
     package private(set) var records: [ProtocolTarget.ID: ProtocolTarget.Record] = [:]
     package private(set) var targetByFrame: [ProtocolFrame.ID: ProtocolTarget.ID] = [:]
     package private(set) var currentPageID: ProtocolTarget.ID?
@@ -13,6 +18,29 @@ package struct ConnectionTargetRegistry: Sendable {
 
     package func record(for id: ProtocolTarget.ID) -> ProtocolTarget.Record? {
         records[id]
+    }
+
+    package func targetKind(
+        protocolType: String,
+        frameID: ProtocolFrame.ID?,
+        parentFrameID: ProtocolFrame.ID?,
+        isProvisional: Bool
+    ) -> ProtocolTarget.Kind {
+        let protocolKind = ProtocolTarget.Kind(protocolType: protocolType)
+        guard protocolKind == .page else { return protocolKind }
+        if parentFrameID != nil { return .frame }
+        if let frameID,
+           let existingTargetID = targetByFrame[frameID],
+           existingTargetID != currentPageID {
+            return .frame
+        }
+        if isProvisional { return .page }
+        if let currentFrameID = currentPage?.frameID,
+           let frameID,
+           frameID != currentFrameID {
+            return .frame
+        }
+        return .page
     }
 
     @discardableResult
@@ -43,11 +71,23 @@ package struct ConnectionTargetRegistry: Sendable {
     package mutating func commit(
         old oldID: ProtocolTarget.ID,
         new newID: ProtocolTarget.ID
-    ) -> Bool {
+    ) -> CommitMutation {
+        if currentPageID == oldID,
+           var committedFrame = records[newID],
+           !committedFrame.isTopLevelPage {
+            committedFrame.isProvisional = false
+            records[newID] = committedFrame
+            if let frameID = committedFrame.frameID {
+                targetByFrame[frameID] = newID
+            }
+            return CommitMutation(bindingChanged: false, retiredTargetID: nil)
+        }
+
+        let previousCurrentPageID = currentPageID
         let replacingCurrentPage = currentPageID == oldID
         let oldRecord = records.removeValue(forKey: oldID)
         guard var newRecord = records[newID] ?? oldRecord else {
-            return false
+            return CommitMutation(bindingChanged: false, retiredTargetID: nil)
         }
 
         newRecord.id = newID
@@ -64,7 +104,10 @@ package struct ConnectionTargetRegistry: Sendable {
         } else if currentPageID == nil, newRecord.isTopLevelPage {
             currentPageID = newID
         }
-        return replacingCurrentPage
+        return CommitMutation(
+            bindingChanged: previousCurrentPageID != currentPageID,
+            retiredTargetID: oldID
+        )
     }
 
     package func resolve(_ route: WebInspectorRoute) -> ProtocolTarget.ID? {

@@ -120,7 +120,10 @@ package struct WebInspectorTargetSelectionPolicy: Hashable, Sendable {
         self.descendantKinds = descendantKinds
     }
 
-    package static let currentPage = Self(anchor: .currentPage)
+    package static let currentPage = Self(
+        anchor: .currentPage,
+        descendantKinds: [.frame]
+    )
 
     package static func target(_ id: WebInspectorTarget.ID) -> Self {
         Self(anchor: .target(id))
