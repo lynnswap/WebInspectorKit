@@ -13,12 +13,17 @@ private final class _WebInspectorFeatureSlot: @unchecked Sendable {
 /// Concrete DOM/Network/Console facades delegate here instead of introducing
 /// a central switch over feature implementations.
 package final class WebInspectorFeatureRegistry: @unchecked Sendable {
-    private let slots = Mutex<[WebInspectorFeatureID: _WebInspectorFeatureSlot]>([:])
+    private struct Storage {
+        var slots: [WebInspectorFeatureID: _WebInspectorFeatureSlot] = [:]
+        var isFinished = false
+    }
+
+    private let storage = Mutex(Storage())
 
     package init(enabledFeatures: Set<WebInspectorFeatureID>) {
-        slots.withLock { slots in
+        storage.withLock { storage in
             for featureID in enabledFeatures {
-                slots[featureID] = _WebInspectorFeatureSlot()
+                storage.slots[featureID] = _WebInspectorFeatureSlot()
             }
         }
     }
@@ -27,10 +32,11 @@ package final class WebInspectorFeatureRegistry: @unchecked Sendable {
         _ featureID: WebInspectorFeatureID,
         retry: @escaping @Sendable () async -> Void
     ) {
-        slots.withLock { slots in
-            let slot = slots[featureID] ?? _WebInspectorFeatureSlot()
+        storage.withLock { storage in
+            guard !storage.isFinished else { return }
+            let slot = storage.slots[featureID] ?? _WebInspectorFeatureSlot()
             slot.retry = retry
-            slots[featureID] = slot
+            storage.slots[featureID] = slot
         }
     }
 
@@ -54,13 +60,21 @@ package final class WebInspectorFeatureRegistry: @unchecked Sendable {
     }
 
     package func retry(_ featureID: WebInspectorFeatureID) async {
-        let retry = slots.withLock { $0[featureID]?.retry }
+        let retry = storage.withLock {
+            storage -> (@Sendable () async -> Void)? in
+            guard !storage.isFinished else { return nil }
+            return storage.slots[featureID]?.retry
+        }
         await retry?()
     }
 
     package func finish() {
-        let publishers = slots.withLock {
-            $0.values.map(\.state)
+        let publishers = storage.withLock { storage in
+            guard !storage.isFinished else {
+                return [_WebInspectorStatePublisher<WebInspectorFeatureState>]()
+            }
+            storage.isFinished = true
+            return storage.slots.values.map(\.state)
         }
         for publisher in publishers { publisher.finish() }
     }
@@ -68,11 +82,16 @@ package final class WebInspectorFeatureRegistry: @unchecked Sendable {
     private func slot(
         for featureID: WebInspectorFeatureID
     ) -> _WebInspectorFeatureSlot {
-        slots.withLock { slots in
-            if let slot = slots[featureID] { return slot }
+        let result = storage.withLock {
+            storage -> (slot: _WebInspectorFeatureSlot, finish: Bool) in
+            if let slot = storage.slots[featureID] {
+                return (slot, false)
+            }
             let slot = _WebInspectorFeatureSlot()
-            slots[featureID] = slot
-            return slot
+            storage.slots[featureID] = slot
+            return (slot, storage.isFinished)
         }
+        if result.finish { result.slot.state.finish() }
+        return result.slot
     }
 }

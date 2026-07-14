@@ -172,22 +172,11 @@ package enum _WebInspectorTypedModelMutationOperation<
     }
 }
 
-package class _WebInspectorAnyModelSchema: @unchecked Sendable {
-    package var modelTypeID: ObjectIdentifier {
-        fatalError("abstract schema")
-    }
-
-    package var schemaIdentity: ObjectIdentifier {
-        fatalError("abstract schema")
-    }
-
-    package var featureID: WebInspectorFeatureID {
-        fatalError("abstract schema")
-    }
-
-    package func makeEmptyStoreTable() -> _WebInspectorAnyModelStoreTable {
-        fatalError("abstract schema")
-    }
+package protocol _WebInspectorAnyModelSchema: Sendable {
+    var modelTypeID: ObjectIdentifier { get }
+    var schemaIdentity: ObjectIdentifier { get }
+    var featureID: WebInspectorFeatureID { get }
+    func makeEmptyStoreTable() -> any _WebInspectorAnyModelStoreTable
 }
 
 package final class _WebInspectorTypedModelSchema<
@@ -202,55 +191,45 @@ package final class _WebInspectorTypedModelSchema<
         self.definition = definition
     }
 
-    package override var modelTypeID: ObjectIdentifier {
+    package var modelTypeID: ObjectIdentifier {
         ObjectIdentifier(Model.self)
     }
 
-    package override var schemaIdentity: ObjectIdentifier {
+    package var schemaIdentity: ObjectIdentifier {
         ObjectIdentifier(definition.identity)
     }
 
-    package override var featureID: WebInspectorFeatureID {
+    package var featureID: WebInspectorFeatureID {
         definition.featureID
     }
 
-    package override func makeEmptyStoreTable()
-        -> _WebInspectorAnyModelStoreTable
+    package func makeEmptyStoreTable()
+        -> any _WebInspectorAnyModelStoreTable
     {
         _WebInspectorModelStoreTable(
             definition: definition,
-            records: [:]
+            records: [:],
+            canonicalRankOwners: [:]
         )
     }
 }
 
 /// A model schema erased only at the heterogeneous container boundary.
 package struct WebInspectorAnyModelSchema: Sendable {
-    package let box: _WebInspectorAnyModelSchema
+    package let box: any _WebInspectorAnyModelSchema
 
-    package init(box: _WebInspectorAnyModelSchema) {
+    package init(box: any _WebInspectorAnyModelSchema) {
         self.box = box
     }
 }
 
-package class _WebInspectorAnyModelMutation: @unchecked Sendable {
-    package var modelTypeID: ObjectIdentifier {
-        fatalError("abstract mutation")
-    }
-
-    package var schemaIdentity: ObjectIdentifier {
-        fatalError("abstract mutation")
-    }
-
-    package var featureID: WebInspectorFeatureID {
-        fatalError("abstract mutation")
-    }
-
-    package func makeBatch(
-        from mutations: [_WebInspectorAnyModelMutation]
-    ) throws -> _WebInspectorAnyModelMutationBatch {
-        fatalError("abstract mutation")
-    }
+package protocol _WebInspectorAnyModelMutation: Sendable {
+    var modelTypeID: ObjectIdentifier { get }
+    var schemaIdentity: ObjectIdentifier { get }
+    var featureID: WebInspectorFeatureID { get }
+    func makeBatch(
+        from mutations: [any _WebInspectorAnyModelMutation]
+    ) throws -> any _WebInspectorAnyModelMutationBatch
 }
 
 package final class _WebInspectorTypedModelMutation<
@@ -268,21 +247,21 @@ package final class _WebInspectorTypedModelMutation<
         self.operation = operation
     }
 
-    package override var modelTypeID: ObjectIdentifier {
+    package var modelTypeID: ObjectIdentifier {
         ObjectIdentifier(Model.self)
     }
 
-    package override var schemaIdentity: ObjectIdentifier {
+    package var schemaIdentity: ObjectIdentifier {
         ObjectIdentifier(definition.identity)
     }
 
-    package override var featureID: WebInspectorFeatureID {
+    package var featureID: WebInspectorFeatureID {
         definition.featureID
     }
 
-    package override func makeBatch(
-        from mutations: [_WebInspectorAnyModelMutation]
-    ) throws -> _WebInspectorAnyModelMutationBatch {
+    package func makeBatch(
+        from mutations: [any _WebInspectorAnyModelMutation]
+    ) throws -> any _WebInspectorAnyModelMutationBatch {
         var operations: [_WebInspectorTypedModelMutationOperation<Model, Record>] = []
         operations.reserveCapacity(mutations.count)
         for mutation in mutations {
@@ -311,16 +290,16 @@ package final class _WebInspectorTypedModelMutation<
 package struct WebInspectorModelMutation<
     Model: WebInspectorPersistentModel
 >: Sendable {
-    package let box: _WebInspectorAnyModelMutation
+    package let box: any _WebInspectorAnyModelMutation
 
-    package init(box: _WebInspectorAnyModelMutation) {
+    package init(box: any _WebInspectorAnyModelMutation) {
         self.box = box
     }
 }
 
 /// One atomic feature commit containing a single ordered mutation collection.
 package struct WebInspectorModelTransaction: Sendable {
-    package private(set) var mutations: [_WebInspectorAnyModelMutation]
+    package private(set) var mutations: [any _WebInspectorAnyModelMutation]
     package private(set) var featureStates: [WebInspectorFeatureID: WebInspectorFeatureState]
 
     package init() {
@@ -352,10 +331,10 @@ package struct WebInspectorModelTransaction: Sendable {
     }
 
     package func makeBatches() throws
-        -> [_WebInspectorAnyModelMutationBatch]
+        -> [any _WebInspectorAnyModelMutationBatch]
     {
         var order: [ObjectIdentifier] = []
-        var grouped: [ObjectIdentifier: [_WebInspectorAnyModelMutation]] = [:]
+        var grouped: [ObjectIdentifier: [any _WebInspectorAnyModelMutation]] = [:]
         for mutation in mutations {
             if grouped[mutation.modelTypeID] == nil {
                 order.append(mutation.modelTypeID)

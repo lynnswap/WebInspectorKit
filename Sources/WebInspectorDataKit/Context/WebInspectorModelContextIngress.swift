@@ -14,13 +14,13 @@ package enum WebInspectorModelContextCloseReason: Sendable {
     }
 }
 
-package class _WebInspectorModelContextOperation: @unchecked Sendable {
-    package func process(
-        on lifecycle: WebInspectorModelContextLifecycle
-    ) async {
-        fatalError("abstract context operation")
-    }
+package protocol _WebInspectorModelContextOperation: Sendable {
+    func process(on lifecycle: WebInspectorModelContextLifecycle) async
+    var isSourceOperation: Bool { get }
+    var isRebaseOperation: Bool { get }
+}
 
+extension _WebInspectorModelContextOperation {
     package var isSourceOperation: Bool { false }
     package var isRebaseOperation: Bool { false }
 }
@@ -35,13 +35,13 @@ private final class _WebInspectorContextInitialOperation:
         self.rebase = rebase
     }
 
-    override var isSourceOperation: Bool { true }
-    override var isRebaseOperation: Bool { true }
+    var isSourceOperation: Bool { true }
+    var isRebaseOperation: Bool { true }
 
-    override func process(
+    func process(
         on lifecycle: WebInspectorModelContextLifecycle
     ) async {
-        await lifecycle.process(rebase: rebase, isInitial: true)
+        await lifecycle.process(rebase: rebase)
     }
 }
 
@@ -55,9 +55,9 @@ private final class _WebInspectorContextCommitOperation:
         self.commit = commit
     }
 
-    override var isSourceOperation: Bool { true }
+    var isSourceOperation: Bool { true }
 
-    override func process(
+    func process(
         on lifecycle: WebInspectorModelContextLifecycle
     ) async {
         await lifecycle.process(commit: commit)
@@ -74,13 +74,13 @@ private final class _WebInspectorContextRebaseOperation:
         self.rebase = rebase
     }
 
-    override var isSourceOperation: Bool { true }
-    override var isRebaseOperation: Bool { true }
+    var isSourceOperation: Bool { true }
+    var isRebaseOperation: Bool { true }
 
-    override func process(
+    func process(
         on lifecycle: WebInspectorModelContextLifecycle
     ) async {
-        await lifecycle.process(rebase: rebase, isInitial: false)
+        await lifecycle.process(rebase: rebase)
     }
 }
 
@@ -99,7 +99,7 @@ package final class _WebInspectorContextControlOperation:
         self.body = body
     }
 
-    package override func process(
+    package func process(
         on lifecycle: WebInspectorModelContextLifecycle
     ) async {
         await body(lifecycle)
@@ -116,7 +116,7 @@ private final class _WebInspectorContextCloseOperation:
         self.reason = reason
     }
 
-    override func process(
+    func process(
         on lifecycle: WebInspectorModelContextLifecycle
     ) async {
         await lifecycle.processClose(reason: reason)
@@ -137,7 +137,7 @@ package final class WebInspectorModelContextIngress: @unchecked Sendable {
 
     private struct State {
         var phase = Phase.open
-        var operations: [_WebInspectorModelContextOperation] = []
+        var operations: [any _WebInspectorModelContextOperation] = []
         var isActivated = false
         var isDrainScheduled = false
     }
@@ -228,7 +228,7 @@ package final class WebInspectorModelContextIngress: @unchecked Sendable {
 
     @discardableResult
     package func enqueueControl(
-        _ operation: _WebInspectorModelContextOperation
+        _ operation: any _WebInspectorModelContextOperation
     ) -> Bool {
         let result = state.withLock { state -> (accepted: Bool, schedule: Bool) in
             guard case .open = state.phase else { return (false, false) }
@@ -265,7 +265,7 @@ package final class WebInspectorModelContextIngress: @unchecked Sendable {
     }
 
     package func dequeue()
-        -> _WebInspectorModelContextOperation?
+        -> (any _WebInspectorModelContextOperation)?
     {
         state.withLock { state in
             guard !state.operations.isEmpty else {
@@ -299,7 +299,7 @@ package final class WebInspectorModelContextIngress: @unchecked Sendable {
     }
 
     private func enqueueSourceOperation(
-        _ operation: _WebInspectorModelContextOperation
+        _ operation: any _WebInspectorModelContextOperation
     ) {
         let shouldSchedule = state.withLock { state -> Bool in
             guard case .open = state.phase else { return false }

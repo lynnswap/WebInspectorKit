@@ -96,6 +96,7 @@ func fetchedResultsPerformsInitialThenAppliesOneAtomicDelta() async throws {
     #expect(
         controller.fetchedQueryValue(for: .init(rawValue: 1))?.score == 10
     )
+    let firstModel = try #require(controller.fetchedObjects?.first)
 
     var updates = controller.updates.makeAsyncIterator()
     guard case .initial = await updates.next() else {
@@ -128,10 +129,58 @@ func fetchedResultsPerformsInitialThenAppliesOneAtomicDelta() async throws {
     #expect(
         controller.fetchedQueryValue(for: .init(rawValue: 1))?.score == 30
     )
+    #expect(controller.fetchedObjects?.last === firstModel)
+
+    var rankSwapTransaction = WebInspectorModelTransaction()
+    rankSwapTransaction.append(
+        cutoverQuerySchema.upsert(
+            record: CutoverQueryRecord(score: 30),
+            queryValue: .init(id: .init(rawValue: 1), score: 30),
+            canonicalRank: .init(rawValue: 2)
+        )
+    )
+    rankSwapTransaction.append(
+        cutoverQuerySchema.upsert(
+            record: CutoverQueryRecord(score: 20),
+            queryValue: .init(id: .init(rawValue: 2), score: 20),
+            canonicalRank: .init(rawValue: 1)
+        )
+    )
+    _ = try await container.modelStoreSink.commit(rankSwapTransaction)
+
+    guard
+        case let .changes(_, _, rankChanges, rankUpdatedItemIDs) =
+            await updates.next()
+    else {
+        Issue.record("Expected one atomic update for the rank swap.")
+        return
+    }
+    #expect(rankChanges.isEmpty)
+    #expect(Set(rankUpdatedItemIDs.map(\.rawValue)) == Set([1, 2]))
+    #expect(controller.fetchedObjects?.last === firstModel)
 
     await controller.close()
+    #expect(await updates.next() == nil)
+    await controller.close()
+    await #expect(throws: WebInspectorFetchError.contextClosed) {
+        try await controller.performFetch()
+    }
     await context.close()
     await container.close()
+}
+
+@Test
+func cancellingOneSharedReplyWaiterDoesNotResolveTheOperation() async throws {
+    let reply = WebInspectorContextReply<Int>()
+    let cancelledWaiter = Task { try await reply.value() }
+    cancelledWaiter.cancel()
+    let secondWaiter = Task { try await reply.value() }
+
+    #expect(reply.isPending)
+    reply.succeed(42)
+
+    #expect(try await cancelledWaiter.value == 42)
+    #expect(try await secondWaiter.value == 42)
 }
 
 @Test

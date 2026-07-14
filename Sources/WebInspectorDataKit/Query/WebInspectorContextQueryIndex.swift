@@ -104,8 +104,7 @@ package actor WebInspectorContextQueryIndex {
         for model: Model.Type,
         featureID: WebInspectorFeatureID,
         featureState: WebInspectorFeatureState,
-        records: [_WebInspectorQueryRecord<Model>],
-        forceReset: Bool
+        records: [_WebInspectorQueryRecord<Model>]
     ) -> [_WebInspectorQueryDelivery<Model>]
     where Model: WebInspectorPersistentModel {
         let index: _WebInspectorTypedQueryIndex<Model>
@@ -130,15 +129,14 @@ package actor WebInspectorContextQueryIndex {
         index.records = Dictionary(
             uniqueKeysWithValues: records.map { ($0.id, $0) }
         )
-        return reevaluateRegistrations(in: index, forceReset: forceReset)
+        return reevaluateRegistrations(in: index)
     }
 
     package func updateFeatureState(
         _ state: WebInspectorFeatureState,
-        for featureID: WebInspectorFeatureID,
-        forceReset: Bool
-    ) -> [_WebInspectorAnyQueryDelivery] {
-        var deliveries: [_WebInspectorAnyQueryDelivery] = []
+        for featureID: WebInspectorFeatureID
+    ) -> [any _WebInspectorAnyQueryDelivery] {
+        var deliveries: [any _WebInspectorAnyQueryDelivery] = []
         for index in indexes.values {
             guard
                 let erased = index as? _WebInspectorAnyTypedQueryIndex,
@@ -149,7 +147,6 @@ package actor WebInspectorContextQueryIndex {
             deliveries.append(
                 contentsOf: erased.updateFeatureState(
                     state,
-                    forceReset: forceReset,
                     owner: self
                 )
             )
@@ -378,8 +375,7 @@ package actor WebInspectorContextQueryIndex {
     }
 
     fileprivate func reevaluateRegistrations<Model>(
-        in index: _WebInspectorTypedQueryIndex<Model>,
-        forceReset: Bool
+        in index: _WebInspectorTypedQueryIndex<Model>
     ) -> [_WebInspectorQueryDelivery<Model>]
     where Model: WebInspectorPersistentModel {
         if let error = readinessFailure(
@@ -648,10 +644,8 @@ package actor WebInspectorContextQueryIndex {
     }
 }
 
-package class _WebInspectorAnyQueryDelivery: @unchecked Sendable {
-    package func apply(to lifecycle: WebInspectorModelContextLifecycle) {
-        fatalError("abstract query delivery")
-    }
+package protocol _WebInspectorAnyQueryDelivery: Sendable {
+    func apply(to lifecycle: WebInspectorModelContextLifecycle)
 }
 
 package final class _WebInspectorTypedAnyQueryDelivery<
@@ -663,7 +657,7 @@ package final class _WebInspectorTypedAnyQueryDelivery<
         self.delivery = delivery
     }
 
-    package override func apply(
+    package func apply(
         to lifecycle: WebInspectorModelContextLifecycle
     ) {
         lifecycle.applyQueryDelivery(delivery)
@@ -674,23 +668,19 @@ private protocol _WebInspectorAnyTypedQueryIndex: AnyObject {
     var featureID: WebInspectorFeatureID { get }
     func updateFeatureState(
         _ state: WebInspectorFeatureState,
-        forceReset: Bool,
         owner: isolated WebInspectorContextQueryIndex
-    ) -> [_WebInspectorAnyQueryDelivery]
+    ) -> [any _WebInspectorAnyQueryDelivery]
     func removeAllRegistrations()
 }
 
 extension _WebInspectorTypedQueryIndex: _WebInspectorAnyTypedQueryIndex {
     fileprivate func updateFeatureState(
         _ state: WebInspectorFeatureState,
-        forceReset: Bool,
         owner: isolated WebInspectorContextQueryIndex
-    ) -> [_WebInspectorAnyQueryDelivery] {
+    ) -> [any _WebInspectorAnyQueryDelivery] {
         featureState = state
-        return owner.reevaluateRegistrations(
-            in: self,
-            forceReset: forceReset
-        ).map(_WebInspectorTypedAnyQueryDelivery.init)
+        return owner.reevaluateRegistrations(in: self)
+            .map(_WebInspectorTypedAnyQueryDelivery.init)
     }
 
     fileprivate func removeAllRegistrations() {

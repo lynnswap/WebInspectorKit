@@ -10,22 +10,11 @@ package struct _WebInspectorStoredModelRecord<
     package let canonicalRank: WebInspectorModelCanonicalRank
 }
 
-package class _WebInspectorAnyModelStoreTable: @unchecked Sendable {
-    package var modelTypeID: ObjectIdentifier {
-        fatalError("abstract store table")
-    }
-
-    package var schemaIdentity: ObjectIdentifier {
-        fatalError("abstract store table")
-    }
-
-    package var featureID: WebInspectorFeatureID {
-        fatalError("abstract store table")
-    }
-
-    package func makeSnapshot() -> _WebInspectorAnyModelSnapshot {
-        fatalError("abstract store table")
-    }
+package protocol _WebInspectorAnyModelStoreTable: Sendable {
+    var modelTypeID: ObjectIdentifier { get }
+    var schemaIdentity: ObjectIdentifier { get }
+    var featureID: WebInspectorFeatureID { get }
+    func makeSnapshot() -> any _WebInspectorAnyModelSnapshot
 }
 
 package final class _WebInspectorModelStoreTable<
@@ -34,28 +23,31 @@ package final class _WebInspectorModelStoreTable<
 >: _WebInspectorAnyModelStoreTable, @unchecked Sendable {
     package let definition: _WebInspectorModelSchemaDefinition<Model, Record>
     package let records: [Model.ID: _WebInspectorStoredModelRecord<Model, Record>]
+    package let canonicalRankOwners: [WebInspectorModelCanonicalRank: Model.ID]
 
     package init(
         definition: _WebInspectorModelSchemaDefinition<Model, Record>,
-        records: [Model.ID: _WebInspectorStoredModelRecord<Model, Record>]
+        records: [Model.ID: _WebInspectorStoredModelRecord<Model, Record>],
+        canonicalRankOwners: [WebInspectorModelCanonicalRank: Model.ID]
     ) {
         self.definition = definition
         self.records = records
+        self.canonicalRankOwners = canonicalRankOwners
     }
 
-    package override var modelTypeID: ObjectIdentifier {
+    package var modelTypeID: ObjectIdentifier {
         ObjectIdentifier(Model.self)
     }
 
-    package override var schemaIdentity: ObjectIdentifier {
+    package var schemaIdentity: ObjectIdentifier {
         ObjectIdentifier(definition.identity)
     }
 
-    package override var featureID: WebInspectorFeatureID {
+    package var featureID: WebInspectorFeatureID {
         definition.featureID
     }
 
-    package override func makeSnapshot() -> _WebInspectorAnyModelSnapshot {
+    package func makeSnapshot() -> any _WebInspectorAnyModelSnapshot {
         _WebInspectorModelSnapshot(
             definition: definition,
             records: records
@@ -63,30 +55,16 @@ package final class _WebInspectorModelStoreTable<
     }
 }
 
-package class _WebInspectorAnyModelMutationBatch: @unchecked Sendable {
-    package var modelTypeID: ObjectIdentifier {
-        fatalError("abstract mutation batch")
-    }
-
-    package var schemaIdentity: ObjectIdentifier {
-        fatalError("abstract mutation batch")
-    }
-
-    package var featureID: WebInspectorFeatureID {
-        fatalError("abstract mutation batch")
-    }
-
-    package func applying(
-        to table: _WebInspectorAnyModelStoreTable?
-    ) throws -> _WebInspectorAnyModelStoreTable {
-        fatalError("abstract mutation batch")
-    }
-
-    package func prepare(
+package protocol _WebInspectorAnyModelMutationBatch: Sendable {
+    var modelTypeID: ObjectIdentifier { get }
+    var schemaIdentity: ObjectIdentifier { get }
+    var featureID: WebInspectorFeatureID { get }
+    func applying(
+        to table: (any _WebInspectorAnyModelStoreTable)?
+    ) throws -> any _WebInspectorAnyModelStoreTable
+    func prepare(
         to lifecycle: WebInspectorModelContextLifecycle
-    ) async -> _WebInspectorPreparedContextApply {
-        fatalError("abstract mutation batch")
-    }
+    ) async -> any _WebInspectorPreparedContextApply
 }
 
 package final class _WebInspectorModelMutationBatch<
@@ -104,21 +82,21 @@ package final class _WebInspectorModelMutationBatch<
         self.operations = operations
     }
 
-    package override var modelTypeID: ObjectIdentifier {
+    package var modelTypeID: ObjectIdentifier {
         ObjectIdentifier(Model.self)
     }
 
-    package override var schemaIdentity: ObjectIdentifier {
+    package var schemaIdentity: ObjectIdentifier {
         ObjectIdentifier(definition.identity)
     }
 
-    package override var featureID: WebInspectorFeatureID {
+    package var featureID: WebInspectorFeatureID {
         definition.featureID
     }
 
-    package override func applying(
-        to table: _WebInspectorAnyModelStoreTable?
-    ) throws -> _WebInspectorAnyModelStoreTable {
+    package func applying(
+        to table: (any _WebInspectorAnyModelStoreTable)?
+    ) throws -> any _WebInspectorAnyModelStoreTable {
         let typedTable: _WebInspectorModelStoreTable<Model, Record>
         if let table {
             guard
@@ -137,11 +115,19 @@ package final class _WebInspectorModelMutationBatch<
         } else {
             typedTable = _WebInspectorModelStoreTable(
                 definition: definition,
-                records: [:]
+                records: [:],
+                canonicalRankOwners: [:]
             )
         }
 
         var records = typedTable.records
+        var canonicalRankOwners = typedTable.canonicalRankOwners
+        let affectedIDs = Set(operations.map(\.id))
+        for id in affectedIDs {
+            if let previous = typedTable.records[id] {
+                canonicalRankOwners[previous.canonicalRank] = nil
+            }
+        }
         for operation in operations {
             switch operation {
             case let .upsert(record, queryValue, canonicalRank):
@@ -165,22 +151,26 @@ package final class _WebInspectorModelMutationBatch<
                 records[id] = nil
             }
         }
-
-        let ranks = records.values.map(\.canonicalRank)
-        guard Set(ranks).count == ranks.count else {
-            throw WebInspectorModelStoreError.duplicateCanonicalRank(
-                String(reflecting: Model.self)
-            )
+        for id in affectedIDs {
+            guard let record = records[id] else { continue }
+            if canonicalRankOwners[record.canonicalRank] != nil {
+                throw WebInspectorModelStoreError.duplicateCanonicalRank(
+                    String(reflecting: Model.self)
+                )
+            }
+            canonicalRankOwners[record.canonicalRank] = id
         }
+
         return _WebInspectorModelStoreTable(
             definition: definition,
-            records: records
+            records: records,
+            canonicalRankOwners: canonicalRankOwners
         )
     }
 
-    package override func prepare(
+    package func prepare(
         to lifecycle: WebInspectorModelContextLifecycle
-    ) async -> _WebInspectorPreparedContextApply {
+    ) async -> any _WebInspectorPreparedContextApply {
         await lifecycle.prepareMutationBatch(
             definition: definition,
             operations: operations
@@ -188,18 +178,12 @@ package final class _WebInspectorModelMutationBatch<
     }
 }
 
-package class _WebInspectorAnyModelSnapshot: @unchecked Sendable {
-    package var modelTypeID: ObjectIdentifier {
-        fatalError("abstract model snapshot")
-    }
-
-    package func prepare(
+package protocol _WebInspectorAnyModelSnapshot: Sendable {
+    var modelTypeID: ObjectIdentifier { get }
+    func prepare(
         to lifecycle: WebInspectorModelContextLifecycle,
-        featureStates: [WebInspectorFeatureID: WebInspectorFeatureState],
-        forceReset: Bool
-    ) async -> _WebInspectorPreparedContextApply {
-        fatalError("abstract model snapshot")
-    }
+        featureStates: [WebInspectorFeatureID: WebInspectorFeatureState]
+    ) async -> any _WebInspectorPreparedContextApply
 }
 
 package final class _WebInspectorModelSnapshot<
@@ -217,33 +201,31 @@ package final class _WebInspectorModelSnapshot<
         self.records = records
     }
 
-    package override var modelTypeID: ObjectIdentifier {
+    package var modelTypeID: ObjectIdentifier {
         ObjectIdentifier(Model.self)
     }
 
-    package override func prepare(
+    package func prepare(
         to lifecycle: WebInspectorModelContextLifecycle,
-        featureStates: [WebInspectorFeatureID: WebInspectorFeatureState],
-        forceReset: Bool
-    ) async -> _WebInspectorPreparedContextApply {
+        featureStates: [WebInspectorFeatureID: WebInspectorFeatureState]
+    ) async -> any _WebInspectorPreparedContextApply {
         await lifecycle.prepareSnapshot(
             definition: definition,
             records: records,
-            featureState: featureStates[definition.featureID] ?? .disabled,
-            forceReset: forceReset
+            featureState: featureStates[definition.featureID] ?? .disabled
         )
     }
 }
 
 package struct WebInspectorModelStoreCommit: Sendable {
     package let revision: WebInspectorStoreRevision
-    package let batches: [_WebInspectorAnyModelMutationBatch]
+    package let batches: [any _WebInspectorAnyModelMutationBatch]
     package let featureStates: [WebInspectorFeatureID: WebInspectorFeatureState]
 }
 
 package struct WebInspectorModelStoreRebase: Sendable {
     package let revision: WebInspectorStoreRevision
-    package let snapshots: [_WebInspectorAnyModelSnapshot]
+    package let snapshots: [any _WebInspectorAnyModelSnapshot]
     package let featureStates: [WebInspectorFeatureID: WebInspectorFeatureState]
 }
 
@@ -286,14 +268,15 @@ package final class WebInspectorModelStoreIngressRegistry: @unchecked Sendable {
     }
 
     package func register(_ ingress: WebInspectorModelContextIngress) {
-        let rebase = state.withLock {
-            state -> WebInspectorModelStoreRebase? in
-            guard !state.isClosed, ingress.acceptsSource else { return nil }
+        state.withLock { state in
+            guard !state.isClosed, ingress.acceptsSource else { return }
+            // Publish the initial rebase before making the ingress visible to
+            // commit publication. This lock is the source-order linearization
+            // point for context issuance.
+            ingress.enqueueInitial(state.latestRebase)
             state.ingresses[ingress.registrationID] =
                 _WebInspectorWeakModelContextIngress(ingress)
-            return state.latestRebase
         }
-        if let rebase { ingress.enqueueInitial(rebase) }
     }
 
     package func unregister(_ registrationID: UUID) {
@@ -376,12 +359,12 @@ package struct WebInspectorModelSchemaRegistry: Sendable {
 /// It never decodes protocol events or owns observable model references.
 package actor WebInspectorModelStore {
     private struct PreparedCommit {
-        let nextTables: [ObjectIdentifier: _WebInspectorAnyModelStoreTable]
+        let nextTables: [ObjectIdentifier: any _WebInspectorAnyModelStoreTable]
         let nextFeatureStates: [WebInspectorFeatureID: WebInspectorFeatureState]
         let commit: WebInspectorModelStoreCommit
     }
 
-    private var tables: [ObjectIdentifier: _WebInspectorAnyModelStoreTable]
+    private var tables: [ObjectIdentifier: any _WebInspectorAnyModelStoreTable]
     private var featureStates: [WebInspectorFeatureID: WebInspectorFeatureState]
     private var revision = WebInspectorStoreRevision(rawValue: 0)
     nonisolated package let ingressRegistry: WebInspectorModelStoreIngressRegistry
@@ -392,7 +375,7 @@ package actor WebInspectorModelStore {
         schemaRegistry: WebInspectorModelSchemaRegistry,
         enabledFeatures: Set<WebInspectorFeatureID>
     ) {
-        var tables: [ObjectIdentifier: _WebInspectorAnyModelStoreTable] = [:]
+        var tables: [ObjectIdentifier: any _WebInspectorAnyModelStoreTable] = [:]
         for schema in schemaRegistry.schemas {
             let modelTypeID = schema.box.modelTypeID
             tables[modelTypeID] = schema.box.makeEmptyStoreTable()

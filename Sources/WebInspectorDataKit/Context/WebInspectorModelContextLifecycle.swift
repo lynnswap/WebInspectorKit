@@ -2,14 +2,9 @@ import Dispatch
 import Foundation
 import Synchronization
 
-package class _WebInspectorAnyContextModelTable {
-    package var modelTypeID: ObjectIdentifier {
-        fatalError("abstract context model table")
-    }
-
-    package func invalidateAll(in context: WebInspectorModelContext) {
-        fatalError("abstract context model table")
-    }
+package protocol _WebInspectorAnyContextModelTable: AnyObject {
+    var modelTypeID: ObjectIdentifier { get }
+    func invalidateAll(in context: WebInspectorModelContext)
 }
 
 package final class _WebInspectorContextModelTable<
@@ -28,11 +23,11 @@ package final class _WebInspectorContextModelTable<
         self.records = records
     }
 
-    package override var modelTypeID: ObjectIdentifier {
+    package var modelTypeID: ObjectIdentifier {
         ObjectIdentifier(Model.self)
     }
 
-    package override func invalidateAll(
+    package func invalidateAll(
         in context: WebInspectorModelContext
     ) {
         for model in models.values {
@@ -43,10 +38,8 @@ package final class _WebInspectorContextModelTable<
     }
 }
 
-package class _WebInspectorPreparedContextApply: @unchecked Sendable {
-    package func apply(to lifecycle: WebInspectorModelContextLifecycle) {
-        fatalError("abstract prepared context apply")
-    }
+package protocol _WebInspectorPreparedContextApply: Sendable {
+    func apply(to lifecycle: WebInspectorModelContextLifecycle)
 }
 
 private final class _WebInspectorPreparedMutationApply<
@@ -67,7 +60,7 @@ private final class _WebInspectorPreparedMutationApply<
         self.deliveries = deliveries
     }
 
-    override func apply(to lifecycle: WebInspectorModelContextLifecycle) {
+    func apply(to lifecycle: WebInspectorModelContextLifecycle) {
         lifecycle.applyMutationBatchSynchronously(
             definition: definition,
             operations: operations
@@ -96,7 +89,7 @@ private final class _WebInspectorPreparedSnapshotApply<
         self.deliveries = deliveries
     }
 
-    override func apply(to lifecycle: WebInspectorModelContextLifecycle) {
+    func apply(to lifecycle: WebInspectorModelContextLifecycle) {
         lifecycle.applySnapshotSynchronously(
             definition: definition,
             records: records
@@ -126,8 +119,8 @@ package final class WebInspectorModelContextLifecycle: @unchecked Sendable {
     private let didClose: @Sendable (UUID) -> Void
 
     fileprivate weak var context: WebInspectorModelContext?
-    private var modelTables: [ObjectIdentifier: _WebInspectorAnyContextModelTable] = [:]
-    private var endpoints: [WebInspectorQueryRegistrationID: _WebInspectorAnyFetchedResultsEndpoint] = [:]
+    private var modelTables: [ObjectIdentifier: any _WebInspectorAnyContextModelTable] = [:]
+    private var endpoints: [WebInspectorQueryRegistrationID: any _WebInspectorAnyFetchedResultsEndpoint] = [:]
     private var featureStates: [WebInspectorFeatureID: WebInspectorFeatureState] = [:]
     private var appliedRevision: WebInspectorStoreRevision?
 
@@ -184,24 +177,23 @@ package final class WebInspectorModelContextLifecycle: @unchecked Sendable {
         if let appliedRevision {
             guard commit.revision > appliedRevision else { return }
             guard commit.revision.rawValue == appliedRevision.rawValue + 1 else {
-                await process(rebase: await store.snapshot(), isInitial: false)
+                await process(rebase: await store.snapshot())
                 return
             }
         }
 
-        var prepared: [_WebInspectorPreparedContextApply] = []
+        var prepared: [any _WebInspectorPreparedContextApply] = []
         prepared.reserveCapacity(commit.batches.count)
         for batch in commit.batches {
             prepared.append(await batch.prepare(to: self))
         }
 
-        var featureDeliveries: [_WebInspectorAnyQueryDelivery] = []
+        var featureDeliveries: [any _WebInspectorAnyQueryDelivery] = []
         for (featureID, state) in commit.featureStates {
             featureDeliveries.append(
                 contentsOf: await queryIndex.updateFeatureState(
                     state,
-                    for: featureID,
-                    forceReset: false
+                    for: featureID
                 )
             )
         }
@@ -216,20 +208,16 @@ package final class WebInspectorModelContextLifecycle: @unchecked Sendable {
         appliedRevision = commit.revision
     }
 
-    package func process(
-        rebase: WebInspectorModelStoreRebase,
-        isInitial: Bool
-    ) async {
-        if let appliedRevision, rebase.revision < appliedRevision { return }
+    package func process(rebase: WebInspectorModelStoreRebase) async {
+        if let appliedRevision, rebase.revision <= appliedRevision { return }
 
-        var prepared: [_WebInspectorPreparedContextApply] = []
+        var prepared: [any _WebInspectorPreparedContextApply] = []
         prepared.reserveCapacity(rebase.snapshots.count)
         for snapshot in rebase.snapshots {
             prepared.append(
                 await snapshot.prepare(
                     to: self,
-                    featureStates: rebase.featureStates,
-                    forceReset: !isInitial
+                    featureStates: rebase.featureStates
                 )
             )
         }
@@ -247,7 +235,7 @@ package final class WebInspectorModelContextLifecycle: @unchecked Sendable {
     >(
         definition: _WebInspectorModelSchemaDefinition<Model, Record>,
         operations: [_WebInspectorTypedModelMutationOperation<Model, Record>]
-    ) async -> _WebInspectorPreparedContextApply {
+    ) async -> any _WebInspectorPreparedContextApply {
         let queryMutations = operations.map { operation in
             switch operation {
             case let .upsert(_, queryValue, canonicalRank):
@@ -277,9 +265,8 @@ package final class WebInspectorModelContextLifecycle: @unchecked Sendable {
     >(
         definition: _WebInspectorModelSchemaDefinition<Model, Record>,
         records: [Model.ID: _WebInspectorStoredModelRecord<Model, Record>],
-        featureState: WebInspectorFeatureState,
-        forceReset: Bool
-    ) async -> _WebInspectorPreparedContextApply {
+        featureState: WebInspectorFeatureState
+    ) async -> any _WebInspectorPreparedContextApply {
         let queryRecords = records.values.map {
             _WebInspectorQueryRecord<Model>(
                 queryValue: $0.queryValue,
@@ -290,8 +277,7 @@ package final class WebInspectorModelContextLifecycle: @unchecked Sendable {
             for: Model.self,
             featureID: definition.featureID,
             featureState: featureState,
-            records: queryRecords,
-            forceReset: forceReset
+            records: queryRecords
         )
         return _WebInspectorPreparedSnapshotApply(
             definition: definition,
@@ -309,6 +295,7 @@ package final class WebInspectorModelContextLifecycle: @unchecked Sendable {
     ) {
         guard let context else { return }
         let table = typedTable(definition: definition)
+        let affectedIDs = Set(operations.map(\.id))
         for operation in operations {
             switch operation {
             case let .upsert(record, queryValue, canonicalRank):
@@ -318,9 +305,6 @@ package final class WebInspectorModelContextLifecycle: @unchecked Sendable {
                     queryValue: queryValue,
                     canonicalRank: canonicalRank
                 )
-                if let model = table.models[id] {
-                    definition.updateModel(context, model, record)
-                }
             case let .updateContent(id, record):
                 guard let existing = table.records[id] else { continue }
                 table.records[id] = _WebInspectorStoredModelRecord(
@@ -328,14 +312,17 @@ package final class WebInspectorModelContextLifecycle: @unchecked Sendable {
                     queryValue: existing.queryValue,
                     canonicalRank: existing.canonicalRank
                 )
-                if let model = table.models[id] {
-                    definition.updateModel(context, model, record)
-                }
             case let .delete(id):
                 table.records[id] = nil
-                if let model = table.models.removeValue(forKey: id) {
-                    definition.invalidateModel(context, model)
-                }
+            }
+        }
+        for id in affectedIDs {
+            guard let model = table.models[id] else { continue }
+            if let record = table.records[id]?.record {
+                definition.updateModel(context, model, record)
+            } else {
+                table.models[id] = nil
+                definition.invalidateModel(context, model)
             }
         }
     }
@@ -349,7 +336,7 @@ package final class WebInspectorModelContextLifecycle: @unchecked Sendable {
     ) {
         guard let context else { return }
         let table = typedTable(definition: definition)
-        for (id, model) in table.models where records[id] == nil {
+        for (id, model) in Array(table.models) where records[id] == nil {
             definition.invalidateModel(context, model)
             table.models[id] = nil
         }
@@ -492,8 +479,7 @@ package final class WebInspectorModelContextLifecycle: @unchecked Sendable {
     }
 
     package func requestClose<Model>(
-        endpoint: _WebInspectorFetchedResultsEndpoint<Model>,
-        reply: WebInspectorContextReply<Void>
+        endpoint: _WebInspectorFetchedResultsEndpoint<Model>
     ) -> Bool where Model: WebInspectorPersistentModel {
         ingress.enqueueControl(
             _WebInspectorContextControlOperation { lifecycle in
@@ -503,7 +489,6 @@ package final class WebInspectorModelContextLifecycle: @unchecked Sendable {
                     model: Model.self
                 )
                 endpoint.close(reason: .contextClosed)
-                reply.succeed(())
             }
         )
     }

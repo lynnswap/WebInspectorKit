@@ -1,33 +1,31 @@
 import Observation
 
-package class _WebInspectorAnyFetchedResultsEndpoint: @unchecked Sendable {
-    package var registrationID: WebInspectorQueryRegistrationID {
-        fatalError("abstract fetched-results endpoint")
-    }
-
-    package var modelTypeID: ObjectIdentifier {
-        fatalError("abstract fetched-results endpoint")
-    }
-
-    package func close(reason: WebInspectorModelContextCloseReason) {
-        fatalError("abstract fetched-results endpoint")
-    }
+package protocol _WebInspectorAnyFetchedResultsEndpoint: Sendable {
+    var registrationID: WebInspectorQueryRegistrationID { get }
+    var modelTypeID: ObjectIdentifier { get }
+    func close(reason: WebInspectorModelContextCloseReason)
 }
 
 package final class _WebInspectorFetchedResultsEndpoint<
     Model: WebInspectorPersistentModel
 >: _WebInspectorAnyFetchedResultsEndpoint, @unchecked Sendable {
+    private enum Phase {
+        case open
+        case closing
+        case closed
+    }
+
     package let id = WebInspectorQueryRegistrationID()
     package weak var controller: WebInspectorFetchedResultsController<Model>?
     package var pendingReply: WebInspectorContextReply<Void>?
+    package let closeReply = WebInspectorContextReply<Void>()
+    private var phase = Phase.open
 
-    package override init() {}
-
-    package override var registrationID: WebInspectorQueryRegistrationID {
+    package var registrationID: WebInspectorQueryRegistrationID {
         id
     }
 
-    package override var modelTypeID: ObjectIdentifier {
+    package var modelTypeID: ObjectIdentifier {
         ObjectIdentifier(Model.self)
     }
 
@@ -37,11 +35,23 @@ package final class _WebInspectorFetchedResultsEndpoint<
         self.controller = controller
     }
 
+    @discardableResult
     package func begin(
         reply: WebInspectorContextReply<Void>
-    ) {
+    ) -> Bool {
+        guard case .open = phase else {
+            reply.fail(WebInspectorFetchError.contextClosed)
+            return false
+        }
         pendingReply?.fail(CancellationError())
         pendingReply = reply
+        return true
+    }
+
+    package func beginClose() -> Bool {
+        guard case .open = phase else { return false }
+        phase = .closing
+        return true
     }
 
     package func markOperationBegan(
@@ -98,11 +108,37 @@ package final class _WebInspectorFetchedResultsEndpoint<
             pendingReply?.succeed(())
             pendingReply = nil
         case let .changes(itemIDs, difference):
-            let models = lifecycle.materialize(itemIDs, as: Model.self)
-            let queryValues = lifecycle.queryValues(itemIDs, as: Model.self)
+            var insertedItemIDs: Set<Model.ID> = []
+            var deletedItemIDs: Set<Model.ID> = []
+            for change in difference.itemChanges {
+                switch change {
+                case let .insert(itemID, _):
+                    insertedItemIDs.insert(itemID)
+                case let .delete(itemID, _):
+                    deletedItemIDs.insert(itemID)
+                case .move:
+                    break
+                }
+            }
+            let queryValueIDs = insertedItemIDs.union(
+                difference.updatedItemIDs
+            )
+            let insertedModels = lifecycle.materialize(
+                Array(insertedItemIDs),
+                as: Model.self
+            )
+            let changedQueryValues = lifecycle.queryValues(
+                Array(queryValueIDs),
+                as: Model.self
+            )
             controller.acceptChanges(
-                models: models,
-                queryValues: queryValues,
+                insertedModels: Dictionary(
+                    uniqueKeysWithValues: insertedModels.map { ($0.id, $0) }
+                ),
+                changedQueryValues: Dictionary(
+                    uniqueKeysWithValues: changedQueryValues.map { ($0.id, $0) }
+                ),
+                deletedItemIDs: deletedItemIDs,
                 itemIDs: itemIDs,
                 difference: difference,
                 clearsFetchError: delivery.clearsFetchError
@@ -131,12 +167,15 @@ package final class _WebInspectorFetchedResultsEndpoint<
         pendingReply = nil
     }
 
-    package override func close(
+    package func close(
         reason: WebInspectorModelContextCloseReason
     ) {
+        if case .closed = phase { return }
+        phase = .closed
         controller?.acceptClose(reason.fetchError)
         pendingReply?.fail(reason.fetchError)
         pendingReply = nil
+        closeReply.succeed(())
     }
 }
 
@@ -147,8 +186,7 @@ public final class WebInspectorFetchedResultsController<
 > {
     private struct SuccessfulState {
         var descriptor: WebInspectorFetchDescriptor<Model>
-        var fetchedObjects: [Model]
-        var fetchedQueryValues: [Model.QueryValue]
+        var fetchedObjectsByID: [Model.ID: Model]
         var fetchedQueryValuesByID: [Model.ID: Model.QueryValue]
         var snapshot: WebInspectorFetchedResultsSnapshot<Model.ID>
         var revision: WebInspectorFetchedResultsRevision
@@ -183,7 +221,10 @@ public final class WebInspectorFetchedResultsController<
     }
 
     public var fetchedObjects: [Model]? {
-        successfulState?.fetchedObjects
+        guard let success = successfulState else { return nil }
+        return success.snapshot.itemIDs.compactMap {
+            success.fetchedObjectsByID[$0]
+        }
     }
 
     public var snapshot: WebInspectorFetchedResultsSnapshot<Model.ID>? {
@@ -194,7 +235,10 @@ public final class WebInspectorFetchedResultsController<
     /// Feature UI may transfer these values to background projection work
     /// without reading context-owned observable models off their executor.
     package var fetchedQueryValues: [Model.QueryValue]? {
-        successfulState?.fetchedQueryValues
+        guard let success = successfulState else { return nil }
+        return success.snapshot.itemIDs.compactMap {
+            success.fetchedQueryValuesByID[$0]
+        }
     }
 
     /// Returns the immutable value from the currently accepted result in O(1).
@@ -243,12 +287,13 @@ public final class WebInspectorFetchedResultsController<
     public nonisolated(nonsending) func performFetch() async throws {
         let descriptor = fetchDescriptor
         let reply = WebInspectorContextReply<Void>()
-        endpoint.begin(reply: reply)
-        if !modelContext.lifecycle.requestPerformFetch(
-            endpoint: endpoint,
-            descriptor: descriptor,
-            reply: reply
-        ) {
+        if endpoint.begin(reply: reply),
+            !modelContext.lifecycle.requestPerformFetch(
+                endpoint: endpoint,
+                descriptor: descriptor,
+                reply: reply
+            )
+        {
             endpoint.acceptFailure(modelContext.lifecycle.closedFetchError)
         }
         try await reply.cancellableValue()
@@ -258,27 +303,25 @@ public final class WebInspectorFetchedResultsController<
         using descriptor: WebInspectorFetchDescriptor<Model>
     ) async throws {
         let reply = WebInspectorContextReply<Void>()
-        endpoint.begin(reply: reply)
-        if !modelContext.lifecycle.requestRefetch(
-            endpoint: endpoint,
-            descriptor: descriptor,
-            reply: reply
-        ) {
+        if endpoint.begin(reply: reply),
+            !modelContext.lifecycle.requestRefetch(
+                endpoint: endpoint,
+                descriptor: descriptor,
+                reply: reply
+            )
+        {
             endpoint.acceptFailure(modelContext.lifecycle.closedFetchError)
         }
         try await reply.cancellableValue()
     }
 
     public nonisolated(nonsending) func close() async {
-        let reply = WebInspectorContextReply<Void>()
-        if modelContext.lifecycle.requestClose(
-            endpoint: endpoint,
-            reply: reply
-        ) {
-            _ = try? await reply.value()
-        } else {
-            endpoint.close(reason: .contextClosed)
+        if endpoint.beginClose() {
+            if !modelContext.lifecycle.requestClose(endpoint: endpoint) {
+                endpoint.close(reason: .contextClosed)
+            }
         }
+        _ = try? await endpoint.closeReply.value()
     }
 
     /// Best-effort synchronous teardown for an owner-isolated deinitializer.
@@ -338,8 +381,9 @@ public final class WebInspectorFetchedResultsController<
     }
 
     package func acceptChanges(
-        models: [Model],
-        queryValues: [Model.QueryValue],
+        insertedModels: [Model.ID: Model],
+        changedQueryValues: [Model.ID: Model.QueryValue],
+        deletedItemIDs: Set<Model.ID>,
         itemIDs: [Model.ID],
         difference: WebInspectorFetchedResultsDifference<Model.ID>,
         clearsFetchError: Bool
@@ -349,11 +393,14 @@ public final class WebInspectorFetchedResultsController<
         let toRevision = WebInspectorFetchedResultsRevision(
             rawValue: fromRevision.rawValue + 1
         )
-        success.fetchedObjects = models
-        success.fetchedQueryValues = queryValues
-        success.fetchedQueryValuesByID = Dictionary(
-            uniqueKeysWithValues: queryValues.map { ($0.id, $0) }
-        )
+        for id in deletedItemIDs {
+            success.fetchedObjectsByID[id] = nil
+            success.fetchedQueryValuesByID[id] = nil
+        }
+        success.fetchedObjectsByID.merge(insertedModels) { _, new in new }
+        success.fetchedQueryValuesByID.merge(changedQueryValues) { _, new in
+            new
+        }
         success.snapshot = WebInspectorFetchedResultsSnapshot(
             itemIDs: itemIDs
         )
@@ -440,8 +487,9 @@ public final class WebInspectorFetchedResultsController<
         )
         let success = SuccessfulState(
             descriptor: descriptor,
-            fetchedObjects: models,
-            fetchedQueryValues: queryValues,
+            fetchedObjectsByID: Dictionary(
+                uniqueKeysWithValues: models.map { ($0.id, $0) }
+            ),
             fetchedQueryValuesByID: Dictionary(
                 uniqueKeysWithValues: queryValues.map { ($0.id, $0) }
             ),

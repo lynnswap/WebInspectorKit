@@ -178,8 +178,7 @@ package final class _WebInspectorFetchedResultsUpdatePublisher<
             ) { [weak self] in
                 self?.removeSubscriber(id)
             }
-            if state.isClosed {
-            } else {
+            if !state.isClosed {
                 state.subscribers[id] = mailbox
             }
             return (
