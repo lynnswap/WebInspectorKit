@@ -198,6 +198,30 @@ func capabilityReacquiredDuringDisableIsEnabledBeforeScopeReturns() async throws
 }
 
 @Test
+func inspectorCapabilityInitializesAfterEveryPhysicalEnable() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    defer { Task { await runtime.close() } }
+
+    let firstTask = Task { try await openInspectorScope(on: runtime.page) }
+    try await replyNext(runtime.peer, method: "Inspector.enable")
+    try await replyNext(runtime.peer, method: "Inspector.initialized")
+    let first = try await firstTask.value
+
+    let firstClose = Task { await first.close() }
+    try await replyNext(runtime.peer, method: "Inspector.disable")
+    await firstClose.value
+
+    let secondTask = Task { try await openInspectorScope(on: runtime.page) }
+    try await replyNext(runtime.peer, method: "Inspector.enable")
+    try await replyNext(runtime.peer, method: "Inspector.initialized")
+    let second = try await secondTask.value
+
+    let secondClose = Task { await second.close() }
+    try await replyNext(runtime.peer, method: "Inspector.disable")
+    await secondClose.value
+}
+
+@Test
 func descendantWorkerIsEnrolledAndEnabledAfterScopeRegistration() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     defer { Task { await runtime.close() } }
@@ -423,6 +447,18 @@ private func openConsoleScope(
         descriptor: WebInspectorOrderedScopeDescriptor(
             decoders: [ConsoleWireCoding.eventDecoder],
             capabilities: [ConsoleWireCoding.capability]
+        ),
+        buffering: .bounded(4)
+    )
+}
+
+private func openInspectorScope(
+    on page: WebInspectorPage
+) async throws -> WebInspectorOrderedEventScope<Inspector.Event> {
+    try await page.orderedScope(
+        descriptor: WebInspectorOrderedScopeDescriptor(
+            decoders: [InspectorWireCoding.eventDecoder],
+            capabilities: [InspectorWireCoding.capability]
         ),
         buffering: .bounded(4)
     )

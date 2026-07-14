@@ -488,10 +488,22 @@ package enum InspectorWireCoding {
     package static let disable = DomainCommandJSON.emptyVoid("Inspector", "disable")
     package static let initialized = DomainCommandJSON.emptyVoid("Inspector", "initialized")
 
-    package static let capability = WebInspectorDomainCapabilityDescriptor(
+    private static let domainCapability = WebInspectorDomainCapabilityDescriptor(
         domain: eventDomain,
+        agentResolution: .currentPage,
         enable: enable,
         release: .disable(disable),
+        mutationOwner: .init(rawValue: "Inspector")
+    )
+
+    package static let capability = WebInspectorDomainCapabilityDescriptor(
+        domain: eventDomain,
+        configurationID: .init(rawValue: "initialized"),
+        agentResolution: .currentPage,
+        dependencies: [domainCapability],
+        enable: initialized,
+        release: .retainEnabled,
+        reacquisition: .enable,
         mutationOwner: .init(rawValue: "Inspector")
     )
 }
