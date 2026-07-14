@@ -10,26 +10,15 @@ where Model: WebInspectorPersistentModel {
     public var sortBy: [SortDescriptor<Model.QueryValue>]
 
     /// The number of matching values skipped before publication.
-    public var fetchOffset: Int = 0 {
-        didSet {
-            precondition(
-                fetchOffset >= 0,
-                "WebInspectorFetchDescriptor fetchOffset must be non-negative."
-            )
-        }
-    }
+    ///
+    /// Invalid negative values are reported by fetch operations as
+    /// ``WebInspectorFetchError/invalidOffset(_:)``.
+    public var fetchOffset: Int?
 
     /// The maximum number of values published after the offset, or `nil` for no limit.
-    public var fetchLimit: Int? {
-        didSet {
-            if let fetchLimit {
-                precondition(
-                    fetchLimit >= 0,
-                    "WebInspectorFetchDescriptor fetchLimit must be non-negative."
-                )
-            }
-        }
-    }
+    /// Invalid negative values are reported by fetch operations as
+    /// ``WebInspectorFetchError/invalidLimit(_:)``.
+    public var fetchLimit: Int?
 
     /// Creates a persistent-model fetch descriptor.
     public init(
@@ -38,6 +27,7 @@ where Model: WebInspectorPersistentModel {
     ) {
         self.predicate = predicate
         self.sortBy = sortBy
+        fetchOffset = nil
         fetchLimit = nil
     }
 }
