@@ -1,5 +1,33 @@
 import WebInspectorProxyKit
 
+/// Exact routing and binding authority for Console/Runtime reduction.
+///
+/// The generic connection scope carries only FIFO route facts. Binding
+/// epochs are issued by the Console/Runtime feature actor and remain local to
+/// that feature instead of leaking domain state into the connection layer.
+package struct WebInspectorConsoleRuntimeEventScope: Equatable, Sendable {
+    package let generation: WebInspectorPageGeneration
+    package let target: WebInspectorFeatureTarget
+    package let agentTarget: WebInspectorFeatureTarget
+    package let navigationEpoch: WebInspectorPageGeneration
+    package let runtimeBindingEpoch: WebInspectorRuntimeBindingGeneration?
+    package let consoleBindingEpoch: WebInspectorConsoleBindingGeneration?
+
+    package init(
+        route: WebInspectorFeatureEventScope,
+        navigationEpoch: WebInspectorPageGeneration,
+        runtimeBindingEpoch: WebInspectorRuntimeBindingGeneration?,
+        consoleBindingEpoch: WebInspectorConsoleBindingGeneration?
+    ) {
+        generation = route.generation
+        target = route.semanticTarget
+        agentTarget = route.agentTarget
+        self.navigationEpoch = navigationEpoch
+        self.runtimeBindingEpoch = runtimeBindingEpoch
+        self.consoleBindingEpoch = consoleBindingEpoch
+    }
+}
+
 package struct CanonicalRuntimeContextMembership: Equatable, Sendable {
     package let semanticTargetID: WebInspectorTarget.ID
     package let navigationEpoch: ModelNavigationEpoch

@@ -315,7 +315,7 @@ package struct CanonicalConsoleRuntimeStore: Equatable, Sendable {
 
     package mutating func reduceRuntime(
         _ event: Runtime.Event,
-        scope: ModelEventScope
+        scope: WebInspectorConsoleRuntimeEventScope
     ) throws -> CanonicalConsoleRuntimeTransaction? {
         guard isActive(scope) else {
             return nil
@@ -345,7 +345,7 @@ package struct CanonicalConsoleRuntimeStore: Equatable, Sendable {
 
     package mutating func reduceConsole(
         _ event: Console.Event,
-        scope: ModelEventScope,
+        scope: WebInspectorConsoleRuntimeEventScope,
         networkRequestResolution: CanonicalConsoleNetworkRequestResolution? = nil
     ) throws -> CanonicalConsoleRuntimeTransaction? {
         guard isActive(scope) else {
@@ -470,7 +470,7 @@ package struct CanonicalConsoleRuntimeStore: Equatable, Sendable {
     /// new document loader. Persistent RuntimeContext membership is handled by
     /// the frame or semantic-target navigation boundary separately.
     package func runtimeBindingDidAdvance(
-        scope: ModelEventScope
+        scope: WebInspectorConsoleRuntimeEventScope
     ) throws -> CanonicalConsoleRuntimeTransaction? {
         guard isActive(scope) else {
             return nil
@@ -492,7 +492,7 @@ package struct CanonicalConsoleRuntimeStore: Equatable, Sendable {
     /// Applies a semantic-target navigation boundary without guessing
     /// membership from an identifier-only Runtime event.
     package mutating func semanticTargetNavigated(
-        scope: ModelEventScope
+        scope: WebInspectorConsoleRuntimeEventScope
     ) throws -> CanonicalConsoleRuntimeTransaction? {
         guard isActive(scope) else {
             return nil
@@ -623,7 +623,7 @@ private extension CanonicalConsoleRuntimeStore {
         return ids.map(CanonicalRuntimeContextChange.delete)
     }
 
-    func isActive(_ scope: ModelEventScope) -> Bool {
+    func isActive(_ scope: WebInspectorConsoleRuntimeEventScope) -> Bool {
         activeAttachmentGeneration != nil
             && scope.generation == activePageGeneration
     }
@@ -655,7 +655,7 @@ private extension CanonicalConsoleRuntimeStore {
     }
 
     func requireRuntimeBindingEpoch(
-        _ scope: ModelEventScope,
+        _ scope: WebInspectorConsoleRuntimeEventScope,
         event: String
     ) throws -> ModelRuntimeBindingEpoch {
         guard let epoch = scope.runtimeBindingEpoch else {
@@ -667,7 +667,7 @@ private extension CanonicalConsoleRuntimeStore {
     }
 
     func requireConsoleBindingEpoch(
-        _ scope: ModelEventScope,
+        _ scope: WebInspectorConsoleRuntimeEventScope,
         event: String
     ) throws -> ModelConsoleBindingEpoch {
         guard let epoch = scope.consoleBindingEpoch else {
@@ -680,7 +680,7 @@ private extension CanonicalConsoleRuntimeStore {
 
     func canonicalRuntimeContextID(
         rawContextID: Runtime.ExecutionContext.ID,
-        scope: ModelEventScope
+        scope: WebInspectorConsoleRuntimeEventScope
     ) -> CanonicalRuntimeContextIDStorage {
         guard let attachmentGeneration = activeAttachmentGeneration else {
             preconditionFailure(
@@ -716,7 +716,7 @@ private extension CanonicalConsoleRuntimeStore {
 private extension CanonicalConsoleRuntimeStore {
     mutating func insertRuntimeContext(
         _ context: Runtime.ExecutionContext,
-        scope: ModelEventScope
+        scope: WebInspectorConsoleRuntimeEventScope
     ) throws -> CanonicalConsoleRuntimeTransaction {
         let runtimeBindingEpoch = try requireRuntimeBindingEpoch(
             scope,
@@ -784,7 +784,7 @@ private extension CanonicalConsoleRuntimeStore {
 
     mutating func destroyRuntimeContext(
         _ rawContextID: Runtime.ExecutionContext.ID,
-        scope: ModelEventScope
+        scope: WebInspectorConsoleRuntimeEventScope
     ) throws -> CanonicalConsoleRuntimeTransaction? {
         _ = try requireRuntimeBindingEpoch(
             scope,
@@ -821,7 +821,7 @@ private extension CanonicalConsoleRuntimeStore {
     }
 
     mutating func clearRuntimeContexts(
-        scope: ModelEventScope
+        scope: WebInspectorConsoleRuntimeEventScope
     ) throws -> CanonicalConsoleRuntimeTransaction {
         let runtimeBindingEpoch = try requireRuntimeBindingEpoch(
             scope,
@@ -908,7 +908,7 @@ private extension CanonicalConsoleRuntimeStore {
 private extension CanonicalConsoleRuntimeStore {
     mutating func insertConsoleMessage(
         _ message: Console.Message,
-        scope: ModelEventScope,
+        scope: WebInspectorConsoleRuntimeEventScope,
         networkRequestResolution: CanonicalConsoleNetworkRequestResolution?
     ) throws -> CanonicalConsoleRuntimeTransaction {
         guard message.repeatCount > 0 else {
@@ -1003,7 +1003,7 @@ private extension CanonicalConsoleRuntimeStore {
     mutating func updateConsoleRepeatCount(
         _ count: Int,
         timestamp: Double?,
-        scope: ModelEventScope
+        scope: WebInspectorConsoleRuntimeEventScope
     ) throws -> CanonicalConsoleRuntimeTransaction {
         _ = try requireRuntimeBindingEpoch(
             scope,
@@ -1055,7 +1055,7 @@ private extension CanonicalConsoleRuntimeStore {
     }
 
     mutating func clearConsoleMessages(
-        scope: ModelEventScope
+        scope: WebInspectorConsoleRuntimeEventScope
     ) throws -> CanonicalConsoleRuntimeTransaction {
         _ = try requireRuntimeBindingEpoch(
             scope,
