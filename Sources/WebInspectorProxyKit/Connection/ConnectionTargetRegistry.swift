@@ -4,6 +4,7 @@ package struct ConnectionTargetRegistry: Sendable {
     package struct CommitMutation: Sendable {
         package let bindingChanged: Bool
         package let retiredTargetID: ProtocolTarget.ID?
+        package let committedTargetID: ProtocolTarget.ID?
     }
 
     package private(set) var records: [ProtocolTarget.ID: ProtocolTarget.Record] = [:]
@@ -80,14 +81,22 @@ package struct ConnectionTargetRegistry: Sendable {
             if let frameID = committedFrame.frameID {
                 targetByFrame[frameID] = newID
             }
-            return CommitMutation(bindingChanged: false, retiredTargetID: nil)
+            return CommitMutation(
+                bindingChanged: false,
+                retiredTargetID: nil,
+                committedTargetID: newID
+            )
         }
 
         let previousCurrentPageID = currentPageID
         let replacingCurrentPage = currentPageID == oldID
         let oldRecord = records.removeValue(forKey: oldID)
         guard var newRecord = records[newID] ?? oldRecord else {
-            return CommitMutation(bindingChanged: false, retiredTargetID: nil)
+            return CommitMutation(
+                bindingChanged: false,
+                retiredTargetID: nil,
+                committedTargetID: nil
+            )
         }
 
         newRecord.id = newID
@@ -106,7 +115,8 @@ package struct ConnectionTargetRegistry: Sendable {
         }
         return CommitMutation(
             bindingChanged: previousCurrentPageID != currentPageID,
-            retiredTargetID: oldID
+            retiredTargetID: oldID,
+            committedTargetID: newID
         )
     }
 
@@ -125,13 +135,16 @@ package struct ConnectionTargetRegistry: Sendable {
         for policy: WebInspectorTargetSelectionPolicy
     ) -> Set<ProtocolTarget.ID> {
         guard let anchorID = resolve(anchor: policy.anchor),
-              let anchor = records[anchorID] else {
+              let anchor = records[anchorID],
+              !anchor.isProvisional else {
             return []
         }
         var selected: Set<ProtocolTarget.ID> = policy.includesAnchor ? [anchorID] : []
         guard !policy.descendantKinds.isEmpty else { return selected }
 
-        for record in records.values where policy.descendantKinds.contains(record.kind) {
+        for record in records.values where
+            !record.isProvisional && policy.descendantKinds.contains(record.kind)
+        {
             if isDescendant(record, of: anchor) {
                 selected.insert(record.id)
             }
@@ -192,6 +205,7 @@ package struct ConnectionTargetRegistry: Sendable {
             if parentFrameID == anchor.frameID { return true }
             guard let parentTargetID = targetByFrame[parentFrameID],
                   let parent = records[parentTargetID],
+                  !parent.isProvisional,
                   let next = parent.parentFrameID else {
                 return false
             }

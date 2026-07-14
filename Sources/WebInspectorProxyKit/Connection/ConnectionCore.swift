@@ -59,6 +59,7 @@ package actor ConnectionCore {
     private var rootReplies: [UInt64: PendingReply] = [:]
     private var targetReplies: [ReplyKey: PendingReply] = [:]
     private var targetReplyByWrapperID: [UInt64: ReplyKey] = [:]
+    private var provisionalMessagesByTargetID: [ProtocolTarget.ID: [ParsedProtocolMessage]] = [:]
     private var currentPageWaiters: [UUID: ReplyPromise<ProtocolTarget.Record>] = [:]
     private var scopes = ConnectionOrderedScopeRegistry()
     private var capabilities = ConnectionCapabilityRegistry()
@@ -411,16 +412,18 @@ package actor ConnectionCore {
             return
         }
 
-        if method.domain.rawValue == "Target" {
-            try await handleTargetControl(method: method, parameters: parsed.parameters)
-        }
-        routeEvent(method: method, parameters: parsed.parameters, deliveredBy: nil)
+        try await handleEvent(method: method, parameters: parsed.parameters, deliveredBy: nil)
     }
 
     private func handleTarget(
         _ parsed: ParsedProtocolMessage,
         deliveredBy targetID: ProtocolTarget.ID
     ) async throws {
+        guard let target = targets.record(for: targetID) else { return }
+        if target.isProvisional {
+            provisionalMessagesByTargetID[targetID, default: []].append(parsed)
+            return
+        }
         if let id = parsed.id {
             let key = ReplyKey(targetID: targetID, commandID: id)
             if let pending = targetReplies.removeValue(forKey: key) {
@@ -429,7 +432,6 @@ package actor ConnectionCore {
                 return
             }
         }
-        guard targets.record(for: targetID) != nil else { return }
         guard let method = parsed.method else { return }
         if method.rawValue == "Target.dispatchMessageFromTarget" {
             let dispatch: TargetDispatchParameters
@@ -447,10 +449,33 @@ package actor ConnectionCore {
             try await handleTarget(nested, deliveredBy: dispatch.targetID)
             return
         }
-        if method.domain.rawValue == "Target" {
-            try await handleTargetControl(method: method, parameters: parsed.parameters)
+        try await handleEvent(method: method, parameters: parsed.parameters, deliveredBy: targetID)
+    }
+
+    private func handleEvent(
+        method: WebInspectorProtocolMethod,
+        parameters: Data,
+        deliveredBy targetID: ProtocolTarget.ID?
+    ) async throws {
+        let committedTargetID: ProtocolTarget.ID? = if method.domain.rawValue == "Target" {
+            try handleTargetControl(method: method, parameters: parameters)
+        } else {
+            nil
         }
-        routeEvent(method: method, parameters: parsed.parameters, deliveredBy: targetID)
+        routeEvent(method: method, parameters: parameters, deliveredBy: targetID)
+        if let committedTargetID {
+            try await dispatchProvisionalMessages(for: committedTargetID)
+        }
+    }
+
+    private func dispatchProvisionalMessages(
+        for targetID: ProtocolTarget.ID
+    ) async throws {
+        let messages = provisionalMessagesByTargetID.removeValue(forKey: targetID) ?? []
+        for message in messages {
+            guard case .open = state else { return }
+            try await handleTarget(message, deliveredBy: targetID)
+        }
     }
 
     private func complete(_ pending: PendingReply, parsed: ParsedProtocolMessage) {
@@ -502,7 +527,7 @@ package actor ConnectionCore {
     private func handleTargetControl(
         method: WebInspectorProtocolMethod,
         parameters: Data
-    ) async throws {
+    ) throws -> ProtocolTarget.ID? {
         switch method.rawValue {
         case "Target.targetCreated":
             let payload: TargetCreatedParameters
@@ -528,16 +553,19 @@ package actor ConnectionCore {
             if bindingChanged { advanceGeneration() }
             resumeCurrentPageWaitersIfPossible()
             reconcileScopesAfterTargetMutation()
+            return nil
 
         case "Target.targetDestroyed":
             let payload: TargetDestroyedParameters
             do { payload = try WebInspectorWireJSON.decode(TargetDestroyedParameters.self, from: parameters) }
             catch { throw ConnectionError.malformedTargetControlPlane(method.rawValue) }
             let bindingChanged = targets.remove(payload.targetID)
+            provisionalMessagesByTargetID.removeValue(forKey: payload.targetID)
             failPendingReplies(for: payload.targetID)
             _ = capabilities.targetDisappeared(payload.targetID)
             if bindingChanged { advanceGeneration() }
             reconcileScopesAfterTargetMutation()
+            return nil
 
         case "Target.didCommitProvisionalTarget":
             let payload: TargetCommittedParameters
@@ -551,9 +579,10 @@ package actor ConnectionCore {
             if mutation.bindingChanged { advanceGeneration() }
             resumeCurrentPageWaitersIfPossible()
             reconcileScopesAfterTargetMutation()
+            return mutation.committedTargetID
 
         default:
-            break
+            return nil
         }
     }
 

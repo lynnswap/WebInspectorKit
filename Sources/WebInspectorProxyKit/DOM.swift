@@ -100,7 +100,12 @@ public struct DOM: Sendable, WebInspectorEventDomainHandle {
     }
 
     /// Highlights a DOM node in the inspected page.
+    ///
+    /// WebKit cannot highlight frame-owned nodes from frame targets. Such
+    /// nodes are intentionally ignored instead of being routed into the
+    /// current page's unrelated node namespace.
     public func highlightNode(_ id: Node.ID) async throws {
+        guard id.targetScopeRawValue == nil else { return }
         try await endpoint.dispatch(DOMWireCoding.highlightNode(id))
     }
 

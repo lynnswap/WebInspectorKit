@@ -52,6 +52,7 @@ func topLevelCommitRetargetsTheLogicalPage() {
 
     #expect(mutation.bindingChanged)
     #expect(mutation.retiredTargetID == ProtocolTarget.ID("page-old"))
+    #expect(mutation.committedTargetID == ProtocolTarget.ID("page-new"))
     #expect(registry.currentPageID == ProtocolTarget.ID("page-new"))
     #expect(registry.record(for: ProtocolTarget.ID("page-new"))?.isProvisional == false)
     #expect(registry.record(for: ProtocolTarget.ID("page-old")) == nil)
@@ -80,6 +81,7 @@ func subframeCommitPreservesTheLogicalPageAndItsPhysicalTarget() {
 
     #expect(!mutation.bindingChanged)
     #expect(mutation.retiredTargetID == nil)
+    #expect(mutation.committedTargetID == ProtocolTarget.ID("frame-new"))
     #expect(registry.currentPageID == ProtocolTarget.ID("page-main"))
     #expect(registry.record(for: ProtocolTarget.ID("page-main")) != nil)
     #expect(registry.record(for: ProtocolTarget.ID("frame-new"))?.isProvisional == false)
@@ -108,6 +110,42 @@ func currentPageSelectionIncludesFrameTargetsButNotWorkers() {
     #expect(registry.selectedTargets(for: .currentPage) == [
         ProtocolTarget.ID("page-main"),
         ProtocolTarget.ID("frame-one"),
+    ])
+}
+
+@Test
+func currentPageSelectionExcludesProvisionalDescendantsUntilCommit() {
+    var registry = ConnectionTargetRegistry()
+    registry.insert(target(
+        "page-main",
+        kind: .page,
+        frameID: "main-frame"
+    ))
+    registry.insert(target(
+        "frame-new",
+        kind: .frame,
+        frameID: "child-frame",
+        parentFrameID: "main-frame",
+        isProvisional: true
+    ))
+    registry.insert(target(
+        "frame-descendant",
+        kind: .frame,
+        frameID: "grandchild-frame",
+        parentFrameID: "child-frame"
+    ))
+
+    #expect(registry.selectedTargets(for: .currentPage) == [
+        ProtocolTarget.ID("page-main"),
+    ])
+    _ = registry.commit(
+        old: ProtocolTarget.ID("page-main"),
+        new: ProtocolTarget.ID("frame-new")
+    )
+    #expect(registry.selectedTargets(for: .currentPage) == [
+        ProtocolTarget.ID("page-main"),
+        ProtocolTarget.ID("frame-new"),
+        ProtocolTarget.ID("frame-descendant"),
     ])
 }
 

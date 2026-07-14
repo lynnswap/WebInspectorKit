@@ -300,6 +300,60 @@ func subframeCommitCannotConsumeTheCurrentPageBinding() async throws {
 }
 
 @Test
+func provisionalTargetTrafficIsDeliveredOnlyAfterCommit() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    defer { Task { await runtime.close() } }
+    let scope = try await runtime.page.orderedScope(
+        descriptor: WebInspectorOrderedScopeDescriptor(
+            decoders: [DOMWireCoding.eventDecoder.routed()],
+            capabilities: [DOMWireCoding.capability]
+        ),
+        buffering: .bounded(4)
+    )
+    var iterator = scope.events.makeAsyncIterator()
+    _ = try await iterator.next()
+
+    try await runtime.peer.createTarget(.init(
+        id: "frame-provisional",
+        type: "page",
+        frameID: "child-frame",
+        parentFrameID: "main-frame",
+        isProvisional: true
+    ))
+    try await runtime.peer.emitTargetEvent(
+        targetID: "frame-provisional",
+        method: "DOM.documentUpdated"
+    )
+    try await runtime.peer.commitProvisionalTarget(
+        from: "page-main",
+        to: "frame-provisional"
+    )
+
+    guard case let .event(_, event) = try await iterator.next() else {
+        Issue.record("Expected the committed frame event.")
+        return
+    }
+    #expect(event.agentTarget?.id.rawValue == "frame-provisional")
+    #expect(event.agentTarget?.isProvisional == false)
+    await scope.close()
+}
+
+@Test
+func frameOwnedNodeHighlightIsANoOp() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    defer { Task { await runtime.close() } }
+
+    try await runtime.page.dom.highlightNode(
+        DOM.Node.ID("42", scopedToTargetRawValue: "frame-one")
+    )
+    let hideTask = Task { try await runtime.page.dom.hideHighlight() }
+    let command = try await runtime.peer.commands.next()
+    #expect(command.method == "DOM.hideHighlight")
+    try await runtime.peer.reply(to: command)
+    try await hideTask.value
+}
+
+@Test
 func malformedTargetControlPlaneTerminatesThePhysicalConnection() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     do {
