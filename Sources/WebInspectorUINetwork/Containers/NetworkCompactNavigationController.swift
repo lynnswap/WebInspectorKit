@@ -83,7 +83,7 @@ package final class NetworkCompactNavigationController:
     ) {
         guard transition == nil,
               viewController === listViewController,
-              self.viewControllers.last === detailViewController,
+              isTransitioningFromDetailToList(in: navigationController),
               case let .detail(entryID) = model.route else {
             return
         }
@@ -92,6 +92,21 @@ package final class NetworkCompactNavigationController:
         // therefore never see a still-selected detail after a completed pop.
         transition = .userPop(previousEntryID: entryID)
         model.showList()
+    }
+
+    private func isTransitioningFromDetailToList(
+        in navigationController: UINavigationController
+    ) -> Bool {
+        if let coordinator = navigationController.transitionCoordinator {
+            return coordinator.viewController(forKey: .from)
+                === detailViewController
+                && coordinator.viewController(forKey: .to)
+                === listViewController
+        }
+
+        // Nonanimated stack changes can synchronously invoke the delegate
+        // without installing a transition coordinator.
+        return self.viewControllers.last === detailViewController
     }
 
     package func navigationController(
