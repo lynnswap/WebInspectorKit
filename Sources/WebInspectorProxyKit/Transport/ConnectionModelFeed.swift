@@ -604,6 +604,15 @@ package actor ConnectionModelFeed {
         try await owner.closeModelFeed(id)
     }
 
+    package func requestDOMRecovery(
+        afterRejecting scope: ModelEventScope
+    ) async throws {
+        try await owner.requestModelFeedDOMRecovery(
+            id,
+            afterRejecting: scope
+        )
+    }
+
     package nonisolated func makeElementPickerLease()
         -> ConnectionModelElementPickerLease
     {

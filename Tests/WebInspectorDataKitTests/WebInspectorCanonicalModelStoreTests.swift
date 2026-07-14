@@ -1065,6 +1065,121 @@ func canonicalModelStoreAtomicallyInvalidatesDOMAndCSSDocumentState() throws {
 }
 
 @Test
+func canonicalModelStoreRecoversRejectedDOMDeltaWithoutStoppingNetwork()
+    throws
+{
+    var fixture = try CanonicalModelStoreFixture(domains: [.dom, .network])
+    _ = try fixture.bootstrapDOM(
+        root: canonicalModelDocument(
+            id: "document",
+            children: [canonicalModelDOMNode(id: "body")]
+        )
+    )
+
+    let rejectedSequence = fixture.nextSequence
+    let recovery = try fixture.event(
+        .dom(
+            .childNodeRemoved(
+                parent: DOM.Node.ID("document"),
+                node: DOM.Node.ID("not-materialized")
+            )
+        ),
+        scope: fixture.scope()
+    )
+    #expect(
+        recovery.feedChanges == [
+            .DOMRecoveryStarted(
+                targetID: WebInspectorTarget.ID("page"),
+                rejectedSequence: rejectedSequence
+            )
+        ]
+    )
+    guard case let .recoverDOM(_, actionSequence, operation, _) = try #require(
+        recovery.actions.first
+    ) else {
+        Issue.record("Expected a DOM recovery action.")
+        return
+    }
+    #expect(recovery.actions.count == 1)
+    #expect(actionSequence == rejectedSequence)
+    #expect(operation == .childNodeRemoved)
+    #expect(fixture.store.bindingSnapshot?.lastSequence == rejectedSequence)
+    #expect(fixture.store.bindingSnapshot?.readyDOMTargetIDs.isEmpty == true)
+    #expect(
+        fixture.store.snapshot(reason: .onDemandRebase).DOM?.records.count
+            == 2
+    )
+    #expect(
+        fixture.store.snapshot(reason: .onDemandRebase).DOM?.tree.rows.isEmpty
+            == true
+    )
+
+    let suppressedDOM = try fixture.event(
+        .dom(
+            .attributeModified(
+                DOM.Node.ID("body"),
+                name: "class",
+                value: "stale"
+            )
+        ),
+        scope: fixture.scope()
+    )
+    #expect(suppressedDOM.isEmpty)
+
+    let network = try fixture.event(
+        .network(
+            canonicalRequestWillBeSent(
+                id: "during-dom-recovery",
+                url: "https://example.test/recovery",
+                timestamp: 1
+            )
+        ),
+        scope: fixture.scope()
+    )
+    #expect(network.network?.requestChanges.count == 1)
+    #expect(
+        fixture.store.networkRequestID(
+            forRawRequestID: Network.Request.ID("during-dom-recovery")
+        ) != nil
+    )
+
+    let invalidationScope = fixture.scope(DOMBindingEpoch: 2)
+    let invalidation = try fixture.store.reduce(
+        .domDocumentInvalidated(
+            sequence: fixture.nextSequence,
+            scope: invalidationScope
+        ),
+        attachmentGeneration: fixture.attachmentGeneration
+    )
+    fixture.nextSequence += 1
+    #expect(invalidation.DOM?.deletedRecordIDs.count == 2)
+
+    let replacement = try fixture.store.reduce(
+        .bootstrapSnapshot(
+            generation: fixture.pageGeneration,
+            domain: .dom,
+            sequence: fixture.nextSequence,
+            payload: .domDocument(
+                scope: invalidationScope,
+                root: canonicalModelDocument(id: "replacement-document")
+            )
+        ),
+        attachmentGeneration: fixture.attachmentGeneration
+    )
+    fixture.nextSequence += 1
+    #expect(replacement.DOM?.insertedRecords.count == 1)
+    #expect(
+        fixture.store.bindingSnapshot?.readyDOMTargetIDs
+            == [WebInspectorTarget.ID("page")]
+    )
+    #expect(
+        fixture.store.networkRequestID(
+            forRawRequestID: Network.Request.ID("during-dom-recovery")
+        ) != nil
+    )
+}
+
+@Test
 func canonicalModelStoreClearsPrimaryDOMRootAtProvisionalPageCommit() throws {
     let oldPage = canonicalModelPageTarget(id: "old-page")
     var fixture = try CanonicalModelStoreFixture(

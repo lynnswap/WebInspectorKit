@@ -124,6 +124,10 @@ package enum WebInspectorCanonicalFeedChange: Equatable, Sendable {
         targetID: WebInspectorTarget.ID,
         epoch: ModelDOMBindingEpoch
     )
+    case DOMRecoveryStarted(
+        targetID: WebInspectorTarget.ID,
+        rejectedSequence: UInt64
+    )
     case replayComplete(domain: ModelDomain, through: UInt64)
     case bootstrapSnapshot(domain: ModelDomain, through: UInt64)
     case bootstrapComplete(domain: ModelDomain, through: UInt64)
@@ -137,6 +141,73 @@ package enum WebInspectorCanonicalModelAction: Equatable, Sendable {
         scope: ModelEventScope,
         objectID: Runtime.RemoteObject.ID?
     )
+    /// A domain-local projection failure that requires a fresh authoritative
+    /// document from the existing ProxyKit model feed.
+    case recoverDOM(
+        scope: ModelEventScope,
+        rejectedSequence: UInt64,
+        operation: WebInspectorCanonicalDOMOperation,
+        error: WebInspectorCanonicalDOMError
+    )
+}
+
+package enum WebInspectorCanonicalDOMOperation: String, Equatable, Sendable {
+    case documentUpdated
+    case setChildNodes
+    case detachedRoot
+    case childNodeInserted
+    case childNodeRemoved
+    case childNodeCountUpdated
+    case attributeModified
+    case attributeRemoved
+    case inlineStyleInvalidated
+    case characterDataModified
+    case shadowRootPushed
+    case shadowRootPopped
+    case pseudoElementAdded
+    case pseudoElementRemoved
+    case willDestroyDOMNode
+    case inspect
+    case unknown
+
+    init(_ event: DOM.Event) {
+        switch event {
+        case .documentUpdated:
+            self = .documentUpdated
+        case .setChildNodes:
+            self = .setChildNodes
+        case .detachedRoot:
+            self = .detachedRoot
+        case .childNodeInserted:
+            self = .childNodeInserted
+        case .childNodeRemoved:
+            self = .childNodeRemoved
+        case .childNodeCountUpdated:
+            self = .childNodeCountUpdated
+        case .attributeModified:
+            self = .attributeModified
+        case .attributeRemoved:
+            self = .attributeRemoved
+        case .inlineStyleInvalidated:
+            self = .inlineStyleInvalidated
+        case .characterDataModified:
+            self = .characterDataModified
+        case .shadowRootPushed:
+            self = .shadowRootPushed
+        case .shadowRootPopped:
+            self = .shadowRootPopped
+        case .pseudoElementAdded:
+            self = .pseudoElementAdded
+        case .pseudoElementRemoved:
+            self = .pseudoElementRemoved
+        case .willDestroyDOMNode:
+            self = .willDestroyDOMNode
+        case .inspect:
+            self = .inspect
+        case .unknown:
+            self = .unknown
+        }
+    }
 }
 
 package struct WebInspectorCanonicalModelTransaction: Equatable, Sendable {
@@ -262,6 +333,7 @@ package struct WebInspectorCanonicalModelStore: Sendable {
     private enum DOMPhase: Equatable, Sendable {
         case awaiting
         case ready
+        case recovering
     }
 
     private struct DOMAuthority: Equatable, Sendable {
@@ -519,10 +591,22 @@ package struct WebInspectorCanonicalModelStore: Sendable {
     ) throws -> WebInspectorCanonicalModelTransaction {
         do {
             let priorEpochMapMutationCount = binding?.epochMapMutationCount ?? 0
-            var transaction = try reduceValidated(
-                record,
-                attachmentGeneration: attachmentGeneration
-            )
+            var transaction: WebInspectorCanonicalModelTransaction
+            do {
+                transaction = try reduceValidated(
+                    record,
+                    attachmentGeneration: attachmentGeneration
+                )
+            } catch let error as WebInspectorCanonicalDOMError {
+                guard let recovery = try beginDOMRecovery(
+                    afterRejecting: record,
+                    error: error,
+                    attachmentGeneration: attachmentGeneration
+                ) else {
+                    throw error
+                }
+                transaction = recovery
+            }
             reconcilePrimaryDOMTree(in: &transaction)
             if transaction.feedChanges.contains(where: {
                 if case .reset = $0 {
@@ -783,6 +867,14 @@ private extension WebInspectorCanonicalModelStore {
             guard next.targetSnapshotWasApplied else {
                 throw protocolViolation(.eventBeforeTargetSnapshot)
             }
+            if try suppressDOMDependentEventDuringRecovery(
+                payload,
+                scope: scope,
+                binding: &next
+            ) {
+                binding = next
+                return WebInspectorCanonicalModelTransaction()
+            }
             let transaction = try reduce(
                 payload,
                 scope: scope,
@@ -888,6 +980,75 @@ private extension WebInspectorCanonicalModelStore {
         _ violation: WebInspectorCanonicalFeedProtocolViolation
     ) -> WebInspectorCanonicalModelStoreError {
         .protocolViolation(violation)
+    }
+
+    private mutating func beginDOMRecovery(
+        afterRejecting record: ConnectionModelFeedRecord,
+        error: WebInspectorCanonicalDOMError,
+        attachmentGeneration: WebInspectorContainerAttachmentGeneration
+    ) throws -> WebInspectorCanonicalModelTransaction? {
+        guard case let .event(sequence, scope, .dom(event)) = record,
+            var next = binding,
+            next.attachmentGeneration == attachmentGeneration,
+            next.targetSnapshotWasApplied,
+            configuredDomains.contains(.dom)
+        else {
+            return nil
+        }
+        try requireGeneration(scope.generation, in: next)
+        try acceptSequence(sequence, in: &next)
+        try validateModelScope(
+            scope,
+            in: &next,
+            requireDOMReady: true
+        )
+        guard var authority = next.DOMAuthorities[scope.target.id],
+            authority.phase == .ready,
+            authority.isEstablishedInReducer
+        else {
+            return nil
+        }
+        authority.phase = .recovering
+        next.DOMAuthorities[scope.target.id] = authority
+        binding = next
+        return WebInspectorCanonicalModelTransaction(
+            feedChanges: [
+                .DOMRecoveryStarted(
+                    targetID: scope.target.id,
+                    rejectedSequence: sequence
+                )
+            ],
+            actions: [
+                .recoverDOM(
+                    scope: scope,
+                    rejectedSequence: sequence,
+                    operation: WebInspectorCanonicalDOMOperation(event),
+                    error: error
+                )
+            ]
+        )
+    }
+
+    private mutating func suppressDOMDependentEventDuringRecovery(
+        _ payload: ModelProtocolEvent,
+        scope: ModelEventScope,
+        binding: inout BindingState
+    ) throws -> Bool {
+        switch payload {
+        case .dom, .css, .inspector:
+            break
+        case .target, .network, .console, .runtime:
+            return false
+        }
+        guard binding.DOMAuthorities[scope.target.id]?.phase == .recovering else {
+            return false
+        }
+        try validateModelScope(
+            scope,
+            in: &binding,
+            requireDOMReady: false
+        )
+        return true
     }
 }
 

@@ -350,6 +350,7 @@ package struct WebInspectorModelContainerAttachmentAttemptState: Sendable {
 
 package struct WebInspectorModelContainerFeedApplication: Sendable {
     package let synchronizationBarrier: WebInspectorModelContextAcknowledgementBarrier?
+    package let domRecoveryScopes: [ModelEventScope]
 }
 
 package extension WebInspectorModelContainerCore {
@@ -554,12 +555,28 @@ package extension WebInspectorModelContainerCore {
             record,
             attachmentGeneration: generation
         )
+        var domRecoveryScopes: [ModelEventScope] = []
         if let commit {
             applyCanonicalElementPickerActions(
                 commit.transaction.actions,
                 resourceID: resourceID,
                 generation: generation
             )
+            for action in commit.transaction.actions {
+                guard case let .recoverDOM(
+                    scope,
+                    rejectedSequence,
+                    operation,
+                    error
+                ) = action else {
+                    continue
+                }
+                WebInspectorDataKitLog.error(
+                    "Canonical DOM delta rejected; resynchronizing target=\(scope.target.id.rawValue) sequence=\(rejectedSequence) operation=\(operation.rawValue) error=\(error)"
+                )
+                performanceCounters.domRecoveryCount += 1
+                domRecoveryScopes.append(scope)
+            }
         }
         guard let commit,
             commit.transaction.feedChanges.contains(where: {
@@ -571,14 +588,16 @@ package extension WebInspectorModelContainerCore {
             })
         else {
             return WebInspectorModelContainerFeedApplication(
-                synchronizationBarrier: nil
+                synchronizationBarrier: nil,
+                domRecoveryScopes: domRecoveryScopes
             )
         }
 
         return WebInspectorModelContainerFeedApplication(
             synchronizationBarrier: try makeAcknowledgementBarrier(
                 through: commit.toRevision
-            )
+            ),
+            domRecoveryScopes: domRecoveryScopes
         )
     }
 
@@ -856,7 +875,7 @@ private extension WebInspectorModelContainerCore {
         }
         let driverTask = Task.detached(priority: .userInitiated) {
             await Self.driveModelFeed(
-                feed.records,
+                feed,
                 resourceID: resourceID,
                 generation: attempt.generation,
                 startGate: startGate,
@@ -891,7 +910,7 @@ private extension WebInspectorModelContainerCore {
     }
 
     nonisolated static func driveModelFeed(
-        _ records: ConnectionModelFeedRecords,
+        _ feed: ConnectionModelFeed,
         resourceID: UInt64,
         generation: WebInspectorContainerAttachmentGeneration,
         startGate: ReplyPromise<Void>,
@@ -902,7 +921,7 @@ private extension WebInspectorModelContainerCore {
     ) async -> WebInspectorModelContainerFeedDriverTerminal {
         do {
             try await startGate.valueIgnoringCancellation()
-            for try await record in records {
+            for try await record in feed.records {
                 try Task.checkCancellation()
                 guard let core = resolveCore() else {
                     return .cancelled
@@ -912,6 +931,12 @@ private extension WebInspectorModelContainerCore {
                     resourceID: resourceID,
                     generation: generation
                 )
+                for scope in application.domRecoveryScopes {
+                    try Task.checkCancellation()
+                    try await feed.requestDOMRecovery(
+                        afterRejecting: scope
+                    )
+                }
                 if let barrier = application.synchronizationBarrier {
                     try await core.waitForAcknowledgements(barrier)
                     try await core.recordSynchronizationCompletion(

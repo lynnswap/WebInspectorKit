@@ -918,6 +918,53 @@ package actor ConnectionCore {
         completion.fulfill(.success(()))
     }
 
+    package func requestModelFeedDOMRecovery(
+        _ id: ConnectionModelFeedID,
+        afterRejecting scope: ModelEventScope
+    ) async throws {
+        guard isOpen else {
+            throw terminalScopeError
+        }
+        guard let registration = modelFeed,
+            registration.id == id,
+            registration.configuredDomains.contains(.dom)
+        else {
+            throw ConnectionModelFeedError.consumerTerminated
+        }
+        switch registration.lifecycle {
+        case .acquiring, .active:
+            break
+        case .rollingBack, .closing:
+            throw ConnectionModelFeedError.consumerTerminated
+        }
+
+        let targetID = ProtocolTarget.ID(scope.target.id.rawValue)
+        guard let rejectedEpoch = scope.domBindingEpoch else {
+            preconditionFailure("A rejected DOM model event has no binding epoch.")
+        }
+        guard scope.generation == currentPageGeneration,
+            modelNavigationEpoch(for: targetID) == scope.navigationEpoch,
+            modelDOMBindingEpoch(for: targetID) == rejectedEpoch,
+            let targetRecord = targetRegistry.target(for: targetID),
+            targetRegistry.isCurrentPageModelTarget(targetRecord),
+            let currentTarget = ModelTarget(record: targetRecord),
+            currentTarget == scope.target
+        else {
+            // A page/target/document boundary already superseded the rejected
+            // delta. Its ordered model record is the recovery authority.
+            return
+        }
+
+        let recoverySequence = eventSequences.recordEvent(domain: .dom).sequence
+        let invalidation = prepareModelDOMInvalidation(
+            targetID: targetID,
+            sequence: recoverySequence
+        )
+        await completeCommandInvalidationEffects(invalidation)
+        startNextDOMBootstrapIfNeeded()
+        startCSSBootstrapIfNeeded()
+    }
+
     private func appendModelFeedCapabilityLease(
         _ lease: ConnectionModelFeedCapabilityLease,
         feedID: ConnectionModelFeedID
@@ -3080,6 +3127,21 @@ package actor ConnectionCore {
               targetRegistry.isCurrentPageModelTarget(targetRecord) else {
             return ConnectionCommandInvalidationEffects()
         }
+        return prepareModelDOMInvalidation(
+            targetID: targetID,
+            sequence: event.sequence
+        )
+    }
+
+    private func prepareModelDOMInvalidation(
+        targetID: ProtocolTarget.ID,
+        sequence: UInt64
+    ) -> ConnectionCommandInvalidationEffects {
+        guard let targetRecord = targetRegistry.target(for: targetID),
+            targetRegistry.isCurrentPageModelTarget(targetRecord)
+        else {
+            return ConnectionCommandInvalidationEffects()
+        }
         let oldEpoch = modelDOMBindingEpoch(for: targetID)
         let documentEpoch = advanceModelDOMBindingEpoch(for: targetID)
 
@@ -3140,7 +3202,7 @@ package actor ConnectionCore {
             }
             _ = enqueueModelFeedRecord(
                 .domDocumentInvalidated(
-                    sequence: event.sequence,
+                    sequence: sequence,
                     scope: modelEventScope(
                         targetID: targetID,
                         target: target,

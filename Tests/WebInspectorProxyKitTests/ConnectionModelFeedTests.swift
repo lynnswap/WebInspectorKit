@@ -3808,6 +3808,83 @@ func domDocumentInvalidationPrecedesMainTargetDeltasAndFreshBootstrap() async th
 }
 
 @Test
+func modelFeedConsumerCanRecoverOnlyDOMWithoutClosingTheFeed() async throws {
+    let backend = FakeTransportBackend()
+    let core = ConnectionCore(backend: backend, responseTimeout: nil)
+    _ = await core.receiveRootMessage(modelFeedTargetCreatedMessage(
+        id: "page-main",
+        type: "page",
+        frameID: "main-frame"
+    ))
+
+    let feed = try await modelFeedOpenSuccessfully(
+        core: core,
+        backend: backend,
+        configuredDomains: [.dom],
+        targetID: "page-main"
+    )
+    var iterator = feed.records.makeAsyncIterator()
+    _ = try await modelFeedRequireReset(iterator.next())
+    _ = try await modelFeedRequireTargetSnapshot(iterator.next())
+    let initialDocument = try await modelFeedRequireDOMBootstrapSnapshot(
+        iterator.next()
+    )
+    _ = try await modelFeedRequireBootstrapCompletion(iterator.next())
+    let synchronization = try await modelFeedRequireSynchronization(
+        iterator.next()
+    )
+
+    try await feed.requestDOMRecovery(
+        afterRejecting: initialDocument.scope
+    )
+    let invalidation = try await modelFeedRequireDOMDocumentInvalidation(
+        iterator.next()
+    )
+    #expect(invalidation.sequence > synchronization.through)
+    #expect(invalidation.documentEpoch == ModelDOMBindingEpoch(rawValue: 1))
+
+    let replacementCommand = try await backend.waitForTargetMessage(
+        method: "DOM.getDocument",
+        ordinal: 1
+    )
+    await modelFeedRespondWithDocument(
+        to: replacementCommand,
+        core: core,
+        nodeID: "replacement"
+    )
+    let replacement = try await modelFeedRequireDOMBootstrapSnapshot(
+        iterator.next()
+    )
+    #expect(replacement.root.id == DOM.Node.ID("replacement"))
+    #expect(replacement.documentEpoch == ModelDOMBindingEpoch(rawValue: 1))
+    _ = try await modelFeedRequireBootstrapCompletion(iterator.next())
+
+    let liveSequence = await core.receiveRootMessage(
+        modelFeedTargetDispatchMessage(
+            targetID: "page-main",
+            message: #"{"method":"DOM.childNodeCountUpdated","params":{"nodeId":"replacement","childNodeCount":1}}"#
+        )
+    )
+    let live = try await modelFeedRequireEvent(iterator.next())
+    #expect(live.sequence == liveSequence)
+    #expect(live.domBindingEpoch == ModelDOMBindingEpoch(rawValue: 1))
+    guard case .dom = live.payload else {
+        Issue.record("Expected live DOM delivery after consumer recovery.")
+        return
+    }
+
+    try await modelFeedCloseSuccessfully(
+        feed,
+        core: core,
+        backend: backend,
+        targetID: "page-main",
+        enableMethods: ["Page.enable"]
+    )
+    #expect(try await iterator.next() == nil)
+    await core.close()
+}
+
+@Test
 func cssBootstrapRetriesStaleScopeAndPublishesOnlyTheLatestBinding() async throws {
     let backend = FakeTransportBackend()
     let core = ConnectionCore(backend: backend, responseTimeout: nil)

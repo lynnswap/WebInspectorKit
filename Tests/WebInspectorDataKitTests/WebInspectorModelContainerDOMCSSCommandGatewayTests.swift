@@ -29,12 +29,18 @@ private struct DOMCSSGatewayRuntime {
                 with: try testJSONObject(#"{"headers":[]}"#)
             )
         }
+        if domains.contains(.network) {
+            await wire.respond(to: "Network.enable")
+        }
         await wire.respond(
             to: "DOM.getDocument",
             with: try domDocumentResult(document)
         )
         if domains.contains(.css) {
             await wire.respond(to: "CSS.disable")
+        }
+        if domains.contains(.network) {
+            await wire.respond(to: "Network.disable")
         }
         await wire.respond(to: "Page.disable")
         let container = WebInspectorModelContainer(
@@ -318,6 +324,71 @@ func DOMGatewayRejectsStaleAndForeignCanonicalIdentitiesBeforeWire()
                 $0.method == "DOM.getOuterHTML"
             } == false
         )
+    }
+}
+
+@Test
+func rejectedDOMDeltaResynchronizesDOMWhileNetworkRemainsLive() async throws {
+    try await withDOMCSSGatewayRuntime(domains: [.dom, .network]) { fixture in
+        let replacementGate = await fixture.wire.deferReply(
+            to: "DOM.getDocument",
+            with: try domDocumentResult(
+                gatewayDocument(
+                    documentID: "replacement-document",
+                    bodyID: "replacement-body"
+                )
+            )
+        )
+
+        try await fixture.wire.emitRaw(
+            .childNodeRemoved(
+                parent: DOM.Node.ID("document"),
+                node: DOM.Node.ID("not-materialized")
+            ),
+            target: WebInspectorTarget.ID("page-main")
+        )
+        _ = await fixture.wire.observations.waitForCommands(
+            method: "DOM.getDocument",
+            count: 2
+        )
+
+        try await fixture.wire.emitRaw(
+            canonicalRequestWillBeSent(
+                id: "during-dom-recovery",
+                url: "https://example.test/during-dom-recovery",
+                timestamp: 1
+            ),
+            target: WebInspectorTarget.ID("page-main")
+        )
+        for _ in 0..<1_000 {
+            let snapshot = await fixture.container.core
+                .canonicalSnapshotForTesting()
+            if snapshot.network?.requests.contains(where: {
+                $0.record.id.rawRequestID
+                    == Network.Request.ID("during-dom-recovery")
+            }) == true {
+                break
+            }
+            await Task.yield()
+        }
+        #expect(
+            await fixture.container.core.canonicalSnapshotForTesting()
+                .network?.requests.contains(where: {
+                    $0.record.id.rawRequestID
+                        == Network.Request.ID("during-dom-recovery")
+                }) == true
+        )
+        #expect(fixture.container.state == .attached)
+        #expect(
+            await fixture.container.core.metrics.core.domRecoveryCount == 1
+        )
+
+        replacementGate.open()
+        _ = try await canonicalDOMNodeID(
+            rawValue: "replacement-body",
+            in: fixture.container.core
+        )
+        #expect(fixture.container.state == .attached)
     }
 }
 

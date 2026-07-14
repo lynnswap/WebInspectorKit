@@ -157,6 +157,7 @@ package struct WebInspectorModelContainerCorePerformanceCounters: Equatable, Sen
     package fileprivate(set) var networkResponseBodyWireCommandCount = 0
     package fileprivate(set) var networkResponseBodyCoalescedWaiterCount = 0
     package fileprivate(set) var networkResponseBodyInvalidationCount = 0
+    package var domRecoveryCount = 0
     package var domCSSCommandWireOperationCount = 0
     package var domCSSCommandCoalescedWaiterCount = 0
     package var domCSSCommandInvalidationCount = 0
