@@ -35,8 +35,18 @@ public final class WebInspectorModelContainer: Equatable, Sendable {
     package let modelStoreSink: WebInspectorModelStoreSink
     package let contextRegistry: WebInspectorModelContextRegistry
     package let featureRegistry: WebInspectorFeatureRegistry
+    package let domFeature: WebInspectorDOMFeature
+    package let networkFeature: WebInspectorNetworkFeature
+    package let consoleRuntimeFeature: WebInspectorConsoleRuntimeFeature
+    package let connectionOwner: WebInspectorModelContainerConnectionOwner
 
-    private let statePublisher = _WebInspectorStatePublisher<State>(.detached)
+    public let dom: WebInspectorDOM
+    public let network: WebInspectorNetwork
+    public let console: WebInspectorConsole
+    public let runtime: WebInspectorRuntime
+    public let page: WebInspectorPageCommands
+
+    private let statePublisher: _WebInspectorStatePublisher<State>
     private let closeReply = WebInspectorContextReply<Void>()
     @MainActor private weak var cachedMainContext: WebInspectorModelContext?
     @MainActor private weak var cachedClosedMainContext: WebInspectorModelContext?
@@ -49,6 +59,9 @@ public final class WebInspectorModelContainer: Equatable, Sendable {
 
     public init(configuration: Configuration = .init()) {
         self.configuration = configuration
+        let statePublisher = _WebInspectorStatePublisher<State>(.detached)
+        self.statePublisher = statePublisher
+        let storeID = WebInspectorContainerStoreID()
         let store = WebInspectorModelStore(
             schemaRegistry: WebInspectorBuiltInModelSchemas.registry(
                 for: configuration.enabledFeatures
@@ -58,9 +71,42 @@ public final class WebInspectorModelContainer: Equatable, Sendable {
         modelStore = store
         modelStoreSink = WebInspectorModelStoreSink(store: store)
         contextRegistry = WebInspectorModelContextRegistry(store: store)
-        featureRegistry = WebInspectorFeatureRegistry(
+        let featureRegistry = WebInspectorFeatureRegistry(
             enabledFeatures: configuration.enabledFeatures
         )
+        self.featureRegistry = featureRegistry
+        let pickerPublisher = _WebInspectorStatePublisher<WebInspectorElementPickerState>(.idle)
+        let domFeature = WebInspectorDOMFeature(
+            registry: featureRegistry,
+            pickerPublisher: pickerPublisher
+        )
+        let networkFeature = WebInspectorNetworkFeature(registry: featureRegistry)
+        let consoleRuntimeFeature = WebInspectorConsoleRuntimeFeature(registry: featureRegistry)
+        self.domFeature = domFeature
+        self.networkFeature = networkFeature
+        self.consoleRuntimeFeature = consoleRuntimeFeature
+        dom = WebInspectorDOM(
+            owner: domFeature,
+            registry: featureRegistry,
+            pickerPublisher: pickerPublisher
+        )
+        network = WebInspectorNetwork(owner: networkFeature, registry: featureRegistry)
+        console = WebInspectorConsole(owner: consoleRuntimeFeature, registry: featureRegistry)
+        runtime = WebInspectorRuntime(owner: consoleRuntimeFeature, registry: featureRegistry)
+        let connectionOwner = WebInspectorModelContainerConnectionOwner(
+            enabledFeatures: configuration.enabledFeatures,
+            storeID: storeID,
+            storeSink: modelStoreSink,
+            statePublisher: statePublisher,
+            dom: domFeature,
+            network: networkFeature,
+            consoleRuntime: consoleRuntimeFeature
+        )
+        self.connectionOwner = connectionOwner
+        page = WebInspectorPageCommands(owner: connectionOwner)
+        featureRegistry.install(.dom) { await domFeature.retry() }
+        featureRegistry.install(.network) { await networkFeature.retry() }
+        featureRegistry.install(.consoleRuntime) { await consoleRuntimeFeature.retry() }
     }
 
     package init(
@@ -68,6 +114,9 @@ public final class WebInspectorModelContainer: Equatable, Sendable {
         schemaRegistry: WebInspectorModelSchemaRegistry
     ) {
         self.configuration = configuration
+        let statePublisher = _WebInspectorStatePublisher<State>(.detached)
+        self.statePublisher = statePublisher
+        let storeID = WebInspectorContainerStoreID()
         let store = WebInspectorModelStore(
             schemaRegistry: schemaRegistry,
             enabledFeatures: configuration.enabledFeatures
@@ -75,9 +124,42 @@ public final class WebInspectorModelContainer: Equatable, Sendable {
         modelStore = store
         modelStoreSink = WebInspectorModelStoreSink(store: store)
         contextRegistry = WebInspectorModelContextRegistry(store: store)
-        featureRegistry = WebInspectorFeatureRegistry(
+        let featureRegistry = WebInspectorFeatureRegistry(
             enabledFeatures: configuration.enabledFeatures
         )
+        self.featureRegistry = featureRegistry
+        let pickerPublisher = _WebInspectorStatePublisher<WebInspectorElementPickerState>(.idle)
+        let domFeature = WebInspectorDOMFeature(
+            registry: featureRegistry,
+            pickerPublisher: pickerPublisher
+        )
+        let networkFeature = WebInspectorNetworkFeature(registry: featureRegistry)
+        let consoleRuntimeFeature = WebInspectorConsoleRuntimeFeature(registry: featureRegistry)
+        self.domFeature = domFeature
+        self.networkFeature = networkFeature
+        self.consoleRuntimeFeature = consoleRuntimeFeature
+        dom = WebInspectorDOM(
+            owner: domFeature,
+            registry: featureRegistry,
+            pickerPublisher: pickerPublisher
+        )
+        network = WebInspectorNetwork(owner: networkFeature, registry: featureRegistry)
+        console = WebInspectorConsole(owner: consoleRuntimeFeature, registry: featureRegistry)
+        runtime = WebInspectorRuntime(owner: consoleRuntimeFeature, registry: featureRegistry)
+        let connectionOwner = WebInspectorModelContainerConnectionOwner(
+            enabledFeatures: configuration.enabledFeatures,
+            storeID: storeID,
+            storeSink: modelStoreSink,
+            statePublisher: statePublisher,
+            dom: domFeature,
+            network: networkFeature,
+            consoleRuntime: consoleRuntimeFeature
+        )
+        self.connectionOwner = connectionOwner
+        page = WebInspectorPageCommands(owner: connectionOwner)
+        featureRegistry.install(.dom) { await domFeature.retry() }
+        featureRegistry.install(.network) { await networkFeature.retry() }
+        featureRegistry.install(.consoleRuntime) { await consoleRuntimeFeature.retry() }
     }
 
     public static func == (
@@ -156,6 +238,7 @@ public final class WebInspectorModelContainer: Equatable, Sendable {
             statePublisher.publish(.closing)
         }
 
+        await connectionOwner.close()
         await contextRegistry.closeAll()
         await modelStore.close()
         featureRegistry.finish()
