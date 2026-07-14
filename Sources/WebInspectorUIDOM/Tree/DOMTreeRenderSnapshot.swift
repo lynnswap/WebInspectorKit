@@ -250,20 +250,71 @@ actor DOMTreeRenderProjector {
         }
 
         var nodesByID = acceptedSnapshot.nodesByID
+        var affectedNodeIDs: Set<DOMNode.ID> = []
+        var parentNodeIDs: Set<DOMNode.ID> = []
+        var hasStructuralChanges = false
+
         for id in deletedNodeIDs {
-            nodesByID.removeValue(forKey: id)
+            guard let removedNode = nodesByID.removeValue(forKey: id) else {
+                continue
+            }
+            affectedNodeIDs.insert(id)
+            if let parentID = removedNode.parentID {
+                parentNodeIDs.insert(parentID)
+            }
+            hasStructuralChanges = true
         }
         for value in upsertedQueryValues {
-            nodesByID[value.id] = Self.makeNode(value)
+            let nextNode = Self.makeNode(value)
+            if let rootNodeID = acceptedSnapshot.rootNodeID,
+               let projectedRootNodeID = nextNode.primaryDocumentRootID,
+               projectedRootNodeID != rootNodeID {
+                throw DOMTreeRenderProjectionError.ambiguousDocumentRoots
+            }
+
+            if let previousNode = nodesByID.updateValue(
+                nextNode,
+                forKey: value.id
+            ) {
+                guard previousNode != nextNode else { continue }
+                affectedNodeIDs.insert(value.id)
+                if previousNode.topology != nextNode.topology {
+                    hasStructuralChanges = true
+                    if let parentID = previousNode.parentID {
+                        parentNodeIDs.insert(parentID)
+                    }
+                    if let parentID = nextNode.parentID {
+                        parentNodeIDs.insert(parentID)
+                    }
+                }
+            } else {
+                affectedNodeIDs.insert(value.id)
+                hasStructuralChanges = true
+                if let parentID = nextNode.parentID {
+                    parentNodeIDs.insert(parentID)
+                }
+            }
         }
-        let nextSnapshot = try Self.makeSnapshot(
+
+        let rootNodeID = acceptedSnapshot.rootNodeID
+        guard nodesByID.isEmpty || rootNodeID.map({ nodesByID[$0] != nil }) == true else {
+            throw DOMTreeRenderProjectionError.missingDocumentRoot
+        }
+        let nextRootNodeID = nodesByID.isEmpty ? nil : rootNodeID
+        let nextSnapshot = DOMTreeRenderSnapshot(
             revision: toRevision,
-            nodesByID: nodesByID,
-            selectedNodeID: selectedNodeID
+            rootNodeID: nextRootNodeID,
+            selectedNodeID: selectedNodeID,
+            nodesByID: nodesByID
         )
-        let invalidation = Self.makeInvalidation(
-            from: acceptedSnapshot,
-            to: nextSnapshot
+        let rootChanged = acceptedSnapshot.rootNodeID != nextRootNodeID
+        let invalidation = DOMTreeRenderInvalidation(
+            kind: rootChanged ? .root : hasStructuralChanges ? .structure : .content,
+            revision: toRevision,
+            startRevision: fromRevision,
+            affectedNodeIDs: affectedNodeIDs,
+            parentNodeIDs: parentNodeIDs,
+            resetsLocalDocumentState: acceptedSnapshot.rootNodeID != nil && rootChanged
         )
         acceptedSnapshot = nextSnapshot
         return DOMTreeRenderProjection(
