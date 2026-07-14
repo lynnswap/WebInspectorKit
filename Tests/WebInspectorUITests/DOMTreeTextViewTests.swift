@@ -87,91 +87,6 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
-    func canonicalRenderStateAppliesContentAndTopologyDeltasInPlace() {
-        let documentID = testDOMNodeID(1000)
-        let bodyID = testDOMNodeID(1001)
-        let childID = testDOMNodeID(1002)
-        let document = makeCanonicalRenderRow(
-            id: documentID,
-            nodeType: 9,
-            nodeName: "#document",
-            children: .loaded([bodyID])
-        )
-        let body = makeCanonicalRenderRow(
-            id: bodyID,
-            parentID: documentID,
-            nodeName: "BODY",
-            localName: "body",
-            attributes: ["class": "before"]
-        )
-        let state = DOMTreeRenderState(
-            revision: 0,
-            snapshot: WebInspectorDOMTreeSnapshot(
-                primaryRootID: documentID,
-                rowsByID: [documentID: document, bodyID: body]
-            ),
-            selectedNodeID: bodyID
-        )
-
-        #expect(state.snapshot.displayRootIDs() == [bodyID])
-        #expect(state.snapshot.selectedNodeID == bodyID)
-
-        let contentInvalidation = state.apply(
-            WebInspectorDOMTreeDelta(
-                primaryRootChange: nil,
-                upsertedRows: [
-                    makeCanonicalRenderRow(
-                        id: bodyID,
-                        parentID: documentID,
-                        nodeName: "BODY",
-                        localName: "body",
-                        attributes: ["class": "after"]
-                    )
-                ],
-                deletedRowIDs: []
-            ),
-            fromRevision: 0,
-            toRevision: 1,
-            selectedNodeID: bodyID
-        )
-
-        #expect(contentInvalidation.kind == .content)
-        #expect(contentInvalidation.affectedNodeIDs == [bodyID])
-        #expect(state.snapshot.node(for: bodyID)?.attributes == ["class": "after"])
-
-        let structureInvalidation = state.apply(
-            WebInspectorDOMTreeDelta(
-                primaryRootChange: nil,
-                upsertedRows: [
-                    makeCanonicalRenderRow(
-                        id: bodyID,
-                        parentID: documentID,
-                        nodeName: "BODY",
-                        localName: "body",
-                        attributes: ["class": "after"],
-                        children: .loaded([childID])
-                    ),
-                    makeCanonicalRenderRow(
-                        id: childID,
-                        parentID: bodyID,
-                        nodeName: "DIV",
-                        localName: "div"
-                    ),
-                ],
-                deletedRowIDs: []
-            ),
-            fromRevision: 1,
-            toRevision: 2,
-            selectedNodeID: bodyID
-        )
-
-        #expect(structureInvalidation.kind == .structure)
-        #expect(structureInvalidation.parentNodeIDs == [documentID, bodyID])
-        #expect(state.snapshot.visibleChildren(of: bodyID).nodeIDs == [childID])
-        #expect(state.snapshot.revision == 2)
-    }
-
-    @Test
     func rendersAndSelectsDOMThroughContainerOwnedPanelModel() async throws {
         let runtime = try await WebInspectorDataKitTestRuntime.start(
             scenario: .init(
@@ -201,7 +116,6 @@ struct DOMTreeTextViewTests {
         )
         let panelModel = try await DOMPanelModel.make(context: runtime.model)
         let view = DOMTreeTextView(model: panelModel)
-        view.setUsesInlineRowRenderBuildsForTesting(true)
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.setRenderingActive(true)
 
@@ -706,7 +620,6 @@ struct DOMTreeTextViewTests {
     {
         let fixture = try await DOMTreeRuntimeFixture.start()
         let view = await fixture.makeView()
-        view.setUsesInlineRowRenderBuildsForTesting(false)
         view.suspendNextRowRenderBuildForTesting()
         view.toggleRowForTesting(containing: "<article")
         await view.waitForRowRenderBuildSuspensionForTesting()
@@ -732,7 +645,6 @@ struct DOMTreeTextViewTests {
     func hidingDuringInFlightBuildCancelsStaleApplyUntilResume() async throws {
         let fixture = try await DOMTreeRuntimeFixture.start()
         let view = await fixture.makeView()
-        view.setUsesInlineRowRenderBuildsForTesting(false)
         view.suspendNextRowRenderBuildForTesting()
         view.toggleRowForTesting(containing: "<article")
         await view.waitForRowRenderBuildSuspensionForTesting()
@@ -1040,7 +952,6 @@ private final class DOMTreeRuntimeFixture {
             highlightNodeAction: highlightNodeAction,
             restoreHighlightAction: restoreHighlightAction
         )
-        view.setUsesInlineRowRenderBuildsForTesting(true)
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
         view.setRenderingActive(true)
@@ -1257,41 +1168,6 @@ private func testDOMNodeID(_ value: Int) -> DOMNode.ID {
     )
 }
 
-private func makeCanonicalRenderRow(
-    id: DOMNode.ID,
-    parentID: DOMNode.ID? = nil,
-    nodeType: Int = 1,
-    nodeName: String,
-    localName: String = "",
-    attributes: [String: String] = [:],
-    children: WebInspectorDOMTreeChildren = .loaded([])
-) -> WebInspectorDOMTreeRow {
-    WebInspectorDOMTreeRow(
-        id: id,
-        parentID: parentID,
-        nodeName: nodeName,
-        localName: localName,
-        nodeValue: "",
-        nodeType: nodeType,
-        frameID: nil,
-        documentURL: nil,
-        baseURL: nil,
-        attributes: attributes,
-        attributeList: attributes.sorted { $0.key < $1.key }.map {
-            DOMNode.Attribute(name: $0.key, value: $0.value)
-        },
-        children: children,
-        contentDocumentID: nil,
-        shadowRootIDs: [],
-        templateContentID: nil,
-        beforePseudoElementID: nil,
-        otherPseudoElementIDs: [],
-        afterPseudoElementID: nil,
-        pseudoType: nil,
-        shadowRootType: nil
-    )
-}
-
 private func makeRowDocumentRows(_ texts: [String]) -> [DOMTreeRowRenderPlan] {
     var utf16Location = 0
     return texts.enumerated().map { index, text in
@@ -1315,7 +1191,8 @@ private func makeRowDocumentRows(_ texts: [String]) -> [DOMTreeRowRenderPlan] {
             tokens: [],
             displayColumnCount: utf16Length,
             hasDisclosure: false,
-            isOpen: false
+            isOpen: false,
+            hasUnloadedRegularChildren: false
         )
     }
 }

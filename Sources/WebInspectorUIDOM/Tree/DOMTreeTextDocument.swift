@@ -199,6 +199,7 @@ struct DOMTreeRowRenderPlan: Equatable, Sendable {
     let displayColumnCount: Int
     let hasDisclosure: Bool
     let isOpen: Bool
+    let hasUnloadedRegularChildren: Bool
 
     var nodeID: DOMNode.ID {
         identity.nodeID
@@ -216,6 +217,7 @@ struct DOMTreeRowRenderPlan: Equatable, Sendable {
             && displayColumnCount == other.displayColumnCount
             && hasDisclosure == other.hasDisclosure
             && isOpen == other.isOpen
+            && hasUnloadedRegularChildren == other.hasUnloadedRegularChildren
     }
 }
 

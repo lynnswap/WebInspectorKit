@@ -1,7 +1,27 @@
 #if canImport(UIKit)
 import WebInspectorDataKit
 
-struct DOMTreeRenderSnapshot: Sendable {
+struct DOMTreeRenderMetadata: Equatable, Sendable {
+    let revision: UInt64
+    let rootNodeID: DOMNode.ID?
+
+    static let empty = DOMTreeRenderMetadata(revision: 0, rootNodeID: nil)
+}
+
+struct DOMTreeRenderProjection: Sendable {
+    let metadata: DOMTreeRenderMetadata
+    let invalidation: DOMTreeRenderInvalidation
+}
+
+enum DOMTreeRenderProjectionError: Error, Sendable {
+    case ambiguousDocumentRoots
+    case duplicateNodeID
+    case missingDocumentRoot
+    case missingUpdatedQueryValue
+    case revisionMismatch(expected: UInt64, actual: UInt64)
+}
+
+actor DOMTreeRenderProjector {
     struct Node: Equatable, Sendable {
         enum Children: Equatable, Sendable {
             case unrequested(count: Int)
@@ -10,7 +30,7 @@ struct DOMTreeRenderSnapshot: Sendable {
 
         let id: DOMNode.ID
         let primaryDocumentRootID: DOMNode.ID?
-        let documentRootID: DOMNode.ID
+        let documentRootID: DOMNode.ID?
         let parentID: DOMNode.ID?
         let nodeName: String
         let localName: String
@@ -44,6 +64,13 @@ struct DOMTreeRenderSnapshot: Sendable {
             }
         }
 
+        var hasUnloadedRegularChildren: Bool {
+            if case let .unrequested(count) = children {
+                return count > 0
+            }
+            return false
+        }
+
         var displayName: String {
             if localName.isEmpty == false {
                 return localName
@@ -54,7 +81,7 @@ struct DOMTreeRenderSnapshot: Sendable {
             return nodeValue.isEmpty ? nodeName : nodeValue
         }
 
-        fileprivate var topology: Topology {
+        var topology: Topology {
             Topology(
                 parentID: parentID,
                 children: children,
@@ -67,7 +94,7 @@ struct DOMTreeRenderSnapshot: Sendable {
             )
         }
 
-        fileprivate struct Topology: Equatable {
+        struct Topology: Equatable, Sendable {
             let parentID: DOMNode.ID?
             let children: Children
             let contentDocumentID: DOMNode.ID?
@@ -79,158 +106,59 @@ struct DOMTreeRenderSnapshot: Sendable {
         }
     }
 
-    struct VisibleChildren: Sendable {
+    struct VisibleChildren {
         let nodeIDs: [DOMNode.ID]
-        let hasUnloadedChildren: Bool
         let hasRenderableChildren: Bool
     }
 
-    let revision: UInt64
-    let rootNodeID: DOMNode.ID?
-    let selectedNodeID: DOMNode.ID?
-    let nodesByID: [DOMNode.ID: Node]
-    let parentByNodeID: [DOMNode.ID: DOMNode.ID]
-
-    init(
-        revision: UInt64,
-        rootNodeID: DOMNode.ID?,
-        selectedNodeID: DOMNode.ID?,
-        nodesByID: [DOMNode.ID: Node]
-    ) {
-        self.revision = revision
-        self.rootNodeID = rootNodeID.flatMap { nodesByID[$0] == nil ? nil : $0 }
-        self.selectedNodeID = selectedNodeID.flatMap {
-            nodesByID[$0] == nil ? nil : $0
-        }
-        self.nodesByID = nodesByID
-        self.parentByNodeID = nodesByID.reduce(into: [:]) { result, element in
-            if let parentID = element.value.parentID {
-                result[element.key] = parentID
-            }
-        }
-    }
-
-    func node(for id: DOMNode.ID) -> Node? {
-        nodesByID[id]
-    }
-
-    func visibleChildren(of id: DOMNode.ID) -> VisibleChildren {
-        guard let node = nodesByID[id] else {
-            return VisibleChildren(
-                nodeIDs: [],
-                hasUnloadedChildren: false,
-                hasRenderableChildren: false
-            )
-        }
-
-        var nodeIDs: [DOMNode.ID] = []
-        if let templateContentID = node.templateContentID {
-            nodeIDs.append(templateContentID)
-        }
-        if let beforePseudoElementID = node.beforePseudoElementID {
-            nodeIDs.append(beforePseudoElementID)
-        }
-        nodeIDs.append(contentsOf: node.otherPseudoElementIDs)
-        if let contentDocumentID = node.contentDocumentID {
-            nodeIDs.append(contentDocumentID)
-        } else {
-            nodeIDs.append(contentsOf: node.shadowRootIDs)
-            if case let .loaded(childIDs) = node.children {
-                nodeIDs.append(contentsOf: childIDs)
-            }
-        }
-        if let afterPseudoElementID = node.afterPseudoElementID {
-            nodeIDs.append(afterPseudoElementID)
-        }
-
-        let hasUnloadedChildren: Bool
-        switch node.children {
-        case let .unrequested(count):
-            hasUnloadedChildren = count > 0
-        case .loaded:
-            hasUnloadedChildren = false
-        }
-        return VisibleChildren(
-            nodeIDs: nodeIDs,
-            hasUnloadedChildren: hasUnloadedChildren,
-            hasRenderableChildren: nodeIDs.isEmpty == false || node.childNodeCount > 0
-        )
-    }
-
-    func displayRootIDs() -> [DOMNode.ID] {
-        guard let rootNodeID,
-              let root = nodesByID[rootNodeID] else {
-            return []
-        }
-        return root.kind == .document
-            ? visibleChildren(of: rootNodeID).nodeIDs
-            : [rootNodeID]
-    }
-
-    func isTemplateContent(_ id: DOMNode.ID) -> Bool {
-        guard let parentID = parentByNodeID[id],
-              let parent = nodesByID[parentID] else {
-            return false
-        }
-        return parent.templateContentID == id
-    }
-
-    func parent(of id: DOMNode.ID) -> DOMNode.ID? {
-        parentByNodeID[id]
-    }
-
-    func ancestorNodeIDs(of id: DOMNode.ID) -> [DOMNode.ID] {
-        var result: [DOMNode.ID] = []
-        var visited: Set<DOMNode.ID> = []
-        var current = parentByNodeID[id]
-        while let id = current,
-              visited.insert(id).inserted {
-            result.append(id)
-            current = parentByNodeID[id]
-        }
-        return result
-    }
-}
-
-struct DOMTreeRenderProjection: Sendable {
-    let snapshot: DOMTreeRenderSnapshot
-    let invalidation: DOMTreeRenderInvalidation
-}
-
-enum DOMTreeRenderProjectionError: Error, Sendable {
-    case ambiguousDocumentRoots
-    case duplicateNodeID
-    case missingDocumentRoot
-    case missingUpdatedQueryValue
-    case revisionMismatch(expected: UInt64, actual: UInt64)
-}
-
-actor DOMTreeRenderProjector {
-    private var acceptedSnapshot = DOMTreeRenderSnapshot(
-        revision: 0,
-        rootNodeID: nil,
-        selectedNodeID: nil,
-        nodesByID: [:]
-    )
+    private(set) var revision: UInt64 = 0
+    private(set) var rootNodeID: DOMNode.ID?
+    var nodesByID: [DOMNode.ID: Node] = [:]
+    var parentByNodeID: [DOMNode.ID: DOMNode.ID] = [:]
+    var markupCache: [DOMTreeTextView.MarkupCacheKey: DOMTreeTextView.CachedMarkup] = [:]
 
     func replace(
         revision: UInt64,
-        queryValues: [DOMNode.QueryValue],
-        selectedNodeID: DOMNode.ID?
+        queryValues: [DOMNode.QueryValue]
     ) throws -> DOMTreeRenderProjection {
-        let nextSnapshot = try Self.makeSnapshot(
+        var nextNodesByID: [DOMNode.ID: Node] = [:]
+        nextNodesByID.reserveCapacity(queryValues.count)
+        var nextParentByNodeID: [DOMNode.ID: DOMNode.ID] = [:]
+        nextParentByNodeID.reserveCapacity(queryValues.count)
+
+        for value in queryValues {
+            let node = Self.makeNode(value)
+            guard nextNodesByID.updateValue(node, forKey: value.id) == nil else {
+                throw DOMTreeRenderProjectionError.duplicateNodeID
+            }
+            if let parentID = node.parentID {
+                nextParentByNodeID[node.id] = parentID
+            }
+        }
+
+        let nextRootNodeID = try Self.resolveRootNodeID(in: nextNodesByID)
+        let previousMetadata = metadata
+        let nextMetadata = DOMTreeRenderMetadata(
             revision: revision,
-            queryValues: queryValues,
-            selectedNodeID: selectedNodeID
+            rootNodeID: nextRootNodeID
         )
-        let previousSnapshot = acceptedSnapshot
-        let invalidation = Self.makeInvalidation(
-            from: previousSnapshot,
-            to: nextSnapshot
+        let invalidation = Self.makeReplacementInvalidation(
+            previousRevision: self.revision,
+            previousRootNodeID: rootNodeID,
+            previousNodesByID: nodesByID,
+            nextMetadata: nextMetadata,
+            nextNodesByID: nextNodesByID
         )
-        acceptedSnapshot = nextSnapshot
+
+        self.revision = revision
+        rootNodeID = nextRootNodeID
+        nodesByID = nextNodesByID
+        parentByNodeID = nextParentByNodeID
+        if previousMetadata.rootNodeID != nextRootNodeID {
+            markupCache.removeAll(keepingCapacity: true)
+        }
         return DOMTreeRenderProjection(
-            snapshot: nextSnapshot,
+            metadata: nextMetadata,
             invalidation: invalidation
         )
     }
@@ -239,17 +167,44 @@ actor DOMTreeRenderProjector {
         fromRevision: UInt64,
         toRevision: UInt64,
         deletedNodeIDs: Set<DOMNode.ID>,
-        upsertedQueryValues: [DOMNode.QueryValue],
-        selectedNodeID: DOMNode.ID?
+        upsertedQueryValues: [DOMNode.QueryValue]
     ) throws -> DOMTreeRenderProjection {
-        guard acceptedSnapshot.revision == fromRevision else {
+        guard revision == fromRevision else {
             throw DOMTreeRenderProjectionError.revisionMismatch(
-                expected: acceptedSnapshot.revision,
+                expected: revision,
                 actual: fromRevision
             )
         }
 
-        var nodesByID = acceptedSnapshot.nodesByID
+        var upsertedNodes: [Node] = []
+        upsertedNodes.reserveCapacity(upsertedQueryValues.count)
+        var upsertedNodeIDs: Set<DOMNode.ID> = []
+        upsertedNodeIDs.reserveCapacity(upsertedQueryValues.count)
+        for value in upsertedQueryValues {
+            guard upsertedNodeIDs.insert(value.id).inserted else {
+                throw DOMTreeRenderProjectionError.duplicateNodeID
+            }
+            upsertedNodes.append(Self.makeNode(value))
+        }
+
+        let removedExistingNodeCount = deletedNodeIDs.reduce(into: 0) { count, id in
+            if nodesByID[id] != nil, !upsertedNodeIDs.contains(id) {
+                count += 1
+            }
+        }
+        let insertedNodeCount = upsertedNodes.reduce(into: 0) { count, node in
+            if nodesByID[node.id] == nil {
+                count += 1
+            }
+        }
+        let nextNodeCount = nodesByID.count - removedExistingNodeCount + insertedNodeCount
+        let nextRootNodeID = try validatedRootNodeID(
+            nextNodeCount: nextNodeCount,
+            deletedNodeIDs: deletedNodeIDs,
+            upsertedNodes: upsertedNodes,
+            upsertedNodeIDs: upsertedNodeIDs
+        )
+
         var affectedNodeIDs: Set<DOMNode.ID> = []
         var parentNodeIDs: Set<DOMNode.ID> = []
         var hasStructuralChanges = false
@@ -258,26 +213,29 @@ actor DOMTreeRenderProjector {
             guard let removedNode = nodesByID.removeValue(forKey: id) else {
                 continue
             }
+            parentByNodeID.removeValue(forKey: id)
+            markupCache.removeValue(forKey: .init(nodeID: id, isClosingTag: false))
+            markupCache.removeValue(forKey: .init(nodeID: id, isClosingTag: true))
             affectedNodeIDs.insert(id)
             if let parentID = removedNode.parentID {
                 parentNodeIDs.insert(parentID)
             }
             hasStructuralChanges = true
         }
-        for value in upsertedQueryValues {
-            let nextNode = Self.makeNode(value)
-            if let rootNodeID = acceptedSnapshot.rootNodeID,
-               let projectedRootNodeID = nextNode.primaryDocumentRootID,
-               projectedRootNodeID != rootNodeID {
-                throw DOMTreeRenderProjectionError.ambiguousDocumentRoots
+
+        for nextNode in upsertedNodes {
+            let previousNode = nodesByID.updateValue(nextNode, forKey: nextNode.id)
+            if let parentID = nextNode.parentID {
+                parentByNodeID[nextNode.id] = parentID
+            } else {
+                parentByNodeID.removeValue(forKey: nextNode.id)
             }
 
-            if let previousNode = nodesByID.updateValue(
-                nextNode,
-                forKey: value.id
-            ) {
-                guard previousNode != nextNode else { continue }
-                affectedNodeIDs.insert(value.id)
+            guard previousNode != nextNode else {
+                continue
+            }
+            affectedNodeIDs.insert(nextNode.id)
+            if let previousNode {
                 if previousNode.topology != nextNode.topology {
                     hasStructuralChanges = true
                     if let parentID = previousNode.parentID {
@@ -288,7 +246,6 @@ actor DOMTreeRenderProjector {
                     }
                 }
             } else {
-                affectedNodeIDs.insert(value.id)
                 hasStructuralChanges = true
                 if let parentID = nextNode.parentID {
                     parentNodeIDs.insert(parentID)
@@ -296,73 +253,82 @@ actor DOMTreeRenderProjector {
             }
         }
 
-        let rootNodeID = acceptedSnapshot.rootNodeID
-        guard nodesByID.isEmpty || rootNodeID.map({ nodesByID[$0] != nil }) == true else {
+        let previousRootNodeID = rootNodeID
+        let rootChanged = previousRootNodeID != nextRootNodeID
+        if rootChanged {
+            markupCache.removeAll(keepingCapacity: true)
+        }
+
+        revision = toRevision
+        rootNodeID = nextRootNodeID
+        let nextMetadata = metadata
+        return DOMTreeRenderProjection(
+            metadata: nextMetadata,
+            invalidation: DOMTreeRenderInvalidation(
+                kind: rootChanged ? .root : hasStructuralChanges ? .structure : .content,
+                revision: toRevision,
+                startRevision: fromRevision,
+                affectedNodeIDs: affectedNodeIDs,
+                parentNodeIDs: parentNodeIDs,
+                resetsLocalDocumentState: previousRootNodeID != nil && rootChanged
+            )
+        )
+    }
+
+    private func validatedRootNodeID(
+        nextNodeCount: Int,
+        deletedNodeIDs: Set<DOMNode.ID>,
+        upsertedNodes: [Node],
+        upsertedNodeIDs: Set<DOMNode.ID>
+    ) throws -> DOMNode.ID? {
+        guard nextNodeCount > 0 else {
+            return nil
+        }
+
+        let candidateRootNodeID: DOMNode.ID
+        if let rootNodeID,
+           !deletedNodeIDs.contains(rootNodeID) || upsertedNodeIDs.contains(rootNodeID) {
+            candidateRootNodeID = rootNodeID
+        } else if rootNodeID != nil {
+            // A primary document replacement is delivered as a reset. Applying it
+            // as a delta would leave unchanged nodes bound to the previous root.
+            throw DOMTreeRenderProjectionError.missingDocumentRoot
+        } else {
+            let projectedRootNodeIDs = Set(
+                upsertedNodes.compactMap(\.primaryDocumentRootID)
+            )
+            guard projectedRootNodeIDs.count == 1,
+                  let projectedRootNodeID = projectedRootNodeIDs.first else {
+                throw DOMTreeRenderProjectionError.ambiguousDocumentRoots
+            }
+            candidateRootNodeID = projectedRootNodeID
+        }
+
+        let rootRemains = (
+            nodesByID[candidateRootNodeID] != nil
+                && !deletedNodeIDs.contains(candidateRootNodeID)
+        ) || upsertedNodeIDs.contains(candidateRootNodeID)
+        guard rootRemains else {
             throw DOMTreeRenderProjectionError.missingDocumentRoot
         }
-        let nextRootNodeID = nodesByID.isEmpty ? nil : rootNodeID
-        let nextSnapshot = DOMTreeRenderSnapshot(
-            revision: toRevision,
-            rootNodeID: nextRootNodeID,
-            selectedNodeID: selectedNodeID,
-            nodesByID: nodesByID
-        )
-        let rootChanged = acceptedSnapshot.rootNodeID != nextRootNodeID
-        let invalidation = DOMTreeRenderInvalidation(
-            kind: rootChanged ? .root : hasStructuralChanges ? .structure : .content,
-            revision: toRevision,
-            startRevision: fromRevision,
-            affectedNodeIDs: affectedNodeIDs,
-            parentNodeIDs: parentNodeIDs,
-            resetsLocalDocumentState: acceptedSnapshot.rootNodeID != nil && rootChanged
-        )
-        acceptedSnapshot = nextSnapshot
-        return DOMTreeRenderProjection(
-            snapshot: nextSnapshot,
-            invalidation: invalidation
-        )
-    }
-
-    private static func makeSnapshot(
-        revision: UInt64,
-        queryValues: [DOMNode.QueryValue],
-        selectedNodeID: DOMNode.ID?
-    ) throws -> DOMTreeRenderSnapshot {
-        guard queryValues.isEmpty == false else {
-            return DOMTreeRenderSnapshot(
-                revision: revision,
-                rootNodeID: nil,
-                selectedNodeID: nil,
-                nodesByID: [:]
-            )
-        }
-
-        var nodesByID: [DOMNode.ID: DOMTreeRenderSnapshot.Node] = [:]
-        nodesByID.reserveCapacity(queryValues.count)
-        for value in queryValues {
-            guard nodesByID.updateValue(makeNode(value), forKey: value.id) == nil else {
-                throw DOMTreeRenderProjectionError.duplicateNodeID
+        for node in upsertedNodes {
+            if let projectedRootNodeID = node.primaryDocumentRootID,
+               projectedRootNodeID != candidateRootNodeID {
+                throw DOMTreeRenderProjectionError.ambiguousDocumentRoots
             }
         }
-        return try makeSnapshot(
-            revision: revision,
-            nodesByID: nodesByID,
-            selectedNodeID: selectedNodeID,
-        )
+        return candidateRootNodeID
     }
 
-    private static func makeSnapshot(
-        revision: UInt64,
-        nodesByID: [DOMNode.ID: DOMTreeRenderSnapshot.Node],
-        selectedNodeID: DOMNode.ID?
-    ) throws -> DOMTreeRenderSnapshot {
+    var metadata: DOMTreeRenderMetadata {
+        DOMTreeRenderMetadata(revision: revision, rootNodeID: rootNodeID)
+    }
+
+    private static func resolveRootNodeID(
+        in nodesByID: [DOMNode.ID: Node]
+    ) throws -> DOMNode.ID? {
         guard nodesByID.isEmpty == false else {
-            return DOMTreeRenderSnapshot(
-                revision: revision,
-                rootNodeID: nil,
-                selectedNodeID: nil,
-                nodesByID: [:]
-            )
+            return nil
         }
         let rootIDs = Set(nodesByID.values.compactMap(\.primaryDocumentRootID))
         guard rootIDs.count == 1,
@@ -372,18 +338,11 @@ actor DOMTreeRenderProjector {
         guard nodesByID[rootNodeID] != nil else {
             throw DOMTreeRenderProjectionError.missingDocumentRoot
         }
-        return DOMTreeRenderSnapshot(
-            revision: revision,
-            rootNodeID: rootNodeID,
-            selectedNodeID: selectedNodeID,
-            nodesByID: nodesByID
-        )
+        return rootNodeID
     }
 
-    private static func makeNode(
-        _ value: DOMNode.QueryValue
-    ) -> DOMTreeRenderSnapshot.Node {
-        DOMTreeRenderSnapshot.Node(
+    private static func makeNode(_ value: DOMNode.QueryValue) -> Node {
+        Node(
             id: value.id,
             primaryDocumentRootID: value.primaryDocumentRootID,
             documentRootID: value.documentRootID,
@@ -411,7 +370,7 @@ actor DOMTreeRenderProjector {
 
     private static func makeChildren(
         _ children: DOMNode.QueryValue.Children
-    ) -> DOMTreeRenderSnapshot.Node.Children {
+    ) -> Node.Children {
         switch children {
         case let .unrequested(count):
             .unrequested(count: count)
@@ -420,19 +379,22 @@ actor DOMTreeRenderProjector {
         }
     }
 
-    private static func makeInvalidation(
-        from previous: DOMTreeRenderSnapshot,
-        to next: DOMTreeRenderSnapshot
+    private static func makeReplacementInvalidation(
+        previousRevision: UInt64,
+        previousRootNodeID: DOMNode.ID?,
+        previousNodesByID: [DOMNode.ID: Node],
+        nextMetadata: DOMTreeRenderMetadata,
+        nextNodesByID: [DOMNode.ID: Node]
     ) -> DOMTreeRenderInvalidation {
-        let previousIDs = Set(previous.nodesByID.keys)
-        let nextIDs = Set(next.nodesByID.keys)
+        let previousIDs = Set(previousNodesByID.keys)
+        let nextIDs = Set(nextNodesByID.keys)
         var affectedNodeIDs = previousIDs.symmetricDifference(nextIDs)
         var parentNodeIDs: Set<DOMNode.ID> = []
         var hasStructuralChanges = previousIDs != nextIDs
 
         for id in previousIDs.intersection(nextIDs) {
-            guard let oldNode = previous.nodesByID[id],
-                  let newNode = next.nodesByID[id],
+            guard let oldNode = previousNodesByID[id],
+                  let newNode = nextNodesByID[id],
                   oldNode != newNode else {
                 continue
             }
@@ -443,60 +405,24 @@ actor DOMTreeRenderProjector {
         }
 
         for id in affectedNodeIDs {
-            if let parentID = previous.nodesByID[id]?.parentID {
+            if let parentID = previousNodesByID[id]?.parentID {
                 parentNodeIDs.insert(parentID)
             }
-            if let parentID = next.nodesByID[id]?.parentID {
+            if let parentID = nextNodesByID[id]?.parentID {
                 parentNodeIDs.insert(parentID)
             }
         }
 
-        let rootChanged = previous.rootNodeID != next.rootNodeID
+        let rootChanged = previousRootNodeID != nextMetadata.rootNodeID
         return DOMTreeRenderInvalidation(
             kind: rootChanged ? .root : hasStructuralChanges ? .structure : .content,
-            revision: next.revision,
-            startRevision: previous.revision,
+            revision: nextMetadata.revision,
+            startRevision: previousRevision,
             affectedNodeIDs: affectedNodeIDs,
             parentNodeIDs: parentNodeIDs,
-            resetsLocalDocumentState: previous.rootNodeID != nil && rootChanged
+            resetsLocalDocumentState: previousRootNodeID != nil && rootChanged
         )
     }
 }
 
-@MainActor
-final class DOMTreeRenderState {
-    private(set) var snapshot: DOMTreeRenderSnapshot
-
-    init(selectedNodeID: DOMNode.ID? = nil) {
-        snapshot = DOMTreeRenderSnapshot(
-            revision: 0,
-            rootNodeID: nil,
-            selectedNodeID: selectedNodeID,
-            nodesByID: [:]
-        )
-    }
-
-    func accept(_ nextSnapshot: DOMTreeRenderSnapshot) {
-        snapshot = nextSnapshot
-    }
-
-    @discardableResult
-    func setSelectedNodeID(
-        _ selectedNodeID: DOMNode.ID?
-    ) -> Bool {
-        let liveSelectedNodeID = selectedNodeID.flatMap {
-            snapshot.nodesByID[$0] == nil ? nil : $0
-        }
-        guard snapshot.selectedNodeID != liveSelectedNodeID else {
-            return false
-        }
-        snapshot = DOMTreeRenderSnapshot(
-            revision: snapshot.revision,
-            rootNodeID: snapshot.rootNodeID,
-            selectedNodeID: liveSelectedNodeID,
-            nodesByID: snapshot.nodesByID
-        )
-        return true
-    }
-}
 #endif

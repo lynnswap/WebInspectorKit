@@ -56,12 +56,12 @@ struct DOMTreeRenderInvalidation: Sendable {
 }
 
 extension DOMTreeRenderInvalidation {
-    static func initial(snapshot: DOMTreeRenderSnapshot) -> DOMTreeRenderInvalidation {
+    static func initial(metadata: DOMTreeRenderMetadata) -> DOMTreeRenderInvalidation {
         DOMTreeRenderInvalidation(
             kind: .root,
-            revision: snapshot.revision,
-            startRevision: snapshot.revision,
-            affectedNodeIDs: Set(snapshot.rootNodeID.map { [$0] } ?? []),
+            revision: metadata.revision,
+            startRevision: metadata.revision,
+            affectedNodeIDs: Set(metadata.rootNodeID.map { [$0] } ?? []),
             parentNodeIDs: [],
             resetsLocalDocumentState: false
         )
