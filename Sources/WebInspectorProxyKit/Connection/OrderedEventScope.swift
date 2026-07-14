@@ -80,11 +80,17 @@ package final class WebInspectorOrderedScopeMailbox<Element: Sendable>: Sendable
         case failed(any Error)
     }
 
+    private struct Waiter: Sendable {
+        let id: UUID
+        let continuation: CheckedContinuation<WebInspectorOrderedScopeRecord<Element>?, any Error>
+    }
+
     private struct State: Sendable {
         var records: [WebInspectorOrderedScopeRecord<Element>] = []
         var startIndex = 0
         var bufferedEventCount = 0
-        var waiter: CheckedContinuation<WebInspectorOrderedScopeRecord<Element>?, any Error>?
+        var waiter: Waiter?
+        var registeringWaiterIDs: Set<UUID> = []
         var terminal: Terminal?
 
         mutating func append(_ record: WebInspectorOrderedScopeRecord<Element>) {
@@ -134,7 +140,7 @@ package final class WebInspectorOrderedScopeMailbox<Element: Sendable>: Sendable
             state.terminal = error.map(Terminal.failed) ?? .finished
             guard state.startIndex == state.records.count else { return nil }
             defer { state.waiter = nil }
-            return state.waiter
+            return state.waiter?.continuation
         }
         guard let waiter else { return }
         if let error { waiter.resume(throwing: error) }
@@ -179,7 +185,7 @@ package final class WebInspectorOrderedScopeMailbox<Element: Sendable>: Sendable
             guard state.terminal == nil else { return nil }
             if let waiter = state.waiter {
                 state.waiter = nil
-                return waiter
+                return waiter.continuation
             }
             if countsAgainstCapacity, let capacity, state.bufferedEventCount >= capacity {
                 state.terminal = .failed(WebInspectorProxyError.eventBufferOverflow(capacity: capacity))
@@ -202,9 +208,16 @@ package final class WebInspectorOrderedScopeMailbox<Element: Sendable>: Sendable
     }
 
     private func nextRecord() async throws -> WebInspectorOrderedScopeRecord<Element>? {
-        try await withTaskCancellationHandler {
+        let waiterID = UUID()
+        state.withLock { state in
+            _ = state.registeringWaiterIDs.insert(waiterID)
+        }
+        return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 let immediate = state.withLock { state -> Result<WebInspectorOrderedScopeRecord<Element>?, any Error>? in
+                    guard state.registeringWaiterIDs.remove(waiterID) != nil else {
+                        return .failure(CancellationError())
+                    }
                     if let record = state.popFirst() { return .success(record) }
                     if let terminal = state.terminal {
                         switch terminal {
@@ -215,15 +228,17 @@ package final class WebInspectorOrderedScopeMailbox<Element: Sendable>: Sendable
                     guard state.waiter == nil else {
                         return .failure(WebInspectorProxyError.concurrentScopeConsumption)
                     }
-                    state.waiter = continuation
+                    state.waiter = Waiter(id: waiterID, continuation: continuation)
                     return nil
                 }
                 if let immediate { continuation.resume(with: immediate) }
             }
         } onCancel: {
             let waiter = state.withLock { state -> CheckedContinuation<WebInspectorOrderedScopeRecord<Element>?, any Error>? in
+                state.registeringWaiterIDs.remove(waiterID)
+                guard state.waiter?.id == waiterID else { return nil }
                 defer { state.waiter = nil }
-                return state.waiter
+                return state.waiter?.continuation
             }
             waiter?.resume(throwing: CancellationError())
         }

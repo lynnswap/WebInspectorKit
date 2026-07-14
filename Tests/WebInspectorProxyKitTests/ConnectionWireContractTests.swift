@@ -124,6 +124,19 @@ func malformedKnownDomainEventTerminatesOnlyItsScope() async throws {
 }
 
 @Test
+func cancelledEventWaitCannotRegisterAfterCancellation() async throws {
+    let mailbox = WebInspectorOrderedScopeMailbox<DOM.Event>(capacity: 1)
+    let wait = Task {
+        try await mailbox.nextEvent()
+    }
+    wait.cancel()
+
+    await #expect(throws: CancellationError.self) {
+        _ = try await wait.value
+    }
+}
+
+@Test
 func networkOverflowStopsDeliveryButRetainsThePhysicalLease() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     defer { Task { await runtime.close() } }
