@@ -758,6 +758,10 @@ public final class NetworkBody {
         phase = .failed(failure)
     }
 
+    package func failResponseFetch(_ failure: Failure) {
+        fail(failure)
+    }
+
     func resetForResponse(
         _ response: Network.Response? = nil,
         fallbackURL: String = ""

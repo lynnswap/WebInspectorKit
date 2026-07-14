@@ -1,380 +1,134 @@
-import Foundation
 import WebInspectorProxyKit
 
-extension CanonicalNetworkRequestRecord: WebInspectorModelRecord {}
-extension CanonicalNetworkEntryRecord: WebInspectorModelRecord {}
-
-private struct NetworkModelOwnerEffect: Sendable {}
-
-package enum WebInspectorNetworkModelSchemas {
-    package static var registrations: [WebInspectorModelSchemaRegistration] {
-        [
-            WebInspectorModelSchemaRegistration(request),
-            WebInspectorModelSchemaRegistration(entry),
-        ]
+package let webInspectorNetworkRequestSchema = WebInspectorModelSchema<
+    NetworkRequest,
+    CanonicalNetworkRequestRecord
+>(
+    featureID: .network,
+    makeModel: { context, _, record in
+        NetworkRequest(canonical: record, modelContext: context)
+    },
+    updateModel: { context, model, record in
+        model.replaceCanonicalRecord(record, modelContext: context)
+    },
+    invalidateModel: { _, model in
+        model.invalidateCanonicalRecord()
     }
+)
 
-    package static var request: WebInspectorModelSchema<NetworkRequest> {
-        WebInspectorModelSchema(
-            snapshot: { snapshot in
-                let entries = snapshot.network?.requests ?? []
-                return WebInspectorModelSchemaSnapshot(
-                    entries: entries.map { entry in
-                        let id = NetworkRequest.ID(canonical: entry.record.id)
-                        return WebInspectorModelSchemaSnapshotEntry(
-                            id: id,
-                            record: entry.record,
-                            queryValue: entry.query.queryValue,
-                            canonicalRank: .init(
-                                rawValue: entry.record.insertionOrdinal
-                            )
-                        )
-                    },
-                    ownerEffects: [] as [NetworkModelOwnerEffect]
-                )
-            },
-            delta: { transaction, lookup in
-                WebInspectorModelSchemaDelta(
-                    changes: requestChanges(
-                        transaction.network?.requestChanges ?? [],
-                        lookup: lookup
-                    ),
-                    ownerEffects: [] as [NetworkModelOwnerEffect]
-                )
-            },
-            makeModel: { context, id, record in
-                precondition(
-                    id.canonicalStorage == record.id,
-                    "A NetworkRequest schema record changed persistent identity."
-                )
-                return NetworkRequest(
-                    canonical: record,
-                    modelContext: context
-                )
-            },
-            replaceModel: { context, model, record in
-                model.replaceCanonicalRecord(record, modelContext: context)
-            },
-            applyPatch: { _, model, patch in
-                model.applyCanonicalPatch(patch)
-            },
-            invalidateModel: { _, model in
-                model.invalidateCanonicalRecord()
-            },
-            applyOwnerEffect: { _, _, _ in
-                preconditionFailure(
-                    "Network persistent schemas do not publish owner effects."
-                )
-            },
-            resetOwnerProjection: { _, _ in }
-        ) as WebInspectorModelSchema<NetworkRequest>
+package let webInspectorNetworkEntrySchema = WebInspectorModelSchema<
+    NetworkEntry,
+    CanonicalNetworkEntryRecord
+>(
+    featureID: .network,
+    makeModel: { context, _, record in
+        NetworkEntry(canonical: record, modelContext: context)
+    },
+    updateModel: { context, model, record in
+        model.replaceCanonicalRecord(record, modelContext: context)
+    },
+    invalidateModel: { _, model in
+        model.invalidateCanonicalRecord()
     }
+)
 
-    package static var entry: WebInspectorModelSchema<NetworkEntry> {
-        WebInspectorModelSchema(
-            snapshot: { snapshot in
-                let entries = snapshot.network?.entries ?? []
-                return WebInspectorModelSchemaSnapshot(
-                    entries: entries.map { entry in
-                        let id = NetworkEntry.ID(canonical: entry.record.id)
-                        return WebInspectorModelSchemaSnapshotEntry(
-                            id: id,
-                            record: entry.record,
-                            queryValue: entry.query.queryValue,
-                            canonicalRank: .init(
-                                rawValue: entry.record.id.ordinal
-                            )
-                        )
-                    },
-                    ownerEffects: [] as [NetworkModelOwnerEffect]
+package func webInspectorNetworkSnapshotMutations(
+    _ snapshot: CanonicalNetworkSnapshot
+) -> (
+    requests: [WebInspectorModelMutation<NetworkRequest>],
+    entries: [WebInspectorModelMutation<NetworkEntry>]
+) {
+    (
+        requests: snapshot.requests.map { entry in
+            webInspectorNetworkRequestSchema.upsert(
+                record: entry.record,
+                queryValue: entry.query.queryValue,
+                canonicalRank: WebInspectorModelCanonicalRank(
+                    rawValue: entry.record.insertionOrdinal
                 )
-            },
-            delta: { transaction, lookup in
-                WebInspectorModelSchemaDelta(
-                    changes: entryChanges(
-                        transaction.network?.entryChanges ?? [],
-                        lookup: lookup
-                    ),
-                    ownerEffects: [] as [NetworkModelOwnerEffect]
+            )
+        },
+        entries: snapshot.entries.map { entry in
+            webInspectorNetworkEntrySchema.upsert(
+                record: entry.record,
+                queryValue: entry.query.queryValue,
+                canonicalRank: WebInspectorModelCanonicalRank(
+                    rawValue: entry.record.id.ordinal
                 )
-            },
-            makeModel: { context, id, record in
-                precondition(
-                    id.storage == record.id,
-                    "A NetworkEntry schema record changed persistent identity."
-                )
-                return NetworkEntry(
-                    canonical: record,
-                    modelContext: context
-                )
-            },
-            replaceModel: { context, model, record in
-                model.replaceCanonicalRecord(record, modelContext: context)
-            },
-            applyPatch: { _, model, patch in
-                model.applyCanonicalPatch(patch)
-            },
-            invalidateModel: { _, model in
-                model.invalidateCanonicalRecord()
-            },
-            applyOwnerEffect: { _, _, _ in
-                preconditionFailure(
-                    "Network persistent schemas do not publish owner effects."
-                )
-            },
-            resetOwnerProjection: { _, _ in }
-        ) as WebInspectorModelSchema<NetworkEntry>
-    }
+            )
+        }
+    )
 }
 
-private extension WebInspectorNetworkModelSchemas {
-    enum PendingRequestChange {
-        case insert(
-            record: CanonicalNetworkRequestRecord,
-            query: CanonicalNetworkRequestQueryProjection
+package func webInspectorNetworkMutations(
+    _ transaction: CanonicalNetworkTransaction,
+    staged store: CanonicalNetworkStore
+) -> (
+    requests: [WebInspectorModelMutation<NetworkRequest>],
+    entries: [WebInspectorModelMutation<NetworkEntry>]
+) {
+    var requestOrder: [CanonicalNetworkRequestIDStorage] = []
+    var requestIDs: Set<CanonicalNetworkRequestIDStorage> = []
+    for change in transaction.requestChanges {
+        let id: CanonicalNetworkRequestIDStorage = switch change {
+        case let .insert(record, _): record.id
+        case let .update(id, _, _), let .delete(id): id
+        }
+        if requestIDs.insert(id).inserted { requestOrder.append(id) }
+    }
+    let requestMutations = requestOrder.compactMap { id in
+        guard let record = store.request(for: id),
+              let query = store.requestQuery(for: id)
+        else {
+            return webInspectorNetworkRequestSchema.delete(
+                id: NetworkRequest.ID(canonical: id)
+            )
+        }
+        return webInspectorNetworkRequestSchema.upsert(
+            record: record,
+            queryValue: query.queryValue,
+            canonicalRank: WebInspectorModelCanonicalRank(
+                rawValue: record.insertionOrdinal
+            )
         )
-        case update(
-            patches: [CanonicalNetworkRequestPatch],
-            query: CanonicalNetworkRequestQueryProjection?,
-            canonicalRank: WebInspectorFetchedResultsCanonicalRank
-        )
-        case delete
     }
 
-    enum PendingEntryChange {
-        case insert(
-            record: CanonicalNetworkEntryRecord,
-            query: CanonicalNetworkEntryQueryProjection
+    var entryOrder: [CanonicalNetworkEntryIDStorage] = []
+    var entryIDs: Set<CanonicalNetworkEntryIDStorage> = []
+    for change in transaction.entryChanges {
+        let id: CanonicalNetworkEntryIDStorage = switch change {
+        case let .insert(record, _): record.id
+        case let .update(id, _, _), let .delete(id): id
+        }
+        if entryIDs.insert(id).inserted { entryOrder.append(id) }
+    }
+    let entryMutations = entryOrder.compactMap { id in
+        guard let record = store.entry(for: id),
+              let query = store.entryQuery(for: id)
+        else {
+            return webInspectorNetworkEntrySchema.delete(
+                id: NetworkEntry.ID(canonical: id)
+            )
+        }
+        return webInspectorNetworkEntrySchema.upsert(
+            record: record,
+            queryValue: query.queryValue,
+            canonicalRank: WebInspectorModelCanonicalRank(
+                rawValue: record.id.ordinal
+            )
         )
-        case update(
-            patches: [CanonicalNetworkEntryPatch],
-            query: CanonicalNetworkEntryQueryProjection?,
-            canonicalRank: WebInspectorFetchedResultsCanonicalRank
-        )
-        case delete
     }
-
-    static func requestChanges(
-        _ changes: [CanonicalNetworkRequestChange],
-        lookup: WebInspectorModelSchemaRecordLookup<
-            NetworkRequest,
-            CanonicalNetworkRequestRecord
-        >
-    ) -> [WebInspectorModelSchemaChange<
-        NetworkRequest,
-        CanonicalNetworkRequestRecord
-    >] {
-        var order: [NetworkRequest.ID] = []
-        var pendingByID: [NetworkRequest.ID: PendingRequestChange] = [:]
-        for change in changes {
-            switch change {
-            case let .insert(record, query):
-                let id = NetworkRequest.ID(canonical: record.id)
-                precondition(
-                    pendingByID[id] == nil && lookup.record(for: id) == nil,
-                    "Canonical Network inserted an existing request identity."
-                )
-                order.append(id)
-                pendingByID[id] = .insert(record: record, query: query)
-
-            case let .update(storage, patch, query):
-                let id = NetworkRequest.ID(canonical: storage)
-                switch pendingByID[id] {
-                case nil:
-                    guard let record = lookup.record(for: id) else {
-                        preconditionFailure(
-                            "Canonical Network updated a missing request identity."
-                        )
-                    }
-                    order.append(id)
-                    pendingByID[id] = .update(
-                        patches: [patch],
-                        query: query,
-                        canonicalRank: .init(
-                            rawValue: record.insertionOrdinal
-                        )
-                    )
-                case let .insert(record, existingQuery):
-                    var record = record
-                    record.apply(patch)
-                    pendingByID[id] = .insert(
-                        record: record,
-                        query: query ?? existingQuery
-                    )
-                case let .update(patches, existingQuery, canonicalRank):
-                    pendingByID[id] = .update(
-                        patches: patches + [patch],
-                        query: query ?? existingQuery,
-                        canonicalRank: canonicalRank
-                    )
-                case .delete:
-                    preconditionFailure(
-                        "Canonical Network updated a deleted request identity."
-                    )
-                }
-
-            case let .delete(storage):
-                let id = NetworkRequest.ID(canonical: storage)
-                switch pendingByID[id] {
-                case nil:
-                    precondition(
-                        lookup.record(for: id) != nil,
-                        "Canonical Network deleted a missing request identity."
-                    )
-                    order.append(id)
-                    pendingByID[id] = .delete
-                case .insert:
-                    pendingByID[id] = nil
-                case .update:
-                    pendingByID[id] = .delete
-                case .delete:
-                    preconditionFailure(
-                        "Canonical Network deleted one request identity twice."
-                    )
-                }
-            }
-        }
-
-        return order.compactMap { id in
-            guard let pending = pendingByID[id] else {
-                return nil
-            }
-            switch pending {
-            case let .insert(record, query):
-                return .insert(
-                    id: id,
-                    record: record,
-                    queryValue: query.queryValue,
-                    canonicalRank: .init(rawValue: record.insertionOrdinal)
-                )
-            case let .update(patches, query, canonicalRank):
-                return .update(
-                    id: id,
-                    patches: WebInspectorModelRecordPatchBatch(patches),
-                    queryValue: query?.queryValue,
-                    canonicalRank: query.map { _ in canonicalRank }
-                )
-            case .delete:
-                return .delete(id: id)
-            }
-        }
-    }
-
-    static func entryChanges(
-        _ changes: [CanonicalNetworkEntryChange],
-        lookup: WebInspectorModelSchemaRecordLookup<
-            NetworkEntry,
-            CanonicalNetworkEntryRecord
-        >
-    ) -> [WebInspectorModelSchemaChange<NetworkEntry, CanonicalNetworkEntryRecord>] {
-        var order: [NetworkEntry.ID] = []
-        var pendingByID: [NetworkEntry.ID: PendingEntryChange] = [:]
-        for change in changes {
-            switch change {
-            case let .insert(record, query):
-                let id = NetworkEntry.ID(canonical: record.id)
-                precondition(
-                    pendingByID[id] == nil && lookup.record(for: id) == nil,
-                    "Canonical Network inserted an existing entry identity."
-                )
-                order.append(id)
-                pendingByID[id] = .insert(record: record, query: query)
-
-            case let .update(storage, patch, query):
-                let id = NetworkEntry.ID(canonical: storage)
-                switch pendingByID[id] {
-                case nil:
-                    precondition(
-                        lookup.record(for: id) != nil,
-                        "Canonical Network updated a missing entry identity."
-                    )
-                    order.append(id)
-                    pendingByID[id] = .update(
-                        patches: [patch],
-                        query: query,
-                        canonicalRank: .init(rawValue: storage.ordinal)
-                    )
-                case let .insert(record, existingQuery):
-                    var record = record
-                    record.apply(patch)
-                    pendingByID[id] = .insert(
-                        record: record,
-                        query: query ?? existingQuery
-                    )
-                case let .update(patches, existingQuery, canonicalRank):
-                    pendingByID[id] = .update(
-                        patches: patches + [patch],
-                        query: query ?? existingQuery,
-                        canonicalRank: canonicalRank
-                    )
-                case .delete:
-                    preconditionFailure(
-                        "Canonical Network updated a deleted entry identity."
-                    )
-                }
-
-            case let .delete(storage):
-                let id = NetworkEntry.ID(canonical: storage)
-                switch pendingByID[id] {
-                case nil:
-                    precondition(
-                        lookup.record(for: id) != nil,
-                        "Canonical Network deleted a missing entry identity."
-                    )
-                    order.append(id)
-                    pendingByID[id] = .delete
-                case .insert:
-                    pendingByID[id] = nil
-                case .update:
-                    pendingByID[id] = .delete
-                case .delete:
-                    preconditionFailure(
-                        "Canonical Network deleted one entry identity twice."
-                    )
-                }
-            }
-        }
-
-        return order.compactMap { id in
-            guard let pending = pendingByID[id] else {
-                return nil
-            }
-            switch pending {
-            case let .insert(record, query):
-                return .insert(
-                    id: id,
-                    record: record,
-                    queryValue: query.queryValue,
-                    canonicalRank: .init(rawValue: record.id.ordinal)
-                )
-            case let .update(patches, query, canonicalRank):
-                return .update(
-                    id: id,
-                    patches: WebInspectorModelRecordPatchBatch(patches),
-                    queryValue: query?.queryValue,
-                    canonicalRank: query.map { _ in canonicalRank }
-                )
-            case .delete:
-                return .delete(id: id)
-            }
-        }
-    }
+    return (requestMutations, entryMutations)
 }
 
 package extension CanonicalNetworkRequestQueryProjection {
     var queryValue: NetworkRequest.QueryValue {
-        precondition(
-            insertionOrdinal <= UInt64(Int.max),
-            "A canonical Network insertion ordinal exceeded QueryValue's Int surface."
-        )
-        return NetworkRequest.QueryValue(
+        NetworkRequest.QueryValue(
             id: NetworkRequest.ID(canonical: id),
-            insertionIndex: Int(insertionOrdinal),
+            insertionIndex: Int(clamping: insertionOrdinal),
             url: url,
             method: method,
-            resourceType: resourceType.map(
-                Network.ResourceType.init(rawValue:)
-            ),
+            resourceType: resourceType.map(Network.ResourceType.init(rawValue:)),
             mimeType: mimeType,
             resourceCategory: resourceCategory.publicValue,
             searchableText: searchableText,
@@ -385,9 +139,7 @@ package extension CanonicalNetworkRequestQueryProjection {
     }
 
     private var canonicalInitiatorNodeID: DOMNode.ID? {
-        guard case let .dom(storage) = groupKey else {
-            return nil
-        }
+        guard case let .dom(storage) = groupKey else { return nil }
         return DOMNode.ID(canonical: storage)
     }
 }
@@ -398,11 +150,10 @@ package extension CanonicalNetworkEntryQueryProjection {
             id: NetworkEntry.ID(canonical: id),
             startedAt: chronology.timestamp,
             insertionOrdinal: chronology.insertionOrdinal,
-            methods: methods,
-            resourceCategories: Set(
-                resourceCategories.map(\.publicValue)
-            ),
-            searchTexts: searchTexts
+            methods: Set(methods),
+            resourceCategories: Set(resourceCategories.map(\.publicValue)),
+            memberCount: searchTexts.count,
+            searchableText: searchTexts.joined(separator: "\n")
         )
     }
 }
@@ -410,24 +161,15 @@ package extension CanonicalNetworkEntryQueryProjection {
 package extension CanonicalNetworkResourceCategory {
     var publicValue: NetworkRequest.ResourceCategory {
         switch self {
-        case .document:
-            .document
-        case .stylesheet:
-            .stylesheet
-        case .script:
-            .script
-        case .image:
-            .image
-        case .font:
-            .font
-        case .xhrFetch:
-            .xhrFetch
-        case .media:
-            .media
-        case .webSocket:
-            .webSocket
-        case .other:
-            .other
+        case .document: .document
+        case .stylesheet: .stylesheet
+        case .script: .script
+        case .image: .image
+        case .font: .font
+        case .xhrFetch: .xhrFetch
+        case .media: .media
+        case .webSocket: .webSocket
+        case .other: .other
         }
     }
 }
@@ -446,9 +188,7 @@ package extension CanonicalNetworkRequestPayload {
             method: method,
             headers: overridingHeaders ?? headers,
             postData: postData,
-            referrerPolicy: referrerPolicy.map(
-                Network.ReferrerPolicy.init(rawValue:)
-            ),
+            referrerPolicy: referrerPolicy.map(Network.ReferrerPolicy.init(rawValue:)),
             integrity: integrity,
             backendResourceIdentifier: backendResourceIdentifier.map {
                 Network.BackendResourceID(
@@ -505,9 +245,7 @@ package extension CanonicalNetworkRedirectHop {
             request: NetworkRequestSnapshot(request.proxyValue),
             response: NetworkResponseSnapshot(response.proxyValue),
             timestamp: redirectTimestamp,
-            resourceType: resourceType.map(
-                Network.ResourceType.init(rawValue:)
-            ),
+            resourceType: resourceType.map(Network.ResourceType.init(rawValue:)),
             requestSentTimestamp: requestSentTimestamp,
             responseReceivedTimestamp: responseReceivedTimestamp,
             lastDataReceivedTimestamp: lastDataReceivedTimestamp,
