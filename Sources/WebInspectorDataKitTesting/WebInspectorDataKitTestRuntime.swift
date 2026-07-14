@@ -686,7 +686,7 @@ private actor ScenarioDriver {
             parameters: try WebInspectorTestJSONObject(encoding:
                 DOMSetChildNodesParameters(
                     parentId: parentID,
-                    nodes: children.map(DOMNodeWire.init(node:))
+                    nodes: children.map { DOMNodeWire(node: $0, depth: 0) }
                 )
             )
         )
@@ -720,7 +720,7 @@ private actor ScenarioDriver {
                 DOMChildNodeInsertedParameters(
                     parentNodeId: parentID,
                     previousNodeId: previousNodeID ?? "0",
-                    node: DOMNodeWire(node: node)
+                    node: DOMNodeWire(node: node, depth: 0)
                 )
             )
         )
@@ -990,7 +990,7 @@ private struct DOMNodeWire: Encodable {
     let frameId: String?
     let documentURL: String?
     let attributes: [String]
-    let childNodeCount: Int
+    let childNodeCount: Int?
     let children: [DOMNodeWire]?
 
     init(document: WebInspectorDataKitTestRuntime.Document) {
@@ -1002,13 +1002,14 @@ private struct DOMNodeWire: Encodable {
         frameId = document.frameID
         documentURL = document.url
         attributes = []
-        childNodeCount = document.children.count
-        children = document.children.isEmpty
+        let protocolChildren = document.children.filter { !$0.isASCIIWhitespaceText }
+        childNodeCount = protocolChildren.count
+        children = protocolChildren.isEmpty
             ? nil
-            : document.children.map(DOMNodeWire.init(node:))
+            : protocolChildren.map { DOMNodeWire(node: $0, depth: .max) }
     }
 
-    init(node: WebInspectorDataKitTestRuntime.Node) {
+    init(node: WebInspectorDataKitTestRuntime.Node, depth: Int) {
         nodeId = node.id
         nodeType = node.nodeType
         nodeName = node.nodeName
@@ -1017,10 +1018,37 @@ private struct DOMNodeWire: Encodable {
         frameId = nil
         documentURL = nil
         attributes = node.attributes.sorted { $0.key < $1.key }.flatMap { [$0.key, $0.value] }
-        childNodeCount = node.children.count
-        children = node.children.isEmpty
-            ? nil
-            : node.children.map(DOMNodeWire.init(node:))
+        let protocolChildren = node.children.filter { !$0.isASCIIWhitespaceText }
+        childNodeCount = node.isContainer ? protocolChildren.count : nil
+        if depth > 0 {
+            children = protocolChildren.isEmpty
+                ? nil
+                : protocolChildren.map { DOMNodeWire(node: $0, depth: depth - 1) }
+        } else if node.children.count == 1, node.children[0].nodeType == 3 {
+            children = [DOMNodeWire(node: node.children[0], depth: 0)]
+        } else {
+            children = nil
+        }
+    }
+}
+
+private extension WebInspectorDataKitTestRuntime.Node {
+    var isContainer: Bool {
+        nodeType == 1 || nodeType == 9 || nodeType == 11
+    }
+
+    var isASCIIWhitespaceText: Bool {
+        guard nodeType == 3 else {
+            return false
+        }
+        return nodeValue.unicodeScalars.allSatisfy { scalar in
+            switch scalar.value {
+            case 0x09, 0x0A, 0x0C, 0x0D, 0x20:
+                true
+            default:
+                false
+            }
+        }
     }
 }
 

@@ -141,7 +141,11 @@ func dataKitTestingDrivesIncrementalDOMEventsThroughTheProductionTreeStream()
 
     try await runtime.emitDOMChildNodeInserted(
         parentID: "body",
-        node: .element(id: "first", name: "em")
+        node: .element(
+            id: "first",
+            name: "em",
+            children: [.text(id: "first-whitespace", value: "\n    ")]
+        )
     )
     guard case let .changes(_, _, .delta(firstInsertionDelta)) =
         await iterator.next()
@@ -152,6 +156,7 @@ func dataKitTestingDrivesIncrementalDOMEventsThroughTheProductionTreeStream()
         row.id.canonicalStorage.rawNodeID.rawValue == "first"
     }?.id)
     #expect(runtime.model.model(for: firstID)?.localName == "em")
+    #expect(runtime.model.model(for: firstID)?.childNodeCount == 1)
 
     try await runtime.emitDOMSetChildNodes(
         parentID: "body",
@@ -211,6 +216,61 @@ func dataKitTestingDrivesIncrementalDOMEventsThroughTheProductionTreeStream()
     #expect(removalDelta.deletedRowIDs == [spanID])
     #expect(runtime.model.registeredModel(for: spanID) == nil)
     #expect(runtime.model.model(for: strongID) != nil)
+
+    try await runtime.emitDOMChildNodeInserted(
+        parentID: "body",
+        previousNodeID: "strong",
+        node: .element(
+            id: "old-frame-owner",
+            name: "iframe",
+            children: [.text(id: "preserved-whitespace", value: "\n    ")]
+        )
+    )
+    guard case let .changes(_, _, .delta(oldFrameDelta)) =
+        await iterator.next()
+    else {
+        preconditionFailure("The old frame owner must enter the production tree stream.")
+    }
+    let oldFrameID = try #require(oldFrameDelta.upsertedRows.first { row in
+        row.id.canonicalStorage.rawNodeID.rawValue == "old-frame-owner"
+    }?.id)
+    let preservedID = try #require(oldFrameDelta.upsertedRows.first { row in
+        row.id.canonicalStorage.rawNodeID.rawValue == "preserved-whitespace"
+    }?.id)
+    let firstPreservedModel = try #require(runtime.model.model(for: preservedID))
+
+    try await runtime.emitDOMChildNodeRemoved(
+        parentID: "body",
+        nodeID: "old-frame-owner"
+    )
+    guard case let .changes(_, _, .delta(oldFrameRemoval)) =
+        await iterator.next()
+    else {
+        preconditionFailure("The old frame owner removal must publish a tree delta.")
+    }
+    #expect(oldFrameRemoval.deletedRowIDs == [oldFrameID, preservedID])
+    #expect(runtime.model.registeredModel(for: preservedID) == nil)
+
+    try await runtime.emitDOMChildNodeInserted(
+        parentID: "body",
+        previousNodeID: "strong",
+        node: .element(
+            id: "new-frame-owner",
+            name: "iframe",
+            children: [.text(id: "preserved-whitespace", value: "\n    ")]
+        )
+    )
+    guard case let .changes(_, _, .delta(newFrameDelta)) =
+        await iterator.next()
+    else {
+        preconditionFailure("A backend-preserved child identity must be rematerialized.")
+    }
+    let rematerializedID = try #require(newFrameDelta.upsertedRows.first { row in
+        row.id.canonicalStorage.rawNodeID.rawValue == "preserved-whitespace"
+    }?.id)
+    let rematerializedModel = try #require(runtime.model.model(for: rematerializedID))
+    #expect(rematerializedID == preservedID)
+    #expect(rematerializedModel !== firstPreservedModel)
 
     iterator.cancel()
     await runtime.close()

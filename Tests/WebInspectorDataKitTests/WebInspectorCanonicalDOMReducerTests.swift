@@ -521,17 +521,31 @@ func canonicalDOMMatchesWebKitCountAndFirstInsertionSemantics() throws {
     let loadedID = canonicalDOMID("loaded", scope: documentScope)
     let existingID = canonicalDOMID("existing", scope: documentScope)
     let insertedID = canonicalDOMID("inserted", scope: documentScope)
+    let whitespaceID = canonicalDOMID("whitespace", scope: documentScope)
 
     let insertion = try reducer.apply(
         scope: fixture.scope,
         event: .childNodeInserted(
             parent: DOM.Node.ID("unrequested"),
             previous: nil,
-            node: canonicalDOMNode(id: "inserted")
+            node: canonicalDOMNode(
+                id: "inserted",
+                childCount: 0,
+                children: [
+                    canonicalDOMNode(
+                        id: "whitespace",
+                        type: 3,
+                        name: "#text",
+                        localName: "",
+                        value: "\n    "
+                    )
+                ]
+            )
         )
     )
-    #expect(insertion.insertedRecords.map(\.id) == [insertedID])
+    #expect(insertion.insertedRecords.map(\.id) == [insertedID, whitespaceID])
     #expect(reducer.record(for: unrequestedID)?.children == .loaded([insertedID]))
+    #expect(reducer.record(for: insertedID)?.children == .loaded([whitespaceID]))
 
     let countOnly = try reducer.apply(
         scope: fixture.scope,
@@ -542,7 +556,7 @@ func canonicalDOMMatchesWebKitCountAndFirstInsertionSemantics() throws {
 }
 
 @Test
-func canonicalDOMRejectsInvalidDeltaAndTombstonedIDReuseWithStrongGuarantee() throws {
+func canonicalDOMRejectsInvalidDeltaWithStrongGuarantee() throws {
     let fixture = canonicalDOMReducerFixture()
     var reducer = fixture.reducer
     let parent = canonicalDOMNode(id: "parent", children: [canonicalDOMNode(id: "child")])
@@ -573,21 +587,79 @@ func canonicalDOMRejectsInvalidDeltaAndTombstonedIDReuseWithStrongGuarantee() th
         scope: fixture.scope,
         event: .childNodeRemoved(parent: DOM.Node.ID("parent"), node: DOM.Node.ID("child"))
     )
-    let afterRemoval = reducer.snapshot()
-    #expect(throws: (any Error).self) {
-        try reducer.apply(
-            scope: fixture.scope,
-            event: .childNodeInserted(
-                parent: DOM.Node.ID("parent"),
-                previous: nil,
-                node: canonicalDOMNode(id: "child")
-            )
-        )
-    }
-    #expect(reducer.snapshot() == afterRemoval)
     #expect(throws: WebInspectorCanonicalDOMError.documentUpdatedRequiresInvalidationBoundary) {
         try reducer.apply(scope: fixture.scope, event: .documentUpdated)
     }
+}
+
+@Test
+func canonicalDOMRematerializesAChildIdentityPreservedAcrossFrameOwnerReplacement() throws {
+    let fixture = canonicalDOMReducerFixture()
+    var reducer = fixture.reducer
+    _ = try reducer.bootstrap(
+        scope: fixture.scope,
+        root: canonicalDOMNode(
+            id: "document",
+            type: 9,
+            name: "#document",
+            children: [
+                canonicalDOMNode(
+                    id: "parent",
+                    children: [
+                        canonicalDOMNode(
+                            id: "old-frame-owner",
+                            children: [
+                                canonicalDOMNode(
+                                    id: "preserved-whitespace",
+                                    type: 3,
+                                    name: "#text",
+                                    value: "\n    "
+                                )
+                            ]
+                        )
+                    ]
+                )
+            ]
+        )
+    )
+    let documentScope = try canonicalDocumentScope(fixture, eventScope: fixture.scope)
+    let oldOwnerID = canonicalDOMID("old-frame-owner", scope: documentScope)
+    let newOwnerID = canonicalDOMID("new-frame-owner", scope: documentScope)
+    let preservedID = canonicalDOMID("preserved-whitespace", scope: documentScope)
+    let preservedOrdinal = try #require(reducer.record(for: preservedID)).insertionOrdinal
+
+    let removal = try reducer.apply(
+        scope: fixture.scope,
+        event: .childNodeRemoved(
+            parent: DOM.Node.ID("parent"),
+            node: DOM.Node.ID("old-frame-owner")
+        )
+    )
+    #expect(removal.deletedRecordIDs == [oldOwnerID, preservedID])
+
+    let insertion = try reducer.apply(
+        scope: fixture.scope,
+        event: .childNodeInserted(
+            parent: DOM.Node.ID("parent"),
+            previous: nil,
+            node: canonicalDOMNode(
+                id: "new-frame-owner",
+                children: [
+                    canonicalDOMNode(
+                        id: "preserved-whitespace",
+                        type: 3,
+                        name: "#text",
+                        value: "\n    "
+                    )
+                ]
+            )
+        )
+    )
+
+    #expect(insertion.insertedRecords.map(\.id) == [newOwnerID, preservedID])
+    #expect(reducer.parent(of: preservedID) == newOwnerID)
+    #expect(reducer.record(for: preservedID)?.nodeValue == "\n    ")
+    #expect(reducer.record(for: preservedID)?.insertionOrdinal == preservedOrdinal)
 }
 
 @Test
@@ -643,19 +715,6 @@ func canonicalDOMSetChildNodesReplacesOnlyTheMaterializedChildSubtrees() throws 
     #expect(reducer.record(for: addedID) != nil)
     #expect(reducer.performanceCounters.fullGraphBuildCount == before.fullGraphBuildCount)
     #expect(reducer.performanceCounters.unrelatedRecordScanCount == 0)
-
-    let after = reducer.snapshot()
-    #expect(throws: WebInspectorCanonicalDOMError.reusedNode(removedID)) {
-        try reducer.apply(
-            scope: fixture.scope,
-            event: .childNodeInserted(
-                parent: DOM.Node.ID("parent"),
-                previous: DOM.Node.ID("retained"),
-                node: canonicalDOMNode(id: "removed")
-            )
-        )
-    }
-    #expect(reducer.snapshot() == after)
 }
 
 @Test

@@ -1794,6 +1794,30 @@ func DOMChildInsertionTreatsZeroPreviousNodeAsTheFirstChild() throws {
 }
 
 @Test
+func DOMNodePayloadPreservesWebKitWhitespaceChildCountMismatch() throws {
+    let event = ProtocolEvent(
+        sequence: 1,
+        domain: .dom,
+        method: "DOM.childNodeInserted",
+        targetID: nil,
+        paramsData: Data(
+            ##"{"parentNodeId":1,"previousNodeId":0,"node":{"nodeId":2,"nodeType":1,"nodeName":"DIV","localName":"div","nodeValue":"","childNodeCount":0,"children":[{"nodeId":3,"nodeType":3,"nodeName":"#text","localName":"","nodeValue":"\n    "}]}}"##.utf8
+        )
+    )
+
+    guard case let .dom(.childNodeInserted(_, _, node)) = try LiveProxyEventDecoder.proxyEvent(
+        from: event,
+        targetID: WebInspectorTarget.ID("page-main")
+    ) else {
+        Issue.record("Expected a decoded DOM child insertion event.")
+        return
+    }
+
+    #expect(node.childNodeCount == 0)
+    #expect(node.children?.map(\.nodeValue) == ["\n    "])
+}
+
+@Test
 func networkRequestWillBeSentRequiresProtocolFrameAndLoaderMembership() {
     let missingLoader = ProtocolEvent(
         sequence: 1,

@@ -324,11 +324,10 @@ package enum WebInspectorCanonicalDOMError: Error, Equatable, Sendable {
     case bootstrapAlreadyExists(WebInspectorDOMDocumentScopeStorage)
     case invalidDocumentTransition(WebInspectorDOMTargetRouteStorage)
     case duplicateNode(WebInspectorDOMNodeIdentityStorage)
-    case reusedNode(WebInspectorDOMNodeIdentityStorage)
     case missingNode(WebInspectorDOMNodeIdentityStorage)
     case invalidParent(WebInspectorDOMNodeIdentityStorage)
     case invalidPreviousSibling(WebInspectorDOMNodeIdentityStorage)
-    case invalidChildCount(WebInspectorDOMNodeIdentityStorage)
+    case negativeChildCount(WebInspectorDOMNodeIdentityStorage, count: Int)
     case invalidAttributes(WebInspectorDOMNodeIdentityStorage)
     case invalidRelationship(WebInspectorDOMNodeIdentityStorage)
     case ambiguousFrameOwner(FrameID)
@@ -357,7 +356,6 @@ package struct WebInspectorCanonicalDOMReducer: Sendable {
         var upsertOrder: [WebInspectorDOMNodeIdentityStorage] = []
         var parentAssignments: [WebInspectorDOMNodeIdentityStorage: ParentAssignment] = [:]
         var deletes: Set<WebInspectorDOMNodeIdentityStorage> = []
-        var tombstones: Set<WebInspectorDOMNodeIdentityStorage> = []
         var incrementalVisits = 0
         var deletionVisits = 0
         var resourceInvalidations: Set<WebInspectorCanonicalResourceInvalidation> = []
@@ -377,7 +375,9 @@ package struct WebInspectorCanonicalDOMReducer: Sendable {
     private var frameOwnerByFrameID: [FrameID: WebInspectorDOMNodeIdentityStorage] = [:]
     private var frameRootByFrameID: [FrameID: WebInspectorDOMNodeIdentityStorage] = [:]
     private var frameIDByFrameRootID: [WebInspectorDOMNodeIdentityStorage: FrameID] = [:]
-    private var retiredRawNodeIDsByScope: [WebInspectorDOMDocumentScopeStorage: Set<DOM.Node.ID>] = [:]
+    // WebKit can unbind an ancestor while retaining a descendant binding. Keep
+    // that descendant's canonical order stable when its NodeId is rematerialized.
+    private var insertionOrdinalByNodeID: [WebInspectorDOMNodeIdentityStorage: UInt64] = [:]
     private var lastInsertionOrdinal: UInt64 = 0
     private var primaryRootID: WebInspectorDOMNodeIdentityStorage?
     private var treeReachableNodeIDs: Set<WebInspectorDOMNodeIdentityStorage> = []
@@ -530,7 +530,7 @@ package struct WebInspectorCanonicalDOMReducer: Sendable {
         var graph = BuiltGraph()
         try build(root, scope: scope, parent: nil, into: &graph)
         let rootID = nodeID(root.id, in: scope)
-        let suppressedEmbeddedDocumentIDs = try prepareNewGraph(&graph, replacing: [])
+        try prepareNewGraph(&graph, replacing: [])
 
         var frameRootID: FrameID?
         var embeddedDocumentIDs: Set<WebInspectorDOMNodeIdentityStorage> = []
@@ -564,6 +564,12 @@ package struct WebInspectorCanonicalDOMReducer: Sendable {
 
         var touchedFrames = Set(graph.frameOwners.keys)
         lastInsertionOrdinal = committedInsertionOrdinal
+        for id in graph.insertionOrder {
+            guard let record = graph.recordsByID[id] else {
+                continue
+            }
+            insertionOrdinalByNodeID[id] = record.insertionOrdinal
+        }
         for id in embeddedDocumentIDs {
             if let frameID = recordsByID[id]?.frameOwnerID,
                 frameOwnerByFrameID[frameID] == id
@@ -574,10 +580,6 @@ package struct WebInspectorCanonicalDOMReducer: Sendable {
             recordsByID.removeValue(forKey: id)
             parentByNodeID.removeValue(forKey: id)
             nodeIDsByDocumentScope[id.documentScope]?.remove(id)
-            retiredRawNodeIDsByScope[id.documentScope, default: []].insert(id.rawNodeID)
-        }
-        for id in suppressedEmbeddedDocumentIDs {
-            retiredRawNodeIDsByScope[id.documentScope, default: []].insert(id.rawNodeID)
         }
         recordsByID.merge(graph.recordsByID) { _, _ in
             preconditionFailure("Validated DOM bootstrap unexpectedly collided during commit.")
@@ -688,7 +690,6 @@ package struct WebInspectorCanonicalDOMReducer: Sendable {
         activeScopeByTargetRoute[targetRoute] = newScope
         activeSemanticTargetByTargetRoute[targetRoute] = newEventScope.modelScope.target
         nodeIDsByDocumentScope[newScope] = []
-        retiredRawNodeIDsByScope.removeValue(forKey: oldScope)
         return transaction
     }
 
@@ -700,7 +701,6 @@ package struct WebInspectorCanonicalDOMReducer: Sendable {
         transaction.resourceInvalidations.insert(.target(scope))
         activeScopeByTargetRoute.removeValue(forKey: scope.targetRoute)
         activeSemanticTargetByTargetRoute.removeValue(forKey: scope.targetRoute)
-        retiredRawNodeIDsByScope.removeValue(forKey: scope)
         return transaction
     }
 
@@ -733,7 +733,6 @@ package struct WebInspectorCanonicalDOMReducer: Sendable {
                     ?? ParentAssignment.none
             ],
             deletes: deletedIDs,
-            tombstones: deletedIDs,
             deletionVisits: deletedIDs.count,
             resourceInvalidations: [.subtree(ownerID)]
         )
@@ -768,7 +767,7 @@ package struct WebInspectorCanonicalDOMReducer: Sendable {
         frameOwnerByFrameID.removeAll(keepingCapacity: true)
         frameRootByFrameID.removeAll(keepingCapacity: true)
         frameIDByFrameRootID.removeAll(keepingCapacity: true)
-        retiredRawNodeIDsByScope.removeAll(keepingCapacity: true)
+        insertionOrdinalByNodeID.removeAll(keepingCapacity: true)
         primaryRootID = nil
         treeReachableNodeIDs.removeAll(keepingCapacity: true)
         treeChildrenByNodeID.removeAll(keepingCapacity: true)
@@ -1078,7 +1077,7 @@ private extension WebInspectorCanonicalDOMReducer {
         for node in nodes {
             try build(node, scope: scope, parent: parentID, into: &graph)
         }
-        let suppressedIDs = try prepareNewGraph(&graph, replacing: oldSubtreeIDs)
+        try prepareNewGraph(&graph, replacing: oldSubtreeIDs)
 
         let newIDs = Set(graph.recordsByID.keys)
         let removedIDs = oldSubtreeIDs.subtracting(newIDs)
@@ -1092,7 +1091,6 @@ private extension WebInspectorCanonicalDOMReducer {
         plan.parentAssignments[parentID] =
             parentByNodeID[parentID].map(ParentAssignment.parent) ?? ParentAssignment.none
         plan.deletes = removedIDs
-        plan.tombstones = removedIDs.union(suppressedIDs)
         plan.incrementalVisits = graph.visitCount + 1
         plan.deletionVisits = oldSubtreeIDs.count
         plan.resourceInvalidations = [.target(scope)]
@@ -1105,9 +1103,8 @@ private extension WebInspectorCanonicalDOMReducer {
     ) throws -> WebInspectorCanonicalDOMTransaction {
         var graph = BuiltGraph()
         try build(node, scope: scope, parent: nil, into: &graph)
-        let suppressedIDs = try prepareNewGraph(&graph, replacing: [])
+        try prepareNewGraph(&graph, replacing: [])
         var plan = mutationPlan(for: graph)
-        plan.tombstones = suppressedIDs
         plan.incrementalVisits = graph.visitCount
         plan.resourceInvalidations = [.target(scope)]
         return try commit(plan)
@@ -1150,12 +1147,11 @@ private extension WebInspectorCanonicalDOMReducer {
 
         var graph = BuiltGraph()
         try build(node, scope: scope, parent: parentID, into: &graph)
-        let suppressedIDs = try prepareNewGraph(&graph, replacing: [])
+        try prepareNewGraph(&graph, replacing: [])
         childIDs.insert(nodeID(node.id, in: scope), at: insertionIndex)
         parentRecord.children = .loaded(childIDs)
 
         var plan = mutationPlan(for: graph)
-        plan.tombstones = suppressedIDs
         plan.upserts[parentID] = parentRecord
         plan.upsertOrder.append(parentID)
         plan.parentAssignments[parentID] =
@@ -1191,7 +1187,6 @@ private extension WebInspectorCanonicalDOMReducer {
         plan.parentAssignments[parentID] =
             parentByNodeID[parentID].map(ParentAssignment.parent) ?? ParentAssignment.none
         plan.deletes = deletedIDs
-        plan.tombstones = deletedIDs
         plan.incrementalVisits = 1
         plan.deletionVisits = deletedIDs.count
         plan.resourceInvalidations = [.target(scope)]
@@ -1208,7 +1203,7 @@ private extension WebInspectorCanonicalDOMReducer {
             throw WebInspectorCanonicalDOMError.missingNode(id)
         }
         guard count >= 0 else {
-            throw WebInspectorCanonicalDOMError.invalidChildCount(id)
+            throw WebInspectorCanonicalDOMError.negativeChildCount(id, count: count)
         }
         switch record.children {
         case let .unrequested(oldCount):
@@ -1322,13 +1317,12 @@ private extension WebInspectorCanonicalDOMReducer {
         }
         var graph = BuiltGraph()
         try build(root, scope: scope, parent: hostID, into: &graph)
-        let suppressedIDs = try prepareNewGraph(&graph, replacing: previousSubtreeIDs)
+        try prepareNewGraph(&graph, replacing: previousSubtreeIDs)
         let removedIDs = previousSubtreeIDs.subtracting(graph.recordsByID.keys)
         hostRecord.shadowRootIDs.removeAll(where: { $0 == rootID })
         hostRecord.shadowRootIDs.append(rootID)
         var plan = mutationPlan(for: graph)
         plan.deletes = removedIDs
-        plan.tombstones = removedIDs.union(suppressedIDs)
         plan.upserts[hostID] = hostRecord
         plan.upsertOrder.append(hostID)
         plan.parentAssignments[hostID] = parentByNodeID[hostID].map(ParentAssignment.parent) ?? ParentAssignment.none
@@ -1358,7 +1352,6 @@ private extension WebInspectorCanonicalDOMReducer {
         plan.upsertOrder = [hostID]
         plan.parentAssignments[hostID] = parentByNodeID[hostID].map(ParentAssignment.parent) ?? ParentAssignment.none
         plan.deletes = deletedIDs
-        plan.tombstones = deletedIDs
         plan.incrementalVisits = 1
         plan.deletionVisits = deletedIDs.count
         plan.resourceInvalidations = [.target(scope)]
@@ -1388,7 +1381,7 @@ private extension WebInspectorCanonicalDOMReducer {
 
         var graph = BuiltGraph()
         try build(element, scope: scope, parent: parentID, into: &graph)
-        let suppressedIDs = try prepareNewGraph(&graph, replacing: previousSubtreeIDs)
+        try prepareNewGraph(&graph, replacing: previousSubtreeIDs)
         let removedIDs = previousSubtreeIDs.subtracting(graph.recordsByID.keys)
         switch element.pseudoType {
         case .before:
@@ -1404,7 +1397,6 @@ private extension WebInspectorCanonicalDOMReducer {
         }
         var plan = mutationPlan(for: graph)
         plan.deletes = removedIDs
-        plan.tombstones = removedIDs.union(suppressedIDs)
         plan.upserts[parentID] = parentRecord
         plan.upsertOrder.append(parentID)
         plan.parentAssignments[parentID] =
@@ -1443,7 +1435,6 @@ private extension WebInspectorCanonicalDOMReducer {
         plan.parentAssignments[parentID] =
             parentByNodeID[parentID].map(ParentAssignment.parent) ?? ParentAssignment.none
         plan.deletes = deletedIDs
-        plan.tombstones = deletedIDs
         plan.incrementalVisits = 1
         plan.deletionVisits = deletedIDs.count
         plan.resourceInvalidations = [.target(scope)]
@@ -1464,7 +1455,6 @@ private extension WebInspectorCanonicalDOMReducer {
         let deletedIDs = try collectSubtrees([id])
         var plan = MutationPlan()
         plan.deletes = deletedIDs
-        plan.tombstones = deletedIDs
         plan.incrementalVisits = 1
         plan.deletionVisits = deletedIDs.count
         plan.resourceInvalidations = [.target(scope)]
@@ -1521,7 +1511,10 @@ private extension WebInspectorCanonicalDOMReducer {
             throw WebInspectorCanonicalDOMError.duplicateNode(id)
         }
         guard node.childNodeCount >= 0 else {
-            throw WebInspectorCanonicalDOMError.invalidChildCount(id)
+            throw WebInspectorCanonicalDOMError.negativeChildCount(
+                id,
+                count: node.childNodeCount
+            )
         }
         var attributeNames = Set<String>()
         for attribute in node.attributeList where !attributeNames.insert(attribute.name).inserted {
@@ -1534,9 +1527,6 @@ private extension WebInspectorCanonicalDOMReducer {
 
         let children: WebInspectorCanonicalDOMChildren
         if let payloadChildren = node.children {
-            guard payloadChildren.count == node.childNodeCount else {
-                throw WebInspectorCanonicalDOMError.invalidChildCount(id)
-            }
             children = .loaded(payloadChildren.map { nodeID($0.id, in: scope) })
         } else {
             children = .unrequested(count: node.childNodeCount)
@@ -1613,13 +1603,12 @@ private extension WebInspectorCanonicalDOMReducer {
     func prepareNewGraph(
         _ graph: inout BuiltGraph,
         replacing replacedIDs: Set<WebInspectorDOMNodeIdentityStorage>
-    ) throws -> Set<WebInspectorDOMNodeIdentityStorage> {
-        let suppressedIDs = try suppressEmbeddedDocumentsReplacedByFrameRoots(
+    ) throws {
+        try suppressEmbeddedDocumentsReplacedByFrameRoots(
             in: &graph,
             replacing: replacedIDs
         )
         try validateNewGraph(graph, replacing: replacedIDs)
-        return suppressedIDs
     }
 
     func validateNewGraph(
@@ -1629,9 +1618,6 @@ private extension WebInspectorCanonicalDOMReducer {
         for id in graph.recordsByID.keys {
             if recordsByID[id] != nil, !replacedIDs.contains(id) {
                 throw WebInspectorCanonicalDOMError.duplicateNode(id)
-            }
-            if retiredRawNodeIDsByScope[id.documentScope]?.contains(id.rawNodeID) == true {
-                throw WebInspectorCanonicalDOMError.reusedNode(id)
             }
         }
         for (frameID, ownerID) in graph.frameOwners {
@@ -1655,8 +1641,7 @@ private extension WebInspectorCanonicalDOMReducer {
     func suppressEmbeddedDocumentsReplacedByFrameRoots(
         in graph: inout BuiltGraph,
         replacing replacedIDs: Set<WebInspectorDOMNodeIdentityStorage>
-    ) throws -> Set<WebInspectorDOMNodeIdentityStorage> {
-        var suppressedIDs = Set<WebInspectorDOMNodeIdentityStorage>()
+    ) throws {
         let insertionIndexByID = Dictionary(
             uniqueKeysWithValues: graph.insertionOrder.enumerated().map { ($0.element, $0.offset) }
         )
@@ -1679,9 +1664,6 @@ private extension WebInspectorCanonicalDOMReducer {
                 if recordsByID[id] != nil, !replacedIDs.contains(id) {
                     throw WebInspectorCanonicalDOMError.duplicateNode(id)
                 }
-                if retiredRawNodeIDsByScope[id.documentScope]?.contains(id.rawNodeID) == true {
-                    throw WebInspectorCanonicalDOMError.reusedNode(id)
-                }
                 if let embeddedFrameID = graph.recordsByID[id]?.frameOwnerID,
                     graph.frameOwners[embeddedFrameID] == id
                 {
@@ -1693,9 +1675,7 @@ private extension WebInspectorCanonicalDOMReducer {
             graph.insertionOrder.removeAll(where: embeddedIDs.contains)
             owner.contentDocumentID = frameRootID
             graph.recordsByID[ownerID] = owner
-            suppressedIDs.formUnion(embeddedIDs)
         }
-        return suppressedIDs
     }
 
     func validateFrameLink(
@@ -1793,9 +1773,6 @@ private extension WebInspectorCanonicalDOMReducer {
             parentByNodeID.removeValue(forKey: id)
             nodeIDsByDocumentScope[id.documentScope]?.remove(id)
         }
-        for id in plan.tombstones {
-            retiredRawNodeIDsByScope[id.documentScope, default: []].insert(id.rawNodeID)
-        }
         for id in plan.upsertOrder {
             guard let record = plan.upserts[id] else {
                 continue
@@ -1809,6 +1786,14 @@ private extension WebInspectorCanonicalDOMReducer {
             }
             recordsByID[id] = record
             nodeIDsByDocumentScope[id.documentScope, default: []].insert(id)
+            if let knownOrdinal = insertionOrdinalByNodeID[id] {
+                precondition(
+                    knownOrdinal == record.insertionOrdinal,
+                    "A canonical DOM identity cannot change insertion order."
+                )
+            } else {
+                insertionOrdinalByNodeID[id] = record.insertionOrdinal
+            }
             if let assignment = plan.parentAssignments[id] {
                 apply(assignment, to: id)
             }
@@ -1922,6 +1907,9 @@ private extension WebInspectorCanonicalDOMReducer {
         if let existing = recordsByID[id] {
             return existing.insertionOrdinal
         }
+        if let knownOrdinal = insertionOrdinalByNodeID[id] {
+            return knownOrdinal
+        }
         let previous = graph.lastAllocatedInsertionOrdinal ?? lastInsertionOrdinal
         let (ordinal, overflow) = previous.addingReportingOverflow(1)
         guard !overflow else {
@@ -1952,6 +1940,13 @@ private extension WebInspectorCanonicalDOMReducer {
                 visitedNewIDs.insert(id).inserted,
                 "A canonical DOM mutation cannot insert one identity twice."
             )
+            if let knownOrdinal = insertionOrdinalByNodeID[id] {
+                precondition(
+                    record.insertionOrdinal == knownOrdinal,
+                    "A rematerialized canonical DOM identity cannot change insertion order."
+                )
+                continue
+            }
             precondition(
                 record.insertionOrdinal > committedOrdinal,
                 "Canonical DOM insertion ordinals must advance in protocol order."
@@ -2101,6 +2096,9 @@ private extension WebInspectorCanonicalDOMReducer {
         _ scope: WebInspectorDOMDocumentScopeStorage
     ) -> WebInspectorCanonicalDOMTransaction {
         let ids = nodeIDsByDocumentScope.removeValue(forKey: scope) ?? []
+        insertionOrdinalByNodeID = insertionOrdinalByNodeID.filter { id, _ in
+            id.documentScope != scope
+        }
         var touchedFrames = Set<FrameID>()
         for id in ids {
             if let frameID = recordsByID[id]?.frameOwnerID,
