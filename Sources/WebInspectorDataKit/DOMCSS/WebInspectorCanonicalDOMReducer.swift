@@ -362,7 +362,7 @@ package struct WebInspectorCanonicalDOMReducer: Sendable {
     }
 
     package let storeID: WebInspectorContainerStoreID
-    package let attachmentGeneration: WebInspectorContainerAttachmentGeneration
+    package let attachmentGeneration: WebInspectorAttachmentGeneration
 
     private var recordsByID: [WebInspectorDOMNodeIdentityStorage: WebInspectorCanonicalDOMRecord] = [:]
     private var parentByNodeID: [WebInspectorDOMNodeIdentityStorage: WebInspectorDOMNodeIdentityStorage] = [:]
@@ -371,7 +371,7 @@ package struct WebInspectorCanonicalDOMReducer: Sendable {
         [:]
     private var activeScopeByTargetRoute: [WebInspectorDOMTargetRouteStorage: WebInspectorDOMDocumentScopeStorage] =
         [:]
-    private var activeSemanticTargetByTargetRoute: [WebInspectorDOMTargetRouteStorage: ModelTarget] = [:]
+    private var activeSemanticTargetByTargetRoute: [WebInspectorDOMTargetRouteStorage: WebInspectorFeatureTarget] = [:]
     private var frameOwnerByFrameID: [FrameID: WebInspectorDOMNodeIdentityStorage] = [:]
     private var frameRootByFrameID: [FrameID: WebInspectorDOMNodeIdentityStorage] = [:]
     private var frameIDByFrameRootID: [WebInspectorDOMNodeIdentityStorage: FrameID] = [:]
@@ -395,7 +395,7 @@ package struct WebInspectorCanonicalDOMReducer: Sendable {
 
     package init(
         storeID: WebInspectorContainerStoreID,
-        attachmentGeneration: WebInspectorContainerAttachmentGeneration
+        attachmentGeneration: WebInspectorAttachmentGeneration
     ) {
         self.storeID = storeID
         self.attachmentGeneration = attachmentGeneration
@@ -417,6 +417,10 @@ package struct WebInspectorCanonicalDOMReducer: Sendable {
         in scope: WebInspectorDOMDocumentScopeStorage
     ) -> WebInspectorDOMNodeIdentityStorage? {
         rootByDocumentScope[scope]
+    }
+
+    package var primaryDocumentRootID: WebInspectorDOMNodeIdentityStorage? {
+        primaryRootID
     }
 
     package func nodeID(
@@ -519,7 +523,7 @@ package struct WebInspectorCanonicalDOMReducer: Sendable {
             guard activeScope == scope else {
                 throw WebInspectorCanonicalDOMError.scopeMismatch(targetRoute)
             }
-            guard activeSemanticTargetByTargetRoute[targetRoute] == eventScope.modelScope.target else {
+            guard activeSemanticTargetByTargetRoute[targetRoute] == eventScope.modelScope.semanticTarget else {
                 throw WebInspectorCanonicalDOMError.scopeMismatch(targetRoute)
             }
             if rootByDocumentScope[scope] != nil || !(nodeIDsByDocumentScope[scope] ?? []).isEmpty {
@@ -534,8 +538,8 @@ package struct WebInspectorCanonicalDOMReducer: Sendable {
 
         var frameRootID: FrameID?
         var embeddedDocumentIDs: Set<WebInspectorDOMNodeIdentityStorage> = []
-        if eventScope.modelScope.target.kind == .frame {
-            guard let frameID = eventScope.modelScope.target.frameID else {
+        if eventScope.modelScope.semanticTargetKind == .frame {
+            guard let frameID = eventScope.modelScope.semanticFrameID else {
                 throw WebInspectorCanonicalDOMError.invalidRelationship(rootID)
             }
             if let payloadFrameID = root.frameID, payloadFrameID != frameID {
@@ -589,7 +593,7 @@ package struct WebInspectorCanonicalDOMReducer: Sendable {
         }
         nodeIDsByDocumentScope[scope] = Set(graph.recordsByID.keys)
         activeScopeByTargetRoute[targetRoute] = scope
-        activeSemanticTargetByTargetRoute[targetRoute] = eventScope.modelScope.target
+        activeSemanticTargetByTargetRoute[targetRoute] = eventScope.modelScope.semanticTarget
         rootByDocumentScope[scope] = rootID
         for (frameID, ownerID) in graph.frameOwners {
             frameOwnerByFrameID[frameID] = ownerID
@@ -677,7 +681,7 @@ package struct WebInspectorCanonicalDOMReducer: Sendable {
             throw WebInspectorCanonicalDOMError.inactiveTarget(targetRoute)
         }
         guard oldScope.pageGeneration == newScope.pageGeneration,
-            activeSemanticTargetByTargetRoute[targetRoute] == newEventScope.modelScope.target,
+            activeSemanticTargetByTargetRoute[targetRoute] == newEventScope.modelScope.semanticTarget,
             oldScope.domBindingEpoch.rawValue != UInt64.max,
             oldScope.domBindingEpoch.rawValue + 1 == newScope.domBindingEpoch.rawValue
         else {
@@ -688,7 +692,7 @@ package struct WebInspectorCanonicalDOMReducer: Sendable {
         transaction.rootChanges.append(WebInspectorCanonicalDOMRootChange(scope: newScope, rootID: nil))
         transaction.resourceInvalidations.insert(.target(oldScope))
         activeScopeByTargetRoute[targetRoute] = newScope
-        activeSemanticTargetByTargetRoute[targetRoute] = newEventScope.modelScope.target
+        activeSemanticTargetByTargetRoute[targetRoute] = newEventScope.modelScope.semanticTarget
         nodeIDsByDocumentScope[newScope] = []
         return transaction
     }
@@ -1482,7 +1486,7 @@ private extension WebInspectorCanonicalDOMReducer {
         guard activeScope == scope else {
             throw WebInspectorCanonicalDOMError.scopeMismatch(targetRoute)
         }
-        guard activeSemanticTargetByTargetRoute[targetRoute] == eventScope.modelScope.target else {
+        guard activeSemanticTargetByTargetRoute[targetRoute] == eventScope.modelScope.semanticTarget else {
             throw WebInspectorCanonicalDOMError.scopeMismatch(targetRoute)
         }
         return scope

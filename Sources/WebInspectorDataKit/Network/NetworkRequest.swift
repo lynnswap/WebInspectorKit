@@ -435,26 +435,6 @@ public final class WebSocketState {
 /// Observable request or response body state for a network request.
 @Observable
 public final class NetworkBody {
-    final class ResponseFetchIdentity {}
-
-    struct ResponseFetchLease {
-        fileprivate let identity: ResponseFetchIdentity
-        fileprivate let revision: UInt64
-        let completion: ReplyPromise<Network.Body>
-    }
-
-    enum ResponseFetchAcquisition {
-        case loaded
-        case failed(Failure)
-        case owner(ResponseFetchLease)
-        case waiter(ResponseFetchLease)
-    }
-
-    private struct ResponseFetch {
-        let lease: ResponseFetchLease
-        var task: Task<Void, Never>?
-    }
-
     /// The body side represented by the model.
     public enum Role: CaseIterable, Hashable, Sendable {
         /// A request body.
@@ -481,11 +461,8 @@ public final class NetworkBody {
         /// WebKit reported that the resource load failed or was cancelled.
         case loadingFailed(errorText: String, canceled: Bool)
 
-        /// The semantic model rejected the response-body operation.
-        case model(WebInspectorModelError)
-
-        /// The inspector protocol or transport failed the response-body command.
-        case proxy(WebInspectorProxyError)
+        /// The feature command that owns response bodies failed.
+        case command(WebInspectorCommandError)
     }
 
     /// Syntax hint for text body rendering.
@@ -588,10 +565,6 @@ public final class NetworkBody {
     @ObservationIgnored private var isBatchingTextRepresentationInvalidation: Bool
     @ObservationIgnored private var needsTextRepresentationInvalidation: Bool
     @ObservationIgnored private var responseRevision: UInt64
-    @ObservationIgnored private var responseFetch: ResponseFetch?
-    @ObservationIgnored private weak var canonicalModelContext:
-        WebInspectorModelContext?
-    @ObservationIgnored private var canonicalRequestID: NetworkRequest.ID?
     @ObservationIgnored private var hasCanonicalResponseMetadata: Bool
 
     package init(
@@ -618,18 +591,8 @@ public final class NetworkBody {
         isBatchingTextRepresentationInvalidation = false
         needsTextRepresentationInvalidation = false
         responseRevision = 0
-        responseFetch = nil
-        canonicalModelContext = nil
-        canonicalRequestID = nil
         hasCanonicalResponseMetadata = false
         refreshTextRepresentation()
-    }
-
-    deinit {
-        responseFetch?.lease.completion.fulfill(
-            .failure(WebInspectorProxyError.staleIdentifier)
-        )
-        responseFetch?.task?.cancel()
     }
 
     var needsFetch: Bool {
@@ -646,98 +609,6 @@ public final class NetworkBody {
             self.kind = kind
             self.sourceSyntaxKind = sourceSyntaxKind
         }
-    }
-
-    func acquireResponseFetch() -> ResponseFetchAcquisition {
-        switch phase {
-        case .loaded:
-            return .loaded
-        case let .failed(error):
-            return .failed(error)
-        case .fetching:
-            guard let responseFetch else {
-                preconditionFailure("A fetching NetworkBody has no response-fetch owner.")
-            }
-            return .waiter(responseFetch.lease)
-        case .available:
-            precondition(
-                responseFetch == nil,
-                "An available NetworkBody cannot already own a response fetch."
-            )
-            let lease = ResponseFetchLease(
-                identity: ResponseFetchIdentity(),
-                revision: responseRevision,
-                completion: ReplyPromise<Network.Body>()
-            )
-            responseFetch = ResponseFetch(lease: lease, task: nil)
-            phase = .fetching
-            return .owner(lease)
-        }
-    }
-
-    func installResponseFetchTask(
-        _ task: Task<Void, Never>,
-        for lease: ResponseFetchLease
-    ) {
-        guard var responseFetch,
-              responseFetch.lease.identity === lease.identity else {
-            task.cancel()
-            return
-        }
-        precondition(
-            responseFetch.task == nil,
-            "A NetworkBody response fetch can install only one task."
-        )
-        responseFetch.task = task
-        self.responseFetch = responseFetch
-    }
-
-    func finishResponseFetch(
-        _ result: Result<Network.Body, WebInspectorProxyError>,
-        for lease: ResponseFetchLease
-    ) {
-        guard let responseFetch,
-              responseFetch.lease.identity === lease.identity else {
-            return
-        }
-        self.responseFetch = nil
-        switch result {
-        case let .success(body):
-            load(body)
-            lease.completion.fulfill(.success(body))
-        case let .failure(error):
-            fail(.proxy(error))
-            lease.completion.fulfill(.failure(error))
-        }
-    }
-
-    func isCurrentResponseFetch(_ lease: ResponseFetchLease) -> Bool {
-        lease.revision == responseRevision
-    }
-
-    func invalidateResponseFetch(
-        with error: WebInspectorProxyError = .staleIdentifier
-    ) {
-        guard let responseFetch else {
-            return
-        }
-        self.responseFetch = nil
-        fail(.proxy(error))
-        responseFetch.lease.completion.fulfill(.failure(error))
-        responseFetch.task?.cancel()
-    }
-
-    func failResponseFetch(
-        _ failure: Failure,
-        completionError: (any Error)? = nil
-    ) {
-        let responseFetch = self.responseFetch
-        self.responseFetch = nil
-        fail(failure)
-        responseFetch?.lease.completion.fulfill(
-            .failure(completionError ?? failure)
-        )
-        responseFetch?.task?.cancel()
     }
 
     func load(_ body: Network.Body) {
@@ -778,18 +649,6 @@ public final class NetworkBody {
         resetPayloadForResponse(response, fallbackURL: fallbackURL)
     }
 
-    package func bindCanonicalOwner(
-        _ modelContext: WebInspectorModelContext,
-        requestID: NetworkRequest.ID
-    ) {
-        precondition(
-            role == .response,
-            "Only a response NetworkBody can bind canonical command ownership."
-        )
-        canonicalModelContext = modelContext
-        canonicalRequestID = requestID
-    }
-
     package func synchronizeCanonicalResponse(
         revision: UInt64,
         response: Network.Response?,
@@ -811,39 +670,8 @@ public final class NetworkBody {
         resetPayloadForResponse(response, fallbackURL: fallbackURL)
     }
 
-    package func invalidateCanonicalOwner() {
-        canonicalModelContext = nil
-        canonicalRequestID = nil
-        failResponseFetch(
-            .model(.staleModel),
-            completionError: WebInspectorModelError.staleModel
-        )
-    }
-
     package var canonicalResponseRevision: UInt64 {
         responseRevision
-    }
-
-    package var boundCanonicalRequestID: NetworkRequest.ID? {
-        canonicalRequestID
-    }
-
-    /// Loads this response body through its model container's canonical
-    /// Network command authority.
-    @discardableResult
-    public func load(
-        isolation: isolated (any Actor) = #isolation
-    ) async throws -> NetworkBody {
-        _ = isolation
-        guard let modelContext = canonicalModelContext,
-            canonicalRequestID != nil
-        else {
-            throw WebInspectorModelError.staleModel
-        }
-        return try await modelContext.loadCanonicalResponseBody(
-            self,
-            isolation: isolation
-        )
     }
 
     private func resetPayloadForResponse(
@@ -856,13 +684,6 @@ public final class NetworkBody {
             url: response?.url ?? fallbackURL,
             role: .response
         )
-        let responseFetch = self.responseFetch
-        self.responseFetch = nil
-        responseFetch?.lease.completion.fulfill(
-            .failure(WebInspectorProxyError.staleIdentifier)
-        )
-        responseFetch?.task?.cancel()
-
         withTextRepresentationInvalidationBatch {
             kind = hints.kind
             full = nil
@@ -1272,7 +1093,6 @@ public final class NetworkRequest: WebInspectorPersistentModel {
     /// Whether WebKit served the current response from its memory cache.
     public private(set) var wasServedFromMemoryCache: Bool
 
-    @ObservationIgnored weak var modelContext: WebInspectorModelContext?
     @ObservationIgnored private var currentRequest: Network.Request
 
     var isActive: Bool {
@@ -1392,10 +1212,7 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         responseBody = NetworkBody()
         allowsMultipartContinuation = record.allowsMultipartContinuation
         wasServedFromMemoryCache = hop.servedFromMemoryCache
-        self.modelContext = modelContext
         currentRequest = request
-
-        responseBody.bindCanonicalOwner(modelContext, requestID: id)
         responseBody.synchronizeCanonicalResponse(
             revision: record.responseBodyRevision,
             response: response,
@@ -1412,14 +1229,12 @@ public final class NetworkRequest: WebInspectorPersistentModel {
             id == ID(canonical: record.id),
             "A NetworkRequest cannot adopt another canonical identity."
         )
-        self.modelContext = modelContext
         redirects = record.redirects.map(\.publicValue)
         initiator = record.initialInitiator?.proxyValue
         logicalStartTimestamp = record.logicalStartTimestamp
         webSocket = record.webSocket.map(WebSocketState.init)
         allowsMultipartContinuation = record.allowsMultipartContinuation
         applyCanonicalCurrentHop(record.currentHop)
-        responseBody.bindCanonicalOwner(modelContext, requestID: id)
         responseBody.synchronizeCanonicalResponse(
             revision: record.responseBodyRevision,
             response: record.currentHop.response?.proxyValue,
@@ -1526,8 +1341,7 @@ public final class NetworkRequest: WebInspectorPersistentModel {
     }
 
     package func invalidateCanonicalRecord() {
-        modelContext = nil
-        responseBody.invalidateCanonicalOwner()
+        responseBody.fail(.command(.staleIdentifier))
     }
 
     private func applyCanonicalCurrentHop(

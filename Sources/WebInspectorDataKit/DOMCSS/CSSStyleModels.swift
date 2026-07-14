@@ -2,7 +2,7 @@ import Observation
 import WebInspectorProxyKit
 
 /// A display section in the CSS style sidebar for a DOM element.
-public struct CSSStyleSection: Identifiable {
+public struct CSSStyleSection: Identifiable, Sendable {
     /// The source of a style section.
     public enum Kind: Hashable, Sendable {
         /// The element's inline `style` declaration.
@@ -76,7 +76,7 @@ public struct CSSStyleSection: Identifiable {
 }
 
 /// A DataKit model for a CSS declaration block.
-public struct CSSStyle: Identifiable {
+public struct CSSStyle: Identifiable, Sendable {
     /// Stable identity for a CSS declaration block.
     public struct ID: Hashable, Sendable {
         /// The raw backend style identifier.
@@ -228,7 +228,7 @@ public struct CSSStyle: Identifiable {
 }
 
 /// A DataKit model for a matched CSS rule.
-public struct CSSStyleRule {
+public struct CSSStyleRule: Sendable {
     /// Stable identity for an editable CSS rule.
     public struct ID: Hashable, Sendable {
         /// The raw backend rule identifier.
@@ -360,9 +360,8 @@ public struct CSSStyleRule {
     }
 }
 
-/// An observable CSS property declaration with stable backend identity.
-@Observable
-public final class CSSStyleProperty: Identifiable {
+/// An immutable CSS property declaration with stable backend identity.
+public struct CSSStyleProperty: Identifiable, Sendable {
     /// Stable identity for an editable CSS property.
     public struct ID: Hashable, Sendable {
         /// The raw backend property identifier.
@@ -425,39 +424,34 @@ public final class CSSStyleProperty: Identifiable {
     public let id: ID
 
     /// The property name.
-    public private(set) var name: String
+    public let name: String
 
     /// The property value.
-    public private(set) var value: String
+    public let value: String
 
     /// The declaration priority, such as `important`.
-    public private(set) var priority: String?
+    public let priority: String?
 
     /// The original declaration text, if WebKit reported it.
-    public private(set) var text: String?
+    public let text: String?
 
     /// A Boolean value indicating whether WebKit parsed the declaration successfully.
-    public private(set) var parsedOk: Bool
+    public let parsedOk: Bool
 
     /// The cascade status of the declaration.
-    public private(set) var status: Status
+    public let status: Status
 
     /// A Boolean value indicating whether the declaration is implicit.
-    public private(set) var implicit: Bool
+    public let implicit: Bool
 
     /// Source range for the declaration, if known.
-    public private(set) var range: CSSStyle.SourceRange?
+    public let range: CSSStyle.SourceRange?
 
     /// A Boolean value indicating whether WebKit accepts edits for this declaration.
-    public private(set) var isEditable: Bool
+    public let isEditable: Bool
 
     /// A Boolean value indicating whether the declaration was changed through DataKit.
-    public private(set) var isModifiedByInspector: Bool
-
-    /// A Boolean value indicating whether this declaration has a submitted mutation awaiting completion.
-    public private(set) var isMutationPending: Bool
-
-    @ObservationIgnored package weak var ownerStyles: CSSStyles?
+    public let isModifiedByInspector: Bool
 
     /// A Boolean value indicating whether the declaration is enabled.
     public var isEnabled: Bool {
@@ -494,11 +488,9 @@ public final class CSSStyleProperty: Identifiable {
         self.range = range
         self.isEditable = isEditable
         self.isModifiedByInspector = isModifiedByInspector
-        isMutationPending = false
-        ownerStyles = nil
     }
 
-    package convenience init(_ property: CSS.Property) {
+    package init(_ property: CSS.Property) {
         self.init(
             id: ID(property.id),
             name: property.name,
@@ -514,36 +506,6 @@ public final class CSSStyleProperty: Identifiable {
         )
     }
 
-    package func update(from property: CSSStyleProperty) {
-        if name != property.name { name = property.name }
-        if value != property.value { value = property.value }
-        if priority != property.priority { priority = property.priority }
-        if text != property.text { text = property.text }
-        if parsedOk != property.parsedOk { parsedOk = property.parsedOk }
-        if status != property.status { status = property.status }
-        if implicit != property.implicit { implicit = property.implicit }
-        if range != property.range { range = property.range }
-        if isEditable != property.isEditable { isEditable = property.isEditable }
-        if isModifiedByInspector != property.isModifiedByInspector {
-            isModifiedByInspector = property.isModifiedByInspector
-        }
-    }
-
-    package func beginMutation() -> Bool {
-        guard isMutationPending == false else {
-            return false
-        }
-        isMutationPending = true
-        return true
-    }
-
-    package func endMutation() {
-        isMutationPending = false
-    }
-
-    package func bindOwner(_ styles: CSSStyles) {
-        ownerStyles = styles
-    }
 }
 
 /// A computed CSS property for a DOM node.

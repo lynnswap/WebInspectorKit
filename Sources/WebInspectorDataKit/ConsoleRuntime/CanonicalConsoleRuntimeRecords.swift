@@ -30,13 +30,13 @@ package struct WebInspectorConsoleRuntimeEventScope: Equatable, Sendable {
 
 package struct CanonicalRuntimeContextMembership: Equatable, Sendable {
     package let semanticTargetID: WebInspectorTarget.ID
-    package let navigationEpoch: ModelNavigationEpoch
-    package let runtimeBindingEpoch: ModelRuntimeBindingEpoch
+    package let navigationEpoch: WebInspectorPageGeneration
+    package let runtimeBindingEpoch: WebInspectorRuntimeBindingGeneration
 
     package init(
         semanticTargetID: WebInspectorTarget.ID,
-        navigationEpoch: ModelNavigationEpoch,
-        runtimeBindingEpoch: ModelRuntimeBindingEpoch
+        navigationEpoch: WebInspectorPageGeneration,
+        runtimeBindingEpoch: WebInspectorRuntimeBindingGeneration
     ) {
         self.semanticTargetID = semanticTargetID
         self.navigationEpoch = navigationEpoch
@@ -55,7 +55,7 @@ package struct CanonicalRuntimeContextPatch: Equatable, Sendable {
     private init() {}
 }
 
-package struct CanonicalRuntimeContextRecord: Equatable, Sendable, WebInspectorModelRecord {
+package struct CanonicalRuntimeContextRecord: Equatable, Sendable {
     package let id: CanonicalRuntimeContextIDStorage
     package let insertionOrdinal: UInt64
     package let membership: CanonicalRuntimeContextMembership
@@ -171,12 +171,12 @@ package struct CanonicalRuntimeRemoteObjectPayload: Equatable, Sendable {
 /// Exact command authority captured when WebKit publishes a Console parameter.
 package struct CanonicalConsoleParameterAuthority: Equatable, Sendable {
     package let ownerMessageID: CanonicalConsoleMessageIDStorage
-    package let pageGeneration: WebInspectorPage.Generation
+    package let pageGeneration: WebInspectorPageGeneration
     package let semanticTargetID: WebInspectorTarget.ID
     package let agentTargetID: WebInspectorTarget.ID
-    package let navigationEpoch: ModelNavigationEpoch
-    package let runtimeBindingEpoch: ModelRuntimeBindingEpoch
-    package let consoleBindingEpoch: ModelConsoleBindingEpoch
+    package let navigationEpoch: WebInspectorPageGeneration
+    package let runtimeBindingEpoch: WebInspectorRuntimeBindingGeneration
+    package let consoleBindingEpoch: WebInspectorConsoleBindingGeneration
 }
 
 package struct CanonicalConsoleParameterResourceSeed: Equatable, Sendable {
@@ -185,12 +185,12 @@ package struct CanonicalConsoleParameterResourceSeed: Equatable, Sendable {
 }
 
 package struct CanonicalConsoleMessageMembership: Equatable, Sendable {
-    package let pageGeneration: WebInspectorPage.Generation
+    package let pageGeneration: WebInspectorPageGeneration
     package let semanticTargetID: WebInspectorTarget.ID
     package let agentTargetID: WebInspectorTarget.ID
-    package let navigationEpoch: ModelNavigationEpoch
-    package let runtimeBindingEpoch: ModelRuntimeBindingEpoch
-    package let consoleBindingEpoch: ModelConsoleBindingEpoch
+    package let navigationEpoch: WebInspectorPageGeneration
+    package let runtimeBindingEpoch: WebInspectorRuntimeBindingGeneration
+    package let consoleBindingEpoch: WebInspectorConsoleBindingGeneration
 }
 
 package enum CanonicalConsoleNetworkRequestReference: Equatable, Sendable {
@@ -237,7 +237,7 @@ package struct CanonicalConsoleMessageQueryProjection: Equatable, Sendable {
     package let timestamp: Double?
 }
 
-package struct CanonicalConsoleMessageRecord: Equatable, Sendable, WebInspectorModelRecord {
+package struct CanonicalConsoleMessageRecord: Equatable, Sendable {
     package let id: CanonicalConsoleMessageIDStorage
     package let membership: CanonicalConsoleMessageMembership
     package let source: Console.Source
@@ -311,26 +311,26 @@ package enum CanonicalConsoleMessageChange: Equatable, Sendable {
 package enum CanonicalConsoleRuntimeResourceInvalidation: Equatable, Sendable {
     case runtimeBinding(
         agentTargetID: WebInspectorTarget.ID,
-        epoch: ModelRuntimeBindingEpoch
+        epoch: WebInspectorRuntimeBindingGeneration
     )
     case consoleBinding(
         agentTargetID: WebInspectorTarget.ID,
-        epoch: ModelConsoleBindingEpoch
+        epoch: WebInspectorConsoleBindingGeneration
     )
     case semanticNavigation(
         semanticTargetID: WebInspectorTarget.ID,
-        navigationEpoch: ModelNavigationEpoch
+        navigationEpoch: WebInspectorPageGeneration
     )
     case frameDetached(FrameID)
     case targetLost(WebInspectorTarget.ID)
     case attachmentDetached(
-        attachmentGeneration: WebInspectorContainerAttachmentGeneration,
-        pageGeneration: WebInspectorPage.Generation
+        attachmentGeneration: WebInspectorAttachmentGeneration,
+        pageGeneration: WebInspectorPageGeneration
     )
     case attachmentReset(
-        previous: WebInspectorContainerAttachmentGeneration?,
-        current: WebInspectorContainerAttachmentGeneration,
-        pageGeneration: WebInspectorPage.Generation
+        previous: WebInspectorAttachmentGeneration?,
+        current: WebInspectorAttachmentGeneration,
+        pageGeneration: WebInspectorPageGeneration
     )
 }
 

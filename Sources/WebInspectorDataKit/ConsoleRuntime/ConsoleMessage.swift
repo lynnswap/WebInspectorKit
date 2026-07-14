@@ -119,9 +119,6 @@ public final class ConsoleMessage: WebInspectorPersistentModel {
     public private(set) var timestamp: Double?
     let targetID: WebInspectorTarget.ID?
 
-    @ObservationIgnored
-    private var canonicalMembership: CanonicalConsoleMessageMembership?
-
     @ObservationIgnored weak var modelContext: WebInspectorModelContext?
 
     package init(
@@ -147,7 +144,6 @@ public final class ConsoleMessage: WebInspectorPersistentModel {
         networkRequestID = Self.networkRequestID(record.networkRequestReference)
         timestamp = record.timestamp
         targetID = record.membership.semanticTargetID
-        canonicalMembership = record.membership
         self.modelContext = modelContext
     }
 
@@ -159,7 +155,6 @@ public final class ConsoleMessage: WebInspectorPersistentModel {
             id.canonicalStorage == record.id,
             "A ConsoleMessage replacement must preserve canonical identity."
         )
-        invalidateParameterGraphs()
         source = record.source
         level = record.level
         kind = record.kind
@@ -172,7 +167,6 @@ public final class ConsoleMessage: WebInspectorPersistentModel {
         stackTrace = record.stackTrace.map(Self.stackTrace)
         networkRequestID = Self.networkRequestID(record.networkRequestReference)
         timestamp = record.timestamp
-        canonicalMembership = record.membership
         self.modelContext = modelContext
     }
 
@@ -186,53 +180,7 @@ public final class ConsoleMessage: WebInspectorPersistentModel {
     }
 
     package func invalidate() {
-        invalidateParameterGraphs()
-        canonicalMembership = nil
         modelContext = nil
-    }
-
-    package func invalidateParameterGraphs(
-        matching invalidation: CanonicalConsoleRuntimeResourceInvalidation
-    ) {
-        guard let membership = canonicalMembership else {
-            return
-        }
-        let matches = switch invalidation {
-        case let .runtimeBinding(agentTargetID, epoch):
-            membership.agentTargetID == agentTargetID
-                && membership.runtimeBindingEpoch != epoch
-        case let .consoleBinding(agentTargetID, epoch):
-            membership.agentTargetID == agentTargetID
-                && membership.consoleBindingEpoch != epoch
-        case let .semanticNavigation(semanticTargetID, navigationEpoch):
-            membership.semanticTargetID == semanticTargetID
-                && membership.navigationEpoch != navigationEpoch
-        case .frameDetached:
-            true
-        case let .targetLost(targetID):
-            membership.semanticTargetID == targetID
-                || membership.agentTargetID == targetID
-        case .attachmentDetached, .attachmentReset:
-            true
-        }
-        if matches {
-            invalidateParameterGraphs()
-        }
-    }
-
-    package func invalidateParameterGraphs() {
-        for parameter in parameters {
-            parameter.invalidateCanonicalResource()
-        }
-    }
-
-    package func replaceParameterGraphs(
-        membership: CanonicalConsoleMessageMembership,
-        seeds: [CanonicalConsoleParameterResourceSeed]
-    ) {
-        invalidateParameterGraphs()
-        parameters = Self.makeCanonicalParameters(id: id, seeds: seeds)
-        canonicalMembership = membership
     }
 
     func updateRepeatCount(_ count: Int, timestamp: Double?) {
@@ -255,8 +203,10 @@ public final class ConsoleMessage: WebInspectorPersistentModel {
     ) -> [RuntimeObject] {
         seeds.enumerated().map { index, seed in
             RuntimeObject(
-                consoleMessageID: id,
-                parameterIndex: index,
+                id: RuntimeObject.ID(
+                    consoleMessageID: id,
+                    parameterIndex: index
+                ),
                 payload: seed.payload
             )
         }

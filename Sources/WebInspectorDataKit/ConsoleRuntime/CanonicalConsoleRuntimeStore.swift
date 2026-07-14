@@ -23,8 +23,8 @@ package enum CanonicalConsoleRuntimeProtocolViolation: Error, Equatable, Sendabl
     )
     case consoleBindingMismatch(
         id: CanonicalConsoleMessageIDStorage,
-        expected: ModelConsoleBindingEpoch,
-        actual: ModelConsoleBindingEpoch
+        expected: WebInspectorConsoleBindingGeneration,
+        actual: WebInspectorConsoleBindingGeneration
     )
     case unexpectedNetworkResolution(event: String)
     case networkResolutionRawIdentifierMismatch(
@@ -36,12 +36,12 @@ package enum CanonicalConsoleRuntimeProtocolViolation: Error, Equatable, Sendabl
         requestStoreID: WebInspectorContainerStoreID
     )
     case networkResolutionAttachmentMismatch(
-        active: WebInspectorContainerAttachmentGeneration,
-        resolved: WebInspectorContainerAttachmentGeneration
+        active: WebInspectorAttachmentGeneration,
+        resolved: WebInspectorAttachmentGeneration
     )
     case networkResolutionPageMismatch(
-        active: WebInspectorPage.Generation,
-        resolved: WebInspectorPage.Generation
+        active: WebInspectorPageGeneration,
+        resolved: WebInspectorPageGeneration
     )
 }
 
@@ -49,17 +49,17 @@ package enum CanonicalConsoleRuntimeStoreError: Error, Equatable, Sendable {
     case consoleOrdinalExhausted
     case runtimeContextOrdinalExhausted
     case nonmonotonicAttachmentGeneration(
-        current: WebInspectorContainerAttachmentGeneration,
-        proposed: WebInspectorContainerAttachmentGeneration
+        current: WebInspectorAttachmentGeneration,
+        proposed: WebInspectorAttachmentGeneration
     )
     case nonmonotonicPageGeneration(
-        current: WebInspectorPage.Generation,
-        proposed: WebInspectorPage.Generation
+        current: WebInspectorPageGeneration,
+        proposed: WebInspectorPageGeneration
     )
     case nonmonotonicNavigationEpoch(
         semanticTargetID: WebInspectorTarget.ID,
-        current: ModelNavigationEpoch,
-        proposed: ModelNavigationEpoch
+        current: WebInspectorPageGeneration,
+        proposed: WebInspectorPageGeneration
     )
 }
 
@@ -79,8 +79,8 @@ package struct CanonicalConsoleRuntimeStore: Equatable, Sendable {
     package let storeID: WebInspectorContainerStoreID
     package let projectsRuntimeContexts: Bool
 
-    private var activeAttachmentGeneration: WebInspectorContainerAttachmentGeneration?
-    private var activePageGeneration: WebInspectorPage.Generation?
+    private var activeAttachmentGeneration: WebInspectorAttachmentGeneration?
+    private var activePageGeneration: WebInspectorPageGeneration?
 
     private var runtimeContextsByID: [CanonicalRuntimeContextIDStorage: CanonicalRuntimeContextRecord]
     private var runtimeContextIDByLookupKey: [RuntimeLookupKey: CanonicalRuntimeContextIDStorage]
@@ -131,11 +131,11 @@ package struct CanonicalConsoleRuntimeStore: Equatable, Sendable {
         lastConsoleOrdinal = 0
     }
 
-    package var attachmentGeneration: WebInspectorContainerAttachmentGeneration? {
+    package var attachmentGeneration: WebInspectorAttachmentGeneration? {
         activeAttachmentGeneration
     }
 
-    package var pageGeneration: WebInspectorPage.Generation? {
+    package var pageGeneration: WebInspectorPageGeneration? {
         activePageGeneration
     }
 
@@ -230,8 +230,8 @@ package struct CanonicalConsoleRuntimeStore: Equatable, Sendable {
     /// Console ordinal allocator.
     @discardableResult
     package mutating func reset(
-        attachmentGeneration: WebInspectorContainerAttachmentGeneration,
-        pageGeneration: WebInspectorPage.Generation
+        attachmentGeneration: WebInspectorAttachmentGeneration,
+        pageGeneration: WebInspectorPageGeneration
     ) throws -> CanonicalConsoleRuntimeTransaction {
         try validateReset(
             attachmentGeneration: attachmentGeneration,
@@ -629,8 +629,8 @@ private extension CanonicalConsoleRuntimeStore {
     }
 
     func validateReset(
-        attachmentGeneration: WebInspectorContainerAttachmentGeneration,
-        pageGeneration: WebInspectorPage.Generation
+        attachmentGeneration: WebInspectorAttachmentGeneration,
+        pageGeneration: WebInspectorPageGeneration
     ) throws {
         guard let currentAttachment = activeAttachmentGeneration else {
             return
@@ -657,7 +657,7 @@ private extension CanonicalConsoleRuntimeStore {
     func requireRuntimeBindingEpoch(
         _ scope: WebInspectorConsoleRuntimeEventScope,
         event: String
-    ) throws -> ModelRuntimeBindingEpoch {
+    ) throws -> WebInspectorRuntimeBindingGeneration {
         guard let epoch = scope.runtimeBindingEpoch else {
             throw CanonicalConsoleRuntimeProtocolViolation.missingRuntimeBindingEpoch(
                 event: event
@@ -669,7 +669,7 @@ private extension CanonicalConsoleRuntimeStore {
     func requireConsoleBindingEpoch(
         _ scope: WebInspectorConsoleRuntimeEventScope,
         event: String
-    ) throws -> ModelConsoleBindingEpoch {
+    ) throws -> WebInspectorConsoleBindingGeneration {
         guard let epoch = scope.consoleBindingEpoch else {
             throw CanonicalConsoleRuntimeProtocolViolation.missingConsoleBindingEpoch(
                 event: event

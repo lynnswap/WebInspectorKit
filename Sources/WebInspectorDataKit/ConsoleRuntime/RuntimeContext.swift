@@ -26,7 +26,7 @@ public final class RuntimeContext: WebInspectorPersistentModel {
         public let name: String
 
         /// The frame associated with the execution context, if any.
-        public let frameID: FrameID?
+        public let frameID: WebInspectorFrameID?
 
         /// The kind of execution context reported by WebKit.
         public let kind: Runtime.ContextKind
@@ -34,7 +34,7 @@ public final class RuntimeContext: WebInspectorPersistentModel {
         package init(
             id: ID,
             name: String,
-            frameID: FrameID?,
+            frameID: WebInspectorFrameID?,
             kind: Runtime.ContextKind
         ) {
             self.id = id
@@ -51,7 +51,7 @@ public final class RuntimeContext: WebInspectorPersistentModel {
     public private(set) var name: String
 
     /// The frame associated with the execution context, if any.
-    public private(set) var frameID: FrameID?
+    public private(set) var frameID: WebInspectorFrameID?
 
     /// The kind of execution context reported by WebKit.
     public private(set) var kind: Runtime.ContextKind
@@ -69,7 +69,7 @@ public final class RuntimeContext: WebInspectorPersistentModel {
         )
         self.id = id
         name = record.name
-        frameID = record.frameID
+        frameID = record.frameID.map(WebInspectorFrameID.init)
         kind = record.kind
         self.modelContext = modelContext
     }
@@ -83,7 +83,7 @@ public final class RuntimeContext: WebInspectorPersistentModel {
             "A RuntimeContext replacement must preserve canonical identity."
         )
         name = record.name
-        frameID = record.frameID
+        frameID = record.frameID.map(WebInspectorFrameID.init)
         kind = record.kind
         self.modelContext = modelContext
     }

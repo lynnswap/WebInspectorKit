@@ -27,33 +27,34 @@ public final class NetworkEntry: WebInspectorPersistentModel {
         /// The canonical insertion ordinal used when no timestamp is available.
         public let insertionOrdinal: UInt64
 
-        /// Member request methods in the same order as the entry membership.
-        public let methods: [String]
+        /// Distinct member request methods.
+        public let methods: Set<String>
 
         /// Resource categories represented by the entry.
         public let resourceCategories: Set<NetworkRequest.ResourceCategory>
 
-        /// Member search projections in the same order as the entry membership.
-        public let searchTexts: [String]
+        /// Number of requests represented by this entry.
+        public let memberCount: Int
+
+        /// One normalized search projection for the complete logical entry.
+        public let searchableText: String
 
         package init(
             id: ID,
             startedAt: Double?,
             insertionOrdinal: UInt64,
-            methods: [String],
+            methods: Set<String>,
             resourceCategories: Set<NetworkRequest.ResourceCategory>,
-            searchTexts: [String]
+            memberCount: Int,
+            searchableText: String
         ) {
-            precondition(
-                methods.count == searchTexts.count,
-                "A NetworkEntry query must keep member methods and search text aligned."
-            )
             self.id = id
             self.startedAt = startedAt
             self.insertionOrdinal = insertionOrdinal
             self.methods = methods
             self.resourceCategories = resourceCategories
-            self.searchTexts = searchTexts
+            self.memberCount = memberCount
+            self.searchableText = searchableText
         }
     }
 

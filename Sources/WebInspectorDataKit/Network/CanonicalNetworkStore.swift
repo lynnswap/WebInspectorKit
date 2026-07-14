@@ -82,12 +82,12 @@ package enum CanonicalNetworkStoreError: Error, Equatable, Sendable {
 
     case counterExhausted(Counter)
     case nonmonotonicAttachmentGeneration(
-        current: WebInspectorContainerAttachmentGeneration,
-        proposed: WebInspectorContainerAttachmentGeneration
+        current: WebInspectorAttachmentGeneration,
+        proposed: WebInspectorAttachmentGeneration
     )
     case nonmonotonicPageGeneration(
-        current: WebInspectorPage.Generation,
-        proposed: WebInspectorPage.Generation
+        current: WebInspectorPageGeneration,
+        proposed: WebInspectorPageGeneration
     )
 }
 
@@ -141,8 +141,8 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
 
     package let storeID: WebInspectorContainerStoreID
 
-    private var activeAttachmentGeneration: WebInspectorContainerAttachmentGeneration?
-    private var activePageGeneration: WebInspectorPage.Generation?
+    private var activeAttachmentGeneration: WebInspectorAttachmentGeneration?
+    private var activePageGeneration: WebInspectorPageGeneration?
     private var requestsByID: [CanonicalNetworkRequestIDStorage: CanonicalNetworkRequestRecord]
     private var requestQueriesByID:
         [CanonicalNetworkRequestIDStorage:
@@ -199,11 +199,11 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
         #endif
     }
 
-    package var attachmentGeneration: WebInspectorContainerAttachmentGeneration? {
+    package var attachmentGeneration: WebInspectorAttachmentGeneration? {
         activeAttachmentGeneration
     }
 
-    package var pageGeneration: WebInspectorPage.Generation? {
+    package var pageGeneration: WebInspectorPageGeneration? {
         activePageGeneration
     }
 
@@ -267,6 +267,12 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
         requestsByID[id]
     }
 
+    package func requestQuery(
+        for id: CanonicalNetworkRequestIDStorage
+    ) -> CanonicalNetworkRequestQueryProjection? {
+        requestQueriesByID[id]
+    }
+
     /// Resolves the active attachment/page raw identifier used by Console
     /// payloads.
     ///
@@ -296,6 +302,12 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
         for id: CanonicalNetworkEntryIDStorage
     ) -> CanonicalNetworkEntryRecord? {
         entriesByID[id]
+    }
+
+    package func entryQuery(
+        for id: CanonicalNetworkEntryIDStorage
+    ) -> CanonicalNetworkEntryQueryProjection? {
+        entryQueriesByID[id]
     }
 
     package func entry(
@@ -333,8 +345,8 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
     /// request and entry ordinal allocation.
     @discardableResult
     package mutating func reset(
-        attachmentGeneration: WebInspectorContainerAttachmentGeneration,
-        pageGeneration: WebInspectorPage.Generation
+        attachmentGeneration: WebInspectorAttachmentGeneration,
+        pageGeneration: WebInspectorPageGeneration
     ) throws -> CanonicalNetworkTransaction {
         try validateReset(
             attachmentGeneration: attachmentGeneration,
@@ -577,8 +589,8 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
     }
 
     private func validateReset(
-        attachmentGeneration: WebInspectorContainerAttachmentGeneration,
-        pageGeneration: WebInspectorPage.Generation
+        attachmentGeneration: WebInspectorAttachmentGeneration,
+        pageGeneration: WebInspectorPageGeneration
     ) throws {
         guard let currentAttachment = activeAttachmentGeneration else {
             return

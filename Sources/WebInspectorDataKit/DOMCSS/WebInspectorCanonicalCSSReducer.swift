@@ -73,7 +73,7 @@ package enum WebInspectorCanonicalCSSError: Error, Equatable, Sendable {
 
 package struct WebInspectorCanonicalCSSReducer: Sendable {
     package let storeID: WebInspectorContainerStoreID
-    package let attachmentGeneration: WebInspectorContainerAttachmentGeneration
+    package let attachmentGeneration: WebInspectorAttachmentGeneration
 
     private var recordsByID: [WebInspectorCSSStyleSheetIdentityStorage: WebInspectorCanonicalCSSStyleSheetRecord] = [:]
     private var styleSheetIDsByScope:
@@ -83,13 +83,13 @@ package struct WebInspectorCanonicalCSSReducer: Sendable {
     private var cascadeRevisionByScope: [WebInspectorDOMDocumentScopeStorage: UInt64] = [:]
     private var activeScopeByTargetRoute: [WebInspectorDOMTargetRouteStorage: WebInspectorDOMDocumentScopeStorage] =
         [:]
-    private var activeSemanticTargetByTargetRoute: [WebInspectorDOMTargetRouteStorage: ModelTarget] = [:]
+    private var activeSemanticTargetByTargetRoute: [WebInspectorDOMTargetRouteStorage: WebInspectorFeatureTarget] = [:]
 
     package private(set) var performanceCounters = WebInspectorCanonicalCSSPerformanceCounters()
 
     package init(
         storeID: WebInspectorContainerStoreID,
-        attachmentGeneration: WebInspectorContainerAttachmentGeneration
+        attachmentGeneration: WebInspectorAttachmentGeneration
     ) {
         self.storeID = storeID
         self.attachmentGeneration = attachmentGeneration
@@ -122,12 +122,12 @@ package struct WebInspectorCanonicalCSSReducer: Sendable {
         var incomingByID: [WebInspectorCSSStyleSheetIdentityStorage: WebInspectorCanonicalCSSStyleSheetRecord] = [:]
         var incomingOrder: [WebInspectorCSSStyleSheetIdentityStorage] = []
         var incomingScopesByRoute: [WebInspectorDOMTargetRouteStorage: WebInspectorDOMDocumentScopeStorage] = [:]
-        var incomingSemanticTargetsByRoute: [WebInspectorDOMTargetRouteStorage: ModelTarget] = [:]
+        var incomingSemanticTargetsByRoute: [WebInspectorDOMTargetRouteStorage: WebInspectorFeatureTarget] = [:]
 
         for eventScope in eventScopes {
             let scope = try documentScope(for: eventScope)
             let targetRoute = scope.targetRoute
-            let semanticTarget = eventScope.modelScope.target
+            let semanticTarget = eventScope.modelScope.semanticTarget
             if let activeScope = activeScopeByTargetRoute[targetRoute], activeScope != scope {
                 throw WebInspectorCanonicalCSSError.scopeMismatch(targetRoute)
             }
@@ -146,7 +146,7 @@ package struct WebInspectorCanonicalCSSReducer: Sendable {
             let scope = try documentScope(for: styleSheet.scope)
             let targetRoute = scope.targetRoute
             guard incomingScopesByRoute[targetRoute] == scope,
-                incomingSemanticTargetsByRoute[targetRoute] == styleSheet.scope.modelScope.target
+                incomingSemanticTargetsByRoute[targetRoute] == styleSheet.scope.modelScope.semanticTarget
             else {
                 throw WebInspectorCanonicalCSSError.scopeMismatch(targetRoute)
             }
@@ -231,7 +231,7 @@ package struct WebInspectorCanonicalCSSReducer: Sendable {
             throw WebInspectorCanonicalCSSError.scopeMismatch(targetRoute)
         }
         if let activeTarget = activeSemanticTargetByTargetRoute[targetRoute],
-            activeTarget != eventScope.modelScope.target
+            activeTarget != eventScope.modelScope.semanticTarget
         {
             throw WebInspectorCanonicalCSSError.scopeMismatch(targetRoute)
         }
@@ -245,7 +245,7 @@ package struct WebInspectorCanonicalCSSReducer: Sendable {
             var transaction = WebInspectorCanonicalCSSTransaction()
             advanceCascadeRevision(scope, transaction: &transaction)
             transaction.resourceInvalidations.insert(.target(scope))
-            establish(scope, semanticTarget: eventScope.modelScope.target)
+            establish(scope, semanticTarget: eventScope.modelScope.semanticTarget)
             return transaction
         case let .styleSheetAdded(header):
             let record = try makeRecord(header: header, scope: scope)
@@ -262,7 +262,7 @@ package struct WebInspectorCanonicalCSSReducer: Sendable {
             recordsByID[record.id] = record
             styleSheetIDsByScope[scope, default: []].insert(record.id)
             insertIntoFrameIndex(record)
-            establish(scope, semanticTarget: eventScope.modelScope.target)
+            establish(scope, semanticTarget: eventScope.modelScope.semanticTarget)
             performanceCounters.incrementalLookupCount += 1
             performanceCounters.recordMutationCount += 1
             return transaction
@@ -281,7 +281,7 @@ package struct WebInspectorCanonicalCSSReducer: Sendable {
             styleSheetIDsByScope[scope]?.remove(id)
             removeFromFrameIndex(removed)
             retiredStyleSheetIDsByScope[scope, default: []].insert(rawID)
-            establish(scope, semanticTarget: eventScope.modelScope.target)
+            establish(scope, semanticTarget: eventScope.modelScope.semanticTarget)
             performanceCounters.incrementalLookupCount += 1
             performanceCounters.recordMutationCount += 1
             return transaction
@@ -289,7 +289,7 @@ package struct WebInspectorCanonicalCSSReducer: Sendable {
             var transaction = WebInspectorCanonicalCSSTransaction()
             advanceCascadeRevision(scope, transaction: &transaction)
             transaction.resourceInvalidations.insert(.target(scope))
-            establish(scope, semanticTarget: eventScope.modelScope.target)
+            establish(scope, semanticTarget: eventScope.modelScope.semanticTarget)
             return transaction
         case let .nodeLayoutFlagsChanged(rawNodeID):
             let nodeID = WebInspectorDOMNodeIdentityStorage(
@@ -298,7 +298,7 @@ package struct WebInspectorCanonicalCSSReducer: Sendable {
             )
             var transaction = WebInspectorCanonicalCSSTransaction()
             transaction.resourceInvalidations = [.nodes([nodeID])]
-            establish(scope, semanticTarget: eventScope.modelScope.target)
+            establish(scope, semanticTarget: eventScope.modelScope.semanticTarget)
             return transaction
         case .unknown:
             return WebInspectorCanonicalCSSTransaction()
@@ -314,7 +314,7 @@ package struct WebInspectorCanonicalCSSReducer: Sendable {
             throw WebInspectorCanonicalCSSError.inactiveTarget(targetRoute)
         }
         guard oldScope.pageGeneration == newScope.pageGeneration,
-            activeSemanticTargetByTargetRoute[targetRoute] == newEventScope.modelScope.target,
+            activeSemanticTargetByTargetRoute[targetRoute] == newEventScope.modelScope.semanticTarget,
             oldScope.domBindingEpoch.rawValue != UInt64.max,
             oldScope.domBindingEpoch.rawValue + 1 == newScope.domBindingEpoch.rawValue
         else {
@@ -322,7 +322,7 @@ package struct WebInspectorCanonicalCSSReducer: Sendable {
         }
         var transaction = removeScope(oldScope)
         activeScopeByTargetRoute[targetRoute] = newScope
-        activeSemanticTargetByTargetRoute[targetRoute] = newEventScope.modelScope.target
+        activeSemanticTargetByTargetRoute[targetRoute] = newEventScope.modelScope.semanticTarget
         styleSheetIDsByScope[newScope] = []
         retiredStyleSheetIDsByScope.removeValue(forKey: oldScope)
         cascadeRevisionByScope.removeValue(forKey: oldScope)
@@ -424,7 +424,7 @@ private extension WebInspectorCanonicalCSSReducer {
         guard activeScope == scope else {
             throw WebInspectorCanonicalCSSError.scopeMismatch(targetRoute)
         }
-        guard activeSemanticTargetByTargetRoute[targetRoute] == eventScope.modelScope.target else {
+        guard activeSemanticTargetByTargetRoute[targetRoute] == eventScope.modelScope.semanticTarget else {
             throw WebInspectorCanonicalCSSError.scopeMismatch(targetRoute)
         }
         return scope
@@ -432,7 +432,7 @@ private extension WebInspectorCanonicalCSSReducer {
 
     mutating func establish(
         _ scope: WebInspectorDOMDocumentScopeStorage,
-        semanticTarget: ModelTarget
+        semanticTarget: WebInspectorFeatureTarget
     ) {
         activeScopeByTargetRoute[scope.targetRoute] = scope
         activeSemanticTargetByTargetRoute[scope.targetRoute] = semanticTarget

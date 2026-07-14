@@ -14,11 +14,8 @@ package struct WebInspectorContainerStoreID: Hashable, Sendable {
     }
 }
 
-/// Identifies one attachment attempt reserved by a model container.
-///
-/// The container allocates these values monotonically and never reuses a value,
-/// including when native attachment or model-feed adoption fails.
-package struct WebInspectorContainerAttachmentGeneration: Hashable, Comparable, Sendable {
+/// Identifies one DOM backend binding within a page generation.
+package struct WebInspectorDOMBindingScopeID: RawRepresentable, Hashable, Comparable, Sendable {
     package let rawValue: UInt64
 
     package init(rawValue: UInt64) {
@@ -26,11 +23,21 @@ package struct WebInspectorContainerAttachmentGeneration: Hashable, Comparable, 
     }
 
     package static func < (
-        lhs: WebInspectorContainerAttachmentGeneration,
-        rhs: WebInspectorContainerAttachmentGeneration
+        lhs: WebInspectorDOMBindingScopeID,
+        rhs: WebInspectorDOMBindingScopeID
     ) -> Bool {
         lhs.rawValue < rhs.rawValue
     }
+}
+
+package struct WebInspectorRuntimeBindingGeneration: RawRepresentable, Hashable, Sendable {
+    package let rawValue: UInt64
+    package init(rawValue: UInt64) { self.rawValue = rawValue }
+}
+
+package struct WebInspectorConsoleBindingGeneration: RawRepresentable, Hashable, Sendable {
+    package let rawValue: UInt64
+    package init(rawValue: UInt64) { self.rawValue = rawValue }
 }
 
 /// Canonical storage wrapped by `RuntimeContext.ID`.
@@ -41,15 +48,15 @@ package struct WebInspectorContainerAttachmentGeneration: Hashable, Comparable, 
 /// agent-local authority.
 package struct CanonicalRuntimeContextIDStorage: Hashable, Sendable {
     package let storeID: WebInspectorContainerStoreID
-    package let attachmentGeneration: WebInspectorContainerAttachmentGeneration
-    package let pageGeneration: WebInspectorPage.Generation
+    package let attachmentGeneration: WebInspectorAttachmentGeneration
+    package let pageGeneration: WebInspectorPageGeneration
     package let agentTargetID: WebInspectorTarget.ID
     package let rawContextID: Runtime.ExecutionContext.ID
 
     package init(
         storeID: WebInspectorContainerStoreID,
-        attachmentGeneration: WebInspectorContainerAttachmentGeneration,
-        pageGeneration: WebInspectorPage.Generation,
+        attachmentGeneration: WebInspectorAttachmentGeneration,
+        pageGeneration: WebInspectorPageGeneration,
         agentTargetID: WebInspectorTarget.ID,
         rawContextID: Runtime.ExecutionContext.ID
     ) {
@@ -69,12 +76,12 @@ package struct CanonicalRuntimeContextIDStorage: Hashable, Sendable {
 /// reconstructed.
 package struct CanonicalConsoleMessageIDStorage: Hashable, Sendable {
     package let storeID: WebInspectorContainerStoreID
-    package let attachmentGeneration: WebInspectorContainerAttachmentGeneration
+    package let attachmentGeneration: WebInspectorAttachmentGeneration
     package let ordinal: UInt64
 
     package init(
         storeID: WebInspectorContainerStoreID,
-        attachmentGeneration: WebInspectorContainerAttachmentGeneration,
+        attachmentGeneration: WebInspectorAttachmentGeneration,
         ordinal: UInt64
     ) {
         self.storeID = storeID
@@ -104,13 +111,13 @@ package enum CanonicalNetworkRequestOrigin: Equatable, Sendable {
 /// keeps its exact origin identity without borrowing another target's epoch.
 package struct CanonicalNetworkRegisteredTargetAuthority: Equatable, Hashable, Sendable {
     package let targetID: WebInspectorTarget.ID
-    package let navigationEpoch: ModelNavigationEpoch
-    package let domBindingEpoch: ModelDOMBindingEpoch?
+    package let navigationEpoch: WebInspectorPageGeneration
+    package let domBindingEpoch: WebInspectorDOMBindingScopeID?
 
     package init(
         targetID: WebInspectorTarget.ID,
-        navigationEpoch: ModelNavigationEpoch,
-        domBindingEpoch: ModelDOMBindingEpoch?
+        navigationEpoch: WebInspectorPageGeneration,
+        domBindingEpoch: WebInspectorDOMBindingScopeID?
     ) {
         self.targetID = targetID
         self.navigationEpoch = navigationEpoch
@@ -124,7 +131,7 @@ package struct CanonicalNetworkRegisteredTargetAuthority: Equatable, Hashable, S
 /// Network command and request-ID namespace. They may differ for frame and
 /// worker loads.
 package struct WebInspectorCanonicalNetworkEventScope: Equatable, Sendable {
-    package let generation: WebInspectorPage.Generation
+    package let generation: WebInspectorPageGeneration
     package let origin: CanonicalNetworkRequestOrigin
     package let agentTargetID: WebInspectorTarget.ID
     package let targetAuthority: CanonicalNetworkRegisteredTargetAuthority?
@@ -135,43 +142,43 @@ package struct WebInspectorCanonicalNetworkEventScope: Equatable, Sendable {
         origin.semanticTargetID
     }
 
-    package var navigationEpoch: ModelNavigationEpoch? {
+    package var navigationEpoch: WebInspectorPageGeneration? {
         targetAuthority?.navigationEpoch
     }
 
-    package var domBindingEpoch: ModelDOMBindingEpoch? {
+    package var domBindingEpoch: WebInspectorDOMBindingScopeID? {
         targetAuthority?.domBindingEpoch
     }
 
     package init(
-        modelScope: ModelEventScope
+        modelScope: WebInspectorFeatureEventScope
     ) {
         generation = modelScope.generation
-        origin = .eventTarget(modelScope.target.id)
-        agentTargetID = modelScope.agentTarget.id
+        origin = .eventTarget(modelScope.semanticTargetID)
+        agentTargetID = modelScope.agentTargetID
         targetAuthority = CanonicalNetworkRegisteredTargetAuthority(
-            targetID: modelScope.target.id,
-            navigationEpoch: modelScope.navigationEpoch,
-            domBindingEpoch: modelScope.domBindingEpoch
+            targetID: modelScope.semanticTargetID,
+            navigationEpoch: modelScope.generation,
+            domBindingEpoch: nil
         )
         frameID = nil
         loaderID = nil
     }
 
     package init(
-        modelScope: ModelEventScope,
+        modelScope: WebInspectorFeatureEventScope,
         membership: CanonicalNetworkRequestMembership
     ) {
         generation = modelScope.generation
         origin = membership.origin
-        agentTargetID = modelScope.agentTarget.id
+        agentTargetID = modelScope.agentTargetID
         targetAuthority = membership.targetAuthority
         frameID = membership.frameID
         loaderID = membership.loaderID
     }
 
     package init(
-        modelScope: ModelEventScope,
+        modelScope: WebInspectorFeatureEventScope,
         origin: CanonicalNetworkRequestOrigin,
         targetAuthority: CanonicalNetworkRegisteredTargetAuthority?,
         frameID: FrameID,
@@ -184,7 +191,7 @@ package struct WebInspectorCanonicalNetworkEventScope: Equatable, Sendable {
         )
         generation = modelScope.generation
         self.origin = origin
-        agentTargetID = modelScope.agentTarget.id
+        agentTargetID = modelScope.agentTargetID
         self.targetAuthority = targetAuthority
         self.frameID = frameID
         self.loaderID = loaderID
@@ -193,18 +200,23 @@ package struct WebInspectorCanonicalNetworkEventScope: Equatable, Sendable {
 
 /// Canonical DOM/CSS routing authority for one exact document binding.
 package struct WebInspectorCanonicalDOMEventScope: Equatable, Sendable {
-    package let modelScope: ModelEventScope
+    package let modelScope: WebInspectorFeatureEventScope
+    package let bindingScopeID: WebInspectorDOMBindingScopeID
 
     package var semanticTargetID: WebInspectorTarget.ID {
-        modelScope.target.id
+        modelScope.semanticTargetID
     }
 
     package var agentTargetID: WebInspectorTarget.ID {
-        modelScope.agentTarget.id
+        modelScope.agentTargetID
     }
 
-    package init(modelScope: ModelEventScope) {
+    package init(
+        modelScope: WebInspectorFeatureEventScope,
+        bindingScopeID: WebInspectorDOMBindingScopeID
+    ) {
         self.modelScope = modelScope
+        self.bindingScopeID = bindingScopeID
     }
 }
 
@@ -223,11 +235,11 @@ package struct WebInspectorDOMTargetRouteStorage: Hashable, Sendable {
 
 package struct WebInspectorDOMDocumentScopeStorage: Hashable, Sendable {
     package let storeID: WebInspectorContainerStoreID
-    package let attachmentGeneration: WebInspectorContainerAttachmentGeneration
-    package let pageGeneration: WebInspectorPage.Generation
+    package let attachmentGeneration: WebInspectorAttachmentGeneration
+    package let pageGeneration: WebInspectorPageGeneration
     package let semanticTargetID: WebInspectorTarget.ID
     package let agentTargetID: WebInspectorTarget.ID
-    package let domBindingEpoch: ModelDOMBindingEpoch
+    package let domBindingEpoch: WebInspectorDOMBindingScopeID
 
     package var targetRoute: WebInspectorDOMTargetRouteStorage {
         WebInspectorDOMTargetRouteStorage(
@@ -238,11 +250,11 @@ package struct WebInspectorDOMDocumentScopeStorage: Hashable, Sendable {
 
     package init(
         storeID: WebInspectorContainerStoreID,
-        attachmentGeneration: WebInspectorContainerAttachmentGeneration,
-        pageGeneration: WebInspectorPage.Generation,
+        attachmentGeneration: WebInspectorAttachmentGeneration,
+        pageGeneration: WebInspectorPageGeneration,
         semanticTargetID: WebInspectorTarget.ID,
         agentTargetID: WebInspectorTarget.ID,
-        domBindingEpoch: ModelDOMBindingEpoch
+        domBindingEpoch: WebInspectorDOMBindingScopeID
     ) {
         self.storeID = storeID
         self.attachmentGeneration = attachmentGeneration
@@ -254,19 +266,16 @@ package struct WebInspectorDOMDocumentScopeStorage: Hashable, Sendable {
 
     package init(
         storeID: WebInspectorContainerStoreID,
-        attachmentGeneration: WebInspectorContainerAttachmentGeneration,
+        attachmentGeneration: WebInspectorAttachmentGeneration,
         eventScope: WebInspectorCanonicalDOMEventScope
     ) {
-        guard let domBindingEpoch = eventScope.modelScope.domBindingEpoch else {
-            return nil
-        }
         self.init(
             storeID: storeID,
             attachmentGeneration: attachmentGeneration,
             pageGeneration: eventScope.modelScope.generation,
             semanticTargetID: eventScope.semanticTargetID,
             agentTargetID: eventScope.agentTargetID,
-            domBindingEpoch: domBindingEpoch
+            domBindingEpoch: eventScope.bindingScopeID
         )
     }
 
@@ -326,15 +335,15 @@ package struct WebInspectorCSSStyleSheetIdentityStorage: Hashable, Sendable {
 /// event API.
 package struct CanonicalNetworkRequestIDStorage: Hashable, Sendable {
     package let storeID: WebInspectorContainerStoreID
-    package let attachmentGeneration: WebInspectorContainerAttachmentGeneration
-    package let pageGeneration: WebInspectorPage.Generation
+    package let attachmentGeneration: WebInspectorAttachmentGeneration
+    package let pageGeneration: WebInspectorPageGeneration
     package let agentTargetID: WebInspectorTarget.ID
     package let rawRequestID: Network.Request.ID
 
     package init(
         storeID: WebInspectorContainerStoreID,
-        attachmentGeneration: WebInspectorContainerAttachmentGeneration,
-        pageGeneration: WebInspectorPage.Generation,
+        attachmentGeneration: WebInspectorAttachmentGeneration,
+        pageGeneration: WebInspectorPageGeneration,
         agentTargetID: WebInspectorTarget.ID,
         rawRequestID: Network.Request.ID
     ) {
@@ -349,12 +358,12 @@ package struct CanonicalNetworkRequestIDStorage: Hashable, Sendable {
 /// Canonical storage wrapped by `NetworkEntry.ID`.
 package struct CanonicalNetworkEntryIDStorage: Hashable, Sendable {
     package let storeID: WebInspectorContainerStoreID
-    package let attachmentGeneration: WebInspectorContainerAttachmentGeneration
+    package let attachmentGeneration: WebInspectorAttachmentGeneration
     package let ordinal: UInt64
 
     package init(
         storeID: WebInspectorContainerStoreID,
-        attachmentGeneration: WebInspectorContainerAttachmentGeneration,
+        attachmentGeneration: WebInspectorAttachmentGeneration,
         ordinal: UInt64
     ) {
         self.storeID = storeID
@@ -368,8 +377,8 @@ package struct CanonicalNetworkEntryIDStorage: Hashable, Sendable {
 /// constructed.
 package struct CanonicalNetworkOpaqueInitiatorKey: Hashable, Sendable {
     package let storeID: WebInspectorContainerStoreID
-    package let attachmentGeneration: WebInspectorContainerAttachmentGeneration
-    package let pageGeneration: WebInspectorPage.Generation
+    package let attachmentGeneration: WebInspectorAttachmentGeneration
+    package let pageGeneration: WebInspectorPageGeneration
     package let semanticTargetID: WebInspectorTarget.ID
     package let agentTargetID: WebInspectorTarget.ID
     package let targetAuthority: CanonicalNetworkRegisteredTargetAuthority?
@@ -377,8 +386,8 @@ package struct CanonicalNetworkOpaqueInitiatorKey: Hashable, Sendable {
 
     package init(
         storeID: WebInspectorContainerStoreID,
-        attachmentGeneration: WebInspectorContainerAttachmentGeneration,
-        pageGeneration: WebInspectorPage.Generation,
+        attachmentGeneration: WebInspectorAttachmentGeneration,
+        pageGeneration: WebInspectorPageGeneration,
         semanticTargetID: WebInspectorTarget.ID,
         agentTargetID: WebInspectorTarget.ID,
         targetAuthority: CanonicalNetworkRegisteredTargetAuthority?,
@@ -395,11 +404,11 @@ package struct CanonicalNetworkOpaqueInitiatorKey: Hashable, Sendable {
 
     package init(
         storeID: WebInspectorContainerStoreID,
-        attachmentGeneration: WebInspectorContainerAttachmentGeneration,
-        pageGeneration: WebInspectorPage.Generation,
+        attachmentGeneration: WebInspectorAttachmentGeneration,
+        pageGeneration: WebInspectorPageGeneration,
         semanticTargetID: WebInspectorTarget.ID,
         agentTargetID: WebInspectorTarget.ID,
-        navigationEpoch: ModelNavigationEpoch,
+        navigationEpoch: WebInspectorPageGeneration,
         rawNodeID: DOM.Node.ID
     ) {
         self.init(

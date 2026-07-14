@@ -21,30 +21,37 @@ public struct DOMMutationFailure: Error, Hashable, Sendable {
     }
 }
 
+/// Text representations supported by the DOM feature facade.
+public enum DOMTextRepresentation: Hashable, Sendable {
+    case html
+    case selectorPath
+    case xPath
+}
+
 /// A document-epoch-bound capability for undoing one accepted DOM/CSS change.
-public final class DOMUndoCapability {
-    private let core: WebInspectorModelContainerCore
+public final class DOMUndoCapability: Sendable {
+    private let owner: WebInspectorDOMFeature
     private let scope: WebInspectorDOMDocumentScopeStorage
 
     package init(
-        core: WebInspectorModelContainerCore,
+        owner: WebInspectorDOMFeature,
         scope: WebInspectorDOMDocumentScopeStorage
     ) {
-        self.core = core
+        self.owner = owner
         self.scope = scope
     }
 
-    public nonisolated(nonsending) func undo() async throws {
-        try await core.undoDOMChange(in: scope)
+    public func undo() async throws {
+        try await owner.undo(in: scope)
     }
 
-    public nonisolated(nonsending) func redo() async throws {
-        try await core.redoDOMChange(in: scope)
+    public func redo() async throws {
+        try await owner.redo(in: scope)
     }
 }
 
 /// The applied subset and explicit failures from a requested DOM mutation.
-public struct DOMMutationOutcome {
+public struct DOMMutationOutcome: Sendable {
     public let requestedNodeIDs: [DOMNode.ID]
     public let appliedNodeIDs: [DOMNode.ID]
     public let failures: [DOMMutationFailure]

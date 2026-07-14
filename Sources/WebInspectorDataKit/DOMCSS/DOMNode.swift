@@ -2,6 +2,89 @@ import Foundation
 import Observation
 import WebInspectorProxyKit
 
+/// A frame identity carried by immutable DOM projections.
+public struct WebInspectorFrameID: RawRepresentable, Hashable, Sendable {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    package init(_ frameID: FrameID) {
+        rawValue = frameID.rawValue
+    }
+}
+
+/// A protocol-independent pseudo-element kind.
+public enum DOMPseudoElementKind: Hashable, Sendable {
+    case before
+    case after
+    case marker
+    case scrollbar
+    case resizer
+    case selection
+    case other(String)
+
+    public var rawValue: String {
+        switch self {
+        case .before: "before"
+        case .after: "after"
+        case .marker: "marker"
+        case .scrollbar: "scrollbar"
+        case .resizer: "resizer"
+        case .selection: "selection"
+        case let .other(rawValue): rawValue
+        }
+    }
+
+    package init(_ value: DOM.PseudoType) {
+        switch value {
+        case .before:
+            self = .before
+        case .after:
+            self = .after
+        case let .other(rawValue):
+            self = switch rawValue {
+            case "marker": .marker
+            case "scrollbar": .scrollbar
+            case "resizer": .resizer
+            case "selection": .selection
+            default: .other(rawValue)
+            }
+        }
+    }
+}
+
+/// A protocol-independent shadow-root kind.
+public enum DOMShadowRootKind: Hashable, Sendable {
+    case open
+    case closed
+    case userAgent
+    case other(String)
+
+    public var rawValue: String {
+        switch self {
+        case .open: "open"
+        case .closed: "closed"
+        case .userAgent: "user-agent"
+        case let .other(rawValue): rawValue
+        }
+    }
+
+    package init(_ value: DOM.ShadowRootType) {
+        switch value {
+        case .open:
+            self = .open
+        case .closed:
+            self = .closed
+        case .userAgent:
+            self = .userAgent
+        case let .other(rawValue):
+            self = .other(rawValue)
+        }
+    }
+}
+
 /// Observable model for a DOM node owned by a ``WebInspectorModelContext``.
 @Observable
 public final class DOMNode: WebInspectorPersistentModel {
@@ -19,6 +102,21 @@ public final class DOMNode: WebInspectorPersistentModel {
 
     /// Immutable DOM node fields available to typed fetch descriptors.
     public struct QueryValue: Identifiable, Sendable {
+        /// Query-visible regular-child loading state.
+        public enum Children: Equatable, Sendable {
+            case unrequested(count: Int)
+            case loaded([DOMNode.ID])
+
+            public var count: Int {
+                switch self {
+                case let .unrequested(count):
+                    count
+                case let .loaded(ids):
+                    ids.count
+                }
+            }
+        }
+
         /// The node identity.
         public let id: ID
 
@@ -35,7 +133,7 @@ public final class DOMNode: WebInspectorPersistentModel {
         public let nodeType: Int
 
         /// The frame that owns the node, if WebKit reported one.
-        public let frameID: FrameID?
+        public let frameID: WebInspectorFrameID?
 
         /// The document URL associated with the node.
         public let documentURL: String?
@@ -46,14 +144,51 @@ public final class DOMNode: WebInspectorPersistentModel {
         /// Attributes keyed by name.
         public let attributes: [String: String]
 
-        /// The number of regular children reported by WebKit.
-        public let childNodeCount: Int
+        /// Attributes in protocol order.
+        public let attributeList: [Attribute]
+
+        /// Parent identity in the canonical document topology.
+        public let parentID: ID?
+
+        /// Document root identity for this node.
+        public let documentRootID: ID?
+
+        /// The single root displayed by the current primary DOM tree.
+        ///
+        /// Unlike ``documentRootID``, this value crosses embedded document,
+        /// shadow-root, and pseudo-element boundaries. Every current
+        /// projection from one DOM feature generation carries the same value.
+        public let primaryDocumentRootID: ID?
+
+        /// Regular child identities or the unloaded child count.
+        public let children: Children
+
+        /// Embedded content document identity.
+        public let contentDocumentID: ID?
+
+        /// Shadow-root identities in protocol order.
+        public let shadowRootIDs: [ID]
+
+        /// Template content identity.
+        public let templateContentID: ID?
+
+        /// The `::before` pseudo-element identity.
+        public let beforePseudoElementID: ID?
+
+        /// Other pseudo-element identities in protocol order.
+        public let otherPseudoElementIDs: [ID]
+
+        /// The `::after` pseudo-element identity.
+        public let afterPseudoElementID: ID?
 
         /// The node's pseudo-element kind.
-        public let pseudoType: DOM.PseudoType?
+        public let pseudoType: DOMPseudoElementKind?
 
         /// The node's shadow-root kind.
-        public let shadowRootType: DOM.ShadowRootType?
+        public let shadowRootType: DOMShadowRootKind?
+
+        /// The number of regular children reported by WebKit.
+        public var childNodeCount: Int { children.count }
 
         /// The DOM node kind derived from ``nodeType``.
         public var kind: Kind {
@@ -66,13 +201,23 @@ public final class DOMNode: WebInspectorPersistentModel {
             localName: String,
             nodeValue: String,
             nodeType: Int,
-            frameID: FrameID?,
+            frameID: WebInspectorFrameID?,
             documentURL: String?,
             baseURL: String?,
             attributes: [String: String],
-            childNodeCount: Int,
-            pseudoType: DOM.PseudoType?,
-            shadowRootType: DOM.ShadowRootType?
+            attributeList: [Attribute],
+            parentID: ID?,
+            documentRootID: ID?,
+            primaryDocumentRootID: ID?,
+            children: Children,
+            contentDocumentID: ID?,
+            shadowRootIDs: [ID],
+            templateContentID: ID?,
+            beforePseudoElementID: ID?,
+            otherPseudoElementIDs: [ID],
+            afterPseudoElementID: ID?,
+            pseudoType: DOMPseudoElementKind?,
+            shadowRootType: DOMShadowRootKind?
         ) {
             self.id = id
             self.nodeName = nodeName
@@ -83,7 +228,17 @@ public final class DOMNode: WebInspectorPersistentModel {
             self.documentURL = documentURL
             self.baseURL = baseURL
             self.attributes = attributes
-            self.childNodeCount = childNodeCount
+            self.attributeList = attributeList
+            self.parentID = parentID
+            self.documentRootID = documentRootID
+            self.primaryDocumentRootID = primaryDocumentRootID
+            self.children = children
+            self.contentDocumentID = contentDocumentID
+            self.shadowRootIDs = shadowRootIDs
+            self.templateContentID = templateContentID
+            self.beforePseudoElementID = beforePseudoElementID
+            self.otherPseudoElementIDs = otherPseudoElementIDs
+            self.afterPseudoElementID = afterPseudoElementID
             self.pseudoType = pseudoType
             self.shadowRootType = shadowRootType
         }
@@ -193,7 +348,7 @@ public final class DOMNode: WebInspectorPersistentModel {
     }
 
     /// The frame that owns the node, if WebKit reported one.
-    public private(set) var frameID: FrameID?
+    public private(set) var frameID: WebInspectorFrameID?
 
     /// The document URL associated with the node.
     public private(set) var documentURL: String?
@@ -267,13 +422,10 @@ public final class DOMNode: WebInspectorPersistentModel {
     }
 
     /// The node's pseudo-element kind.
-    public private(set) var pseudoType: DOM.PseudoType?
+    public private(set) var pseudoType: DOMPseudoElementKind?
 
     /// The node's shadow-root kind.
-    public private(set) var shadowRootType: DOM.ShadowRootType?
-
-    /// CSS styles associated with the element, when styles have been requested.
-    public private(set) var elementStyles: CSSStyles?
+    public private(set) var shadowRootType: DOMShadowRootKind?
 
     private var canonicalTopology: WebInspectorDOMModelTopology?
 
@@ -299,16 +451,15 @@ public final class DOMNode: WebInspectorPersistentModel {
         localName = record.canonical.localName
         nodeValue = record.canonical.nodeValue
         nodeType = record.canonical.nodeType
-        frameID = record.canonical.frameID
+        frameID = record.canonical.frameID.map(WebInspectorFrameID.init)
         documentURL = record.canonical.documentURL
         baseURL = record.canonical.baseURL
         attributes = record.canonical.queryValue.attributes
         attributeList = record.canonical.attributes.map(Attribute.init)
         childNodeCount = record.canonical.children.count
         canonicalTopology = record.topology
-        pseudoType = record.canonical.pseudoType
-        shadowRootType = record.canonical.shadowRootType
-        elementStyles = nil
+        pseudoType = record.canonical.pseudoType.map(DOMPseudoElementKind.init)
+        shadowRootType = record.canonical.shadowRootType.map(DOMShadowRootKind.init)
         self.modelContext = modelContext
     }
 
@@ -340,7 +491,6 @@ public final class DOMNode: WebInspectorPersistentModel {
 
     package func resetCanonicalOwnerProjection() {
         canonicalTopology = nil
-        invalidateCanonicalCSSResource()
     }
 
     package func invalidateCanonicalRecord() {
@@ -348,25 +498,8 @@ public final class DOMNode: WebInspectorPersistentModel {
         modelContext = nil
     }
 
-    package func applyCanonicalResourceInvalidations(
-        _ invalidations: Set<WebInspectorCanonicalResourceInvalidation>
-    ) {
-        let storage = id.canonicalStorage
-        guard invalidations.contains(where: {
-                canonicalResourceInvalidation($0, affects: storage)
-            })
-        else {
-            return
-        }
-        elementStyles?.markCanonicalNeedsRefresh()
-    }
-
     package var canonicalAncestorIDsForTesting: [WebInspectorDOMNodeIdentityStorage] {
         canonicalTopology?.ancestorIDs ?? []
-    }
-
-    func setElementStyles(_ styles: CSSStyles?) {
-        elementStyles = styles
     }
 
     private func replaceCanonicalContent(
@@ -376,14 +509,14 @@ public final class DOMNode: WebInspectorPersistentModel {
         localName = record.localName
         nodeValue = record.nodeValue
         nodeType = record.nodeType
-        frameID = record.frameID
+        frameID = record.frameID.map(WebInspectorFrameID.init)
         documentURL = record.documentURL
         baseURL = record.baseURL
         attributes = record.queryValue.attributes
         attributeList = record.attributes.map(Attribute.init)
         childNodeCount = record.children.count
-        pseudoType = record.pseudoType
-        shadowRootType = record.shadowRootType
+        pseudoType = record.pseudoType.map(DOMPseudoElementKind.init)
+        shadowRootType = record.shadowRootType.map(DOMShadowRootKind.init)
     }
 
     private func applyCanonicalPatch(
@@ -404,7 +537,7 @@ public final class DOMNode: WebInspectorPersistentModel {
             case let .nodeType(value):
                 nodeType = value
             case let .frameID(value):
-                frameID = value
+                frameID = value.map(WebInspectorFrameID.init)
             case let .documentURL(value):
                 documentURL = value
             case let .baseURL(value):
@@ -417,9 +550,9 @@ public final class DOMNode: WebInspectorPersistentModel {
                 )
                 attributeList = value.map(Attribute.init)
             case let .pseudoType(value):
-                pseudoType = value
+                pseudoType = value.map(DOMPseudoElementKind.init)
             case let .shadowRootType(value):
-                shadowRootType = value
+                shadowRootType = value.map(DOMShadowRootKind.init)
             case .children,
                 .contentDocument,
                 .shadowRoots,
@@ -445,27 +578,6 @@ public final class DOMNode: WebInspectorPersistentModel {
             )
         }
         return model
-    }
-
-    private func canonicalResourceInvalidation(
-        _ invalidation: WebInspectorCanonicalResourceInvalidation,
-        affects storage: WebInspectorDOMNodeIdentityStorage
-    ) -> Bool {
-        switch invalidation {
-        case let .target(scope):
-            storage.documentScope == scope
-        case let .subtree(rootID):
-            rootID.documentScope == storage.documentScope
-                && (storage == rootID
-                    || canonicalTopology?.ancestorIDs.contains(rootID) == true)
-        case let .nodes(nodeIDs):
-            nodeIDs.contains(storage)
-        }
-    }
-
-    private func invalidateCanonicalCSSResource() {
-        elementStyles?.invalidateCanonicalOwner()
-        elementStyles = nil
     }
 
 }
