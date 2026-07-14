@@ -1464,16 +1464,11 @@ private extension WebInspectorCanonicalDOMReducer {
     func documentScope(
         for eventScope: WebInspectorCanonicalDOMEventScope
     ) throws -> WebInspectorDOMDocumentScopeStorage {
-        guard
-            let scope = WebInspectorDOMDocumentScopeStorage(
-                storeID: storeID,
-                attachmentGeneration: attachmentGeneration,
-                eventScope: eventScope
-            )
-        else {
-            throw WebInspectorCanonicalDOMError.missingDOMBindingEpoch
-        }
-        return scope
+        WebInspectorDOMDocumentScopeStorage(
+            storeID: storeID,
+            attachmentGeneration: attachmentGeneration,
+            eventScope: eventScope
+        )
     }
 
     func requireActiveScope(

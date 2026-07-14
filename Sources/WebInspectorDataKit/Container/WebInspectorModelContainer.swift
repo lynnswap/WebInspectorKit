@@ -50,7 +50,9 @@ public final class WebInspectorModelContainer: Equatable, Sendable {
     public init(configuration: Configuration = .init()) {
         self.configuration = configuration
         let store = WebInspectorModelStore(
-            schemaRegistry: .empty,
+            schemaRegistry: WebInspectorBuiltInModelSchemas.registry(
+                for: configuration.enabledFeatures
+            ),
             enabledFeatures: configuration.enabledFeatures
         )
         modelStore = store

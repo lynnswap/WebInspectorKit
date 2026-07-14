@@ -252,7 +252,7 @@ package struct WebInspectorDOMDocumentScopeStorage: Hashable, Sendable {
         self.domBindingEpoch = domBindingEpoch
     }
 
-    package init?(
+    package init(
         storeID: WebInspectorContainerStoreID,
         attachmentGeneration: WebInspectorContainerAttachmentGeneration,
         eventScope: WebInspectorCanonicalDOMEventScope

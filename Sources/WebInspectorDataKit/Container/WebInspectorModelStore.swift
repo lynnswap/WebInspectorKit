@@ -436,6 +436,33 @@ package actor WebInspectorModelStore {
         return (prepared.commit.revision, output)
     }
 
+    /// Builds a domain transaction after the store-owned metadata value has
+    /// issued the identity needed by that transaction, then activates both in
+    /// one revision. The builder works on a copy: if reduction or validation
+    /// throws, neither metadata nor model records change.
+    package func commit<Value: Sendable, Output: Sendable>(
+        updating key: WebInspectorModelStoreMetadataKey<Value>,
+        initialValue: Value,
+        _ build:
+            @Sendable (
+                inout Value,
+                WebInspectorStoreRevision
+            ) throws -> (WebInspectorModelTransaction, Output)
+    ) throws -> (revision: WebInspectorStoreRevision, output: Output) {
+        guard !isClosed else {
+            throw WebInspectorModelStoreError.closed
+        }
+        var value = metadata[key.rawValue] as? Value ?? initialValue
+        let proposedRevision = WebInspectorStoreRevision(
+            rawValue: revision.rawValue + 1
+        )
+        let (transaction, output) = try build(&value, proposedRevision)
+        let prepared = try prepare(transaction, permitsEmpty: true)
+        metadata[key.rawValue] = value
+        apply(prepared)
+        return (prepared.commit.revision, output)
+    }
+
     package func metadataValue<Value: Sendable>(
         for key: WebInspectorModelStoreMetadataKey<Value>,
         default defaultValue: Value
@@ -584,6 +611,25 @@ package struct WebInspectorModelStoreSink: Sendable {
             updating: key,
             initialValue: initialValue,
             update
+        )
+    }
+
+    package func commit<Value: Sendable, Output: Sendable>(
+        updating key: WebInspectorModelStoreMetadataKey<Value>,
+        initialValue: Value,
+        _ build:
+            @escaping @Sendable (
+                inout Value,
+                WebInspectorStoreRevision
+            ) throws -> (WebInspectorModelTransaction, Output)
+    ) async throws -> (
+        revision: WebInspectorStoreRevision,
+        output: Output
+    ) {
+        try await store.commit(
+            updating: key,
+            initialValue: initialValue,
+            build
         )
     }
 

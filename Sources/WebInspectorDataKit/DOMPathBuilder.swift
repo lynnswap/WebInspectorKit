@@ -31,27 +31,39 @@ private struct DOMPathSnapshot {
     let parentByNodeID: [DOMNode.ID: DOMNode.ID]
     let childrenByNodeID: [DOMNode.ID: [DOMNode.ID]]
 
-    init(_ snapshot: WebInspectorDOMTreeSnapshot) {
-        nodesByID = snapshot.rowsByID.mapValues {
-            DOMPathNode(
-                id: $0.id,
-                nodeName: $0.nodeName,
-                localName: $0.localName,
-                kind: DOMNode.Kind(rawValue: $0.nodeType),
-                attributeList: $0.attributeList
+    init(_ snapshot: WebInspectorCanonicalDOMSnapshot) {
+        let rows = snapshot.tree.rows
+        nodesByID = Dictionary(uniqueKeysWithValues: rows.map { row in
+            let record = row.record
+            let id = DOMNode.ID(canonical: record.id)
+            return (
+                id,
+                DOMPathNode(
+                    id: id,
+                    nodeName: record.nodeName,
+                    localName: record.localName,
+                    kind: DOMNode.Kind(rawValue: record.nodeType),
+                    attributeList: record.attributes.map {
+                        DOMNode.Attribute(name: $0.name, value: $0.value)
+                    }
+                )
             )
-        }
-        parentByNodeID = snapshot.rowsByID.reduce(into: [:]) { result, element in
-            if let parentID = element.value.parentID {
-                result[element.key] = parentID
+        })
+        parentByNodeID = rows.reduce(into: [:]) { result, row in
+            if let parentID = row.parentID {
+                result[DOMNode.ID(canonical: row.id)] = DOMNode.ID(canonical: parentID)
             }
         }
-        childrenByNodeID = snapshot.rowsByID.mapValues { row in
-            guard case let .loaded(ids) = row.children else {
-                return []
+        childrenByNodeID = Dictionary(uniqueKeysWithValues: rows.map { row in
+            let children: [DOMNode.ID]
+            switch row.record.children {
+            case .unrequested:
+                children = []
+            case let .loaded(ids):
+                children = ids.map(DOMNode.ID.init(canonical:))
             }
-            return ids
-        }
+            return (DOMNode.ID(canonical: row.id), children)
+        })
     }
 
     func node(for id: DOMNode.ID) -> DOMPathNode? {
@@ -67,7 +79,7 @@ private struct DOMPathSnapshot {
     }
 }
 
-package extension WebInspectorDOMTreeSnapshot {
+package extension WebInspectorCanonicalDOMSnapshot {
     func selectorPath(for id: DOMNode.ID) -> String {
         let pathSnapshot = DOMPathSnapshot(self)
         guard let node = pathSnapshot.node(for: id) else {
