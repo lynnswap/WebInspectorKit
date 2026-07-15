@@ -1010,6 +1010,66 @@ struct BrowserSessionRestoreTests {
     }
 
     @Test
+    func javaScriptDialogPresenterFollowsPresentedInspector() throws {
+        let fixture = try makeJavaScriptDialogFixture()
+        defer { fixture.cleanup() }
+
+        #expect(fixture.tab.findPresenter(for: fixture.tab.webView) === fixture.inspectorViewController)
+    }
+
+    @Test
+    func javaScriptAlertPresentedAboveInspectorCompletesFromOKAction() async throws {
+        let dialogPresenter = JavaScriptDialogPresenterSpy()
+        let fixture = try makeJavaScriptDialogFixture(dialogPresenter: dialogPresenter)
+        defer { fixture.cleanup() }
+
+        await fixture.tab.presentJavaScriptAlert(
+            message: "Fixture alert",
+            webView: fixture.tab.webView
+        )
+
+        #expect(dialogPresenter.alertMessage == "Fixture alert")
+        #expect(dialogPresenter.presenter === fixture.inspectorViewController)
+        #expect(dialogPresenter.alertCompletionCount == 1)
+    }
+
+    @Test
+    func javaScriptConfirmPresentedAboveInspectorCompletesFromCancelAction() async throws {
+        let dialogPresenter = JavaScriptDialogPresenterSpy(confirmResult: false)
+        let fixture = try makeJavaScriptDialogFixture(dialogPresenter: dialogPresenter)
+        defer { fixture.cleanup() }
+
+        let result = await fixture.tab.presentJavaScriptConfirm(
+            message: "Fixture confirm",
+            webView: fixture.tab.webView
+        )
+
+        #expect(result == false)
+        #expect(dialogPresenter.confirmMessage == "Fixture confirm")
+        #expect(dialogPresenter.presenter === fixture.inspectorViewController)
+        #expect(dialogPresenter.confirmCompletionCount == 1)
+    }
+
+    @Test
+    func javaScriptPromptPresentedAboveInspectorCompletesWithEnteredText() async throws {
+        let dialogPresenter = JavaScriptDialogPresenterSpy(promptResult: "Entered value")
+        let fixture = try makeJavaScriptDialogFixture(dialogPresenter: dialogPresenter)
+        defer { fixture.cleanup() }
+
+        let result = await fixture.tab.presentJavaScriptPrompt(
+            prompt: "Fixture prompt",
+            defaultText: "Default value",
+            webView: fixture.tab.webView
+        )
+
+        #expect(result == "Entered value")
+        #expect(dialogPresenter.prompt == "Fixture prompt")
+        #expect(dialogPresenter.defaultText == "Default value")
+        #expect(dialogPresenter.presenter === fixture.inspectorViewController)
+        #expect(dialogPresenter.promptCompletionCount == 1)
+    }
+
+    @Test
     func tabSwitchInstallsSelectedWebViewOnceAndPreservesTabIdentity() async throws {
         let fixture = try makeAttachmentLifecycleFixture()
         let pageViewController = BrowserPageViewController(
@@ -1270,6 +1330,56 @@ struct BrowserSessionRestoreTests {
         return condition()
     }
 
+    private struct JavaScriptDialogFixture {
+        var tab: BrowserTab
+        var window: UIWindow
+        var rootViewController: UINavigationController
+        var inspectorViewController: UIViewController
+
+        func cleanup() {
+            rootViewController.dismiss(animated: false)
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+    }
+
+    private func makeJavaScriptDialogFixture(
+        dialogPresenter: any BrowserJavaScriptDialogPresenting = BrowserJavaScriptDialogPresenter()
+    ) throws -> JavaScriptDialogFixture {
+        let tab = BrowserTab(
+            url: try #require(URL(string: "about:blank")),
+            automaticallyLoadsInitialRequest: false,
+            javaScriptDialogPresenter: dialogPresenter
+        )
+        let pageViewController = UIViewController()
+        pageViewController.view.addSubview(tab.webView)
+        tab.webView.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            tab.webView.leadingAnchor.constraint(equalTo: pageViewController.view.leadingAnchor),
+            tab.webView.trailingAnchor.constraint(equalTo: pageViewController.view.trailingAnchor),
+            tab.webView.topAnchor.constraint(equalTo: pageViewController.view.topAnchor),
+            tab.webView.bottomAnchor.constraint(equalTo: pageViewController.view.bottomAnchor),
+        ])
+
+        let rootViewController = UINavigationController(rootViewController: pageViewController)
+        let window = UIWindow(windowScene: try makeWindowScene())
+        window.rootViewController = rootViewController
+        window.makeKeyAndVisible()
+        rootViewController.loadViewIfNeeded()
+        window.layoutIfNeeded()
+
+        let inspectorViewController = UIViewController()
+        rootViewController.present(inspectorViewController, animated: false)
+        #expect(inspectorViewController.presentingViewController != nil)
+
+        return JavaScriptDialogFixture(
+            tab: tab,
+            window: window,
+            rootViewController: rootViewController,
+            inspectorViewController: inspectorViewController
+        )
+    }
+
     private struct AttachmentLifecycleFixture {
         var secondTabID: UUID
         var browserWindow: BrowserWindow
@@ -1366,6 +1476,61 @@ struct BrowserSessionRestoreTests {
             await withCheckedContinuation { continuation in
                 waitersByWebViewID[webViewID, default: []].append(continuation)
             }
+        }
+    }
+
+    @MainActor
+    private final class JavaScriptDialogPresenterSpy: BrowserJavaScriptDialogPresenting {
+        private let confirmResult: Bool
+        private let promptResult: String?
+
+        private(set) weak var presenter: UIViewController?
+        private(set) var alertMessage: String?
+        private(set) var confirmMessage: String?
+        private(set) var prompt: String?
+        private(set) var defaultText: String?
+        private(set) var alertCompletionCount = 0
+        private(set) var confirmCompletionCount = 0
+        private(set) var promptCompletionCount = 0
+
+        init(confirmResult: Bool = true, promptResult: String? = nil) {
+            self.confirmResult = confirmResult
+            self.promptResult = promptResult
+        }
+
+        func presentAlert(
+            message: String,
+            from presenter: UIViewController,
+            completion: @escaping () -> Void
+        ) {
+            self.presenter = presenter
+            alertMessage = message
+            alertCompletionCount += 1
+            completion()
+        }
+
+        func presentConfirm(
+            message: String,
+            from presenter: UIViewController,
+            completion: @escaping (Bool) -> Void
+        ) {
+            self.presenter = presenter
+            confirmMessage = message
+            confirmCompletionCount += 1
+            completion(confirmResult)
+        }
+
+        func presentPrompt(
+            prompt: String,
+            defaultText: String?,
+            from presenter: UIViewController,
+            completion: @escaping (String?) -> Void
+        ) {
+            self.presenter = presenter
+            self.prompt = prompt
+            self.defaultText = defaultText
+            promptCompletionCount += 1
+            completion(promptResult)
         }
     }
 
