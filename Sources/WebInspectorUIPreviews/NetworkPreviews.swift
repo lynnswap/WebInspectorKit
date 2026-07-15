@@ -155,7 +155,7 @@ private enum NetworkPreviewFixtures {
             mimeType: "application/json",
             resourceType: .xhr,
             encodedDataLength: encodedDataLength,
-            body: Network.Body(data: responseBody)
+            body: .init(data: responseBody)
         )
     }
 
