@@ -4,7 +4,6 @@ import UIKit
 import WebKit
 import WebInspectorDataKit
 import WebInspectorUIBase
-import WebInspectorUINetwork
 
 /// The UIKit-facing inspection session used by `WebInspectorViewController`.
 ///
@@ -13,6 +12,11 @@ import WebInspectorUINetwork
 @MainActor
 @Observable
 public final class WebInspectorSession {
+    private struct RootPresentationRetirement {
+        let attachmentGeneration: UInt64
+        var detachesSession: Bool
+    }
+
     package let interface: InterfaceModel
     /// The user interface style inferred from the inspected page.
     ///
@@ -21,6 +25,8 @@ public final class WebInspectorSession {
     @ObservationIgnored private var container: WebInspectorContainer?
     @ObservationIgnored private var dataContext: WebInspectorContext
     @ObservationIgnored private var attachmentGeneration: UInt64 = 0
+    @ObservationIgnored private var activeRootPresentationIDs: Set<UUID> = []
+    @ObservationIgnored private var deferredRootPresentationRetirement: RootPresentationRetirement?
     @ObservationIgnored private let makePageUserInterfaceStyleObserver: @MainActor (
         WKWebView,
         @escaping @MainActor (UIUserInterfaceStyle) -> Void
@@ -56,7 +62,6 @@ public final class WebInspectorSession {
 
     isolated deinit {
         stopPageUserInterfaceStyleObservation()
-        interface.removeContentCache()
     }
 
     package var context: WebInspectorContext {
@@ -152,9 +157,89 @@ public final class WebInspectorSession {
         await stopContainer(replaceContextWithDetached: true)
     }
 
+    package func beginRootPresentation(id: UUID) {
+        activeRootPresentationIDs.insert(id)
+    }
+
+    package func retireRootPresentation(id: UUID, detach: Bool) async {
+        guard activeRootPresentationIDs.remove(id) != nil else {
+            return
+        }
+        recordRootPresentationRetirement(detach: detach)
+        guard activeRootPresentationIDs.isEmpty,
+              let retirement = takeDeferredRootPresentationRetirement() else {
+            return
+        }
+        await completeRootPresentationRetirement(retirement)
+    }
+
+    package func abandonRootPresentation(id: UUID, detach: Bool) {
+        guard activeRootPresentationIDs.remove(id) != nil else {
+            return
+        }
+        recordRootPresentationRetirement(detach: detach)
+        guard activeRootPresentationIDs.isEmpty,
+              let retirement = takeDeferredRootPresentationRetirement() else {
+            return
+        }
+        Task { @MainActor [weak self] in
+            await self?.completeRootPresentationRetirement(retirement)
+        }
+    }
+
     package func retireRootPresentation(detach: Bool) async {
-        guard detach else {
-            interface.removeContentCache()
+        guard activeRootPresentationIDs.isEmpty else {
+            return
+        }
+        await completeRootPresentationRetirement(
+            RootPresentationRetirement(
+                attachmentGeneration: attachmentGeneration,
+                detachesSession: detach
+            )
+        )
+    }
+
+    private func recordRootPresentationRetirement(detach: Bool) {
+        mergeDeferredRootPresentationRetirement(
+            RootPresentationRetirement(
+                attachmentGeneration: attachmentGeneration,
+                detachesSession: detach
+            )
+        )
+    }
+
+    private func mergeDeferredRootPresentationRetirement(
+        _ retirement: RootPresentationRetirement
+    ) {
+        guard retirement.attachmentGeneration == attachmentGeneration else {
+            return
+        }
+        guard var deferredRetirement = deferredRootPresentationRetirement,
+              deferredRetirement.attachmentGeneration == attachmentGeneration else {
+            deferredRootPresentationRetirement = retirement
+            return
+        }
+        deferredRetirement.detachesSession = deferredRetirement.detachesSession
+            || retirement.detachesSession
+        deferredRootPresentationRetirement = deferredRetirement
+    }
+
+    private func takeDeferredRootPresentationRetirement() -> RootPresentationRetirement? {
+        defer { deferredRootPresentationRetirement = nil }
+        return deferredRootPresentationRetirement
+    }
+
+    private func completeRootPresentationRetirement(
+        _ retirement: RootPresentationRetirement
+    ) async {
+        guard retirement.attachmentGeneration == attachmentGeneration else {
+            return
+        }
+        guard activeRootPresentationIDs.isEmpty else {
+            mergeDeferredRootPresentationRetirement(retirement)
+            return
+        }
+        guard retirement.detachesSession else {
             await suspendBackendInteractionForPresentationEnd()
             return
         }
@@ -215,11 +300,11 @@ public final class WebInspectorSession {
 
     package func installDataContext(_ context: WebInspectorContext) {
         dataContext = context
-        removeContextBoundContent()
+        interface.contextDidChange()
     }
 
     private func stopContainer(replaceContextWithDetached: Bool) async {
-        removeContextBoundContent()
+        interface.contextDidChange()
         if let container {
             self.container = nil
             await container.close()
@@ -229,10 +314,6 @@ public final class WebInspectorSession {
         if replaceContextWithDetached {
             installDataContext(Self.makeDetachedDataContext())
         }
-    }
-
-    private func removeContextBoundContent() {
-        interface.removeContextBoundContent()
     }
 
     private static func makeDetachedDataContext() -> WebInspectorContext {
@@ -255,8 +336,6 @@ package final class InterfaceModel {
     package private(set) var selectedItemID: WebInspectorTab.DisplayItem.ID?
     package private(set) var contextBoundContentRevision = 0
     @ObservationIgnored private let projection = WebInspectorTab.DisplayProjection()
-    @ObservationIgnored private let contentCache = WebInspectorTab.ContentCache()
-    @ObservationIgnored private var networkPanelModel: NetworkPanelModel?
 
     package init(tabs: [WebInspectorTab] = [.dom, .network]) {
         let uniqueTabs = Self.uniqueTabs(tabs)
@@ -313,7 +392,6 @@ package final class InterfaceModel {
     package func setTabs(_ tabs: [WebInspectorTab]) {
         let uniqueTabs = Self.uniqueTabs(tabs)
         self.tabs = uniqueTabs
-        pruneContentCache(retaining: reachableContentKeys(for: uniqueTabs))
         guard let selectedItemID,
               isValidItemID(selectedItemID) else {
             self.selectedItemID = uniqueTabs.first.map { Self.displayItem(for: $0).id }
@@ -321,47 +399,14 @@ package final class InterfaceModel {
         }
     }
 
-    package func viewController<Content: UIViewController>(
-        for key: WebInspectorTab.ContentKey,
-        make: () -> Content
-    ) -> Content {
-        contentCache.viewController(for: key, epoch: contextBoundContentRevision, make: make)
-    }
-
-    package func networkPanelModel(for context: WebInspectorContext) -> NetworkPanelModel {
-        if let networkPanelModel,
-           networkPanelModel.context === context {
-            return networkPanelModel
-        }
-
-        let model = NetworkPanelModel(context: context)
-        networkPanelModel = model
-        return model
-    }
-
-    package func removeNetworkPanelModel() {
-        networkPanelModel = nil
-    }
-
-    package func removeContextBoundContent() {
-        removeNetworkPanelModel()
-        removeContentCache()
+    package func contextDidChange() {
         contextBoundContentRevision &+= 1
     }
 
-    package func pruneContentCache(retaining keys: Set<WebInspectorTab.ContentKey>) {
-        contentCache.prune(retaining: keys)
+    package func reachableContentKeys() -> Set<WebInspectorTab.ContentKey> {
+        projection.contentKeys(for: .compact, tabs: tabs)
+            .union(projection.contentKeys(for: .regular, tabs: tabs))
     }
-
-    package func removeContentCache() {
-        contentCache.removeAll()
-    }
-
-    #if DEBUG
-    package var contentCacheCountForTesting: Int {
-        contentCache.countForTesting
-    }
-    #endif
 
     package var selectedTab: WebInspectorTab? {
         guard let selectedItemID else {
@@ -399,11 +444,6 @@ package final class InterfaceModel {
             return .tab(tab.id)
         }
         return .customTab(tab.id)
-    }
-
-    private func reachableContentKeys(for tabs: [WebInspectorTab]) -> Set<WebInspectorTab.ContentKey> {
-        projection.contentKeys(for: .compact, tabs: tabs)
-            .union(projection.contentKeys(for: .regular, tabs: tabs))
     }
 
     private static func uniqueTabs(_ tabs: [WebInspectorTab]) -> [WebInspectorTab] {

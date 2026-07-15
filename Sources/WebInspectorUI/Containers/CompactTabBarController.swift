@@ -6,14 +6,19 @@ import WebInspectorUIBase
 @MainActor
 package final class CompactTabBarController: UITabBarController, UITabBarControllerDelegate {
     private let session: WebInspectorSession
+    private let contentStore: PresentationContentStore
     private let tabTransitionAnimator = NoAnimationTabTransitionAnimator()
     private var nativeTabByItemID: [WebInspectorTab.DisplayItem.ID: UITab] = [:]
     private var renderedContentRevision: Int?
     private var interfaceObservation: PortableObservationTracking.Token?
     private var isRenderingSelection = false
 
-    package init(session: WebInspectorSession) {
+    package init(
+        session: WebInspectorSession,
+        contentStore: PresentationContentStore = PresentationContentStore()
+    ) {
         self.session = session
+        self.contentStore = contentStore
         super.init(nibName: nil, bundle: nil)
 
         delegate = self
@@ -79,6 +84,8 @@ package final class CompactTabBarController: UITabBarController, UITabBarControl
         let displayItems = interface.displayItems(for: .compact)
         let selectedDisplayItem = interface.resolvedSelection(for: .compact)
         let contentRevision = interface.contextBoundContentRevision
+        contentStore.prepare(for: contentRevision)
+        contentStore.pruneContent(retaining: interface.reachableContentKeys())
         let shouldRebuildContent = renderedContentRevision.map { $0 != contentRevision } ?? false
         renderSelectionFromInterface {
             if shouldRebuildContent {
@@ -133,6 +140,7 @@ package final class CompactTabBarController: UITabBarController, UITabBarControl
 
         let descriptor = session.interface.descriptor(for: displayItem)
         let session = session
+        let contentStore = contentStore
         let nativeTab = UITab(
             title: descriptor?.title ?? "",
             image: descriptor?.image,
@@ -144,6 +152,7 @@ package final class CompactTabBarController: UITabBarController, UITabBarControl
             WebInspectorTab.ContentFactory.makeViewController(
                 for: displayItem,
                 session: session,
+                contentStore: contentStore,
                 hostLayout: .compact,
                 tabs: session.interface.tabs
             )

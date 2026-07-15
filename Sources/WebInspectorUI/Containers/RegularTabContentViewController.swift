@@ -6,6 +6,7 @@ import WebInspectorUIBase
 @MainActor
 package final class RegularTabContentViewController: UINavigationController {
     private let session: WebInspectorSession
+    private let contentStore: PresentationContentStore
     private var segmentDisplayItemIDs: [WebInspectorTab.DisplayItem.ID] = []
     private var displayedDisplayItemID: WebInspectorTab.DisplayItem.ID?
     private var renderedContentRevision: Int?
@@ -28,8 +29,12 @@ package final class RegularTabContentViewController: UINavigationController {
         return control
     }()
 
-    package init(session: WebInspectorSession) {
+    package init(
+        session: WebInspectorSession,
+        contentStore: PresentationContentStore = PresentationContentStore()
+    ) {
         self.session = session
+        self.contentStore = contentStore
         super.init(nibName: nil, bundle: nil)
 
         navigationBar.prefersLargeTitles = false
@@ -89,6 +94,8 @@ package final class RegularTabContentViewController: UINavigationController {
         let displayItems = interface.displayItems(for: .regular)
         let selectedDisplayItem = interface.resolvedSelection(for: .regular)
         let contentRevision = interface.contextBoundContentRevision
+        contentStore.prepare(for: contentRevision)
+        contentStore.pruneContent(retaining: interface.reachableContentKeys())
         let shouldRebuildContent = renderedContentRevision.map { $0 != contentRevision } ?? false
         let activeItemIDs = Set(displayItems.map(\.id))
         if let displayedDisplayItemID,
@@ -152,6 +159,7 @@ package final class RegularTabContentViewController: UINavigationController {
         let viewController = WebInspectorTab.ContentFactory.makeViewController(
             for: displayItem,
             session: session,
+            contentStore: contentStore,
             hostLayout: .regular,
             tabs: session.interface.tabs
         )
