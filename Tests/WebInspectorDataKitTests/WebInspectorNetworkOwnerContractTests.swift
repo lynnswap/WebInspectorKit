@@ -464,10 +464,8 @@ func frameTargetDocumentCutDoesNotDeadlockNetworkReduction() async throws {
             await runtime.wire.respond(to: "CSS.disable")
             try await runtime.peer.createTarget(
                 .init(
-                    id: "frame-one",
-                    type: "web-page",
-                    frameID: "child-frame",
-                    parentFrameID: "main-frame"
+                    id: "frame-42-7",
+                    type: "frame"
                 )
             )
             _ = await runtime.wire.observations.waitForCompletedCommands(
@@ -476,15 +474,15 @@ func frameTargetDocumentCutDoesNotDeadlockNetworkReduction() async throws {
             )
 
             try await runtime.wire.emitTargetEvent(
-                targetID: "frame-one",
+                targetID: "frame-42-7",
                 method: "DOM.documentUpdated"
             )
             try await emitOwnerContractRequest(
                 id: "frame-request",
                 url: "https://example.test/frame-request",
-                frameID: "child-frame",
+                frameID: "frame-7.42",
                 loaderID: "child-loader",
-                eventTargetID: "frame-one",
+                eventTargetID: "frame-42-7",
                 nodeID: "42",
                 timestamp: 1,
                 through: runtime.wire
