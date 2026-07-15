@@ -1429,6 +1429,7 @@ struct ParentContainerTests {
         await runtime.backend.enqueue((), for: "Inspector", method: "initialized")
         await runtime.backend.enqueue((), for: "Page", method: "enable")
         await runtime.backend.enqueue((), for: "Runtime", method: "enable")
+        await runtime.backend.enqueue((), for: "Page", method: "enable")
         await runtime.backend.enqueue((), for: "Network", method: "enable")
         await runtime.backend.enqueue(
             DOM.Node(id: DOM.Node.ID("presentation-document"), nodeType: 9, nodeName: "#document"),
