@@ -83,6 +83,146 @@ func fetchedResultsSnapshotDoesNotBuildADuplicateMembershipIndex() {
     #expect(FetchedResultsSnapshotHashProbe.value == 0)
 }
 
+@Test
+func unfilteredFullRangeContentBurstDoesNotRebuildMembership() async throws {
+    let itemCount = 2_305
+    let index = WebInspectorContextQueryIndex()
+    let initialRecords = (0..<itemCount).map { rawValue in
+        _WebInspectorQueryRecord<CutoverQueryModel>(
+            queryValue: .init(
+                id: .init(rawValue: rawValue),
+                score: rawValue
+            ),
+            canonicalRank: .init(rawValue: UInt64(rawValue))
+        )
+    }
+    let ready = WebInspectorFeatureState.ready(
+        generation: .init(rawValue: 1),
+        revision: .init(rawValue: 1)
+    )
+    let sourceDeliveries = await index.replaceSource(
+        for: CutoverQueryModel.self,
+        featureID: .network,
+        featureState: ready,
+        records: initialRecords
+    )
+    #expect(sourceDeliveries.isEmpty)
+
+    let registrationID = WebInspectorQueryRegistrationID()
+    let attempt = await index.register(
+        registrationID,
+        descriptor: WebInspectorFetchDescriptor<CutoverQueryModel>()
+    )
+    guard case let .success(initialItemIDs, .initial) = attempt else {
+        Issue.record("Expected the full-range query to publish its initial result.")
+        return
+    }
+    #expect(initialItemIDs.map(\.rawValue) == Array(0..<itemCount))
+    await index.resetPerformanceCountersForTesting()
+
+    let mutations = (0..<itemCount).map { rawValue in
+        _WebInspectorQueryMutation<CutoverQueryModel>.upsert(
+            _WebInspectorQueryRecord(
+                queryValue: .init(
+                    id: .init(rawValue: rawValue),
+                    score: rawValue + itemCount
+                ),
+                canonicalRank: .init(rawValue: UInt64(rawValue))
+            )
+        )
+    }
+    let deliveries = await index.apply(mutations)
+
+    let counters = await index.performanceCountersForTesting
+    #expect(counters.fullRangeMembershipRebuildCount == 0)
+    #expect(counters.fullRangeMembershipRebuildMemberVisitCount == 0)
+    #expect(deliveries.count == 1)
+    let delivery = try #require(deliveries.first)
+    guard case let .changes(itemIDs, difference) = delivery.kind else {
+        Issue.record("Expected one atomic content-only change.")
+        return
+    }
+    #expect(itemIDs == initialItemIDs)
+    #expect(difference.itemChanges.isEmpty)
+    #expect(difference.updatedItemIDs.count == itemCount)
+
+    await index.resetPerformanceCountersForTesting()
+    var sequentialDeliveryCount = 0
+    for rawValue in 0..<itemCount {
+        let mutation = _WebInspectorQueryMutation<CutoverQueryModel>.upsert(
+            _WebInspectorQueryRecord(
+                queryValue: .init(
+                    id: .init(rawValue: rawValue),
+                    score: rawValue + itemCount * 2
+                ),
+                canonicalRank: .init(rawValue: UInt64(rawValue))
+            )
+        )
+        sequentialDeliveryCount += await index.apply([mutation]).count
+    }
+    let sequentialCounters = await index.performanceCountersForTesting
+    #expect(sequentialDeliveryCount == itemCount)
+    #expect(sequentialCounters.fullRangeMembershipRebuildCount == 0)
+    #expect(
+        sequentialCounters.fullRangeMembershipRebuildMemberVisitCount == 0
+    )
+}
+
+@Test
+func unfilteredFullRangeRankChangeStillReordersCanonically() async throws {
+    let index = WebInspectorContextQueryIndex()
+    let initialRecords = (0..<3).map { rawValue in
+        _WebInspectorQueryRecord<CutoverQueryModel>(
+            queryValue: .init(
+                id: .init(rawValue: rawValue),
+                score: rawValue
+            ),
+            canonicalRank: .init(rawValue: UInt64(rawValue))
+        )
+    }
+    _ = await index.replaceSource(
+        for: CutoverQueryModel.self,
+        featureID: .network,
+        featureState: .ready(
+            generation: .init(rawValue: 1),
+            revision: .init(rawValue: 1)
+        ),
+        records: initialRecords
+    )
+    let registrationID = WebInspectorQueryRegistrationID()
+    guard case .success = await index.register(
+        registrationID,
+        descriptor: WebInspectorFetchDescriptor<CutoverQueryModel>()
+    ) else {
+        Issue.record("Expected the full-range query to publish its initial result.")
+        return
+    }
+    await index.resetPerformanceCountersForTesting()
+
+    let mutations: [_WebInspectorQueryMutation<CutoverQueryModel>] = [
+        .upsert(
+            _WebInspectorQueryRecord(
+                queryValue: .init(id: .init(rawValue: 0), score: 100),
+                canonicalRank: .init(rawValue: 3)
+            )
+        )
+    ]
+    let deliveries = await index.apply(mutations)
+
+    let counters = await index.performanceCountersForTesting
+    #expect(counters.fullRangeMembershipRebuildCount == 1)
+    #expect(counters.fullRangeMembershipRebuildMemberVisitCount == 3)
+    #expect(deliveries.count == 1)
+    let delivery = try #require(deliveries.first)
+    guard case let .changes(itemIDs, difference) = delivery.kind else {
+        Issue.record("Expected one canonical-order change.")
+        return
+    }
+    #expect(itemIDs.map(\.rawValue) == [1, 2, 0])
+    #expect(difference.itemChanges.count == 1)
+    #expect(difference.updatedItemIDs.map(\.rawValue) == [0])
+}
+
 @MainActor
 @Test
 func fetchedResultsPerformsInitialThenAppliesOneAtomicDelta() async throws {

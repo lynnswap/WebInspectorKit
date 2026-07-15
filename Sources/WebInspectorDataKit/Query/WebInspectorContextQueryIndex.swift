@@ -96,6 +96,23 @@ where Model: WebInspectorPersistentModel {
 /// Actor-owned, immutable-value query index shared by all registrations in
 /// one model context. Observable model references never enter this actor.
 package actor WebInspectorContextQueryIndex {
+    #if DEBUG
+        package struct PerformanceCounters: Equatable, Sendable {
+            package var fullRangeMembershipRebuildCount = 0
+            package var fullRangeMembershipRebuildMemberVisitCount = 0
+        }
+
+        private var performanceCounters = PerformanceCounters()
+
+        package var performanceCountersForTesting: PerformanceCounters {
+            performanceCounters
+        }
+
+        package func resetPerformanceCountersForTesting() {
+            performanceCounters = PerformanceCounters()
+        }
+    #endif
+
     private var indexes: [ObjectIdentifier: Any] = [:]
 
     package init() {}
@@ -165,14 +182,28 @@ package actor WebInspectorContextQueryIndex {
             return []
         }
 
-        let oldRecords = index.records
+        var touchedItemIDs: Set<Model.ID> = []
+        var originalCanonicalRanksByID:
+            [Model.ID: WebInspectorModelCanonicalRank] = [:]
         for mutation in mutations {
             switch mutation {
             case let .upsert(record):
+                if touchedItemIDs.insert(record.id).inserted,
+                   let original = index.records[record.id] {
+                    originalCanonicalRanksByID[record.id] =
+                        original.canonicalRank
+                }
                 index.records[record.id] = record
-            case .updateContent:
-                break
+            case let .updateContent(id):
+                if touchedItemIDs.insert(id).inserted,
+                   let original = index.records[id] {
+                    originalCanonicalRanksByID[id] = original.canonicalRank
+                }
             case let .delete(id):
+                if touchedItemIDs.insert(id).inserted,
+                   let original = index.records[id] {
+                    originalCanonicalRanksByID[id] = original.canonicalRank
+                }
                 index.records[id] = nil
             }
         }
@@ -181,6 +212,12 @@ package actor WebInspectorContextQueryIndex {
             return []
         }
 
+        let stableFullRangeDifference = stableFullRangeDifference(
+            mutations: mutations,
+            touchedItemIDs: touchedItemIDs,
+            originalCanonicalRanksByID: originalCanonicalRanksByID,
+            records: index.records
+        )
         var deliveries: [_WebInspectorQueryDelivery<Model>] = []
         for (registrationID, currentRegistration) in Array(index.registrations) {
             guard
@@ -191,6 +228,32 @@ package actor WebInspectorContextQueryIndex {
             var registration = currentRegistration
 
             let oldItemIDs = accepted.itemIDs
+            let isFullRange = isUnfilteredFullRange(accepted.descriptor)
+            if isFullRange,
+               let difference = stableFullRangeDifference {
+                if !difference.isEmpty {
+                    deliveries.append(
+                        _WebInspectorQueryDelivery(
+                            registrationID: registrationID,
+                            kind: .changes(
+                                itemIDs: oldItemIDs,
+                                difference: difference
+                            ),
+                            clearsFetchError:
+                                registration.evaluationDisposition == nil
+                        )
+                    )
+                }
+                continue
+            }
+            #if DEBUG
+                if isFullRange {
+                    performanceCounters.fullRangeMembershipRebuildCount += 1
+                    performanceCounters
+                        .fullRangeMembershipRebuildMemberVisitCount +=
+                        accepted.matchingItemIDs.count
+                }
+            #endif
             do {
                 var matchingItemIDs = accepted.matchingItemIDs
                 var changedContentIDs: Set<Model.ID> = []
@@ -213,7 +276,7 @@ package actor WebInspectorContextQueryIndex {
                                 model: Model.self
                             )
                         }
-                        if oldRecords[id] != nil {
+                        if originalCanonicalRanksByID[id] != nil {
                             changedContentIDs.insert(id)
                         }
                     case let .updateContent(contentID):
@@ -626,6 +689,52 @@ package actor WebInspectorContextQueryIndex {
         if let offset = descriptor.fetchOffset, offset < 0 {
             throw WebInspectorFetchError.invalidOffset(offset)
         }
+    }
+
+    private func isUnfilteredFullRange<Model>(
+        _ descriptor: WebInspectorFetchDescriptor<Model>
+    ) -> Bool where Model: WebInspectorPersistentModel {
+        descriptor.predicate == nil
+            && descriptor.sortBy.isEmpty
+            && (descriptor.fetchOffset ?? 0) == 0
+            && descriptor.fetchLimit == nil
+    }
+
+    private func stableFullRangeDifference<Model>(
+        mutations: [_WebInspectorQueryMutation<Model>],
+        touchedItemIDs: Set<Model.ID>,
+        originalCanonicalRanksByID:
+            [Model.ID: WebInspectorModelCanonicalRank],
+        records: [Model.ID: _WebInspectorQueryRecord<Model>]
+    ) -> WebInspectorFetchedResultsDifference<Model.ID>?
+    where Model: WebInspectorPersistentModel {
+        // An unfiltered full-range query is ordered only by the store's unique
+        // canonical rank, so same-rank replacements cannot change its result.
+        guard touchedItemIDs.allSatisfy({ id in
+            originalCanonicalRanksByID[id] == records[id]?.canonicalRank
+        }) else {
+            return nil
+        }
+
+        var updatedItemIDs: Set<Model.ID> = []
+        for mutation in mutations {
+            let id: Model.ID
+            switch mutation {
+            case let .upsert(record):
+                id = record.id
+            case let .updateContent(contentID):
+                id = contentID
+            case .delete:
+                continue
+            }
+            if originalCanonicalRanksByID[id] != nil,
+               records[id] != nil {
+                updatedItemIDs.insert(id)
+            }
+        }
+        return WebInspectorFetchedResultsDifference(
+            updatedItemIDs: updatedItemIDs
+        )
     }
 
     private func predicateFailure(_ error: any Error)
