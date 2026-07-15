@@ -513,6 +513,102 @@ func disappearingInitialDescendantDoesNotFailScopeRegistration() async throws {
 }
 
 @Test
+func DOMEditHistoryCommandsStayOnTheOwningFrameTarget() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    defer { Task { await runtime.close() } }
+    try await runtime.peer.createTarget(.init(
+        id: "frame-42-7",
+        type: "frame"
+    ))
+
+    let frameDOM = runtime.page.dom(
+        agentTargetID: WebInspectorTarget.ID("frame-42-7")
+    )
+    let nodeID = DOM.Node.ID(
+        "42",
+        scopedToTargetRawValue: "frame-42-7"
+    )
+
+    let setAttribute = Task {
+        try await runtime.page.dom.setAttributeValue(
+            nodeID,
+            name: "data-state",
+            value: "updated"
+        )
+    }
+    try await replyNext(
+        runtime.peer,
+        method: "DOM.setAttributeValue",
+        destination: .target("frame-42-7")
+    )
+    try await setAttribute.value
+    try await markFrameEdit(frameDOM, peer: runtime.peer)
+
+    let setOuterHTML = Task {
+        try await runtime.page.dom.setOuterHTML(
+            nodeID,
+            html: "<section></section>"
+        )
+    }
+    try await replyNext(
+        runtime.peer,
+        method: "DOM.setOuterHTML",
+        destination: .target("frame-42-7")
+    )
+    try await setOuterHTML.value
+    try await markFrameEdit(frameDOM, peer: runtime.peer)
+
+    let removeNode = Task {
+        try await runtime.page.dom.removeNode(nodeID)
+    }
+    try await replyNext(
+        runtime.peer,
+        method: "DOM.removeNode",
+        destination: .target("frame-42-7")
+    )
+    try await removeNode.value
+    try await markFrameEdit(frameDOM, peer: runtime.peer)
+
+    let styleID = CSS.Style.ID(
+        "sheet\u{1F}0",
+        scopedToTargetRawValue: "frame-42-7"
+    )
+    let setStyleText = Task {
+        try await runtime.page.css.setStyleText(
+            styleID,
+            text: "color: red;"
+        )
+    }
+    let styleCommand = try await runtime.peer.commands.next()
+    #expect(styleCommand.method == "CSS.setStyleText")
+    #expect(styleCommand.destination == .target("frame-42-7"))
+    try await runtime.peer.reply(
+        to: styleCommand,
+        with: try WebInspectorTestJSONObject(
+            json: #"{"style":{"styleId":{"styleSheetId":"sheet","ordinal":0},"cssProperties":[]}}"#
+        )
+    )
+    _ = try await setStyleText.value
+    try await markFrameEdit(frameDOM, peer: runtime.peer)
+
+    let undo = Task { try await frameDOM.undo() }
+    try await replyNext(
+        runtime.peer,
+        method: "DOM.undo",
+        destination: .target("frame-42-7")
+    )
+    try await undo.value
+
+    let redo = Task { try await frameDOM.redo() }
+    try await replyNext(
+        runtime.peer,
+        method: "DOM.redo",
+        destination: .target("frame-42-7")
+    )
+    try await redo.value
+}
+
+@Test
 func subframeCommitCannotConsumeTheCurrentPageBinding() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     defer { Task { await runtime.close() } }
@@ -798,6 +894,19 @@ private let frameOnlyConsoleCapability = WebInspectorDomainCapabilityDescriptor(
     release: .retainEnabled,
     mutationOwner: .init(rawValue: "frame-only-activation-test")
 )
+
+private func markFrameEdit(
+    _ dom: DOM,
+    peer: WebInspectorTestPeer
+) async throws {
+    let mark = Task { try await dom.markUndoableState() }
+    try await replyNext(
+        peer,
+        method: "DOM.markUndoableState",
+        destination: .target("frame-42-7")
+    )
+    try await mark.value
+}
 
 private let pageFrameParameters = #"""
 {

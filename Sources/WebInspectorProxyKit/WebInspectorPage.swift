@@ -27,6 +27,15 @@ public struct WebInspectorPage: Sendable {
     public var runtime: Runtime { Runtime(endpoint: endpoint) }
     public var page: Page { Page(endpoint: endpoint) }
 
+    package func dom(agentTargetID: WebInspectorTarget.ID) -> DOM {
+        DOM(
+            endpoint: DomainEndpoint(
+                proxyReference: proxyReference,
+                route: .target(agentTargetID)
+            )
+        )
+    }
+
     package func orderedScope<Element: Sendable>(
         descriptor: WebInspectorOrderedScopeDescriptor<Element>,
         buffering: WebInspectorEventBufferingPolicy

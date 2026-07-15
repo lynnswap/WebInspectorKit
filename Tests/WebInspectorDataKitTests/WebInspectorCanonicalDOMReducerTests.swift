@@ -83,10 +83,14 @@ func canonicalDOMKeepsSameSemanticRawIdentityDistinctAcrossAllocatingAgents() th
     #expect(secondID.documentScope.agentTargetID == WebInspectorTarget.ID("agent-b"))
     #expect(reducer.record(for: firstID) != nil)
     #expect(reducer.record(for: secondID) != nil)
+    #expect(reducer.isActive(firstScope))
+    #expect(reducer.isActive(secondScope))
 
     _ = try reducer.targetLost(scope: firstEventScope)
     #expect(reducer.record(for: firstID) == nil)
     #expect(reducer.record(for: secondID) != nil)
+    #expect(!reducer.isActive(firstScope))
+    #expect(reducer.isActive(secondScope))
 }
 
 @Test

@@ -179,10 +179,14 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         undo: WebInspectorUndoPolicy
     ) async throws -> DOMMutationOutcome {
         let rawID = try validatedRawNodeID(id)
+        let scope = id.canonicalStorage.documentScope
         guard let connection else { throw WebInspectorCommandError.containerClosed }
         do {
             try await connection.page.dom.setAttributeValue(rawID, name: name, value: value)
-            let capability = try await makeUndoCapabilityIfNeeded(undo)
+            let capability = try await makeUndoCapabilityIfNeeded(
+                undo,
+                in: scope
+            )
             return DOMMutationOutcome(
                 requestedNodeIDs: [id],
                 appliedNodeIDs: [id],
@@ -200,10 +204,14 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         undo: WebInspectorUndoPolicy
     ) async throws -> DOMMutationOutcome {
         let rawID = try validatedRawNodeID(id)
+        let scope = id.canonicalStorage.documentScope
         guard let connection else { throw WebInspectorCommandError.containerClosed }
         do {
             try await connection.page.dom.setOuterHTML(rawID, html: html)
-            let capability = try await makeUndoCapabilityIfNeeded(undo)
+            let capability = try await makeUndoCapabilityIfNeeded(
+                undo,
+                in: scope
+            )
             return DOMMutationOutcome(
                 requestedNodeIDs: [id],
                 appliedNodeIDs: [id],
@@ -220,23 +228,59 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         undo: WebInspectorUndoPolicy
     ) async throws -> DOMMutationOutcome {
         guard let connection else { throw WebInspectorCommandError.containerClosed }
+        var commands: [(id: DOMNode.ID, scope: WebInspectorDOMDocumentScopeStorage)] = []
         var applied: [DOMNode.ID] = []
+        var appliedScope: WebInspectorDOMDocumentScopeStorage?
         var failures: [DOMMutationFailure] = []
         for id in ids {
             do {
-                let rawID = try validatedRawNodeID(id)
-                try await connection.page.dom.removeNode(rawID)
-                applied.append(id)
+                _ = try validatedRawNodeID(id)
+                commands.append(
+                    (
+                        id: id,
+                        scope: id.canonicalStorage.documentScope
+                    )
+                )
             } catch {
                 failures.append(
                     DOMMutationFailure(nodeID: id, message: String(describing: error))
                 )
             }
         }
-        let capability =
-            applied.isEmpty
-            ? nil
-            : try await makeUndoCapabilityIfNeeded(undo)
+        let agentTargetIDs = Set(commands.map(\.scope.agentTargetID))
+        guard agentTargetIDs.count <= 1 else {
+            throw WebInspectorCommandError.rejected(
+                WebInspectorFailureDescription(
+                    code: "dom.remove.multiple-targets",
+                    phase: "DOM.removeNode",
+                    message: "One DOM mutation cannot span multiple WebKit agent targets."
+                )
+            )
+        }
+        for command in commands {
+            do {
+                let rawID = try validatedRawNodeID(command.id)
+                try await connection.page.dom.removeNode(rawID)
+                applied.append(command.id)
+                appliedScope = appliedScope ?? command.scope
+            } catch {
+                failures.append(
+                    DOMMutationFailure(
+                        nodeID: command.id,
+                        message: String(describing: error)
+                    )
+                )
+            }
+        }
+        let capability: DOMUndoCapability?
+        if !applied.isEmpty, let appliedScope {
+            capability = try await makeUndoCapabilityIfNeeded(
+                undo,
+                in: appliedScope
+            )
+        } else {
+            capability = nil
+        }
         return DOMMutationOutcome(
             requestedNodeIDs: ids,
             appliedNodeIDs: applied,
@@ -283,7 +327,11 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
     package func undo(in scope: WebInspectorDOMDocumentScopeStorage) async throws {
         try validate(scope)
         guard let connection else { throw WebInspectorCommandError.containerClosed }
-        do { try await connection.page.dom.undo() } catch {
+        do {
+            try await connection.page.dom(
+                agentTargetID: scope.agentTargetID
+            ).undo()
+        } catch {
             throw webInspectorCommandError(error, featureID: .dom, phase: "DOM.undo")
         }
     }
@@ -291,7 +339,11 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
     package func redo(in scope: WebInspectorDOMDocumentScopeStorage) async throws {
         try validate(scope)
         guard let connection else { throw WebInspectorCommandError.containerClosed }
-        do { try await connection.page.dom.redo() } catch {
+        do {
+            try await connection.page.dom(
+                agentTargetID: scope.agentTargetID
+            ).redo()
+        } catch {
             throw webInspectorCommandError(error, featureID: .dom, phase: "DOM.redo")
         }
     }
@@ -379,7 +431,10 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         else { throw WebInspectorCommandError.staleIdentifier }
         do {
             _ = try await connection.page.css.setStyleText(location.style.id, text: text)
-            return try await makeUndoCapabilityIfNeeded(undo)
+            return try await makeUndoCapabilityIfNeeded(
+                undo,
+                in: location.scope
+            )
         } catch {
             throw webInspectorCommandError(error, featureID: .dom, phase: "CSS.setStyleText")
         }
@@ -401,7 +456,10 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         else { throw WebInspectorCommandError.staleIdentifier }
         do {
             _ = try await connection.page.css.setStyleText(location.style.id, text: rewritten)
-            return try await makeUndoCapabilityIfNeeded(undo)
+            return try await makeUndoCapabilityIfNeeded(
+                undo,
+                in: location.scope
+            )
         } catch {
             throw webInspectorCommandError(error, featureID: .dom, phase: "CSS.setStyleText")
         }
@@ -986,6 +1044,7 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
     private struct CSSPropertyLocation {
         let style: CSS.Style
         let propertyIndex: Int
+        let scope: WebInspectorDOMDocumentScopeStorage
     }
 
     private func propertyLocation(
@@ -993,13 +1052,15 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
     ) -> CSSPropertyLocation? {
         for resource in loadedStyles.values {
             let record = resource.record
+            let scope = record.nodeID.canonicalStorage.documentScope
             for section in record.sections {
                 if let index = section.proxyStyle.properties.firstIndex(
                     where: { $0.id.rawValue == id.rawValue }
                 ) {
                     return CSSPropertyLocation(
                         style: section.proxyStyle,
-                        propertyIndex: index
+                        propertyIndex: index,
+                        scope: scope
                     )
                 }
             }
@@ -1169,18 +1230,29 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
     }
 
     private func validatedRawNodeID(_ id: DOMNode.ID) throws -> DOM.Node.ID {
-        guard let reducer,
-            reducer.record(for: id.canonicalStorage) != nil,
-            let expectedScope = activeDocumentScope,
-            id.canonicalStorage.documentScope == expectedScope
+        guard isCurrentDocumentScope(id.canonicalStorage.documentScope),
+            reducer?.record(for: id.canonicalStorage) != nil
         else { throw WebInspectorCommandError.staleIdentifier }
         return id.canonicalStorage.rawNodeID
     }
 
     private func validate(_ scope: WebInspectorDOMDocumentScopeStorage) throws {
-        guard let expectedScope = activeDocumentScope,
-            scope == expectedScope
+        guard isCurrentDocumentScope(scope)
         else { throw WebInspectorCommandError.targetChanged }
+    }
+
+    private func isCurrentDocumentScope(
+        _ scope: WebInspectorDOMDocumentScopeStorage
+    ) -> Bool {
+        guard let connection,
+            currentBindingScope != nil,
+            scope.storeID == connection.storeID,
+            scope.attachmentGeneration == connection.attachmentGeneration,
+            let reducer
+        else {
+            return false
+        }
+        return reducer.isActive(scope)
     }
 
     private var activeDocumentScope: WebInspectorDOMDocumentScopeStorage? {
@@ -1193,12 +1265,17 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
     }
 
     private func makeUndoCapabilityIfNeeded(
-        _ policy: WebInspectorUndoPolicy
+        _ policy: WebInspectorUndoPolicy,
+        in scope: WebInspectorDOMDocumentScopeStorage
     ) async throws -> DOMUndoCapability? {
         guard policy == .automatic else { return nil }
-        guard let connection, let scope = activeDocumentScope
-        else { throw WebInspectorCommandError.targetChanged }
-        try await connection.page.dom.markUndoableState()
+        try validate(scope)
+        guard let connection else {
+            throw WebInspectorCommandError.containerClosed
+        }
+        try await connection.page.dom(
+            agentTargetID: scope.agentTargetID
+        ).markUndoableState()
         return DOMUndoCapability(owner: self, scope: scope)
     }
 

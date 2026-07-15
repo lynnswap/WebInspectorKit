@@ -419,6 +419,12 @@ package struct WebInspectorCanonicalDOMReducer: Sendable {
         rootByDocumentScope[scope]
     }
 
+    package func isActive(
+        _ scope: WebInspectorDOMDocumentScopeStorage
+    ) -> Bool {
+        activeScopeByTargetRoute[scope.targetRoute] == scope
+    }
+
     package var primaryDocumentRootID: WebInspectorDOMNodeIdentityStorage? {
         primaryRootID
     }

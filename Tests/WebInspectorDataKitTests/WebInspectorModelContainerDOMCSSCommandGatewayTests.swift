@@ -83,6 +83,67 @@ func DOMAndCSSCommandsRouteThroughTheDOMFeatureFacade() async throws {
 
 @MainActor
 @Test
+func DOMMutationCapabilityMarksAndReplaysTheAcceptingAgentHistory() async throws {
+    let container = WebInspectorModelContainer(
+        configuration: .init(enabledFeatures: [.dom])
+    )
+
+    try await withDataKitTestRuntime { runtime in
+        try await prepareDOMFeatureAttachment(runtime)
+        try await container.attach(owning: runtime.proxy)
+
+        let results = WebInspectorFetchedResultsController<DOMNode>(
+            modelContext: container.mainContext
+        )
+        do {
+            try await results.performFetch()
+            let body = try #require(
+                results.fetchedObjects?.first { $0.localName == "body" }
+            )
+
+            await runtime.wire.respond(to: "DOM.setAttributeValue")
+            await runtime.wire.respond(to: "DOM.markUndoableState")
+            let mutation = try await container.dom.setAttribute(
+                "data-state",
+                value: "ready",
+                on: body.id
+            )
+            let history = try #require(mutation.undo)
+
+            await runtime.wire.respond(to: "DOM.undo")
+            try await history.undo()
+            await runtime.wire.respond(to: "DOM.redo")
+            try await history.redo()
+
+            let commands = runtime.wire.observations.commands.filter {
+                [
+                    "DOM.setAttributeValue",
+                    "DOM.markUndoableState",
+                    "DOM.undo",
+                    "DOM.redo",
+                ].contains($0.method)
+            }
+            #expect(
+                commands.map(\.method) == [
+                    "DOM.setAttributeValue",
+                    "DOM.markUndoableState",
+                    "DOM.undo",
+                    "DOM.redo",
+                ])
+            #expect(commands.allSatisfy { $0.destination == .target("page-main") })
+
+            await results.close()
+            await closeDOMFeatureAttachment(container, runtime: runtime)
+        } catch {
+            await results.close()
+            await closeDOMFeatureAttachment(container, runtime: runtime)
+            throw error
+        }
+    }
+}
+
+@MainActor
+@Test
 func replacedDOMIdentityIsRejectedAtTheFeatureFacade() async throws {
     let runtime = try await WebInspectorDataKitTestRuntime.start(
         scenario: .init(

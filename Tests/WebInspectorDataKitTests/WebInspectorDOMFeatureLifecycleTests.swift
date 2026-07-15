@@ -27,16 +27,78 @@ func DOMReattachmentAtomicallyReplacesThePreviousAttachmentRecords() async throw
             let firstGeneration = try #require(
                 firstObjects.first?.id.canonicalStorage.documentScope.attachmentGeneration
             )
+            let firstBodyID = try #require(
+                firstObjects.first { rawDOMNodeID($0) == "first-body" }?.id
+            )
+            await firstRuntime.wire.respond(to: "DOM.setAttributeValue")
+            await firstRuntime.wire.respond(to: "DOM.markUndoableState")
+            let firstMutation = try await container.dom.setAttribute(
+                "data-state",
+                value: "first",
+                on: firstBodyID
+            )
+            let firstHistory = try #require(firstMutation.undo)
 
             await container.detach()
 
             try await withDataKitTestRuntime { secondRuntime in
-                try await prepareDOMAttachment(
-                    secondRuntime,
-                    documentID: "second-document",
-                    bodyID: "second-body"
+                await secondRuntime.wire.respond(to: "Page.enable")
+                await secondRuntime.wire.respond(to: "Inspector.enable")
+                await secondRuntime.wire.respond(to: "Inspector.initialized")
+                await secondRuntime.wire.respond(to: "CSS.enable")
+                let secondDocumentReply = await secondRuntime.wire.deferReply(
+                    to: "DOM.getDocument",
+                    with: try domDocumentResult(
+                        DOM.Node(
+                            id: DOM.Node.ID("second-document"),
+                            nodeType: 9,
+                            nodeName: "#document",
+                            frameID: FrameID("main-frame"),
+                            childNodeCount: 1,
+                            children: [
+                                DOM.Node(
+                                    id: DOM.Node.ID("second-body"),
+                                    nodeType: 1,
+                                    nodeName: "BODY",
+                                    localName: "body"
+                                )
+                            ]
+                        )
+                    )
                 )
-                try await container.attach(owning: secondRuntime.proxy)
+                await secondRuntime.wire.respond(to: "CSS.disable")
+                await secondRuntime.wire.respond(to: "Inspector.disable")
+                await secondRuntime.wire.respond(to: "Page.disable")
+                await secondRuntime.wire.respond(to: "DOM.highlightNode")
+                await secondRuntime.wire.respond(to: "DOM.undo")
+
+                let attachment = Task { @MainActor in
+                    try await container.attach(owning: secondRuntime.proxy)
+                }
+                _ = await secondRuntime.wire.observations.waitForCommands(
+                    method: "DOM.getDocument",
+                    count: 1
+                )
+
+                await #expect(throws: WebInspectorCommandError.staleIdentifier) {
+                    try await container.dom.highlight(firstBodyID)
+                }
+                await #expect(throws: WebInspectorCommandError.targetChanged) {
+                    try await firstHistory.undo()
+                }
+                #expect(
+                    secondRuntime.wire.observations.commandMethods.contains(
+                        "DOM.highlightNode"
+                    ) == false
+                )
+                #expect(
+                    secondRuntime.wire.observations.commandMethods.contains(
+                        "DOM.undo"
+                    ) == false
+                )
+
+                secondDocumentReply.open()
+                try await attachment.value
 
                 #expect(
                     await waitForDOMRawIDs(
@@ -103,7 +165,6 @@ func DOMBootstrapPreservesEveryEventReceivedBeforeTheDocumentReply() async throw
             await runtime.wire.respond(to: "CSS.disable")
             await runtime.wire.respond(to: "Inspector.disable")
             await runtime.wire.respond(to: "Page.disable")
-
             try await container.attach(owning: runtime.proxy)
             _ = await runtime.wire.observations.waitForCommands(
                 method: "DOM.getDocument",
@@ -178,6 +239,147 @@ func DOMEventForAnUnmaterializedNodeDoesNotTerminateTheAttachment() async throws
             await container.close()
         }
     } catch {
+        await container.close()
+        throw error
+    }
+}
+
+@MainActor
+@Test
+func batchedRemovalDoesNotReuseNodeIDsAfterDocumentNavigation() async throws {
+    let container = WebInspectorModelContainer(
+        configuration: .init(enabledFeatures: [.dom])
+    )
+    let results = WebInspectorFetchedResultsController<DOMNode>(
+        modelContext: container.mainContext
+    )
+
+    do {
+        try await withDataKitTestRuntime { runtime in
+            await runtime.wire.respond(to: "Page.enable")
+            await runtime.wire.respond(to: "Inspector.enable")
+            await runtime.wire.respond(to: "Inspector.initialized")
+            await runtime.wire.respond(to: "CSS.enable")
+            await runtime.wire.respond(
+                to: "DOM.getDocument",
+                with: try domDocumentResult(
+                    DOM.Node(
+                        id: DOM.Node.ID("document"),
+                        nodeType: 9,
+                        nodeName: "#document",
+                        frameID: FrameID("main-frame"),
+                        childNodeCount: 2,
+                        children: [
+                            DOM.Node(
+                                id: DOM.Node.ID("first"),
+                                nodeType: 1,
+                                nodeName: "DIV",
+                                localName: "div"
+                            ),
+                            DOM.Node(
+                                id: DOM.Node.ID("second"),
+                                nodeType: 1,
+                                nodeName: "DIV",
+                                localName: "div"
+                            ),
+                        ]
+                    )
+                )
+            )
+            await runtime.wire.respond(to: "CSS.disable")
+            await runtime.wire.respond(to: "Inspector.disable")
+            await runtime.wire.respond(to: "Page.disable")
+            try await container.attach(owning: runtime.proxy)
+            try await results.performFetch()
+            let firstID = try #require(
+                results.fetchedObjects?.first { rawDOMNodeID($0) == "first" }?.id
+            )
+            let secondID = try #require(
+                results.fetchedObjects?.first { rawDOMNodeID($0) == "second" }?.id
+            )
+
+            let firstRemovalReply = await runtime.wire.deferReply(
+                to: "DOM.removeNode"
+            )
+            await runtime.wire.respond(to: "DOM.removeNode")
+            let removal = Task { @MainActor in
+                try await container.dom.removeNodes(
+                    [firstID, secondID],
+                    undo: .disabled
+                )
+            }
+            _ = await runtime.wire.observations.waitForCommands(
+                method: "DOM.removeNode",
+                count: 1
+            )
+
+            let styleCommitAcquired = DataKitRawWireGate()
+            let releaseStyleCommit = DataKitRawWireGate()
+            defer { releaseStyleCommit.open() }
+            let styleCommitBlocker = Task {
+                try await container.domFeature.withExclusiveStyleCommitForTesting {
+                    styleCommitAcquired.open()
+                    await releaseStyleCommit.waiter.wait()
+                }
+            }
+            await styleCommitAcquired.waiter.wait()
+
+            await runtime.wire.respond(
+                to: "DOM.getDocument",
+                with: try domDocumentResult(
+                    DOM.Node(
+                        id: DOM.Node.ID("replacement-document"),
+                        nodeType: 9,
+                        nodeName: "#document",
+                        frameID: FrameID("main-frame"),
+                        childNodeCount: 1,
+                        children: [
+                            DOM.Node(
+                                id: DOM.Node.ID("second"),
+                                nodeType: 1,
+                                nodeName: "DIV",
+                                localName: "div"
+                            )
+                        ]
+                    )
+                )
+            )
+            try await runtime.wire.emitTargetEvent(
+                targetID: "page-main",
+                method: "DOM.documentUpdated"
+            )
+            var invalidationIsWaiting = false
+            for _ in 0..<1_000 {
+                let state = await container.domFeature.styleCommitGateStateForTesting
+                if state.waiterCount == 1 {
+                    invalidationIsWaiting = true
+                    break
+                }
+                await Task.yield()
+            }
+            #expect(invalidationIsWaiting)
+            firstRemovalReply.open()
+
+            let outcome = try await removal.value
+            #expect(outcome.appliedNodeIDs == [firstID])
+            #expect(outcome.failures.map(\.nodeID) == [secondID])
+            #expect(
+                runtime.wire.observations.commandMethods.filter {
+                    $0 == "DOM.removeNode"
+                }.count == 1
+            )
+
+            releaseStyleCommit.open()
+            try await styleCommitBlocker.value
+            _ = await runtime.wire.observations.waitForCompletedCommands(
+                method: "DOM.getDocument",
+                count: 2
+            )
+            await results.close()
+            await container.close()
+        }
+    } catch {
+        await results.close()
         await container.close()
         throw error
     }
