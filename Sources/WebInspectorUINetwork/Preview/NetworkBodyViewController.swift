@@ -498,7 +498,7 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
     }
 
     private func showMoviePreviewLoadingState(bodyID: ObjectIdentifier) {
-        installMoviePreviewSurfaceIfNeeded(bodyID: bodyID)
+        _ = installMoviePreviewSurfaceIfNeeded(bodyID: bodyID)
         clearMoviePreviewSourceIfNeeded(bodyID: bodyID, resetsFailure: true)
         showMoviePreviewStatus(UIContentUnavailableConfiguration.loading())
         previewRenderState.showMovieLoading(bodyID: bodyID)
@@ -508,7 +508,7 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
         bodyID: ObjectIdentifier,
         message: String?
     ) {
-        installMoviePreviewSurfaceIfNeeded(bodyID: bodyID)
+        _ = installMoviePreviewSurfaceIfNeeded(bodyID: bodyID)
         clearMoviePreviewSourceIfNeeded(bodyID: bodyID, resetsFailure: false)
         var configuration = UIContentUnavailableConfiguration.empty()
         configuration.image = UIImage(systemName: "exclamationmark.triangle")
