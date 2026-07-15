@@ -259,15 +259,16 @@ private final class DOMContainerFixture {
     init() async throws {
         let runtime = try await WebInspectorDataKitTestRuntime.start(
             scenario: .init(
-                configuration: .init(domains: [.dom]),
+                configuration: .init(enabledFeatures: [.dom]),
                 document: .init(children: [
                     .element(id: "body", name: "body")
                 ])
-            ),
-            isolation: MainActor.shared
+            )
         )
         self.runtime = runtime
-        model = try await DOMPanelModel.make(context: runtime.model)
+        model = try await DOMPanelModel.make(
+            context: runtime.container.mainContext
+        )
     }
 
     func close() async {
@@ -276,8 +277,8 @@ private final class DOMContainerFixture {
     }
 
     func nodeID(named localName: String) throws -> DOMNode.ID {
-        try #require(model.nodes.snapshot.itemIDs.first { id in
-            runtime.model.model(for: id)?.localName == localName
+        try #require(model.nodes.snapshot?.itemIDs.first { id in
+            runtime.container.mainContext.model(for: id)?.localName == localName
         })
     }
 }

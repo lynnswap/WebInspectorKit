@@ -10,11 +10,6 @@ extension WebInspectorUIRenderingTests {
 @MainActor
 @Suite
 struct DOMElementStyleSnapshotCoordinatorTests {
-    /// Keeps the weak `CSSStyles.modelContext` alive for the test lifetime.
-    private let modelContext = WebInspectorModelContainer(
-        configuration: .init(enabledFeatures: [.dom])
-    ).mainContext
-
     @Test
     func coordinatorRequestsNonAnimatedDiffForInitialLoadedSelection() throws {
         let coordinator = DOMElementStyleSnapshotCoordinator()
@@ -219,7 +214,7 @@ struct DOMElementStyleSnapshotCoordinatorTests {
                 marginText: "/* margin: 4px; */"
             )
         )
-        nodeStyles.markNeedsRefresh()
+        markNeedsRefresh(nodeStyles)
         let update = coordinator.updateSelectedNodeStyles(nodeStyles)
 
         #expect(update.applyMode == .none)
@@ -244,7 +239,7 @@ struct DOMElementStyleSnapshotCoordinatorTests {
         let renderedSectionIDs = coordinator.visibleSectionIDs
 
         load(nodeStyles, with: makeVariablesMatchedStyles())
-        nodeStyles.markNeedsRefresh()
+        markNeedsRefresh(nodeStyles)
         let update = coordinator.updateSelectedNodeStyles(nodeStyles)
 
         #expect(update.applyMode == .none)
@@ -379,22 +374,48 @@ struct DOMElementStyleSnapshotCoordinatorTests {
             agentTargetID: targetID,
             domBindingEpoch: .init(rawValue: 1)
         )
+        let nodeID = DOMNode.ID(
+            canonical: WebInspectorDOMNodeIdentityStorage(
+                documentScope: documentScope,
+                rawNodeID: DOM.Node.ID(nodeID)
+            )
+        )
         return CSSStyles(
-            nodeID: DOMNode.ID(
-                canonical: WebInspectorDOMNodeIdentityStorage(
-                    documentScope: documentScope,
-                    rawNodeID: DOM.Node.ID(nodeID)
-                )
-            ),
-            modelContext: modelContext
+            id: .init(nodeID: nodeID),
+            record: WebInspectorCSSStylesRecord(
+                nodeID: nodeID,
+                phase: .loading,
+                sections: [],
+                computedProperties: [],
+                cascadeRevision: 0
+            )
         )
     }
 
     private func load(_ styles: CSSStyles, with matchedStyles: CSS.MatchedStyles) {
-        styles.load(
-            matchedStyles: matchedStyles,
-            inlineStyles: CSS.InlineStyles(),
-            computedProperties: []
+        styles.replace(
+            with: WebInspectorCSSStylesRecord(
+                nodeID: styles.nodeID,
+                phase: .loaded,
+                sections: CSSStyleSectionBuilder.makeSections(
+                    matched: matchedStyles,
+                    inline: CSS.InlineStyles()
+                ),
+                computedProperties: [],
+                cascadeRevision: 0
+            )
+        )
+    }
+
+    private func markNeedsRefresh(_ styles: CSSStyles) {
+        styles.replace(
+            with: WebInspectorCSSStylesRecord(
+                nodeID: styles.nodeID,
+                phase: .needsRefresh,
+                sections: styles.sections,
+                computedProperties: styles.computedProperties,
+                cascadeRevision: 0
+            )
         )
     }
 

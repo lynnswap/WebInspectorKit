@@ -1,8 +1,6 @@
 #if canImport(UIKit)
 import Testing
 import UIKit
-@testable import WebInspectorUI
-@testable import WebInspectorUISyntaxBody
 @testable import WebInspectorUINetwork
 @testable import WebInspectorUIDOM
 @testable import WebInspectorUIBase

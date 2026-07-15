@@ -90,7 +90,7 @@ struct DOMTreeTextViewTests {
     func rendersAndSelectsDOMThroughContainerOwnedPanelModel() async throws {
         let runtime = try await WebInspectorDataKitTestRuntime.start(
             scenario: .init(
-                configuration: .init(domains: [.dom]),
+                configuration: .init(enabledFeatures: [.dom]),
                 document: .init(children: [
                     .element(
                         id: "html",
@@ -111,10 +111,10 @@ struct DOMTreeTextViewTests {
                         ]
                     )
                 ])
-            ),
-            isolation: MainActor.shared
+            )
         )
-        let panelModel = try await DOMPanelModel.make(context: runtime.model)
+        let context = runtime.container.mainContext
+        let panelModel = try await DOMPanelModel.make(context: context)
         let view = DOMTreeTextView(model: panelModel)
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.setRenderingActive(true)
@@ -123,8 +123,8 @@ struct DOMTreeTextViewTests {
         #expect(view.documentTextForTesting.contains("<html lang=\"en\">"))
         #expect(view.documentTextForTesting.contains("<input disabled>"))
 
-        let inputID = try #require(panelModel.nodes.snapshot.itemIDs.first { id in
-            runtime.model.model(for: id)?.localName == "input"
+        let inputID = try #require(panelModel.nodes.snapshot?.itemIDs.first { id in
+            context.model(for: id)?.localName == "input"
         })
         panelModel.selectNode(inputID, reveal: .selectOnly)
         #expect(await view.waitForRowDocumentForTesting())
@@ -1234,19 +1234,17 @@ private final class DOMTreeVoidActionRecorder {
 private final class DOMTreeRuntimeFixture {
     let runtime: WebInspectorDataKitTestRuntime
     let model: DOMPanelModel
-    private var updates: WebInspectorDOMTreeUpdateSequence.AsyncIterator
-    private var revision: UInt64
+    private var updates:
+        WebInspectorFetchedResultsUpdateSequence<DOMNode.ID>.AsyncIterator
 
     private init(
         runtime: WebInspectorDataKitTestRuntime,
         model: DOMPanelModel,
-        updates: WebInspectorDOMTreeUpdateSequence.AsyncIterator,
-        revision: UInt64
+        updates: WebInspectorFetchedResultsUpdateSequence<DOMNode.ID>.AsyncIterator
     ) {
         self.runtime = runtime
         self.model = model
         self.updates = updates
-        self.revision = revision
     }
 
     static func start(
@@ -1254,14 +1252,15 @@ private final class DOMTreeRuntimeFixture {
     ) async throws -> DOMTreeRuntimeFixture {
         let runtime = try await WebInspectorDataKitTestRuntime.start(
             scenario: .init(
-                configuration: .init(domains: [.dom]),
+                configuration: .init(enabledFeatures: [.dom]),
                 document: document
-            ),
-            isolation: MainActor.shared
+            )
         )
-        let model = try await DOMPanelModel.make(context: runtime.model)
-        var updates = model.treeUpdates().makeAsyncIterator()
-        guard case let .initial(revision, _) = await updates.next() else {
+        let model = try await DOMPanelModel.make(
+            context: runtime.container.mainContext
+        )
+        var updates = model.nodes.updates.makeAsyncIterator()
+        guard case .initial = await updates.next() else {
             preconditionFailure(
                 "A DOM tree test fixture requires an initial canonical snapshot."
             )
@@ -1269,8 +1268,7 @@ private final class DOMTreeRuntimeFixture {
         return DOMTreeRuntimeFixture(
             runtime: runtime,
             model: model,
-            updates: updates,
-            revision: revision
+            updates: updates
         )
     }
 
@@ -1293,7 +1291,7 @@ private final class DOMTreeRuntimeFixture {
     }
 
     func nodeID(_ rawValue: String) throws -> DOMNode.ID {
-        try #require(model.nodes.snapshot.itemIDs.first { id in
+        try #require(model.nodes.snapshot?.itemIDs.first { id in
             id.canonicalStorage.rawNodeID.rawValue == rawValue
         })
     }
@@ -1349,54 +1347,12 @@ private final class DOMTreeRuntimeFixture {
     func replacePage(
         with document: WebInspectorDataKitTestRuntime.Document
     ) async throws -> UInt64 {
-        try await runtime.replacePage(
-            with: document,
-            isolation: MainActor.shared
-        )
-        let expectedRootID = runtime.model.domTreeSnapshot.primaryRootID
-        while true {
-            var iterator = updates
-            let next = await iterator.next()
-            updates = iterator
-            guard let update = next else {
-                break
-            }
-            switch update {
-            case let .initial(nextRevision, snapshot):
-                revision = nextRevision
-                if snapshot.primaryRootID == expectedRootID {
-                    return nextRevision
-                }
-            case let .changes(_, toRevision, changes):
-                revision = toRevision
-                switch changes {
-                case let .reset(snapshot):
-                    if snapshot.primaryRootID == expectedRootID {
-                        return toRevision
-                    }
-                case let .delta(delta):
-                    if let rootChange = delta.primaryRootChange,
-                        rootChange.rootID == expectedRootID
-                    {
-                        return toRevision
-                    }
-                }
-            case let .resetRequired(_, token):
-                let rebase = try model.rebaseTree(token)
-                revision = rebase.revision
-                if rebase.snapshot.primaryRootID == expectedRootID {
-                    return rebase.revision
-                }
-            }
-        }
-        preconditionFailure(
-            "A live DOM tree test fixture cannot terminate during page replacement."
-        )
+        try await runtime.replacePage(with: document)
+        return try await nextRevision()
     }
 
     func close(view: DOMTreeTextView) async {
         view.setRenderingActive(false)
-        updates.cancel()
         await model.retire()
         await runtime.close()
     }
@@ -1410,15 +1366,11 @@ private final class DOMTreeRuntimeFixture {
                 break
             }
             switch update {
-            case let .initial(nextRevision, _):
-                revision = nextRevision
-            case let .changes(_, toRevision, _):
-                revision = toRevision
-                return toRevision
-            case let .resetRequired(_, token):
-                let rebase = try model.rebaseTree(token)
-                revision = rebase.revision
-                return rebase.revision
+            case let .initial(nextRevision, _),
+                let .reset(nextRevision, _):
+                return nextRevision.rawValue
+            case let .changes(_, toRevision, _, _):
+                return toRevision.rawValue
             }
         }
         preconditionFailure(
@@ -1552,6 +1504,7 @@ private func rowRenderDifference(
     ).build()
 }
 
+@MainActor
 private func attributedRowDocument(
     rows: [DOMTreeRowRenderPlan]
 ) -> NSAttributedString {

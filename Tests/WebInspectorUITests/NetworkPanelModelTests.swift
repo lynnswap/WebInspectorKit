@@ -8,17 +8,16 @@ import WebInspectorProxyKit
 private final class NetworkPanelFixture {
     let runtime: WebInspectorDataKitTestRuntime
 
-    var context: WebInspectorModelContext { runtime.model }
+    var context: WebInspectorModelContext { runtime.container.mainContext }
 
     init(
         requests: [WebInspectorDataKitTestRuntime.NetworkRequest] = []
     ) async throws {
         runtime = try await WebInspectorDataKitTestRuntime.start(
             scenario: .init(
-                configuration: .init(domains: [.network]),
+                configuration: .init(enabledFeatures: [.network]),
                 networkReplay: requests
-            ),
-            isolation: MainActor.shared
+            )
         )
     }
 
@@ -83,19 +82,21 @@ struct NetworkPanelModelTests {
         let model = try await NetworkPanelModel.make(context: fixture.context)
 
         #expect(
-            model.entries.snapshot.itemIDs == [
+            model.entries.snapshot?.itemIDs == [
                 imageEntry.id,
                 scriptEntry.id,
                 documentEntry.id,
             ]
         )
 
+        let initialRevision = try #require(model.entries.revision)
         model.setSearchText("cdn")
         model.setResourceFilter(.script, enabled: true)
         await model.waitForQueryUpdates()
 
-        #expect(model.entries.snapshot.itemIDs == [scriptEntry.id])
-        #expect(model.appliedQueryRevision == model.queryRevision)
+        #expect(model.entries.snapshot?.itemIDs == [scriptEntry.id])
+        #expect(model.entries.revision?.rawValue == initialRevision.rawValue + 1)
+        #expect(model.queryError == nil)
         await model.retire()
         await fixture.close()
     }
@@ -142,7 +143,7 @@ struct NetworkPanelModelTests {
 
     @MainActor
     @Test
-    func filteredEntriesDoNotDisableClearOrInvalidateSelection() async throws {
+    func filteringOutSelectionReturnsToListAndClearDeletesCanonicalEntries() async throws {
         let fixture = try await NetworkPanelFixture(requests: [
             .init(
                 id: "script",
@@ -155,50 +156,57 @@ struct NetworkPanelModelTests {
         )
         let entry = try await fixture.entry(containing: request.id)
         let model = try await NetworkPanelModel.make(context: fixture.context)
+        let allEntries = WebInspectorFetchedResultsController<NetworkEntry>(
+            modelContext: fixture.context
+        )
+        try await allEntries.performFetch()
+        var allEntryUpdates = allEntries.updates.makeAsyncIterator()
+        _ = await allEntryUpdates.next()
         model.selectEntry(entry.id)
         model.setSearchText("does-not-match")
         await model.waitForQueryUpdates()
 
-        #expect(model.entries.snapshot.itemIDs.isEmpty)
-        #expect(model.hasClearableRequests)
-        #expect(model.selectedEntryID == entry.id)
-        #expect(model.selectedRequests.map(\.id) == [request.id])
-
-        try await fixture.context.clearNetworkRequests()
-
-        #expect(model.hasClearableRequests == false)
+        #expect(model.entries.snapshot?.itemIDs.isEmpty == true)
         #expect(model.selectedEntryID == nil)
         #expect(model.selectedRequests.isEmpty)
+
+        model.clearRequests()
+        _ = await allEntryUpdates.next()
+
+        #expect(allEntries.snapshot?.itemIDs.isEmpty == true)
+        #expect(model.selectedEntryID == nil)
+        #expect(model.selectedRequests.isEmpty)
+        await allEntries.close()
         await model.retire()
         await fixture.close()
     }
 
     @MainActor
     @Test
-    func retireClosesBothFetchedResultsControllers() async throws {
+    func retireClosesTheEntryFetchedResultsController() async throws {
         let fixture = try await NetworkPanelFixture()
         let model = try await NetworkPanelModel.make(context: fixture.context)
-        #expect(fixture.context.fetchedResultsControllerOwnerCountForTesting == 2)
 
         await model.retire()
 
-        #expect(fixture.context.fetchedResultsControllerOwnerCountForTesting == 0)
+        #expect(model.isRetiredForTesting)
+        #expect(model.entries.fetchError as? WebInspectorFetchError == .contextClosed)
         await fixture.close()
     }
 
     @MainActor
     @Test
-    func deinitBackstopRemovesBothFetchedResultsOwners() async throws {
+    func deinitBackstopClosesTheEntryFetchedResultsController() async throws {
         let fixture = try await NetworkPanelFixture()
         var model: NetworkPanelModel? = try await NetworkPanelModel.make(
             context: fixture.context
         )
-        #expect(fixture.context.fetchedResultsControllerOwnerCountForTesting == 2)
+        let entries = try #require(model?.entries)
 
         model = nil
 
         #expect(model == nil)
-        #expect(fixture.context.fetchedResultsControllerOwnerCountForTesting == 0)
+        #expect(entries.fetchError as? WebInspectorFetchError == .contextClosed)
         await fixture.close()
     }
 }

@@ -9,11 +9,12 @@ struct DOMPanelModelTests {
     @Test
     func selectionUsesStableContextIdentityAndPreservesRevealIntent() async throws {
         let runtime = try await makeRuntime()
-        let model = try await DOMPanelModel.make(context: runtime.model)
-        let buttonID = try #require(model.nodes.snapshot.itemIDs.first { id in
-            runtime.model.model(for: id)?.localName == "button"
+        let context = runtime.container.mainContext
+        let model = try await DOMPanelModel.make(context: context)
+        let buttonID = try #require(model.nodes.snapshot?.itemIDs.first { id in
+            context.model(for: id)?.localName == "button"
         })
-        let button = try #require(runtime.model.model(for: buttonID))
+        let button = try #require(context.model(for: buttonID))
 
         model.selectNode(buttonID, reveal: .selectOnly)
         let firstRevision = model.selectionRevision
@@ -35,19 +36,22 @@ struct DOMPanelModelTests {
     @Test
     func replacingTheDocumentClearsSelectionThatLeftFetchedMembership() async throws {
         let runtime = try await makeRuntime()
-        let model = try await DOMPanelModel.make(context: runtime.model)
-        let buttonID = try #require(model.nodes.snapshot.itemIDs.first { id in
-            runtime.model.model(for: id)?.localName == "button"
+        let context = runtime.container.mainContext
+        let model = try await DOMPanelModel.make(context: context)
+        let buttonID = try #require(model.nodes.snapshot?.itemIDs.first { id in
+            context.model(for: id)?.localName == "button"
         })
         model.selectNode(buttonID, reveal: .selectAndScroll)
+        var updates = model.nodes.updates.makeAsyncIterator()
+        _ = await updates.next()
 
         try await runtime.replacePage(
             with: .init(children: [
                 .element(id: "replacement", name: "main")
-            ]),
-            isolation: MainActor.shared
+            ])
         )
-        for _ in 0..<100 where model.selectedNodeID != nil {
+        _ = await updates.next()
+        for _ in 0..<100 where model.selection != nil {
             await Task.yield()
         }
 
@@ -60,40 +64,40 @@ struct DOMPanelModelTests {
     @Test
     func retireClosesTheNodeFetchedResultsController() async throws {
         let runtime = try await makeRuntime()
-        let model = try await DOMPanelModel.make(context: runtime.model)
-        #expect(runtime.model.fetchedResultsControllerOwnerCountForTesting == 1)
+        let model = try await DOMPanelModel.make(
+            context: runtime.container.mainContext
+        )
 
         await model.retire()
 
         #expect(model.isRetiredForTesting)
-        #expect(runtime.model.fetchedResultsControllerOwnerCountForTesting == 0)
+        #expect(model.nodes.fetchError as? WebInspectorFetchError == .contextClosed)
         await runtime.close()
     }
 
     @Test
-    func deinitBackstopRemovesTheNodeFetchedResultsOwner() async throws {
+    func deinitBackstopClosesTheNodeFetchedResultsController() async throws {
         let runtime = try await makeRuntime()
         var model: DOMPanelModel? = try await DOMPanelModel.make(
-            context: runtime.model
+            context: runtime.container.mainContext
         )
-        #expect(runtime.model.fetchedResultsControllerOwnerCountForTesting == 1)
+        let nodes = try #require(model?.nodes)
 
         model = nil
 
         #expect(model == nil)
-        #expect(runtime.model.fetchedResultsControllerOwnerCountForTesting == 0)
+        #expect(nodes.fetchError as? WebInspectorFetchError == .contextClosed)
         await runtime.close()
     }
 
     private func makeRuntime() async throws -> WebInspectorDataKitTestRuntime {
         try await WebInspectorDataKitTestRuntime.start(
             scenario: .init(
-                configuration: .init(domains: [.dom]),
+                configuration: .init(enabledFeatures: [.dom]),
                 document: .init(children: [
                     .element(id: "button", name: "button")
                 ])
-            ),
-            isolation: MainActor.shared
+            )
         )
     }
 }

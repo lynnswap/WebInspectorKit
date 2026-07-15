@@ -3,7 +3,7 @@ import Testing
 import UIKit
 import WebInspectorDataKit
 import WebInspectorTestSupport
-@testable import WebInspectorUI
+@testable import WebInspectorKit
 
 @MainActor
 @Suite
@@ -16,14 +16,22 @@ struct CustomTabResourceTests {
 
     @Test
     func concurrentHostsJoinOneFactoryAndMoveReadyContent() async throws {
-        let key = WebInspectorTab.ContentKey(tabID: "console", contentID: "root")
+        let key = WebInspectorTab.ContentKey(
+            tabID: .init(rawValue: "console"),
+            contentID: "root"
+        )
         let started = WebInspectorTestGate()
         let release = WebInspectorTestGate()
-        let session = WebInspectorSession(tabs: [])
-        let store = PresentationContentStore()
+        let session = WebInspectorSession(
+            modelContainer: WebInspectorModelContainer(
+                configuration: .init(enabledFeatures: [])
+            )
+        )
+        let context = WebInspectorTab.Context(session: session)
+        let store = PresentationContentStore(context: context)
         let content = UIViewController()
         var factoryCallCount = 0
-        let make: @MainActor (WebInspectorSession) async throws -> UIViewController = { _ in
+        let make: @MainActor (WebInspectorTab.Context) async throws -> UIViewController = { _ in
             factoryCallCount += 1
             started.open()
             await release.waiter.wait()
@@ -32,12 +40,14 @@ struct CustomTabResourceTests {
 
         let firstHost = store.customViewController(
             for: key,
-            session: session,
+            context: context,
+            requiredFeatures: [],
             makeViewController: make
         )
         let secondHost = store.customViewController(
             for: key,
-            session: session,
+            context: context,
+            requiredFeatures: [],
             makeViewController: make
         )
 
@@ -49,8 +59,6 @@ struct CustomTabResourceTests {
         release.open()
         await store.waitForCustomResourceTaskForTesting(for: key)
 
-        #expect(store.customResourceStatusForTesting(for: key) == .ready)
-        #expect(store.customReadyViewControllerForTesting(for: key) === content)
         #expect(firstHost.phase == .ready)
         #expect(secondHost.phase == .ready)
         #expect(firstHost.readyViewControllerForTesting == nil)
@@ -59,7 +67,8 @@ struct CustomTabResourceTests {
 
         let replacementHost = store.customViewController(
             for: key,
-            session: session,
+            context: context,
+            requiredFeatures: [],
             makeViewController: make
         )
         #expect(factoryCallCount == 1)
@@ -71,12 +80,20 @@ struct CustomTabResourceTests {
 
     @Test
     func failureRendersRetryAndRetryPublishesReadyContent() async {
-        let key = WebInspectorTab.ContentKey(tabID: "failing", contentID: "root")
-        let session = WebInspectorSession(tabs: [])
-        let store = PresentationContentStore()
+        let key = WebInspectorTab.ContentKey(
+            tabID: .init(rawValue: "failing"),
+            contentID: "root"
+        )
+        let session = WebInspectorSession(
+            modelContainer: WebInspectorModelContainer(
+                configuration: .init(enabledFeatures: [])
+            )
+        )
+        let context = WebInspectorTab.Context(session: session)
+        let store = PresentationContentStore(context: context)
         let content = UIViewController()
         var factoryCallCount = 0
-        let make: @MainActor (WebInspectorSession) async throws -> UIViewController = { _ in
+        let make: @MainActor (WebInspectorTab.Context) async throws -> UIViewController = { _ in
             factoryCallCount += 1
             if factoryCallCount == 1 {
                 throw FactoryFailure()
@@ -86,16 +103,13 @@ struct CustomTabResourceTests {
 
         let host = store.customViewController(
             for: key,
-            session: session,
+            context: context,
+            requiredFeatures: [],
             makeViewController: make
         )
         await store.waitForCustomResourceTaskForTesting(for: key)
 
         #expect(host.phase == .failed("Custom tab bootstrap failed."))
-        #expect(
-            store.customResourceStatusForTesting(for: key)
-                == .failed("Custom tab bootstrap failed.")
-        )
         #expect(
             (host.contentUnavailableConfiguration as? UIContentUnavailableConfiguration)?
                 .button.title == "Retry"
@@ -112,16 +126,27 @@ struct CustomTabResourceTests {
 
     @Test
     func factoryTaskDoesNotRetainStoreAndLateCompletionCannotPublish() async throws {
-        let key = WebInspectorTab.ContentKey(tabID: "lifecycle", contentID: "root")
+        let key = WebInspectorTab.ContentKey(
+            tabID: .init(rawValue: "lifecycle"),
+            contentID: "root"
+        )
         let started = WebInspectorTestGate()
         let release = WebInspectorTestGate()
         let finished = WebInspectorTestGate()
-        let session = WebInspectorSession(tabs: [])
-        var store: PresentationContentStore? = PresentationContentStore()
+        let session = WebInspectorSession(
+            modelContainer: WebInspectorModelContainer(
+                configuration: .init(enabledFeatures: [])
+            )
+        )
+        let context = WebInspectorTab.Context(session: session)
+        var store: PresentationContentStore? = PresentationContentStore(
+            context: context
+        )
         weak let weakStore = store
         let host = try #require(store).customViewController(
             for: key,
-            session: session
+            context: context,
+            requiredFeatures: []
         ) { _ in
             started.open()
             await release.waiter.wait()
@@ -142,23 +167,34 @@ struct CustomTabResourceTests {
     }
 
     @Test
-    func sessionConfigurationUnionsTabAndAdditionalDomains() {
+    func catalogAndContainerExposeTheSameFeatureContract() throws {
         let console = WebInspectorTab(
-            id: "console",
+            id: .init(rawValue: "console"),
             title: "Console",
-            requiredDomains: [.console, .css]
+            requiredFeatures: [.consoleRuntime]
         ) { _ in
             UIViewController()
         }
-        let session = WebInspectorSession(
-            tabs: [.network, console],
-            additionalDomains: [.runtime]
+        let catalog = try WebInspectorTabCatalog([.network, console])
+        let container = WebInspectorModelContainer(
+            configuration: .init(
+                enabledFeatures: [.network, .consoleRuntime]
+            )
+        )
+        let viewController = WebInspectorViewController(
+            session: WebInspectorSession(modelContainer: container),
+            catalog: catalog
         )
 
+        let requiredFeatures: [Set<WebInspectorFeatureID>] = [
+            [.network],
+            [.consoleRuntime],
+        ]
         #expect(
-            session.modelContainer.configuration.domains
-                == [.network, .console, .css, .dom, .runtime]
+            viewController.interfaceForTesting.tabs.map(\.requiredFeatures)
+                == requiredFeatures
         )
+        #expect(container.configuration.enabledFeatures == [.network, .consoleRuntime])
     }
 }
 #endif

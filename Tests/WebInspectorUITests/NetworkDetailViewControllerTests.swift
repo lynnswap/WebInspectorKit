@@ -8,57 +8,83 @@ import WebInspectorProxyKit
 import WebInspectorProxyKitTesting
 import WebInspectorTestSupport
 import UIKit
-@testable import WebInspectorUI
-@testable import WebInspectorUISyntaxBody
 @testable import WebInspectorUINetwork
 @testable import WebInspectorUIBase
 
 @MainActor
 final class CanonicalNetworkPanelFixture {
     let context: WebInspectorModelContext
+    let wire: WebInspectorRawWireDriver
+
     private let container: WebInspectorModelContainer
-    private var store: CanonicalNetworkStore
-    private var revision: UInt64 = 0
-    private let scope: WebInspectorCanonicalNetworkEventScope
+    private let runtime: WebInspectorProxyTestRuntime
+    private let requests: WebInspectorFetchedResultsController<NetworkRequest>
+    private let entries: WebInspectorFetchedResultsController<NetworkEntry>
+    private var requestUpdates:
+        WebInspectorFetchedResultsUpdateSequence<NetworkRequest.ID>.AsyncIterator
+    private var isClosed = false
 
     init() async throws {
-        let container = WebInspectorModelContainer(
-            configuration: .init(domains: [.network])
-        )
-        self.container = container
-        context = container.mainContext
-        var store = CanonicalNetworkStore(storeID: container.core.storeID)
-        let attachment = WebInspectorContainerAttachmentGeneration(
-            rawValue: 1
-        )
-        let generation = WebInspectorPage.Generation(rawValue: 1)
-        _ = try store.reset(
-            attachmentGeneration: attachment,
-            pageGeneration: generation
-        )
-        self.store = store
-        scope = WebInspectorCanonicalNetworkEventScope(
-            modelScope: ModelEventScope(
-                generation: generation,
-                target: ModelTarget(
-                    id: WebInspectorTarget.ID("page"),
-                    kind: .page,
-                    frameID: FrameID("main-frame"),
-                    parentFrameID: nil
-                ),
-                agentTarget: ModelTarget(
-                    id: WebInspectorTarget.ID("page"),
-                    kind: .page,
-                    frameID: FrameID("main-frame"),
-                    parentFrameID: nil
-                ),
-                navigationEpoch: ModelNavigationEpoch(rawValue: 1),
-                domBindingEpoch: ModelDOMBindingEpoch(rawValue: 1),
-                runtimeBindingEpoch: nil,
-                consoleBindingEpoch: nil
+        let runtime = try await WebInspectorProxyTestRuntime.start()
+        let wire = WebInspectorRawWireDriver(peer: runtime.peer)
+        await wire.start()
+        await wire.respond(to: "Page.enable")
+        await wire.respond(to: "Network.enable")
+        await wire.respond(
+            to: "Page.getResourceTree",
+            with: try WebInspectorTestJSONObject(
+                json: networkResourceTreeBootstrapResult
             )
         )
-        try await context.waitUntilReady()
+        await wire.respond(to: "Network.disable")
+        await wire.respond(to: "Page.disable")
+
+        let container = WebInspectorModelContainer(
+            configuration: .init(enabledFeatures: [.network])
+        )
+        let context = container.mainContext
+        let requests = WebInspectorFetchedResultsController<NetworkRequest>(
+            modelContext: context
+        )
+        let entries = WebInspectorFetchedResultsController<NetworkEntry>(
+            modelContext: context
+        )
+
+        do {
+            try await container.attach(owning: runtime.proxy)
+            try await Self.waitUntilNetworkReady(in: container)
+            try await requests.performFetch()
+            try await entries.performFetch()
+        } catch {
+            await container.close()
+            await runtime.close()
+            await wire.stop()
+            throw error
+        }
+
+        var requestUpdates = requests.updates.makeAsyncIterator()
+        guard case .initial = await requestUpdates.next() else {
+            await entries.close()
+            await requests.close()
+            await container.close()
+            await runtime.close()
+            await wire.stop()
+            throw NetworkFixtureError.queryEnded
+        }
+
+        self.runtime = runtime
+        self.wire = wire
+        self.container = container
+        self.context = context
+        self.requests = requests
+        self.entries = entries
+        self.requestUpdates = requestUpdates
+
+        guard let scope = NetworkFixtureTaskLocal.scope else {
+            await close()
+            throw NetworkFixtureError.missingLifecycleScope
+        }
+        scope.register(self)
     }
 
     func insert(
@@ -84,14 +110,12 @@ final class CanonicalNetworkPanelFixture {
             redirectResponse: nil,
             timestamp: timestamp
         ))
-        guard let id = store.requests.first(where: {
-            $0.id.rawRequestID == Network.Request.ID(rawID)
-        })?.id else {
+        guard let id = request(rawID: Network.Request.ID(rawID))?.id else {
             preconditionFailure(
                 "Canonical Network insertion lost its request."
             )
         }
-        return NetworkRequest.ID(canonical: id)
+        return id
     }
 
     func receiveResponse(
@@ -114,58 +138,378 @@ final class CanonicalNetworkPanelFixture {
     }
 
     func entryID(containing requestID: NetworkRequest.ID) -> NetworkEntry.ID {
-        guard let entry = store.entries.first(where: {
-            $0.requestIDs.contains(requestID.canonicalStorage)
+        guard let entry = entries.fetchedObjects?.first(where: {
+            $0.requestIDs.contains(requestID)
         })
         else {
             preconditionFailure(
                 "Canonical Network request lost its entry."
             )
         }
-        return NetworkEntry.ID(canonical: entry.id)
+        return entry.id
     }
 
     func clear() async throws {
-        try await apply(store.clear())
+        try await container.network.clear()
+        var updates = requestUpdates
+        let update = await updates.next()
+        requestUpdates = updates
+        guard update != nil else {
+            throw NetworkFixtureError.queryEnded
+        }
     }
 
     func apply(_ event: Network.Event) async throws {
-        guard let transaction = try store.reduce(event, scope: scope) else {
-            return
+        let (method, parameters) = try NetworkEventWire.encode(event)
+        try await wire.emitTargetEvent(
+            targetID: WebInspectorTestPeer.Target.initialPage.id,
+            method: method,
+            parameters: parameters
+        )
+        var updates = requestUpdates
+        let update = await updates.next()
+        requestUpdates = updates
+        guard update != nil else {
+            throw NetworkFixtureError.queryEnded
         }
-        try await apply(transaction)
     }
 
     func request(rawID: Network.Request.ID) -> NetworkRequest? {
-        guard let record = store.requests.first(where: {
-            $0.id.rawRequestID == rawID
-        }) else {
-            return nil
+        requests.fetchedObjects?.first {
+            $0.id.canonicalStorage.rawRequestID == rawID
         }
-        return context.model(for: NetworkRequest.ID(canonical: record.id))
     }
 
-    private func apply(
-        _ transaction: CanonicalNetworkTransaction
+    func close() async {
+        guard isClosed == false else { return }
+        isClosed = true
+        await Self.close(
+            requests: requests,
+            entries: entries,
+            container: container,
+            runtime: runtime,
+            wire: wire
+        )
+    }
+
+    deinit {
+        guard isClosed else {
+            preconditionFailure(
+                "Network fixtures must join resource teardown before deinit."
+            )
+        }
+    }
+
+    private static func waitUntilNetworkReady(
+        in container: WebInspectorModelContainer
     ) async throws {
-        precondition(revision < .max)
-        revision += 1
-        var canonical = WebInspectorCanonicalModelTransaction()
-        canonical.network = transaction
-        let transaction = context.modelSchemaContextCore.changes(
-            at: revision,
-            transaction: canonical
-        )
-        let commit = try await transaction.stage(
-            on: context.fetchedResultsQueryCore
-        )
-        precondition(context.publish(commit))
+        var states = container.featureStateUpdates(for: .network)
+            .makeAsyncIterator()
+        while let state = await states.next() {
+            switch state {
+            case .ready:
+                return
+            case let .unavailable(_, error):
+                throw NetworkFixtureError.featureUnavailable(error)
+            case .disabled, .synchronizing, .recovering:
+                continue
+            }
+        }
+        throw NetworkFixtureError.featureStateEnded
+    }
+
+    private static func close(
+        requests: WebInspectorFetchedResultsController<NetworkRequest>,
+        entries: WebInspectorFetchedResultsController<NetworkEntry>,
+        container: WebInspectorModelContainer,
+        runtime: WebInspectorProxyTestRuntime,
+        wire: WebInspectorRawWireDriver
+    ) async {
+        await entries.close()
+        await requests.close()
+        await container.close()
+        await runtime.close()
+        await wire.stop()
+    }
+}
+
+private enum NetworkFixtureError: Error {
+    case featureUnavailable(WebInspectorFeatureError)
+    case featureStateEnded
+    case missingLifecycleScope
+    case queryEnded
+}
+
+private let networkResourceTreeBootstrapResult = #"""
+{
+    "frameTree": {
+        "frame": {
+            "id": "main-frame",
+            "loaderId": "main-frame-loader",
+            "name": "",
+            "url": "https://example.test/",
+            "mimeType": "text/html"
+        },
+        "resources": []
+    }
+}
+"""#
+
+@MainActor
+private final class NetworkFixtureScope {
+    private var fixtures: [CanonicalNetworkPanelFixture] = []
+
+    func register(_ fixture: CanonicalNetworkPanelFixture) {
+        fixtures.append(fixture)
+    }
+
+    func closeAll() async {
+        let fixtures = fixtures.reversed()
+        self.fixtures.removeAll(keepingCapacity: false)
+        for fixture in fixtures {
+            await fixture.close()
+        }
+    }
+}
+
+private enum NetworkFixtureTaskLocal {
+    @TaskLocal static var scope: NetworkFixtureScope?
+}
+
+@MainActor
+private struct NetworkFixtureLifecycle:
+    SuiteTrait,
+    TestTrait,
+    TestScoping
+{
+    func provideScope(
+        for test: Test,
+        testCase: Test.Case?,
+        performing function: () async throws -> Void
+    ) async throws {
+        let scope = NetworkFixtureScope()
+        try await NetworkFixtureTaskLocal.$scope.withValue(scope) {
+            do {
+                try await function()
+            } catch {
+                await scope.closeAll()
+                throw error
+            }
+            await scope.closeAll()
+        }
+    }
+}
+
+private enum NetworkEventWire {
+    private struct Request: Encodable {
+        let url: String
+        let method: String
+        let headers: [String: String]
+        let postData: String?
+        let referrerPolicy: String?
+        let integrity: String?
+
+        init(_ request: Network.Request) {
+            url = request.url
+            method = request.method
+            headers = request.headers
+            postData = request.postData
+            referrerPolicy = request.referrerPolicy?.rawValue
+            integrity = request.integrity
+        }
+    }
+
+    private struct Response: Encodable {
+        let url: String?
+        let status: Int?
+        let statusText: String?
+        let headers: [String: String]
+        let mimeType: String?
+        let source: String?
+        let requestHeaders: [String: String]?
+
+        init(_ response: Network.Response) {
+            url = response.url
+            status = response.status
+            statusText = response.statusText
+            headers = response.headers
+            mimeType = response.mimeType
+            source = response.source?.rawValue
+            requestHeaders = response.requestHeaders
+        }
+    }
+
+    private struct Initiator: Encodable {
+        let type: String
+        let url: String?
+        let lineNumber: Double?
+        let nodeId: String?
+
+        init(_ initiator: Network.Initiator) {
+            type = initiator.kind
+            url = initiator.url
+            lineNumber = initiator.line.map(Double.init)
+            nodeId = initiator.nodeID?.rawValue
+        }
+    }
+
+    private struct BackendResourceIdentifier: Encodable {
+        let sourceProcessID: String
+        let resourceID: String
+
+        init(_ identifier: Network.BackendResourceID) {
+            sourceProcessID = identifier.sourceProcessID
+            resourceID = identifier.resourceID
+        }
+    }
+
+    private struct RequestWillBeSent: Encodable {
+        let requestId: String
+        let frameId = "main-frame"
+        let loaderId = "main-frame-loader"
+        let request: Request
+        let initiator: Initiator
+        let type: String?
+        let redirectResponse: Response?
+        let timestamp: Double
+        let backendResourceIdentifier: BackendResourceIdentifier?
+    }
+
+    private struct ResponseReceived: Encodable {
+        let requestId: String
+        let type: String?
+        let response: Response
+        let timestamp: Double
+    }
+
+    private struct DataReceived: Encodable {
+        let requestId: String
+        let dataLength: Int
+        let encodedDataLength: Int
+        let timestamp: Double
+    }
+
+    private struct Metrics: Encodable {
+        let networkProtocol: String?
+        let remoteAddress: String?
+        let responseBodyBytesReceived: Int?
+        let responseBodyDecodedSize: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case networkProtocol = "protocol"
+            case remoteAddress
+            case responseBodyBytesReceived
+            case responseBodyDecodedSize
+        }
+
+        init(_ metrics: Network.Metrics) {
+            networkProtocol = metrics.networkProtocol
+            remoteAddress = metrics.remoteAddress
+            responseBodyBytesReceived = metrics.encodedDataLength
+            responseBodyDecodedSize = metrics.decodedBodyLength
+        }
+    }
+
+    private struct LoadingFinished: Encodable {
+        let requestId: String
+        let timestamp: Double
+        let sourceMapURL: String?
+        let metrics: Metrics?
+    }
+
+    private struct LoadingFailed: Encodable {
+        let requestId: String
+        let errorText: String
+        let canceled: Bool
+        let timestamp: Double
+    }
+
+    static func encode(
+        _ event: Network.Event
+    ) throws -> (String, WebInspectorTestJSONObject) {
+        switch event {
+        case let .requestWillBeSent(
+            id,
+            request,
+            initiator,
+            resourceType,
+            redirectResponse,
+            timestamp
+        ):
+            return (
+                "Network.requestWillBeSent",
+                try WebInspectorTestJSONObject(encoding: RequestWillBeSent(
+                    requestId: id.rawValue,
+                    request: Request(request),
+                    initiator: Initiator(initiator),
+                    type: resourceType?.rawValue,
+                    redirectResponse: redirectResponse.map(Response.init),
+                    timestamp: timestamp,
+                    backendResourceIdentifier: request.backendResourceIdentifier
+                        .map(BackendResourceIdentifier.init)
+                ))
+            )
+        case let .responseReceived(
+            id,
+            response,
+            resourceType,
+            timestamp
+        ):
+            return (
+                "Network.responseReceived",
+                try WebInspectorTestJSONObject(encoding: ResponseReceived(
+                    requestId: id.rawValue,
+                    type: resourceType?.rawValue,
+                    response: Response(response),
+                    timestamp: timestamp
+                ))
+            )
+        case let .dataReceived(
+            id,
+            dataLength,
+            encodedDataLength,
+            timestamp
+        ):
+            return (
+                "Network.dataReceived",
+                try WebInspectorTestJSONObject(encoding: DataReceived(
+                    requestId: id.rawValue,
+                    dataLength: dataLength,
+                    encodedDataLength: encodedDataLength,
+                    timestamp: timestamp
+                ))
+            )
+        case let .loadingFinished(id, timestamp, sourceMapURL, metrics):
+            return (
+                "Network.loadingFinished",
+                try WebInspectorTestJSONObject(encoding: LoadingFinished(
+                    requestId: id.rawValue,
+                    timestamp: timestamp,
+                    sourceMapURL: sourceMapURL,
+                    metrics: metrics.map(Metrics.init)
+                ))
+            )
+        case let .loadingFailed(id, errorText, canceled, timestamp):
+            return (
+                "Network.loadingFailed",
+                try WebInspectorTestJSONObject(encoding: LoadingFailed(
+                    requestId: id.rawValue,
+                    errorText: errorText,
+                    canceled: canceled,
+                    timestamp: timestamp
+                ))
+            )
+        case .requestServedFromMemoryCache, .webSocket, .unknown:
+            preconditionFailure(
+                "Network UI fixtures only emit request lifecycle events."
+            )
+        }
     }
 }
 
 extension WebInspectorUIRenderingTests {
 @MainActor
-@Suite
+@Suite(NetworkFixtureLifecycle())
 struct NetworkDetailViewControllerTests {
     private struct UnavailableMediaPreviewCase: Sendable {
         let name: String
@@ -351,7 +695,7 @@ struct NetworkDetailViewControllerTests {
             let window = showInWindow(viewController)
             await viewController.flushPendingSnapshotUpdateForTesting()
 
-            #expect(viewController.displayedEntryIDsForTesting == model.entries.snapshot.itemIDs)
+            #expect(viewController.displayedEntryIDsForTesting == model.entries.snapshot?.itemIDs)
             #expect(viewController.entryIDsEvaluationCountForTesting == 1)
             window.isHidden = true
             window.rootViewController = nil
@@ -1671,7 +2015,7 @@ struct NetworkDetailViewControllerTests {
     func groupedPreviewFollowsNewerPlaylist() async throws {
         let fixture = try await CanonicalNetworkPanelFixture()
         let context = fixture.context
-        let nodeID = DOM.Node.ID("unplayed-video")
+        let nodeID = DOM.Node.ID("101")
         let firstRequest = try #require(await applyRequest(
                 to: fixture,
             requestID: "first-unplayed-playlist",
@@ -1724,7 +2068,7 @@ struct NetworkDetailViewControllerTests {
     func groupedPreviewKeepsMasterPlaylistAheadOfNewerPartialSegment() async throws {
         let fixture = try await CanonicalNetworkPanelFixture()
         let context = fixture.context
-        let nodeID = DOM.Node.ID("hls-with-partial-segment")
+        let nodeID = DOM.Node.ID("102")
         let playlistURL = "https://media.example.com/master.m3u8"
         let playlist = try #require(await applyRequest(
                 to: fixture,
@@ -1771,7 +2115,7 @@ struct NetworkDetailViewControllerTests {
     func groupedPreviewSkipsCancelledAndNoContentMediaForHealthyMember() async throws {
         let fixture = try await CanonicalNetworkPanelFixture()
         let context = fixture.context
-        let nodeID = DOM.Node.ID("healthy-media-candidate")
+        let nodeID = DOM.Node.ID("103")
         let healthyRequest = try #require(await applyRequest(
                 to: fixture,
             requestID: "healthy-playlist",
@@ -1836,7 +2180,7 @@ struct NetworkDetailViewControllerTests {
     func groupedHLSPreviewReplacesPlayerForNewRequestWithSameURL() async throws {
         let fixture = try await CanonicalNetworkPanelFixture()
         let context = fixture.context
-        let nodeID = DOM.Node.ID("same-url-playlist")
+        let nodeID = DOM.Node.ID("104")
         let playlistURL = "https://media.example.com/shared.m3u8"
         let firstRequest = try #require(await applyRequest(
                 to: fixture,
@@ -1892,7 +2236,7 @@ struct NetworkDetailViewControllerTests {
     func filteredOutDetailSelectionRendersLaterMembersFromTheSameGroup() async throws {
         let fixture = try await CanonicalNetworkPanelFixture()
         let context = fixture.context
-        let nodeID = DOM.Node.ID("filtered-detail-video")
+        let nodeID = DOM.Node.ID("105")
         let playlist = try #require(await applyRequest(
                 to: fixture,
             requestID: "playlist",
@@ -1914,7 +2258,7 @@ struct NetworkDetailViewControllerTests {
 
         model.setSearchText("does-not-match")
         await model.waitForQueryUpdates()
-        #expect(model.entries.snapshot.itemIDs.isEmpty)
+        #expect(model.entries.snapshot?.itemIDs.isEmpty == true)
 
         let segmentProxyID = Network.Request.ID("segment")
         try await fixture.apply(.requestWillBeSent(
@@ -1938,14 +2282,14 @@ struct NetworkDetailViewControllerTests {
                 && text.contains("segment-1.ts")
         }
         #expect(didRenderLaterMember)
-        #expect(model.entries.snapshot.itemIDs.isEmpty)
+        #expect(model.entries.snapshot?.itemIDs.isEmpty == true)
     }
 
     @Test
     func groupedPreviewTreatsPartialMediaAsAnOrdinaryMovieCandidate() async throws {
         let fixture = try await CanonicalNetworkPanelFixture()
         let context = fixture.context
-        let nodeID = DOM.Node.ID("audio")
+        let nodeID = DOM.Node.ID("106")
         let fullRequest = try #require(await applyRequest(
                 to: fixture,
             requestID: "full",
@@ -2952,7 +3296,8 @@ struct NetworkDetailViewControllerTests {
         #expect(didPush)
         await waitForNavigationTransitionToFinish(in: navigationController)
 
-        let poppedViewController = await navigationController.popDetailFromUserNavigationForTesting()
+        let poppedViewController = navigationController
+            .popDetailFromUserNavigationForTesting()
         #expect(poppedViewController === detailViewController)
         let didReturnToList = await waitUntilNavigationStackSynced(in: navigationController) {
             navigationController.viewControllers == [listViewController]
@@ -2987,36 +3332,8 @@ struct NetworkDetailViewControllerTests {
         navigationController.syncStackForTesting()
         #expect(navigationController.viewControllers == [listViewController, detailViewController])
 
-        let poppedViewController = await navigationController.popDetailFromUserNavigationForTesting {
-            navigationController.syncStackForTesting()
-        }
-
-        #expect(poppedViewController === detailViewController)
-        #expect(model.selectedRequest == nil)
-        #expect(navigationController.viewControllers == [listViewController])
-    }
-
-    @Test
-    func compactContainerDoesNotRepushDetailWhenUserPopOvertakesPushCompletion() async throws {
-        let fixture = try await CanonicalNetworkPanelFixture()
-        let context = fixture.context
-        let request = try #require(
-            await applyRequest(to: fixture, requestID: "1", url: "https://example.com/app.js")
-        )
-        let model = try await NetworkPanelModel.make(context: context)
-        let listViewController = NetworkListViewController(model: model)
-        let detailViewController = makeNetworkDetailViewController(model: model)
-        let navigationController = NetworkCompactNavigationController(
-            model: model,
-            listViewController: listViewController,
-            detailViewController: detailViewController
-        )
-        model.selectRequest(request)
-        navigationController.syncStackForTesting()
-        #expect(navigationController.viewControllers == [listViewController, detailViewController])
-
-        let poppedViewController =
-            navigationController.popDetailWhilePushTransitionIsStillTrackedForTesting()
+        let poppedViewController = navigationController
+            .popDetailFromUserNavigationForTesting()
         navigationController.syncStackForTesting()
 
         #expect(poppedViewController === detailViewController)
@@ -3042,9 +3359,17 @@ struct NetworkDetailViewControllerTests {
         model.selectRequest(request)
         navigationController.syncStackForTesting()
 
-        navigationController.cancelDetailPopFromUserNavigationForTesting {
-            navigationController.syncStackForTesting()
-        }
+        navigationController.navigationController(
+            navigationController,
+            willShow: listViewController,
+            animated: false
+        )
+        navigationController.navigationController(
+            navigationController,
+            didShow: detailViewController,
+            animated: false
+        )
+        navigationController.syncStackForTesting()
 
         #expect(model.selectedRequest === request)
         #expect(navigationController.viewControllers == [listViewController, detailViewController])
@@ -3071,10 +3396,10 @@ struct NetworkDetailViewControllerTests {
         model.selectRequest(firstRequest)
         navigationController.syncStackForTesting()
 
-        let poppedViewController = await navigationController.popDetailFromUserNavigationForTesting {
-            model.selectRequest(secondRequest)
-            navigationController.syncStackForTesting()
-        }
+        let poppedViewController = navigationController
+            .popDetailFromUserNavigationForTesting()
+        model.selectRequest(secondRequest)
+        navigationController.syncStackForTesting()
 
         #expect(poppedViewController === detailViewController)
         #expect(model.selectedRequest === secondRequest)
@@ -3082,10 +3407,12 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func compactUserPopDoesNotClearSameGroupSelectionFromANewerSourceEpoch() async throws {
+    func compactContainerShowsReplacementAfterPreviousGroupWasCleared()
+        async throws
+    {
         let fixture = try await CanonicalNetworkPanelFixture()
         let context = fixture.context
-        let nodeID = DOM.Node.ID("stable-media-node")
+        let nodeID = DOM.Node.ID("107")
         let firstRequest = try #require(await applyRequest(
             to: fixture,
             requestID: "first",
@@ -3102,36 +3429,26 @@ struct NetworkDetailViewControllerTests {
             detailViewController: detailViewController
         )
         model.selectRequest(firstRequest)
-        _ = try #require(model.selectionToken)
         navigationController.syncStackForTesting()
 
-        var capturedReplacementToken: NetworkPanelSelectionToken?
-        let poppedViewController = await navigationController.popDetailFromUserNavigationForTesting {
-            do {
-                try await fixture.clear()
-                guard let replacementRequest = try await applyRequest(
-                    to: fixture,
-                    requestID: "replacement",
-                    url: "https://media.example.com/replacement.ts",
-                    resourceType: .media,
-                    timestamp: 2,
-                    initiatorNodeID: nodeID
-                ) else {
-                    Issue.record("Expected a replacement request")
-                    return
-                }
-                model.selectRequest(replacementRequest)
-                capturedReplacementToken = model.selectionToken
-                navigationController.syncStackForTesting()
-            } catch {
-                Issue.record(error)
-                return
-            }
-        }
+        let poppedViewController = navigationController
+            .popDetailFromUserNavigationForTesting()
+        try await fixture.clear()
+        let replacementRequest = try #require(try await applyRequest(
+            to: fixture,
+            requestID: "replacement",
+            url: "https://media.example.com/replacement.ts",
+            resourceType: .media,
+            timestamp: 2,
+            initiatorNodeID: nodeID
+        ))
+        model.selectRequest(replacementRequest)
+        let replacementEntryID = try #require(model.selectedEntryID)
+        navigationController.syncStackForTesting()
 
-        let replacementToken = try #require(capturedReplacementToken)
         #expect(poppedViewController === detailViewController)
-        #expect(model.selectionToken == replacementToken)
+        #expect(model.route == .detail(replacementEntryID))
+        #expect(model.selectedRequest === replacementRequest)
         #expect(navigationController.viewControllers == [listViewController, detailViewController])
     }
 
@@ -3210,7 +3527,6 @@ struct NetworkDetailViewControllerTests {
         defer { window.isHidden = true }
 
         model.selectRequest(request)
-        let selectionToken = try #require(model.selectionToken)
         let didPush = await waitUntilNavigationStackSynced(in: navigationController) {
             navigationController.viewControllers.last === detailViewController
         }
@@ -3224,7 +3540,6 @@ struct NetworkDetailViewControllerTests {
                 Issue.record(error)
             }
         }
-        #expect(model.selectionToken == selectionToken)
         #expect(model.selectedEntryID == nil)
         #expect(model.selectedRequest == nil)
 
@@ -3241,14 +3556,14 @@ struct NetworkDetailViewControllerTests {
             id: "playlist",
             url: "https://media.example.test/master.m3u8",
             resourceType: .media,
-            initiatorNodeID: "video",
+            initiatorNodeID: "108",
             timestamp: 1
         )
         let segmentID = try await fixture.insert(
             id: "segment",
             url: "https://media.example.test/segment.m4s",
             resourceType: .media,
-            initiatorNodeID: "video",
+            initiatorNodeID: "108",
             timestamp: 2
         )
         let unrelatedID = try await fixture.insert(
@@ -3303,9 +3618,10 @@ struct NetworkDetailViewControllerTests {
             resourceType: .fetch,
             timestamp: 2
         )
+        let responseRevision = try #require(model.entries.revision).rawValue
         #expect(
             await listViewController.waitForFetchedResultsRevisionForTesting(
-                model.entries.revision
+                responseRevision
             )
         )
         await listViewController.flushPendingSnapshotUpdateForTesting()
@@ -3320,9 +3636,10 @@ struct NetworkDetailViewControllerTests {
             resourceType: .fetch,
             timestamp: 3
         )
+        let insertionRevision = try #require(model.entries.revision).rawValue
         #expect(
             await listViewController.waitForFetchedResultsRevisionForTesting(
-                model.entries.revision
+                insertionRevision
             )
         )
         await listViewController.flushPendingSnapshotUpdateForTesting()
@@ -3407,93 +3724,11 @@ struct NetworkDetailViewControllerTests {
         await model.retire()
     }
 
-    @MainActor
-    private struct LiveNetworkContextFixture {
-        let core: WebInspectorModelContainerCore
-        let runtime: WebInspectorProxyTestRuntime
-        let wire: WebInspectorRawWireDriver
-        let context: WebInspectorModelContext
-
-        func apply(_ event: Network.Event) async throws {
-            let snapshot = await core.canonicalSnapshotForTesting()
-            guard let binding = snapshot.binding,
-                  let currentPageID = binding.currentPageID,
-                  let targetState = binding.targets.first(where: {
-                      $0.target.id == currentPageID
-                  }) else {
-                preconditionFailure(
-                    "An attached Network test container requires a current canonical page target."
-                )
-            }
-            let sequence = try #require(binding.lastSequence).addingReportingOverflow(1)
-            precondition(sequence.overflow == false)
-            guard let commit = try await core.reduce(
-                .event(
-                    sequence: sequence.partialValue,
-                    scope: ModelEventScope(
-                        generation: binding.pageGeneration,
-                        target: targetState.target,
-                        agentTarget: targetState.target,
-                        navigationEpoch: targetState.navigationEpoch,
-                        domBindingEpoch: targetState.domBindingEpoch,
-                        runtimeBindingEpoch: targetState.runtimeBindingEpoch,
-                        consoleBindingEpoch: targetState.consoleBindingEpoch
-                    ),
-                    payload: .network(event)
-                ),
-                attachmentGeneration: binding.attachmentGeneration
-            ) else {
-                return
-            }
-            let barrier = try await core.makeAcknowledgementBarrier(
-                through: commit.toRevision
-            )
-            try await core.waitForAcknowledgements(barrier)
-        }
-
-        func request(rawID: Network.Request.ID) async -> NetworkRequest? {
-            let record = await core.canonicalSnapshotForTesting()
-                .network?.requests.first(where: {
-                    $0.record.id.rawRequestID == rawID
-                })?.record
-            guard let record else {
-                return nil
-            }
-            return context.model(for: NetworkRequest.ID(canonical: record.id))
-        }
-    }
-
     private func withLiveNetworkContext<Output>(
-        _ operation: @MainActor (LiveNetworkContextFixture) async throws -> Output
+        _ operation: @MainActor (CanonicalNetworkPanelFixture) async throws
+            -> Output
     ) async throws -> Output {
-        let runtime = try await WebInspectorProxyTestRuntime.start()
-        let wire = WebInspectorRawWireDriver(peer: runtime.peer)
-        await wire.start()
-        await wire.respond(to: "Page.enable")
-        await wire.respond(to: "Network.enable")
-        let container = WebInspectorModelContainer(
-            configuration: .init(domains: [.network]),
-            modelSchemaRegistry: WebInspectorModelSchemaRegistry(
-                WebInspectorNetworkModelSchemas.registrations
-            )
-        )
-        let core = container.core
-        let context = container.mainContext
-        try await context.waitUntilReady()
-        do {
-            try await core.attach(owning: runtime.proxy)
-        } catch {
-            await runtime.close()
-            await wire.stop()
-            throw error
-        }
-
-        let fixture = LiveNetworkContextFixture(
-            core: core,
-            runtime: runtime,
-            wire: wire,
-            context: context
-        )
+        let fixture = try await CanonicalNetworkPanelFixture()
         let result: Result<Output, any Error>
         do {
             result = .success(try await operation(fixture))
@@ -3501,122 +3736,8 @@ struct NetworkDetailViewControllerTests {
             result = .failure(error)
         }
 
-        await wire.respond(to: "Network.disable")
-        await wire.respond(to: "Page.disable")
-        await container.close()
-        await runtime.close()
-        await wire.stop()
+        await fixture.close()
         return try result.get()
-    }
-
-    private func applyRequest(
-        to fixture: LiveNetworkContextFixture,
-        requestID rawRequestID: String,
-        url: String,
-        requestHeaders: [String: String] = [:],
-        postData: String? = nil,
-        responseHeaders: [String: String] = ["content-type": "text/javascript"],
-        responseMimeType: String = "text/javascript",
-        responseStatus: Int = 200,
-        resourceType: Network.ResourceType = .script,
-        method: String? = nil,
-        timestamp: Double = 1,
-        initiatorNodeID: DOM.Node.ID? = nil,
-        finishes: Bool = true
-    ) async throws -> NetworkRequest? {
-        let requestID = Network.Request.ID(rawRequestID)
-        try await fixture.apply(
-            .requestWillBeSent(
-                id: requestID,
-                request: Network.Request(
-                    id: requestID,
-                    url: url,
-                    method: method ?? (postData == nil ? "GET" : "POST"),
-                    headers: requestHeaders,
-                    postData: postData
-                ),
-                initiator: Network.Initiator(
-                    kind: "other",
-                    nodeID: initiatorNodeID
-                ),
-                resourceType: resourceType,
-                redirectResponse: nil,
-                timestamp: timestamp
-            )
-        )
-        try await fixture.apply(
-            .responseReceived(
-                id: requestID,
-                response: Network.Response(
-                    url: url,
-                    status: responseStatus,
-                    statusText: responseStatus == 206
-                        ? "Partial Content"
-                        : "OK",
-                    mimeType: responseMimeType,
-                    headers: responseHeaders,
-                    source: Network.Source(rawValue: "network"),
-                    requestHeaders: requestHeaders
-                ),
-                resourceType: resourceType,
-                timestamp: timestamp + 0.1
-            )
-        )
-        if finishes {
-            try await fixture.apply(
-                .loadingFinished(
-                    id: requestID,
-                    timestamp: timestamp + 0.2,
-                    sourceMapURL: nil,
-                    metrics: nil
-                )
-            )
-        }
-        return await fixture.request(rawID: requestID)
-    }
-
-    private func applyResponseReceived(
-        to fixture: LiveNetworkContextFixture,
-        requestID rawRequestID: String,
-        url: String,
-        responseHeaders: [String: String],
-        responseMimeType: String,
-        responseStatus: Int = 200,
-        resourceType: Network.ResourceType = .script,
-        timestamp: Double
-    ) async throws {
-        try await fixture.apply(
-            .responseReceived(
-                id: Network.Request.ID(rawRequestID),
-                response: Network.Response(
-                    url: url,
-                    status: responseStatus,
-                    statusText: responseStatus == 206
-                        ? "Partial Content"
-                        : "OK",
-                    mimeType: responseMimeType,
-                    headers: responseHeaders,
-                    source: Network.Source(rawValue: "network")
-                ),
-                resourceType: resourceType,
-                timestamp: timestamp
-            )
-        )
-    }
-
-    private func applyLoadingFinished(
-        to fixture: LiveNetworkContextFixture,
-        requestID rawRequestID: String,
-        timestamp: Double
-    ) async throws {
-        try await fixture.apply(
-            .loadingFinished(
-                id: Network.Request.ID(rawRequestID),
-                timestamp: timestamp,
-                sourceMapURL: nil,
-                metrics: nil
-            )
-        )
     }
 
     private func applyRequest(

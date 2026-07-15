@@ -4,8 +4,6 @@ import UIKit
 @testable import WebInspectorDataKit
 import WebInspectorDataKitTesting
 @testable import WebInspectorProxyKit
-@testable import WebInspectorUI
-@testable import WebInspectorUISyntaxBody
 @testable import WebInspectorUINetwork
 @testable import WebInspectorUIDOM
 @testable import WebInspectorUIBase
@@ -168,19 +166,19 @@ private struct DOMTreeMenuModelFixture {
 private func makeMenuFixture() async throws -> DOMTreeMenuModelFixture {
     let runtime = try await WebInspectorDataKitTestRuntime.start(
         scenario: .init(
-            configuration: .init(domains: [.dom]),
+            configuration: .init(enabledFeatures: [.dom]),
             document: menuFixtureDocument()
-        ),
-        isolation: MainActor.shared
+        )
     )
-    let nodes = try await runtime.model.fetch(
+    let context = runtime.container.mainContext
+    let nodes = try await context.fetch(
         WebInspectorFetchDescriptor<DOMNode>()
     )
     let divID = try #require(nodes.first(where: { $0.localName == "div" })?.id)
     let inputID = try #require(nodes.first(where: { $0.localName == "input" })?.id)
     return DOMTreeMenuModelFixture(
         runtime: runtime,
-        context: runtime.model,
+        context: context,
         divID: divID,
         inputID: inputID
     )
