@@ -12,6 +12,7 @@ package struct NetworkRequestRecordInput: Hashable, Sendable {
     package var responseHeaders: [String: String]
     package var statusCode: Int?
     package var statusText: String?
+    package var searchableText: String
     package var requestSentTimestamp: Double?
     package var hasResponse: Bool
 
@@ -26,6 +27,7 @@ package struct NetworkRequestRecordInput: Hashable, Sendable {
         responseHeaders = request.responseHeaders
         statusCode = request.statusCode
         statusText = request.statusText
+        searchableText = request.searchableText
         requestSentTimestamp = request.requestSentTimestamp
         hasResponse = request.hasResponse
     }
@@ -62,19 +64,7 @@ package struct NetworkRequestRecord: Hashable, Sendable {
             hasResponse: input.hasResponse
         )
         resourceCategory = category
-        searchableText = NetworkRequest.uniqueNonEmpty([
-            input.url,
-            input.responseURL,
-            NetworkRequest.urlSearchText(input.url),
-            input.responseURL.map(NetworkRequest.urlSearchText),
-            input.method,
-            input.statusCode.map(String.init),
-            input.statusText,
-            input.mimeType,
-            input.resourceTypeRawValue,
-            category.rawValue,
-        ])
-        .joined(separator: "\n")
+        searchableText = input.searchableText
         statusCode = input.statusCode
         requestSentTimestamp = input.requestSentTimestamp
     }

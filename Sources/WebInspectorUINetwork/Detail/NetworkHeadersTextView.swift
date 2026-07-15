@@ -282,11 +282,16 @@ private struct NetworkHeadersTextDocumentBuilder {
     }
 
     private func sections() -> [Section] {
-        [
-            summarySection(),
-            requestSection(),
-            responseSection(),
-        ].compactMap { $0 }
+        var sections = [summarySection()]
+        for (index, redirect) in request.redirects.enumerated() {
+            sections.append(redirectRequestSection(redirect.request, index: index))
+            sections.append(redirectResponseSection(redirect.response, index: index))
+        }
+        sections.append(requestSection())
+        if let responseSection = responseSection() {
+            sections.append(responseSection)
+        }
+        return sections
     }
 
     private func summarySection() -> Section {
@@ -295,6 +300,13 @@ private struct NetworkHeadersTextDocumentBuilder {
             Row(key: String(localized: "network.headers.summary.status", defaultValue: "Status", bundle: WebInspectorUILocalization.bundle), value: statusText(), style: .summary),
             Row(key: String(localized: "network.headers.summary.source", defaultValue: "Source", bundle: WebInspectorUILocalization.bundle), value: sourceText(), style: .summary),
         ]
+        if request.redirects.isEmpty == false {
+            rows.append(Row(
+                key: String(localized: "network.headers.summary.redirects", defaultValue: "Redirects", bundle: WebInspectorUILocalization.bundle),
+                value: String(request.redirects.count),
+                style: .summary
+            ))
+        }
         if let remoteAddress = request.metrics?.remoteAddress, remoteAddress.isEmpty == false {
             rows.append(
                 Row(
@@ -313,7 +325,11 @@ private struct NetworkHeadersTextDocumentBuilder {
 
     private func requestSection() -> Section {
         let headers = request.requestHeaders
-        var rows: [Row] = requestProtocolRows()
+        var rows: [Row] = requestProtocolRows(
+            url: request.url,
+            method: request.method,
+            protocolName: request.metrics?.networkProtocol
+        )
         rows.append(contentsOf: headerRows(headers))
         if rows.isEmpty {
             rows.append(
@@ -336,7 +352,11 @@ private struct NetworkHeadersTextDocumentBuilder {
             return nil
         }
         let headers = request.responseHeaders
-        var rows: [Row] = responseProtocolRows()
+        var rows: [Row] = responseProtocolRows(
+            status: request.status,
+            statusText: request.statusText,
+            protocolName: request.metrics?.networkProtocol
+        )
         rows.append(contentsOf: headerRows(headers))
         if rows.isEmpty {
             rows.append(
@@ -354,12 +374,54 @@ private struct NetworkHeadersTextDocumentBuilder {
         )
     }
 
-    private func requestProtocolRows() -> [Row] {
-        let protocolName = request.metrics?.networkProtocol ?? ""
-        let components = URLComponents(string: request.url)
+    private func redirectRequestSection(
+        _ request: NetworkRequestSnapshot,
+        index: Int
+    ) -> Section {
+        var rows = requestProtocolRows(url: request.url, method: request.method, protocolName: nil)
+        rows.append(contentsOf: headerRows(request.headers))
+        return Section(
+            title: String(
+                localized: "network.section.redirect_request",
+                defaultValue: "Redirect Request",
+                bundle: WebInspectorUILocalization.bundle
+            ) + " \(index + 1)",
+            rows: rows,
+            ruleColor: NetworkHeadersWebKitStyle.networkHeaderColor
+        )
+    }
+
+    private func redirectResponseSection(
+        _ response: NetworkResponseSnapshot,
+        index: Int
+    ) -> Section {
+        var rows = responseProtocolRows(
+            status: response.status,
+            statusText: response.statusText,
+            protocolName: nil
+        )
+        rows.append(contentsOf: headerRows(response.headers))
+        return Section(
+            title: String(
+                localized: "network.section.redirect_response",
+                defaultValue: "Redirect Response",
+                bundle: WebInspectorUILocalization.bundle
+            ) + " \(index + 1)",
+            rows: rows,
+            ruleColor: NetworkHeadersWebKitStyle.networkHeaderColor
+        )
+    }
+
+    private func requestProtocolRows(
+        url: String,
+        method: String,
+        protocolName rawProtocolName: String?
+    ) -> [Row] {
+        let protocolName = rawProtocolName ?? ""
+        let components = URLComponents(string: url)
         if protocolName == "h2" {
             return [
-                Row(key: ":method", value: request.method, style: .pseudoHeader),
+                Row(key: ":method", value: method, style: .pseudoHeader),
                 Row(key: ":scheme", value: components?.scheme, style: .pseudoHeader),
                 Row(key: ":authority", value: authority(from: components), style: .pseudoHeader),
                 Row(key: ":path", value: path(from: components), style: .pseudoHeader),
@@ -373,25 +435,29 @@ private struct NetworkHeadersTextDocumentBuilder {
         let path = path(from: components) ?? "/"
         let suffix = protocolName.hasPrefix("http/1") ? " \(protocolName.uppercased())" : ""
         return [
-            Row(key: "\(request.method) \(path)\(suffix)", value: nil, style: .pseudoHeader),
+            Row(key: "\(method) \(path)\(suffix)", value: nil, style: .pseudoHeader),
         ]
     }
 
-    private func responseProtocolRows() -> [Row] {
-        guard let status = request.status else {
+    private func responseProtocolRows(
+        status: Int?,
+        statusText: String?,
+        protocolName rawProtocolName: String?
+    ) -> [Row] {
+        guard let status else {
             return []
         }
-        let protocolName = request.metrics?.networkProtocol ?? ""
+        let protocolName = rawProtocolName ?? ""
         if protocolName == "h2" {
             return [Row(key: ":status", value: "\(status)", style: .pseudoHeader)]
         }
         if protocolName.hasPrefix("http/1") {
-            let statusText = request.statusText ?? ""
-            let suffix = statusText.isEmpty ? "" : " \(statusText)"
+            let resolvedStatusText = statusText ?? ""
+            let suffix = resolvedStatusText.isEmpty ? "" : " \(resolvedStatusText)"
             return [Row(key: "\(protocolName.uppercased()) \(status)\(suffix)", value: nil, style: .pseudoHeader)]
         }
-        let statusText = request.statusText ?? ""
-        let suffix = statusText.isEmpty ? "" : " \(statusText)"
+        let resolvedStatusText = statusText ?? ""
+        let suffix = resolvedStatusText.isEmpty ? "" : " \(resolvedStatusText)"
         return [Row(key: "\(status)\(suffix)", value: nil, style: .pseudoHeader)]
     }
 

@@ -264,6 +264,90 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func headersRenderRedirectChainBeforeFinalRequestAndResponse() async throws {
+        let context = makeContext()
+        let requestID = Network.Request.ID("redirect-chain")
+        await context.apply(
+            .requestWillBeSent(
+                id: requestID,
+                request: Network.Request(
+                    id: requestID,
+                    url: "https://example.com/start",
+                    method: "POST",
+                    headers: ["x-start": "one"]
+                ),
+                resourceType: .document,
+                redirectResponse: nil,
+                timestamp: 1
+            )
+        )
+        await context.apply(
+            .requestWillBeSent(
+                id: requestID,
+                request: Network.Request(
+                    id: requestID,
+                    url: "https://example.com/final",
+                    method: "GET",
+                    headers: ["x-final-request": "two"]
+                ),
+                resourceType: .document,
+                redirectResponse: Network.Response(
+                    url: "https://example.com/start",
+                    status: 302,
+                    statusText: "Found",
+                    headers: ["location": "https://example.com/final"]
+                ),
+                timestamp: 2
+            )
+        )
+        await context.apply(
+            .responseReceived(
+                id: requestID,
+                response: Network.Response(
+                    url: "https://example.com/final",
+                    status: 200,
+                    statusText: "OK",
+                    headers: ["x-final-response": "three"]
+                ),
+                resourceType: .document,
+                timestamp: 3
+            )
+        )
+
+        let request = try #require(context.registeredRequest(forProxyID: requestID))
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(request)
+        let viewController = makeNetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didRenderChain = await waitUntilRendered(in: viewController) {
+            let text = viewController.headersTextViewForTesting.renderedTextForTesting
+            return text.contains("POST /start")
+                && text.contains("302 Found")
+                && text.contains("GET /final")
+                && text.contains("200 OK")
+                && text.contains("x-start: one")
+                && text.contains("location: https://example.com/final")
+                && text.contains("x-final-request: two")
+                && text.contains("x-final-response: three")
+        }
+        #expect(didRenderChain)
+
+        let text = viewController.headersTextViewForTesting.renderedTextForTesting
+        let redirectRequest = try #require(text.range(of: "POST /start"))
+        let redirectResponse = try #require(text.range(of: "302 Found"))
+        let finalRequest = try #require(text.range(of: "GET /final"))
+        let finalResponse = try #require(text.range(
+            of: "200 OK",
+            range: finalRequest.upperBound..<text.endIndex
+        ))
+        #expect(redirectRequest.lowerBound < redirectResponse.lowerBound)
+        #expect(redirectResponse.lowerBound < finalRequest.lowerBound)
+        #expect(finalRequest.lowerBound < finalResponse.lowerBound)
+    }
+
+    @Test
     func previewRequestWithoutBodyReplacesPreviousBodyWithUnavailablePlaceholder() async throws {
         let context = makeContext()
         let bodyRequest = try #require(

@@ -868,7 +868,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
 
     /// Text used by Network list filtering.
     public var searchableText: String {
-        return Self.uniqueNonEmpty([
+        let currentFields: [String?] = [
             url,
             responseURL,
             Self.urlSearchText(url),
@@ -879,7 +879,20 @@ public final class NetworkRequest: WebInspectorFetchableModel {
             mimeType,
             resourceType?.rawValue,
             resourceCategory.rawValue,
-        ])
+        ]
+        let redirectFields: [String?] = redirects.flatMap { redirect in
+            [
+                redirect.request.url,
+                Self.urlSearchText(redirect.request.url),
+                redirect.request.method,
+                redirect.response.url,
+                redirect.response.url.map(Self.urlSearchText),
+                redirect.response.status.map(String.init),
+                redirect.response.statusText,
+                redirect.response.mimeType,
+            ]
+        }
+        return Self.uniqueNonEmpty(currentFields + redirectFields)
         .joined(separator: "\n")
     }
 
