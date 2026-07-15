@@ -43,7 +43,7 @@ package final class NetworkCompactNavigationController:
         webInspectorApplyNavigationControllerBackground(to: self)
         delegate = self
         listViewController.setEntrySelectionAction { [weak model] entryID in
-            model?.showDetail(entryID)
+            model?.selectEntry(entryID)
         }
     }
 

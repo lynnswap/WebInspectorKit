@@ -364,36 +364,53 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
                 return errorText
             }
             return String(localized: "network.body.fetch.error.unavailable", bundle: WebInspectorUILocalization.bundle)
-        case .model(let error):
+        case .command(let error):
             switch error {
-            case .commandRejected(_, let message):
-                return message
-            case .detached, .synchronizing, .domainNotConfigured, .staleModel:
+            case .rejected(let failure):
+                return localizedDescription(for: failure)
+            case .connection(let error):
+                return localizedDescription(for: error)
+            case .featureUnavailable(_, let error):
+                return localizedDescription(for: error)
+            case .staleIdentifier,
+                 .targetChanged,
+                 .timedOut,
+                 .containerClosed:
                 return String(localized: "network.body.fetch.error.unavailable", bundle: WebInspectorUILocalization.bundle)
             }
-        case .proxy(let error):
-            return localizedDescription(for: error)
         }
     }
 
-    private func localizedDescription(for error: WebInspectorProxyError) -> String {
+    private func localizedDescription(
+        for error: WebInspectorFeatureError
+    ) -> String {
         switch error {
-        case .closed, .pageUnavailable, .staleIdentifier, .connectionInUse:
-            String(localized: "network.body.fetch.error.unavailable", bundle: WebInspectorUILocalization.bundle)
-        case .unsupported(let messages):
-            messages.joined(separator: "\n")
-        case .attachFailed(let message),
-             .disconnected(let message),
-             .commandFailed(_, _, let message),
-             .commandRejected(_, let message),
-             .protocolViolation(let message),
-             .transportFailure(let message):
-            message
-        case .eventBufferOverflow(let capacity):
-            "Web Inspector event buffer exceeded \(capacity) pending events."
-        case .timeout(let domain, let method):
-            "\(domain).\(method) timed out."
+        case .bootstrap(let failure),
+             .eventStream(let failure),
+             .command(let failure),
+             .recoveryBudgetExhausted(let failure):
+            localizedDescription(for: failure)
         }
+    }
+
+    private func localizedDescription(
+        for error: WebInspectorConnectionFailure
+    ) -> String {
+        switch error {
+        case .native(let failure),
+             .transportEnvelope(let failure),
+             .targetControlPlane(let failure):
+            localizedDescription(for: failure)
+        }
+    }
+
+    private func localizedDescription(
+        for failure: WebInspectorFailureDescription
+    ) -> String {
+        guard failure.message.isEmpty == false else {
+            return String(localized: "network.body.fetch.error.unavailable", bundle: WebInspectorUILocalization.bundle)
+        }
+        return failure.message
     }
 
     private func applyBodyDisplay(

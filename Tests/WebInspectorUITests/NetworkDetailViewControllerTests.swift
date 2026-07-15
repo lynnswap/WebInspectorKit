@@ -271,10 +271,11 @@ struct NetworkDetailViewControllerTests {
             role: .response,
             kind: .text,
             sourceSyntaxKind: .plainText,
-            phase: .failed(.model(.commandRejected(
-                method: "Network.getResponseBody",
+            phase: .failed(.command(.rejected(.init(
+                code: "Network.getResponseBody",
+                phase: "responseBody",
                 message: "The response body is no longer available."
-            )))
+            ))))
         )
         let viewController = NetworkBodyViewController()
         viewController.loadViewIfNeeded()
@@ -3358,10 +3359,12 @@ struct NetworkDetailViewControllerTests {
         listViewController.beginSnapshotApplyForTesting()
         listViewController.queueSnapshotUpdateForTesting(
             entryIDs: [first],
+            projectionRevision: try #require(model.entries.revision),
             reconfigureEntryIDs: [first]
         )
         listViewController.queueSnapshotUpdateForTesting(
             entryIDs: [second, first],
+            projectionRevision: try #require(model.entries.revision),
             reconfigureEntryIDs: [second],
             requiresFullReconfigure: true
         )

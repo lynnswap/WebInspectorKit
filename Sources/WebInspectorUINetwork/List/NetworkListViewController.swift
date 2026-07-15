@@ -843,12 +843,13 @@ extension NetworkListViewController {
 
     package func queueSnapshotUpdateForTesting(
         entryIDs: [NetworkEntry.ID],
+        projectionRevision: WebInspectorFetchedResultsRevision,
         reconfigureEntryIDs: Set<NetworkEntry.ID> = [],
         requiresFullReconfigure: Bool = false
     ) {
         requestSnapshotUpdate(
             entryIDs: entryIDs,
-            projectionRevision: fetchedResults.revision,
+            projectionRevision: projectionRevision,
             reconfigureEntryIDs: reconfigureEntryIDs,
             requiresFullReconfigure: requiresFullReconfigure
         )
