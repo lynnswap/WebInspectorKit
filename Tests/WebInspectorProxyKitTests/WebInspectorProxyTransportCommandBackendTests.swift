@@ -845,7 +845,7 @@ func transportBackendDeliversCurrentPageTargetDestroyedLifecycle() async throws 
 }
 
 @Test
-func transportBackendDeliversProvisionalTargetDestroyedLifecycle() async throws {
+func transportBackendDeliversProvisionalPageDestroyedBeforePageTopology() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-main"))
@@ -876,7 +876,7 @@ func transportBackendDeliversProvisionalTargetDestroyedLifecycle() async throws 
 }
 
 @Test
-func transportBackendDeliversParentlessFrameProvisionalTargetDestroyedLifecycle() async throws {
+func transportBackendDeliversProvisionalFrameDestroyedBeforePageTopology() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-main"))
@@ -907,12 +907,12 @@ func transportBackendDeliversParentlessFrameProvisionalTargetDestroyedLifecycle(
 }
 
 @Test
-func transportBackendDoesNotDeliverUnrelatedProvisionalTargetDestroyedLifecycle() async throws {
+func transportBackendDoesNotDeliverWorkerTargetDestroyedLifecycleToCurrentPage() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-main"))
     await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"unrelated-provisional","type":"page","frameId":"other-main-frame","isProvisional":true}}}"#
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"service-worker","type":"service-worker","isProvisional":false}}}"#
     )
     let proxy = try await WebInspectorProxy(transport: transport)
     let target = try await proxy.waitForCurrentPage()
@@ -927,7 +927,7 @@ func transportBackendDoesNotDeliverUnrelatedProvisionalTargetDestroyedLifecycle(
 
     await waitForEventSubscription(target, domain: .target)
     await transport.receiveRootMessage(
-        #"{"method":"Target.targetDestroyed","params":{"targetId":"unrelated-provisional"}}"#
+        #"{"method":"Target.targetDestroyed","params":{"targetId":"service-worker"}}"#
     )
     try await Task.sleep(for: .milliseconds(100))
 
@@ -3296,23 +3296,34 @@ private actor EventDeliveryProbe {
 
 private struct TimedOut: Error {}
 
+private enum TaskValueRace<Value: Sendable>: Sendable {
+    case value(Value)
+    case timedOut
+}
+
 private func value<T: Sendable>(
     of task: Task<T, Never>,
     timeout: Duration = .seconds(5)
 ) async throws -> T {
-    try await withThrowingTaskGroup(of: T.self) { group in
+    try await withThrowingTaskGroup(of: TaskValueRace<T>.self) { group in
+        defer { group.cancelAll() }
         group.addTask {
-            await task.value
+            .value(await task.value)
         }
         group.addTask {
             try await Task.sleep(for: timeout)
+            return .timedOut
+        }
+        guard let outcome = try await group.next() else {
             throw TimedOut()
         }
-        guard let value = try await group.next() else {
+        switch outcome {
+        case let .value(value):
+            return value
+        case .timedOut:
+            task.cancel()
             throw TimedOut()
         }
-        group.cancelAll()
-        return value
     }
 }
 
@@ -3320,18 +3331,24 @@ private func throwingValue<T: Sendable>(
     of task: Task<T, any Error>,
     timeout: Duration = .seconds(5)
 ) async throws -> T {
-    try await withThrowingTaskGroup(of: T.self) { group in
+    try await withThrowingTaskGroup(of: TaskValueRace<T>.self) { group in
+        defer { group.cancelAll() }
         group.addTask {
-            try await task.value
+            .value(try await task.value)
         }
         group.addTask {
             try await Task.sleep(for: timeout)
+            return .timedOut
+        }
+        guard let outcome = try await group.next() else {
             throw TimedOut()
         }
-        guard let value = try await group.next() else {
+        switch outcome {
+        case let .value(value):
+            return value
+        case .timedOut:
+            task.cancel()
             throw TimedOut()
         }
-        group.cancelAll()
-        return value
     }
 }

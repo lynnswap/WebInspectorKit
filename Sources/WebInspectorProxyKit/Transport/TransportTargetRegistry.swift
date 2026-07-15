@@ -45,35 +45,17 @@ struct TransportTargetRegistry: Sendable {
         }
     }
 
-    func isTargetInCurrentPageHierarchy(_ targetID: ProtocolTarget.ID) -> Bool {
-        guard let currentMainPageTargetID,
-              let mainRecord = targetsByID[currentMainPageTargetID],
-              let mainFrameID = mainRecord.frameID,
-              let record = targetsByID[targetID] else {
+    func isProvisionalTargetInCurrentPage(_ targetID: ProtocolTarget.ID) -> Bool {
+        guard currentMainPageTargetID != nil,
+              let record = targetsByID[targetID],
+              record.isProvisional else {
             return false
         }
-        if record.frameID == mainFrameID {
-            return true
-        }
-        if record.kind == .frame,
-           record.frameID != nil,
-           record.parentFrameID == nil {
-            return true
-        }
-        var visitedFrameIDs: Set<ProtocolFrame.ID> = []
-        var parentFrameID = record.parentFrameID
-        while let frameID = parentFrameID,
-              visitedFrameIDs.insert(frameID).inserted {
-            if frameID == mainFrameID {
-                return true
-            }
-            guard let parentTargetID = frameTargetIDsByFrameID[frameID],
-                  let parentRecord = targetsByID[parentTargetID] else {
-                return false
-            }
-            parentFrameID = parentRecord.parentFrameID
-        }
-        return false
+        // A root stream is already scoped to one inspected page's
+        // WebPageInspectorController. That controller creates and removes its
+        // provisional page and frame targets before Page topology is available
+        // to the frontend, so topology cannot be their ownership source.
+        return record.kind == .page || record.kind == .frame
     }
 
     func isFrameTargetInCurrentPage(_ targetID: ProtocolTarget.ID) -> Bool {

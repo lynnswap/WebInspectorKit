@@ -453,8 +453,7 @@ package actor TransportSession {
             && targetID != nil
             && targetID == targetRegistry.currentMainPageTargetID
         let destroyedProvisionalTargetInCurrentPageHierarchy = method == "Target.targetDestroyed"
-            && targetID.flatMap { targetRegistry.target(for: $0) }?.isProvisional == true
-            && targetID.map { targetRegistry.isTargetInCurrentPageHierarchy($0) } == true
+            && targetID.map { targetRegistry.isProvisionalTargetInCurrentPage($0) } == true
         let detachedCurrentPageFrameTarget = method == "Page.frameDetached"
             && targetID.map(targetRegistry.isFrameTargetInCurrentPage) == true
         let pageBindingTargetID = resolvePageBindingTargetID(
