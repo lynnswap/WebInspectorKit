@@ -1,7 +1,7 @@
 import Synchronization
 
 /// A deterministic, cancellation-aware suspension point for asynchronous tests.
-public final class WebInspectorTestGate: Sendable {
+public final class WebInspectorCancellationAwareTestGate: Sendable {
     private final class Storage: Sendable {
         struct State: Sendable {
             var isOpen = false
@@ -69,7 +69,7 @@ public final class WebInspectorTestGate: Sendable {
         let waiterID = storage.state.withLock { state -> UInt64 in
             precondition(
                 state.nextWaiterID < UInt64.max,
-                "WebInspectorTestGate exhausted its waiter identifier space."
+                "WebInspectorCancellationAwareTestGate exhausted its waiter identifier space."
             )
             state.nextWaiterID += 1
             return state.nextWaiterID

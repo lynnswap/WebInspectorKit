@@ -1308,7 +1308,7 @@ private final class ControlledNodeActionRecorder {
     private struct IntentionalFailure: Error {}
 
     private enum Gate {
-        case cancellationAware(WebInspectorTestGate)
+        case cancellationAware(WebInspectorCancellationAwareTestGate)
         case cancellationIgnoring(CancellationIgnoringGate)
 
         func wait() async {
@@ -1349,7 +1349,7 @@ private final class ControlledNodeActionRecorder {
         let gate: Gate = if ignoresCancellation {
             .cancellationIgnoring(CancellationIgnoringGate())
         } else {
-            .cancellationAware(WebInspectorTestGate())
+            .cancellationAware(WebInspectorCancellationAwareTestGate())
         }
         nodeIDs.append(nodeID)
         owners.append(owner)
