@@ -2544,10 +2544,16 @@ extension WebInspectorContext {
             return
         }
 
-        guard case var .loaded(children) = parentNode.children else {
+        var children: [DOMNode]
+        switch parentNode.children {
+        case let .unrequested(count) where count > 0:
             parentNode.updateChildNodeCount(parentNode.childNodeCount + 1)
             notifyDOMTreeChildCountChanged(node: parentNode, isolation: isolation)
             return
+        case .unrequested:
+            children = []
+        case let .loaded(loadedChildren):
+            children = loadedChildren
         }
         var materializedPayloadIDs = Set<DOMNode.ID>()
         collectMaterializedPayloadIDs(node, into: &materializedPayloadIDs)

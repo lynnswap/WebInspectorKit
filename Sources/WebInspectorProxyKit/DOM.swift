@@ -44,7 +44,7 @@ public enum DOM {
             )
         }
 
-        /// Resolves a runtime object into a DOM node identity.
+    /// Resolves a runtime object into a DOM node identity through its owning target.
         public func requestNode(forRemoteObject objectID: Runtime.RemoteObject.ID) async throws -> Node.ID {
             try await context.dispatch(
                 domain: .dom,

@@ -85,7 +85,7 @@ enum LiveProxyEventDecoder {
             let params = try decode(ChildNodeInsertedParams.self, from: event)
             return try .childNodeInserted(
                 parent: DOM.Node.ID(params.parentNodeId),
-                previous: params.previousNodeId.map(DOM.Node.ID.init),
+                previous: params.previousNodeID,
                 node: params.node.proxyNode()
             )
         case "DOM.childNodeRemoved":
@@ -130,13 +130,7 @@ enum LiveProxyEventDecoder {
         switch event.method {
         case "Inspector.inspect":
             let params = try decode(InspectorInspectParams.self, from: event)
-            let origin = event.targetID.map {
-                Inspector.EventOrigin(
-                    targetID: WebInspectorTarget.ID($0.rawValue),
-                    route: RoutingTargetID($0.rawValue)
-                )
-            }
-            return .inspect(params.object.proxyObject, hints: params.hints?.proxyValue, origin: origin)
+            return .inspect(params.object.proxyObject, hints: params.hints?.proxyValue)
         default:
             return .unknown(rawEvent(from: event))
         }
@@ -379,8 +373,12 @@ private struct SetChildNodesParams: Decodable {
 
 private struct ChildNodeInsertedParams: Decodable {
     var parentNodeId: String
-    var previousNodeId: String?
+    var previousNodeId: String
     var node: ProtocolDOMNodePayload
+
+    var previousNodeID: DOM.Node.ID? {
+        previousNodeId == "0" ? nil : DOM.Node.ID(previousNodeId)
+    }
 
     private enum CodingKeys: String, CodingKey {
         case parentNodeId
@@ -391,7 +389,7 @@ private struct ChildNodeInsertedParams: Decodable {
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         parentNodeId = try container.decodeStringOrInteger(forKey: .parentNodeId)
-        previousNodeId = try container.decodeStringOrIntegerIfPresent(forKey: .previousNodeId)
+        previousNodeId = try container.decodeStringOrInteger(forKey: .previousNodeId)
         node = try container.decode(ProtocolDOMNodePayload.self, forKey: .node)
     }
 }
