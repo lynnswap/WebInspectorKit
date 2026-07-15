@@ -1655,19 +1655,16 @@ public final class WebInspectorContext {
         }
     }
 
-    func fetchResponseBody(
+    func responseBodyResult(
         for request: NetworkRequest,
-        expectedResponseRevision: NetworkBody.ResponseRevision,
         isolation: isolated (any Actor) = #isolation
-    ) async {
+    ) async -> Result<Network.Body, WebInspectorProxyError> {
         requireOwner(isolation)
+        guard requestsByID[request.id] === request else {
+            return .failure(NetworkBody.invalidatedResponseFetchError)
+        }
         guard let currentPage else {
-            finishResponseBodyFetch(
-                .failure(.disconnected("WebInspectorDataKit has no current page target.")),
-                for: request,
-                expectedResponseRevision: expectedResponseRevision
-            )
-            return
+            return .failure(.disconnected("WebInspectorDataKit has no current page target."))
         }
 
         do {
@@ -1675,42 +1672,19 @@ public final class WebInspectorContext {
                 for: request.proxyID,
                 backendResourceIdentifier: request.backendResourceIdentifier
             )
-            finishResponseBodyFetch(
-                .success(body),
-                for: request,
-                expectedResponseRevision: expectedResponseRevision
-            )
+            guard requestsByID[request.id] === request else {
+                return .failure(NetworkBody.invalidatedResponseFetchError)
+            }
+            return .success(body)
         } catch let error as WebInspectorProxyError {
-            finishResponseBodyFetch(
-                .failure(error),
-                for: request,
-                expectedResponseRevision: expectedResponseRevision
-            )
+            return .failure(error)
         } catch {
-            finishResponseBodyFetch(
-                .failure(.commandFailed(
-                    domain: "Network",
-                    method: "getResponseBody",
-                    message: String(describing: error)
-                )),
-                for: request,
-                expectedResponseRevision: expectedResponseRevision
-            )
+            return .failure(.commandFailed(
+                domain: "Network",
+                method: "getResponseBody",
+                message: String(describing: error)
+            ))
         }
-    }
-
-    private func finishResponseBodyFetch(
-        _ result: Result<Network.Body, WebInspectorProxyError>,
-        for request: NetworkRequest,
-        expectedResponseRevision: NetworkBody.ResponseRevision
-    ) {
-        guard requestsByID[request.id] === request else {
-            return
-        }
-        request.finishResponseBodyFetch(
-            result: result,
-            expectedResponseRevision: expectedResponseRevision
-        )
     }
 
     func requestChildren(
@@ -2482,6 +2456,7 @@ public final class WebInspectorContext {
         clearedNetworkRequestIDs = []
         networkNavigationTimelines = [:]
         pendingNetworkNavigationsByTargetID = [:]
+        invalidateNetworkResponseBodyFetches()
         requestsByID = [:]
         orderedRequestIDs = []
         networkRequestOrderIndicesByID = [:]
@@ -5271,6 +5246,7 @@ extension WebInspectorContext {
 
     private func clearNetworkRequests() {
         clearedNetworkRequestIDs.formUnion(requestsByID.keys)
+        invalidateNetworkResponseBodyFetches()
         requestsByID = [:]
         orderedRequestIDs = []
         networkRequestOrderIndicesByID = [:]
@@ -5278,6 +5254,12 @@ extension WebInspectorContext {
         clearNetworkRequestIndex()
         networkCollectionState.replaceCount(0)
         resetNetworkFetchedResults()
+    }
+
+    private func invalidateNetworkResponseBodyFetches() {
+        for request in requestsByID.values {
+            request.invalidateResponseBodyFetch()
+        }
     }
 
     private func currentNetworkRequests() -> [NetworkRequest] {

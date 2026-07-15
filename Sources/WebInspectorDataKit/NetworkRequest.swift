@@ -275,9 +275,33 @@ public final class WebSocketState {
 /// Observable request or response body state for a network request.
 @Observable
 public final class NetworkBody {
+    fileprivate final class ResponseFetchIdentity {}
+
     struct ResponseRevision: Equatable, Sendable {
         fileprivate let rawValue: UInt64
     }
+
+    struct ResponseFetchLease {
+        fileprivate let identity: ResponseFetchIdentity
+        fileprivate let revision: ResponseRevision
+        fileprivate let completion: ReplyPromise<Void>
+    }
+
+    enum ResponseFetchAcquisition {
+        case loaded
+        case failed(WebInspectorProxyError)
+        case owner(ResponseFetchLease)
+        case waiter(ResponseFetchLease)
+    }
+
+    private struct ResponseFetch {
+        let lease: ResponseFetchLease
+        var task: Task<Void, Never>?
+    }
+
+    static let invalidatedResponseFetchError = WebInspectorProxyError.disconnected(
+        "NetworkRequest is no longer registered in its WebInspectorContext."
+    )
 
     /// The body side represented by the model.
     public enum Role: CaseIterable, Hashable, Sendable {
@@ -400,6 +424,7 @@ public final class NetworkBody {
     @ObservationIgnored private var isBatchingTextRepresentationInvalidation: Bool
     @ObservationIgnored private var needsTextRepresentationInvalidation: Bool
     @ObservationIgnored private var responseRevision: UInt64
+    @ObservationIgnored private var responseFetch: ResponseFetch?
 
     package init(
         role: Role = .response,
@@ -425,7 +450,15 @@ public final class NetworkBody {
         isBatchingTextRepresentationInvalidation = false
         needsTextRepresentationInvalidation = false
         responseRevision = 0
+        responseFetch = nil
         refreshTextRepresentation()
+    }
+
+    deinit {
+        responseFetch?.lease.completion.fulfill(
+            .failure(Self.invalidatedResponseFetchError)
+        )
+        responseFetch?.task?.cancel()
     }
 
     var needsFetch: Bool {
@@ -437,6 +470,12 @@ public final class NetworkBody {
         }
     }
 
+#if DEBUG
+    package var responseFetchWaiterCountForTesting: Int {
+        responseFetch?.lease.completion.bookkeepingCountForTesting() ?? 0
+    }
+#endif
+
     func updateHints(kind: Kind, sourceSyntaxKind: SyntaxKind) {
         withTextRepresentationInvalidationBatch {
             self.kind = kind
@@ -444,26 +483,87 @@ public final class NetworkBody {
         }
     }
 
-    func beginResponseFetch() -> ResponseRevision {
-        precondition(role == .response, "Only a response NetworkBody can begin a response fetch.")
-        precondition(needsFetch, "A response body fetch can begin only while its body is available.")
-        phase = .fetching
-        return ResponseRevision(rawValue: responseRevision)
+    func acquireResponseFetch() -> ResponseFetchAcquisition {
+        precondition(role == .response, "Only a response NetworkBody can acquire a response fetch.")
+        switch phase {
+        case .loaded:
+            return .loaded
+        case let .failed(error):
+            return .failed(error)
+        case .fetching:
+            guard let responseFetch,
+                  responseFetch.lease.revision.rawValue == responseRevision else {
+                preconditionFailure("A fetching NetworkBody has no current response-fetch owner.")
+            }
+            return .waiter(responseFetch.lease)
+        case .available:
+            precondition(
+                responseFetch == nil,
+                "An available NetworkBody cannot already own a response fetch."
+            )
+            let lease = ResponseFetchLease(
+                identity: ResponseFetchIdentity(),
+                revision: ResponseRevision(rawValue: responseRevision),
+                completion: ReplyPromise<Void>()
+            )
+            responseFetch = ResponseFetch(lease: lease, task: nil)
+            phase = .fetching
+            return .owner(lease)
+        }
+    }
+
+    func installResponseFetchTask(
+        _ task: Task<Void, Never>,
+        for lease: ResponseFetchLease
+    ) {
+        guard var responseFetch,
+              responseFetch.lease.identity === lease.identity,
+              responseFetch.lease.revision == lease.revision else {
+            task.cancel()
+            return
+        }
+        precondition(
+            responseFetch.task == nil,
+            "A NetworkBody response fetch can install only one task."
+        )
+        responseFetch.task = task
+        self.responseFetch = responseFetch
     }
 
     func finishResponseFetch(
         _ result: Result<Network.Body, WebInspectorProxyError>,
-        for revision: ResponseRevision
+        for lease: ResponseFetchLease
     ) {
-        guard revision.rawValue == responseRevision else {
+        guard let responseFetch,
+              responseFetch.lease.identity === lease.identity,
+              responseFetch.lease.revision == lease.revision,
+              lease.revision.rawValue == responseRevision else {
             return
         }
+        self.responseFetch = nil
         switch result {
         case let .success(body):
             load(body)
+            lease.completion.fulfill(.success(()))
         case let .failure(error):
             fail(error)
+            lease.completion.fulfill(.failure(error))
         }
+    }
+
+    func invalidateResponseFetch(
+        with error: WebInspectorProxyError = NetworkBody.invalidatedResponseFetchError,
+        marksBodyFailed: Bool = true
+    ) {
+        guard let responseFetch else {
+            return
+        }
+        self.responseFetch = nil
+        if marksBodyFailed {
+            fail(error)
+        }
+        responseFetch.lease.completion.fulfill(.failure(error))
+        responseFetch.task?.cancel()
     }
 
     func load(_ body: Network.Body) {
@@ -492,6 +592,7 @@ public final class NetworkBody {
             role == .response,
             "Only a response NetworkBody can adopt response metadata."
         )
+        invalidateResponseFetch(marksBodyFailed: false)
         precondition(
             responseRevision < UInt64.max,
             "A NetworkBody exhausted its response revision space."
@@ -968,23 +1069,59 @@ public final class NetworkRequest: WebInspectorFetchableModel {
     }
 
     /// Fetches the response body when it is available and not already loaded.
+    ///
+    /// Concurrent callers join one protocol command. Cancelling a caller ends
+    /// only that caller's wait and does not cancel the shared response fetch.
     public func fetchResponseBody(isolation: isolated (any Actor) = #isolation) async {
-        guard canFetchResponseBody else {
-            return
+        let body = responseBody
+        if case .available = body.phase {
+            guard state == .finished else {
+                return
+            }
         }
-        let expectedResponseRevision = responseBody.beginResponseFetch()
-        guard let modelContext else {
-            responseBody.finishResponseFetch(
-                .failure(.disconnected("NetworkRequest is not registered in a WebInspectorContext.")),
-                for: expectedResponseRevision
-            )
+
+        let lease: NetworkBody.ResponseFetchLease
+        switch body.acquireResponseFetch() {
+        case .loaded, .failed:
             return
+        case let .waiter(existingLease):
+            lease = existingLease
+        case let .owner(newLease):
+            lease = newLease
+            guard let modelContext else {
+                body.finishResponseFetch(
+                    .failure(.disconnected("NetworkRequest is not registered in a WebInspectorContext.")),
+                    for: newLease
+                )
+                return
+            }
+            let task = Task { [weak self, weak body, weak modelContext] in
+                _ = isolation
+                let result: Result<Network.Body, WebInspectorProxyError>
+                if Task.isCancelled {
+                    result = .failure(NetworkBody.invalidatedResponseFetchError)
+                } else if let self, let modelContext {
+                    result = await modelContext.responseBodyResult(
+                        for: self,
+                        isolation: isolation
+                    )
+                } else {
+                    result = .failure(NetworkBody.invalidatedResponseFetchError)
+                }
+                guard let body else {
+                    newLease.completion.fulfill(.failure(NetworkBody.invalidatedResponseFetchError))
+                    return
+                }
+                body.finishResponseFetch(result, for: newLease)
+            }
+            body.installResponseFetchTask(task, for: newLease)
         }
-        await modelContext.fetchResponseBody(
-            for: self,
-            expectedResponseRevision: expectedResponseRevision,
-            isolation: isolation
-        )
+
+        _ = try? await lease.completion.value()
+    }
+
+    func invalidateResponseBodyFetch() {
+        responseBody.invalidateResponseFetch()
     }
 
     func applyRequestWillBeSent(
@@ -1157,13 +1294,6 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         requestBody = NetworkBody.makeRequestBody(for: currentRequest)
         responseBody.resetForResponse(response, fallbackURL: currentRequest.url)
         state = .finished
-    }
-
-    func finishResponseBodyFetch(
-        result: Result<Network.Body, WebInspectorProxyError>,
-        expectedResponseRevision: NetworkBody.ResponseRevision
-    ) {
-        responseBody.finishResponseFetch(result, for: expectedResponseRevision)
     }
 
     func applyWebSocketCreated(url: String) {

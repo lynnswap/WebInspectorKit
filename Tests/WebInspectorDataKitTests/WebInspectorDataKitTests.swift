@@ -8937,7 +8937,203 @@ func fetchResponseBodyStoresLoadedAndFailedPhases() async throws {
 
 @MainActor
 @Test
-func fetchResponseBodyDropsCompletionAfterNetworkClear() async throws {
+func concurrentResponseBodyCallersShareCompletionAcrossCallerCancellation() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let requestID = Network.Request.ID("coalesced-body-request")
+    let gate = WebInspectorTestGate()
+
+    await emitFinishedRequest(id: requestID, target: target, backend: runtime.backend)
+    try await waitUntil {
+        context.registeredRequest(for: NetworkRequest.ID(requestID))?.state == .finished
+    }
+    let request = try #require(context.registeredRequest(for: NetworkRequest.ID(requestID)))
+    let body = request.responseBody
+    await runtime.backend.hold(domain: "Network", method: "getResponseBody", gate: gate)
+    await runtime.backend.enqueue(
+        Network.Body(data: "shared", base64Encoded: false),
+        for: "Network",
+        method: "getResponseBody"
+    )
+
+    let first = Task { @MainActor in
+        await request.fetchResponseBody()
+    }
+    _ = await runtime.backend.waitForRecordedCommands(
+        domain: "Network",
+        method: "getResponseBody",
+        count: 1
+    )
+    let second = Task { @MainActor in
+        await request.fetchResponseBody()
+    }
+    try await waitUntil {
+        body.responseFetchWaiterCountForTesting == 2
+    }
+
+    first.cancel()
+    await first.value
+    try await waitUntil {
+        body.responseFetchWaiterCountForTesting == 1
+    }
+    #expect(body.phase == .fetching)
+    #expect(await runtime.backend.recordedCommands().filter {
+        $0 == RecordedCommand(domain: "Network", method: "getResponseBody")
+    }.count == 1)
+
+    await gate.open()
+    await second.value
+
+    #expect(body.phase == .loaded)
+    #expect(body.text == "shared")
+    #expect(request.responseBody === body)
+    #expect(body.responseFetchWaiterCountForTesting == 0)
+}
+
+@MainActor
+@Test
+func responseReplacementResolvesEveryJoinedResponseBodyWaiter() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let requestID = Network.Request.ID("replaced-coalesced-body")
+    let gate = WebInspectorTestGate()
+
+    await emitFinishedRequest(id: requestID, target: target, backend: runtime.backend)
+    try await waitUntil {
+        context.registeredRequest(for: NetworkRequest.ID(requestID))?.state == .finished
+    }
+    let request = try #require(context.registeredRequest(for: NetworkRequest.ID(requestID)))
+    let body = request.responseBody
+    await runtime.backend.hold(domain: "Network", method: "getResponseBody", gate: gate)
+    await runtime.backend.enqueue(
+        Network.Body(data: "obsolete", base64Encoded: false),
+        for: "Network",
+        method: "getResponseBody"
+    )
+    let firstProbe = ResponseBodyFetchCompletionProbe()
+    let secondProbe = ResponseBodyFetchCompletionProbe()
+    let first = Task { @MainActor in
+        await request.fetchResponseBody()
+        firstProbe.finish()
+    }
+    _ = await runtime.backend.waitForRecordedCommands(
+        domain: "Network",
+        method: "getResponseBody",
+        count: 1
+    )
+    let second = Task { @MainActor in
+        await request.fetchResponseBody()
+        secondProbe.finish()
+    }
+    try await waitUntil {
+        body.responseFetchWaiterCountForTesting == 2
+    }
+
+    await runtime.backend.emit(
+        .responseReceived(
+            id: requestID,
+            response: Network.Response(
+                url: "https://example.com/replaced-body",
+                status: 200,
+                mimeType: "multipart/x-mixed-replace"
+            ),
+            resourceType: .fetch,
+            timestamp: 4
+        ),
+        target: target
+    )
+    try await waitUntil {
+        body.phase == .available
+    }
+
+    do {
+        try await waitUntil {
+            firstProbe.isFinished && secondProbe.isFinished
+        }
+    } catch {
+        await gate.open()
+        await first.value
+        await second.value
+        throw error
+    }
+
+    #expect(request.responseBody === body)
+    #expect(body.phase == .available)
+    #expect(body.full == nil)
+    #expect(body.responseFetchWaiterCountForTesting == 0)
+    await gate.open()
+    await first.value
+    await second.value
+}
+
+@MainActor
+@Test
+func clearingNetworkResolvesEveryJoinedResponseBodyWaiter() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let requestID = Network.Request.ID("cleared-coalesced-body")
+    let gate = WebInspectorTestGate()
+
+    await emitFinishedRequest(id: requestID, target: target, backend: runtime.backend)
+    try await waitUntil {
+        context.registeredRequest(for: NetworkRequest.ID(requestID))?.state == .finished
+    }
+    let request = try #require(context.registeredRequest(for: NetworkRequest.ID(requestID)))
+    let body = request.responseBody
+    await runtime.backend.hold(domain: "Network", method: "getResponseBody", gate: gate)
+    await runtime.backend.enqueue(
+        Network.Body(data: "obsolete", base64Encoded: false),
+        for: "Network",
+        method: "getResponseBody"
+    )
+    let firstProbe = ResponseBodyFetchCompletionProbe()
+    let secondProbe = ResponseBodyFetchCompletionProbe()
+    let first = Task { @MainActor in
+        await request.fetchResponseBody()
+        firstProbe.finish()
+    }
+    _ = await runtime.backend.waitForRecordedCommands(
+        domain: "Network",
+        method: "getResponseBody",
+        count: 1
+    )
+    let second = Task { @MainActor in
+        await request.fetchResponseBody()
+        secondProbe.finish()
+    }
+    try await waitUntil {
+        body.responseFetchWaiterCountForTesting == 2
+    }
+
+    context.clearNetworkRequests()
+    #expect(context.registeredRequest(for: NetworkRequest.ID(requestID)) == nil)
+
+    do {
+        try await waitUntil {
+            firstProbe.isFinished && secondProbe.isFinished
+        }
+    } catch {
+        await gate.open()
+        await first.value
+        await second.value
+        throw error
+    }
+
+    #expect(
+        body.phase
+            == NetworkBody.Phase.failed(NetworkBody.invalidatedResponseFetchError)
+    )
+    #expect(body.text == nil)
+    #expect(request.responseBody === body)
+    #expect(body.responseFetchWaiterCountForTesting == 0)
+    await gate.open()
+    await first.value
+    await second.value
+}
+
+@MainActor
+@Test
+func fetchResponseBodyRejectsLateCompletionAfterNetworkClear() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let requestID = Network.Request.ID("cleared-body-request")
@@ -8968,7 +9164,10 @@ func fetchResponseBodyDropsCompletionAfterNetworkClear() async throws {
     await gate.open()
     await fetchTask.value
 
-    #expect(body.phase == NetworkBody.Phase.fetching)
+    #expect(
+        body.phase
+            == NetworkBody.Phase.failed(NetworkBody.invalidatedResponseFetchError)
+    )
     #expect(body.text == nil)
     #expect(request.responseBody === body)
 }
@@ -10946,6 +11145,15 @@ private struct TimedOut: Error, CustomStringConvertible {
 
     init(_ description: String = "Timed out") {
         self.description = description
+    }
+}
+
+@MainActor
+private final class ResponseBodyFetchCompletionProbe {
+    private(set) var isFinished = false
+
+    func finish() {
+        isFinished = true
     }
 }
 
