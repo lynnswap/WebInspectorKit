@@ -20,8 +20,8 @@ package final class NetworkSplitViewController: UISplitViewController {
             hidesNavigationBar: false
         )
         super.init(style: .doubleColumn)
-        listViewController.setRequestSelectionAction { [weak model] request in
-            model?.selectRequest(request)
+        listViewController.setEntrySelectionAction { [weak model] entryID in
+            model?.selectEntry(entryID)
         }
         configureSplitViewLayout()
     }

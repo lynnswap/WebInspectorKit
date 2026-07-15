@@ -74,6 +74,12 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
     private var mediaPlayerSurfaceBodyID: ObjectIdentifier?
     private var mediaPlayerStatusView: UIContentUnavailableView?
     private var mediaPlayerPreview: NetworkMoviePreview?
+    private var mediaPlayerItemID: ObjectIdentifier?
+    private var mediaPlayerItemStatusObservation: NSKeyValueObservation?
+    private var mediaPlayerFailedToEndObserver: NSObjectProtocol?
+    private var failedMediaPlayerPreview: NetworkMoviePreview?
+    private var failedMediaPlayerMessage: String?
+    private var observesMoviePreviewPlayback = true
     private var moviePreviewPlayerFactory: MoviePreviewPlayerFactory
     private var textPreviewCoordinator = NetworkTextPreviewCoordinator()
     private var mediaPreviewCoordinator = NetworkMediaPreviewCoordinator()
@@ -125,6 +131,7 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
 
     isolated deinit {
         bodyObservation?.cancel()
+        tearDownMoviePreviewObservation()
 #if DEBUG
         previewRenderObservationDelivery?.cancel()
 #endif
@@ -181,6 +188,8 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
         if surface.body !== nextSurface.body || surface.metadata != nextSurface.metadata {
             textPreviewCoordinator.cancel()
             mediaPreviewCoordinator.cancel()
+            failedMediaPlayerPreview = nil
+            failedMediaPlayerMessage = nil
         }
 
         surface = nextSurface
@@ -414,6 +423,12 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
             hideMediaPreview()
             return false
         case .active:
+            if let failedMediaPlayerPreview {
+                displayMoviePreviewFailure(
+                    failedMediaPlayerPreview,
+                    message: failedMediaPlayerMessage
+                )
+            }
             return true
         case .remoteMovie(let preview):
             showMoviePreview(preview)
@@ -465,20 +480,24 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
 
     private func showMoviePreviewLoadingState(bodyID: ObjectIdentifier) {
         installMoviePreviewSurfaceIfNeeded(bodyID: bodyID)
-        clearMoviePreviewSourceIfNeeded(bodyID: bodyID)
+        clearMoviePreviewSourceIfNeeded(bodyID: bodyID, resetsFailure: true)
         showMoviePreviewStatus(UIContentUnavailableConfiguration.loading())
         previewRenderState.showMovieLoading(bodyID: bodyID)
     }
 
-    private func showMoviePreviewUnavailableState(bodyID: ObjectIdentifier) {
+    private func showMoviePreviewUnavailableState(
+        bodyID: ObjectIdentifier,
+        message: String? = nil
+    ) {
         installMoviePreviewSurfaceIfNeeded(bodyID: bodyID)
-        clearMoviePreviewSourceIfNeeded(bodyID: bodyID)
+        clearMoviePreviewSourceIfNeeded(bodyID: bodyID, resetsFailure: false)
         var configuration = UIContentUnavailableConfiguration.empty()
         configuration.image = UIImage(systemName: "exclamationmark.triangle")
         configuration.text = String(
             localized: "network.body.unavailable",
             bundle: WebInspectorUILocalization.bundle
         )
+        configuration.secondaryText = message
         showMoviePreviewStatus(configuration)
         previewRenderState.showMovieUnavailable(bodyID: bodyID)
     }
@@ -512,10 +531,19 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
 
     private func showMoviePreview(_ preview: NetworkMoviePreview) {
         installMoviePreviewSurfaceIfNeeded(bodyID: preview.bodyID)
+        if failedMediaPlayerPreview == preview {
+            displayMoviePreviewFailure(
+                preview,
+                message: failedMediaPlayerMessage
+            )
+            return
+        }
         if mediaPlayerPreview == preview,
            mediaPlayerViewController?.player?.currentItem != nil {
             return
         }
+        failedMediaPlayerPreview = nil
+        failedMediaPlayerMessage = nil
         guard let player = mediaPlayerViewController?.player else {
             preconditionFailure("An installed movie preview surface must own its player.")
         }
@@ -526,7 +554,10 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
             }
         )
         let item = AVPlayerItem(asset: asset)
+        let itemID = ObjectIdentifier(item)
         mediaPlayerPreview = preview
+        mediaPlayerItemID = itemID
+        observeMoviePreviewItem(item, itemID: itemID, preview: preview)
         player.replaceCurrentItem(with: item)
         hideMoviePreviewStatus()
         previewRenderState.showMovie(preview.url)
@@ -559,20 +590,34 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
         mediaPlayerViewController = playerViewController
     }
 
-    private func clearMoviePreviewSourceIfNeeded(bodyID: ObjectIdentifier) {
+    private func clearMoviePreviewSourceIfNeeded(
+        bodyID: ObjectIdentifier,
+        resetsFailure: Bool
+    ) {
         guard mediaPlayerSurfaceBodyID == bodyID,
-              let player = mediaPlayerViewController?.player,
-              mediaPlayerPreview != nil || player.currentItem != nil else {
+              let player = mediaPlayerViewController?.player else {
             return
         }
+        if resetsFailure {
+            failedMediaPlayerPreview = nil
+            failedMediaPlayerMessage = nil
+        }
+        guard mediaPlayerPreview != nil
+                || player.currentItem != nil
+                || mediaPlayerItemStatusObservation != nil
+                || mediaPlayerFailedToEndObserver != nil else {
+            return
+        }
+        tearDownMoviePreviewObservation()
         player.pause()
         player.replaceCurrentItem(with: nil)
         mediaPlayerPreview = nil
     }
 
     private func showMoviePreviewStatus(_ configuration: UIContentUnavailableConfiguration) {
-        guard let playerViewController = mediaPlayerViewController else {
-            preconditionFailure("A movie preview status requires an installed player surface.")
+        guard let playerViewController = mediaPlayerViewController,
+              let overlayView = playerViewController.contentOverlayView else {
+            return
         }
         let statusView: UIContentUnavailableView
         if let mediaPlayerStatusView {
@@ -584,24 +629,132 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
             statusView.backgroundColor = .clear
             statusView.isOpaque = false
             statusView.isUserInteractionEnabled = false
-            guard let playerView = playerViewController.view else {
-                preconditionFailure("An installed movie preview surface must own its view.")
-            }
-            playerView.addSubview(statusView)
+            overlayView.addSubview(statusView)
             NSLayoutConstraint.activate([
-                statusView.topAnchor.constraint(equalTo: playerView.topAnchor),
-                statusView.leadingAnchor.constraint(equalTo: playerView.leadingAnchor),
-                statusView.trailingAnchor.constraint(equalTo: playerView.trailingAnchor),
-                statusView.bottomAnchor.constraint(equalTo: playerView.bottomAnchor),
+                statusView.topAnchor.constraint(equalTo: overlayView.topAnchor),
+                statusView.leadingAnchor.constraint(equalTo: overlayView.leadingAnchor),
+                statusView.trailingAnchor.constraint(equalTo: overlayView.trailingAnchor),
+                statusView.bottomAnchor.constraint(equalTo: overlayView.bottomAnchor),
             ])
             mediaPlayerStatusView = statusView
         }
         statusView.isHidden = false
-        statusView.superview?.bringSubviewToFront(statusView)
     }
 
     private func hideMoviePreviewStatus() {
         mediaPlayerStatusView?.isHidden = true
+    }
+
+    private func observeMoviePreviewItem(
+        _ item: AVPlayerItem,
+        itemID: ObjectIdentifier,
+        preview: NetworkMoviePreview
+    ) {
+        tearDownMoviePreviewObservation()
+        mediaPlayerItemID = itemID
+        guard observesMoviePreviewPlayback else {
+            return
+        }
+
+        mediaPlayerItemStatusObservation = item.observe(
+            \.status,
+            options: [.initial, .new]
+        ) { [weak self] item, _ in
+            let status = MoviePreviewItemStatus(item: item)
+            Task { @MainActor [weak self] in
+                self?.handleMoviePreviewItemStatus(
+                    status,
+                    itemID: itemID,
+                    preview: preview
+                )
+            }
+        }
+        mediaPlayerFailedToEndObserver = NotificationCenter.default.addObserver(
+            forName: AVPlayerItem.failedToPlayToEndTimeNotification,
+            object: item,
+            queue: nil
+        ) { [weak self] notification in
+            let message = (notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? any Error)?
+                .localizedDescription
+            Task { @MainActor [weak self] in
+                self?.handleMoviePreviewFailure(
+                    itemID: itemID,
+                    preview: preview,
+                    message: message
+                )
+            }
+        }
+    }
+
+    private func handleMoviePreviewItemStatus(
+        _ status: MoviePreviewItemStatus,
+        itemID: ObjectIdentifier,
+        preview: NetworkMoviePreview
+    ) {
+        guard mediaPlayerItemID == itemID,
+              mediaPlayerPreview == preview else {
+            return
+        }
+        switch status {
+        case .unknown, .readyToPlay:
+            return
+        case .failed(let message):
+            handleMoviePreviewFailure(
+                itemID: itemID,
+                preview: preview,
+                message: message
+            )
+        }
+    }
+
+    private func handleMoviePreviewFailure(
+        itemID: ObjectIdentifier,
+        preview: NetworkMoviePreview,
+        message: String?
+    ) {
+        guard mediaPlayerItemID == itemID,
+              mediaPlayerPreview == preview else {
+            return
+        }
+        failedMediaPlayerPreview = preview
+        failedMediaPlayerMessage = message
+        guard isRenderingActive else {
+            return
+        }
+        displayMoviePreviewFailure(preview, message: message)
+    }
+
+    private func displayMoviePreviewFailure(
+        _ preview: NetworkMoviePreview,
+        message: String?
+    ) {
+        guard isRenderingActive,
+              failedMediaPlayerPreview == preview,
+              mediaPlayerSurfaceBodyID == preview.bodyID else {
+            return
+        }
+        let failureText = if let message, message.isEmpty == false {
+            message
+        } else {
+            String(
+                localized: "network.body.fetch.error.unavailable",
+                bundle: WebInspectorUILocalization.bundle
+            )
+        }
+        showMoviePreviewUnavailableState(
+            bodyID: preview.bodyID,
+            message: failureText
+        )
+    }
+
+    private func tearDownMoviePreviewObservation() {
+        mediaPlayerItemStatusObservation?.invalidate()
+        mediaPlayerItemStatusObservation = nil
+        if let mediaPlayerFailedToEndObserver {
+            NotificationCenter.default.removeObserver(mediaPlayerFailedToEndObserver)
+        }
+        mediaPlayerFailedToEndObserver = nil
+        mediaPlayerItemID = nil
     }
 
     private func hideMediaPreview() {
@@ -729,6 +882,7 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
     }
 
     private func removeMediaPlayerViewController() {
+        tearDownMoviePreviewObservation()
         mediaPlayerPreview = nil
         mediaPlayerSurfaceBodyID = nil
         mediaPlayerStatusView?.removeFromSuperview()
@@ -767,6 +921,25 @@ private struct ImagePreviewLayoutState {
     var imageSize: CGSize
     var visibleBoundsSize: CGSize
     var minimumZoomScale: CGFloat
+}
+
+private enum MoviePreviewItemStatus: Sendable {
+    case unknown
+    case readyToPlay
+    case failed(String?)
+
+    init(item: AVPlayerItem) {
+        switch item.status {
+        case .unknown:
+            self = .unknown
+        case .readyToPlay:
+            self = .readyToPlay
+        case .failed:
+            self = .failed(item.error?.localizedDescription)
+        @unknown default:
+            self = .failed(nil)
+        }
+    }
 }
 
 @MainActor
@@ -942,6 +1115,11 @@ extension NetworkBodyViewController {
         return mediaPlayerStatusView?.isHidden == false
     }
 
+    var mediaPlayerStatusConfigurationForTesting: UIContentUnavailableConfiguration? {
+        loadViewIfNeeded()
+        return mediaPlayerStatusView?.configuration as? UIContentUnavailableConfiguration
+    }
+
     var moviePreviewStatusForTesting: NetworkMoviePreviewStatusForTesting? {
         loadViewIfNeeded()
         switch previewRenderState.surface {
@@ -954,13 +1132,13 @@ extension NetworkBodyViewController {
         }
     }
 
-    var isMoviePreviewStatusHostedInPlayerForTesting: Bool {
+    var isMoviePreviewStatusHostedInPlayerOverlayForTesting: Bool {
         loadViewIfNeeded()
         guard let mediaPlayerStatusView,
-              let playerView = mediaPlayerViewController?.view else {
+              let contentOverlayView = mediaPlayerViewController?.contentOverlayView else {
             return false
         }
-        return mediaPlayerStatusView.isDescendant(of: playerView)
+        return mediaPlayerStatusView.superview === contentOverlayView
     }
 
     var mediaPlayerIdentityForTesting: ObjectIdentifier? {
@@ -980,6 +1158,18 @@ extension NetworkBodyViewController {
         _ factory: @escaping MoviePreviewPlayerFactory
     ) {
         moviePreviewPlayerFactory = factory
+        observesMoviePreviewPlayback = false
+    }
+
+    var hasMoviePreviewObservationForTesting: Bool {
+        loadViewIfNeeded()
+        return mediaPlayerItemStatusObservation != nil
+            && mediaPlayerFailedToEndObserver != nil
+    }
+
+    var hasMoviePreviewFailureForTesting: Bool {
+        loadViewIfNeeded()
+        return failedMediaPlayerPreview != nil
     }
 
     func waitUntilMediaPreviewPreparationFinishedForTesting() async {

@@ -8,8 +8,8 @@ import UIKit
 package final class NetworkListCell: UICollectionViewListCell {
     private let statusIndicatorView = UIView(frame: CGRect(origin: .zero, size: CGSize(width: 8, height: 8)))
     private let fileTypeLabel = UILabel()
-    private var requestObservation: PortableObservationTracking.Token?
-    private weak var observedRequest: NetworkRequest?
+    private var entryObservation: PortableObservationTracking.Token?
+    private weak var observedEntry: NetworkListEntry?
     private var isRenderingActive = true
 
     override init(frame: CGRect) {
@@ -23,7 +23,7 @@ package final class NetworkListCell: UICollectionViewListCell {
     }
 
     isolated deinit {
-        requestObservation?.cancel()
+        entryObservation?.cancel()
     }
 
     override package func prepareForReuse() {
@@ -31,10 +31,10 @@ package final class NetworkListCell: UICollectionViewListCell {
         unbind()
     }
 
-    package func bind(request: NetworkRequest, renderingActive: Bool) {
-        if observedRequest !== request {
-            cancelRequestObservation()
-            observedRequest = request
+    package func bind(entry: NetworkListEntry, renderingActive: Bool) {
+        if observedEntry !== entry {
+            cancelEntryObservation()
+            observedEntry = entry
         }
         setRenderingActive(renderingActive)
     }
@@ -42,7 +42,7 @@ package final class NetworkListCell: UICollectionViewListCell {
     package func setRenderingActive(_ isActive: Bool) {
         guard isRenderingActive != isActive else {
             if isActive {
-                renderObservedRequest()
+                renderObservedEntry()
                 startRequestObservationIfNeeded()
             }
             return
@@ -50,40 +50,40 @@ package final class NetworkListCell: UICollectionViewListCell {
 
         isRenderingActive = isActive
         if isActive {
-            renderObservedRequest()
+            renderObservedEntry()
             startRequestObservationIfNeeded()
         } else {
-            cancelRequestObservation()
+            cancelEntryObservation()
         }
     }
 
     package func unbind() {
-        cancelRequestObservation()
-        observedRequest = nil
+        cancelEntryObservation()
+        observedEntry = nil
         render(displayName: "", statusSeverity: .neutral, fileTypeLabel: "")
     }
 
     private func startRequestObservationIfNeeded() {
-        guard requestObservation == nil,
-              let observedRequest else {
+        guard entryObservation == nil,
+              let observedEntry else {
             return
         }
-        requestObservation = withPortableContinuousObservation { [weak self, weak observedRequest] _ in
+        entryObservation = withPortableContinuousObservation { [weak self, weak observedEntry] _ in
             guard let self,
-                  let observedRequest,
+                  let observedEntry,
                   self.isRenderingActive,
-                  self.observedRequest === observedRequest else {
+                  self.observedEntry === observedEntry else {
                 return
             }
-            render(request: observedRequest)
+            render(entry: observedEntry)
         }
     }
 
-    private func renderObservedRequest() {
-        guard let observedRequest else {
+    private func renderObservedEntry() {
+        guard let observedEntry else {
             return
         }
-        render(request: observedRequest)
+        render(entry: observedEntry)
     }
 
     private func configureStaticViews() {
@@ -126,11 +126,14 @@ package final class NetworkListCell: UICollectionViewListCell {
         renderAccessories(statusSeverity: statusSeverity, fileTypeLabel: fileTypeLabel)
     }
 
-    private func render(request: NetworkRequest) {
+    private func render(entry: NetworkListEntry) {
+        let requests = entry.requests
+        let representativeRequest = entry.representativeRequest
+        let countSuffix = requests.count > 1 ? " ×\(requests.count)" : ""
         render(
-            displayName: request.displayName,
-            statusSeverity: request.statusSeverity,
-            fileTypeLabel: request.fileTypeLabel
+            displayName: representativeRequest.displayName,
+            statusSeverity: entry.statusSeverity,
+            fileTypeLabel: representativeRequest.fileTypeLabel + countSuffix
         )
     }
 
@@ -156,9 +159,9 @@ package final class NetworkListCell: UICollectionViewListCell {
         }
     }
 
-    private func cancelRequestObservation() {
-        requestObservation?.cancel()
-        requestObservation = nil
+    private func cancelEntryObservation() {
+        entryObservation?.cancel()
+        entryObservation = nil
     }
 
     private static func makeContentConfiguration() -> UIListContentConfiguration {
@@ -187,7 +190,7 @@ extension NetworkListCell {
     }
 
     package var hasActiveRequestObservationForTesting: Bool {
-        requestObservation != nil
+        entryObservation != nil
     }
 }
 #endif

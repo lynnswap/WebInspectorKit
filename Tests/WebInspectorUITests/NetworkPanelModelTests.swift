@@ -1,6 +1,6 @@
 import ObservationBridge
 import Testing
-import WebInspectorDataKit
+@testable import WebInspectorDataKit
 import WebInspectorProxyKit
 import WebInspectorProxyKitTesting
 @testable import WebInspectorUI
@@ -140,9 +140,12 @@ func selectedRequestInvalidatesWhenUnfilteredRequestDisappears() async throws {
     #expect(model.displayRequestIDs.isEmpty)
     #expect(model.selectedRequest === request)
 
+    let rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
     context.clearNetworkRequests()
 
     #expect(model.selectedRequestID == requestID)
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
+    #expect(model.selectedRequestID == nil)
     #expect(model.selectedRequest == nil)
     #expect(await observedValues.waitUntilValue(true))
 }
@@ -457,6 +460,7 @@ func displayResourceFilterUpdatesWhenResponseMIMEBecomesPreviewable() async thro
 
     #expect(model.displayRequestIDs.isEmpty)
 
+    let rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
     await applyResponseReceived(
         to: context,
         requestID: "1",
@@ -465,6 +469,7 @@ func displayResourceFilterUpdatesWhenResponseMIMEBecomesPreviewable() async thro
         mimeType: "image/png",
         timestamp: 1.1
     )
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
     #expect(model.displayRequestIDs == [requestID])
     let request = try #require(context.registeredRequest(for: requestID))
     #expect(request.displayResourceFilter(mediaPreviewClassifier: { mimeType, url in
@@ -520,6 +525,7 @@ func displaySearchFieldsUpdateWhenRequestChanges() async throws {
     model.setSearchText("new-endpoint")
     #expect(model.displayRequestIDs.isEmpty)
 
+    var rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
     await applyRedirectRequest(
         to: context,
         requestID: "1",
@@ -529,6 +535,7 @@ func displaySearchFieldsUpdateWhenRequestChanges() async throws {
         redirectURL: "https://api.example.com/old",
         timestamp: 2
     )
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
     #expect(model.displayRequestIDs == [requestID])
     model.setSearchText("PATCH")
     #expect(model.displayRequestIDs == [requestID])
@@ -540,6 +547,7 @@ func displaySearchFieldsUpdateWhenRequestChanges() async throws {
     model.setSearchText("json")
     #expect(model.displayRequestIDs.isEmpty)
 
+    rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
     await applyResponseReceived(
         to: context,
         requestID: "1",
@@ -550,6 +558,7 @@ func displaySearchFieldsUpdateWhenRequestChanges() async throws {
         statusText: "Created",
         timestamp: 2.1
     )
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
     #expect(model.displayRequestIDs == [requestID])
     model.setSearchText("Created")
     #expect(model.displayRequestIDs == [requestID])
@@ -582,6 +591,7 @@ func requestFileTypeAndSearchUpdateWhenRawMIMETypeAppears() async throws {
     model.setSearchText("json")
     #expect(model.displayRequestIDs.isEmpty)
 
+    let rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
     await applyResponseReceived(
         to: context,
         requestID: "1",
@@ -591,6 +601,7 @@ func requestFileTypeAndSearchUpdateWhenRawMIMETypeAppears() async throws {
         responseHeaders: ["Content-Type": "application/json"],
         timestamp: 1.2
     )
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
     #expect(request.fileTypeLabel == "json")
     #expect(model.displayRequestIDs == [requestID])
 }
@@ -665,8 +676,10 @@ func displayRequestsClearAfterReset() async throws {
 
     #expect(model.displayRequestIDs.count == 1)
 
+    let rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
     context.clearNetworkRequests()
 
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
     #expect(model.displayRequestIDs.isEmpty)
 }
 
@@ -695,9 +708,12 @@ func displayRequestsUpdateWhenResourceCategoryChanges() async throws {
 
     #expect(model.displayRequestIDs == [mediaID])
 
+    var rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
     await applyDataReceived(to: context, requestID: "1", dataLength: 1024, encodedDataLength: 512, timestamp: 3)
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
     #expect(model.displayRequestIDs == [mediaID])
 
+    rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
     await applyResponseReceived(
         to: context,
         requestID: "1",
@@ -706,6 +722,7 @@ func displayRequestsUpdateWhenResourceCategoryChanges() async throws {
         mimeType: "video/mp4",
         timestamp: 4
     )
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
     #expect(model.displayRequestIDs == [mediaID, jsonID])
 }
 
@@ -751,11 +768,13 @@ func clearRequestsClearsSelectionButPreservesDisplayCriteria() async throws {
     model.setSearchText("cdn")
     model.setResourceFilter(.script, enabled: true)
     model.selectRequest(context.registeredRequest(for: requestID))
+    let rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
     model.clearRequests()
 
     #expect(model.selectedRequestID == nil)
     #expect(model.searchText == "cdn")
     #expect(model.activeResourceFilters == [.script])
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
     #expect(model.displayRequests.isEmpty)
     #expect(context.registeredRequest(for: requestID) == nil)
 }
@@ -913,6 +932,753 @@ func responseBodyFetchStartsCurrentRevisionWhilePriorRevisionIsInFlight() async 
     }
     #expect(currentRevisionStarted)
 }
+
+@Test
+@MainActor
+func groupedEntriesUseVisitAndInitiatorIdentityWithoutMergingBackForwardVisits() async throws {
+    let context = makeContext()
+    let frameID = FrameID("main-frame")
+    let nodeID = DOM.Node.ID("video")
+
+    context.apply(WebInspectorTargetLifecycleEvent.frameNavigated(WebInspectorPageFrameLifecycle(
+        id: frameID,
+        parentID: nil,
+        pageBindingID: "page-a-1",
+        loaderID: "loader-a",
+        name: "A",
+        url: "https://example.test/a",
+        securityOrigin: "https://example.test",
+        mimeType: "text/html"
+    )))
+    let a1 = await applyOriginatedPendingRequest(
+        to: context,
+        requestID: "a-1",
+        frameID: frameID,
+        loaderID: "loader-a",
+        pageBindingID: "page-a-1",
+        initiatorNodeID: nodeID,
+        timestamp: 1
+    )
+    let a2 = await applyOriginatedPendingRequest(
+        to: context,
+        requestID: "a-2",
+        frameID: frameID,
+        loaderID: "loader-a",
+        pageBindingID: "page-a-1",
+        initiatorNodeID: nodeID,
+        timestamp: 2
+    )
+
+    context.apply(WebInspectorTargetLifecycleEvent.frameNavigated(WebInspectorPageFrameLifecycle(
+        id: frameID,
+        parentID: nil,
+        pageBindingID: "page-b",
+        loaderID: "loader-b",
+        name: "B",
+        url: "https://example.test/b",
+        securityOrigin: "https://example.test",
+        mimeType: "text/html"
+    )))
+    let b = await applyOriginatedPendingRequest(
+        to: context,
+        requestID: "b",
+        frameID: frameID,
+        loaderID: "loader-b",
+        pageBindingID: "page-b",
+        initiatorNodeID: nodeID,
+        timestamp: 3
+    )
+
+    context.apply(WebInspectorTargetLifecycleEvent.frameNavigated(WebInspectorPageFrameLifecycle(
+        id: frameID,
+        parentID: nil,
+        pageBindingID: "page-a-2",
+        loaderID: "loader-a",
+        name: "A",
+        url: "https://example.test/a",
+        securityOrigin: "https://example.test",
+        mimeType: "text/html"
+    )))
+    let a3 = await applyOriginatedPendingRequest(
+        to: context,
+        requestID: "a-3",
+        frameID: frameID,
+        loaderID: "loader-a",
+        pageBindingID: "page-a-2",
+        initiatorNodeID: nodeID,
+        timestamp: 4
+    )
+
+    let model = NetworkPanelModel(context: context)
+
+    #expect(model.displayEntries.map { $0.requests.map(\.id) } == [[a3], [b], [a1, a2]])
+    #expect(Set(model.displayEntryIDs).count == 3)
+}
+
+@Test
+@MainActor
+func missingVisitOrInitiatorAlwaysProducesSingletonEntries() async {
+    let context = makeContext()
+    let nodeID = DOM.Node.ID("button")
+    let noVisit1 = await applyPendingRequest(
+        to: context,
+        requestID: "no-visit-1",
+        url: "https://example.test/no-visit-1",
+        resourceType: .fetch,
+        timestamp: 1,
+        initiatorNodeID: nodeID
+    )
+    let noVisit2 = await applyPendingRequest(
+        to: context,
+        requestID: "no-visit-2",
+        url: "https://example.test/no-visit-2",
+        resourceType: .fetch,
+        timestamp: 2,
+        initiatorNodeID: nodeID
+    )
+    let frameID = FrameID("main-frame")
+    context.apply(WebInspectorTargetLifecycleEvent.frameNavigated(WebInspectorPageFrameLifecycle(
+        id: frameID,
+        parentID: nil,
+        pageBindingID: "page",
+        loaderID: "loader",
+        name: "Main",
+        url: "https://example.test",
+        securityOrigin: "https://example.test",
+        mimeType: "text/html"
+    )))
+    let noInitiator1 = await applyOriginatedPendingRequest(
+        to: context,
+        requestID: "no-initiator-1",
+        frameID: frameID,
+        loaderID: "loader",
+        pageBindingID: "page",
+        initiatorNodeID: nil,
+        timestamp: 3
+    )
+    let noInitiator2 = await applyOriginatedPendingRequest(
+        to: context,
+        requestID: "no-initiator-2",
+        frameID: frameID,
+        loaderID: "loader",
+        pageBindingID: "page",
+        initiatorNodeID: nil,
+        timestamp: 4
+    )
+
+    let model = NetworkPanelModel(context: context)
+
+    #expect(model.displayEntries.map { $0.requests.map(\.id) } == [
+        [noInitiator2], [noInitiator1], [noVisit2], [noVisit1],
+    ])
+    #expect(Set(model.displayEntryIDs).count == 4)
+}
+
+@Test
+@MainActor
+func groupedFilterRequiresOneMemberToMatchSearchAndResourceFilter() async {
+    let context = makeContext()
+    let frameID = FrameID("main-frame")
+    let nodeID = DOM.Node.ID("loader")
+    context.apply(WebInspectorTargetLifecycleEvent.frameNavigated(WebInspectorPageFrameLifecycle(
+        id: frameID,
+        parentID: nil,
+        pageBindingID: "page",
+        loaderID: "loader",
+        name: "Main",
+        url: "https://example.test",
+        securityOrigin: "https://example.test",
+        mimeType: "text/html"
+    )))
+    _ = await applyOriginatedPendingRequest(
+        to: context,
+        requestID: "script",
+        url: "https://example.test/alpha.js",
+        frameID: frameID,
+        loaderID: "loader",
+        pageBindingID: "page",
+        initiatorNodeID: nodeID,
+        resourceType: .script,
+        timestamp: 1
+    )
+    _ = await applyOriginatedPendingRequest(
+        to: context,
+        requestID: "image",
+        url: "https://example.test/beta.png",
+        frameID: frameID,
+        loaderID: "loader",
+        pageBindingID: "page",
+        initiatorNodeID: nodeID,
+        resourceType: .image,
+        timestamp: 2
+    )
+    let model = NetworkPanelModel(context: context)
+    model.setResourceFilter(.script, enabled: true)
+
+    model.setSearchText("beta")
+    #expect(model.displayEntries.isEmpty)
+
+    model.setSearchText("alpha")
+    #expect(model.displayEntries.count == 1)
+    #expect(model.displayEntries[0].requests.count == 2)
+}
+
+@Test
+@MainActor
+func selectingAnyGroupedMemberUsesStableEntryAndOldestRepresentative() async throws {
+    let context = makeContext()
+    let frameID = FrameID("main-frame")
+    let nodeID = DOM.Node.ID("player")
+    context.apply(WebInspectorTargetLifecycleEvent.frameNavigated(WebInspectorPageFrameLifecycle(
+        id: frameID,
+        parentID: nil,
+        pageBindingID: "page",
+        loaderID: "loader",
+        name: "Main",
+        url: "https://example.test",
+        securityOrigin: "https://example.test",
+        mimeType: "text/html"
+    )))
+    let firstID = await applyOriginatedPendingRequest(
+        to: context,
+        requestID: "first",
+        frameID: frameID,
+        loaderID: "loader",
+        pageBindingID: "page",
+        initiatorNodeID: nodeID,
+        timestamp: 1
+    )
+    let secondID = await applyOriginatedPendingRequest(
+        to: context,
+        requestID: "second",
+        frameID: frameID,
+        loaderID: "loader",
+        pageBindingID: "page",
+        initiatorNodeID: nodeID,
+        timestamp: 2
+    )
+    let model = NetworkPanelModel(context: context)
+    let stableID = try #require(model.displayEntryIDs.first)
+
+    model.selectRequest(context.registeredRequest(for: secondID))
+
+    #expect(model.selectedEntryID == stableID)
+    #expect(model.selectedRequest?.id == firstID)
+    #expect(model.selectedRequests.map(\.id) == [firstID, secondID])
+}
+
+@Test
+@MainActor
+func liveGroupedInsertionPreservesEntryIdentityRowPositionAndChronologicalMembers() async throws {
+    let context = makeContext()
+    let frameID = FrameID("main-frame")
+    let nodeID = DOM.Node.ID("player")
+    context.apply(WebInspectorTargetLifecycleEvent.frameNavigated(WebInspectorPageFrameLifecycle(
+        id: frameID,
+        parentID: nil,
+        pageBindingID: "page",
+        loaderID: "loader",
+        name: "Main",
+        url: "https://example.test",
+        securityOrigin: "https://example.test",
+        mimeType: "text/html"
+    )))
+    let model = NetworkPanelModel(context: context)
+
+    var rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
+    let firstID = await applyOriginatedPendingRequest(
+        to: context,
+        requestID: "first",
+        frameID: frameID,
+        loaderID: "loader",
+        pageBindingID: "page",
+        initiatorNodeID: nodeID,
+        timestamp: 10
+    )
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
+    let stableEntryID = try #require(model.entryID(containing: firstID))
+    let stableEntry = try #require(model.entry(for: stableEntryID))
+
+    rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
+    let newerSingletonID = await applyPendingRequest(
+        to: context,
+        requestID: "newer-singleton",
+        url: "https://example.test/newer-singleton",
+        resourceType: .fetch,
+        timestamp: 20
+    )
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
+    #expect(model.displayEntryIDs == [model.entryID(containing: newerSingletonID), stableEntryID].compactMap { $0 })
+
+    rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
+    let laterID = await applyOriginatedPendingRequest(
+        to: context,
+        requestID: "later",
+        frameID: frameID,
+        loaderID: "loader",
+        pageBindingID: "page",
+        initiatorNodeID: nodeID,
+        timestamp: 30
+    )
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
+    #expect(model.displayEntryIDs.last == stableEntryID)
+    #expect(model.entry(for: stableEntryID) === stableEntry)
+    #expect(stableEntry.requests.map(\.id) == [firstID, laterID])
+
+    rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
+    let lateOlderID = await applyOriginatedPendingRequest(
+        to: context,
+        requestID: "late-older",
+        frameID: frameID,
+        loaderID: "loader",
+        pageBindingID: "page",
+        initiatorNodeID: nodeID,
+        timestamp: 5
+    )
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
+
+    rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
+    let sameTimestampID = await applyOriginatedPendingRequest(
+        to: context,
+        requestID: "same-timestamp",
+        frameID: frameID,
+        loaderID: "loader",
+        pageBindingID: "page",
+        initiatorNodeID: nodeID,
+        timestamp: 5
+    )
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
+
+    #expect(model.displayEntryIDs.last == stableEntryID)
+    #expect(model.entry(for: stableEntryID) === stableEntry)
+    #expect(stableEntry.representativeRequest.id == lateOlderID)
+    #expect(stableEntry.requests.map(\.id) == [lateOlderID, sameTimestampID, firstID, laterID])
+}
+
+@Test
+@MainActor
+func groupedSelectionTracksAnchoredMemberAndPreservesSelectionWhenAnotherMemberLeaves() async throws {
+    let context = makeContext()
+    let frameID = FrameID("main-frame")
+    let nodeID = DOM.Node.ID("player")
+    context.apply(WebInspectorTargetLifecycleEvent.frameNavigated(WebInspectorPageFrameLifecycle(
+        id: frameID,
+        parentID: nil,
+        pageBindingID: "page",
+        loaderID: "loader",
+        name: "Main",
+        url: "https://example.test",
+        securityOrigin: "https://example.test",
+        mimeType: "text/html"
+    )))
+    let firstID = await applyOriginatedPendingRequest(
+        to: context,
+        requestID: "first",
+        frameID: frameID,
+        loaderID: "loader",
+        pageBindingID: "page",
+        initiatorNodeID: nodeID,
+        timestamp: 1
+    )
+    let secondID = await applyOriginatedPendingRequest(
+        to: context,
+        requestID: "second",
+        frameID: frameID,
+        loaderID: "loader",
+        pageBindingID: "page",
+        initiatorNodeID: nodeID,
+        timestamp: 2
+    )
+    let thirdID = await applyOriginatedPendingRequest(
+        to: context,
+        requestID: "third",
+        frameID: frameID,
+        loaderID: "loader",
+        pageBindingID: "page",
+        initiatorNodeID: nodeID,
+        timestamp: 3
+    )
+    let model = NetworkPanelModel(context: context)
+    let groupedEntryID = try #require(model.entryID(containing: firstID))
+    #expect(model.entry(for: groupedEntryID)?.requests.map(\.id) == [firstID, secondID, thirdID])
+
+    model.selectRequest(context.registeredRequest(for: firstID))
+    var rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
+    await applyLoadingFinished(to: context, requestID: "second", timestamp: 4)
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
+    rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
+    _ = await applyPendingRequest(
+        to: context,
+        requestID: "second",
+        url: "https://example.test/reused-second",
+        resourceType: .fetch,
+        timestamp: 5
+    )
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
+    #expect(model.selectedEntryID == groupedEntryID)
+    #expect(model.selectedRequestID == firstID)
+    #expect(model.entry(for: groupedEntryID)?.requests.map(\.id) == [firstID, thirdID])
+
+    model.selectRequest(context.registeredRequest(for: thirdID))
+    rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
+    await applyLoadingFinished(to: context, requestID: "third", timestamp: 6)
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
+    rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
+    _ = await applyPendingRequest(
+        to: context,
+        requestID: "third",
+        url: "https://example.test/reused-third",
+        resourceType: .fetch,
+        timestamp: 7
+    )
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
+    #expect(model.selectedRequestID == thirdID)
+    #expect(model.selectedEntryID == model.entryID(containing: thirdID))
+    #expect(model.selectedRequest?.id == thirdID)
+    #expect(model.entry(for: groupedEntryID)?.requests.map(\.id) == [firstID])
+}
+
+@Test
+@MainActor
+func reusedProtocolRequestIDPublishesLatestLifecycleAndReordersSingleton() async throws {
+    let context = makeContext()
+    let reusedID = await applyPendingRequest(
+        to: context,
+        requestID: "reused",
+        url: "https://example.test/first",
+        resourceType: .fetch,
+        timestamp: 1
+    )
+    await applyLoadingFinished(to: context, requestID: "reused", timestamp: 1.5)
+    let newerID = await applyPendingRequest(
+        to: context,
+        requestID: "newer",
+        url: "https://example.test/newer",
+        resourceType: .fetch,
+        timestamp: 2
+    )
+    let model = NetworkPanelModel(context: context)
+    let reusedEntryID = try #require(model.entryID(containing: reusedID))
+    let newerEntryID = try #require(model.entryID(containing: newerID))
+    let stableEntry = try #require(model.entry(for: reusedEntryID))
+    model.selectRequest(context.registeredRequest(for: reusedID))
+    #expect(model.displayEntryIDs == [newerEntryID, reusedEntryID])
+    let rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
+    let publicationBaseline = model.listTransactionPublicationCountForTesting
+
+    _ = await applyPendingRequest(
+        to: context,
+        requestID: "reused",
+        url: "https://example.test/latest",
+        resourceType: .fetch,
+        timestamp: 3
+    )
+
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
+    #expect(model.displayEntryIDs == [reusedEntryID, newerEntryID])
+    #expect(model.displayEntryIDs.count == 2)
+    #expect(model.entry(for: reusedEntryID) === stableEntry)
+    #expect(model.selectedEntryID == reusedEntryID)
+    #expect(model.selectedRequest?.url == "https://example.test/latest")
+    #expect(model.selectedRequest?.requestSentTimestamp == 3)
+    #expect(model.selectedRequest?.lifecycleRevision == 1)
+    #expect(model.listTransactionPublicationCountForTesting == publicationBaseline + 1)
+}
+
+@Test
+@MainActor
+func selectedSingletonReusedIntoGroupPreservesSelection() async throws {
+    let context = makeContext()
+    let reusedID = await applyPendingRequest(
+        to: context,
+        requestID: "reused",
+        url: "https://example.test/first",
+        resourceType: .fetch,
+        timestamp: 1
+    )
+    await applyLoadingFinished(to: context, requestID: "reused", timestamp: 2)
+    let model = NetworkPanelModel(context: context)
+    model.selectRequest(context.registeredRequest(for: reusedID))
+
+    let frameID = FrameID("main-frame")
+    context.apply(WebInspectorTargetLifecycleEvent.frameNavigated(WebInspectorPageFrameLifecycle(
+        id: frameID,
+        parentID: nil,
+        pageBindingID: "page",
+        loaderID: "loader",
+        name: "Main",
+        url: "https://example.test",
+        securityOrigin: "https://example.test",
+        mimeType: "text/html"
+    )))
+    let rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
+    _ = await applyOriginatedPendingRequest(
+        to: context,
+        requestID: "reused",
+        frameID: frameID,
+        loaderID: "loader",
+        pageBindingID: "page",
+        initiatorNodeID: DOM.Node.ID("player"),
+        timestamp: 3
+    )
+
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
+    let groupedEntryID = try #require(model.entryID(containing: reusedID))
+    #expect(model.selectedRequestID == reusedID)
+    #expect(model.selectedEntryID == groupedEntryID)
+    #expect(model.selectedRequest?.id == reusedID)
+    #expect(model.selectedRequest?.url == "https://example.test/reused")
+}
+
+@Test
+@MainActor
+func contentUpdateReevaluatesOnlyItsEntryWithoutTopologyPublicationOrFullRebuild() async throws {
+    let context = makeContext()
+    let updatedRequestID = await applyPendingRequest(
+        to: context,
+        requestID: "updated",
+        url: "https://example.test/updated",
+        resourceType: .fetch,
+        timestamp: 1
+    )
+    let unaffectedRequestID = await applyPendingRequest(
+        to: context,
+        requestID: "unaffected",
+        url: "https://example.test/unaffected",
+        resourceType: .fetch,
+        timestamp: 2
+    )
+    let model = NetworkPanelModel(context: context)
+    model.setSearchText("example.test")
+    let updatedEntryID = try #require(model.entryID(containing: updatedRequestID))
+    _ = try #require(model.entryID(containing: unaffectedRequestID))
+    let rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
+    let rebuildBaseline = model.fullEntryRebuildCountForTesting
+    let filterEvaluationBaseline = model.filterEvaluationCountForTesting
+    let publicationBaseline = model.listTransactionPublicationCountForTesting
+
+    await applyResponseReceived(
+        to: context,
+        requestID: "updated",
+        url: "https://example.test/updated",
+        resourceType: .fetch,
+        mimeType: "application/json",
+        status: 201,
+        statusText: "Created",
+        timestamp: 3
+    )
+
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
+    #expect(model.rawTransactionDeliveryCountForTesting == rawTransactionBaseline + 1)
+    #expect(model.fullEntryRebuildCountForTesting == rebuildBaseline)
+    #expect(model.filterEvaluationCountForTesting == filterEvaluationBaseline + 1)
+    #expect(model.listTransactionPublicationCountForTesting == publicationBaseline)
+    #expect(model.entry(for: updatedEntryID)?.representativeRequest.status == 201)
+
+    let countersAfterRelevantUpdate = (
+        model.rawTransactionDeliveryCountForTesting,
+        model.fullEntryRebuildCountForTesting,
+        model.filterEvaluationCountForTesting,
+        model.listTransactionPublicationCountForTesting
+    )
+    await applyDataReceived(
+        to: context,
+        requestID: "updated",
+        dataLength: 1,
+        encodedDataLength: 1,
+        timestamp: 4
+    )
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: countersAfterRelevantUpdate.0))
+    #expect(model.rawTransactionDeliveryCountForTesting == countersAfterRelevantUpdate.0 + 1)
+    #expect(model.fullEntryRebuildCountForTesting == countersAfterRelevantUpdate.1)
+    #expect(model.filterEvaluationCountForTesting == countersAfterRelevantUpdate.2 + 1)
+    #expect(model.listTransactionPublicationCountForTesting == countersAfterRelevantUpdate.3)
+}
+
+@Test
+@MainActor
+func activeFilterContentUpdateTraversesOnlyAffectedGroupMembers() async throws {
+    let context = makeContext()
+    let frameID = FrameID("main-frame")
+    let nodeID = DOM.Node.ID("filtered-group")
+    context.apply(WebInspectorTargetLifecycleEvent.frameNavigated(WebInspectorPageFrameLifecycle(
+        id: frameID,
+        parentID: nil,
+        pageBindingID: "page",
+        loaderID: "loader",
+        name: "Main",
+        url: "https://example.test",
+        securityOrigin: "https://example.test",
+        mimeType: "text/html"
+    )))
+    for index in 0..<3 {
+        _ = await applyOriginatedPendingRequest(
+            to: context,
+            requestID: "grouped-\(index)",
+            frameID: frameID,
+            loaderID: "loader",
+            pageBindingID: "page",
+            initiatorNodeID: nodeID,
+            resourceType: .other,
+            timestamp: Double(index + 1)
+        )
+    }
+    _ = await applyPendingRequest(
+        to: context,
+        requestID: "unaffected",
+        url: "https://example.test/unaffected",
+        resourceType: .other,
+        timestamp: 4
+    )
+    let model = NetworkPanelModel(context: context)
+    model.setResourceFilter(.media, enabled: true)
+    #expect(model.displayEntryIDs.isEmpty)
+    let rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
+    let rebuildBaseline = model.fullEntryRebuildCountForTesting
+    let filterEvaluationBaseline = model.filterEvaluationCountForTesting
+    let traversalBaseline = model.memberTraversalCountForTesting
+    let orderingBaseline = model.requestOrderComparisonCountForTesting
+    let publicationBaseline = model.listTransactionPublicationCountForTesting
+
+    await applyResponseReceived(
+        to: context,
+        requestID: "grouped-2",
+        url: "https://example.test/grouped-2.mp4",
+        resourceType: .media,
+        mimeType: "video/mp4",
+        timestamp: 5
+    )
+
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
+    #expect(model.displayEntryIDs.count == 1)
+    #expect(model.fullEntryRebuildCountForTesting == rebuildBaseline)
+    #expect(model.filterEvaluationCountForTesting == filterEvaluationBaseline + 1)
+    #expect(model.memberTraversalCountForTesting == traversalBaseline + 3)
+    #expect(model.requestOrderComparisonCountForTesting == orderingBaseline)
+    #expect(model.listTransactionPublicationCountForTesting == publicationBaseline + 1)
+}
+
+@Test
+@MainActor
+func largeRawRequestSetHasNoCapAndContentUpdateVisitsOnlyAffectedEntry() async {
+    let context = makeContext()
+    for index in 0..<2_305 {
+        context.seedNetworkRequest(
+            requestID: "request-\(index)",
+            url: "https://example.test/\(index).json",
+            resourceTypeRawValue: "Fetch",
+            responseMIMEType: "application/json",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            timestamp: Double(index)
+        )
+    }
+
+    let model = NetworkPanelModel(context: context)
+
+    #expect(model.displayEntries.count == 2_305)
+    #expect(model.displayEntries.first?.representativeRequest.requestSentTimestamp == 2_304)
+    #expect(model.displayEntries.last?.representativeRequest.requestSentTimestamp == 0)
+
+    let updatedRequestID = NetworkRequest.ID(Network.Request.ID("request-1152"))
+    let updatedEntryID = model.entryID(containing: updatedRequestID)
+    let rebuildBaseline = model.fullEntryRebuildCountForTesting
+    let filterEvaluationBaseline = model.filterEvaluationCountForTesting
+    let publicationBaseline = model.listTransactionPublicationCountForTesting
+    let rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
+
+    await applyResponseReceived(
+        to: context,
+        requestID: "request-1152",
+        url: "https://example.test/1152.json",
+        resourceType: .fetch,
+        mimeType: "application/json",
+        status: 500,
+        statusText: "Server Error",
+        timestamp: 3_000
+    )
+
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
+    #expect(model.displayEntries.count == 2_305)
+    #expect(model.entryID(containing: updatedRequestID) == updatedEntryID)
+    #expect(updatedEntryID.flatMap(model.entry(for:))?.statusSeverity == .error)
+    #expect(model.fullEntryRebuildCountForTesting == rebuildBaseline)
+    #expect(model.filterEvaluationCountForTesting == filterEvaluationBaseline)
+    #expect(model.listTransactionPublicationCountForTesting == publicationBaseline)
+}
+
+@Test
+@MainActor
+func largeGroupContentEventsDoNotTraverseOrResortMembership() async throws {
+    let context = makeContext()
+    let frameID = FrameID("main-frame")
+    let nodeID = DOM.Node.ID("large-group")
+    context.apply(WebInspectorTargetLifecycleEvent.frameNavigated(WebInspectorPageFrameLifecycle(
+        id: frameID,
+        parentID: nil,
+        pageBindingID: "page",
+        loaderID: "loader",
+        name: "Main",
+        url: "https://example.test",
+        securityOrigin: "https://example.test",
+        mimeType: "text/html"
+    )))
+    for index in 0..<2_305 {
+        await applyOriginatedPendingRequest(
+            to: context,
+            requestID: "grouped-\(index)",
+            frameID: frameID,
+            loaderID: "loader",
+            pageBindingID: "page",
+            initiatorNodeID: nodeID,
+            timestamp: Double(index)
+        )
+    }
+
+    let model = NetworkPanelModel(context: context)
+    let updatedRequestID = NetworkRequest.ID(Network.Request.ID("grouped-1152"))
+    let entryID = try #require(model.entryID(containing: updatedRequestID))
+    #expect(model.displayEntries.count == 1)
+    #expect(model.entry(for: entryID)?.requests.count == 2_305)
+    let traversalBaseline = model.memberTraversalCountForTesting
+    let comparisonBaseline = model.requestOrderComparisonCountForTesting
+    let filterEvaluationBaseline = model.filterEvaluationCountForTesting
+    let publicationBaseline = model.listTransactionPublicationCountForTesting
+
+    var rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
+    await applyResponseReceived(
+        to: context,
+        requestID: "grouped-1152",
+        url: "https://example.test/grouped-1152",
+        resourceType: .fetch,
+        mimeType: "application/json",
+        status: 200,
+        statusText: "OK",
+        timestamp: 3_000
+    )
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
+
+    rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
+    await applyDataReceived(
+        to: context,
+        requestID: "grouped-1152",
+        dataLength: 128,
+        encodedDataLength: 64,
+        timestamp: 3_001
+    )
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
+
+    rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
+    await applyLoadingFinished(to: context, requestID: "grouped-1152", timestamp: 3_002)
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
+
+    #expect(model.entry(for: entryID)?.requests.count == 2_305)
+    #expect(model.entry(for: entryID)?.statusSeverity == .success)
+    #expect(model.memberTraversalCountForTesting == traversalBaseline)
+    #expect(model.requestOrderComparisonCountForTesting == comparisonBaseline)
+    #expect(model.filterEvaluationCountForTesting == filterEvaluationBaseline)
+    #expect(model.listTransactionPublicationCountForTesting == publicationBaseline)
+}
 }
 
 @MainActor
@@ -1014,18 +1780,54 @@ private func applyPendingRequest(
     url: String,
     method: String = "GET",
     resourceType: Network.ResourceType,
-    timestamp: Double
+    timestamp: Double,
+    initiatorNodeID: DOM.Node.ID? = nil
 ) async -> NetworkRequest.ID {
     let requestID = Network.Request.ID(rawRequestID)
     await context.apply(
         .requestWillBeSent(
             id: requestID,
             request: Network.Request(id: requestID, url: url, method: method),
+            initiator: Network.Initiator(kind: "other", nodeID: initiatorNodeID),
             resourceType: resourceType,
             redirectResponse: nil,
             timestamp: timestamp
         )
     )
+    return context.registeredRequest(forProxyID: requestID)!.id
+}
+
+@MainActor
+@discardableResult
+private func applyOriginatedPendingRequest(
+    to context: WebInspectorContext,
+    requestID rawRequestID: String,
+    url: String? = nil,
+    frameID: FrameID,
+    loaderID: String,
+    pageBindingID: String?,
+    initiatorNodeID: DOM.Node.ID?,
+    resourceType: Network.ResourceType = .fetch,
+    timestamp: Double
+) async -> NetworkRequest.ID {
+    let requestID = Network.Request.ID(rawRequestID)
+    await context.apply(.requestWillBeSent(
+        id: requestID,
+        request: Network.Request(
+            id: requestID,
+            url: url ?? "https://example.test/\(rawRequestID)",
+            method: "GET",
+            origin: Network.Request.Origin(
+                frameID: frameID,
+                loaderID: loaderID,
+                targetID: pageBindingID
+            )
+        ),
+        initiator: Network.Initiator(kind: "other", nodeID: initiatorNodeID),
+        resourceType: resourceType,
+        redirectResponse: nil,
+        timestamp: timestamp
+    ))
     return context.registeredRequest(forProxyID: requestID)!.id
 }
 

@@ -13,18 +13,18 @@ package final class NetworkCompactNavigationController: UINavigationController, 
 
     private enum SelectionCommit {
         case none
-        case clearIfStillSelected(NetworkRequest.ID)
+        case clearIfStillSelected(NetworkListEntry.ID)
 
         @MainActor
         func apply(to model: NetworkPanelModel) {
             switch self {
             case .none:
                 return
-            case .clearIfStillSelected(let requestID):
-                guard model.selectedRequestID == requestID else {
+            case .clearIfStillSelected(let entryID):
+                guard model.selectedEntryID == entryID else {
                     return
                 }
-                model.selectRequest(nil)
+                model.selectEntry(nil)
             }
         }
     }
@@ -61,8 +61,8 @@ package final class NetworkCompactNavigationController: UINavigationController, 
         navigationBar.compactScrollEdgeAppearance = navigationBar.compactAppearance ?? navigationBar.standardAppearance
         webInspectorApplyNavigationControllerBackground(to: self)
         delegate = self
-        listViewController.setRequestSelectionAction { [weak model] request in
-            model?.selectRequest(request)
+        listViewController.setEntrySelectionAction { [weak model] entryID in
+            model?.selectEntry(entryID)
         }
     }
 
@@ -252,7 +252,7 @@ package final class NetworkCompactNavigationController: UINavigationController, 
 
     private func finishUntrackedDetailRemovalIfNeeded(shownTarget: StackTarget?) {
         guard shownTarget == .list,
-              model.selectedRequestID != nil else {
+              model.selectedEntryID != nil else {
             return
         }
         commit(
@@ -291,10 +291,10 @@ package final class NetworkCompactNavigationController: UINavigationController, 
     }
 
     private func userPopSelectionCommit() -> SelectionCommit {
-        guard let selectedRequestID = model.selectedRequestID else {
+        guard let selectedEntryID = model.selectedEntryID else {
             return .none
         }
-        return .clearIfStillSelected(selectedRequestID)
+        return .clearIfStillSelected(selectedEntryID)
     }
 
     private func applyBackgroundFromTraits() {
