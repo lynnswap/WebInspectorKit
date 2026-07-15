@@ -8932,6 +8932,320 @@ func staleRuntimeObjectThrowsWithoutFailingContext() async throws {
 
 @MainActor
 @Test
+func lateEvaluateReplyDoesNotRegisterObjectAfterContextDestruction() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let contextID = Runtime.ExecutionContext.ID("late-evaluate-context")
+    let evaluationGate = WebInspectorTestGate()
+
+    await runtime.backend.emit(
+        .executionContextCreated(Runtime.ExecutionContext(
+            id: contextID,
+            name: "Main",
+            frameID: FrameID("main-frame"),
+            kind: .normal
+        )),
+        target: target
+    )
+    try await waitUntil { context.executionContexts.count == 1 }
+    let runtimeContext = try #require(context.executionContexts.first)
+
+    await runtime.backend.hold(domain: "Runtime", method: "evaluate", gate: evaluationGate)
+    await runtime.backend.enqueue(
+        Runtime.EvaluationResult(
+            object: Runtime.RemoteObject(
+                id: Runtime.RemoteObject.ID("late-evaluate-object"),
+                kind: .object,
+                description: "stale"
+            )
+        ),
+        for: "Runtime",
+        method: "evaluate"
+    )
+
+    var evaluationError: WebInspectorProxyError?
+    let evaluationTask = Task { @MainActor in
+        do {
+            _ = try await context.evaluate("window", in: runtimeContext)
+        } catch {
+            evaluationError = error as? WebInspectorProxyError
+        }
+    }
+    _ = await runtime.backend.waitForRecordedCommands(domain: "Runtime", method: "evaluate", count: 1)
+
+    await runtime.backend.emit(.executionContextDestroyed(contextID), target: target)
+    try await waitUntil { context.executionContexts.isEmpty }
+    await evaluationGate.open()
+
+    await evaluationTask.value
+    #expect(evaluationError == .disconnected("Runtime command result is no longer current."))
+    #expect(context.state == .attached)
+}
+
+@MainActor
+@Test
+func childFrameNavigationAndDetachClearOnlyChildRuntimeAuthority() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let mainContextID = Runtime.ExecutionContext.ID("main-context")
+    let childContextID = Runtime.ExecutionContext.ID("child-context")
+    let childFrameID = FrameID("child-frame")
+    let propertiesGate = WebInspectorTestGate()
+
+    await runtime.backend.emit(
+        .executionContextCreated(Runtime.ExecutionContext(
+            id: mainContextID,
+            name: "Main",
+            frameID: FrameID("main-frame"),
+            kind: .normal
+        )),
+        target: target
+    )
+    await runtime.backend.emit(
+        .executionContextCreated(Runtime.ExecutionContext(
+            id: childContextID,
+            name: "Child",
+            frameID: childFrameID,
+            kind: .normal
+        )),
+        target: target
+    )
+    try await waitUntil { context.executionContexts.count == 2 }
+    let childContext = try #require(context.executionContexts.first {
+        $0.id == RuntimeContext.ID(childContextID)
+    })
+
+    await runtime.backend.enqueue(
+        Runtime.EvaluationResult(
+            object: Runtime.RemoteObject(
+                id: Runtime.RemoteObject.ID("child-window"),
+                kind: .object,
+                description: "child window"
+            )
+        ),
+        for: "Runtime",
+        method: "evaluate"
+    )
+    let childWindow = try await context.evaluate("window", in: childContext).object
+
+    await runtime.backend.hold(domain: "Runtime", method: "getProperties", gate: propertiesGate)
+    await runtime.backend.enqueue(
+        [
+            Runtime.PropertyDescriptor(
+                name: "lateChild",
+                value: Runtime.RemoteObject(
+                    id: Runtime.RemoteObject.ID("late-child-property"),
+                    kind: .object
+                )
+            )
+        ],
+        for: "Runtime",
+        method: "getProperties"
+    )
+    var propertiesError: WebInspectorProxyError?
+    let propertiesTask = Task { @MainActor in
+        do {
+            _ = try await childWindow.properties()
+        } catch {
+            propertiesError = error as? WebInspectorProxyError
+        }
+    }
+    _ = await runtime.backend.waitForRecordedCommands(domain: "Runtime", method: "getProperties", count: 1)
+
+    let lifecycleBaseline = context.eventPumpAppliedSequenceForTesting
+    await runtime.backend.emit(
+        .frameNavigated(WebInspectorPageFrameLifecycle(
+            id: childFrameID,
+            parentID: FrameID("main-frame"),
+            loaderID: "child-loader-2",
+            name: "Child",
+            url: "https://example.test/child-next",
+            securityOrigin: "https://example.test",
+            mimeType: "text/html"
+        )),
+        target: target
+    )
+    #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: lifecycleBaseline))
+    #expect(context.executionContexts.map(\.id) == [RuntimeContext.ID(mainContextID)])
+
+    await propertiesGate.open()
+    await propertiesTask.value
+    #expect(propertiesError == .disconnected("Runtime command result is no longer current."))
+    #expect(context.executionContexts.map(\.id) == [RuntimeContext.ID(mainContextID)])
+
+    let detachedContextID = Runtime.ExecutionContext.ID("detached-child-context")
+    await runtime.backend.emit(
+        .executionContextCreated(Runtime.ExecutionContext(
+            id: detachedContextID,
+            name: "Detached child",
+            frameID: childFrameID,
+            kind: .normal
+        )),
+        target: target
+    )
+    try await waitUntil { context.executionContexts.count == 2 }
+    let detachBaseline = context.eventPumpAppliedSequenceForTesting
+    await runtime.backend.emit(.frameDetached(frameID: childFrameID), target: target)
+    #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: detachBaseline))
+    #expect(context.executionContexts.map(\.id) == [RuntimeContext.ID(mainContextID)])
+}
+
+@MainActor
+@Test
+func newNormalFrameContextReplacesPriorTargetContextsAndObjects() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (_, context) = try await startContext(runtime: runtime)
+    let frameTargetID = WebInspectorTarget.ID("frame-runtime-replacement")
+    let frameID = FrameID("child-frame")
+    let firstContextID = Runtime.ExecutionContext.ID(
+        "1",
+        scopedToTargetRawValue: frameTargetID.rawValue
+    )
+    let utilityContextID = Runtime.ExecutionContext.ID(
+        "2",
+        scopedToTargetRawValue: frameTargetID.rawValue
+    )
+    let replacementContextID = Runtime.ExecutionContext.ID(
+        "3",
+        scopedToTargetRawValue: frameTargetID.rawValue
+    )
+
+    context.apply(
+        .executionContextCreated(Runtime.ExecutionContext(
+            id: firstContextID,
+            name: "First",
+            frameID: frameID,
+            kind: .normal
+        )),
+        targetID: frameTargetID
+    )
+    context.apply(
+        .executionContextCreated(Runtime.ExecutionContext(
+            id: utilityContextID,
+            name: "Utility",
+            frameID: frameID,
+            kind: .user
+        )),
+        targetID: frameTargetID
+    )
+    let firstContext = try #require(context.executionContexts.first {
+        $0.id == RuntimeContext.ID(firstContextID)
+    })
+
+    await runtime.backend.enqueue(
+        Runtime.EvaluationResult(
+            object: Runtime.RemoteObject(
+                id: Runtime.RemoteObject.ID(
+                    "old-object",
+                    scopedToTargetRawValue: frameTargetID.rawValue
+                ),
+                kind: .object
+            )
+        ),
+        for: "Runtime",
+        method: "evaluate"
+    )
+    let oldObject = try await context.evaluate("window", in: firstContext).object
+
+    context.apply(
+        .executionContextCreated(Runtime.ExecutionContext(
+            id: replacementContextID,
+            name: "Replacement",
+            frameID: frameID,
+            kind: .normal
+        )),
+        targetID: frameTargetID
+    )
+
+    #expect(context.executionContexts.map(\.id) == [RuntimeContext.ID(replacementContextID)])
+    do {
+        _ = try await oldObject.properties()
+        Issue.record("Expected the replaced frame RuntimeObject to be stale.")
+    } catch let error as WebInspectorProxyError {
+        #expect(error == .disconnected("RuntimeObject is not registered in this WebInspectorContext."))
+    }
+}
+
+@MainActor
+@Test
+func destroyedTargetRejectsLateCollectionEntriesReply() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (pageTarget, context) = try await startContext(runtime: runtime)
+    let frameTargetID = WebInspectorTarget.ID("destroyed-runtime-frame")
+    let contextID = Runtime.ExecutionContext.ID(
+        "1",
+        scopedToTargetRawValue: frameTargetID.rawValue
+    )
+    let collectionGate = WebInspectorTestGate()
+
+    context.apply(
+        .executionContextCreated(Runtime.ExecutionContext(
+            id: contextID,
+            name: "Frame",
+            frameID: FrameID("destroyed-frame"),
+            kind: .normal
+        )),
+        targetID: frameTargetID
+    )
+    let frameContext = try #require(context.executionContexts.first)
+    await runtime.backend.enqueue(
+        Runtime.EvaluationResult(
+            object: Runtime.RemoteObject(
+                id: Runtime.RemoteObject.ID(
+                    "frame-collection",
+                    scopedToTargetRawValue: frameTargetID.rawValue
+                ),
+                kind: .object
+            )
+        ),
+        for: "Runtime",
+        method: "evaluate"
+    )
+    let collection = try await context.evaluate("new Map", in: frameContext).object
+
+    await runtime.backend.hold(domain: "Runtime", method: "getCollectionEntries", gate: collectionGate)
+    await runtime.backend.enqueue(
+        [
+            Runtime.CollectionEntry(
+                value: Runtime.RemoteObject(
+                    id: Runtime.RemoteObject.ID(
+                        "late-entry",
+                        scopedToTargetRawValue: frameTargetID.rawValue
+                    ),
+                    kind: .object
+                )
+            )
+        ],
+        for: "Runtime",
+        method: "getCollectionEntries"
+    )
+    var entriesError: WebInspectorProxyError?
+    let entriesTask = Task { @MainActor in
+        do {
+            _ = try await collection.collectionEntries()
+        } catch {
+            entriesError = error as? WebInspectorProxyError
+        }
+    }
+    _ = await runtime.backend.waitForRecordedCommands(
+        domain: "Runtime",
+        method: "getCollectionEntries",
+        count: 1
+    )
+
+    let lifecycleBaseline = context.eventPumpAppliedSequenceForTesting
+    await runtime.backend.emit(.targetDestroyed(targetID: frameTargetID), target: pageTarget)
+    #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: lifecycleBaseline))
+    #expect(context.executionContexts.isEmpty)
+    await collectionGate.open()
+
+    await entriesTask.value
+    #expect(entriesError == .disconnected("Runtime command result is no longer current."))
+    #expect(context.state == .attached)
+}
+
+@MainActor
+@Test
 func runtimeEventsPopulateContextsAndFallbackSelection() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
