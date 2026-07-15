@@ -646,6 +646,46 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func selectionChangeDuringHoverRestoresTheLatestModelSelection()
+        async throws
+    {
+        let fixture = try await DOMTreeRuntimeFixture.start()
+        let highlights = DOMTreeNodeActionRecorder()
+        let restores = DOMTreeSelectionRestoreRecorder()
+        let view = await fixture.makeView(
+            highlightNodeAction: { nodeID, owner in
+                highlights.record(nodeID, owner: owner)
+            },
+            restoreHighlightAction: {
+                restores.record(fixture.model.selectedNodeID)
+            }
+        )
+
+        #expect(view.primaryClickRowForTesting(containing: "<input disabled>"))
+        let selectedID = await highlights.nextNodeID()
+        view.hoverRowForTesting(containing: "<article")
+        _ = await highlights.nextNodeID(after: selectedID)
+
+        let nestedID = try fixture.nodeID("span")
+        fixture.model.selectNode(nestedID, reveal: .selectAndScroll)
+        #expect(await waitForObservedCondition(
+            deliveries: {
+                [view.selectionObservationDeliveryForTesting].compactMap { $0 }
+            },
+            sample: {
+                view.routedSelectedNodeIDForTesting == nestedID
+            }
+        ))
+        #expect(await view.waitForRowDocumentForTesting())
+        await view.waitForPageHighlightTaskForTesting()
+
+        #expect(highlights.recordedOwners == [.selection, .transient])
+        view.endHoverForTesting()
+        #expect(await restores.next() == nestedID)
+        await fixture.close(view: view)
+    }
+
+    @Test
     func duplicateSelectionInvalidationCoalescesInFlightPageHighlight()
         async throws
     {
@@ -1233,6 +1273,30 @@ private final class DOMTreeVoidActionRecorder {
             return
         }
         await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+}
+
+@MainActor
+private final class DOMTreeSelectionRestoreRecorder {
+    private var nodeIDs: [DOMNode.ID?] = []
+    private var continuation: CheckedContinuation<DOMNode.ID?, Never>?
+
+    func record(_ nodeID: DOMNode.ID?) {
+        if let continuation {
+            self.continuation = nil
+            continuation.resume(returning: nodeID)
+        } else {
+            nodeIDs.append(nodeID)
+        }
+    }
+
+    func next() async -> DOMNode.ID? {
+        if nodeIDs.isEmpty == false {
+            return nodeIDs.removeFirst()
+        }
+        return await withCheckedContinuation { continuation in
             self.continuation = continuation
         }
     }

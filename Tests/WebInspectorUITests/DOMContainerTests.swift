@@ -4,6 +4,8 @@ import Testing
 import UIKit
 @testable import WebInspectorDataKit
 import WebInspectorDataKitTesting
+import WebInspectorProxyKit
+import WebInspectorProxyKitTesting
 import WebInspectorTestSupport
 @testable import WebInspectorUIDOM
 @testable import WebInspectorUIBase
@@ -88,6 +90,91 @@ struct DOMContainerTests {
 
         fixture.model.cancelElementPicker()
         #expect(await pickerStates.waitUntil { !$0 } != nil)
+        await fixture.close()
+    }
+
+    @Test
+    func pickerSelectionRevealsTheTreeAndRestoresTheBackendHighlight()
+        async throws
+    {
+        let fixture = try await DOMPickerSelectionFixture.start()
+        let viewController = DOMTreeViewController(model: fixture.model)
+        viewController.loadViewIfNeeded()
+        let treeView = viewController.displayedDOMTreeTextViewForTesting
+        treeView.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
+        treeView.setRenderingActive(true)
+        let initialTreeRevision = try #require(
+            fixture.model.nodes.revision
+        ).rawValue
+        #expect(
+            await treeView.waitForRowDocumentAppliedTreeRevisionForTesting(
+                initialTreeRevision,
+                timeout: .seconds(5)
+            )
+        )
+        let baselineRowDocumentRevision = treeView.rowDocumentRevisionForTesting
+        let selectedNodeID = try fixture.nodeID(rawValue: "42")
+        let selectionDelivery = try #require(
+            treeView.selectionObservationDeliveryForTesting
+        )
+
+        fixture.model.toggleElementPicker()
+        _ = await fixture.wire.observations.waitForCompletedCommands(
+            method: "DOM.setInspectModeEnabled",
+            count: 1
+        )
+        try await fixture.wire.emitTargetEvent(
+            targetID: "page-main",
+            method: "DOM.inspect",
+            parameters: try webInspectorTestJSONObject(#"{"nodeId":42}"#)
+        )
+
+        #expect(await waitForObservedCondition(
+            deliveries: { [selectionDelivery] },
+            sample: {
+                fixture.model.selectedNodeID == selectedNodeID
+                    && treeView.routedSelectedNodeIDForTesting == selectedNodeID
+            }
+        ))
+        #expect(await treeView.waitForRowDocumentForTesting())
+        #expect(
+            treeView.rowDocumentRevisionForTesting
+                == baselineRowDocumentRevision + 1
+        )
+        #expect(treeView.documentTextForTesting.contains("<span></span>"))
+        #expect(treeView.selectedRowRectsForTesting().count == 1)
+
+        await treeView.waitForPageHighlightTaskForTesting()
+        let highlightCommands = fixture.wire.observations.commands.filter {
+            $0.method == "DOM.highlightNode"
+        }
+        #expect(highlightCommands.count == 1)
+        #expect(
+            try highlightCommands.first?.parameters.decode(
+                DOMNodeCommandParameters.self
+            ).nodeId == 42
+        )
+
+        try await fixture.wire.emitTargetEvent(
+            targetID: "page-main",
+            method: "DOM.childNodeRemoved",
+            parameters: try webInspectorTestJSONObject(
+                #"{"parentNodeId":3,"nodeId":42}"#
+            )
+        )
+        #expect(await waitForObservedCondition(
+            deliveries: { [selectionDelivery] },
+            sample: {
+                fixture.model.selectedNodeID == nil
+                    && treeView.routedSelectedNodeIDForTesting == nil
+            }
+        ))
+        await treeView.waitForPageHighlightTaskForTesting()
+        #expect(
+            fixture.wire.observations.commands.filter {
+                $0.method == "DOM.hideHighlight"
+            }.count == 1
+        )
         await fixture.close()
     }
 
@@ -292,6 +379,153 @@ private final class DOMContainerFixture {
             runtime.container.mainContext.model(for: id)?.localName == localName
         })
     }
+}
+
+@MainActor
+private final class DOMPickerSelectionFixture {
+    enum FixtureError: Error {
+        case domFeatureUnavailable
+        case domFeatureUpdatesEnded
+    }
+
+    let runtime: WebInspectorProxyTestRuntime
+    let wire: WebInspectorRawWireDriver
+    let container: WebInspectorModelContainer
+    let model: DOMPanelModel
+
+    private init(
+        runtime: WebInspectorProxyTestRuntime,
+        wire: WebInspectorRawWireDriver,
+        container: WebInspectorModelContainer,
+        model: DOMPanelModel
+    ) {
+        self.runtime = runtime
+        self.wire = wire
+        self.container = container
+        self.model = model
+    }
+
+    static func start() async throws -> DOMPickerSelectionFixture {
+        let runtime = try await WebInspectorProxyTestRuntime.start()
+        let wire = WebInspectorRawWireDriver(peer: runtime.peer)
+        let container = WebInspectorModelContainer(
+            configuration: .init(enabledFeatures: [.dom])
+        )
+        do {
+            try await configure(wire)
+            await wire.start()
+            try await container.attach(owning: runtime.proxy)
+            try await waitForDOMReady(in: container)
+            let model = try await DOMPanelModel.make(
+                context: container.mainContext
+            )
+            return DOMPickerSelectionFixture(
+                runtime: runtime,
+                wire: wire,
+                container: container,
+                model: model
+            )
+        } catch {
+            await container.close()
+            await runtime.close()
+            await wire.stop()
+            throw error
+        }
+    }
+
+    func close() async {
+        await model.retire()
+        await container.close()
+        await runtime.close()
+        await wire.stop()
+    }
+
+    func nodeID(rawValue: String) throws -> DOMNode.ID {
+        try #require(model.nodes.snapshot?.itemIDs.first {
+            $0.canonicalStorage.rawNodeID.rawValue == rawValue
+        })
+    }
+
+    private static func configure(
+        _ wire: WebInspectorRawWireDriver
+    ) async throws {
+        await wire.respond(to: "Page.enable")
+        await wire.respond(to: "Inspector.enable")
+        await wire.respond(to: "Inspector.initialized")
+        await wire.respond(to: "CSS.enable")
+        await wire.respond(
+            to: "DOM.getDocument",
+            with: try webInspectorDOMDocumentResult(document())
+        )
+        await wire.respond(to: "DOM.setInspectModeEnabled")
+        await wire.respond(to: "DOM.highlightNode")
+        await wire.respond(to: "DOM.hideHighlight")
+        await wire.respond(to: "CSS.disable")
+        await wire.respond(to: "Inspector.disable")
+        await wire.respond(to: "Page.disable")
+    }
+
+    private static func waitForDOMReady(
+        in container: WebInspectorModelContainer
+    ) async throws {
+        if case .ready = container.dom.state {
+            return
+        }
+        var updates = container.dom.stateUpdates.makeAsyncIterator()
+        while let state = await updates.next() {
+            switch state {
+            case .ready:
+                return
+            case .unavailable:
+                throw FixtureError.domFeatureUnavailable
+            case .disabled, .synchronizing, .recovering:
+                continue
+            }
+        }
+        throw FixtureError.domFeatureUpdatesEnded
+    }
+
+    private static func document() -> DOM.Node {
+        DOM.Node(
+            id: DOM.Node.ID("1"),
+            nodeType: 9,
+            nodeName: "#document",
+            frameID: FrameID("main-frame"),
+            childNodeCount: 1,
+            children: [
+                DOM.Node(
+                    id: DOM.Node.ID("2"),
+                    nodeType: 1,
+                    nodeName: "BODY",
+                    localName: "body",
+                    childNodeCount: 1,
+                    children: [
+                        DOM.Node(
+                            id: DOM.Node.ID("3"),
+                            nodeType: 1,
+                            nodeName: "ARTICLE",
+                            localName: "article",
+                            childNodeCount: 1,
+                            children: [
+                                DOM.Node(
+                                    id: DOM.Node.ID("42"),
+                                    nodeType: 1,
+                                    nodeName: "SPAN",
+                                    localName: "span",
+                                    childNodeCount: 0,
+                                    children: []
+                                )
+                            ]
+                        )
+                    ]
+                )
+            ]
+        )
+    }
+}
+
+private struct DOMNodeCommandParameters: Decodable {
+    let nodeId: Int
 }
 
 @MainActor
