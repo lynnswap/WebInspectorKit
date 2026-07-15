@@ -26,3 +26,48 @@ func featureConfigurationAndStateStreamsUseFeatureIDs() async {
     #expect(await domStates.next() == nil)
     #expect(await networkStates.next() == nil)
 }
+
+@Test
+func featureTransitionLoggingSkipsReadyRevisionChurn() {
+    let firstGeneration = WebInspectorPageGeneration(rawValue: 1)
+    let secondGeneration = WebInspectorPageGeneration(rawValue: 2)
+    let firstRevision = WebInspectorStoreRevision(rawValue: 10)
+    let secondRevision = WebInspectorStoreRevision(rawValue: 11)
+
+    #expect(
+        !webInspectorShouldLogFeatureTransition(
+            from: .ready(
+                generation: firstGeneration,
+                revision: firstRevision
+            ),
+            to: .ready(
+                generation: firstGeneration,
+                revision: secondRevision
+            )
+        )
+    )
+    #expect(
+        webInspectorShouldLogFeatureTransition(
+            from: .ready(
+                generation: firstGeneration,
+                revision: secondRevision
+            ),
+            to: .ready(
+                generation: secondGeneration,
+                revision: secondRevision
+            )
+        )
+    )
+    #expect(
+        webInspectorShouldLogFeatureTransition(
+            from: .ready(
+                generation: firstGeneration,
+                revision: secondRevision
+            ),
+            to: .recovering(
+                generation: firstGeneration,
+                reason: .targetChanged
+            )
+        )
+    )
+}

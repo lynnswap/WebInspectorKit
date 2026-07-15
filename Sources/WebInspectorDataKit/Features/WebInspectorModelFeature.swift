@@ -234,9 +234,25 @@ package func webInspectorLogFeatureTransition(
     fingerprint: WebInspectorRecoveryFingerprint? = nil,
     revision: WebInspectorStoreRevision? = nil
 ) {
+    guard webInspectorShouldLogFeatureTransition(from: from, to: to) else {
+        return
+    }
     WebInspectorDataKitLog.debug(
         "feature=\(feature.name) from=\(from) to=\(to) "
             + "fingerprint=\(String(describing: fingerprint)) "
             + "revision=\(String(describing: revision?.rawValue))"
     )
+}
+
+package func webInspectorShouldLogFeatureTransition(
+    from: WebInspectorFeatureState,
+    to: WebInspectorFeatureState
+) -> Bool {
+    guard from != to else { return false }
+    if case let .ready(fromGeneration, _) = from,
+        case let .ready(toGeneration, _) = to
+    {
+        return fromGeneration != toGeneration
+    }
+    return true
 }
