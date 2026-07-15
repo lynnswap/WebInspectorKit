@@ -364,7 +364,7 @@ public final class WebInspectorContext {
     private var didInvalidateDOMEditHistoryTarget: Bool
     private var documentReloadTask: Task<Void, Never>?
     private var inspectResolutionTask: Task<Void, Never>?
-    private var inspectedNodeHighlightTask: Task<Void, Never>?
+    private var pageHighlightMaintenanceTask: Task<Void, Never>?
     private var elementPickerOperation: ElementPickerOperation?
     private var elementPickerDesiredState: ElementPickerDesiredState?
     private var nextElementPickerOperationID: UInt64
@@ -445,7 +445,7 @@ public final class WebInspectorContext {
         domEditHistoryTarget = nil
         documentReloadTask = nil
         inspectResolutionTask = nil
-        inspectedNodeHighlightTask = nil
+        pageHighlightMaintenanceTask = nil
         elementPickerOperation = nil
         elementPickerDesiredState = nil
         nextElementPickerOperationID = 0
@@ -524,7 +524,7 @@ public final class WebInspectorContext {
         currentPageCleanupTask?.cancel()
         documentReloadTask?.cancel()
         inspectResolutionTask?.cancel()
-        inspectedNodeHighlightTask?.cancel()
+        pageHighlightMaintenanceTask?.cancel()
         cancelFrameDocumentLoadTasks()
         styleRefreshTask?.cancel()
         for acquisition in styleTrackingAcquisitions.values {
@@ -644,8 +644,8 @@ public final class WebInspectorContext {
         pendingInspectedNodeID = nil
         inspectResolutionTask?.cancel()
         inspectResolutionTask = nil
-        inspectedNodeHighlightTask?.cancel()
-        inspectedNodeHighlightTask = nil
+        pageHighlightMaintenanceTask?.cancel()
+        pageHighlightMaintenanceTask = nil
         selectedNode = node
         notifyDOMTreeSelectionChanged(node, reveal: reveal, isolation: isolation)
         notifyStatusChanged()
@@ -2019,8 +2019,8 @@ public final class WebInspectorContext {
         documentReloadTask = nil
         inspectResolutionTask?.cancel()
         inspectResolutionTask = nil
-        inspectedNodeHighlightTask?.cancel()
-        inspectedNodeHighlightTask = nil
+        pageHighlightMaintenanceTask?.cancel()
+        pageHighlightMaintenanceTask = nil
         cancelFrameDocumentLoadTasks()
         styleRefreshTask?.cancel()
         styleRefreshTask = nil
@@ -3443,8 +3443,8 @@ extension WebInspectorContext {
         styleRefreshTask?.cancel()
         styleRefreshTask = nil
         styleRefreshGeneration += 1
-        inspectedNodeHighlightTask?.cancel()
-        inspectedNodeHighlightTask = nil
+        pageHighlightMaintenanceTask?.cancel()
+        pageHighlightMaintenanceTask = nil
         clearPageHighlightForDOMReset(isolation: isolation)
         cancelFrameDocumentLoadTasks()
         rootNode = nil
@@ -3477,7 +3477,7 @@ extension WebInspectorContext {
             return
         }
         pageHighlightDocumentGeneration = nil
-        inspectedNodeHighlightTask = Task { [weak self, currentPage] in
+        pageHighlightMaintenanceTask = Task { [weak self, currentPage] in
             _ = isolation
             do {
                 guard Task.isCancelled == false else {
@@ -4114,40 +4114,6 @@ extension WebInspectorContext {
     private func selectInspectedNode(_ node: DOMNode, isolation: isolated (any Actor)) {
         WebInspectorDataKitLog.debug("DOM.inspect selecting resolved nodeID=\(String(describing: node.id))")
         select(node, isolation: isolation)
-        restoreElementPickerHighlight(for: node, isolation: isolation)
-    }
-
-    private func restoreElementPickerHighlight(for node: DOMNode, isolation: isolated (any Actor)) {
-        guard let currentPage else {
-            skipEvent("DOM.inspect highlight restore ignored: no current page target")
-            return
-        }
-        let generation = domDocumentGeneration
-        let nodeID = node.id.proxyID
-        guard nodeID.targetScopeRawValue == nil else {
-            return
-        }
-        inspectedNodeHighlightTask?.cancel()
-        // Web Inspector clears the picker overlay after inspect. On touch devices
-        // WebInspectorKit keeps the picked node highlighted so the tap target remains visible.
-        inspectedNodeHighlightTask = Task { [weak self, currentPage, generation, nodeID] in
-            _ = isolation
-            do {
-                guard Task.isCancelled == false,
-                      self?.isDOMDocumentGeneration(generation, isolation: isolation) == true else {
-                    return
-                }
-                WebInspectorDataKitLog.debug(
-                    "DOM.inspect restoring highlight nodeID=\(String(describing: nodeID))"
-                )
-                self?.recordPageHighlight(documentGeneration: generation, isolation: isolation)
-                try await currentPage.dom.highlightNode(nodeID)
-            } catch is CancellationError {
-                return
-            } catch {
-                self?.failIfTerminal(error, operation: "DOM.highlightNode after inspect")
-            }
-        }
     }
 }
 

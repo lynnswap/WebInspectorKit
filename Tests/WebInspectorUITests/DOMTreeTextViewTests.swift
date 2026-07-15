@@ -365,6 +365,100 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func externalSelectionChangeHighlightsSelectedPageNode() async throws {
+        let session = makeDOMTreeFixture()
+        let recorder = NodeActionRecorder()
+        let view = DOMTreeTextView(
+            context: session.context,
+            highlightNodeAction: { nodeID, owner in
+                recorder.record(nodeID, owner: owner)
+            }
+        )
+        configureTreeViewForDeterministicTesting(view)
+        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
+        view.layoutIfNeeded()
+        view.setRenderingActive(true)
+        #expect(await view.waitForRowDocumentForTesting())
+        let inputID = try #require(session.snapshot().nodesByID.first { entry in
+            entry.value.localName == "input"
+        }?.key)
+
+        session.selectNode(inputID)
+        #expect(await view.waitForObservedTreeRevisionForTesting(session.treeRevision))
+        view.routeCurrentSelectionInvalidationForTesting()
+        await view.waitForPageHighlightTaskForTesting()
+
+        #expect(recorder.recordedNodeIDs == [inputID])
+        #expect(recorder.recordedOwners == [.selection])
+    }
+
+    @Test
+    func selectionChangeDuringHoverRestoresLatestSelection() async throws {
+        let session = makeDOMTreeFixture()
+        let highlightRecorder = NodeActionRecorder()
+        let restoreRecorder = SelectionRestoreRecorder()
+        let view = DOMTreeTextView(
+            context: session.context,
+            highlightNodeAction: { nodeID, owner in
+                highlightRecorder.record(nodeID, owner: owner)
+            },
+            restoreHighlightAction: {
+                restoreRecorder.record(session.selectedNode?.id)
+            }
+        )
+        configureTreeViewForDeterministicTesting(view)
+        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
+        view.layoutIfNeeded()
+        view.setRenderingActive(true)
+        #expect(await view.waitForRowDocumentForTesting())
+
+        view.primaryClickRowForTesting(containing: "<input disabled>")
+        await view.waitForPageHighlightTaskForTesting()
+        view.hoverRowForTesting(containing: "<article")
+        await view.waitForPageHighlightTaskForTesting()
+
+        let nestedID = try #require(session.snapshot().nodesByID.first { entry in
+            entry.value.localName == "span"
+        }?.key)
+        session.selectNode(nestedID)
+        #expect(await view.waitForObservedTreeRevisionForTesting(session.treeRevision))
+        view.routeCurrentSelectionInvalidationForTesting()
+        await view.waitForPageHighlightTaskForTesting()
+
+        #expect(highlightRecorder.recordedOwners == [.selection, .transient])
+        view.endHoverForTesting()
+        #expect(await restoreRecorder.next() == nestedID)
+    }
+
+    @Test
+    func documentResetLeavesPageHighlightClearToDataKit() async throws {
+        let session = makeDOMTreeFixture()
+        let restoreRecorder = VoidActionRecorder()
+        let view = DOMTreeTextView(
+            context: session.context,
+            highlightNodeAction: { _, _ in },
+            restoreHighlightAction: {
+                restoreRecorder.record()
+            }
+        )
+        configureTreeViewForDeterministicTesting(view)
+        view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
+        view.layoutIfNeeded()
+        view.setRenderingActive(true)
+        #expect(await view.waitForRowDocumentForTesting())
+
+        view.primaryClickRowForTesting(containing: "<input disabled>")
+        await view.waitForPageHighlightTaskForTesting()
+        session.context.apply(DOM.Event.documentUpdated)
+        #expect(await view.waitForObservedTreeRevisionForTesting(session.treeRevision))
+        await Task.yield()
+        await view.waitForPageHighlightTaskForTesting()
+
+        #expect(session.selectedNode == nil)
+        #expect(restoreRecorder.recordCount == 0)
+    }
+
+    @Test
     func duplicateSelectionInvalidationCoalescesInFlightPageHighlight() async throws {
         let session = makeDOMTreeFixture()
         let recorder = ControlledNodeActionRecorder()
@@ -1351,6 +1445,30 @@ private final class NodeActionRecorder {
     func removeAll() {
         nodeIDs.removeAll(keepingCapacity: true)
         owners.removeAll(keepingCapacity: true)
+    }
+}
+
+@MainActor
+private final class SelectionRestoreRecorder {
+    private var nodeIDs: [DOMNode.ID?] = []
+    private var continuation: CheckedContinuation<DOMNode.ID?, Never>?
+
+    func record(_ nodeID: DOMNode.ID?) {
+        if let continuation {
+            self.continuation = nil
+            continuation.resume(returning: nodeID)
+        } else {
+            nodeIDs.append(nodeID)
+        }
+    }
+
+    func next() async -> DOMNode.ID? {
+        if nodeIDs.isEmpty == false {
+            return nodeIDs.removeFirst()
+        }
+        return await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
     }
 }
 

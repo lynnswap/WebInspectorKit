@@ -271,7 +271,6 @@ func domCommandsDispatchThroughDataKitContext() async throws {
     #expect(context.isElementPickerEnabled)
 
     await enqueueCSSStyleReplies(on: runtime.backend)
-    await runtime.backend.enqueue((), for: "DOM", method: "highlightNode")
     await runtime.backend.emit(.inspect(childID), target: target)
     try await waitUntil { context.selectedNode === child }
     try await waitUntil { child.elementStyles?.phase == .loaded }
@@ -343,7 +342,6 @@ func elementPickerInspectBeforeEnableContinuationCannotReactivatePicker() async 
 
     await runtime.backend.hold(domain: "DOM", method: "setInspectModeEnabled", gate: enableGate)
     await runtime.backend.enqueue((), for: "DOM", method: "setInspectModeEnabled")
-    await runtime.backend.enqueue((), for: "DOM", method: "highlightNode")
 
     let enableTask = Task { @MainActor in
         try await context.setElementPickerEnabled(true)
@@ -1053,17 +1051,9 @@ func domInspectSelectsKnownNodeAndLoadsStyles() async throws {
     let element = try await waitForChild(in: context)
 
     await enqueueCSSStyleReplies(on: runtime.backend)
-    await runtime.backend.enqueue((), for: "DOM", method: "highlightNode")
     await runtime.backend.emit(.inspect(elementID), target: target)
 
     try await waitUntil { context.selectedNode === element }
-    try await waitUntil {
-        await runtime.backend.recordedCommands().contains { command in
-            command.domain == "DOM"
-                && command.method == "highlightNode"
-                && command.payload.cast(as: DOM.HighlightNodePayload.self)?.id == elementID
-        }
-    }
     let styles = try #require(element.elementStyles)
     try await waitUntil { styles.phase == .loaded }
     #expect(styles.sections.map(\.title) == [".card"])
@@ -1091,7 +1081,6 @@ func domInspectWaitsForRequestNodePathBeforeSelectingUnresolvedNode() async thro
     try await waitUntil { context.node(for: DOMNode.ID(staleID)) != nil }
 
     await enqueueCSSStyleReplies(on: runtime.backend)
-    await runtime.backend.enqueue((), for: "DOM", method: "highlightNode")
     await runtime.backend.emit(.inspect(elementID), target: target)
     #expect(context.selectedNode == nil)
 
@@ -1103,13 +1092,6 @@ func domInspectWaitsForRequestNodePathBeforeSelectingUnresolvedNode() async thro
     )
 
     try await waitUntil { context.selectedNode?.id == DOMNode.ID(elementID) }
-    try await waitUntil {
-        await runtime.backend.recordedCommands().contains { command in
-            command.domain == "DOM"
-                && command.method == "highlightNode"
-                && command.payload.cast(as: DOM.HighlightNodePayload.self)?.id == elementID
-        }
-    }
     #expect(context.state == .attached)
     #expect(await runtime.backend.recordedCommands().contains(
         RecordedCommand(domain: "DOM", method: "requestChildNodes")
@@ -1144,7 +1126,6 @@ func domInspectBeforeDocumentArrivesWaitsForRequestNodePathAfterRootApplies() as
     }
 
     await runtime.backend.emit(.inspect(elementID), target: target)
-    await runtime.backend.enqueue((), for: "DOM", method: "highlightNode")
     await enqueueCSSStyleReplies(on: runtime.backend)
     await gate.open()
 
@@ -1159,13 +1140,6 @@ func domInspectBeforeDocumentArrivesWaitsForRequestNodePathAfterRootApplies() as
     )
 
     try await waitUntil { context.selectedNode?.id == DOMNode.ID(elementID) }
-    try await waitUntil {
-        await runtime.backend.recordedCommands().contains { command in
-            command.domain == "DOM"
-                && command.method == "highlightNode"
-                && command.payload.cast(as: DOM.HighlightNodePayload.self)?.id == elementID
-        }
-    }
     let selected = try #require(context.selectedNode)
     let styles = try #require(selected.elementStyles)
     try await waitUntil { styles.phase == .loaded }
@@ -1797,7 +1771,7 @@ func transportBackedStartupCapturesRuntimeAndConsoleReplayBeforeEnableReplies() 
 
 @MainActor
 @Test
-func transportBackedInspectorInspectMaterializesSelectionAndRestoresHighlight() async throws {
+func transportBackedInspectorInspectMaterializesSelectionWithoutOwningPresentationHighlight() async throws {
     let targetID = ProtocolTarget.ID("page-main")
     let inspectedID = DOM.Node.ID("42")
     let (backend, transport, context) = try await startTransportBackedContext(
@@ -1853,20 +1827,10 @@ func transportBackedInspectorInspectMaterializesSelectionAndRestoresHighlight() 
 
     try await waitUntil { context.selectedNode?.id == DOMNode.ID(inspectedID) }
     #expect(context.isElementPickerEnabled == false)
-
-    let highlight = try await waitForTransportTargetMessage(
-        backend,
-        method: "DOM.highlightNode",
-        after: startupMessageCount
-    )
-    #expect(highlight.targetIdentifier == targetID)
-    #expect((try transportTargetMessageParameters(highlight.message)["nodeId"] as? NSNumber)?.intValue == 42)
-    await receiveTransportTargetReply(
-        transport,
-        targetID: highlight.targetIdentifier,
-        messageID: try transportMessageID(highlight.message),
-        result: "{}"
-    )
+    let sentMethods = try await backend.sentTargetMessages().map { message in
+        try transportTargetMessageMethod(message.message)
+    }
+    #expect(sentMethods.contains("DOM.highlightNode") == false)
 
     let cssEnable = try await waitForTransportTargetMessage(
         backend,
@@ -1925,7 +1889,7 @@ func transportBackedInspectorInspectMaterializesSelectionAndRestoresHighlight() 
 
 @MainActor
 @Test
-func transportBackedFrameNavigationClearsRestoredPickerHighlight() async throws {
+func transportBackedFrameNavigationClearsSelectionPresentationHighlight() async throws {
     let targetID = ProtocolTarget.ID("page-main")
     let inspectedID = DOM.Node.ID("42")
     let (backend, transport, context) = try await startTransportBackedContext(
@@ -1975,6 +1939,11 @@ func transportBackedFrameNavigationClearsRestoredPickerHighlight() async throws 
     )
     try await waitUntil { context.selectedNode?.id == DOMNode.ID(inspectedID) }
 
+    let highlightTask = Task { @MainActor in
+        let selectedNode = try #require(context.selectedNode)
+        try await context.dom.highlight(selectedNode.id)
+    }
+
     let highlight = try await waitForTransportTargetMessage(
         backend,
         method: "DOM.highlightNode",
@@ -1986,6 +1955,7 @@ func transportBackedFrameNavigationClearsRestoredPickerHighlight() async throws 
         messageID: try transportMessageID(highlight.message),
         result: "{}"
     )
+    try await highlightTask.value
 
     let beforeNavigationMessageCount = await backend.sentTargetMessages().count
     await receiveTransportTargetEvent(
