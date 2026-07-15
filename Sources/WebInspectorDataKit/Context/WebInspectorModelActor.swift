@@ -41,7 +41,7 @@ public protocol WebInspectorModelActor: Actor {
 
 extension WebInspectorModelActor {
     public nonisolated var unownedExecutor: UnownedSerialExecutor {
-        modelActorBinding.serialQueue.asUnownedSerialExecutor()
+        unsafe modelActorBinding.serialQueue.asUnownedSerialExecutor()
     }
 
     public var modelContext: WebInspectorModelContext {

@@ -1,3 +1,4 @@
+import Foundation
 import WebInspectorProxyKit
 
 /// An immutable, actor-independent snapshot of one Runtime value.
