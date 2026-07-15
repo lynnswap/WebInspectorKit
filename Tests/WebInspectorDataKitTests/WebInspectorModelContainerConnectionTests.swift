@@ -2,6 +2,7 @@ import Testing
 @testable import WebInspectorDataKit
 import WebInspectorProxyKit
 import WebInspectorProxyKitTesting
+import WebKit
 
 @MainActor
 @Test
@@ -36,6 +37,57 @@ func modelContainerPublishesLatestOwnedLifecycleState() async throws {
         var lateStates = container.stateUpdates.makeAsyncIterator()
         #expect(await lateStates.next() == .closed)
         #expect(await lateStates.next() == nil)
+    }
+}
+
+@MainActor
+@Test
+func webViewAttachmentReservationHasOneContainerOwner() async throws {
+    try await withDataKitTestRuntime { firstRuntime in
+        try await withDataKitTestRuntime { secondRuntime in
+            let webView = WKWebView()
+            let otherWebView = WKWebView()
+            let first = WebInspectorModelContainer(
+                configuration: .init(enabledFeatures: [])
+            )
+            let second = WebInspectorModelContainer(
+                configuration: .init(enabledFeatures: [])
+            )
+
+            try await first.attach(to: webView) { firstRuntime.proxy }
+
+            let sameViewFactory = WebInspectorContextReply<Void>()
+            try await first.attach(to: webView) {
+                sameViewFactory.succeed(())
+                return secondRuntime.proxy
+            }
+            #expect(sameViewFactory.isPending)
+
+            let otherViewFactory = WebInspectorContextReply<Void>()
+            await #expect(throws: WebInspectorAttachmentError.alreadyAttached) {
+                try await first.attach(to: otherWebView) {
+                    otherViewFactory.succeed(())
+                    return secondRuntime.proxy
+                }
+            }
+            #expect(otherViewFactory.isPending)
+
+            let competingFactory = WebInspectorContextReply<Void>()
+            await #expect(
+                throws: WebInspectorAttachmentError.webViewAlreadyAttached
+            ) {
+                try await second.attach(to: webView) {
+                    competingFactory.succeed(())
+                    return secondRuntime.proxy
+                }
+            }
+            #expect(competingFactory.isPending)
+
+            await first.detach()
+            try await second.attach(to: webView) { secondRuntime.proxy }
+            await first.close()
+            await second.close()
+        }
     }
 }
 
@@ -179,6 +231,117 @@ func detachJoinsConcurrentContainerCloseThroughContextRetirement()
     await detachTask.value
     #expect(await returnedState.snapshot() == .closed)
     #expect(container.state == .closed)
+}
+
+@MainActor
+@Test
+func detachDuringAttachmentJoinsCandidateRetirement() async throws {
+    try await withDataKitTestRuntime { runtime in
+        let webView = WKWebView()
+        let container = WebInspectorModelContainer(
+            configuration: .init(enabledFeatures: [])
+        )
+        let factoryEntered = DataKitRawWireGate()
+        let candidate = WebInspectorContextReply<WebInspectorProxy>()
+        let attachment = Task { @MainActor in
+            try await container.attach(to: webView) {
+                factoryEntered.open()
+                return try await candidate.value()
+            }
+        }
+        await factoryEntered.waiter.wait()
+
+        let returnedState = ContainerStateRecorder()
+        let detach = Task { @MainActor in
+            await container.detach()
+            await returnedState.record(container.state)
+        }
+        while container.state != .detaching(generation: .init(rawValue: 1)) {
+            await Task.yield()
+        }
+        for _ in 0..<100 {
+            if await returnedState.snapshot() != nil { break }
+            await Task.yield()
+        }
+        #expect(await returnedState.snapshot() == nil)
+
+        candidate.succeed(runtime.proxy)
+        await detach.value
+        await #expect(throws: CancellationError.self) {
+            try await attachment.value
+        }
+        #expect(await returnedState.snapshot() == .detached)
+        try await runtime.proxy.waitUntilClosed()
+
+        let replacement = WebInspectorModelContainer(
+            configuration: .init(enabledFeatures: [])
+        )
+        let replacementFactory = WebInspectorContextReply<Void>()
+        await #expect(throws: CancellationError.self) {
+            try await replacement.attach(to: webView) {
+                replacementFactory.succeed(())
+                throw CancellationError()
+            }
+        }
+        #expect(!replacementFactory.isPending)
+        await replacement.close()
+        await container.close()
+    }
+}
+
+@MainActor
+@Test
+func closeDuringAttachmentJoinsCandidateRetirement() async throws {
+    try await withDataKitTestRuntime { runtime in
+        let webView = WKWebView()
+        let container = WebInspectorModelContainer(
+            configuration: .init(enabledFeatures: [])
+        )
+        let factoryEntered = DataKitRawWireGate()
+        let candidate = WebInspectorContextReply<WebInspectorProxy>()
+        let attachment = Task { @MainActor in
+            try await container.attach(to: webView) {
+                factoryEntered.open()
+                return try await candidate.value()
+            }
+        }
+        await factoryEntered.waiter.wait()
+
+        let returnedState = ContainerStateRecorder()
+        let close = Task { @MainActor in
+            await container.close()
+            await returnedState.record(container.state)
+        }
+        while container.state != .closing {
+            await Task.yield()
+        }
+        for _ in 0..<100 {
+            if await returnedState.snapshot() != nil { break }
+            await Task.yield()
+        }
+        #expect(await returnedState.snapshot() == nil)
+
+        candidate.succeed(runtime.proxy)
+        await close.value
+        await #expect(throws: WebInspectorAttachmentError.containerClosed) {
+            try await attachment.value
+        }
+        #expect(await returnedState.snapshot() == .closed)
+        try await runtime.proxy.waitUntilClosed()
+
+        let replacement = WebInspectorModelContainer(
+            configuration: .init(enabledFeatures: [])
+        )
+        let replacementFactory = WebInspectorContextReply<Void>()
+        await #expect(throws: CancellationError.self) {
+            try await replacement.attach(to: webView) {
+                replacementFactory.succeed(())
+                throw CancellationError()
+            }
+        }
+        #expect(!replacementFactory.isPending)
+        await replacement.close()
+    }
 }
 
 @MainActor

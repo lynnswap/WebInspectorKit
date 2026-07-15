@@ -26,13 +26,157 @@ private final class WebInspectorProxyOwnership: Sendable {
     }
 }
 
-package struct WebInspectorAttachmentReservation: Hashable, Sendable {
-    package let token: UUID
-    package let generation: WebInspectorAttachmentGeneration
+fileprivate struct WebInspectorWebViewAttachmentReservation: Sendable {
+    fileprivate let viewID: ObjectIdentifier
+    fileprivate let token: UUID
+
+    fileprivate func release() {
+        WebInspectorWebViewAttachmentRegistry.release(self)
+    }
+}
+
+@MainActor
+private enum WebInspectorWebViewAttachmentRegistry {
+    fileprivate enum ClaimResult {
+        case reserved(WebInspectorWebViewAttachmentReservation)
+        case alreadyReservedByOwner
+        case ownerReservedDifferentView
+        case reservedByOther
+    }
+
+    private final class Entry: @unchecked Sendable {
+        weak var webView: WKWebView?
+        weak var owner: WebInspectorModelContainer?
+        let token: UUID
+
+        init(
+            webView: WKWebView,
+            owner: WebInspectorModelContainer,
+            token: UUID
+        ) {
+            self.webView = webView
+            self.owner = owner
+            self.token = token
+        }
+    }
+
+    private final class Storage: Sendable {
+        let entries = Mutex<[ObjectIdentifier: Entry]>([:])
+    }
+
+    nonisolated private static let storage = Storage()
+
+    static func claim(
+        _ webView: WKWebView,
+        for owner: WebInspectorModelContainer
+    ) -> ClaimResult {
+        storage.entries.withLock { entries in
+            entries = entries.filter { _, entry in
+                entry.webView != nil && entry.owner != nil
+            }
+
+            if let ownedEntry = entries.values.first(where: { $0.owner === owner }) {
+                if ownedEntry.webView === webView {
+                    return .alreadyReservedByOwner
+                }
+                return .ownerReservedDifferentView
+            }
+
+            let viewID = ObjectIdentifier(webView)
+            if let entry = entries[viewID], entry.webView === webView {
+                return .reservedByOther
+            }
+
+            let token = UUID()
+            entries[viewID] = Entry(
+                webView: webView,
+                owner: owner,
+                token: token
+            )
+            return .reserved(
+                WebInspectorWebViewAttachmentReservation(
+                    viewID: viewID,
+                    token: token
+                )
+            )
+        }
+    }
+
+    nonisolated static func release(
+        _ reservation: WebInspectorWebViewAttachmentReservation
+    ) {
+        storage.entries.withLock { entries in
+            guard entries[reservation.viewID]?.token == reservation.token else {
+                return
+            }
+            entries[reservation.viewID] = nil
+        }
+    }
+}
+
+private func webInspectorProxyAlreadyOwnedFailure()
+    -> WebInspectorConnectionFailure
+{
+    .targetControlPlane(
+        WebInspectorFailureDescription(
+            code: "attachment.proxy.in-use",
+            phase: "attach",
+            message: "The ProxyKit connection is already owned by another model container."
+        )
+    )
 }
 
 /// Sole owner of one physical ProxyKit connection and all feature runners.
 package actor WebInspectorModelContainerConnectionOwner {
+    private final class AttachmentControl: Sendable {
+        private enum State {
+            case pending
+            case cancelled
+            case claimed
+        }
+
+        private let state = Mutex(State.pending)
+
+        func cancel() {
+            state.withLock { state in
+                guard case .pending = state else { return }
+                state = .cancelled
+            }
+        }
+
+        func claimCompletion() -> Bool {
+            state.withLock { state in
+                guard case .pending = state else { return false }
+                state = .claimed
+                return true
+            }
+        }
+    }
+
+    private enum AttachmentWorkerResult: Sendable {
+        case candidate(WebInspectorProxy)
+        case cancelled
+        case failed(
+            WebInspectorConnectionFailure,
+            attachmentError: WebInspectorAttachmentError
+        )
+    }
+
+    private enum AttachmentOutcome: Sendable {
+        case attached
+        case cancelled
+        case failed(WebInspectorAttachmentError)
+    }
+
+    private struct AttachmentOperation: Sendable {
+        let id: UUID
+        let generation: WebInspectorAttachmentGeneration
+        let control: AttachmentControl
+        let worker: Task<AttachmentWorkerResult, Never>
+        let completion: Task<AttachmentOutcome, Never>
+        let webViewReservation: WebInspectorWebViewAttachmentReservation?
+    }
+
     private struct TeardownOperation: Sendable {
         let id: UUID
         let task: Task<Void, Never>
@@ -40,8 +184,12 @@ package actor WebInspectorModelContainerConnectionOwner {
 
     private enum Phase {
         case detached
-        case attaching(WebInspectorAttachmentReservation)
-        case attached(sessionID: UUID, generation: WebInspectorAttachmentGeneration)
+        case attaching(AttachmentOperation)
+        case attached(
+            sessionID: UUID,
+            generation: WebInspectorAttachmentGeneration,
+            webViewReservation: WebInspectorWebViewAttachmentReservation?
+        )
         case failing(
             generation: WebInspectorAttachmentGeneration,
             failure: WebInspectorConnectionFailure,
@@ -91,7 +239,102 @@ package actor WebInspectorModelContainerConnectionOwner {
         self.consoleRuntime = consoleRuntime
     }
 
-    package func reserveAttachment() throws -> WebInspectorAttachmentReservation {
+    package func attach(
+        using factory:
+            @escaping @MainActor @Sendable () async throws -> WebInspectorProxy
+    ) async throws {
+        try await attach(using: factory, webViewReservation: nil)
+    }
+
+    fileprivate func attach(
+        using factory:
+            @escaping @MainActor @Sendable () async throws -> WebInspectorProxy,
+        webViewReservation: WebInspectorWebViewAttachmentReservation
+    ) async throws {
+        try await attach(
+            using: factory,
+            webViewReservation: Optional(webViewReservation)
+        )
+    }
+
+    private func attach(
+        using factory:
+            @escaping @MainActor @Sendable () async throws -> WebInspectorProxy,
+        webViewReservation: WebInspectorWebViewAttachmentReservation?
+    ) async throws {
+        let generation: WebInspectorAttachmentGeneration
+        do {
+            generation = try reserveAttachmentGeneration()
+        } catch {
+            webViewReservation?.release()
+            throw error
+        }
+        let control = AttachmentControl()
+        let ownershipID = ownerID
+        let worker = Task<AttachmentWorkerResult, Never> { @MainActor in
+            do {
+                let candidate = try await factory()
+                guard WebInspectorProxyOwnership.shared.claim(
+                    candidate,
+                    for: ownershipID
+                ) else {
+                    let failure = webInspectorProxyAlreadyOwnedFailure()
+                    return .failed(
+                        failure,
+                        attachmentError: .webViewAlreadyAttached
+                    )
+                }
+                return .candidate(candidate)
+            } catch is CancellationError {
+                return .cancelled
+            } catch {
+                let failure = WebInspectorConnectionFailure.native(
+                    WebInspectorFailureDescription(
+                        code: "attachment.native.failed",
+                        phase: "attach",
+                        message: String(describing: error)
+                    )
+                )
+                return .failed(
+                    failure,
+                    attachmentError: .native(failure)
+                )
+            }
+        }
+        try await installAndAwaitAttachment(
+            generation: generation,
+            control: control,
+            worker: worker,
+            webViewReservation: webViewReservation
+        )
+    }
+
+    package func attach(owning candidate: WebInspectorProxy) async throws {
+        let generation = try reserveAttachmentGeneration()
+        guard WebInspectorProxyOwnership.shared.claim(candidate, for: ownerID) else {
+            let failure = webInspectorProxyAlreadyOwnedFailure()
+            phase = .failed(generation: generation, failure: failure)
+            statePublisher.publish(
+                .failed(generation: generation, failure: failure)
+            )
+            throw WebInspectorAttachmentError.webViewAlreadyAttached
+        }
+
+        let control = AttachmentControl()
+        let worker = Task { @MainActor in
+            AttachmentWorkerResult.candidate(candidate)
+        }
+        try await installAndAwaitAttachment(
+            generation: generation,
+            control: control,
+            worker: worker,
+            webViewReservation: nil
+        )
+    }
+
+    private func reserveAttachmentGeneration() throws
+        -> WebInspectorAttachmentGeneration
+    {
         switch phase {
         case .detached, .failed:
             break
@@ -115,63 +358,146 @@ package actor WebInspectorModelContainerConnectionOwner {
             )
         }
         lastGeneration = next
-        let reservation = WebInspectorAttachmentReservation(
-            token: UUID(),
-            generation: WebInspectorAttachmentGeneration(rawValue: next)
-        )
-        phase = .attaching(reservation)
-        statePublisher.publish(.attaching(generation: reservation.generation))
-        return reservation
+        return WebInspectorAttachmentGeneration(rawValue: next)
     }
 
-    package func abandon(
-        _ reservation: WebInspectorAttachmentReservation,
-        failure: WebInspectorConnectionFailure?
-    ) {
-        guard case let .attaching(current) = phase, current == reservation else { return }
-        if let failure {
-            phase = .failed(
-                generation: reservation.generation,
-                failure: failure
+    private func installAndAwaitAttachment(
+        generation: WebInspectorAttachmentGeneration,
+        control: AttachmentControl,
+        worker: Task<AttachmentWorkerResult, Never>,
+        webViewReservation: WebInspectorWebViewAttachmentReservation?
+    ) async throws {
+        let id = UUID()
+        let ownershipID = ownerID
+        let completion = Task { [weak self] in
+            let result = await worker.value
+            guard let self else {
+                if case let .candidate(candidate) = result {
+                    await candidate.close()
+                    WebInspectorProxyOwnership.shared.release(
+                        candidate,
+                        for: ownershipID
+                    )
+                }
+                webViewReservation?.release()
+                return AttachmentOutcome.failed(.containerClosed)
+            }
+            return await self.completeAttachment(
+                id: id,
+                generation: generation,
+                control: control,
+                result: result,
+                webViewReservation: webViewReservation
             )
-            statePublisher.publish(
-                .failed(generation: reservation.generation, failure: failure)
+        }
+        let operation = AttachmentOperation(
+            id: id,
+            generation: generation,
+            control: control,
+            worker: worker,
+            completion: completion,
+            webViewReservation: webViewReservation
+        )
+        phase = .attaching(operation)
+        statePublisher.publish(.attaching(generation: generation))
+
+        let outcome = await withTaskCancellationHandler {
+            await completion.value
+        } onCancel: {
+            control.cancel()
+            worker.cancel()
+        }
+        switch outcome {
+        case .attached:
+            return
+        case .cancelled:
+            throw CancellationError()
+        case let .failed(error):
+            throw error
+        }
+    }
+
+    private func completeAttachment(
+        id: UUID,
+        generation: WebInspectorAttachmentGeneration,
+        control: AttachmentControl,
+        result: AttachmentWorkerResult,
+        webViewReservation: WebInspectorWebViewAttachmentReservation?
+    ) async -> AttachmentOutcome {
+        let completionOwnsAttempt: Bool
+        let interruptedOutcome: AttachmentOutcome
+        switch phase {
+        case let .attaching(operation) where operation.id == id:
+            completionOwnsAttempt = control.claimCompletion()
+            interruptedOutcome = .cancelled
+        case let .detaching(currentGeneration, _)
+            where currentGeneration == generation:
+            completionOwnsAttempt = false
+            interruptedOutcome = .cancelled
+        case .closing, .closed:
+            completionOwnsAttempt = false
+            interruptedOutcome = .failed(.containerClosed)
+        case .detached, .attaching, .attached, .failing, .detaching, .failed:
+            completionOwnsAttempt = false
+            interruptedOutcome = .failed(.containerClosed)
+        }
+
+        guard completionOwnsAttempt else {
+            await retireAttachmentCandidateIfNeeded(result)
+            if case let .attaching(operation) = phase, operation.id == id {
+                webViewReservation?.release()
+                phase = .detached
+                statePublisher.publish(.detached)
+            }
+            return interruptedOutcome
+        }
+
+        switch result {
+        case let .candidate(candidate):
+            adoptClaimed(
+                candidate,
+                generation: generation,
+                webViewReservation: webViewReservation
             )
-        } else {
+            return .attached
+        case .cancelled:
+            webViewReservation?.release()
             phase = .detached
             statePublisher.publish(.detached)
+            return .cancelled
+        case let .failed(failure, attachmentError):
+            webViewReservation?.release()
+            phase = .failed(generation: generation, failure: failure)
+            statePublisher.publish(
+                .failed(generation: generation, failure: failure)
+            )
+            return .failed(attachmentError)
         }
     }
 
-    package func adopt(
-        _ candidate: WebInspectorProxy,
-        reservation: WebInspectorAttachmentReservation
-    ) async throws {
-        guard case let .attaching(current) = phase, current == reservation else {
-            throw WebInspectorAttachmentError.containerClosed
-        }
-        guard WebInspectorProxyOwnership.shared.claim(candidate, for: ownerID) else {
-            let failure = WebInspectorConnectionFailure.targetControlPlane(
-                WebInspectorFailureDescription(
-                    code: "attachment.proxy.in-use",
-                    phase: "attach",
-                    message: "The ProxyKit connection is already owned by another model container."
-                )
-            )
-            phase = .failed(
-                generation: reservation.generation,
-                failure: failure
-            )
-            statePublisher.publish(.failed(generation: reservation.generation, failure: failure))
-            throw WebInspectorAttachmentError.webViewAlreadyAttached
-        }
+    private func retireAttachmentCandidateIfNeeded(
+        _ result: AttachmentWorkerResult
+    ) async {
+        guard case let .candidate(candidate) = result else { return }
+        await candidate.close()
+        WebInspectorProxyOwnership.shared.release(candidate, for: ownerID)
+    }
 
+    private func adoptClaimed(
+        _ candidate: WebInspectorProxy,
+        generation: WebInspectorAttachmentGeneration,
+        webViewReservation: WebInspectorWebViewAttachmentReservation?
+    ) {
         let sessionID = UUID()
         proxy = candidate
-        phase = .attached(sessionID: sessionID, generation: reservation.generation)
+        phase = .attached(
+            sessionID: sessionID,
+            generation: generation,
+            webViewReservation: webViewReservation
+        )
         let connection = WebInspectorFeatureConnection(
             page: candidate.page,
-            attachmentGeneration: reservation.generation,
+            attachmentGeneration: generation,
             storeID: storeID
         )
         startFeatures(connection: connection, sessionID: sessionID)
@@ -201,21 +527,23 @@ package actor WebInspectorModelContainerConnectionOwner {
                 )
             }
         }
-        statePublisher.publish(.attached(generation: reservation.generation))
+        statePublisher.publish(.attached(generation: generation))
     }
 
     package func detach() async {
         let generation: WebInspectorAttachmentGeneration
         let teardown: TeardownOperation
         switch phase {
-        case let .attaching(reservation):
-            phase = .detached
-            statePublisher.publish(.detached)
-            _ = reservation
-            return
-        case let .attached(_, attachedGeneration):
+        case let .attaching(operation):
+            generation = operation.generation
+            teardown = makeTeardownOperation(attachment: operation)
+            phase = .detaching(generation: generation, teardown: teardown)
+            statePublisher.publish(.detaching(generation: generation))
+        case let .attached(_, attachedGeneration, webViewReservation):
             generation = attachedGeneration
-            teardown = makeTeardownOperation()
+            teardown = makeTeardownOperation(
+                webViewReservation: webViewReservation
+            )
             phase = .detaching(generation: generation, teardown: teardown)
             statePublisher.publish(.detaching(generation: generation))
         case let .failing(failingGeneration, _, currentTeardown):
@@ -259,7 +587,15 @@ package actor WebInspectorModelContainerConnectionOwner {
             let .detaching(_, currentTeardown):
             teardown = currentTeardown
             phase = .closing(teardown)
-        case .detached, .attaching, .attached, .failed:
+        case let .attaching(operation):
+            teardown = makeTeardownOperation(attachment: operation)
+            phase = .closing(teardown)
+        case let .attached(_, _, webViewReservation):
+            teardown = makeTeardownOperation(
+                webViewReservation: webViewReservation
+            )
+            phase = .closing(teardown)
+        case .detached, .failed:
             teardown = makeTeardownOperation()
             phase = .closing(teardown)
         }
@@ -326,7 +662,11 @@ package actor WebInspectorModelContainerConnectionOwner {
         termination: WebInspectorFeatureTermination,
         sessionID: UUID
     ) async {
-        guard case let .attached(currentSessionID, generation) = phase,
+        guard case let .attached(
+            currentSessionID,
+            generation,
+            webViewReservation
+        ) = phase,
             currentSessionID == sessionID
         else { return }
         featureTasks[featureID] = nil
@@ -336,7 +676,8 @@ package actor WebInspectorModelContainerConnectionOwner {
         case let .connectionFailed(failure):
             await failConnection(
                 generation: generation,
-                failure: failure
+                failure: failure,
+                webViewReservation: webViewReservation
             )
         case .containerClosed:
             let failure = WebInspectorConnectionFailure.native(
@@ -348,7 +689,8 @@ package actor WebInspectorModelContainerConnectionOwner {
             )
             await failConnection(
                 generation: generation,
-                failure: failure
+                failure: failure,
+                webViewReservation: webViewReservation
             )
         }
     }
@@ -357,20 +699,31 @@ package actor WebInspectorModelContainerConnectionOwner {
         sessionID: UUID,
         failure: WebInspectorConnectionFailure
     ) async {
-        guard case let .attached(currentSessionID, generation) = phase,
+        guard case let .attached(
+            currentSessionID,
+            generation,
+            webViewReservation
+        ) = phase,
             currentSessionID == sessionID
         else { return }
         // This method is entered by the monitor task itself. Remove that handle
         // before creating the teardown operation so it cannot join its caller.
         connectionMonitor = nil
-        await failConnection(generation: generation, failure: failure)
+        await failConnection(
+            generation: generation,
+            failure: failure,
+            webViewReservation: webViewReservation
+        )
     }
 
     private func failConnection(
         generation: WebInspectorAttachmentGeneration,
-        failure: WebInspectorConnectionFailure
+        failure: WebInspectorConnectionFailure,
+        webViewReservation: WebInspectorWebViewAttachmentReservation?
     ) async {
-        let teardown = makeTeardownOperation()
+        let teardown = makeTeardownOperation(
+            webViewReservation: webViewReservation
+        )
         phase = .failing(
             generation: generation,
             failure: failure,
@@ -387,11 +740,24 @@ package actor WebInspectorModelContainerConnectionOwner {
         )
     }
 
-    private func makeTeardownOperation() -> TeardownOperation {
+    private func makeTeardownOperation(
+        attachment: AttachmentOperation? = nil,
+        webViewReservation: WebInspectorWebViewAttachmentReservation? = nil
+    ) -> TeardownOperation {
+        attachment?.control.cancel()
+        attachment?.worker.cancel()
+        let attachmentCompletion = attachment?.completion
+        let reservation = attachment?.webViewReservation
+            ?? webViewReservation
         let id = UUID()
         let task = Task { [weak self] in
-            guard let self else { return }
-            await self.tearDownConnectionResources()
+            if let attachmentCompletion {
+                _ = await attachmentCompletion.value
+            }
+            if let self {
+                await self.tearDownConnectionResources()
+            }
+            reservation?.release()
         }
         return TeardownOperation(id: id, task: task)
     }
@@ -412,8 +778,8 @@ package actor WebInspectorModelContainerConnectionOwner {
 
         if let proxy {
             self.proxy = nil
-            WebInspectorProxyOwnership.shared.release(proxy, for: ownerID)
             await proxy.close()
+            WebInspectorProxyOwnership.shared.release(proxy, for: ownerID)
         }
         await connectionMonitor?.value
     }
@@ -447,43 +813,79 @@ public extension WebInspectorModelContainer {
         to webView: WKWebView,
         proxyConfiguration: WebInspectorProxy.Configuration = .init()
     ) async throws {
-        let reservation = try await connectionOwner.reserveAttachment()
-        let proxy: WebInspectorProxy
-        do {
-            proxy = try await WebInspectorProxy(
+        try await attach(to: webView) {
+            try await WebInspectorProxy(
                 attachingTo: webView,
                 configuration: proxyConfiguration
             )
-        } catch is CancellationError {
-            await connectionOwner.abandon(reservation, failure: nil)
-            throw CancellationError()
-        } catch {
-            let failure = WebInspectorConnectionFailure.native(
-                WebInspectorFailureDescription(
-                    code: "attachment.native.failed",
-                    phase: "attach",
-                    message: String(describing: error)
-                )
-            )
-            await connectionOwner.abandon(reservation, failure: failure)
-            throw WebInspectorAttachmentError.native(failure)
         }
-        do {
-            try await connectionOwner.adopt(proxy, reservation: reservation)
-        } catch {
-            await proxy.close()
-            throw error
+    }
+
+    @MainActor
+    package func attach(
+        to webView: WKWebView,
+        proxyFactory:
+            @escaping @MainActor @Sendable () async throws -> WebInspectorProxy
+    ) async throws {
+        switch state {
+        case .attaching, .detaching:
+            throw WebInspectorAttachmentError.attachmentInProgress
+        case .closing, .closed:
+            throw WebInspectorAttachmentError.containerClosed
+        case .detached, .attached, .failed:
+            break
+        }
+
+        let claim = WebInspectorWebViewAttachmentRegistry.claim(
+            webView,
+            for: self
+        )
+        switch claim {
+        case let .reserved(reservation):
+            if case .attached = state {
+                reservation.release()
+                throw WebInspectorAttachmentError.alreadyAttached
+            }
+            try await connectionOwner.attach(
+                using: proxyFactory,
+                webViewReservation: reservation
+            )
+        case .alreadyReservedByOwner:
+            switch state {
+            case .attached:
+                return
+            case .attaching, .detaching:
+                throw WebInspectorAttachmentError.attachmentInProgress
+            case .closing, .closed:
+                throw WebInspectorAttachmentError.containerClosed
+            case .detached, .failed:
+                preconditionFailure(
+                    "A detached container retained its WKWebView reservation."
+                )
+            }
+        case .ownerReservedDifferentView:
+            switch state {
+            case .attached:
+                throw WebInspectorAttachmentError.alreadyAttached
+            case .attaching, .detaching:
+                throw WebInspectorAttachmentError.attachmentInProgress
+            case .closing, .closed:
+                throw WebInspectorAttachmentError.containerClosed
+            case .detached, .failed:
+                preconditionFailure(
+                    "A detached container retained a different WKWebView reservation."
+                )
+            }
+        case .reservedByOther:
+            if case .attached = state {
+                throw WebInspectorAttachmentError.alreadyAttached
+            }
+            throw WebInspectorAttachmentError.webViewAlreadyAttached
         }
     }
 
     package func attach(owning proxy: WebInspectorProxy) async throws {
-        let reservation = try await connectionOwner.reserveAttachment()
-        do {
-            try await connectionOwner.adopt(proxy, reservation: reservation)
-        } catch {
-            await connectionOwner.abandon(reservation, failure: nil)
-            throw error
-        }
+        try await connectionOwner.attach(owning: proxy)
     }
 
     func detach() async {
