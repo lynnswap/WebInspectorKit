@@ -25,6 +25,7 @@ package enum NativeConnectionCoreFactory {
         responseTimeout: Duration?,
         fatalFailureHandler: @escaping @Sendable (String) -> Void = { _ in }
     ) async throws -> ConnectionCore {
+        let protocolProfile = try WebInspectorProtocolProfile.currentWebKit()
         let receiver = ConnectionReceiver()
         let page = NativeInspectablePage(webView: webView)
         var core: ConnectionCore?
@@ -50,6 +51,7 @@ package enum NativeConnectionCoreFactory {
             attachment = createdAttachment
             let createdCore = ConnectionCore(
                 backend: backend,
+                protocolProfile: protocolProfile,
                 responseTimeout: responseTimeout,
                 closeAction: {
                     await createdAttachment.close()

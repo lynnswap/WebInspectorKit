@@ -48,6 +48,7 @@ package actor ConnectionCore {
     }
 
     private let backend: any ConnectionBackend
+    private let protocolProfile: WebInspectorProtocolProfile
     private let responseTimeout: Duration?
     private var closeAction: CloseAction?
     private var state: State = .open
@@ -70,10 +71,12 @@ package actor ConnectionCore {
 
     package init(
         backend: any ConnectionBackend,
+        protocolProfile: WebInspectorProtocolProfile,
         responseTimeout: Duration?,
         closeAction: CloseAction? = nil
     ) {
         self.backend = backend
+        self.protocolProfile = protocolProfile
         self.responseTimeout = responseTimeout
         self.closeAction = closeAction
     }
@@ -582,17 +585,18 @@ package actor ConnectionCore {
             }
             let info = payload.targetInfo
             let isProvisional = info.isProvisional ?? false
+            let kind = targets.targetKind(
+                protocolType: info.type,
+                parentTargetID: parentTargetID
+            )
             let record = ProtocolTarget.Record(
                 id: info.targetID,
-                kind: targets.targetKind(
-                    protocolType: info.type,
-                    parentTargetID: parentTargetID,
-                    parentFrameID: info.parentFrameID
-                ),
+                kind: kind,
                 parentTargetID: parentTargetID,
-                frameID: info.frameID,
-                parentFrameID: info.parentFrameID,
-                advertisedDomains: info.domains.map { Set($0.map(WebInspectorProtocolDomainToken.init(rawValue:))) },
+                frameID: try protocolProfile.semanticFrameID(
+                    for: info.targetID,
+                    targetKind: kind
+                ),
                 isProvisional: isProvisional,
                 isPaused: info.isPaused ?? false
             )
@@ -914,6 +918,14 @@ package actor ConnectionCore {
             scheduledGeneration: scheduledGeneration
         )
         let agentTargetID = try resolveAgent(descriptor.agentResolution, selected: selectedTargetID)
+        if let agentTargetID {
+            guard let agent = targets.record(for: agentTargetID) else {
+                throw WebInspectorProxyError.pageUnavailable
+            }
+            guard protocolProfile.supports(descriptor.domain, on: agent.kind) else {
+                return
+            }
+        }
         let key = ConnectionCapabilityKey(
             agentTargetID: agentTargetID,
             domain: descriptor.domain,
@@ -944,17 +956,6 @@ package actor ConnectionCore {
             selecting: selectedTargetID,
             scheduledGeneration: scheduledGeneration
         )
-
-        if let agentTargetID,
-           let advertised = targets.record(for: agentTargetID)?.advertisedDomains,
-            !advertised.contains(descriptor.domain)
-        {
-            throw WebInspectorProxyError.commandFailed(
-                domain: descriptor.domain.rawValue,
-                method: "enable",
-                message: "The selected WebKit target does not advertise this domain."
-            )
-        }
 
         var entry = capabilities.entry(for: key, descriptor: descriptor)
         if entry.owners.contains(scopeID) {
@@ -1299,18 +1300,12 @@ private struct TargetCreatedParameters: Decodable {
     struct TargetInfo: Decodable {
         let targetID: ProtocolTarget.ID
         let type: String
-        let frameID: ProtocolFrame.ID?
-        let parentFrameID: ProtocolFrame.ID?
-        let domains: [String]?
         let isProvisional: Bool?
         let isPaused: Bool?
 
         private enum CodingKeys: String, CodingKey {
             case targetID = "targetId"
             case type
-            case frameID = "frameId"
-            case parentFrameID = "parentFrameId"
-            case domains
             case isProvisional
             case isPaused
         }

@@ -20,8 +20,23 @@ public struct WebInspectorProxyTestRuntime: Sendable {
         configuration: WebInspectorProxy.Configuration = .init(),
         initialTarget: WebInspectorTestPeer.Target = .initialPage
     ) async throws -> WebInspectorProxyTestRuntime {
+        try await start(
+            configuration: configuration,
+            initialTarget: initialTarget,
+            protocolProfile: .latest
+        )
+    }
+
+    package static func start(
+        configuration: WebInspectorProxy.Configuration = .init(),
+        initialTarget: WebInspectorTestPeer.Target = .initialPage,
+        protocolProfile: WebInspectorProtocolProfile
+    ) async throws -> WebInspectorProxyTestRuntime {
         let peer = WebInspectorTestPeer()
-        let core = await peer.makeConnection(configuration: configuration)
+        let core = await peer.makeConnection(
+            configuration: configuration,
+            protocolProfile: protocolProfile
+        )
         do {
             try await peer.createTarget(initialTarget)
             let proxy = try await WebInspectorProxy(

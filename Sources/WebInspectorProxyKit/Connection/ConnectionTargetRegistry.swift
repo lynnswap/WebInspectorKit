@@ -22,12 +22,11 @@ package struct ConnectionTargetRegistry: Sendable {
 
     package func targetKind(
         protocolType: String,
-        parentTargetID: ProtocolTarget.ID?,
-        parentFrameID: ProtocolFrame.ID?
+        parentTargetID: ProtocolTarget.ID?
     ) -> ProtocolTarget.Kind {
         let protocolKind = ProtocolTarget.Kind(protocolType: protocolType)
         guard protocolKind == .page else { return protocolKind }
-        if parentTargetID != nil || parentFrameID != nil { return .frame }
+        if parentTargetID != nil { return .frame }
         return .page
     }
 
@@ -69,8 +68,6 @@ package struct ConnectionTargetRegistry: Sendable {
 
         newRecord.id = newID
         newRecord.parentTargetID = newRecord.parentTargetID ?? oldRecord?.parentTargetID
-        newRecord.frameID = newRecord.frameID ?? oldRecord?.frameID
-        newRecord.parentFrameID = newRecord.parentFrameID ?? oldRecord?.parentFrameID
         newRecord.isProvisional = false
         records[newID] = newRecord
         if replacingCurrentPage, newRecord.isTopLevelPage {
@@ -137,7 +134,7 @@ package struct ConnectionTargetRegistry: Sendable {
         return WebInspectorTarget(
             id: identity ?? WebInspectorTarget.ID(id.rawValue),
             kind: record.kind,
-            frameID: record.frameID.map { FrameID($0.rawValue) },
+            frameID: record.frameID,
             isProvisional: record.isProvisional
         )
     }

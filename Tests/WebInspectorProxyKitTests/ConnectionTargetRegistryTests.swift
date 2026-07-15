@@ -6,18 +6,15 @@ func targetKindUsesTheProtocolTypeAndDeliveryTopology() {
     let registry = ConnectionTargetRegistry()
     #expect(registry.targetKind(
         protocolType: "frame",
-        parentTargetID: nil,
-        parentFrameID: nil
+        parentTargetID: nil
     ) == .frame)
     #expect(registry.targetKind(
         protocolType: "web-page",
-        parentTargetID: ProtocolTarget.ID("page-main"),
-        parentFrameID: nil
+        parentTargetID: ProtocolTarget.ID("page-main")
     ) == .frame)
     #expect(registry.targetKind(
         protocolType: "page",
-        parentTargetID: nil,
-        parentFrameID: nil
+        parentTargetID: nil
     ) == .page)
 }
 
@@ -159,16 +156,12 @@ private func target(
     _ id: String,
     kind: ProtocolTarget.Kind,
     parentTargetID: String? = nil,
-    frameID: String? = nil,
-    parentFrameID: String? = nil,
     isProvisional: Bool = false
 ) -> ProtocolTarget.Record {
     ProtocolTarget.Record(
         id: ProtocolTarget.ID(id),
         kind: kind,
         parentTargetID: parentTargetID.map { ProtocolTarget.ID($0) },
-        frameID: frameID.map { ProtocolFrame.ID($0) },
-        parentFrameID: parentFrameID.map { ProtocolFrame.ID($0) },
         isProvisional: isProvisional,
         isPaused: false
     )

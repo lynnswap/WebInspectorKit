@@ -1,7 +1,6 @@
 import Foundation
 
 package enum ProtocolTarget {}
-package enum ProtocolFrame {}
 
 package extension ProtocolTarget {
     struct ID: RawRepresentable, Hashable, Codable, Sendable, CustomStringConvertible {
@@ -34,9 +33,7 @@ package extension ProtocolTarget {
         package var id: ID
         package var kind: Kind
         package var parentTargetID: ID?
-        package var frameID: ProtocolFrame.ID?
-        package var parentFrameID: ProtocolFrame.ID?
-        package var advertisedDomains: Set<WebInspectorProtocolDomainToken>?
+        package var frameID: FrameID?
         package var isProvisional: Bool
         package var isPaused: Bool
 
@@ -44,9 +41,7 @@ package extension ProtocolTarget {
             id: ID,
             kind: Kind,
             parentTargetID: ID? = nil,
-            frameID: ProtocolFrame.ID? = nil,
-            parentFrameID: ProtocolFrame.ID? = nil,
-            advertisedDomains: Set<WebInspectorProtocolDomainToken>? = nil,
+            frameID: FrameID? = nil,
             isProvisional: Bool = false,
             isPaused: Bool = false
         ) {
@@ -54,25 +49,13 @@ package extension ProtocolTarget {
             self.kind = kind
             self.parentTargetID = parentTargetID
             self.frameID = frameID
-            self.parentFrameID = parentFrameID
-            self.advertisedDomains = advertisedDomains
             self.isProvisional = isProvisional
             self.isPaused = isPaused
         }
 
         package var isTopLevelPage: Bool {
-            kind == .page && parentTargetID == nil && parentFrameID == nil
+            kind == .page && parentTargetID == nil
         }
-    }
-}
-
-package extension ProtocolFrame {
-    struct ID: RawRepresentable, Hashable, Codable, Sendable, CustomStringConvertible {
-        package let rawValue: String
-
-        package init(_ rawValue: String) { self.rawValue = rawValue }
-        package init(rawValue: String) { self.rawValue = rawValue }
-        package var description: String { rawValue }
     }
 }
 

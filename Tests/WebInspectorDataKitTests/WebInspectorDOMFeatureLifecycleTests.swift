@@ -551,10 +551,8 @@ func frameDocumentUpdatedDoesNotInvalidateTheMainDocumentBinding() async throws 
             await runtime.wire.respond(to: "CSS.disable")
             try await runtime.peer.createTarget(
                 .init(
-                    id: "frame-one",
-                    type: "web-page",
-                    frameID: "child-frame",
-                    parentFrameID: "main-frame"
+                    id: "frame-42-7",
+                    type: "frame"
                 )
             )
             _ = await runtime.wire.observations.waitForCompletedCommands(
@@ -563,7 +561,7 @@ func frameDocumentUpdatedDoesNotInvalidateTheMainDocumentBinding() async throws 
             )
 
             try await runtime.wire.emitTargetEvent(
-                targetID: "frame-one",
+                targetID: "frame-42-7",
                 method: "DOM.documentUpdated"
             )
             try await runtime.wire.emitTargetEvent(

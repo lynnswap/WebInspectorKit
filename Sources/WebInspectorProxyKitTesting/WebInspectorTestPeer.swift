@@ -124,15 +124,6 @@ public actor WebInspectorTestPeer {
         /// The raw WebKit target type.
         public let type: String
 
-        /// The physical frame identifier, when present.
-        public let frameID: String?
-
-        /// The parent physical frame identifier, when present.
-        public let parentFrameID: String?
-
-        /// The domain names advertised by the target, when WebKit supplies them.
-        public let domains: [String]?
-
         /// Whether the target is provisional.
         public let isProvisional: Bool
 
@@ -143,17 +134,11 @@ public actor WebInspectorTestPeer {
         public init(
             id: String,
             type: String,
-            frameID: String? = nil,
-            parentFrameID: String? = nil,
-            domains: [String]? = nil,
             isProvisional: Bool = false,
             isPaused: Bool = false
         ) {
             self.id = id
             self.type = type
-            self.frameID = frameID
-            self.parentFrameID = parentFrameID
-            self.domains = domains
             self.isProvisional = isProvisional
             self.isPaused = isPaused
         }
@@ -188,7 +173,7 @@ public actor WebInspectorTestPeer {
     private var outstandingCommands: [UInt64: ReplyRoute]
     private var postDrainActionForTesting: (@Sendable () async -> Void)?
 
-    init() {
+    package init() {
         let commandMailbox = WebInspectorTestCommandMailbox()
         peerID = UUID()
         self.commandMailbox = commandMailbox
@@ -812,18 +797,12 @@ private struct TargetCreatedParameters: Encodable {
     struct TargetInfo: Encodable {
         let targetId: String
         let type: String
-        let frameId: String?
-        let parentFrameId: String?
-        let domains: [String]?
         let isProvisional: Bool
         let isPaused: Bool
 
         init(_ target: WebInspectorTestPeer.Target) {
             targetId = target.id
             type = target.type
-            frameId = target.frameID
-            parentFrameId = target.parentFrameID
-            domains = target.domains
             isProvisional = target.isProvisional
             isPaused = target.isPaused
         }
@@ -840,13 +819,15 @@ private struct TargetDestroyedParameters: Encodable {
 }
 
 extension WebInspectorTestPeer {
-    func makeConnection(
-        configuration: WebInspectorProxy.Configuration
+    package func makeConnection(
+        configuration: WebInspectorProxy.Configuration,
+        protocolProfile: WebInspectorProtocolProfile
     ) async -> ConnectionCore {
         let receiver = ConnectionReceiver()
         let backend = WebInspectorTestPeerTransportBackend(peer: self)
         let core = ConnectionCore(
             backend: backend,
+            protocolProfile: protocolProfile,
             responseTimeout: configuration.responseTimeout
         )
         receiver.setCore(core)

@@ -890,7 +890,6 @@ private actor ScenarioDriver {
                 .init(
                     id: replacement.newTargetID,
                     type: "page",
-                    frameID: document.frameID,
                     isProvisional: true
                 ))
             recordAcceptedRawInput()

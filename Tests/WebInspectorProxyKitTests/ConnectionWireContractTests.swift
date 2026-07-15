@@ -71,10 +71,10 @@ func currentPageReplacementResetsAnExistingScope() async throws {
     try await runtime.peer.createTarget(
         .init(
             id: "page-next",
-        type: "page",
-        frameID: "next-main-frame",
-        isProvisional: true
-    ))
+            type: "page",
+            isProvisional: true
+        )
+    )
     try await runtime.peer.commitProvisionalTarget(
         from: "page-main",
         to: "page-next"
@@ -409,11 +409,11 @@ func descendantWorkerIsEnrolledAndEnabledAfterScopeRegistration() async throws {
 }
 
 @Test
-func currentPageScopeIncludesFrameTargetsWithoutInventedFrameMetadata() async throws {
+func currentPageScopeDerivesFrameIdentityFromWebKit625TargetEncoding() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     defer { Task { await runtime.close() } }
     try await runtime.peer.createTarget(.init(
-        id: "frame-one",
+        id: "frame-42-7",
         type: "frame"
     ))
 
@@ -426,7 +426,7 @@ func currentPageScopeIncludesFrameTargetsWithoutInventedFrameMetadata() async th
     )
     var iterator = scope.events.makeAsyncIterator()
     try await runtime.peer.emitTargetEvent(
-        targetID: "frame-one",
+        targetID: "frame-42-7",
         method: "DOM.documentUpdated"
     )
     guard case let .event(_, event) = try await iterator.next() else {
@@ -434,8 +434,9 @@ func currentPageScopeIncludesFrameTargetsWithoutInventedFrameMetadata() async th
         return
     }
     #expect(event.semanticTarget?.id == .currentPage)
-    #expect(event.agentTarget?.id.rawValue == "frame-one")
+    #expect(event.agentTarget?.id.rawValue == "frame-42-7")
     #expect(event.agentTarget?.kind == .frame)
+    #expect(event.agentTarget?.frameID?.rawValue == "frame-7.42")
     await scope.close()
 }
 
@@ -516,17 +517,17 @@ func subframeCommitCannotConsumeTheCurrentPageBinding() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     defer { Task { await runtime.close() } }
     try await runtime.peer.createTarget(.init(
-        id: "frame-old",
+        id: "frame-42-7",
         type: "frame"
     ))
     try await runtime.peer.createTarget(.init(
-        id: "frame-provisional",
+        id: "frame-42-8",
         type: "frame",
         isProvisional: true
     ))
     try await runtime.peer.commitProvisionalTarget(
-        from: "frame-old",
-        to: "frame-provisional"
+        from: "frame-42-7",
+        to: "frame-42-8"
     )
 
     #expect(try await runtime.page.generation.rawValue == 1)
@@ -555,28 +556,28 @@ func provisionalTargetTrafficIsDeliveredOnlyAfterCommit() async throws {
     var iterator = scope.events.makeAsyncIterator()
 
     try await runtime.peer.createTarget(.init(
-        id: "frame-old",
+        id: "frame-42-7",
         type: "frame"
     ))
     try await runtime.peer.createTarget(.init(
-        id: "frame-provisional",
+        id: "frame-42-8",
         type: "frame",
         isProvisional: true
     ))
     try await runtime.peer.emitTargetEvent(
-        targetID: "frame-provisional",
+        targetID: "frame-42-8",
         method: "DOM.documentUpdated"
     )
     try await runtime.peer.commitProvisionalTarget(
-        from: "frame-old",
-        to: "frame-provisional"
+        from: "frame-42-7",
+        to: "frame-42-8"
     )
 
     guard case let .event(_, event) = try await iterator.next() else {
         Issue.record("Expected the committed frame event.")
         return
     }
-    #expect(event.agentTarget?.id.rawValue == "frame-provisional")
+    #expect(event.agentTarget?.id.rawValue == "frame-42-8")
     #expect(event.agentTarget?.isProvisional == false)
     await scope.close()
 }
@@ -629,22 +630,21 @@ func requestNodeRoutesScopedObjectToFrameAndScopesTheReply() async throws {
     defer { Task { await runtime.close() } }
     try await runtime.peer.createTarget(
         .init(
-            id: "frame-one",
-        type: "web-page",
-        frameID: "child-frame",
-        parentFrameID: "main-frame"
-    ))
+            id: "frame-42-7",
+            type: "frame"
+        )
+    )
 
     let nodeTask = Task {
         try await runtime.page.dom.requestNode(
             forRemoteObject: Runtime.RemoteObject.ID(
                 "frame-object",
-                scopedToTargetRawValue: "frame-one"
+                scopedToTargetRawValue: "frame-42-7"
             )
         )
     }
     let command = try await runtime.peer.commands.next()
-    #expect(command.destination == .target("frame-one"))
+    #expect(command.destination == .target("frame-42-7"))
     #expect(command.method == "DOM.requestNode")
     let expectedParameters = try WebInspectorTestJSONObject(
         json: #"{"objectId":"frame-object"}"#
@@ -657,7 +657,7 @@ func requestNodeRoutesScopedObjectToFrameAndScopesTheReply() async throws {
 
     let nodeID = try await nodeTask.value
     #expect(nodeID.unscopedRawValue == "42")
-    #expect(nodeID.targetScopeRawValue == "frame-one")
+    #expect(nodeID.targetScopeRawValue == "frame-42-7")
 }
 
 @Test
