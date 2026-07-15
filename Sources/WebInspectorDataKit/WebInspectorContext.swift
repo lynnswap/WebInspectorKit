@@ -5016,7 +5016,12 @@ extension WebInspectorContext {
         case let .messageAdded(message):
             applyMessageAdded(message, targetID: targetID)
         case let .messageRepeatCountUpdated(count, timestamp):
-            let lastMessageID = targetID.flatMap { lastConsoleMessageIDByTargetID[$0] } ?? lastConsoleMessageID
+            let lastMessageID: ConsoleMessage.ID?
+            if let targetID {
+                lastMessageID = lastConsoleMessageIDByTargetID[targetID]
+            } else {
+                lastMessageID = lastConsoleMessageID
+            }
             guard let lastConsoleMessageID = lastMessageID,
                   let message = consoleMessagesByID[lastConsoleMessageID] else {
                 skipEvent("Console.messageRepeatCountUpdated arrived before any tracked message")

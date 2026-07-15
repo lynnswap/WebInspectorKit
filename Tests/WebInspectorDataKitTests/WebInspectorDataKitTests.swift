@@ -8558,6 +8558,50 @@ func consoleEventsPopulateRepeatAndClearFetchedMessages() async throws {
 
 @MainActor
 @Test
+func consoleRepeatUpdatesStayWithinTheirTarget() throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let firstTargetID = WebInspectorTarget.ID("console-frame-a")
+    let secondTargetID = WebInspectorTarget.ID("console-frame-b")
+    let unknownTargetID = WebInspectorTarget.ID("console-frame-unknown")
+
+    context.apply(
+        .messageAdded(Console.Message(
+            source: Console.Source(rawValue: "console-api"),
+            level: Console.Level(rawValue: "log"),
+            text: "first"
+        )),
+        targetID: firstTargetID
+    )
+    context.apply(
+        .messageAdded(Console.Message(
+            source: Console.Source(rawValue: "console-api"),
+            level: Console.Level(rawValue: "log"),
+            text: "second"
+        )),
+        targetID: secondTargetID
+    )
+
+    let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
+    let first = try #require(results.items.first { $0.targetID == firstTargetID })
+    let second = try #require(results.items.first { $0.targetID == secondTargetID })
+
+    context.apply(
+        .messageRepeatCountUpdated(count: 3, timestamp: 3),
+        targetID: firstTargetID
+    )
+    context.apply(
+        .messageRepeatCountUpdated(count: 9, timestamp: 9),
+        targetID: unknownTargetID
+    )
+
+    #expect(first.repeatCount == 3)
+    #expect(first.timestamp == 3)
+    #expect(second.repeatCount == 1)
+    #expect(second.timestamp == nil)
+}
+
+@MainActor
+@Test
 func consoleFetchedResultsHonorDescriptorsForInitialUpdatesAndDescriptorChanges() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
@@ -8621,6 +8665,34 @@ func consoleFetchedResultsHonorDescriptorsForInitialUpdatesAndDescriptorChanges(
     try await waitUntil {
         warningResults.items.map(\.text) == ["omega", "zebra"]
     }
+}
+
+@MainActor
+@Test
+func consoleFetchedResultsPreserveTieOrderAndCustomComparators() {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    for text in ["item2", "item10"] {
+        context.apply(.messageAdded(Console.Message(
+            source: Console.Source(rawValue: "console-api"),
+            level: Console.Level(rawValue: "log"),
+            text: text
+        )))
+    }
+
+    let reverseTieResults: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults(
+        for: WebInspectorFetchDescriptor(
+            sortBy: [SortDescriptor(\.level.rawValue, order: .reverse)],
+            fetchLimit: 1
+        )
+    )
+    let lexicalResults: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults(
+        for: WebInspectorFetchDescriptor(
+            sortBy: [SortDescriptor(\.text, comparator: .lexical)]
+        )
+    )
+
+    #expect(reverseTieResults.items.map(\.text) == ["item2"])
+    #expect(lexicalResults.items.map(\.text) == ["item10", "item2"])
 }
 
 @MainActor
