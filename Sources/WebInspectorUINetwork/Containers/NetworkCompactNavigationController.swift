@@ -36,7 +36,6 @@ package final class NetworkCompactNavigationController: UINavigationController, 
     }
 
     private struct DeferredStackSync {
-        var target: StackTarget
         var animated: Bool
     }
 
@@ -143,7 +142,7 @@ package final class NetworkCompactNavigationController: UINavigationController, 
     }
 
     private func syncStack(to target: StackTarget, animated: Bool) {
-        guard scheduleStackSyncAfterCurrentTransitionIfNeeded(to: target, animated: animated) == false else {
+        guard scheduleStackSyncAfterCurrentTransitionIfNeeded(animated: animated) == false else {
             return
         }
 
@@ -191,9 +190,9 @@ package final class NetworkCompactNavigationController: UINavigationController, 
         finishActiveTransitionIfNoCoordinator()
     }
 
-    private func scheduleStackSyncAfterCurrentTransitionIfNeeded(to target: StackTarget, animated: Bool) -> Bool {
+    private func scheduleStackSyncAfterCurrentTransitionIfNeeded(animated: Bool) -> Bool {
         if activeTransition != nil {
-            mergeDeferredStackSync(to: target, animated: animated)
+            mergeDeferredStackSync(animated: animated)
             return true
         }
         guard let transitionCoordinator else {
@@ -201,7 +200,7 @@ package final class NetworkCompactNavigationController: UINavigationController, 
         }
 
         let hadDeferredSync = deferredStackSync != nil
-        mergeDeferredStackSync(to: target, animated: animated)
+        mergeDeferredStackSync(animated: animated)
         guard hadDeferredSync == false else {
             return true
         }
@@ -217,9 +216,9 @@ package final class NetworkCompactNavigationController: UINavigationController, 
         return false
     }
 
-    private func mergeDeferredStackSync(to target: StackTarget, animated: Bool) {
+    private func mergeDeferredStackSync(animated: Bool) {
         let shouldAnimate = (deferredStackSync?.animated ?? false) || animated
-        deferredStackSync = DeferredStackSync(target: target, animated: shouldAnimate)
+        deferredStackSync = DeferredStackSync(animated: shouldAnimate)
     }
 
     private func performDeferredStackSyncIfNeeded() {
@@ -227,7 +226,7 @@ package final class NetworkCompactNavigationController: UINavigationController, 
             return
         }
         self.deferredStackSync = nil
-        syncStack(to: deferredStackSync.target, animated: deferredStackSync.animated)
+        syncStack(to: desiredStackTarget(), animated: deferredStackSync.animated)
     }
 
     private func finishActiveTransitionIfNoCoordinator() {
@@ -244,7 +243,7 @@ package final class NetworkCompactNavigationController: UINavigationController, 
         }
         activeTransition = nil
         guard shownTarget == transition.target else {
-            return true
+            return false
         }
 
         commit(transition)
@@ -320,7 +319,36 @@ extension NetworkCompactNavigationController {
     }
 
     @discardableResult
-    package func popDetailFromUserNavigationForTesting() -> UIViewController? {
+    package func popDetailWhilePushTransitionIsStillTrackedForTesting()
+        -> UIViewController?
+    {
+        guard viewControllers.last === detailViewController else {
+            return nil
+        }
+
+        activeTransition = StackTransition(
+            target: .detail,
+            removesDetail: false,
+            selectionCommit: .none
+        )
+        navigationController(
+            self,
+            willShow: listViewController,
+            animated: false
+        )
+        let poppedViewController = popViewController(animated: false)
+        navigationController(
+            self,
+            didShow: listViewController,
+            animated: false
+        )
+        return poppedViewController
+    }
+
+    @discardableResult
+    package func popDetailFromUserNavigationForTesting(
+        beforeTransitionCompletion: () -> Void = {}
+    ) -> UIViewController? {
         guard viewControllers.last === detailViewController else {
             return nil
         }
@@ -331,9 +359,27 @@ extension NetworkCompactNavigationController {
             selectionCommit: userPopSelectionCommit()
         )
         let poppedViewController = popViewController(animated: false)
+        beforeTransitionCompletion()
         _ = finishActiveTransitionIfNeeded(shownTarget: .list)
         performDeferredStackSyncIfNeeded()
         return poppedViewController
+    }
+
+    package func cancelDetailPopFromUserNavigationForTesting(
+        beforeTransitionCompletion: () -> Void = {}
+    ) {
+        guard viewControllers.last === detailViewController else {
+            return
+        }
+
+        activeTransition = StackTransition(
+            target: .list,
+            removesDetail: true,
+            selectionCommit: userPopSelectionCommit()
+        )
+        beforeTransitionCompletion()
+        _ = finishActiveTransitionIfNeeded(shownTarget: .detail)
+        performDeferredStackSyncIfNeeded()
     }
 }
 #endif
