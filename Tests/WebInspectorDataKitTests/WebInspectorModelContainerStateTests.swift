@@ -21,6 +21,8 @@ func featureConfigurationAndStateStreamsUseFeatureIDs() async {
     #expect(await networkStates.next() == .disabled)
 
     await container.close()
+    #expect(await domStates.next() == .disabled)
+    #expect(await networkStates.next() == .disabled)
     #expect(await domStates.next() == nil)
     #expect(await networkStates.next() == nil)
 }

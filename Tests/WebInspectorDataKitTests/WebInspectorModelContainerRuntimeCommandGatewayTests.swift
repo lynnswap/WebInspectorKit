@@ -1,6 +1,7 @@
 import Testing
 @testable import WebInspectorDataKit
 import WebInspectorProxyKit
+import WebInspectorProxyKitTesting
 
 @MainActor
 @Test
@@ -13,6 +14,10 @@ func runtimeObjectScopeOwnsEvaluationPropertiesAndClose() async throws {
         await runtime.wire.respond(to: "Page.enable")
         await runtime.wire.respond(to: "Console.enable")
         await runtime.wire.respond(to: "Runtime.enable")
+        await runtime.wire.respond(
+            to: "Page.getResourceTree",
+            with: try consoleRuntimeResourceTreeResult()
+        )
         try await container.attach(owning: runtime.proxy)
 
         do {
@@ -54,7 +59,7 @@ func runtimeObjectScopeOwnsEvaluationPropertiesAndClose() async throws {
             #expect(properties.map(\.name) == ["value"])
             #expect(properties.first?.value == "1")
 
-            await runtime.wire.respond(to: "Runtime.releaseObjectGroup")
+            await runtime.wire.respond(to: "Runtime.releaseObject")
             await scope.close()
             await #expect(throws: WebInspectorCommandError.staleIdentifier) {
                 _ = try await scope.evaluate("2")
@@ -63,7 +68,7 @@ func runtimeObjectScopeOwnsEvaluationPropertiesAndClose() async throws {
             let methods = runtime.wire.observations.commands.map(\.method)
             #expect(methods.contains("Runtime.evaluate"))
             #expect(methods.contains("Runtime.getProperties"))
-            #expect(methods.contains("Runtime.releaseObjectGroup"))
+            #expect(methods.contains("Runtime.releaseObject"))
 
             await closeRuntimeFeatureAttachment(container, runtime: runtime)
         } catch {
@@ -71,6 +76,27 @@ func runtimeObjectScopeOwnsEvaluationPropertiesAndClose() async throws {
             throw error
         }
     }
+}
+
+private func consoleRuntimeResourceTreeResult() throws
+    -> WebInspectorTestJSONObject
+{
+    try testJSONObject(
+        #"""
+        {
+          "frameTree": {
+            "frame": {
+              "id": "main-frame",
+              "loaderId": "main-frame-loader",
+              "name": "",
+              "url": "https://example.test/",
+              "mimeType": "text/html"
+            },
+            "resources": []
+          }
+        }
+        """#
+    )
 }
 
 @MainActor

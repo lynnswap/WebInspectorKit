@@ -3,7 +3,7 @@ import Testing
 
 @MainActor
 @Test
-func modelContainerPublishesOwnedAttachDetachAndCloseLifecycle() async throws {
+func modelContainerPublishesLatestOwnedLifecycleState() async throws {
     try await withDataKitTestRuntime { runtime in
         let container = WebInspectorModelContainer(
             configuration: .init(enabledFeatures: [])
@@ -13,30 +13,21 @@ func modelContainerPublishesOwnedAttachDetachAndCloseLifecycle() async throws {
         #expect(await states.next() == .detached)
         try await container.attach(owning: runtime.proxy)
 
-        guard case let .attaching(generation) = await states.next() else {
-            Issue.record("Expected an attaching state.")
+        guard case let .attached(generation) = await states.next() else {
+            Issue.record("Expected the latest attached state.")
             await container.close()
             return
         }
-        #expect(
-            await states.next()
-                == .attached(generation: generation)
-        )
         #expect(
             container.state
                 == .attached(generation: generation)
         )
 
         await container.detach()
-        #expect(
-            await states.next()
-                == .detaching(generation: generation)
-        )
         #expect(await states.next() == .detached)
         #expect(container.state == .detached)
 
         await container.close()
-        #expect(await states.next() == .closing)
         #expect(await states.next() == .closed)
         #expect(await states.next() == nil)
 

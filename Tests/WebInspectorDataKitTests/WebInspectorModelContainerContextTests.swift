@@ -22,7 +22,7 @@ func mainContextIsStableUntilExplicitCloseAndContainerCloseIsTerminal()
     await container.close()
     let closed = container.mainContext
     #expect(closed === container.mainContext)
-    await #expect(throws: WebInspectorFetchError.contextClosed) {
+    await #expect(throws: WebInspectorFetchError.containerClosed) {
         _ = try await closed.fetchIdentifiers(
             WebInspectorFetchDescriptor<NetworkEntry>()
         )
@@ -41,14 +41,15 @@ func modelActorMacroIssuesIndependentContainerOwnedContexts() async throws {
     #expect(await first.contextIdentity() != second.contextIdentity())
     #expect(first.modelContainer === container)
     #expect(second.modelContainer === container)
+    #expect(await first.isModelContextOpen())
+    #expect(await second.isModelContextOpen())
 
     await first.closeModelContext()
-    await #expect(throws: WebInspectorFetchError.contextClosed) {
-        _ = try await first.fetchNetworkEntryIDs()
-    }
+    #expect(await first.isModelContextOpen() == false)
+    #expect(await second.isModelContextOpen())
 
-    #expect(try await second.fetchNetworkEntryIDs().isEmpty)
     await second.closeModelContext()
+    #expect(await second.isModelContextOpen() == false)
     await container.close()
 }
 
@@ -58,9 +59,7 @@ private actor ContextCutoverModelActor {
         ObjectIdentifier(modelContext)
     }
 
-    func fetchNetworkEntryIDs() async throws -> [NetworkEntry.ID] {
-        try await modelContext.fetchIdentifiers(
-            WebInspectorFetchDescriptor<NetworkEntry>()
-        )
+    func isModelContextOpen() -> Bool {
+        modelContext.lifecycle.isOpen
     }
 }

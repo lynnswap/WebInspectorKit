@@ -53,7 +53,13 @@ func DOMAndCSSCommandsRouteThroughTheDOMFeatureFacade() async throws {
                 with: try rawCSSComputedStyleResult([])
             )
             let stylesID = try await container.dom.loadStyles(for: body.id)
-            let styles = try #require(container.mainContext.model(for: stylesID))
+            let stylesIDs = try await container.mainContext.fetchIdentifiers(
+                WebInspectorFetchDescriptor<CSSStyles>()
+            )
+            #expect(stylesIDs.contains(stylesID))
+            let styles = try #require(
+                container.mainContext.model(for: stylesID)
+            )
             #expect(styles.nodeID == body.id)
             #expect(styles.phase == .loaded)
 

@@ -1294,6 +1294,12 @@ private extension CanonicalNetworkStore {
         timestamp: Double,
         scope: WebInspectorCanonicalNetworkEventScope
     ) throws -> CanonicalNetworkTransaction? {
+        guard
+            response.url != nil
+                || existingRequestID(rawID: rawID, scope: scope) != nil
+        else {
+            return nil
+        }
         let resolution = try resolveRawIdentity(
             rawID: rawID,
             matchingURL: response.url,
