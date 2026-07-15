@@ -129,6 +129,11 @@ package final class PresentationContentStore {
         }
     }
 
+    private struct RetryTaskHandle {
+        let id: UUID
+        let task: Task<Void, Never>
+    }
+
     package typealias NetworkPanelModelFactory = @MainActor (
         WebInspectorModelContext
     ) async throws -> NetworkPanelModel
@@ -145,6 +150,11 @@ package final class PresentationContentStore {
     private var networkResource: Resource<NetworkPanelModel>?
     private var customResources: [
         WebInspectorTab.ContentKey: Resource<UIViewController>
+    ] = [:]
+    private var domRetryTask: RetryTaskHandle?
+    private var networkRetryTask: RetryTaskHandle?
+    private var customRetryTasks: [
+        WebInspectorTab.ContentKey: RetryTaskHandle
     ] = [:]
 
     private var domViewControllers: [WeakBox<DOMTabResourceViewController>] = []
@@ -168,6 +178,11 @@ package final class PresentationContentStore {
     }
 
     isolated deinit {
+        domRetryTask?.task.cancel()
+        networkRetryTask?.task.cancel()
+        for retryTask in customRetryTasks.values {
+            retryTask.task.cancel()
+        }
         for viewController in domViewControllers {
             viewController.value?.synchronouslyResetForOwnerDeinit()
         }
@@ -263,12 +278,29 @@ package final class PresentationContentStore {
         let domResource = domResource
         let networkResource = networkResource
         let customResources = Array(customResources.values)
+        let domRetryTask = domRetryTask?.task
+        let networkRetryTask = networkRetryTask?.task
+        let customRetryTasks = customRetryTasks.values.map(\.task)
 
         self.domResource = nil
         self.networkResource = nil
         self.customResources.removeAll(keepingCapacity: false)
+        self.domRetryTask = nil
+        self.networkRetryTask = nil
+        self.customRetryTasks.removeAll(keepingCapacity: false)
         resetViewControllers()
         contentCache.removeAll()
+
+        domRetryTask?.cancel()
+        networkRetryTask?.cancel()
+        for retryTask in customRetryTasks {
+            retryTask.cancel()
+        }
+        await domRetryTask?.value
+        await networkRetryTask?.value
+        for retryTask in customRetryTasks {
+            await retryTask.value
+        }
 
         await domResource?.close {}
         await networkResource?.close {}
@@ -305,22 +337,36 @@ package final class PresentationContentStore {
 
     private func retryDOM() {
         guard let resource = domResource,
-              case .failed = resource.state else { return }
-        Task { @MainActor [weak self] in
-            guard let self else { return }
+              case .failed = resource.state,
+              domRetryTask == nil else { return }
+        let retryTaskID = UUID()
+        let context = context
+        let task = Task { @MainActor [weak self, resource] in
+            defer { self?.finishDOMRetryTask(id: retryTaskID) }
             await context.modelContainer.retryFeature(.dom)
+            guard Task.isCancelled == false,
+                  let self,
+                  self.domResource === resource else { return }
             resource.start { [weak self] in self?.renderDOM() }
         }
+        domRetryTask = RetryTaskHandle(id: retryTaskID, task: task)
     }
 
     private func retryNetwork() {
         guard let resource = networkResource,
-              case .failed = resource.state else { return }
-        Task { @MainActor [weak self] in
-            guard let self else { return }
+              case .failed = resource.state,
+              networkRetryTask == nil else { return }
+        let retryTaskID = UUID()
+        let context = context
+        let task = Task { @MainActor [weak self, resource] in
+            defer { self?.finishNetworkRetryTask(id: retryTaskID) }
             await context.modelContainer.retryFeature(.network)
+            guard Task.isCancelled == false,
+                  let self,
+                  self.networkResource === resource else { return }
             resource.start { [weak self] in self?.renderNetwork() }
         }
+        networkRetryTask = RetryTaskHandle(id: retryTaskID, task: task)
     }
 
     private func retryCustomResource(
@@ -328,16 +374,46 @@ package final class PresentationContentStore {
         requiredFeatures: Set<WebInspectorFeatureID>
     ) {
         guard let resource = customResources[key],
-              case .failed = resource.state else { return }
-        Task { @MainActor [weak self] in
-            guard let self else { return }
+              case .failed = resource.state,
+              customRetryTasks[key] == nil else { return }
+        let retryTaskID = UUID()
+        let context = context
+        let task = Task { @MainActor [weak self, resource] in
+            defer {
+                self?.finishCustomRetryTask(for: key, id: retryTaskID)
+            }
             for feature in requiredFeatures {
                 await context.modelContainer.retryFeature(feature)
+                guard Task.isCancelled == false else { return }
             }
+            guard let self,
+                  self.customResources[key] === resource else { return }
             resource.start { [weak self] in
                 self?.renderCustomResource(for: key)
             }
         }
+        customRetryTasks[key] = RetryTaskHandle(
+            id: retryTaskID,
+            task: task
+        )
+    }
+
+    private func finishDOMRetryTask(id: UUID) {
+        guard domRetryTask?.id == id else { return }
+        domRetryTask = nil
+    }
+
+    private func finishNetworkRetryTask(id: UUID) {
+        guard networkRetryTask?.id == id else { return }
+        networkRetryTask = nil
+    }
+
+    private func finishCustomRetryTask(
+        for key: WebInspectorTab.ContentKey,
+        id: UUID
+    ) {
+        guard customRetryTasks[key]?.id == id else { return }
+        customRetryTasks[key] = nil
     }
 
     private static func waitForFeatures(
@@ -482,14 +558,17 @@ package final class PresentationContentStore {
         networkResource?.readyValue()
     }
     package func waitForDOMResourceTaskForTesting() async {
+        await domRetryTask?.task.value
         await domResource?.waitForAttempt()
     }
     package func waitForNetworkResourceTaskForTesting() async {
+        await networkRetryTask?.task.value
         await networkResource?.waitForAttempt()
     }
     package func waitForCustomResourceTaskForTesting(
         for key: WebInspectorTab.ContentKey
     ) async {
+        await customRetryTasks[key]?.task.value
         await customResources[key]?.waitForAttempt()
     }
     #endif

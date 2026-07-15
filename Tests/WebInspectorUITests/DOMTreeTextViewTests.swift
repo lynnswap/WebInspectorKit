@@ -115,11 +115,17 @@ struct DOMTreeTextViewTests {
         )
         let context = runtime.container.mainContext
         let panelModel = try await DOMPanelModel.make(context: context)
+        let initialRevision = try #require(panelModel.nodes.revision).rawValue
         let view = DOMTreeTextView(model: panelModel)
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.setRenderingActive(true)
 
-        #expect(await view.waitForRowDocumentForTesting())
+        #expect(
+            await view.waitForRowDocumentAppliedTreeRevisionForTesting(
+                initialRevision,
+                timeout: .seconds(5)
+            )
+        )
         #expect(view.documentTextForTesting.contains("<html lang=\"en\">"))
         #expect(view.documentTextForTesting.contains("<input disabled>"))
 
@@ -954,8 +960,9 @@ struct DOMTreeTextViewTests {
         let revision = try await fixture.replacePage(
             with: DOMTreeRuntimeFixture.document()
         )
-        #expect(await view.waitForObservedTreeRevisionForTesting(revision))
-        #expect(await view.waitForRowDocumentForTesting())
+        #expect(
+            await view.waitForRowDocumentAppliedTreeRevisionForTesting(revision)
+        )
         let committedIdentity = try #require(
             view.lastCommittedRowRenderRequestIdentityForTesting
         )
@@ -967,7 +974,7 @@ struct DOMTreeTextViewTests {
         )
         #expect(
             view.rowDocumentRevisionForTesting
-                == baselineDocumentRevision + 1
+                == baselineDocumentRevision + 2
         )
         #expect(view.documentTextForTesting.contains("<article>…</article>"))
         #expect(!view.documentTextForTesting.contains("nested-child"))
@@ -1080,8 +1087,9 @@ struct DOMTreeTextViewTests {
         let revision = try await fixture.replacePage(
             with: DOMTreeRuntimeFixture.document()
         )
-        #expect(await view.waitForObservedTreeRevisionForTesting(revision))
-        #expect(await view.waitForRowDocumentForTesting())
+        #expect(
+            await view.waitForRowDocumentAppliedTreeRevisionForTesting(revision)
+        )
 
         #expect(view.documentTextForTesting.contains("<article>…</article>"))
         #expect(!view.documentTextForTesting.contains("nested-child"))
@@ -1277,6 +1285,11 @@ private final class DOMTreeRuntimeFixture {
         highlightNodeAction: DOMTreeTextView.HighlightNodeAction? = nil,
         restoreHighlightAction: DOMTreeTextView.RestoreHighlightAction? = nil
     ) async -> DOMTreeTextView {
+        guard let initialRevision = model.nodes.revision?.rawValue else {
+            preconditionFailure(
+                "A DOM tree test view requires an accepted canonical snapshot."
+            )
+        }
         let view = DOMTreeTextView(
             model: model,
             requestChildrenAction: requestChildrenAction,
@@ -1286,7 +1299,12 @@ private final class DOMTreeRuntimeFixture {
         view.frame = CGRect(x: 0, y: 0, width: 360, height: 480)
         view.layoutIfNeeded()
         view.setRenderingActive(true)
-        #expect(await view.waitForRowDocumentForTesting())
+        #expect(
+            await view.waitForRowDocumentAppliedTreeRevisionForTesting(
+                initialRevision,
+                timeout: .seconds(5)
+            )
+        )
         return view
     }
 
@@ -1347,8 +1365,15 @@ private final class DOMTreeRuntimeFixture {
     func replacePage(
         with document: WebInspectorDataKitTestRuntime.Document
     ) async throws -> UInt64 {
-        try await runtime.replacePage(with: document)
-        return try await nextRevision()
+        let boundary = try await runtime.replacePage(with: document)
+        guard case let .ready(pageGeneration, _) = boundary.featureState(
+            for: .dom
+        ) else {
+            preconditionFailure(
+                "A DOM page replacement requires a ready replacement generation."
+            )
+        }
+        return try await nextRevision(in: pageGeneration)
     }
 
     func close(view: DOMTreeTextView) async {
@@ -1376,6 +1401,40 @@ private final class DOMTreeRuntimeFixture {
         preconditionFailure(
             "A live DOM tree test fixture cannot terminate its update sequence."
         )
+    }
+
+    private func nextRevision(
+        in pageGeneration: WebInspectorPageGeneration
+    ) async throws -> UInt64 {
+        while true {
+            if let revision = revision(in: pageGeneration) {
+                return revision
+            }
+            var iterator = updates
+            let next = await iterator.next()
+            updates = iterator
+            guard next != nil else {
+                break
+            }
+        }
+        preconditionFailure(
+            "A live DOM tree test fixture cannot terminate before applying the replacement generation."
+        )
+    }
+
+    private func revision(
+        in pageGeneration: WebInspectorPageGeneration
+    ) -> UInt64? {
+        guard let snapshot = model.nodes.snapshot,
+              snapshot.itemIDs.isEmpty == false,
+              snapshot.itemIDs.allSatisfy({
+                  $0.canonicalStorage.documentScope.pageGeneration
+                      == pageGeneration
+              }),
+              let revision = model.nodes.revision else {
+            return nil
+        }
+        return revision.rawValue
     }
 
     static func document() -> WebInspectorDataKitTestRuntime.Document {

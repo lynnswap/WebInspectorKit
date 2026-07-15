@@ -1,4 +1,5 @@
 #if canImport(UIKit)
+import ObservationBridge
 import Testing
 import UIKit
 @testable import WebInspectorDataKit
@@ -71,12 +72,22 @@ struct DOMContainerTests {
         async throws
     {
         let fixture = try await DOMContainerFixture()
+        let observation = withPortableContinuousObservation { _ in
+            _ = fixture.model.isPickingElement
+        }
+        let pickerStates = await observation.values {
+            fixture.model.isPickingElement
+        }
+        defer {
+            pickerStates.cancel()
+            observation.cancel()
+        }
 
         fixture.model.toggleElementPicker()
-        #expect(fixture.model.isPickingElement)
+        #expect(await pickerStates.waitUntil { $0 } != nil)
 
         fixture.model.cancelElementPicker()
-        #expect(await waitUntil { fixture.model.isPickingElement == false })
+        #expect(await pickerStates.waitUntil { !$0 } != nil)
         await fixture.close()
     }
 

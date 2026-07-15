@@ -5,20 +5,11 @@ import WebInspectorUIBase
 
 @MainActor
 private final class WebInspectorRootPresentationLifecycleCoordinator {
-    #if DEBUG
-    private struct RetirementTaskCompletionWaiter {
-        var baselineCount: UInt64
-        var continuation: CheckedContinuation<Bool, Never>
-        var timeoutTask: Task<Void, Never>
-    }
-    #endif
-
     private var didFinishCurrentPresentation = false
     private var presentationGeneration: UInt64 = 0
+    private var retirementTasks: [UUID: Task<Void, Never>] = [:]
     #if DEBUG
     private var retirementTaskCompletionCount: UInt64 = 0
-    private var retirementTaskCompletionWaiters: [UInt64: RetirementTaskCompletionWaiter] = [:]
-    private var nextRetirementTaskCompletionWaiterID: UInt64 = 0
     #endif
 
     func beginPresentation() {
@@ -26,12 +17,22 @@ private final class WebInspectorRootPresentationLifecycleCoordinator {
         presentationGeneration &+= 1
     }
 
-    func finishIfNeeded(_ finish: (_ generation: UInt64) -> Void) {
+    func finishIfNeeded(
+        prepare: () -> Void,
+        retirement: @escaping @MainActor (_ generation: UInt64) async -> Void
+    ) {
         guard didFinishCurrentPresentation == false else {
             return
         }
         didFinishCurrentPresentation = true
-        finish(presentationGeneration)
+        let generation = presentationGeneration
+        prepare()
+        let taskID = UUID()
+        let task = Task { @MainActor [self] in
+            await retirement(generation)
+            finishRetirementTask(id: taskID)
+        }
+        retirementTasks[taskID] = task
     }
 
     func isCurrentPresentation(_ generation: UInt64) -> Bool {
@@ -48,52 +49,28 @@ private final class WebInspectorRootPresentationLifecycleCoordinator {
     }
 
     func waitForRetirementTaskCompletionForTesting(
-        after baselineCount: UInt64,
-        timeout: Duration = .seconds(1)
+        after baselineCount: UInt64
     ) async -> Bool {
         if retirementTaskCompletionCount > baselineCount {
             return true
         }
-
-        return await withCheckedContinuation { continuation in
-            let waiterID = nextRetirementTaskCompletionWaiterID
-            nextRetirementTaskCompletionWaiterID &+= 1
-            let timeoutTask = Task { @MainActor [weak self] in
-                try? await Task.sleep(for: timeout)
-                self?.resolveRetirementTaskCompletionWaiterForTesting(id: waiterID, result: false)
-            }
-            retirementTaskCompletionWaiters[waiterID] = RetirementTaskCompletionWaiter(
-                baselineCount: baselineCount,
-                continuation: continuation,
-                timeoutTask: timeoutTask
-            )
-            if retirementTaskCompletionCount > baselineCount {
-                resolveRetirementTaskCompletionWaiterForTesting(id: waiterID, result: true)
-            }
+        let runningTasks = Array(retirementTasks.values)
+        guard runningTasks.isEmpty == false else {
+            return false
         }
-    }
-
-    func recordRetirementTaskCompletionForTesting() {
-        retirementTaskCompletionCount &+= 1
-        let completedWaiterIDs = retirementTaskCompletionWaiters.compactMap { id, waiter in
-            retirementTaskCompletionCount > waiter.baselineCount ? id : nil
+        for task in runningTasks {
+            await task.value
         }
-        for waiterID in completedWaiterIDs {
-            resolveRetirementTaskCompletionWaiterForTesting(id: waiterID, result: true)
-        }
-    }
-
-    private func resolveRetirementTaskCompletionWaiterForTesting(
-        id: UInt64,
-        result: Bool
-    ) {
-        guard let waiter = retirementTaskCompletionWaiters.removeValue(forKey: id) else {
-            return
-        }
-        waiter.timeoutTask.cancel()
-        waiter.continuation.resume(returning: result)
+        return retirementTaskCompletionCount > baselineCount
     }
     #endif
+
+    private func finishRetirementTask(id: UUID) {
+        retirementTasks[id] = nil
+        #if DEBUG
+        retirementTaskCompletionCount &+= 1
+        #endif
+    }
 }
 
 private final class WebInspectorPresentationHostWindowObserverView: UIView {
@@ -325,36 +302,30 @@ public final class WebInspectorViewController: UIViewController {
         case .owned: true
         case .borrowed: false
         }
-        presentationLifecycleCoordinator.finishIfNeeded { [
+        presentationLifecycleCoordinator.finishIfNeeded(
+            prepare: { removeActiveHost() }
+        ) { [
             session,
             presentationContentStore,
             presentationLifecycleCoordinator,
             closesSession,
         ] generation in
-            removeActiveHost()
-            Task { @MainActor in
-                defer {
-                    #if DEBUG
-                    presentationLifecycleCoordinator.recordRetirementTaskCompletionForTesting()
-                    #endif
-                }
-                // A re-presentation can begin before this deferred retirement
-                // runs; retiring then would tear down content the new
-                // presentation has already built.
-                guard presentationLifecycleCoordinator.isCurrentPresentation(generation) else {
-                    return
-                }
-                await presentationContentStore.clear()
-                // Resource retirement may suspend long enough for this root to
-                // begin a new presentation. Never detach that newer lifetime.
-                guard presentationLifecycleCoordinator.isCurrentPresentation(generation) else {
-                    return
-                }
-                guard closesSession else {
-                    return
-                }
-                await session.close()
+            // A re-presentation can begin before this deferred retirement
+            // runs; retiring then would tear down content the new
+            // presentation has already built.
+            guard presentationLifecycleCoordinator.isCurrentPresentation(generation) else {
+                return
             }
+            await presentationContentStore.clear()
+            // Resource retirement may suspend long enough for this root to
+            // begin a new presentation. Never detach that newer lifetime.
+            guard presentationLifecycleCoordinator.isCurrentPresentation(generation) else {
+                return
+            }
+            guard closesSession else {
+                return
+            }
+            await session.close()
         }
     }
 

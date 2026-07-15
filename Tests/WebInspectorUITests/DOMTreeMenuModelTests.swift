@@ -66,8 +66,8 @@ struct DOMTreeMenuModelTests {
         #expect(!model.showsSelectedTextCopy)
         #expect(model.canCopyHTML)
         #expect(model.showsSingleNodeCopyActions)
-        #expect(model.canCopySelectorPath)
-        #expect(model.canCopyXPath)
+        #expect(!model.canCopySelectorPath)
+        #expect(!model.canCopyXPath)
         #expect(!model.canDelete)
         await fixture.runtime.close()
     }
