@@ -115,7 +115,6 @@ func canonicalNetworkIdentityScopesCannotAlias() throws {
     #expect(pageScopedID != attachmentScopedID)
     #expect(pageScopedID.pageGeneration == .init(rawValue: 2))
 }
-
 @Test
 func canonicalNetworkRawRequestLookupRejectsLiveAgentCollisions() throws {
     var fixture = try CanonicalNetworkTestFixture()
@@ -192,10 +191,10 @@ func canonicalNetworkInitiatorKeysSeparateSemanticAndAgentTargets() {
                 0, 0, 0, 0, 0, 0, 0, 0,
                 0, 0, 0, 0, 0, 0, 0, 1
             )))
-    let attachmentGeneration = WebInspectorContainerAttachmentGeneration(
+    let attachmentGeneration = WebInspectorAttachmentGeneration(
         rawValue: 1
     )
-    let pageGeneration = WebInspectorPage.Generation(rawValue: 1)
+    let pageGeneration = WebInspectorPageGeneration(rawValue: 1)
     let semanticTargetID = WebInspectorTarget.ID("frame")
     let firstAgentTargetID = WebInspectorTarget.ID("agent-a")
     let secondAgentTargetID = WebInspectorTarget.ID("agent-b")
@@ -365,7 +364,7 @@ func canonicalNetworkGroupingSeparatesAgentsAndKeepsInitialSemanticMembership() 
     )
     #expect(
         preservedRequest.membership.domBindingEpoch
-            == ModelDOMBindingEpoch(rawValue: 1)
+            == WebInspectorDOMBindingScopeID(rawValue: 1)
     )
     #expect(preservedEntry.id == firstAgentEntry.id)
     #expect(preservedEntry.groupKey == firstAgentEntry.groupKey)

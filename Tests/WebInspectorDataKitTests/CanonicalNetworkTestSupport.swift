@@ -5,8 +5,8 @@ import WebInspectorProxyKit
 struct CanonicalNetworkTestFixture {
     var store: CanonicalNetworkStore
     let storeID: WebInspectorContainerStoreID
-    let attachmentGeneration: WebInspectorContainerAttachmentGeneration
-    let pageGeneration: WebInspectorPage.Generation
+    let attachmentGeneration: WebInspectorAttachmentGeneration
+    let pageGeneration: WebInspectorPageGeneration
 
     init(
         storeUUID: UUID = UUID(),
@@ -14,11 +14,10 @@ struct CanonicalNetworkTestFixture {
         pageGeneration: UInt64 = 1
     ) throws {
         storeID = WebInspectorContainerStoreID(rawValue: storeUUID)
-        self.attachmentGeneration =
-            WebInspectorContainerAttachmentGeneration(
-                rawValue: attachmentGeneration
-            )
-        self.pageGeneration = WebInspectorPage.Generation(
+        self.attachmentGeneration = WebInspectorAttachmentGeneration(
+            rawValue: attachmentGeneration
+        )
+        self.pageGeneration = WebInspectorPageGeneration(
             rawValue: pageGeneration
         )
         store = CanonicalNetworkStore(storeID: storeID)
@@ -33,37 +32,39 @@ struct CanonicalNetworkTestFixture {
         agentTargetID: String? = nil,
         navigationEpoch: UInt64 = 1,
         domBindingEpoch: UInt64? = nil,
-        pageGeneration: WebInspectorPage.Generation? = nil
+        pageGeneration: WebInspectorPageGeneration? = nil
     ) -> WebInspectorCanonicalNetworkEventScope {
         let semanticTargetID = WebInspectorTarget.ID(targetID)
         let agentTargetID = WebInspectorTarget.ID(
             agentTargetID ?? targetID
         )
-        let modelScope = ModelEventScope(
+        let modelScope = WebInspectorFeatureEventScope(
             generation: pageGeneration ?? self.pageGeneration,
-            target: ModelTarget(
+            semanticTarget: WebInspectorFeatureTarget(
                 id: semanticTargetID,
                 kind: .page,
-                frameID: nil,
-                parentFrameID: nil
+                frameID: nil
             ),
-            agentTarget: ModelTarget(
+            agentTarget: WebInspectorFeatureTarget(
                 id: agentTargetID,
                 kind: .page,
-                frameID: nil,
-                parentFrameID: nil
-            ),
-            navigationEpoch: ModelNavigationEpoch(
-                rawValue: navigationEpoch
-            ),
-            domBindingEpoch: domBindingEpoch.map {
-                ModelDOMBindingEpoch(rawValue: $0)
-            },
-            runtimeBindingEpoch: nil,
-            consoleBindingEpoch: nil
+                frameID: nil
+            )
         )
         return WebInspectorCanonicalNetworkEventScope(
-            modelScope: modelScope
+            modelScope: modelScope,
+            origin: .eventTarget(semanticTargetID),
+            targetAuthority: CanonicalNetworkRegisteredTargetAuthority(
+                targetID: semanticTargetID,
+                navigationEpoch: WebInspectorPageGeneration(
+                    rawValue: navigationEpoch
+                ),
+                domBindingEpoch: domBindingEpoch.map {
+                    WebInspectorDOMBindingScopeID(rawValue: $0)
+                }
+            ),
+            frameID: FrameID("main-frame"),
+            loaderID: "loader"
         )
     }
 }
@@ -87,7 +88,6 @@ func canonicalRequestWillBeSent(
     originFrameID: String? = nil,
     originLoaderID: String = "loader",
     originTargetID: String? = nil,
-    mappedFrameTargetID: String? = nil,
     timestamp: Double
 ) -> Network.Event {
     let id = Network.Request.ID(rawID)
@@ -108,10 +108,7 @@ func canonicalRequestWillBeSent(
                 Network.Request.Origin(
                     frameID: FrameID(frameID),
                     loaderID: originLoaderID,
-                    targetID: originTargetID,
-                    mappedFrameTargetID: mappedFrameTargetID.map(
-                        WebInspectorTarget.ID.init
-                    )
+                    targetID: originTargetID
                 )
             }
         ),

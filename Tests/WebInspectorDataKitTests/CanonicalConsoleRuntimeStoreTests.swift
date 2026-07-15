@@ -6,8 +6,8 @@ import WebInspectorProxyKit
 private struct CanonicalConsoleRuntimeFixture {
     var store: CanonicalConsoleRuntimeStore
     let storeID: WebInspectorContainerStoreID
-    let attachmentGeneration: WebInspectorContainerAttachmentGeneration
-    let pageGeneration: WebInspectorPage.Generation
+    let attachmentGeneration: WebInspectorAttachmentGeneration
+    let pageGeneration: WebInspectorPageGeneration
 
     init(
         projectsRuntimeContexts: Bool = true,
@@ -17,10 +17,10 @@ private struct CanonicalConsoleRuntimeFixture {
         storeID = WebInspectorContainerStoreID(
             rawValue: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
         )
-        attachmentGeneration = WebInspectorContainerAttachmentGeneration(
+        attachmentGeneration = WebInspectorAttachmentGeneration(
             rawValue: attachment
         )
-        pageGeneration = WebInspectorPage.Generation(rawValue: page)
+        pageGeneration = WebInspectorPageGeneration(rawValue: page)
         store = CanonicalConsoleRuntimeStore(
             storeID: storeID,
             projectsRuntimeContexts: projectsRuntimeContexts
@@ -37,30 +37,30 @@ private struct CanonicalConsoleRuntimeFixture {
         navigationEpoch: UInt64 = 1,
         runtimeBindingEpoch: UInt64? = 1,
         consoleBindingEpoch: UInt64? = 1,
-        pageGeneration: WebInspectorPage.Generation? = nil
-    ) -> ModelEventScope {
+        pageGeneration: WebInspectorPageGeneration? = nil
+    ) -> WebInspectorConsoleRuntimeEventScope {
         let agentTargetID = agentTargetID ?? semanticTargetID
-        return ModelEventScope(
+        let route = WebInspectorFeatureEventScope(
             generation: pageGeneration ?? self.pageGeneration,
-            target: ModelTarget(
+            semanticTarget: WebInspectorFeatureTarget(
                 id: WebInspectorTarget.ID(semanticTargetID),
                 kind: semanticTargetID == agentTargetID ? .page : .frame,
-                frameID: FrameID("frame-\(semanticTargetID)"),
-                parentFrameID: nil
+                frameID: FrameID("frame-\(semanticTargetID)")
             ),
-            agentTarget: ModelTarget(
+            agentTarget: WebInspectorFeatureTarget(
                 id: WebInspectorTarget.ID(agentTargetID),
                 kind: .page,
-                frameID: FrameID("frame-\(agentTargetID)"),
-                parentFrameID: nil
-            ),
-            navigationEpoch: ModelNavigationEpoch(rawValue: navigationEpoch),
-            domBindingEpoch: nil,
+                frameID: FrameID("frame-\(agentTargetID)")
+            )
+        )
+        return WebInspectorConsoleRuntimeEventScope(
+            route: route,
+            navigationEpoch: WebInspectorPageGeneration(rawValue: navigationEpoch),
             runtimeBindingEpoch: runtimeBindingEpoch.map(
-                ModelRuntimeBindingEpoch.init(rawValue:)
+                WebInspectorRuntimeBindingGeneration.init(rawValue:)
             ),
             consoleBindingEpoch: consoleBindingEpoch.map(
-                ModelConsoleBindingEpoch.init(rawValue:)
+                WebInspectorConsoleBindingGeneration.init(rawValue:)
             )
         )
     }
@@ -166,8 +166,8 @@ func canonicalRuntimeIdentitySeparatesAgentAuthorityFromSemanticMembership() thr
     #expect(firstRecord.id != secondRecord.id)
     #expect(firstRecord.id.agentTargetID == WebInspectorTarget.ID("root-runtime-agent"))
     #expect(firstRecord.membership.semanticTargetID == WebInspectorTarget.ID("semantic-frame"))
-    #expect(firstRecord.membership.navigationEpoch == ModelNavigationEpoch(rawValue: 7))
-    #expect(firstRecord.membership.runtimeBindingEpoch == ModelRuntimeBindingEpoch(rawValue: 11))
+    #expect(firstRecord.membership.navigationEpoch == WebInspectorPageGeneration(rawValue: 7))
+    #expect(firstRecord.membership.runtimeBindingEpoch == WebInspectorRuntimeBindingGeneration(rawValue: 11))
     #expect(secondRecord.id.rawContextID == firstRecord.id.rawContextID)
     #expect(fixture.store.runtimeContextCount == 2)
 }
@@ -271,15 +271,15 @@ func canonicalRuntimeInsertionOrdinalIsNeverReusedAcrossRemovalBoundaries() thro
     )
     _ = fixture.store.clearForDetach()
     try fixture.store.reset(
-        attachmentGeneration: WebInspectorContainerAttachmentGeneration(rawValue: 2),
-        pageGeneration: WebInspectorPage.Generation(rawValue: 2)
+        attachmentGeneration: WebInspectorAttachmentGeneration(rawValue: 2),
+        pageGeneration: WebInspectorPageGeneration(rawValue: 2)
     )
     let reset = try insertedRecord(
         try fixture.store.reduceRuntime(
             .executionContextCreated(canonicalRuntimeContext(id: "after-reset")),
             scope: fixture.scope(
                 agentTargetID: "page",
-                pageGeneration: WebInspectorPage.Generation(rawValue: 2)
+                pageGeneration: WebInspectorPageGeneration(rawValue: 2)
             )
         )
     )
@@ -387,7 +387,7 @@ func canonicalRuntimeClearTombstonesEveryContextInOneAgent() throws {
         transaction.resourceInvalidations == [
             .runtimeBinding(
                 agentTargetID: WebInspectorTarget.ID("root-agent"),
-                epoch: ModelRuntimeBindingEpoch(rawValue: 2)
+                epoch: WebInspectorRuntimeBindingGeneration(rawValue: 2)
             )
         ]
     )
@@ -442,7 +442,7 @@ func canonicalRuntimeDestroyRejectsSameGenerationReuseButResetPermitsNewIdentity
     }
     #expect(fixture.store == beforeReuse)
 
-    let nextPage = WebInspectorPage.Generation(rawValue: 2)
+    let nextPage = WebInspectorPageGeneration(rawValue: 2)
     _ = try fixture.store.reset(
         attachmentGeneration: fixture.attachmentGeneration,
         pageGeneration: nextPage
@@ -541,7 +541,7 @@ func canonicalSemanticNavigationDeletesOnlyPriorMembershipForThatTarget() throws
         transaction.resourceInvalidations == [
             .semanticNavigation(
                 semanticTargetID: WebInspectorTarget.ID("frame-a"),
-                navigationEpoch: ModelNavigationEpoch(rawValue: 2)
+                navigationEpoch: WebInspectorPageGeneration(rawValue: 2)
             )
         ]
     )
@@ -591,7 +591,7 @@ func canonicalSemanticNavigationInvalidatesEveryAgentThroughSemanticAuthority() 
         transaction.resourceInvalidations == [
             .semanticNavigation(
                 semanticTargetID: WebInspectorTarget.ID("shared-frame"),
-                navigationEpoch: ModelNavigationEpoch(rawValue: 2)
+                navigationEpoch: WebInspectorPageGeneration(rawValue: 2)
             )
         ]
     )
@@ -648,7 +648,7 @@ func canonicalRuntimeBindingAdvanceIsIndependentFromPersistentMembership() throw
         transaction.resourceInvalidations == [
             .runtimeBinding(
                 agentTargetID: WebInspectorTarget.ID("page-agent"),
-                epoch: ModelRuntimeBindingEpoch(rawValue: 2)
+                epoch: WebInspectorRuntimeBindingGeneration(rawValue: 2)
             )
         ]
     )
@@ -712,7 +712,7 @@ func canonicalConsoleRepeatAndClearAreScopedPerAgent() throws {
         clear.resourceInvalidations == [
             .consoleBinding(
                 agentTargetID: WebInspectorTarget.ID("console-a"),
-                epoch: ModelConsoleBindingEpoch(rawValue: 2)
+                epoch: WebInspectorConsoleBindingGeneration(rawValue: 2)
             )
         ]
     )
@@ -738,10 +738,10 @@ func canonicalConsoleOrdinalNeverReusesAcrossResetReattachOrReplay() throws {
 
     _ = try fixture.store.reset(
         attachmentGeneration: fixture.attachmentGeneration,
-        pageGeneration: WebInspectorPage.Generation(rawValue: 2)
+        pageGeneration: WebInspectorPageGeneration(rawValue: 2)
     )
     let secondScope = fixture.scope(
-        pageGeneration: WebInspectorPage.Generation(rawValue: 2)
+        pageGeneration: WebInspectorPageGeneration(rawValue: 2)
     )
     let second = try #require(
         try fixture.store.reduceConsole(.messageAdded(payload), scope: secondScope)
@@ -751,13 +751,13 @@ func canonicalConsoleOrdinalNeverReusesAcrossResetReattachOrReplay() throws {
         return
     }
 
-    let nextAttachment = WebInspectorContainerAttachmentGeneration(rawValue: 2)
+    let nextAttachment = WebInspectorAttachmentGeneration(rawValue: 2)
     _ = try fixture.store.reset(
         attachmentGeneration: nextAttachment,
-        pageGeneration: WebInspectorPage.Generation(rawValue: 1)
+        pageGeneration: WebInspectorPageGeneration(rawValue: 1)
     )
     let thirdScope = fixture.scope(
-        pageGeneration: WebInspectorPage.Generation(rawValue: 1)
+        pageGeneration: WebInspectorPageGeneration(rawValue: 1)
     )
     let third = try #require(
         try fixture.store.reduceConsole(.messageAdded(payload), scope: thirdScope)
@@ -833,9 +833,9 @@ func canonicalConsoleParameterSeedPreservesPayloadAndExactBindingAuthority() thr
     #expect(seed.authority.ownerMessageID == record.id)
     #expect(seed.authority.semanticTargetID == WebInspectorTarget.ID("semantic-frame"))
     #expect(seed.authority.agentTargetID == WebInspectorTarget.ID("console-runtime-agent"))
-    #expect(seed.authority.navigationEpoch == ModelNavigationEpoch(rawValue: 9))
-    #expect(seed.authority.runtimeBindingEpoch == ModelRuntimeBindingEpoch(rawValue: 12))
-    #expect(seed.authority.consoleBindingEpoch == ModelConsoleBindingEpoch(rawValue: 14))
+    #expect(seed.authority.navigationEpoch == WebInspectorPageGeneration(rawValue: 9))
+    #expect(seed.authority.runtimeBindingEpoch == WebInspectorRuntimeBindingGeneration(rawValue: 12))
+    #expect(seed.authority.consoleBindingEpoch == WebInspectorConsoleBindingGeneration(rawValue: 14))
     #expect(record.stackTrace?.callFrames.first?.functionName == "run")
 }
 
@@ -975,7 +975,7 @@ func consoleOnlyStoreConsumesRuntimeClearWithoutProjectingRuntimeContexts() thro
         clear.resourceInvalidations == [
             .runtimeBinding(
                 agentTargetID: WebInspectorTarget.ID("agent"),
-                epoch: ModelRuntimeBindingEpoch(rawValue: 2)
+                epoch: WebInspectorRuntimeBindingGeneration(rawValue: 2)
             )
         ]
     )

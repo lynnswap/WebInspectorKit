@@ -46,12 +46,11 @@ func canonicalNetworkWebSocketRetainsCreationMembershipThroughHandshake() throws
         request.membership
             == CanonicalNetworkRequestMembership(
                 semanticTargetID: WebInspectorTarget.ID("initial-frame"),
-                navigationEpoch: ModelNavigationEpoch(rawValue: 2),
-                domBindingEpoch: ModelDOMBindingEpoch(rawValue: 3)
+                navigationEpoch: WebInspectorPageGeneration(rawValue: 2),
+                domBindingEpoch: WebInspectorDOMBindingScopeID(rawValue: 3)
             )
     )
 }
-
 @Test
 func canonicalNetworkWebSocketUsesAppendPatchesAndPreservesChronology() throws {
     var fixture = try CanonicalNetworkTestFixture()

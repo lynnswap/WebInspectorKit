@@ -42,7 +42,6 @@ func canonicalNetworkLargeGroupInsertionUsesIncrementalEntryPath() throws {
     #expect(counters.entryQueryRebuildCount == 0)
     #expect(counters.entryIncrementalUpdateCount == 999)
 }
-
 @Test
 func canonicalNetworkTransferAndFrameUpdatesDoNotScanGroupQueries() throws {
     var fixture = try CanonicalNetworkTestFixture()
@@ -337,7 +336,7 @@ func canonicalNetworkEntrySeverityAggregateRespectsEntryOwnershipBoundaries() th
     #expect(survivingEntry.summary.url.hasSuffix("successful-cache"))
     #expect(survivingEntry.summary.statusSeverity == .success)
 
-    let nextPage = WebInspectorPage.Generation(rawValue: 2)
+    let nextPage = WebInspectorPageGeneration(rawValue: 2)
     _ = try fixture.store.reset(
         attachmentGeneration: fixture.attachmentGeneration,
         pageGeneration: nextPage

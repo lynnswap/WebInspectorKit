@@ -17,9 +17,10 @@ func rawCSSInlineStylesResult(_ styles: CSS.InlineStyles) throws -> WebInspector
 func rawCSSComputedStyleResult(
     _ properties: [CSS.ComputedProperty]
 ) throws -> WebInspectorTestJSONObject {
-    try testJSONObject(CSSComputedStyleResultWire(
-        computedStyle: properties.map(CSSComputedPropertyWire.init)
-    ))
+    try testJSONObject(
+        CSSComputedStyleResultWire(
+            computedStyle: properties.map(CSSComputedPropertyWire.init)
+        ))
 }
 
 func rawCSSStyleResult(_ style: CSS.Style) throws -> WebInspectorTestJSONObject {
@@ -31,36 +32,40 @@ func rawCSSRuleResult(_ rule: CSS.Rule) throws -> WebInspectorTestJSONObject {
 }
 
 func rawNetworkBodyResult(_ body: Network.Body) throws -> WebInspectorTestJSONObject {
-    try testJSONObject(NetworkBodyResultWire(
-        body: body.data,
-        base64Encoded: body.base64Encoded
-    ))
+    try testJSONObject(
+        NetworkBodyResultWire(
+            body: body.data,
+            base64Encoded: body.base64Encoded
+        ))
 }
 
 func rawRuntimeEvaluationResult(
     _ result: Runtime.EvaluationResult
 ) throws -> WebInspectorTestJSONObject {
-    try testJSONObject(RuntimeEvaluationResultWire(
-        result: RuntimeRemoteObjectWire(result.object),
-        wasThrown: result.wasThrown,
-        savedResultIndex: result.savedResultIndex
-    ))
+    try testJSONObject(
+        RuntimeEvaluationResultWire(
+            result: RuntimeRemoteObjectWire(result.object),
+            wasThrown: result.wasThrown,
+            savedResultIndex: result.savedResultIndex
+        ))
 }
 
 func rawRuntimePropertiesResult(
     _ properties: [Runtime.PropertyDescriptor]
 ) throws -> WebInspectorTestJSONObject {
-    try testJSONObject(RuntimePropertiesResultWire(
-        properties: properties.map(RuntimePropertyDescriptorWire.init)
-    ))
+    try testJSONObject(
+        RuntimePropertiesResultWire(
+            properties: properties.map(RuntimePropertyDescriptorWire.init)
+        ))
 }
 
 func rawRuntimeCollectionEntriesResult(
     _ entries: [Runtime.CollectionEntry]
 ) throws -> WebInspectorTestJSONObject {
-    try testJSONObject(RuntimeCollectionEntriesResultWire(
-        entries: entries.map(RuntimeCollectionEntryWire.init)
-    ))
+    try testJSONObject(
+        RuntimeCollectionEntriesResultWire(
+            entries: entries.map(RuntimeCollectionEntryWire.init)
+        ))
 }
 
 private struct DOMOuterHTMLResultWire: Encodable {
@@ -332,5 +337,136 @@ private struct RuntimeCollectionEntryWire: Encodable {
     init(_ entry: Runtime.CollectionEntry) {
         key = entry.key.map(RuntimeRemoteObjectWire.init)
         value = RuntimeRemoteObjectWire(entry.value)
+    }
+}
+
+private struct RuntimeRemoteObjectWire: Encodable {
+    let objectId: String?
+    let type: String
+    let subtype: String?
+    let className: String?
+    let description: String?
+    let value: RuntimeJSONValueWire?
+    let size: Int?
+    let preview: RuntimeObjectPreviewWire?
+
+    init(_ object: Runtime.RemoteObject) {
+        objectId = object.id?.rawValue
+        let kind = Self.wireKind(
+            object.kind,
+            explicitSubtype: object.subtype?.rawValue
+        )
+        type = kind.type
+        subtype = kind.subtype
+        className = object.className
+        description = object.description
+        value = object.value.map(RuntimeJSONValueWire.init)
+        size = object.size
+        preview = object.preview.map(RuntimeObjectPreviewWire.init)
+    }
+
+    private static func wireKind(
+        _ kind: Runtime.Kind,
+        explicitSubtype: String?
+    ) -> (type: String, subtype: String?) {
+        switch kind {
+        case .object: ("object", explicitSubtype)
+        case .function: ("function", explicitSubtype)
+        case .string: ("string", explicitSubtype)
+        case .number: ("number", explicitSubtype)
+        case .boolean: ("boolean", explicitSubtype)
+        case .symbol: ("symbol", explicitSubtype)
+        case .bigint: ("bigint", explicitSubtype)
+        case .undefined: ("undefined", explicitSubtype)
+        case .null: ("object", explicitSubtype ?? "null")
+        case .array: ("object", explicitSubtype ?? "array")
+        case .error: ("object", explicitSubtype ?? "error")
+        case let .other(value): (value, explicitSubtype)
+        }
+    }
+}
+
+private struct RuntimeJSONValueWire: Encodable {
+    let value: Runtime.JSONValue
+
+    init(_ value: Runtime.JSONValue) {
+        self.value = value
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch value {
+        case let .string(value): try container.encode(value)
+        case let .number(value): try container.encode(value)
+        case let .bool(value): try container.encode(value)
+        case .null: try container.encodeNil()
+        case let .array(values): try container.encode(values.map(Self.init))
+        case let .object(values):
+            try container.encode(values.mapValues(Self.init))
+        }
+    }
+}
+
+private struct RuntimeObjectPreviewWire: Encodable {
+    let type: String?
+    let subtype: String?
+    let description: String?
+    let lossless: Bool
+    let overflow: Bool
+    let properties: [RuntimePropertyPreviewWire]
+    let entries: [RuntimeEntryPreviewWire]
+    let size: Int?
+
+    init(_ preview: Runtime.ObjectPreview) {
+        type = preview.kind.map {
+            RuntimeRemoteObjectWire(
+                Runtime.RemoteObject(id: nil, kind: $0)
+            ).type
+        }
+        subtype = preview.subtype?.rawValue
+        description = preview.description
+        lossless = preview.lossless
+        overflow = preview.overflow
+        properties = preview.properties.map(RuntimePropertyPreviewWire.init)
+        entries = preview.entries.map(RuntimeEntryPreviewWire.init)
+        size = preview.size
+    }
+}
+
+private struct RuntimePropertyPreviewWire: Encodable {
+    let name: String
+    let value: String?
+
+    init(_ preview: Runtime.PropertyPreview) {
+        name = preview.name
+        value = preview.value
+    }
+}
+
+private struct RuntimeEntryPreviewWire: Encodable {
+    let key: RuntimeRemoteObjectWire?
+    let value: RuntimeRemoteObjectWire?
+
+    init(_ preview: Runtime.EntryPreview) {
+        key = preview.key.map {
+            RuntimeRemoteObjectWire(
+                Runtime.RemoteObject(
+                    id: nil,
+                    kind: .string,
+                    description: $0,
+                    value: .string($0)
+                )
+            )
+        }
+        value = preview.value.map {
+            RuntimeRemoteObjectWire(
+                Runtime.RemoteObject(
+                    id: nil,
+                    kind: .string,
+                    description: $0,
+                    value: .string($0)
+                )
+            )
+        }
     }
 }

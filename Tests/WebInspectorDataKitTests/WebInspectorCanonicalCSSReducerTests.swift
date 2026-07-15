@@ -136,7 +136,7 @@ func canonicalCSSAppliesMembershipCascadeAndNodeInvalidationDeltas() throws {
     #expect(
         try reducer.apply(
             scope: fixture.scope,
-            event: .unknown(RawEvent(domain: "CSS", method: "future"))
+            event: .unknown(RawEvent(method: "CSS.future"))
         ).isEmpty)
 
     let removal = try reducer.apply(
@@ -339,7 +339,7 @@ func canonicalCSSResetClearsMembershipAndResourceRevisions() throws {
 
 private struct CanonicalCSSReducerFixture {
     let storeID: WebInspectorContainerStoreID
-    let attachmentGeneration: WebInspectorContainerAttachmentGeneration
+    let attachmentGeneration: WebInspectorAttachmentGeneration
     let scope: WebInspectorCanonicalDOMEventScope
     let reducer: WebInspectorCanonicalCSSReducer
 }
@@ -350,7 +350,7 @@ private func canonicalCSSReducerFixture(
     let storeID = WebInspectorContainerStoreID(
         rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000020")!
     )
-    let attachmentGeneration = WebInspectorContainerAttachmentGeneration(rawValue: 4)
+    let attachmentGeneration = WebInspectorAttachmentGeneration(rawValue: 4)
     return CanonicalCSSReducerFixture(
         storeID: storeID,
         attachmentGeneration: attachmentGeneration,
@@ -366,42 +366,38 @@ private func canonicalCSSScope(
     generation: UInt64 = 1,
     targetID: String = "page",
     agentTargetID: String = "agent",
-    kind: WebInspectorTarget.Kind = .page,
+    kind: WebInspectorFeatureTarget.Kind = .page,
     frameID: FrameID? = nil,
-    domEpoch: UInt64? = 1
+    domEpoch: UInt64 = 1
 ) -> WebInspectorCanonicalDOMEventScope {
-    let modelScope = ModelEventScope(
-        generation: WebInspectorPage.Generation(rawValue: generation),
-        target: ModelTarget(
+    let modelScope = WebInspectorFeatureEventScope(
+        generation: WebInspectorPageGeneration(rawValue: generation),
+        semanticTarget: WebInspectorFeatureTarget(
             id: WebInspectorTarget.ID(targetID),
             kind: kind,
-            frameID: frameID,
-            parentFrameID: nil
+            frameID: frameID
         ),
-        agentTarget: ModelTarget(
+        agentTarget: WebInspectorFeatureTarget(
             id: WebInspectorTarget.ID(agentTargetID),
             kind: kind,
-            frameID: frameID,
-            parentFrameID: nil
-        ),
-        navigationEpoch: ModelNavigationEpoch(rawValue: 1),
-        domBindingEpoch: domEpoch.map(ModelDOMBindingEpoch.init(rawValue:)),
-        runtimeBindingEpoch: nil,
-        consoleBindingEpoch: nil
+            frameID: frameID
+        )
     )
-    return WebInspectorCanonicalDOMEventScope(modelScope: modelScope)
+    return WebInspectorCanonicalDOMEventScope(
+        modelScope: modelScope,
+        bindingScopeID: WebInspectorDOMBindingScopeID(rawValue: domEpoch)
+    )
 }
 
 private func canonicalCSSDocumentScope(
     _ fixture: CanonicalCSSReducerFixture,
     eventScope: WebInspectorCanonicalDOMEventScope
 ) throws -> WebInspectorDOMDocumentScopeStorage {
-    try #require(
-        WebInspectorDOMDocumentScopeStorage(
-            storeID: fixture.storeID,
-            attachmentGeneration: fixture.attachmentGeneration,
-            eventScope: eventScope
-        ))
+    WebInspectorDOMDocumentScopeStorage(
+        storeID: fixture.storeID,
+        attachmentGeneration: fixture.attachmentGeneration,
+        eventScope: eventScope
+    )
 }
 
 private func canonicalCSSID(

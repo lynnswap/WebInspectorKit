@@ -7,8 +7,8 @@ import WebInspectorProxyKit
 func canonicalDOMIdentityIncludesEveryLifetimeAndPhysicalTargetAxis() throws {
     let storeA = WebInspectorContainerStoreID(rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!)
     let storeB = WebInspectorContainerStoreID(rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!)
-    let attachmentA = WebInspectorContainerAttachmentGeneration(rawValue: 1)
-    let attachmentB = WebInspectorContainerAttachmentGeneration(rawValue: 2)
+    let attachmentA = WebInspectorAttachmentGeneration(rawValue: 1)
+    let attachmentB = WebInspectorAttachmentGeneration(rawValue: 2)
     let baseEventScope = canonicalDOMScope()
     let base = try #require(
         WebInspectorDOMDocumentScopeStorage(
@@ -60,12 +60,6 @@ func canonicalDOMIdentityIncludesEveryLifetimeAndPhysicalTargetAxis() throws {
                 WebInspectorDOMNodeIdentityStorage(documentScope: $0, rawNodeID: rawID)
             }
         ).count == variants.count)
-    #expect(
-        WebInspectorDOMDocumentScopeStorage(
-            storeID: storeA,
-            attachmentGeneration: attachmentA,
-            eventScope: canonicalDOMScope(domEpoch: nil)
-        ) == nil)
 }
 
 @Test
@@ -494,7 +488,7 @@ func canonicalDOMAppliesEveryLocalPatchWithoutRebuildingTheGraph() throws {
     #expect(
         try reducer.apply(
             scope: fixture.scope,
-            event: .unknown(RawEvent(domain: "DOM", method: "future"))
+            event: .unknown(RawEvent(method: "DOM.future"))
         ).isEmpty)
     #expect(reducer.performanceCounters.fullGraphBuildCount == 1)
     #expect(reducer.performanceCounters.unrelatedRecordScanCount == 0)
@@ -1402,7 +1396,7 @@ func canonicalDOMResetPublishesOneFullMembershipClear() throws {
 
 private struct CanonicalDOMReducerFixture {
     let storeID: WebInspectorContainerStoreID
-    let attachmentGeneration: WebInspectorContainerAttachmentGeneration
+    let attachmentGeneration: WebInspectorAttachmentGeneration
     let scope: WebInspectorCanonicalDOMEventScope
     let reducer: WebInspectorCanonicalDOMReducer
 }
@@ -1413,7 +1407,7 @@ private func canonicalDOMReducerFixture(
     let storeID = WebInspectorContainerStoreID(
         rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000010")!
     )
-    let attachmentGeneration = WebInspectorContainerAttachmentGeneration(rawValue: 3)
+    let attachmentGeneration = WebInspectorAttachmentGeneration(rawValue: 3)
     return CanonicalDOMReducerFixture(
         storeID: storeID,
         attachmentGeneration: attachmentGeneration,
@@ -1429,42 +1423,38 @@ private func canonicalDOMScope(
     generation: UInt64 = 1,
     targetID: String = "page",
     agentTargetID: String = "agent",
-    kind: WebInspectorTarget.Kind = .page,
+    kind: WebInspectorFeatureTarget.Kind = .page,
     frameID: FrameID? = nil,
-    domEpoch: UInt64? = 1
+    domEpoch: UInt64 = 1
 ) -> WebInspectorCanonicalDOMEventScope {
-    let modelScope = ModelEventScope(
-        generation: WebInspectorPage.Generation(rawValue: generation),
-        target: ModelTarget(
+    let modelScope = WebInspectorFeatureEventScope(
+        generation: WebInspectorPageGeneration(rawValue: generation),
+        semanticTarget: WebInspectorFeatureTarget(
             id: WebInspectorTarget.ID(targetID),
             kind: kind,
-            frameID: frameID,
-            parentFrameID: nil
+            frameID: frameID
         ),
-        agentTarget: ModelTarget(
+        agentTarget: WebInspectorFeatureTarget(
             id: WebInspectorTarget.ID(agentTargetID),
             kind: kind,
-            frameID: frameID,
-            parentFrameID: nil
-        ),
-        navigationEpoch: ModelNavigationEpoch(rawValue: 1),
-        domBindingEpoch: domEpoch.map(ModelDOMBindingEpoch.init(rawValue:)),
-        runtimeBindingEpoch: nil,
-        consoleBindingEpoch: nil
+            frameID: frameID
+        )
     )
-    return WebInspectorCanonicalDOMEventScope(modelScope: modelScope)
+    return WebInspectorCanonicalDOMEventScope(
+        modelScope: modelScope,
+        bindingScopeID: WebInspectorDOMBindingScopeID(rawValue: domEpoch)
+    )
 }
 
 private func canonicalDocumentScope(
     _ fixture: CanonicalDOMReducerFixture,
     eventScope: WebInspectorCanonicalDOMEventScope
 ) throws -> WebInspectorDOMDocumentScopeStorage {
-    try #require(
-        WebInspectorDOMDocumentScopeStorage(
-            storeID: fixture.storeID,
-            attachmentGeneration: fixture.attachmentGeneration,
-            eventScope: eventScope
-        ))
+    WebInspectorDOMDocumentScopeStorage(
+        storeID: fixture.storeID,
+        attachmentGeneration: fixture.attachmentGeneration,
+        eventScope: eventScope
+    )
 }
 
 private func canonicalDOMID(
