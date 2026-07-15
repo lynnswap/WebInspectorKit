@@ -15,6 +15,7 @@ package final class PresentationContentStore {
         case closed
     }
 
+    @MainActor
     private final class Resource<Value> {
         enum State {
             case idle

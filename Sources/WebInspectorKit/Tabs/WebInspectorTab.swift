@@ -1,6 +1,7 @@
 #if canImport(UIKit)
 import UIKit
 import WebInspectorDataKit
+import WebInspectorUIBase
 
 /// A tab shown by the built-in WebInspectorKit interface.
 ///
@@ -19,6 +20,7 @@ public struct WebInspectorTab: Equatable, Hashable, Identifiable {
     }
 
     /// The stable resources made available to a tab factory.
+    @MainActor
     public struct Context {
         public let session: WebInspectorSession
         public let modelContainer: WebInspectorModelContainer

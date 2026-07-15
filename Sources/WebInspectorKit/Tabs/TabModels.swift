@@ -54,6 +54,7 @@ extension WebInspectorTab {
         package let image: UIImage?
     }
 
+    @MainActor
     package final class ContentCache {
         private var viewControllerByKey: [ContentKey: UIViewController] = [:]
 
@@ -85,6 +86,7 @@ extension WebInspectorTab {
         #endif
     }
 
+    @MainActor
     package struct DisplayProjection {
         package init() {}
 
