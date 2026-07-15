@@ -884,6 +884,41 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func remoteHLSPreviewShowsPlayerWithoutFetchingResponseBody() async throws {
+        let context = makeContext()
+        let playlistURL = "https://media.example.com/live/master.m3u8"
+        let request = try #require(
+            await applyRequest(
+                to: context,
+                requestID: "playlist",
+                url: playlistURL,
+                responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
+                responseMimeType: "application/vnd.apple.mpegurl"
+            )
+        )
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(request)
+        let viewController = makeNetworkDetailViewController(model: model)
+        let playerFactory = MoviePreviewPlayerFactorySpy()
+        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
+            playerFactory.makePlayer(for:)
+        )
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
+
+        let didShowPlayer = await waitUntilRendered(in: viewController) {
+            viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting?.absoluteString
+                == playlistURL
+        }
+        await Task.yield()
+
+        #expect(didShowPlayer)
+        #expect(playerFactory.requestedURLs.map(\.absoluteString) == [playlistURL])
+        #expect(request.responseBody.phase == .available)
+    }
+
+    @Test
     func hlsRequestBodyPreviewCoordinatorDoesNotUseRemotePlaylist() throws {
         let body = NetworkBody(
             role: .request,

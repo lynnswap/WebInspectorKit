@@ -29,6 +29,19 @@ extension NetworkDisplay {
             return kind
         }
 
+        package static func remoteHLSURL(mimeType: String?, url: String?) -> URL? {
+            guard previewKind(mimeType: mimeType, url: url) == .hlsPlaylist,
+                  let url = url.flatMap(URL.init(string:)) else {
+                return nil
+            }
+            switch url.scheme?.lowercased() {
+            case "http", "https":
+                return url
+            default:
+                return nil
+            }
+        }
+
         package static func classification(
             mimeType: String?,
             url: String?
