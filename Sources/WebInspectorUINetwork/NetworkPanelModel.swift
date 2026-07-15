@@ -4,27 +4,6 @@ import Foundation
 import Observation
 
 @MainActor
-private final class NetworkResponseBodyFetchCoordinator {
-    private var fetchesInFlight: Set<NetworkRequest.ID> = []
-
-    init() {}
-
-    func fetchIfNeeded(for request: NetworkRequest) {
-        guard request.canFetchResponseBody,
-              fetchesInFlight.contains(request.id) == false else {
-            return
-        }
-        fetchesInFlight.insert(request.id)
-        Task { @MainActor in
-            defer {
-                fetchesInFlight.remove(request.id)
-            }
-            await request.fetchResponseBody()
-        }
-    }
-}
-
-@MainActor
 @Observable
 package final class NetworkPanelModel {
     package let context: WebInspectorContext
@@ -42,13 +21,11 @@ package final class NetworkPanelModel {
         }
     }
     package private(set) var effectiveResourceFilters: Set<NetworkDisplay.ResourceFilter> = []
-    @ObservationIgnored private let responseBodyFetchCoordinator: NetworkResponseBodyFetchCoordinator
 
     package init(context: WebInspectorContext) {
         self.context = context
         self.requests = context.network.fetchedResults(for: Self.makeNetworkFetchDescriptor(searchText: "", filters: []))
         self.collectionState = context.networkRequestsCollectionState
-        self.responseBodyFetchCoordinator = NetworkResponseBodyFetchCoordinator()
     }
 
     package var displayRequestIDs: [NetworkRequest.ID] {
@@ -120,7 +97,12 @@ package final class NetworkPanelModel {
     }
 
     package func fetchResponseBodyIfNeeded(for request: NetworkRequest) {
-        responseBodyFetchCoordinator.fetchIfNeeded(for: request)
+        guard request.canFetchResponseBody else {
+            return
+        }
+        Task { @MainActor in
+            await request.fetchResponseBody()
+        }
     }
 
     private var normalizedSearchText: String {

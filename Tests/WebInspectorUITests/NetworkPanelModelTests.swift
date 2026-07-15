@@ -2,6 +2,7 @@ import ObservationBridge
 import Testing
 import WebInspectorDataKit
 import WebInspectorProxyKit
+import WebInspectorProxyKitTesting
 @testable import WebInspectorUI
 @testable import WebInspectorUIBase
 @testable import WebInspectorUIDOM
@@ -785,11 +786,186 @@ func responseBodyFetchMovesUnavailablePreviewContextToFailedPhase() async throws
         return false
     } != nil)
 }
+
+@Test
+@MainActor
+func responseBodyFetchStartsCurrentRevisionWhilePriorRevisionIsInFlight() async throws {
+    let fixture = try await makeLiveNetworkModelFixture()
+    let requestID = Network.Request.ID("response-revision")
+    let initialEventSequence = fixture.context.eventPumpAppliedSequenceForTesting
+
+    await fixture.runtime.backend.emit(
+        .requestWillBeSent(
+            id: requestID,
+            request: Network.Request(
+                id: requestID,
+                url: "https://example.com/initial.txt",
+                method: "GET"
+            ),
+            resourceType: .fetch,
+            redirectResponse: nil,
+            timestamp: 1
+        ),
+        target: fixture.target
+    )
+    await fixture.runtime.backend.emit(
+        .responseReceived(
+            id: requestID,
+            response: Network.Response(
+                url: "https://example.com/initial.txt",
+                status: 200,
+                mimeType: "text/plain"
+            ),
+            resourceType: .fetch,
+            timestamp: 2
+        ),
+        target: fixture.target
+    )
+    await fixture.runtime.backend.emit(
+        .loadingFinished(id: requestID, timestamp: 3, sourceMapURL: nil, metrics: nil),
+        target: fixture.target
+    )
+    #expect(await fixture.context.waitForEventPumpAppliedSequenceForTesting(
+        after: initialEventSequence,
+        count: 3
+    ))
+
+    let request = try #require(
+        fixture.context.registeredRequest(forProxyID: requestID)
+    )
+    let responseBody = request.responseBody
+    let model = NetworkPanelModel(context: fixture.context)
+    let gate = WebInspectorTestGate()
+    await fixture.runtime.backend.hold(
+        domain: "Network",
+        method: "getResponseBody",
+        gate: gate
+    )
+    await fixture.runtime.backend.enqueue(
+        Network.Body(data: "current payload", base64Encoded: false),
+        for: "Network",
+        method: "getResponseBody"
+    )
+    await fixture.runtime.backend.enqueue(
+        Network.Body(data: "current payload", base64Encoded: false),
+        for: "Network",
+        method: "getResponseBody"
+    )
+
+    model.fetchResponseBodyIfNeeded(for: request)
+    let initialCommands = await fixture.runtime.backend.waitForRecordedCommands(
+        domain: "Network",
+        method: "getResponseBody",
+        count: 1
+    )
+    #expect(initialCommands.count == 1)
+    #expect(responseBody.phase == .fetching)
+
+    model.fetchResponseBodyIfNeeded(for: request)
+    model.fetchResponseBodyIfNeeded(for: request)
+    #expect(await responseBodyCommandCount(on: fixture.runtime.backend) == 1)
+
+    let replacementEventSequence = fixture.context.eventPumpAppliedSequenceForTesting
+    await fixture.runtime.backend.emit(
+        .responseReceived(
+            id: requestID,
+            response: Network.Response(
+                url: "https://example.com/replacement.json",
+                status: 200,
+                mimeType: "application/json"
+            ),
+            resourceType: .fetch,
+            timestamp: 4
+        ),
+        target: fixture.target
+    )
+    await fixture.runtime.backend.emit(
+        .loadingFinished(id: requestID, timestamp: 5, sourceMapURL: nil, metrics: nil),
+        target: fixture.target
+    )
+    #expect(await fixture.context.waitForEventPumpAppliedSequenceForTesting(
+        after: replacementEventSequence,
+        count: 2
+    ))
+    #expect(request.responseBody === responseBody)
+    #expect(responseBody.phase == .available)
+
+    model.fetchResponseBodyIfNeeded(for: request)
+    let currentRevisionStarted = await waitForNetworkBodyPhase(in: responseBody) {
+        $0 == .fetching
+    } != nil
+    if currentRevisionStarted {
+        model.fetchResponseBodyIfNeeded(for: request)
+        model.fetchResponseBodyIfNeeded(for: request)
+        let currentCommands = await fixture.runtime.backend.waitForRecordedCommands(
+            domain: "Network",
+            method: "getResponseBody",
+            count: 2
+        )
+        #expect(currentCommands.count == 2)
+    }
+
+    await gate.open()
+    if currentRevisionStarted {
+        #expect(await waitForNetworkBodyPhase(in: responseBody) { $0 == .loaded } != nil)
+        #expect(responseBody.full == "current payload")
+        #expect(await responseBodyCommandCount(on: fixture.runtime.backend) == 2)
+    }
+    #expect(currentRevisionStarted)
+}
 }
 
 @MainActor
 private func makeContext() -> WebInspectorContext {
     WebInspectorContext.preview(isolation: MainActor.shared)
+}
+
+private struct LiveNetworkModelFixture {
+    var runtime: WebInspectorProxyTestRuntime
+    var target: WebInspectorTarget
+    var context: WebInspectorContext
+}
+
+@MainActor
+private func makeLiveNetworkModelFixture() async throws -> LiveNetworkModelFixture {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+    await runtime.backend.enqueue((), for: "Inspector", method: "enable")
+    await runtime.backend.enqueue((), for: "Inspector", method: "initialized")
+    await runtime.backend.enqueue((), for: "Runtime", method: "enable")
+    await runtime.backend.enqueue((), for: "Network", method: "enable")
+    await runtime.backend.enqueue(
+        DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document"),
+        for: "DOM",
+        method: "getDocument"
+    )
+    await runtime.backend.enqueue((), for: "Console", method: "enable")
+
+    let container = WebInspectorContainer(proxy: runtime.proxy)
+    let context = container.mainContext
+    try await runtime.backend.waitForSubscribers(domain: "DOM", target: target, count: 1)
+    try await runtime.backend.waitForSubscribers(domain: "Inspector", target: target, count: 1)
+    try await runtime.backend.waitForSubscribers(domain: "CSS", target: target, count: 1)
+    try await runtime.backend.waitForSubscribers(domain: "Network", target: target, count: 1)
+    try await runtime.backend.waitForSubscribers(domain: "Console", target: target, count: 1)
+    try await runtime.backend.waitForSubscribers(domain: "Runtime", target: target, count: 1)
+    for await status in context.statusUpdates {
+        if status.state == .attached {
+            break
+        }
+        if status.state != .attaching {
+            Issue.record("Expected live Network context to attach; got \(status.state).")
+            break
+        }
+    }
+    #expect(context.state == .attached)
+    return LiveNetworkModelFixture(runtime: runtime, target: target, context: context)
+}
+
+private func responseBodyCommandCount(on backend: WebInspectorTestBackend) async -> Int {
+    await backend.recordedCommands()
+        .filter { $0 == RecordedCommand(domain: "Network", method: "getResponseBody") }
+        .count
 }
 
 @MainActor
