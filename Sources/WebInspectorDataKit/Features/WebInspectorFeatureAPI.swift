@@ -18,7 +18,6 @@ public enum WebInspectorElementPickerState: Equatable, Sendable {
     case active
     case resolvingSelection
     case disabling
-    case unavailable(WebInspectorFeatureError)
 }
 
 /// Failures from commands whose model identity or feature authority changed.
@@ -39,7 +38,6 @@ public enum WebInspectorElementPickerError: Error, Equatable, Sendable {
     case enableFailed(WebInspectorFailureDescription)
     case disableFailed(WebInspectorFailureDescription)
     case selectionResolutionFailed(WebInspectorFailureDescription)
-    case unavailable(WebInspectorFeatureError)
 }
 
 package func webInspectorCommandError(

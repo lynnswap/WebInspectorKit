@@ -21,10 +21,19 @@ package actor WebInspectorConsoleRuntimeFeature: WebInspectorModelFeature {
         let rawID: Runtime.RemoteObject.ID
     }
 
+    private struct FrameNavigationKey: Hashable, Sendable {
+        let agentTargetID: WebInspectorTarget.ID
+        let frameID: FrameID
+    }
+
     private struct ObjectScopeState: Sendable {
         let group: Runtime.ObjectGroup
         var nextOrdinal: UInt64 = 0
         var handles: [RuntimeObject.ID: RuntimeHandle] = [:]
+    }
+
+    private struct FrameNavigationIdentity: Equatable, Sendable {
+        let loaderID: String
     }
 
     private let registry: WebInspectorFeatureRegistry
@@ -37,8 +46,14 @@ package actor WebInspectorConsoleRuntimeFeature: WebInspectorModelFeature {
     private var closeRequested = false
     private var explicitRetryRequested = false
     private var retryWaiter: CheckedContinuation<Void, Never>?
-    private var runtimeBindingEpoch: UInt64 = 0
-    private var consoleBindingEpoch: UInt64 = 0
+    private var runtimeBindingEpochs: [WebInspectorTarget.ID: UInt64] = [:]
+    private var consoleBindingEpochs: [WebInspectorTarget.ID: UInt64] = [:]
+    private var navigationEpochs: [
+        WebInspectorTarget.ID: WebInspectorNavigationEpoch
+    ] = [:]
+    private var frameNavigationIdentities: [
+        FrameNavigationKey: FrameNavigationIdentity
+    ] = [:]
     private var objectScopes: [UUID: ObjectScopeState] = [:]
 
     package init(registry: WebInspectorFeatureRegistry) {
@@ -56,6 +71,10 @@ package actor WebInspectorConsoleRuntimeFeature: WebInspectorModelFeature {
         recoveryBudget = WebInspectorFeatureRecoveryBudget()
         canonicalStore = CanonicalConsoleRuntimeStore(storeID: connection.storeID)
         objectScopes.removeAll(keepingCapacity: true)
+        runtimeBindingEpochs.removeAll(keepingCapacity: true)
+        consoleBindingEpochs.removeAll(keepingCapacity: true)
+        navigationEpochs.removeAll(keepingCapacity: true)
+        frameNavigationIdentities.removeAll(keepingCapacity: true)
         await publish(.synchronizing(generation: await currentGeneration()))
 
         while !closeRequested {
@@ -318,44 +337,22 @@ package actor WebInspectorConsoleRuntimeFeature: WebInspectorModelFeature {
             buffering: .bounded(2_048)
         )
         orderedScope = scope
-        let reply = try await scope.command(PageWireCoding.resourceTree())
-        let prefix = try await scope.drain(through: reply.boundary)
-        if prefix.contains(where: invalidatesBootstrap) {
-            throw recovery(
-                code: "console-runtime.bootstrap.invalidated",
-                phase: "bootstrap",
-                reason: .targetChanged
-            )
-        }
-        let route = try featureScope(from: reply)
-        runtimeBindingEpoch &+= 1
-        consoleBindingEpoch &+= 1
-        let binding = makeScope(route)
-        var staged = CanonicalConsoleRuntimeStore(storeID: connection.storeID)
-        _ = try staged.reset(
-            attachmentGeneration: connection.attachmentGeneration,
-            pageGeneration: route.generation
-        )
-        for event in prefix {
-            try reduceBootstrap(event, defaultScope: binding, staged: &staged)
-        }
-        let previous = canonicalStore?.snapshot()
-        let current = staged.snapshot()
-        var transaction = WebInspectorModelTransaction()
-        appendReplacement(previous: previous, current: current, to: &transaction)
-        transaction.setFeatureState(
-            .ready(
-                generation: route.generation,
-                revision: WebInspectorStoreRevision(rawValue: 0)
-            ),
-            for: .consoleRuntime
-        )
-        let revision = try await storeSink.commit(transaction)
-        canonicalStore = staged
-        transition(to: .ready(generation: route.generation, revision: revision))
+        try await bootstrapCurrentTarget(in: scope, storeSink: storeSink)
 
         for try await event in scope.events {
             if closeRequested { return }
+            if case let .reset(generation) = event {
+                await releaseAllObjectScopes()
+                await publish(
+                    .synchronizing(
+                        generation: WebInspectorPageGeneration(
+                            rawValue: generation.rawValue
+                        )
+                    )
+                )
+                try await bootstrapCurrentTarget(in: scope, storeSink: storeSink)
+                continue
+            }
             guard var staged = canonicalStore else { continue }
             do {
                 try await reduceLive(event, staged: &staged)
@@ -376,23 +373,92 @@ package actor WebInspectorConsoleRuntimeFeature: WebInspectorModelFeature {
         }
     }
 
+    private func bootstrapCurrentTarget(
+        in scope: WebInspectorOrderedEventScope<WebInspectorConsoleRuntimeWireEvent>,
+        storeSink: WebInspectorModelStoreSink
+    ) async throws {
+        guard let connection else { throw CancellationError() }
+        while !closeRequested {
+            let reply = try await scope.command(PageWireCoding.resourceTree())
+            let prefix = try await scope.drain(through: reply.boundary)
+            if closeRequested { throw CancellationError() }
+            if prefix.contains(where: invalidatesBootstrap) {
+                await releaseAllObjectScopes()
+                await publish(.synchronizing(generation: await currentGeneration()))
+                continue
+            }
+
+            let route = try featureScope(from: reply)
+            runtimeBindingEpochs.removeAll(keepingCapacity: true)
+            consoleBindingEpochs.removeAll(keepingCapacity: true)
+            navigationEpochs = [
+                route.semanticTargetID: WebInspectorNavigationEpoch(rawValue: 0)
+            ]
+            frameNavigationIdentities.removeAll(keepingCapacity: true)
+            installFrameNavigationIdentities(
+                from: reply.value,
+                agentTargetID: route.agentTargetID
+            )
+            var staged = CanonicalConsoleRuntimeStore(storeID: connection.storeID)
+            _ = try staged.reset(
+                attachmentGeneration: connection.attachmentGeneration,
+                pageGeneration: route.generation
+            )
+            for event in prefix {
+                try reduceBootstrap(
+                    event,
+                    staged: &staged
+                )
+            }
+            let previous = canonicalStore?.snapshot()
+            let current = staged.snapshot()
+            var transaction = WebInspectorModelTransaction()
+            appendReplacement(
+                previous: previous,
+                current: current,
+                to: &transaction
+            )
+            transaction.setFeatureState(
+                .ready(
+                    generation: route.generation,
+                    revision: WebInspectorStoreRevision(rawValue: 0)
+                ),
+                for: .consoleRuntime
+            )
+            let revision = try await storeSink.commit(transaction)
+            canonicalStore = staged
+            transition(
+                to: .ready(generation: route.generation, revision: revision)
+            )
+            return
+        }
+        throw CancellationError()
+    }
+
     private func reduceBootstrap(
         _ event: WebInspectorPageEvent<WebInspectorConsoleRuntimeWireEvent>,
-        defaultScope: WebInspectorConsoleRuntimeEventScope,
         staged: inout CanonicalConsoleRuntimeStore
     ) throws {
         guard case let .event(_, value) = event else { return }
         let transaction: CanonicalConsoleRuntimeTransaction?
         switch value {
         case let .runtime(routed):
+            let route = try featureScope(from: routed)
+            if case .executionContextsCleared = routed.value {
+                advanceRuntimeBindingEpoch(for: route.agentTargetID)
+            }
             transaction = try staged.reduceRuntime(
                 routed.value,
-                scope: makeScope(try featureScope(from: routed))
+                scope: makeScope(route)
             )
         case let .console(routed):
+            let route = try featureScope(from: routed)
+            if case .messagesCleared = routed.value {
+                advanceConsoleBindingEpoch(for: route.agentTargetID)
+            }
             transaction = try staged.reduceConsole(
                 routed.value,
-                scope: makeScope(try featureScope(from: routed))
+                scope: makeScope(route)
             )
         case let .page(routed):
             switch routed.value {
@@ -403,7 +469,6 @@ package actor WebInspectorConsoleRuntimeFeature: WebInspectorModelFeature {
             }
         }
         _ = transaction
-        _ = defaultScope
     }
 
     private func reduceLive(
@@ -412,41 +477,86 @@ package actor WebInspectorConsoleRuntimeFeature: WebInspectorModelFeature {
     ) async throws {
         switch event {
         case .reset:
-            throw recovery(
-                code: "console-runtime.generation.reset",
-                phase: "events",
-                reason: .targetChanged
-            )
+            return
         case let .event(_, .runtime(routed)):
+            let route = try featureScope(from: routed)
+            if case .executionContextsCleared = routed.value {
+                advanceRuntimeBindingEpoch(for: route.agentTargetID)
+                await releaseObjectHandles(for: route.agentTarget)
+            }
             if let canonical = try staged.reduceRuntime(
                 routed.value,
-                scope: makeScope(try featureScope(from: routed))
+                scope: makeScope(route)
             ) {
                 try await commit(canonical, staged: staged)
             }
         case let .event(_, .console(routed)):
+            let route = try featureScope(from: routed)
+            if case .messagesCleared = routed.value {
+                advanceConsoleBindingEpoch(for: route.agentTargetID)
+            }
             if let canonical = try staged.reduceConsole(
                 routed.value,
-                scope: makeScope(try featureScope(from: routed))
+                scope: makeScope(route)
             ) {
                 try await commit(canonical, staged: staged)
             }
         case let .event(_, .page(routed)):
             switch routed.value {
-            case let .frameNavigated(frame) where frame.parentID == nil:
-                throw recovery(
-                    code: "console-runtime.main-frame.navigated",
-                    phase: "events",
-                    reason: .targetChanged
-                )
             case let .frameNavigated(frame):
-                try await commit(staged.frameWasNavigated(frame.id), staged: staged)
+                try await frameWasNavigated(
+                    frame,
+                    route: try featureScope(from: routed),
+                    staged: &staged
+                )
             case let .frameDetached(frameID):
+                frameNavigationIdentities = frameNavigationIdentities.filter {
+                    $0.key.frameID != frameID
+                }
                 try await commit(staged.frameWasDetached(frameID), staged: staged)
             case .unknown:
                 break
             }
         }
+    }
+
+    private func frameWasNavigated(
+        _ frame: Page.Frame,
+        route: WebInspectorFeatureEventScope,
+        staged: inout CanonicalConsoleRuntimeStore
+    ) async throws {
+        let key = FrameNavigationKey(
+            agentTargetID: route.agentTargetID,
+            frameID: frame.id
+        )
+        let nextIdentity = FrameNavigationIdentity(loaderID: frame.loaderID)
+        let previousIdentity = frameNavigationIdentities.updateValue(
+            nextIdentity,
+            forKey: key
+        )
+        guard previousIdentity != nextIdentity else { return }
+
+        advanceRuntimeBindingEpoch(for: route.agentTargetID)
+        let ownsNavigatedFrame = route.agentTarget.frameID == frame.id
+        if ownsNavigatedFrame {
+            advanceNavigationEpoch(for: route.semanticTargetID)
+        }
+        let scope = makeScope(route)
+        var canonical = CanonicalConsoleRuntimeTransaction()
+        merge(
+            try staged.runtimeBindingDidAdvance(scope: scope),
+            into: &canonical
+        )
+        if ownsNavigatedFrame {
+            merge(
+                try staged.semanticTargetNavigated(scope: scope),
+                into: &canonical
+            )
+        } else {
+            merge(staged.frameWasNavigated(frame.id), into: &canonical)
+        }
+        await releaseObjectHandles(for: route.agentTarget)
+        try await commit(canonical, staged: staged)
     }
 
     private func commit(
@@ -498,13 +608,78 @@ package actor WebInspectorConsoleRuntimeFeature: WebInspectorModelFeature {
     ) -> WebInspectorConsoleRuntimeEventScope {
         WebInspectorConsoleRuntimeEventScope(
             route: route,
-            navigationEpoch: route.generation,
+            navigationEpoch: navigationEpochs[route.semanticTargetID]
+                ?? WebInspectorNavigationEpoch(rawValue: 0),
             runtimeBindingEpoch: WebInspectorRuntimeBindingGeneration(
-                rawValue: runtimeBindingEpoch
+                rawValue: runtimeBindingEpochs[route.agentTargetID] ?? 0
             ),
             consoleBindingEpoch: WebInspectorConsoleBindingGeneration(
-                rawValue: consoleBindingEpoch
+                rawValue: consoleBindingEpochs[route.agentTargetID] ?? 0
             )
+        )
+    }
+
+    private func advanceNavigationEpoch(
+        for targetID: WebInspectorTarget.ID
+    ) {
+        let current = navigationEpochs[targetID]
+            ?? WebInspectorNavigationEpoch(rawValue: 0)
+        let (next, overflow) = current.rawValue.addingReportingOverflow(1)
+        precondition(!overflow, "Console/Runtime navigation epoch exhausted.")
+        navigationEpochs[targetID] = WebInspectorNavigationEpoch(rawValue: next)
+    }
+
+    private func advanceRuntimeBindingEpoch(
+        for agentTargetID: WebInspectorTarget.ID
+    ) {
+        let current = runtimeBindingEpochs[agentTargetID] ?? 0
+        let (next, overflow) = current.addingReportingOverflow(1)
+        precondition(!overflow, "Runtime binding epoch exhausted.")
+        runtimeBindingEpochs[agentTargetID] = next
+    }
+
+    private func advanceConsoleBindingEpoch(
+        for agentTargetID: WebInspectorTarget.ID
+    ) {
+        let current = consoleBindingEpochs[agentTargetID] ?? 0
+        let (next, overflow) = current.addingReportingOverflow(1)
+        precondition(!overflow, "Console binding epoch exhausted.")
+        consoleBindingEpochs[agentTargetID] = next
+    }
+
+    private func installFrameNavigationIdentities(
+        from tree: Page.ResourceTree,
+        agentTargetID: WebInspectorTarget.ID
+    ) {
+        frameNavigationIdentities[
+            FrameNavigationKey(
+                agentTargetID: agentTargetID,
+                frameID: tree.frame.id
+            )
+        ] = FrameNavigationIdentity(
+            loaderID: tree.frame.loaderID
+        )
+        for child in tree.childFrames {
+            installFrameNavigationIdentities(
+                from: child,
+                agentTargetID: agentTargetID
+            )
+        }
+    }
+
+    private func merge(
+        _ addition: CanonicalConsoleRuntimeTransaction?,
+        into transaction: inout CanonicalConsoleRuntimeTransaction
+    ) {
+        guard let addition else { return }
+        transaction.runtimeContextChanges.append(
+            contentsOf: addition.runtimeContextChanges
+        )
+        transaction.consoleMessageChanges.append(
+            contentsOf: addition.consoleMessageChanges
+        )
+        transaction.resourceInvalidations.append(
+            contentsOf: addition.resourceInvalidations
         )
     }
 
@@ -544,6 +719,17 @@ package actor WebInspectorConsoleRuntimeFeature: WebInspectorModelFeature {
             record.parameters.indices.contains(parameterIndex),
             let rawID = record.parameters[parameterIndex].payload.rawObjectID
         else { throw WebInspectorCommandError.staleIdentifier }
+        let authority = record.parameters[parameterIndex].authority
+        guard navigationEpochs[authority.semanticTargetID]
+                ?? WebInspectorNavigationEpoch(rawValue: 0)
+                == authority.navigationEpoch,
+            WebInspectorRuntimeBindingGeneration(
+                rawValue: runtimeBindingEpochs[authority.agentTargetID] ?? 0
+            ) == authority.runtimeBindingEpoch,
+            WebInspectorConsoleBindingGeneration(
+                rawValue: consoleBindingEpochs[authority.agentTargetID] ?? 0
+            ) == authority.consoleBindingEpoch
+        else { throw WebInspectorCommandError.staleIdentifier }
         return rawID
     }
 
@@ -556,6 +742,31 @@ package actor WebInspectorConsoleRuntimeFeature: WebInspectorModelFeature {
         objectScopes.removeAll(keepingCapacity: true)
         for scope in scopes {
             await releaseRemoteObjects(in: scope, using: connection)
+        }
+    }
+
+    private func releaseObjectHandles(
+        for agentTarget: WebInspectorFeatureTarget
+    ) async {
+        guard let connection else { return }
+        var removed: [Runtime.RemoteObject.ID] = []
+        for scopeID in Array(objectScopes.keys) {
+            guard var scope = objectScopes[scopeID] else { continue }
+            let matchingIDs = scope.handles.compactMap { id, handle in
+                let target = handle.rawID.targetScopeRawValue
+                let belongsToAgent = target == agentTarget.id.rawValue
+                    || (target == nil && agentTarget.kind == .page)
+                return belongsToAgent ? id : nil
+            }
+            for id in matchingIDs {
+                if let handle = scope.handles.removeValue(forKey: id) {
+                    removed.append(handle.rawID)
+                }
+            }
+            objectScopes[scopeID] = scope
+        }
+        for objectID in Set(removed) {
+            try? await connection.page.runtime.releaseObject(objectID)
         }
     }
 
@@ -588,10 +799,14 @@ package actor WebInspectorConsoleRuntimeFeature: WebInspectorModelFeature {
                 )
             )
         }
+        let agentTarget = WebInspectorFeatureTarget(agent)
+        let semanticTarget = agentTarget.kind == .frame
+            ? agentTarget
+            : WebInspectorFeatureTarget(semantic)
         return WebInspectorFeatureEventScope(
             generation: WebInspectorPageGeneration(rawValue: event.generation.rawValue),
-            semanticTarget: WebInspectorFeatureTarget(semantic),
-            agentTarget: WebInspectorFeatureTarget(agent)
+            semanticTarget: semanticTarget,
+            agentTarget: agentTarget
         )
     }
 
@@ -620,9 +835,6 @@ package actor WebInspectorConsoleRuntimeFeature: WebInspectorModelFeature {
         switch event {
         case .reset:
             return true
-        case let .event(_, .page(routed)):
-            if case let .frameNavigated(frame) = routed.value { return frame.parentID == nil }
-            return false
         case .event:
             return false
         }

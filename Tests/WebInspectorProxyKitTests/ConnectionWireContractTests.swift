@@ -447,6 +447,69 @@ func frameOwnedNodeHighlightIsANoOp() async throws {
 }
 
 @Test
+func requestNodeRoutesUnscopedObjectToMainPageAndReturnsUnscopedNode() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    defer { Task { await runtime.close() } }
+
+    let nodeTask = Task {
+        try await runtime.page.dom.requestNode(
+            forRemoteObject: Runtime.RemoteObject.ID("main-object")
+        )
+    }
+    let command = try await runtime.peer.commands.next()
+    #expect(command.destination == .target("page-main"))
+    #expect(command.method == "DOM.requestNode")
+    let expectedParameters = try WebInspectorTestJSONObject(
+        json: #"{"objectId":"main-object"}"#
+    )
+    #expect(command.parameters == expectedParameters)
+    try await runtime.peer.reply(
+        to: command,
+        with: try WebInspectorTestJSONObject(json: #"{"nodeId":42}"#)
+    )
+
+    let nodeID = try await nodeTask.value
+    #expect(nodeID.unscopedRawValue == "42")
+    #expect(nodeID.targetScopeRawValue == nil)
+}
+
+@Test
+func requestNodeRoutesScopedObjectToFrameAndScopesTheReply() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    defer { Task { await runtime.close() } }
+    try await runtime.peer.createTarget(.init(
+        id: "frame-one",
+        type: "web-page",
+        frameID: "child-frame",
+        parentFrameID: "main-frame"
+    ))
+
+    let nodeTask = Task {
+        try await runtime.page.dom.requestNode(
+            forRemoteObject: Runtime.RemoteObject.ID(
+                "frame-object",
+                scopedToTargetRawValue: "frame-one"
+            )
+        )
+    }
+    let command = try await runtime.peer.commands.next()
+    #expect(command.destination == .target("frame-one"))
+    #expect(command.method == "DOM.requestNode")
+    let expectedParameters = try WebInspectorTestJSONObject(
+        json: #"{"objectId":"frame-object"}"#
+    )
+    #expect(command.parameters == expectedParameters)
+    try await runtime.peer.reply(
+        to: command,
+        with: try WebInspectorTestJSONObject(json: #"{"nodeId":"42"}"#)
+    )
+
+    let nodeID = try await nodeTask.value
+    #expect(nodeID.unscopedRawValue == "42")
+    #expect(nodeID.targetScopeRawValue == "frame-one")
+}
+
+@Test
 func malformedTargetControlPlaneTerminatesThePhysicalConnection() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     do {

@@ -9,13 +9,13 @@ package struct WebInspectorConsoleRuntimeEventScope: Equatable, Sendable {
     package let generation: WebInspectorPageGeneration
     package let target: WebInspectorFeatureTarget
     package let agentTarget: WebInspectorFeatureTarget
-    package let navigationEpoch: WebInspectorPageGeneration
+    package let navigationEpoch: WebInspectorNavigationEpoch
     package let runtimeBindingEpoch: WebInspectorRuntimeBindingGeneration?
     package let consoleBindingEpoch: WebInspectorConsoleBindingGeneration?
 
     package init(
         route: WebInspectorFeatureEventScope,
-        navigationEpoch: WebInspectorPageGeneration,
+        navigationEpoch: WebInspectorNavigationEpoch,
         runtimeBindingEpoch: WebInspectorRuntimeBindingGeneration?,
         consoleBindingEpoch: WebInspectorConsoleBindingGeneration?
     ) {
@@ -30,12 +30,12 @@ package struct WebInspectorConsoleRuntimeEventScope: Equatable, Sendable {
 
 package struct CanonicalRuntimeContextMembership: Equatable, Sendable {
     package let semanticTargetID: WebInspectorTarget.ID
-    package let navigationEpoch: WebInspectorPageGeneration
+    package let navigationEpoch: WebInspectorNavigationEpoch
     package let runtimeBindingEpoch: WebInspectorRuntimeBindingGeneration
 
     package init(
         semanticTargetID: WebInspectorTarget.ID,
-        navigationEpoch: WebInspectorPageGeneration,
+        navigationEpoch: WebInspectorNavigationEpoch,
         runtimeBindingEpoch: WebInspectorRuntimeBindingGeneration
     ) {
         self.semanticTargetID = semanticTargetID
@@ -174,7 +174,7 @@ package struct CanonicalConsoleParameterAuthority: Equatable, Sendable {
     package let pageGeneration: WebInspectorPageGeneration
     package let semanticTargetID: WebInspectorTarget.ID
     package let agentTargetID: WebInspectorTarget.ID
-    package let navigationEpoch: WebInspectorPageGeneration
+    package let navigationEpoch: WebInspectorNavigationEpoch
     package let runtimeBindingEpoch: WebInspectorRuntimeBindingGeneration
     package let consoleBindingEpoch: WebInspectorConsoleBindingGeneration
 }
@@ -188,7 +188,7 @@ package struct CanonicalConsoleMessageMembership: Equatable, Sendable {
     package let pageGeneration: WebInspectorPageGeneration
     package let semanticTargetID: WebInspectorTarget.ID
     package let agentTargetID: WebInspectorTarget.ID
-    package let navigationEpoch: WebInspectorPageGeneration
+    package let navigationEpoch: WebInspectorNavigationEpoch
     package let runtimeBindingEpoch: WebInspectorRuntimeBindingGeneration
     package let consoleBindingEpoch: WebInspectorConsoleBindingGeneration
 }
@@ -323,7 +323,7 @@ package enum CanonicalConsoleRuntimeResourceInvalidation: Equatable, Sendable {
     )
     case semanticNavigation(
         semanticTargetID: WebInspectorTarget.ID,
-        navigationEpoch: WebInspectorPageGeneration
+        navigationEpoch: WebInspectorNavigationEpoch
     )
     case frameDetached(FrameID)
     case targetLost(WebInspectorTarget.ID)

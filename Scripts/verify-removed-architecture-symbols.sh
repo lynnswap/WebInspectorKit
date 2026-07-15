@@ -102,9 +102,9 @@ report_matches \
 # These patterns identify the old receiver-qualified API paths rather than
 # banning their component words. Feature actors may continue to expose
 # operations such as reload or load under new ownership.
-retired_receiver_pattern='(?:\.modelFeedSequence\b|\.modelFeedFailure\b|\.makeContext\s*\(\s*isolation\s*:|\.(?:domTreeUpdates|rebaseDOMTree)\s*\(|\b(?:context|modelContext|mainContext|runtime\.model)\s*\.\s*(?:requestDOMChildren|setDOMAttribute|setOuterHTML|removeDOMNodes|highlightDOMNode|hideDOMHighlight|pickDOMNodeID|cssStyles|refreshCSSStyles|setCSSProperty|setCSSDeclarationText|clearNetworkRequests|loadCanonicalResponseBody|withRuntimeObjectGroup)\s*\(|\b(?:body|responseBody|requestBody)\s*\.\s*load\s*\(\s*(?:\)|isolation\s*:))'
+retired_receiver_pattern='(?:\.modelFeedSequence\b|\.modelFeedFailure\b|\.makeContext\s*\(\s*isolation\s*:|\.(?:domTreeUpdates|rebaseDOMTree)\s*\(|\b(?:context|modelContext|mainContext|runtime\.model)\s*\.\s*(?:requestDOMChildren|setDOMAttribute|setOuterHTML|removeDOMNodes|highlightDOMNode|hideDOMHighlight|pickDOMNodeID|cssStyles|refreshCSSStyles|setCSSProperty|setCSSDeclarationText|clearNetworkRequests|loadCanonicalResponseBody|withRuntimeObjectGroup)\s*\(|\b(?:body|responseBody|requestBody)\s*\.\s*load\s*\(\s*(?:\)|isolation\s*:)|\.network\s*\.\s*retry\s*\(|\bretryFeature\s*\(|\bretryNetwork\s*\(|network\.loading\.failed\.title|Network Unavailable)'
 report_matches \
-    "retired model-feed, ModelContext-domain, or NetworkBody receiver call sites remain" \
+    "retired model-feed, ModelContext-domain, NetworkBody, or Network retry surface remains" \
     "${retired_receiver_pattern}"
 
 sectioned_generic_pattern='\bWebInspectorFetchedResults(?:Controller|Snapshot|Update|UpdateSequence)\s*<\s*[^>,\n]+\s*,'

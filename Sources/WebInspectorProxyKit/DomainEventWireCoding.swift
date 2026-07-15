@@ -277,7 +277,7 @@ private struct PageFrameDetachedParams: Decodable {
 private struct PageFramePayload: Decodable {
     var id: String
     var parentId: String?
-    var loaderId: String?
+    var loaderId: String
     var name: String?
     var url: String
     var securityOrigin: String?
@@ -1160,4 +1160,3 @@ private extension Runtime.Kind {
         }
     }
 }
-

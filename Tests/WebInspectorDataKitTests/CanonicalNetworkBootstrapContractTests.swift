@@ -53,7 +53,7 @@ private struct NetworkBootstrapFixture {
                 origin: origin,
                 targetAuthority: CanonicalNetworkRegisteredTargetAuthority(
                     targetID: semanticID,
-                    navigationEpoch: pageGeneration,
+                    navigationEpoch: WebInspectorNavigationEpoch(rawValue: 0),
                     domBindingEpoch: domBindingEpoch.map {
                         WebInspectorDOMBindingScopeID(rawValue: $0)
                     }

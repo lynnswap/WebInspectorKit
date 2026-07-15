@@ -55,7 +55,7 @@ private struct CanonicalConsoleRuntimeFixture {
         )
         return WebInspectorConsoleRuntimeEventScope(
             route: route,
-            navigationEpoch: WebInspectorPageGeneration(rawValue: navigationEpoch),
+            navigationEpoch: WebInspectorNavigationEpoch(rawValue: navigationEpoch),
             runtimeBindingEpoch: runtimeBindingEpoch.map(
                 WebInspectorRuntimeBindingGeneration.init(rawValue:)
             ),
@@ -171,7 +171,7 @@ func canonicalRuntimeIdentitySeparatesAgentAuthorityFromSemanticMembership() thr
     #expect(firstRecord.id != secondRecord.id)
     #expect(firstRecord.id.agentTargetID == WebInspectorTarget.ID("root-runtime-agent"))
     #expect(firstRecord.membership.semanticTargetID == WebInspectorTarget.ID("semantic-frame"))
-    #expect(firstRecord.membership.navigationEpoch == WebInspectorPageGeneration(rawValue: 7))
+    #expect(firstRecord.membership.navigationEpoch == WebInspectorNavigationEpoch(rawValue: 7))
     #expect(firstRecord.membership.runtimeBindingEpoch == WebInspectorRuntimeBindingGeneration(rawValue: 11))
     #expect(secondRecord.id.rawContextID == firstRecord.id.rawContextID)
     #expect(fixture.store.runtimeContextCount == 2)
@@ -546,7 +546,7 @@ func canonicalSemanticNavigationDeletesOnlyPriorMembershipForThatTarget() throws
         transaction.resourceInvalidations == [
             .semanticNavigation(
                 semanticTargetID: WebInspectorTarget.ID("frame-a"),
-                navigationEpoch: WebInspectorPageGeneration(rawValue: 2)
+                navigationEpoch: WebInspectorNavigationEpoch(rawValue: 2)
             )
         ]
     )
@@ -596,7 +596,7 @@ func canonicalSemanticNavigationInvalidatesEveryAgentThroughSemanticAuthority() 
         transaction.resourceInvalidations == [
             .semanticNavigation(
                 semanticTargetID: WebInspectorTarget.ID("shared-frame"),
-                navigationEpoch: WebInspectorPageGeneration(rawValue: 2)
+                navigationEpoch: WebInspectorNavigationEpoch(rawValue: 2)
             )
         ]
     )
@@ -838,7 +838,7 @@ func canonicalConsoleParameterSeedPreservesPayloadAndExactBindingAuthority() thr
     #expect(seed.authority.ownerMessageID == record.id)
     #expect(seed.authority.semanticTargetID == WebInspectorTarget.ID("semantic-frame"))
     #expect(seed.authority.agentTargetID == WebInspectorTarget.ID("console-runtime-agent"))
-    #expect(seed.authority.navigationEpoch == WebInspectorPageGeneration(rawValue: 9))
+    #expect(seed.authority.navigationEpoch == WebInspectorNavigationEpoch(rawValue: 9))
     #expect(seed.authority.runtimeBindingEpoch == WebInspectorRuntimeBindingGeneration(rawValue: 12))
     #expect(seed.authority.consoleBindingEpoch == WebInspectorConsoleBindingGeneration(rawValue: 14))
     #expect(record.stackTrace?.callFrames.first?.functionName == "run")

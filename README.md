@@ -32,6 +32,7 @@ UIKit Web Inspector for `WKWebView`.
 | --- | --- |
 | `WebInspectorKit` | You want the built-in UIKit inspector UI. |
 | `WebInspectorDataKit` | You want observable DOM, Network, Console, Runtime, and CSS models for a custom UI. |
+| `WebInspectorSwiftUI` | You want to bind DataKit fetch descriptors to SwiftUI with `@WebInspectorQuery`. |
 | `WebInspectorDataKitTesting` | You want a ready DataKit model scenario with raw replay, target replacement, and attachment-failure controls. |
 | `WebInspectorProxyKit` | You want typed Web Inspector protocol commands and events directly over an inspected `WKWebView`. |
 | `WebInspectorProxyKitTesting` | You want to drive ProxyKit's production connection path from a concrete raw WebKit peer in tests. |
@@ -66,9 +67,8 @@ final class BrowserViewController: UIViewController {
 ## Tabs
 
 ```swift
-let inspector = WebInspectorViewController(
-    tabs: [.dom, .network]
-)
+let catalog = try WebInspectorTabCatalog([.dom, .network])
+let inspector = WebInspectorViewController(catalog: catalog)
 ```
 
 The built-in tab surface exposes DOM and Network tabs. Apps can also add UIKit
@@ -76,25 +76,28 @@ tabs with an asynchronous `UIViewController` factory:
 
 ```swift
 let consoleTab = WebInspectorTab(
-    id: "app_console",
+    id: .init(rawValue: "app_console"),
     title: "Console",
     systemImage: "terminal",
-    requiredDomains: [.console]
-) { session in
-    let messages = try await session.model.consoleMessages()
-    return ConsoleViewController(messages: messages)
+    requiredFeatures: [.consoleRuntime]
+) { context in
+    ConsoleViewController(modelContext: context.modelContext)
 }
 
-let inspector = WebInspectorViewController(
-    tabs: [.dom, .network, consoleTab]
-)
+let catalog = try WebInspectorTabCatalog([.dom, .network, consoleTab])
+let inspector = WebInspectorViewController(catalog: catalog)
 ```
+
+Each tab waits only for its own `requiredFeatures`. A Network failure remains
+feature-local, so DOM and Console content stay attached. Network does not expose
+a retry action; a new explicit attachment creates its next feature runner. DOM,
+Console, and Runtime remain independently retryable features.
 
 ## Testing the Raw Wire
 
 `WebInspectorProxyKitTesting` attaches a concrete ``WebInspectorTestPeer``
 below ProxyKit's real connection core. Commands still pass through the
-production target registry, router, JSON codecs, model feed, and authority
+production target registry, router, JSON codecs, and authority
 checks. Tests receive raw commands in transport FIFO order and must complete
 each command exactly once:
 
@@ -142,12 +145,19 @@ let runtime = try await WebInspectorDataKitTestRuntime.start(
     )
 )
 
-let nodes = try await WebInspectorFetchedResultsController<DOMNode, Never>(
-    modelContext: runtime.model
+let context = runtime.container.mainContext
+let nodes = WebInspectorFetchedResultsController<DOMNode>(
+    modelContext: context
 )
-precondition(nodes.snapshot.itemIDs.contains { id in
-    runtime.model.model(for: id)?.localName == "button"
-})
+try await nodes.performFetch()
+var updates = nodes.updates.makeAsyncIterator()
+while nodes.snapshot?.itemIDs.contains(where: { id in
+    context.model(for: id)?.localName == "button"
+}) != true {
+    guard await updates.next() != nil else {
+        preconditionFailure("The DOM query closed before publishing the document.")
+    }
+}
 await nodes.close()
 await runtime.close()
 ```
@@ -159,7 +169,7 @@ to GitHub Pages.
 
 | Document | Purpose |
 | --- | --- |
-| [Architecture](Docs/Architecture.md) | Approved target architecture and one-pass cutover contract; public API examples remain current until that cutover lands. |
+| [Architecture](Docs/Architecture.md) | Implemented architecture, owner map, invariants, and verification contract. |
 | [Migration Guide](Docs/MIGRATION.md) | Version-by-version source migration notes for app code. |
 | [WebKit Version Mapping](Docs/WebKitVersionMapping.md) | Local notes for mapping iOS WebKit framework versions to public WebKit source refs. |
 
@@ -169,6 +179,7 @@ to GitHub Pages.
 Sources/
   WebInspectorKit/             Public built-in inspector product.
   WebInspectorDataKit/         Observable inspector model product.
+  WebInspectorSwiftUI/         SwiftUI query and environment integration.
   WebInspectorDataKitTesting/  Ready production-path DataKit test scenarios.
   WebInspectorProxyKit/        Typed protocol proxy product.
   WebInspectorProxyKitTesting/ Production-path raw peer test runtime.

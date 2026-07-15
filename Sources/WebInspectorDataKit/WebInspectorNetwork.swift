@@ -23,12 +23,21 @@ private enum WebInspectorNetworkBodyLocator: Sendable {
 package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
     package static let id = WebInspectorFeatureID.network
 
+    private struct FrameLoaderKey: Hashable, Sendable {
+        let agentTargetID: WebInspectorTarget.ID
+        let frameID: FrameID
+    }
+
     private let registry: WebInspectorFeatureRegistry
     private var connection: WebInspectorFeatureConnection?
     private var storeSink: WebInspectorModelStoreSink?
     private var orderedScope: WebInspectorOrderedEventScope<WebInspectorNetworkWireEvent>?
     private var canonicalStore: CanonicalNetworkStore?
     private var bodyLocators: [CanonicalNetworkRequestIDStorage: WebInspectorNetworkBodyLocator] = [:]
+    private var navigationEpochs: [
+        WebInspectorTarget.ID: WebInspectorNavigationEpoch
+    ] = [:]
+    private var frameLoaderIDs: [FrameLoaderKey: String] = [:]
     private var state: WebInspectorFeatureState = .disabled
     private var recoveryBudget = WebInspectorFeatureRecoveryBudget()
     private var closeRequested = false
@@ -46,6 +55,8 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
         storeSink = store
         closeRequested = false
         recoveryBudget = WebInspectorFeatureRecoveryBudget()
+        navigationEpochs.removeAll(keepingCapacity: true)
+        frameLoaderIDs.removeAll(keepingCapacity: true)
         if let canonicalStore {
             precondition(
                 canonicalStore.storeID == connection.storeID,
@@ -203,19 +214,95 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
         }
         var didActivateReplacement = false
         do {
+            try await bootstrapCurrentTarget(in: scope, storeSink: storeSink)
+            orderedScope = scope
+            didActivateReplacement = true
+            await previousScope?.close()
+
+            precondition(!isConsumingOrderedScopeEvents)
+            isConsumingOrderedScopeEvents = true
+            defer { isConsumingOrderedScopeEvents = false }
+            for try await event in scope.events {
+                if closeRequested { return }
+                if case let .reset(generation) = event {
+                    await publish(
+                        .synchronizing(
+                            generation: WebInspectorPageGeneration(
+                                rawValue: generation.rawValue
+                            )
+                        )
+                    )
+                    try await bootstrapCurrentTarget(
+                        in: scope,
+                        storeSink: storeSink
+                    )
+                    continue
+                }
+                let currentTimeline = await storeSink.metadataValue(
+                    for: webInspectorDOMBindingTimelineKey,
+                    default: WebInspectorDOMBindingTimeline()
+                )
+                guard var staged = canonicalStore else { continue }
+                var stagedLocators = bodyLocators
+                do {
+                    try await reduce(
+                        event,
+                        timeline: currentTimeline,
+                        staged: &staged,
+                        locators: &stagedLocators,
+                        origin: .live,
+                        publishesTransaction: true
+                    )
+                } catch let error as CanonicalNetworkProtocolViolation {
+                    throw recovery(
+                        code: "network.protocol.\(String(describing: error))",
+                        phase: "events",
+                        reason: .malformedDomainEvent(
+                            webInspectorFailureDescription(
+                                error,
+                                code: "network.protocol",
+                                phase: "events"
+                            )
+                        )
+                    )
+                }
+                canonicalStore = staged
+                bodyLocators = stagedLocators
+            }
+        } catch {
+            if !didActivateReplacement {
+                // The failed candidate owns only its lease. The previous
+                // scope remains the capability lease until a replacement
+                // publishes, avoiding a disable/enable replay gap.
+                await scope.close()
+            }
+            throw error
+        }
+    }
+
+    private func bootstrapCurrentTarget(
+        in scope: WebInspectorOrderedEventScope<WebInspectorNetworkWireEvent>,
+        storeSink: WebInspectorModelStoreSink
+    ) async throws {
+        guard let connection else { throw CancellationError() }
+        while !closeRequested {
             let reply = try await scope.command(PageWireCoding.resourceTree())
             let prefix = try await scope.drain(through: reply.boundary)
             if closeRequested { throw CancellationError() }
-            if prefix.contains(where: {
-                invalidatesBootstrap($0, resourceTree: reply.value)
-            }) {
-                throw recovery(
-                    code: "network.bootstrap.invalidated",
-                    phase: "bootstrap",
-                    reason: .targetChanged
-                )
+            if prefix.contains(where: invalidatesBootstrap) {
+                await publish(.synchronizing(generation: await currentGeneration()))
+                continue
             }
+
             let route = try featureScope(from: reply)
+            navigationEpochs = [
+                route.semanticTargetID: WebInspectorNavigationEpoch(rawValue: 0)
+            ]
+            frameLoaderIDs.removeAll(keepingCapacity: true)
+            installFrameLoaders(
+                from: reply.value,
+                agentTargetID: route.agentTargetID
+            )
             let timeline = await storeSink.metadataValue(
                 for: webInspectorDOMBindingTimelineKey,
                 default: WebInspectorDOMBindingTimeline()
@@ -229,9 +316,6 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
             )
             var stagedLocators = bodyLocators
 
-            // The previous scope's stream has already stopped at the recovery
-            // boundary. The replacement scope alone owns these buffered events,
-            // and bootstrap publishes their reduced union exactly once below.
             for event in prefix {
                 try await reduce(
                     event,
@@ -239,16 +323,12 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
                     staged: &staged,
                     locators: &stagedLocators,
                     origin: .enableReplay,
-                    publishesTransaction: false,
-                    duringBootstrap: true
+                    publishesTransaction: false
                 )
             }
             if closeRequested { throw CancellationError() }
             for resource in snapshotResources(reply.value) {
-                let resourceScope = snapshotScope(
-                    for: resource,
-                    route: route
-                )
+                let resourceScope = snapshotScope(for: resource, route: route)
                 let result = try staged.reconcileSnapshotResource(
                     resource,
                     scope: resourceScope
@@ -282,59 +362,10 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
             canonicalStore = staged
             bodyLocators = stagedLocators
             if closeRequested { throw CancellationError() }
-            orderedScope = scope
-            didActivateReplacement = true
-            transition(
-                to: .ready(generation: route.generation, revision: revision)
-            )
-            await previousScope?.close()
-
-            precondition(!isConsumingOrderedScopeEvents)
-            isConsumingOrderedScopeEvents = true
-            defer { isConsumingOrderedScopeEvents = false }
-            for try await event in scope.events {
-                if closeRequested { return }
-                let currentTimeline = await storeSink.metadataValue(
-                    for: webInspectorDOMBindingTimelineKey,
-                    default: WebInspectorDOMBindingTimeline()
-                )
-                guard var staged = canonicalStore else { continue }
-                var stagedLocators = bodyLocators
-                do {
-                    try await reduce(
-                        event,
-                        timeline: currentTimeline,
-                        staged: &staged,
-                        locators: &stagedLocators,
-                        origin: .live,
-                        publishesTransaction: true,
-                        duringBootstrap: false
-                    )
-                } catch let error as CanonicalNetworkProtocolViolation {
-                    throw recovery(
-                        code: "network.protocol.\(String(describing: error))",
-                        phase: "events",
-                        reason: .malformedDomainEvent(
-                            webInspectorFailureDescription(
-                                error,
-                                code: "network.protocol",
-                                phase: "events"
-                            )
-                        )
-                    )
-                }
-                canonicalStore = staged
-                bodyLocators = stagedLocators
-            }
-        } catch {
-            if !didActivateReplacement {
-                // The failed candidate owns only its lease. The previous
-                // scope remains the capability lease until a replacement
-                // publishes, avoiding a disable/enable replay gap.
-                await scope.close()
-            }
-            throw error
+            transition(to: .ready(generation: route.generation, revision: revision))
+            return
         }
+        throw CancellationError()
     }
 
     private func reduce(
@@ -343,28 +374,27 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
         staged: inout CanonicalNetworkStore,
         locators: inout [CanonicalNetworkRequestIDStorage: WebInspectorNetworkBodyLocator],
         origin: CanonicalNetworkEventOrigin,
-        publishesTransaction: Bool,
-        duringBootstrap: Bool
+        publishesTransaction: Bool
     ) async throws {
         switch pageEvent {
         case .reset:
-            throw recovery(
-                code: "network.generation.reset",
-                phase: "events",
-                reason: .targetChanged
-            )
+            return
         case let .event(_, .page(routed)):
-            if case let .frameNavigated(frame) = routed.value, frame.parentID == nil {
-                if duringBootstrap { return }
-                throw recovery(
-                    code: "network.main-frame.navigated",
-                    phase: "events",
-                    reason: .targetChanged
-                )
-            }
-            if case let .frameDetached(frameID) = routed.value {
+            let route = try featureScope(from: routed)
+            switch routed.value {
+            case let .frameNavigated(frame):
+                if origin == .live {
+                    observeNavigation(frame, route: route)
+                }
+            case let .frameDetached(frameID):
+                frameLoaderIDs = frameLoaderIDs.filter {
+                    $0.key.frameID != frameID
+                }
+                let lostTargetID = route.agentTarget.frameID == frameID
+                    ? route.semanticTargetID
+                    : WebInspectorTarget.ID(frameID.rawValue)
                 let transaction = try staged.targetWasLost(
-                    WebInspectorTarget.ID(frameID.rawValue)
+                    lostTargetID
                 )
                 if let transaction {
                     if publishesTransaction {
@@ -372,6 +402,8 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
                     }
                     removeMissingLocators(staged: staged, locators: &locators)
                 }
+            case .unknown:
+                break
             }
         case let .event(_, .network(routed)):
             let route = try featureScope(from: routed)
@@ -498,7 +530,9 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
                 ),
                 targetAuthority: CanonicalNetworkRegisteredTargetAuthority(
                     targetID: route.semanticTargetID,
-                    navigationEpoch: route.generation,
+                    navigationEpoch: navigationEpoch(
+                        for: route.semanticTargetID
+                    ),
                     domBindingEpoch: nil
                 ),
                 frameID: resource.frameID,
@@ -550,8 +584,13 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
         if case let .requestWillBeSent(_, request, _, _, _, _) = event.value,
             let rawOrigin = request.origin
         {
-            let semanticTargetID = rawOrigin.targetID.map(WebInspectorTarget.ID.init)
-                ?? route.semanticTargetID
+            let semanticTargetID: WebInspectorTarget.ID
+            if rawOrigin.targetID == route.agentTargetID.rawValue {
+                semanticTargetID = route.semanticTargetID
+            } else {
+                semanticTargetID = rawOrigin.targetID.map(WebInspectorTarget.ID.init)
+                    ?? route.semanticTargetID
+            }
             let origin: CanonicalNetworkRequestOrigin = rawOrigin.targetID == nil
                 ? .mappedFrame(frameID: rawOrigin.frameID, targetID: semanticTargetID)
                 : .protocolTarget(semanticTargetID)
@@ -567,7 +606,7 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
                 origin: origin,
                 targetAuthority: CanonicalNetworkRegisteredTargetAuthority(
                     targetID: semanticTargetID,
-                    navigationEpoch: route.generation,
+                    navigationEpoch: navigationEpoch(for: semanticTargetID),
                     domBindingEpoch: binding?.bindingScopeID
                 ),
                 frameID: rawOrigin.frameID,
@@ -589,7 +628,68 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
                 membership: membership
             )
         }
-        return WebInspectorCanonicalNetworkEventScope(modelScope: route)
+        return WebInspectorCanonicalNetworkEventScope(
+            modelScope: route,
+            membership: CanonicalNetworkRequestMembership(
+                pageGeneration: route.generation,
+                agentTargetID: route.agentTargetID,
+                origin: .eventTarget(route.semanticTargetID),
+                targetAuthority: CanonicalNetworkRegisteredTargetAuthority(
+                    targetID: route.semanticTargetID,
+                    navigationEpoch: navigationEpoch(
+                        for: route.semanticTargetID
+                    ),
+                    domBindingEpoch: nil
+                ),
+                frameID: nil,
+                loaderID: nil
+            )
+        )
+    }
+
+    private func navigationEpoch(
+        for targetID: WebInspectorTarget.ID
+    ) -> WebInspectorNavigationEpoch {
+        navigationEpochs[targetID] ?? WebInspectorNavigationEpoch(rawValue: 0)
+    }
+
+    private func observeNavigation(
+        _ frame: Page.Frame,
+        route: WebInspectorFeatureEventScope
+    ) {
+        let key = FrameLoaderKey(
+            agentTargetID: route.agentTargetID,
+            frameID: frame.id
+        )
+        let previous = frameLoaderIDs.updateValue(frame.loaderID, forKey: key)
+        guard previous != frame.loaderID,
+            route.agentTarget.frameID == frame.id else {
+            return
+        }
+        let current = navigationEpoch(for: route.semanticTargetID)
+        let (next, overflow) = current.rawValue.addingReportingOverflow(1)
+        precondition(!overflow, "Network navigation epoch exhausted.")
+        navigationEpochs[route.semanticTargetID] = WebInspectorNavigationEpoch(
+            rawValue: next
+        )
+    }
+
+    private func installFrameLoaders(
+        from tree: Page.ResourceTree,
+        agentTargetID: WebInspectorTarget.ID
+    ) {
+        frameLoaderIDs[
+            FrameLoaderKey(
+                agentTargetID: agentTargetID,
+                frameID: tree.frame.id
+            )
+        ] = tree.frame.loaderID
+        for child in tree.childFrames {
+            installFrameLoaders(
+                from: child,
+                agentTargetID: agentTargetID
+            )
+        }
     }
 
     private func rawRequestID(in event: Network.Event) -> Network.Request.ID? {
@@ -635,10 +735,14 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
                 )
             )
         }
+        let agentTarget = WebInspectorFeatureTarget(agent)
+        let semanticTarget = agentTarget.kind == .frame
+            ? agentTarget
+            : WebInspectorFeatureTarget(semantic)
         return WebInspectorFeatureEventScope(
             generation: WebInspectorPageGeneration(rawValue: event.generation.rawValue),
-            semanticTarget: WebInspectorFeatureTarget(semantic),
-            agentTarget: WebInspectorFeatureTarget(agent)
+            semanticTarget: semanticTarget,
+            agentTarget: agentTarget
         )
     }
 
@@ -662,23 +766,11 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
     }
 
     private func invalidatesBootstrap(
-        _ event: WebInspectorPageEvent<WebInspectorNetworkWireEvent>,
-        resourceTree: Page.ResourceTree
+        _ event: WebInspectorPageEvent<WebInspectorNetworkWireEvent>
     ) -> Bool {
         switch event {
         case .reset:
             return true
-        case let .event(_, .page(routed)):
-            if case let .frameNavigated(frame) = routed.value {
-                guard frame.parentID == nil else { return false }
-                guard frame.id == resourceTree.frame.id,
-                    let eventLoaderID = frame.loaderID,
-                    let snapshotLoaderID = resourceTree.frame.loaderID
-                else { return true }
-                return eventLoaderID != snapshotLoaderID
-            } else {
-                return false
-            }
         case .event:
             return false
         }

@@ -55,7 +55,7 @@ package final class DOMPanelModel {
 
     package var isPickingElement: Bool {
         switch elementPickerState {
-        case .idle, .unavailable:
+        case .idle:
             false
         case .enabling, .active, .resolvingSelection, .disabling:
             true
@@ -90,10 +90,6 @@ package final class DOMPanelModel {
         switch elementPickerState {
         case .idle:
             startElementPicker()
-        case .unavailable:
-            Task { [dom = context.container.dom] in
-                await dom.retryElementPicker()
-            }
         case .enabling, .active, .resolvingSelection, .disabling:
             cancelElementPicker()
         }

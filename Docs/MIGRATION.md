@@ -8,39 +8,62 @@ when upgrading WebInspectorKit. Sections are grouped by release, newest first.
 Unreleased builds require Swift 6.3+ and a minimum deployment target of iOS
 18.4+ or macOS 15.4+. The built-in UIKit inspector remains iOS-only.
 
-### Group Network requests by initiator node
+### Adopt container-issued contexts and flat generic fetches
 
-`NetworkSection` now includes `initiatorNode`. This is a source change for code
-that exhaustively switches over `NetworkSection`; add the new case when
-recompiling:
+`WebInspectorModelContext` no longer attaches to WebKit or owns DOM, Network,
+Console, or Runtime commands. Create a `WebInspectorModelContainer`, attach the
+container, and obtain `mainContext` or a macro-backed model-actor binding from
+that container.
 
-```swift
-switch section {
-case .method:
-    renderMethodSections()
-case .initiatorNode:
-    renderInitiatorGroups()
-}
-```
-
-Use the new section mode to publish one semantic section for each initiating
-DOM node. Requests without a node are stable singleton sections:
+Specialized query types and sectioned fetched results were removed. Create a
+one-generic `WebInspectorFetchedResultsController`, call `performFetch()`, and
+observe its flat snapshot or update sequence:
 
 ```swift
-let requests = try await context.networkRequests(matching: NetworkQuery(
-    search: "media",
-    sort: .requestTimeDescending,
-    section: .initiatorNode,
-    limit: 100
-))
+let container = WebInspectorModelContainer()
+try await container.attach(to: webView)
+let context = container.mainContext
+let entries = WebInspectorFetchedResultsController<NetworkEntry>(
+    modelContext: context
+)
+try await entries.performFetch()
 ```
 
-Groups are formed before filtering. A group is visible when any member matches,
-and every member of a visible group is published chronologically ascending.
-Groups are ordered by their earliest member under the selected sort, while
-`offset` and `limit` count groups. Section raw values are opaque and stable only
-within a Network source epoch; node-backed and singleton identities occupy
-separate namespaces.
+Feature retry is now capability-specific. `WebInspectorFeatureHandle` no
+longer declares `retry()`, `WebInspectorModelContainer.retryFeature(_:)` was
+removed, and `WebInspectorNetwork.retry()` is no longer available. DOM,
+Console, and Runtime expose retry through
+`WebInspectorRetryableFeatureHandle`; call the concrete handle when needed:
+
+```swift
+await container.dom.retry()
+```
+
+Network no longer exposes `retry()`. A bootstrap failure or exhausted recovery
+publishes feature-local `unavailable`; sibling features and the physical
+attachment remain live. The built-in Network tab reports the error without a
+retry action. A later explicit container attachment starts a new Network
+feature runner.
+
+Network redirects and exact initiator groups are now represented by one flat
+`NetworkEntry`. Its ordered `requestIDs` contain every request in the logical
+row. Filtering, sorting, offset, and limit use
+`WebInspectorFetchDescriptor<Model>` over immutable `Model.QueryValue` values.
+
+Commands move from context and persistent models to the feature facade:
+
+| Before | After |
+| --- | --- |
+| `context.highlightDOMNode(node)` | `container.dom.highlight(node.id)` |
+| `context.clearNetworkRequests()` | `container.network.clear()` |
+| `body.load()` | `container.network.responseBody(for: request.id)` |
+| `context.withRuntimeObjectGroup(...)` | `container.runtime.makeObjectScope()` plus explicit `scope.close()` |
+
+SwiftUI consumers add the `WebInspectorSwiftUI` product, install the container
+with `.webInspectorModelContainer(container)`, and use
+`@WebInspectorQuery`. The wrapper preserves its last successful result after a
+later fetch failure; read `fetchError` from its backing storage rather than a
+custom loading/ready/failure projection.
 
 ### Read Network request initiators from request events
 
@@ -62,24 +85,32 @@ identity.
 
 ### Make custom tab factories asynchronous
 
-`WebInspectorTab` factories are now `async throws` and declare the model
-domains they require. The root inspector joins concurrent requests for the same
-tab, presents native loading and failure states, supports retry, and cancels and
-awaits unfinished factories during root teardown:
+`WebInspectorTab` factories are `async throws` and declare the semantic
+features they require. The root inspector joins concurrent requests for the same
+tab, presents native loading and factory/retryable-feature failure states,
+supports retry for those failures, and cancels and awaits unfinished factories
+during root teardown. A Network dependency failure is terminal for only that
+resource and does not present this retry UI:
 
 ```swift
 let consoleTab = WebInspectorTab(
-    id: "console",
+    id: .init(rawValue: "console"),
     title: "Console",
-    requiredDomains: [.console]
-) { session in
-    let messages = try await session.model.consoleMessages()
-    return ConsoleViewController(messages: messages)
+    requiredFeatures: [.consoleRuntime]
+) { context in
+    ConsoleViewController(modelContext: context.modelContext)
 }
+
+let catalog = try WebInspectorTabCatalog([.dom, .network, consoleTab])
+let inspector = WebInspectorViewController(catalog: catalog)
 ```
 
 The returned controller remains root-owned and is reused across compact and
 regular hosts. Attachment and page-generation changes do not recreate it.
+`WebInspectorViewController(session:catalog:)` borrows the supplied session;
+the caller remains responsible for detaching or closing it. The convenience
+`WebInspectorViewController(catalog:)` owns and closes its session at terminal
+presentation retirement.
 
 ### Use the logical page and scoped domain events
 
@@ -193,12 +224,12 @@ Apply these mappings to other tests:
 
 Tests whose subject is a DataKit model no longer need to consume and reply to
 unrelated startup commands. Add the `WebInspectorDataKitTesting` product and
-start an actor-confined, ready context:
+start a production-path container driven by deterministic raw input:
 
 ```swift
 let runtime = try await WebInspectorDataKitTestRuntime.start(
     scenario: .init(
-        configuration: .init(domains: [.dom, .network]),
+        configuration: .init(enabledFeatures: [.dom, .network]),
         document: .init(children: [
             .element(id: "result", name: "article")
         ]),
@@ -208,10 +239,27 @@ let runtime = try await WebInspectorDataKitTestRuntime.start(
     )
 )
 
-let model = runtime.model // already attached and replay is applied
+let context = runtime.container.mainContext
+let entries = WebInspectorFetchedResultsController<NetworkEntry>(
+    modelContext: context
+)
+try await entries.performFetch()
+var updates = entries.updates.makeAsyncIterator()
+_ = await updates.next() // initial result
+
 try await runtime.replacePage(with: .init())
+_ = await updates.next() // context-applied replacement
+await entries.close()
 await runtime.close()
 ```
+
+The runtime waits for enabled feature owners to reach their supported boundary:
+ready or feature-local unavailable. Physical connection failure throws
+`WebInspectorDataKitTestRuntime.RuntimeError.connectionFailed`; Network feature
+failure remains in the boundary snapshot. Page replacement otherwise returns at
+the feature boundary. When a test requires a context or
+fetched-results revision, subscribe to and await that consumer-owned update
+explicitly. Do not infer it from a testing-runtime counter.
 
 Use `WebInspectorProxyKitTesting` directly when the wire command, raw JSON,
 target registry, or exact reply ordering is the subject of the test.
@@ -296,28 +344,26 @@ The `v0.1.5` SwiftUI tab builder API was removed.
 | `WITab.network()` | `.network` |
 | custom `WITab(...)` content | `WebInspectorTab(id:title:image:makeViewController:)` or `WebInspectorTab(id:title:systemImage:makeViewController:)` |
 
-Use the built-in tabs exposed by `WebInspectorViewController`:
+Use a validated catalog to select the built-in tabs:
 
 ```swift
-let controller = WebInspectorViewController(
-    tabs: [.dom, .network]
-)
+let catalog = try WebInspectorTabCatalog([.dom, .network])
+let controller = WebInspectorViewController(catalog: catalog)
 ```
 
 Custom tabs now use UIKit view controllers:
 
 ```swift
 let consoleTab = WebInspectorTab(
-    id: "app_console",
+    id: .init(rawValue: "app_console"),
     title: "Console",
     systemImage: "terminal"
-) { session in
-    ConsoleViewController(inspectorSession: session)
+) { context in
+    ConsoleViewController(modelContext: context.modelContext)
 }
 
-let controller = WebInspectorViewController(
-    tabs: [.dom, .network, consoleTab]
-)
+let catalog = try WebInspectorTabCatalog([.dom, .network, consoleTab])
+let controller = WebInspectorViewController(catalog: catalog)
 ```
 
 ### 5. Remove old DOM and Network model usage

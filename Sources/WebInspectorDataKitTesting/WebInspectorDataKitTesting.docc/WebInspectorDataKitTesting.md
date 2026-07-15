@@ -48,11 +48,13 @@ custom actor declares `@WebInspectorModelActor` and initializes itself with
 come from the same production binding.
 
 ``WebInspectorDataKitTestRuntime/start(scenario:)`` waits until every enabled
-feature is either `ready` or feature-local `unavailable`.
+feature reaches its supported boundary: `ready`, or feature-local `unavailable`
+for a terminal feature failure.
 ``WebInspectorDataKitTestRuntime/replacePage(with:networkReplay:)`` additionally
 waits for previously-ready feature owners to reach a terminal state in the
 replacement generation. An already-unavailable feature remains terminal without
-an implicit retry. The returned
+an implicit retry. Physical connection failure still throws
+``WebInspectorDataKitTestRuntime/RuntimeError/connectionFailed(_:)``. The returned
 ``WebInspectorDataKitTestRuntime/BoundarySnapshot`` does not assert that a
 consumer context or fetched-results controller has applied that store revision.
 When a test needs consumer completion, subscribe to

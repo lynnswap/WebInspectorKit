@@ -47,10 +47,12 @@ package enum DOMWireCoding {
         WebInspectorWireCommand(
             method: DomainCommandJSON.method("DOM", "requestNode"),
             parameters: try DomainCommandJSON.data(["objectId": object.unscopedRawValue]),
-            target: .currentPage
-        ) { data, _ in
+            target: DomainCommandJSON.target(object.targetScopeRawValue)
+        ) { data, context in
             let payload = try liveProxyDecode(DOMRequestNodeResult.self, from: data)
-            return DOM.Node.ID(payload.nodeID)
+            return context.targetScopeRawValue.map {
+                DOM.Node.ID(payload.nodeID, scopedToTargetRawValue: $0)
+            } ?? DOM.Node.ID(payload.nodeID)
         }
     }
 
@@ -436,7 +438,7 @@ private struct PageResourceTreePayload: Decodable {
 private struct PageResourceFramePayload: Decodable {
     let id: String
     let parentId: String?
-    let loaderId: String?
+    let loaderId: String
     let name: String?
     let url: String
     let securityOrigin: String?

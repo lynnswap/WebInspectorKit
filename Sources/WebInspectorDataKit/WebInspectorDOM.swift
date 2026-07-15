@@ -11,7 +11,6 @@ package enum WebInspectorDOMWireEvent: Sendable {
 private struct WebInspectorDOMRecoveryRequest: Error, Sendable {
     let reason: WebInspectorRecoveryReason
     let fingerprint: WebInspectorRecoveryFingerprint
-    let resetPublishedDocument: Bool
 }
 
 /// Sole semantic owner of DOM, CSS, highlight, and element-picker state.
@@ -21,7 +20,10 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
     private enum PickerEnableIntent {
         case activate
         case cancelAfterEnable
-        case selected(Result<DOMNode.ID, any Error>)
+        case selected(
+            DOM.Node.ID,
+            WebInspectorCanonicalDOMEventScope
+        )
         case resolveRemoteObject(
             Runtime.RemoteObject.ID,
             WebInspectorCanonicalDOMEventScope
@@ -56,10 +58,18 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         var phase: PickerOperationPhase
     }
 
+    private struct PickerNodeWaiter {
+        let operationID: UInt64
+        let rawNodeID: DOM.Node.ID
+        let binding: WebInspectorCanonicalDOMEventScope
+        let continuation: CheckedContinuation<DOMNode.ID, any Error>
+    }
+
     private enum PickerState {
         case idle
         case operation(PickerOperation)
-        case unavailable(WebInspectorFeatureError)
+        case activeWithoutClient
+        case disablingWithoutClient(Task<Void, Never>)
     }
 
     private struct LoadedStyleResource {
@@ -88,6 +98,9 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
 
     private var pickerState: PickerState = .idle
     private var nextPickerOperationID: UInt64 = 0
+    private var pickerNodeWaiter: PickerNodeWaiter?
+    private var pickerHighlightTask: Task<Void, Never>?
+    private var pickerHighlightTaskID: UUID?
 
     package init(
         registry: WebInspectorFeatureRegistry,
@@ -128,13 +141,6 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
             } catch let request as WebInspectorDOMRecoveryRequest {
                 await orderedScope?.close()
                 orderedScope = nil
-                if request.resetPublishedDocument {
-                    do {
-                        try await resetPublishedDocument()
-                    } catch {
-                        return termination(for: error)
-                    }
-                }
                 let generation = await currentGeneration()
                 let decision = recoveryBudget.consume(
                     request.fingerprint,
@@ -204,6 +210,7 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         guard !closeRequested else { return }
         closeRequested = true
         await closeStyleCommitGate()
+        cancelPickerHighlight()
         explicitRetryRequested = true
         retryWaiter?.resume()
         retryWaiter = nil
@@ -470,9 +477,7 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         switch pickerState {
         case .idle:
             break
-        case let .unavailable(error):
-            throw WebInspectorElementPickerError.unavailable(error)
-        case .operation:
+        case .operation, .activeWithoutClient, .disablingWithoutClient:
             throw WebInspectorElementPickerError.busy
         }
         guard let connection else { throw WebInspectorCommandError.containerClosed }
@@ -501,14 +506,15 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
     }
 
     package func cancelElementPicker() async {
-        guard case let .operation(operation) = pickerState else { return }
-        cancelPicker(operationID: operation.id)
-    }
-
-    package func retryElementPicker() async {
-        guard case .unavailable = pickerState else { return }
-        pickerState = .idle
-        pickerPublisher.publish(.idle)
+        switch pickerState {
+        case let .operation(operation):
+            cancelPicker(operationID: operation.id)
+        case .activeWithoutClient:
+            guard let connection else { return }
+            beginPickerDisableWithoutClient(connection: connection)
+        case .idle, .disablingWithoutClient:
+            return
+        }
     }
 
     // MARK: Ordered scope
@@ -534,103 +540,168 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
             buffering: .bounded(2_048)
         )
         orderedScope = scope
-        let reply = try await scope.command(DOMWireCoding.getDocument())
-        let prefix = try await scope.drain(through: reply.boundary)
-        if prefix.contains(where: invalidatesDOMBootstrap) {
-            throw WebInspectorDOMRecoveryRequest(
-                reason: .targetChanged,
-                fingerprint: WebInspectorRecoveryFingerprint(
-                    code: "dom.bootstrap.invalidated",
-                    phase: "bootstrap"
-                ),
-                resetPublishedDocument: true
-            )
-        }
-        let route = try featureScope(from: reply)
-        let baseReducer = WebInspectorCanonicalDOMReducer(
-            storeID: connection.storeID,
-            attachmentGeneration: connection.attachmentGeneration
-        )
-        let root = reply.value
-        let boundary = reply.boundary.watermark.rawValue
-        let ready = try await withExclusiveStyleCommit {
-            let oldIDs: [DOMNode.ID]
-            if var reducer {
-                oldIDs = reducer.snapshot().records.map {
-                    DOMNode.ID(canonical: $0.id)
-                }
-            } else {
-                oldIDs = []
-            }
-            let oldStyleIDs = Array(loadedStyles.keys)
-            let result = try await store.commit(
-                updating: webInspectorDOMBindingTimelineKey,
-                initialValue: WebInspectorDOMBindingTimeline()
-            ) { timeline, _ in
-                let binding = try timeline.issue(after: boundary, route: route)
-                var staged = baseReducer
-                var canonical = try staged.bootstrap(scope: binding, root: root)
-                staged.reconcilePrimaryTree(
-                    rootID: WebInspectorDOMNodeIdentityStorage(
-                        documentScope: WebInspectorDOMDocumentScopeStorage(
-                            storeID: connection.storeID,
-                            attachmentGeneration: connection.attachmentGeneration,
-                            eventScope: binding
-                        ),
-                        rawNodeID: root.id
-                    ),
-                    transaction: &canonical
-                )
-                var transaction = WebInspectorModelTransaction()
-                transaction.append(contentsOf: oldIDs.map {
-                    webInspectorDOMNodeSchema.delete(id: $0)
-                })
-                transaction.append(contentsOf: oldStyleIDs.map {
-                    webInspectorCSSStylesSchema.delete(id: $0)
-                })
-                transaction.append(
-                    contentsOf: webInspectorDOMSnapshotMutations(staged.snapshot())
-                )
-                transaction.setFeatureState(
-                    .ready(
-                        generation: route.generation,
-                        revision: WebInspectorStoreRevision(rawValue: 0)
-                    ),
-                    for: .dom
-                )
-                return (transaction, (staged, binding))
-            }
-            reducer = result.output.0
-            currentBindingScope = result.output.1
-            cssReducer = WebInspectorCanonicalCSSReducer(
-                storeID: connection.storeID,
-                attachmentGeneration: connection.attachmentGeneration
-            )
-            loadedStyles.removeAll(keepingCapacity: true)
-            return WebInspectorFeatureState.ready(
-                generation: route.generation,
-                revision: result.revision
-            )
-        }
-        transition(to: ready)
+        try await bootstrapCurrentDocument(in: scope, store: store)
 
         for try await event in scope.events {
             if closeRequested { return }
             switch event {
             case let .reset(generation):
-                throw WebInspectorDOMRecoveryRequest(
-                    reason: .targetChanged,
-                    fingerprint: WebInspectorRecoveryFingerprint(
-                        code: "dom.generation.reset",
-                        phase: "events"
-                    ),
-                    resetPublishedDocument: generation.rawValue
-                        != route.generation.rawValue
+                try await resetPublishedTarget(
+                    generation: WebInspectorPageGeneration(
+                        rawValue: generation.rawValue
+                    )
                 )
+                try await bootstrapCurrentDocument(in: scope, store: store)
             case let .event(_, event):
-                try await apply(event)
+                if let cut = try currentDocumentCut(event) {
+                    try await invalidatePublishedDocument(
+                        after: cut.sequence,
+                        route: cut.route
+                    )
+                    try await bootstrapCurrentDocument(in: scope, store: store)
+                } else {
+                    try await apply(event)
+                }
             }
         }
+    }
+
+    private func bootstrapCurrentDocument(
+        in scope: WebInspectorOrderedEventScope<WebInspectorDOMWireEvent>,
+        store: WebInspectorModelStoreSink
+    ) async throws {
+        guard let connection else { throw CancellationError() }
+        var carriedEvents: [WebInspectorDOMWireEvent] = []
+        while !closeRequested {
+            let reply = try await scope.command(DOMWireCoding.getDocument())
+            let prefix = try await scope.drain(through: reply.boundary)
+            if closeRequested { throw CancellationError() }
+            let route = try featureScope(from: reply)
+            let reset = lastReset(in: prefix)
+            let documentCuts = try currentDocumentCuts(in: prefix, route: route)
+            let lastCutIndex = [reset?.index, documentCuts.last?.index]
+                .compactMap { $0 }
+                .max()
+            if let lastCutIndex {
+                carriedEvents = semanticBootstrapEvents(
+                    after: lastCutIndex,
+                    in: prefix
+                )
+                if let reset {
+                    try await resetPublishedTarget(generation: reset.generation)
+                } else {
+                    for cut in documentCuts {
+                        try await invalidatePublishedDocument(
+                            after: cut.sequence,
+                            route: route
+                        )
+                    }
+                }
+                continue
+            }
+            carriedEvents.append(
+                contentsOf: prefix.compactMap(semanticBootstrapEvent)
+            )
+
+            let root = reply.value
+            let boundary = reply.boundary.watermark.rawValue
+            let ready = try await withExclusiveStyleCommit {
+                let oldIDs: [DOMNode.ID]
+                if var reducer {
+                    oldIDs = reducer.snapshot().records.map {
+                        DOMNode.ID(canonical: $0.id)
+                    }
+                } else {
+                    oldIDs = []
+                }
+                let oldStyleIDs = Array(loadedStyles.keys)
+                let existingBinding = binding(for: route)
+                let baseDOM: WebInspectorCanonicalDOMReducer
+                let baseCSS: WebInspectorCanonicalCSSReducer
+                if existingBinding != nil {
+                    guard let reducer, let cssReducer else {
+                        throw WebInspectorFeatureError.bootstrap(
+                            WebInspectorFailureDescription(
+                                code: "dom.bootstrap.owner",
+                                phase: "bootstrap",
+                                message: "The active DOM binding had no canonical DOM/CSS reducer owner."
+                            )
+                        )
+                    }
+                    baseDOM = reducer
+                    baseCSS = cssReducer
+                } else {
+                    baseDOM = WebInspectorCanonicalDOMReducer(
+                        storeID: connection.storeID,
+                        attachmentGeneration: connection.attachmentGeneration
+                    )
+                    baseCSS = WebInspectorCanonicalCSSReducer(
+                        storeID: connection.storeID,
+                        attachmentGeneration: connection.attachmentGeneration
+                    )
+                }
+                let result = try await store.commit(
+                    updating: webInspectorDOMBindingTimelineKey,
+                    initialValue: WebInspectorDOMBindingTimeline()
+                ) { timeline, _ in
+                    let binding = try existingBinding
+                        ?? timeline.issue(after: boundary, route: route)
+                    var stagedDOM = baseDOM
+                    var stagedCSS = baseCSS
+                    var canonical = try stagedDOM.bootstrap(
+                        scope: binding,
+                        root: root
+                    )
+                    _ = try stagedCSS.bootstrap(
+                        scopes: [binding],
+                        styleSheets: []
+                    )
+                    stagedDOM.reconcilePrimaryTree(
+                        rootID: WebInspectorDOMNodeIdentityStorage(
+                            documentScope: WebInspectorDOMDocumentScopeStorage(
+                                storeID: connection.storeID,
+                                attachmentGeneration: connection.attachmentGeneration,
+                                eventScope: binding
+                            ),
+                            rawNodeID: root.id
+                        ),
+                        transaction: &canonical
+                    )
+                    var transaction = WebInspectorModelTransaction()
+                    transaction.append(contentsOf: oldIDs.map {
+                        webInspectorDOMNodeSchema.delete(id: $0)
+                    })
+                    transaction.append(contentsOf: oldStyleIDs.map {
+                        webInspectorCSSStylesSchema.delete(id: $0)
+                    })
+                    transaction.append(
+                        contentsOf: webInspectorDOMSnapshotMutations(stagedDOM.snapshot())
+                    )
+                    transaction.setFeatureState(
+                        .ready(
+                            generation: route.generation,
+                            revision: WebInspectorStoreRevision(rawValue: 0)
+                        ),
+                        for: .dom
+                    )
+                    return (transaction, (stagedDOM, stagedCSS, binding))
+                }
+                reducer = result.output.0
+                cssReducer = result.output.1
+                currentBindingScope = result.output.2
+                loadedStyles.removeAll(keepingCapacity: true)
+                return WebInspectorFeatureState.ready(
+                    generation: route.generation,
+                    revision: result.revision
+                )
+            }
+            transition(to: ready)
+            for event in carriedEvents {
+                try await apply(event)
+            }
+            return
+        }
+        throw CancellationError()
     }
 
     private func apply(_ event: WebInspectorDOMWireEvent) async throws {
@@ -640,15 +711,7 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
             guard let binding = binding(for: route) else { return }
             switch routed.value {
             case .documentUpdated:
-                throw WebInspectorDOMRecoveryRequest(
-                    reason: .targetChanged,
-                    fingerprint: WebInspectorRecoveryFingerprint(
-                        code: "dom.document.updated",
-                        phase: "events",
-                        method: routed.method.rawValue
-                    ),
-                    resetPublishedDocument: true
-                )
+                return
             case let .inspect(rawID):
                 resolvePicker(rawNodeID: rawID, binding: binding)
             default:
@@ -664,16 +727,6 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
             try await reduceCSS(routed.value, binding: binding, method: routed.method.rawValue)
         case let .page(routed):
             switch routed.value {
-            case let .frameNavigated(frame) where frame.parentID == nil:
-                throw WebInspectorDOMRecoveryRequest(
-                    reason: .targetChanged,
-                    fingerprint: WebInspectorRecoveryFingerprint(
-                        code: "dom.main-frame.navigated",
-                        phase: "events",
-                        method: routed.method.rawValue
-                    ),
-                    resetPublishedDocument: true
-                )
             case let .frameDetached(frameID):
                 try await reduceFrameDetached(frameID)
             case .frameNavigated, .unknown:
@@ -694,7 +747,11 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
                 rootID: staged.primaryDocumentRootID,
                 transaction: &canonical
             )
-            guard !canonical.isEmpty else { return }
+            guard !canonical.isEmpty else {
+                reducer = staged
+                resolvePickerNodeWaiterIfAvailable()
+                return
+            }
             let domMutations = webInspectorDOMMutations(
                 canonical,
                 staged: staged
@@ -717,6 +774,7 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
                 reducer = staged
                 refreshReadyRevision(revision)
             }
+            resolvePickerNodeWaiterIfAvailable()
         } catch let error as WebInspectorCanonicalDOMError {
             throw WebInspectorDOMRecoveryRequest(
                 reason: .snapshotConflict(
@@ -726,8 +784,7 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
                     code: "dom.relation.\(String(describing: error))",
                     phase: "events",
                     method: method
-                ),
-                resetPublishedDocument: false
+                )
             )
         }
     }
@@ -768,8 +825,7 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
                     code: "css.relation.\(String(describing: error))",
                     phase: "events",
                     method: method
-                ),
-                resetPublishedDocument: false
+                )
             )
         }
     }
@@ -808,32 +864,100 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         }
     }
 
-    private func resetPublishedDocument() async throws {
-        guard var reducer, let store else { return }
-        let generation = await currentGeneration()
-        try await withExclusiveStyleCommit {
-            let canonical = reducer.reset()
-            var transaction = WebInspectorModelTransaction()
-            transaction.append(contentsOf: canonical.deletedRecordIDs.map {
-                webInspectorDOMNodeSchema.delete(id: DOMNode.ID(canonical: $0))
-            })
-            transaction.append(
-                contentsOf: loadedStyles.keys.map(webInspectorCSSStylesSchema.delete)
-            )
-            transaction.setFeatureState(
-                .synchronizing(generation: generation),
-                for: .dom
-            )
-            _ = try await store.commit(transaction)
-            self.reducer = reducer
-            loadedStyles.removeAll(keepingCapacity: true)
-            currentBindingScope = nil
-            transition(to: .synchronizing(generation: generation))
-        }
+    private func resetPublishedTarget(
+        generation: WebInspectorPageGeneration
+    ) async throws {
+        currentBindingScope = nil
+        cancelPickerHighlight()
         await retirePicker(
             with: WebInspectorElementPickerError.targetChanged,
             disableBackend: false
         )
+
+        if var stagedDOM = reducer, let store {
+            try await withExclusiveStyleCommit {
+                let canonical = stagedDOM.reset()
+                if var stagedCSS = cssReducer {
+                    _ = stagedCSS.reset()
+                    cssReducer = stagedCSS
+                }
+                var transaction = WebInspectorModelTransaction()
+                transaction.append(contentsOf: canonical.deletedRecordIDs.map {
+                    webInspectorDOMNodeSchema.delete(id: DOMNode.ID(canonical: $0))
+                })
+                transaction.append(
+                    contentsOf: loadedStyles.keys.map(webInspectorCSSStylesSchema.delete)
+                )
+                transaction.setFeatureState(
+                    .synchronizing(generation: generation),
+                    for: .dom
+                )
+                _ = try await store.commit(transaction)
+                reducer = stagedDOM
+                loadedStyles.removeAll(keepingCapacity: true)
+                transition(to: .synchronizing(generation: generation))
+            }
+        } else {
+            await publish(.synchronizing(generation: generation))
+        }
+    }
+
+    private func invalidatePublishedDocument(
+        after boundary: UInt64,
+        route: WebInspectorFeatureEventScope
+    ) async throws {
+        guard binding(for: route) != nil else { return }
+        currentBindingScope = nil
+        cancelPickerHighlight()
+        invalidatePickerSelectionForDocumentChange()
+
+        guard let baseDOM = reducer,
+            let baseCSS = cssReducer,
+            let store
+        else {
+            throw WebInspectorFeatureError.bootstrap(
+                WebInspectorFailureDescription(
+                    code: "dom.document.owner",
+                    phase: "DOM.documentUpdated",
+                    message: "The active DOM binding had no canonical DOM/CSS reducer owner."
+                )
+            )
+        }
+
+        let oldStyleIDs = Array(loadedStyles.keys)
+        let result = try await withExclusiveStyleCommit {
+            try await store.commit(
+                updating: webInspectorDOMBindingTimelineKey,
+                initialValue: WebInspectorDOMBindingTimeline()
+            ) { timeline, _ in
+                let binding = try timeline.issue(after: boundary, route: route)
+                var stagedDOM = baseDOM
+                var stagedCSS = baseCSS
+                var canonical = try stagedDOM.invalidateDocument(binding)
+                _ = try stagedCSS.invalidateDocument(binding)
+                stagedDOM.reconcilePrimaryTree(
+                    rootID: nil,
+                    transaction: &canonical
+                )
+                var transaction = WebInspectorModelTransaction()
+                transaction.append(contentsOf: canonical.deletedRecordIDs.map {
+                    webInspectorDOMNodeSchema.delete(id: DOMNode.ID(canonical: $0))
+                })
+                transaction.append(contentsOf: oldStyleIDs.map {
+                    webInspectorCSSStylesSchema.delete(id: $0)
+                })
+                transaction.setFeatureState(
+                    .synchronizing(generation: route.generation),
+                    for: .dom
+                )
+                return (transaction, (stagedDOM, stagedCSS, binding))
+            }
+        }
+        reducer = result.output.0
+        cssReducer = result.output.1
+        currentBindingScope = result.output.2
+        loadedStyles.removeAll(keepingCapacity: true)
+        transition(to: .synchronizing(generation: route.generation))
     }
 
     // MARK: Helpers
@@ -1170,8 +1294,7 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
                     code: "dom.route.missing",
                     phase: "events",
                     method: event.method.rawValue
-                ),
-                resetPublishedDocument: false
+                )
             )
         }
         return WebInspectorFeatureEventScope(
@@ -1200,22 +1323,66 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         )
     }
 
-    private func invalidatesDOMBootstrap(
+    private func lastReset(
+        in events: [WebInspectorPageEvent<WebInspectorDOMWireEvent>]
+    ) -> (index: Int, generation: WebInspectorPageGeneration)? {
+        for (index, event) in events.enumerated().reversed() {
+            guard case let .reset(generation) = event else { continue }
+            return (
+                index,
+                WebInspectorPageGeneration(rawValue: generation.rawValue)
+            )
+        }
+        return nil
+    }
+
+    private func currentDocumentCuts(
+        in events: [WebInspectorPageEvent<WebInspectorDOMWireEvent>],
+        route: WebInspectorFeatureEventScope
+    ) throws -> [(index: Int, sequence: UInt64)] {
+        try events.enumerated().compactMap { index, event in
+            guard case let .event(_, .dom(routed)) = event,
+                case .documentUpdated = routed.value
+            else { return nil }
+            let eventRoute = try featureScope(from: routed)
+            guard eventRoute == route else { return nil }
+            return (index, routed.sequence.rawValue)
+        }
+    }
+
+    private func currentDocumentCut(
+        _ event: WebInspectorDOMWireEvent
+    ) throws -> (sequence: UInt64, route: WebInspectorFeatureEventScope)? {
+        guard case let .dom(routed) = event,
+            case .documentUpdated = routed.value
+        else { return nil }
+        let route = try featureScope(from: routed)
+        guard binding(for: route) != nil else { return nil }
+        return (routed.sequence.rawValue, route)
+    }
+
+    private func semanticBootstrapEvents(
+        after index: Int,
+        in events: [WebInspectorPageEvent<WebInspectorDOMWireEvent>]
+    ) -> [WebInspectorDOMWireEvent] {
+        events[events.index(after: index)...].compactMap(semanticBootstrapEvent)
+    }
+
+    private func semanticBootstrapEvent(
         _ event: WebInspectorPageEvent<WebInspectorDOMWireEvent>
-    ) -> Bool {
+    ) -> WebInspectorDOMWireEvent? {
+        guard case let .event(_, event) = event else { return nil }
         switch event {
-        case .reset:
-            return true
-        case let .event(_, .dom(event)):
-            if case .documentUpdated = event.value { return true }
-            return false
-        case let .event(_, .page(event)):
-            if case let .frameNavigated(frame) = event.value,
-                frame.parentID == nil
-            { return true }
-            return false
-        case .event:
-            return false
+        case let .dom(routed):
+            guard case .inspect = routed.value else { return nil }
+            return event
+        case let .inspector(routed):
+            guard case .inspect = routed.value else { return nil }
+            return event
+        case .css:
+            return event
+        case .page:
+            return nil
         }
     }
 
@@ -1368,10 +1535,16 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
                     operationID: operationID
                 )
             }
-        case let .selected(selection):
+        case let .selected(rawNodeID, binding):
             // The inspect event is backend proof that searching was enabled and
             // then returned to idle; a later command reply cannot supersede it.
-            finishPickerOperation(selection, operationID: operationID)
+            beginPickerNodeResolution(
+                rawNodeID: rawNodeID,
+                binding: binding,
+                operationID: operationID,
+                connection: connection,
+                publishState: false
+            )
         case let .resolveRemoteObject(remoteObjectID, binding):
             beginPickerResolution(
                 remoteObjectID: remoteObjectID,
@@ -1419,6 +1592,10 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
             )
         case let .resolvingSelection(task):
             task.cancel()
+            failPickerNodeWaiter(
+                operationID: operationID,
+                throwing: CancellationError()
+            )
             finishPickerOperation(
                 .failure(CancellationError()),
                 operationID: operationID
@@ -1453,22 +1630,15 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         operationID: UInt64,
         connection: WebInspectorFeatureConnection
     ) async {
-        var lastError: (any Error)?
-        for _ in 0..<2 {
+        let result: Result<Void, any Error>
+        do {
+            try await connection.page.dom.setInspectMode(enabled: false)
+            result = .success(())
+        } catch {
             guard !Task.isCancelled else { return }
-            do {
-                try await connection.page.dom.setInspectMode(enabled: false)
-                finishPickerDisable(.success(()), operationID: operationID)
-                return
-            } catch {
-                guard !Task.isCancelled else { return }
-                lastError = error
-            }
+            result = .failure(error)
         }
-        guard let lastError else {
-            preconditionFailure("The bounded picker disable loop must record a failure.")
-        }
-        finishPickerDisable(.failure(lastError), operationID: operationID)
+        finishPickerDisable(result, operationID: operationID)
     }
 
     private func finishPickerDisable(
@@ -1492,12 +1662,47 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
                 code: "picker.disable",
                 phase: "DOM.setInspectModeEnabled"
             )
-            let failure = WebInspectorFeatureError.command(description)
-            pickerState = .unavailable(failure)
-            pickerPublisher.publish(.unavailable(failure))
+            pickerState = .activeWithoutClient
+            pickerPublisher.publish(.active)
             operation.continuation.resume(
                 throwing: WebInspectorElementPickerError.disableFailed(description)
             )
+        }
+    }
+
+    private func beginPickerDisableWithoutClient(
+        connection: WebInspectorFeatureConnection
+    ) {
+        guard case .activeWithoutClient = pickerState else { return }
+        let task = Task {
+            await self.runPickerDisableWithoutClient(connection: connection)
+        }
+        pickerState = .disablingWithoutClient(task)
+        pickerPublisher.publish(.disabling)
+    }
+
+    private func runPickerDisableWithoutClient(
+        connection: WebInspectorFeatureConnection
+    ) async {
+        let succeeded: Bool
+        do {
+            try await connection.page.dom.setInspectMode(enabled: false)
+            succeeded = true
+        } catch is CancellationError {
+            return
+        } catch {
+            WebInspectorDataKitLog.error(
+                "DOM picker disable failed: \(String(describing: error))"
+            )
+            succeeded = false
+        }
+        guard case .disablingWithoutClient = pickerState else { return }
+        if succeeded {
+            pickerState = .idle
+            pickerPublisher.publish(.idle)
+        } else {
+            pickerState = .activeWithoutClient
+            pickerPublisher.publish(.active)
         }
     }
 
@@ -1506,26 +1711,82 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         binding: WebInspectorCanonicalDOMEventScope
     ) {
         guard case var .operation(operation) = pickerState else { return }
-        let result = pickerSelectionResult(
-            rawNodeID: rawNodeID,
-            binding: binding,
-            phase: "DOM.inspect"
-        )
 
         switch operation.phase {
         case let .enabling(task, .activate):
             operation.phase = .enabling(
                 task: task,
-                intent: .selected(result)
+                intent: .selected(rawNodeID, binding)
             )
             pickerState = .operation(operation)
             pickerPublisher.publish(.resolvingSelection)
         case .active:
-            pickerPublisher.publish(.resolvingSelection)
-            finishPickerOperation(result, operationID: operation.id)
+            guard let connection else {
+                preconditionFailure("An active picker must retain its feature connection.")
+            }
+            beginPickerNodeResolution(
+                rawNodeID: rawNodeID,
+                binding: binding,
+                operationID: operation.id,
+                connection: connection,
+                publishState: true
+            )
         case .enabling, .resolvingSelection, .disabling, .retiring:
             return
         }
+    }
+
+    private func beginPickerNodeResolution(
+        rawNodeID: DOM.Node.ID,
+        binding: WebInspectorCanonicalDOMEventScope,
+        operationID: UInt64,
+        connection: WebInspectorFeatureConnection,
+        publishState: Bool
+    ) {
+        guard case var .operation(operation) = pickerState,
+            operation.id == operationID
+        else { return }
+        let task = Task {
+            await self.runPickerNodeResolution(
+                rawNodeID: rawNodeID,
+                binding: binding,
+                operationID: operationID,
+                connection: connection
+            )
+        }
+        operation.phase = .resolvingSelection(task: task)
+        pickerState = .operation(operation)
+        if publishState {
+            pickerPublisher.publish(.resolvingSelection)
+        }
+    }
+
+    private func runPickerNodeResolution(
+        rawNodeID: DOM.Node.ID,
+        binding: WebInspectorCanonicalDOMEventScope,
+        operationID: UInt64,
+        connection: WebInspectorFeatureConnection
+    ) async {
+        let result: Result<DOMNode.ID, any Error>
+        do {
+            let nodeID = try await canonicalPickerNode(
+                rawNodeID: rawNodeID,
+                binding: binding,
+                operationID: operationID,
+                materializeMissingSubtree: true,
+                connection: connection
+            )
+            startPickerHighlight(
+                rawNodeID: rawNodeID,
+                binding: binding,
+                connection: connection
+            )
+            result = .success(nodeID)
+        } catch {
+            guard !Task.isCancelled else { return }
+            result = pickerResolutionFailure(error, phase: "DOM.inspect")
+        }
+        finishPickerOperation(result, operationID: operationID)
     }
 
     private func resolvePicker(
@@ -1594,47 +1855,230 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
             let rawNodeID = try await connection.page.dom.requestNode(
                 forRemoteObject: remoteObjectID
             )
-            result = pickerSelectionResult(
+            let nodeID = try await canonicalPickerNode(
                 rawNodeID: rawNodeID,
                 binding: binding,
-                phase: "DOM.requestNode"
+                operationID: operationID,
+                materializeMissingSubtree: false,
+                connection: connection
             )
+            startPickerHighlight(
+                rawNodeID: rawNodeID,
+                binding: binding,
+                connection: connection
+            )
+            result = .success(nodeID)
         } catch {
             guard !Task.isCancelled else { return }
-            result = .failure(
-                WebInspectorElementPickerError.selectionResolutionFailed(
-                    webInspectorFailureDescription(
-                        error,
-                        code: "picker.resolve",
-                        phase: "DOM.requestNode"
-                    )
-                )
-            )
+            result = pickerResolutionFailure(error, phase: "DOM.requestNode")
         }
         finishPickerOperation(result, operationID: operationID)
     }
 
-    private func pickerSelectionResult(
+    private func canonicalPickerNode(
         rawNodeID: DOM.Node.ID,
         binding: WebInspectorCanonicalDOMEventScope,
+        operationID: UInt64,
+        materializeMissingSubtree: Bool,
+        connection: WebInspectorFeatureConnection
+    ) async throws -> DOMNode.ID {
+        if let nodeID = try availablePickerNode(rawNodeID, binding: binding) {
+            return nodeID
+        }
+        if materializeMissingSubtree {
+            guard let rootID = reducer?.primaryDocumentRootID,
+                currentBindingScope == binding,
+                rootID.documentScope == activeDocumentScope
+            else { throw WebInspectorCommandError.staleIdentifier }
+            try await connection.page.dom.requestChildNodes(
+                rootID.rawNodeID,
+                depth: -1
+            )
+            try Task.checkCancellation()
+            if let nodeID = try availablePickerNode(rawNodeID, binding: binding) {
+                return nodeID
+            }
+        }
+        return try await waitForPickerNode(
+            rawNodeID,
+            binding: binding,
+            operationID: operationID
+        )
+    }
+
+    private func availablePickerNode(
+        _ rawNodeID: DOM.Node.ID,
+        binding: WebInspectorCanonicalDOMEventScope
+    ) throws -> DOMNode.ID? {
+        guard currentBindingScope == binding,
+            let reducer
+        else { throw WebInspectorCommandError.staleIdentifier }
+        return try reducer.nodeID(for: rawNodeID, in: binding).map {
+            DOMNode.ID(canonical: $0)
+        }
+    }
+
+    private func waitForPickerNode(
+        _ rawNodeID: DOM.Node.ID,
+        binding: WebInspectorCanonicalDOMEventScope,
+        operationID: UInt64
+    ) async throws -> DOMNode.ID {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                do {
+                    if let nodeID = try availablePickerNode(
+                        rawNodeID,
+                        binding: binding
+                    ) {
+                        continuation.resume(returning: nodeID)
+                        return
+                    }
+                    precondition(
+                        pickerNodeWaiter == nil,
+                        "Only one picker node resolution may await canonical DOM commit."
+                    )
+                    pickerNodeWaiter = PickerNodeWaiter(
+                        operationID: operationID,
+                        rawNodeID: rawNodeID,
+                        binding: binding,
+                        continuation: continuation
+                    )
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        } onCancel: {
+            Task {
+                await self.failPickerNodeWaiter(
+                    operationID: operationID,
+                    throwing: CancellationError()
+                )
+            }
+        }
+    }
+
+    private func resolvePickerNodeWaiterIfAvailable() {
+        guard let waiter = pickerNodeWaiter else { return }
+        do {
+            guard let nodeID = try availablePickerNode(
+                waiter.rawNodeID,
+                binding: waiter.binding
+            ) else { return }
+            pickerNodeWaiter = nil
+            waiter.continuation.resume(returning: nodeID)
+        } catch {
+            pickerNodeWaiter = nil
+            waiter.continuation.resume(throwing: error)
+        }
+    }
+
+    private func failPickerNodeWaiter(
+        operationID: UInt64,
+        throwing error: any Error
+    ) {
+        guard let waiter = pickerNodeWaiter,
+            waiter.operationID == operationID
+        else { return }
+        pickerNodeWaiter = nil
+        waiter.continuation.resume(throwing: error)
+    }
+
+    private func pickerResolutionFailure(
+        _ error: any Error,
         phase: String
     ) -> Result<DOMNode.ID, any Error> {
-        do {
-            guard let reducer,
-                let canonical = try reducer.nodeID(for: rawNodeID, in: binding)
-            else { throw WebInspectorCommandError.staleIdentifier }
-            return .success(DOMNode.ID(canonical: canonical))
-        } catch {
-            return .failure(
-                WebInspectorElementPickerError.selectionResolutionFailed(
-                    webInspectorFailureDescription(
-                        error,
-                        code: "picker.resolve",
-                        phase: phase
-                    )
+        .failure(
+            WebInspectorElementPickerError.selectionResolutionFailed(
+                webInspectorFailureDescription(
+                    error,
+                    code: "picker.resolve",
+                    phase: phase
                 )
             )
+        )
+    }
+
+    private func invalidatePickerSelectionForDocumentChange() {
+        guard case let .operation(operation) = pickerState else { return }
+        let error = WebInspectorElementPickerError.selectionResolutionFailed(
+            WebInspectorFailureDescription(
+                code: "picker.document.changed",
+                phase: "DOM.documentUpdated",
+                message: "The inspected node belonged to the previous document."
+            )
+        )
+        switch operation.phase {
+        case let .enabling(task, intent):
+            switch intent {
+            case .selected, .resolveRemoteObject:
+                task.cancel()
+                failPickerNodeWaiter(
+                    operationID: operation.id,
+                    throwing: error
+                )
+                finishPickerOperation(.failure(error), operationID: operation.id)
+            case .activate, .cancelAfterEnable:
+                return
+            }
+        case let .resolvingSelection(task):
+            task.cancel()
+            failPickerNodeWaiter(
+                operationID: operation.id,
+                throwing: error
+            )
+            finishPickerOperation(.failure(error), operationID: operation.id)
+        case .active, .disabling, .retiring:
+            return
         }
+    }
+
+    private func startPickerHighlight(
+        rawNodeID: DOM.Node.ID,
+        binding: WebInspectorCanonicalDOMEventScope,
+        connection: WebInspectorFeatureConnection
+    ) {
+        cancelPickerHighlight()
+        let taskID = UUID()
+        pickerHighlightTaskID = taskID
+        pickerHighlightTask = Task {
+            await self.runPickerHighlight(
+                rawNodeID: rawNodeID,
+                binding: binding,
+                connection: connection,
+                taskID: taskID
+            )
+        }
+    }
+
+    private func runPickerHighlight(
+        rawNodeID: DOM.Node.ID,
+        binding: WebInspectorCanonicalDOMEventScope,
+        connection: WebInspectorFeatureConnection,
+        taskID: UUID
+    ) async {
+        defer { finishPickerHighlight(taskID: taskID) }
+        guard currentBindingScope == binding else { return }
+        do {
+            try await connection.page.dom.highlightNode(rawNodeID)
+        } catch is CancellationError {
+            return
+        } catch {
+            WebInspectorDataKitLog.error(
+                "DOM picker highlight restore failed: \(String(describing: error))"
+            )
+        }
+    }
+
+    private func finishPickerHighlight(taskID: UUID) {
+        guard pickerHighlightTaskID == taskID else { return }
+        pickerHighlightTask = nil
+        pickerHighlightTaskID = nil
+    }
+
+    private func cancelPickerHighlight() {
+        pickerHighlightTask?.cancel()
+        pickerHighlightTask = nil
+        pickerHighlightTaskID = nil
     }
 
     private func finishPickerOperation(
@@ -1653,20 +2097,35 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         with error: any Error,
         disableBackend: Bool
     ) async {
-        guard case var .operation(operation) = pickerState else {
+        switch pickerState {
+        case .idle:
             pickerState = .idle
             pickerPublisher.publish(.idle)
             return
+        case .activeWithoutClient:
+            if disableBackend, let connection {
+                _ = try? await connection.page.dom.setInspectMode(enabled: false)
+            }
+            pickerState = .idle
+            pickerPublisher.publish(.idle)
+            return
+        case let .disablingWithoutClient(task):
+            task.cancel()
+            pickerState = .idle
+            pickerPublisher.publish(.idle)
+            return
+        case var .operation(operation):
+            operation.phase.task?.cancel()
+            failPickerNodeWaiter(operationID: operation.id, throwing: error)
+            operation.phase = .retiring
+            pickerState = .operation(operation)
+            if disableBackend, let connection {
+                // Connection teardown is the physical cleanup authority. Failure is
+                // terminal with that connection and cannot make the picker reusable.
+                _ = try? await connection.page.dom.setInspectMode(enabled: false)
+            }
+            finishPickerOperation(.failure(error), operationID: operation.id)
         }
-        operation.phase.task?.cancel()
-        operation.phase = .retiring
-        pickerState = .operation(operation)
-        if disableBackend, let connection {
-            // Connection teardown is the physical cleanup authority. Failure is
-            // terminal with that connection and cannot make the picker reusable.
-            _ = try? await connection.page.dom.setInspectMode(enabled: false)
-        }
-        finishPickerOperation(.failure(error), operationID: operation.id)
     }
 }
 
@@ -1700,7 +2159,6 @@ public final class WebInspectorDOM: WebInspectorRetryableFeatureHandle, Sendable
     public func retry() async { await owner.retry() }
     public func pickElement() async throws -> DOMNode.ID { try await owner.pickElement() }
     public func cancelElementPicker() async { await owner.cancelElementPicker() }
-    public func retryElementPicker() async { await owner.retryElementPicker() }
     public func requestChildren(of id: DOMNode.ID, depth: Int = 1) async throws {
         try await owner.requestChildren(of: id, depth: depth)
     }

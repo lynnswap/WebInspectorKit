@@ -58,8 +58,8 @@ package enum CanonicalConsoleRuntimeStoreError: Error, Equatable, Sendable {
     )
     case nonmonotonicNavigationEpoch(
         semanticTargetID: WebInspectorTarget.ID,
-        current: WebInspectorPageGeneration,
-        proposed: WebInspectorPageGeneration
+        current: WebInspectorNavigationEpoch,
+        proposed: WebInspectorNavigationEpoch
     )
 }
 

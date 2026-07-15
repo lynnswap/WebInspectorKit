@@ -1,20 +1,19 @@
 # WebKit Version Mapping Notes
 
-Last checked: 2026-07-08.
+Last checked: 2026-07-15.
 
 This note records how iOS WebKit framework versions map back to public WebKit
 source refs.
 
 ## Local Reference Checkouts
 
-The `reference/` directory is intentionally ignored by Git. It contains
-shared/sparse clones so the WebKit object store is not duplicated:
+The current audit used the read-only sources under `/Users/kn/Dev/WebKit`:
 
-| Path | Ref | Purpose |
-| --- | --- | --- |
-| `reference/WebKit-iOS18.5-7621.2.5.10.10` | `WebKit-7621.2.5.10.10` / `4bdf67c5c75` | Known iOS 18.5-era public source drop. |
-| `reference/WebKit-iOS26.5-7624.2.5.10-branch` | `safari-7624.2.5.10-branch` / `eafd2a9b9776` | Public source branch with `Version.xcconfig` matching WebKit source version `624.2.5.10.4`. |
-| `reference/WebKit-main` | `main` / `9d2c43b4dc9d` | Current upstream reference. |
+| Path | Ref | WebInspectorUI | Purpose |
+| --- | --- | --- | --- |
+| `WebKit-iOS18.5-7621.2.5.10.10` | `WebKit-7621.2.5.10.10` / `4bdf67c5c75` | Absent from the reduced checkout | Known iOS 18.5-era version and platform configuration. Its local Git alternates path is stale, but the checked-out source files remain readable. |
+| `WebKit-iOS26.5-7624.2.5.10-branch` | `safari-7624.2.5.10-branch` / `eafd2a9b9776` | Absent from the reduced checkout | Public source branch whose `Version.xcconfig` matches WebKit source version `624.2.5.10.4`. |
+| `WebKit_latest` | `main` / `b42421de79d1` | Complete | Current upstream source plus the historical release tags used for frontend behavior comparison. |
 
 The sparse checkout includes:
 
@@ -28,6 +27,23 @@ The sparse checkout includes:
 - `Source/JavaScriptCore/inspector/InspectorBackendDispatcher.*`
 - `Source/WTF/wtf/Vector.h`
 - `Source/WTF/wtf/WeakRef.h`
+
+Because the two version-specific directories do not contain
+`Source/WebInspectorUI`, frontend behavior was compared in the complete object
+store at these exact refs:
+
+| Product source | Ref | Commit |
+| --- | --- | --- |
+| Safari 17.6 / iOS 17.6 | `releases/Apple/Safari-17.6-iOS-17.6` | `91977c6e5b061969e921e166d6567b8f84a18f70` |
+| Safari 18 / iOS 18.0 | `releases/Apple/Safari-18-iOS-18.0` | `f3bebebccb505852506f40ffe2384268bec2c29d` |
+| Current upstream | `main` | `b42421de79d1c2daf9b4c26119113cf9926f6260` |
+
+Across all three refs, `NetworkTabContentView` directly constructs
+`NetworkTableContentView`, `NetworkManager.initializeTarget` directly enables
+the Network agent, and there is no Network-specific retry presentation or
+frontend teardown path. A resource-tree error is logged and returned from the
+Network owner; it does not close the inspector. See `Docs/Architecture.md` for
+the resulting feature-local WebInspectorKit lifecycle contract.
 
 ## Mapping Rule
 

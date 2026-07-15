@@ -41,6 +41,9 @@ package actor ConnectionCore {
 
     private struct ScopeActivation: Sendable {
         let id: UUID
+        let scopeID: WebInspectorOrderedScopeID
+        let targetID: ProtocolTarget.ID
+        let generation: WebInspectorPage.Generation
         let task: Task<Void, Never>
     }
 
@@ -159,6 +162,7 @@ package actor ConnectionCore {
         route endpointRoute: WebInspectorRoute,
         scopeID: WebInspectorOrderedScopeID
     ) async throws -> WebInspectorScopedReply<Result> {
+        try await joinScopeActivations(scopeID)
         guard var scope = scopes.entries[scopeID], scope.deliveryIsActive else {
             throw WebInspectorProxyError.replyBoundaryUnavailable
         }
@@ -263,6 +267,10 @@ package actor ConnectionCore {
     package func closeScope(_ id: WebInspectorOrderedScopeID) async {
         guard let entry = scopes.entries.removeValue(forKey: id) else { return }
         entry.sink.finish(nil)
+        let activations = scopeActivations.values
+            .filter { $0.scopeID == id }
+            .map(\.task)
+        for activation in activations { activation.cancel() }
         for lease in entry.leases.reversed() {
             await release(lease)
         }
@@ -657,29 +665,127 @@ package actor ConnectionCore {
         scopeID: WebInspectorOrderedScopeID,
         targetID: ProtocolTarget.ID
     ) {
+        guard let scope = scopes.entries[scopeID],
+              scope.deliveryIsActive,
+              scope.selectedTargets.contains(targetID) else {
+            return
+        }
+        let scheduledGeneration = generation
+        guard !scopeActivations.values.contains(where: {
+            $0.scopeID == scopeID
+                && $0.targetID == targetID
+                && $0.generation == scheduledGeneration
+        }) else {
+            return
+        }
         let activationID = UUID()
         let task = Task { [weak self] in
             guard let self else { return }
-            do {
-                try await self.activateScopeTarget(scopeID: scopeID, targetID: targetID)
-            } catch {
-                await self.failScopeDelivery(scopeID, error: error)
-            }
-            await self.removeScopeActivation(activationID)
+            await self.runScopeActivation(
+                activationID,
+                scopeID: scopeID,
+                targetID: targetID,
+                scheduledGeneration: scheduledGeneration
+            )
         }
-        scopeActivations[activationID] = ScopeActivation(id: activationID, task: task)
+        scopeActivations[activationID] = ScopeActivation(
+            id: activationID,
+            scopeID: scopeID,
+            targetID: targetID,
+            generation: scheduledGeneration,
+            task: task
+        )
     }
 
-    private func activateScopeTarget(
+    private func runScopeActivation(
+        _ activationID: UUID,
         scopeID: WebInspectorOrderedScopeID,
-        targetID: ProtocolTarget.ID
-    ) async throws {
-        guard let entry = scopes.entries[scopeID] else { return }
-        try await acquireCapabilities(entry.descriptorCapabilities, for: targetID, scopeID: scopeID)
+        targetID: ProtocolTarget.ID,
+        scheduledGeneration: WebInspectorPage.Generation
+    ) async {
+        defer { removeScopeActivation(activationID) }
+        do {
+            try Task.checkCancellation()
+            guard let entry = activeScope(
+                scopeID,
+                selecting: targetID,
+                generation: scheduledGeneration
+            ) else {
+                return
+            }
+            try await acquireCapabilities(
+                entry.descriptorCapabilities,
+                for: targetID,
+                scopeID: scopeID,
+                scheduledGeneration: scheduledGeneration
+            )
+        } catch {
+            guard scopeActivationIsCurrent(
+                activationID,
+                scopeID: scopeID,
+                targetID: targetID,
+                generation: scheduledGeneration
+            ) else {
+                return
+            }
+            failScopeDelivery(scopeID, error: error)
+        }
     }
 
     private func removeScopeActivation(_ id: UUID) {
         scopeActivations.removeValue(forKey: id)
+    }
+
+    private func joinScopeActivations(
+        _ scopeID: WebInspectorOrderedScopeID
+    ) async throws {
+        while true {
+            try Task.checkCancellation()
+            guard let scope = scopes.entries[scopeID], scope.deliveryIsActive else {
+                throw WebInspectorProxyError.replyBoundaryUnavailable
+            }
+            let activations = scopeActivations.values
+                .filter { $0.scopeID == scopeID }
+                .map(\.task)
+            guard !activations.isEmpty else { return }
+            for activation in activations {
+                await activation.value
+            }
+        }
+    }
+
+    private func activeScope(
+        _ scopeID: WebInspectorOrderedScopeID,
+        selecting targetID: ProtocolTarget.ID,
+        generation expectedGeneration: WebInspectorPage.Generation
+    ) -> ConnectionOrderedScopeRegistry.Entry? {
+        guard generation == expectedGeneration,
+              let scope = scopes.entries[scopeID],
+              scope.deliveryIsActive,
+              scope.selectedTargets.contains(targetID),
+              targets.record(for: targetID) != nil else {
+            return nil
+        }
+        return scope
+    }
+
+    private func scopeActivationIsCurrent(
+        _ activationID: UUID,
+        scopeID: WebInspectorOrderedScopeID,
+        targetID: ProtocolTarget.ID,
+        generation expectedGeneration: WebInspectorPage.Generation
+    ) -> Bool {
+        guard let activation = scopeActivations[activationID],
+              activation.scopeID == scopeID,
+              activation.targetID == targetID,
+              activation.generation == expectedGeneration else {
+            return false
+        }
+        return activeScope(
+            scopeID,
+            selecting: targetID,
+            generation: expectedGeneration
+        ) != nil
     }
 
     private func failScopeDelivery(_ id: WebInspectorOrderedScopeID, error: any Error) {
@@ -692,7 +798,8 @@ package actor ConnectionCore {
     private func acquireCapabilities(
         _ descriptors: [WebInspectorDomainCapabilityDescriptor],
         for selectedTargetID: ProtocolTarget.ID,
-        scopeID: WebInspectorOrderedScopeID
+        scopeID: WebInspectorOrderedScopeID,
+        scheduledGeneration: WebInspectorPage.Generation? = nil
     ) async throws {
         var visiting: Set<ConnectionCapabilityKey> = []
         var acquired: Set<ConnectionCapabilityKey> = []
@@ -701,6 +808,7 @@ package actor ConnectionCore {
                 descriptor,
                 selectedTargetID: selectedTargetID,
                 scopeID: scopeID,
+                scheduledGeneration: scheduledGeneration,
                 visiting: &visiting,
                 acquired: &acquired
             )
@@ -711,9 +819,15 @@ package actor ConnectionCore {
         _ descriptor: WebInspectorDomainCapabilityDescriptor,
         selectedTargetID: ProtocolTarget.ID,
         scopeID: WebInspectorOrderedScopeID,
+        scheduledGeneration: WebInspectorPage.Generation?,
         visiting: inout Set<ConnectionCapabilityKey>,
         acquired: inout Set<ConnectionCapabilityKey>
     ) async throws {
+        try requireActiveScope(
+            scopeID,
+            selecting: selectedTargetID,
+            scheduledGeneration: scheduledGeneration
+        )
         let agentTargetID = try resolveAgent(descriptor.agentResolution, selected: selectedTargetID)
         let key = ConnectionCapabilityKey(
             agentTargetID: agentTargetID,
@@ -734,10 +848,17 @@ package actor ConnectionCore {
                 dependency,
                 selectedTargetID: selectedTargetID,
                 scopeID: scopeID,
+                scheduledGeneration: scheduledGeneration,
                 visiting: &visiting,
                 acquired: &acquired
             )
         }
+
+        try requireActiveScope(
+            scopeID,
+            selecting: selectedTargetID,
+            scheduledGeneration: scheduledGeneration
+        )
 
         if let agentTargetID,
            let advertised = targets.record(for: agentTargetID)?.advertisedDomains,
@@ -760,6 +881,11 @@ package actor ConnectionCore {
 
         do {
             try await ensureCapabilityActive(key)
+            try requireActiveScope(
+                scopeID,
+                selecting: selectedTargetID,
+                scheduledGeneration: scheduledGeneration
+            )
             acquired.insert(key)
         } catch {
             if var current = capabilities.entries[key] {
@@ -767,6 +893,22 @@ package actor ConnectionCore {
                 capabilities.set(current, for: key)
             }
             throw error
+        }
+    }
+
+    private func requireActiveScope(
+        _ scopeID: WebInspectorOrderedScopeID,
+        selecting targetID: ProtocolTarget.ID,
+        scheduledGeneration: WebInspectorPage.Generation?
+    ) throws {
+        try Task.checkCancellation()
+        guard let scope = scopes.entries[scopeID],
+              scope.deliveryIsActive,
+              scope.selectedTargets.contains(targetID) else {
+            throw CancellationError()
+        }
+        if let scheduledGeneration, generation != scheduledGeneration {
+            throw CancellationError()
         }
     }
 

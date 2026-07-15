@@ -230,9 +230,8 @@ public actor WebInspectorDataKitTestRuntime {
         /// The enabled feature represented by this boundary.
         public let featureID: WebInspectorFeatureID
 
-        /// The feature's captured terminal boundary state. Retryable features
-        /// may be `unavailable`; required Network failure instead fails the
-        /// connection and throws from the boundary operation.
+        /// The feature's captured terminal boundary state. Any enabled feature
+        /// may be `unavailable` without ending sibling features or attachment.
         public let state: WebInspectorFeatureState
 
         fileprivate init(
@@ -248,10 +247,9 @@ public actor WebInspectorDataKitTestRuntime {
     ///
     /// Every listed feature has reached its supported boundary state when
     /// captured. A replacement advances the generation of features that were
-    /// ready; already-unavailable retryable features remain terminal without
-    /// an implicit retry. Required Network failure throws
-    /// `RuntimeError.connectionFailed` after connection teardown instead of
-    /// producing a feature boundary.
+    /// ready; already-unavailable features remain terminal without an implicit
+    /// retry. Only physical connection failure throws
+    /// `RuntimeError.connectionFailed` instead of producing a feature boundary.
     /// This snapshot does not imply that a consumer's ModelContext or
     /// fetched-results controller has applied that revision.
     public struct BoundarySnapshot: Equatable, Sendable {
@@ -290,8 +288,8 @@ public actor WebInspectorDataKitTestRuntime {
     private var isInputOperationActive: Bool
 
     /// Starts the production path and waits for each enabled feature to reach
-    /// its supported boundary state. Required Network failure joins connection
-    /// teardown and throws `RuntimeError.connectionFailed`.
+    /// its supported boundary state. Physical connection failure joins teardown
+    /// and throws `RuntimeError.connectionFailed`.
     public nonisolated static func start(
         scenario: Scenario = .init()
     ) async throws -> WebInspectorDataKitTestRuntime {
@@ -332,8 +330,7 @@ public actor WebInspectorDataKitTestRuntime {
     }
 
     /// Waits until all enabled features reach their supported boundary state.
-    /// Required Network failure throws `RuntimeError.connectionFailed` after
-    /// connection teardown.
+    /// Physical connection failure throws `RuntimeError.connectionFailed`.
     ///
     /// This boundary stops at feature owners. A consumer that needs context or
     /// query completion waits on its own fetched-results update sequence.

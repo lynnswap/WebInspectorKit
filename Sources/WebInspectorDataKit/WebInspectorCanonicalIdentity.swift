@@ -40,6 +40,28 @@ package struct WebInspectorConsoleBindingGeneration: RawRepresentable, Hashable,
     package init(rawValue: UInt64) { self.rawValue = rawValue }
 }
 
+/// Identifies one committed loader lifetime within a semantic target.
+///
+/// Page generation changes only when ProxyKit replaces the inspected target.
+/// A same-target navigation advances this value without changing page
+/// generation or replaying domain capabilities.
+package struct WebInspectorNavigationEpoch:
+    RawRepresentable, Hashable, Comparable, Sendable
+{
+    package let rawValue: UInt64
+
+    package init(rawValue: UInt64) {
+        self.rawValue = rawValue
+    }
+
+    package static func < (
+        lhs: WebInspectorNavigationEpoch,
+        rhs: WebInspectorNavigationEpoch
+    ) -> Bool {
+        lhs.rawValue < rhs.rawValue
+    }
+}
+
 /// Canonical storage wrapped by `RuntimeContext.ID`.
 ///
 /// WebKit allocates execution-context identifiers in one physical Runtime
@@ -111,12 +133,12 @@ package enum CanonicalNetworkRequestOrigin: Equatable, Sendable {
 /// keeps its exact origin identity without borrowing another target's epoch.
 package struct CanonicalNetworkRegisteredTargetAuthority: Equatable, Hashable, Sendable {
     package let targetID: WebInspectorTarget.ID
-    package let navigationEpoch: WebInspectorPageGeneration
+    package let navigationEpoch: WebInspectorNavigationEpoch
     package let domBindingEpoch: WebInspectorDOMBindingScopeID?
 
     package init(
         targetID: WebInspectorTarget.ID,
-        navigationEpoch: WebInspectorPageGeneration,
+        navigationEpoch: WebInspectorNavigationEpoch,
         domBindingEpoch: WebInspectorDOMBindingScopeID?
     ) {
         self.targetID = targetID
@@ -142,7 +164,7 @@ package struct WebInspectorCanonicalNetworkEventScope: Equatable, Sendable {
         origin.semanticTargetID
     }
 
-    package var navigationEpoch: WebInspectorPageGeneration? {
+    package var navigationEpoch: WebInspectorNavigationEpoch? {
         targetAuthority?.navigationEpoch
     }
 
@@ -158,7 +180,7 @@ package struct WebInspectorCanonicalNetworkEventScope: Equatable, Sendable {
         agentTargetID = modelScope.agentTargetID
         targetAuthority = CanonicalNetworkRegisteredTargetAuthority(
             targetID: modelScope.semanticTargetID,
-            navigationEpoch: modelScope.generation,
+            navigationEpoch: WebInspectorNavigationEpoch(rawValue: 0),
             domBindingEpoch: nil
         )
         frameID = nil
@@ -429,7 +451,7 @@ package struct CanonicalNetworkOpaqueInitiatorKey: Hashable, Sendable {
         pageGeneration: WebInspectorPageGeneration,
         semanticTargetID: WebInspectorTarget.ID,
         agentTargetID: WebInspectorTarget.ID,
-        navigationEpoch: WebInspectorPageGeneration,
+        navigationEpoch: WebInspectorNavigationEpoch,
         rawNodeID: DOM.Node.ID
     ) {
         self.init(

@@ -346,7 +346,7 @@ package struct CanonicalNetworkRequestMembership: Equatable, Sendable {
         origin.semanticTargetID
     }
 
-    package var navigationEpoch: WebInspectorPageGeneration? {
+    package var navigationEpoch: WebInspectorNavigationEpoch? {
         targetAuthority?.navigationEpoch
     }
 
@@ -378,11 +378,12 @@ package struct CanonicalNetworkRequestMembership: Equatable, Sendable {
     package init(
         semanticTargetID: WebInspectorTarget.ID,
         agentTargetID: WebInspectorTarget.ID,
-        navigationEpoch: WebInspectorPageGeneration,
+        pageGeneration: WebInspectorPageGeneration,
+        navigationEpoch: WebInspectorNavigationEpoch,
         domBindingEpoch: WebInspectorDOMBindingScopeID?
     ) {
         self.init(
-            pageGeneration: navigationEpoch,
+            pageGeneration: pageGeneration,
             agentTargetID: agentTargetID,
             origin: .eventTarget(semanticTargetID),
             targetAuthority: CanonicalNetworkRegisteredTargetAuthority(

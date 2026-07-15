@@ -48,7 +48,7 @@ public struct Page: Sendable, WebInspectorEventDomainHandle {
     public struct Frame: Sendable {
         public let id: FrameID
         public let parentID: FrameID?
-        public let loaderID: String?
+        public let loaderID: String
         public let name: String?
         public let url: String
         public let securityOrigin: String?
@@ -57,7 +57,7 @@ public struct Page: Sendable, WebInspectorEventDomainHandle {
         public init(
             id: FrameID,
             parentID: FrameID?,
-            loaderID: String?,
+            loaderID: String,
             name: String?,
             url: String,
             securityOrigin: String?,

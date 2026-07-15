@@ -56,7 +56,7 @@ struct CanonicalNetworkTestFixture {
             origin: .eventTarget(semanticTargetID),
             targetAuthority: CanonicalNetworkRegisteredTargetAuthority(
                 targetID: semanticTargetID,
-                navigationEpoch: WebInspectorPageGeneration(
+                navigationEpoch: WebInspectorNavigationEpoch(
                     rawValue: navigationEpoch
                 ),
                 domBindingEpoch: domBindingEpoch.map {

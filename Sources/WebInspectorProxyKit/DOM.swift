@@ -51,10 +51,11 @@ public struct DOM: Sendable, WebInspectorEventDomainHandle {
         try await endpoint.dispatch(DOMWireCoding.requestChildNodes(id, depth: depth))
     }
 
-    /// Resolves a runtime object through the current page DOM agent.
+    /// Resolves a runtime object through the DOM agent that owns it.
     ///
-    /// WebKit does not implement this command for frame targets. The returned
-    /// identity therefore belongs to the unscoped current-page DOM namespace.
+    /// An unscoped object is resolved by the current-page target. A
+    /// target-scoped object is resolved by that target, and the returned node
+    /// identity preserves the decoded target scope.
     public func requestNode(forRemoteObject objectID: Runtime.RemoteObject.ID) async throws -> Node.ID {
         try await endpoint.dispatch(DOMWireCoding.requestNode(objectID))
     }
