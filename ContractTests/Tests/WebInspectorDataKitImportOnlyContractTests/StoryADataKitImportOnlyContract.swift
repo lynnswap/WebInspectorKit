@@ -89,7 +89,6 @@ private actor DataKitImportOnlyActor {
         _ = modelContainer.dom.stateUpdates
         _ = modelContainer.dom.elementPickerState
         _ = modelContainer.dom.elementPickerStateUpdates
-        await modelContainer.dom.retry()
         _ = try await modelContainer.dom.requestChildren(of: nodeID, depth: 1)
         _ = try await modelContainer.dom.setAttribute(
             "data-contract",
@@ -119,12 +118,10 @@ private actor DataKitImportOnlyActor {
 
         _ = modelContainer.console.state
         _ = modelContainer.console.stateUpdates
-        await modelContainer.console.retry()
         try await modelContainer.console.clear()
 
         _ = modelContainer.runtime.state
         _ = modelContainer.runtime.stateUpdates
-        await modelContainer.runtime.retry()
         let scope = await modelContainer.runtime.makeObjectScope()
         _ = try await scope.evaluate("1 + 1", in: runtimeContextID)
         _ = try await scope.properties(of: object)

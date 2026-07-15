@@ -1,8 +1,10 @@
 # WebInspectorKit architecture
 
-Status: Proposed design gate
+Status: Implemented (fourth-generation architecture)
 
-Baseline: 765692a1bea093a99b79fa45e90794455a7883ac
+Design baseline: 765692a1bea093a99b79fa45e90794455a7883ac
+
+Implementation baseline: 38f5170721bc0dc573120604cd1e6d0a199582d8
 
 Scope: WebInspectorProxyKit, WebInspectorDataKitMacros,
 WebInspectorDataKit, WebInspectorSwiftUI, and the built-in UIKit inspector
@@ -38,6 +40,14 @@ The migration has six structural decisions:
 
 This is a breaking, one-pass migration. The branch does not retain deprecated
 wrappers or a second data path.
+
+## Deferred design issue
+
+`WebInspectorProxyOwnership.shared.claim` still enforces one-container-per-proxy
+ownership through a process-global runtime registry. A follow-up must make this
+exclusivity structural or type-level and remove the duplicate claim/release
+lifecycle. This does not reopen feature or transport ownership and must not add
+recovery, retry, or a second production data path.
 
 ## Consumer stories
 
