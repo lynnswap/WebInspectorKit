@@ -151,14 +151,17 @@ package final class NetworkTextPreviewCoordinator {
     }
 
     private func cancelPending() {
+        let hadPendingPreparation = task != nil
         generation += 1
         task?.cancel()
         task = nil
         pendingInput = nil
 #if DEBUG
-        let preparationGateForTesting = preparationGateForTesting
-        Task {
-            await preparationGateForTesting.cancelSuspension()
+        if hadPendingPreparation {
+            let preparationGateForTesting = preparationGateForTesting
+            Task {
+                await preparationGateForTesting.cancelSuspension()
+            }
         }
 #endif
     }
