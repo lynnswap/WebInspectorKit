@@ -6261,6 +6261,196 @@ func cssInvalidationDuringStyleFetchIsNotOverwrittenByStaleResult() async throws
 
 @MainActor
 @Test
+func cssInspectorBaselineIsSharedAcrossNodesAndSurvivesStaleLoads() throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let firstStyles = CSSStyles(
+        nodeID: DOMNode.ID(DOM.Node.ID("shared-baseline-first")),
+        modelContext: context
+    )
+    let secondStyles = CSSStyles(
+        nodeID: DOMNode.ID(DOM.Node.ID("shared-baseline-second")),
+        modelContext: context
+    )
+    let initialStyle = cssBaselineStyle(
+        id: CSS.Style.ID("shared-baseline-style"),
+        properties: [("color", "red")]
+    )
+    for styles in [firstStyles, secondStyles] {
+        styles.load(
+            matchedStyles: cssMatchedStyles([initialStyle]),
+            inlineStyles: .init(),
+            computedProperties: []
+        )
+    }
+
+    let firstColor = try #require(firstStyles.sections.first?.style.properties.first)
+    let editedStyle = cssBaselineStyle(
+        id: initialStyle.id,
+        properties: [("color", "blue")]
+    )
+    firstStyles.applySetStyleText(result: editedStyle, for: firstColor.id)
+
+    secondStyles.load(
+        matchedStyles: cssMatchedStyles([editedStyle]),
+        inlineStyles: .init(),
+        computedProperties: []
+    )
+    #expect(secondStyles.sections.first?.style.properties.first?.isModifiedByInspector == true)
+
+    // A delayed response for another matching node is observational only. It
+    // cannot prove that the shared declaration was restored.
+    secondStyles.load(
+        matchedStyles: cssMatchedStyles([initialStyle]),
+        inlineStyles: .init(),
+        computedProperties: []
+    )
+    firstStyles.load(
+        matchedStyles: cssMatchedStyles([editedStyle]),
+        inlineStyles: .init(),
+        computedProperties: []
+    )
+    #expect(firstStyles.sections.first?.style.properties.first?.isModifiedByInspector == true)
+}
+
+@MainActor
+@Test
+func cssInspectorBaselineRekeysOnlyToUniqueSemanticDeclarationAfterInsertion() throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let styles = CSSStyles(
+        nodeID: DOMNode.ID(DOM.Node.ID("topology-baseline-node")),
+        modelContext: context
+    )
+    let initialStyle = cssBaselineStyle(
+        id: CSS.Style.ID("topology-baseline-style"),
+        properties: [("inset", "0"), ("height", "100%")]
+    )
+    styles.load(
+        matchedStyles: cssMatchedStyles([initialStyle]),
+        inlineStyles: .init(),
+        computedProperties: []
+    )
+
+    let initialProperties = try #require(styles.sections.first?.style.properties)
+    let inset = try #require(initialProperties.first { $0.name == "inset" })
+    let height = try #require(initialProperties.first { $0.name == "height" })
+    let editedHeight = cssBaselineStyle(
+        id: initialStyle.id,
+        properties: [("inset", "0"), ("height", "50%")]
+    )
+    styles.applySetStyleText(result: editedHeight, for: height.id)
+
+    let expandedStyle = cssBaselineStyle(
+        id: initialStyle.id,
+        properties: [
+            ("inset", "1px"),
+            ("top", "1px"),
+            ("right", "1px"),
+            ("bottom", "1px"),
+            ("left", "1px"),
+            ("height", "50%"),
+        ]
+    )
+    styles.applySetStyleText(result: expandedStyle, for: inset.id)
+
+    let expandedProperties = try #require(styles.sections.first?.style.properties)
+    #expect(expandedProperties.first { $0.name == "top" }?.isModifiedByInspector == false)
+    #expect(expandedProperties.first { $0.name == "height" }?.isModifiedByInspector == true)
+}
+
+@MainActor
+@Test
+func cssInspectorBaselineDoesNotRekeyAmbiguousDuplicateDeclarations() throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let styles = CSSStyles(
+        nodeID: DOMNode.ID(DOM.Node.ID("duplicate-baseline-node")),
+        modelContext: context
+    )
+    let initialStyle = cssBaselineStyle(
+        id: CSS.Style.ID("duplicate-baseline-style"),
+        properties: [("color", "red"), ("color", "green")]
+    )
+    styles.load(
+        matchedStyles: cssMatchedStyles([initialStyle]),
+        inlineStyles: .init(),
+        computedProperties: []
+    )
+
+    let secondColor = try #require(styles.sections.first?.style.properties.last)
+    let editedStyle = cssBaselineStyle(
+        id: initialStyle.id,
+        properties: [("margin", "0"), ("color", "red"), ("color", "blue")]
+    )
+    styles.applySetStyleText(result: editedStyle, for: secondColor.id)
+
+    let colors = try #require(styles.sections.first?.style.properties.filter { $0.name == "color" })
+    #expect(colors.count == 2)
+    #expect(colors.allSatisfy { $0.isModifiedByInspector == false })
+}
+
+@MainActor
+@Test
+func cssInspectorBaselineDoesNotCrossDocumentOrTargetLifetime() throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let pageStyles = CSSStyles(
+        nodeID: DOMNode.ID(DOM.Node.ID("page-baseline-node")),
+        modelContext: context
+    )
+    let pageInitial = cssBaselineStyle(
+        id: CSS.Style.ID("page-baseline-style"),
+        properties: [("color", "red")]
+    )
+    pageStyles.load(
+        matchedStyles: cssMatchedStyles([pageInitial]),
+        inlineStyles: .init(),
+        computedProperties: []
+    )
+    let pageColor = try #require(pageStyles.sections.first?.style.properties.first)
+    let pageEdited = cssBaselineStyle(
+        id: pageInitial.id,
+        properties: [("color", "blue")]
+    )
+    pageStyles.applySetStyleText(result: pageEdited, for: pageColor.id)
+
+    context.apply(DOM.Event.documentUpdated)
+    pageStyles.load(
+        matchedStyles: cssMatchedStyles([pageEdited]),
+        inlineStyles: .init(),
+        computedProperties: []
+    )
+    #expect(pageStyles.sections.first?.style.properties.first?.isModifiedByInspector == false)
+
+    let frameTargetID = WebInspectorTarget.ID("baseline-frame")
+    let frameStyles = CSSStyles(
+        nodeID: DOMNode.ID(DOM.Node.ID("frame-baseline-node")),
+        modelContext: context
+    )
+    let frameInitial = cssBaselineStyle(
+        id: CSS.Style.ID("frame-baseline-style", scopedToTargetRawValue: frameTargetID.rawValue),
+        properties: [("display", "block")]
+    )
+    frameStyles.load(
+        matchedStyles: cssMatchedStyles([frameInitial]),
+        inlineStyles: .init(),
+        computedProperties: []
+    )
+    let frameDisplay = try #require(frameStyles.sections.first?.style.properties.first)
+    let frameEdited = cssBaselineStyle(
+        id: frameInitial.id,
+        properties: [("display", "none")]
+    )
+    frameStyles.applySetStyleText(result: frameEdited, for: frameDisplay.id)
+
+    context.apply(.targetDestroyed(targetID: frameTargetID))
+    frameStyles.load(
+        matchedStyles: cssMatchedStyles([frameEdited]),
+        inlineStyles: .init(),
+        computedProperties: []
+    )
+    #expect(frameStyles.sections.first?.style.properties.first?.isModifiedByInspector == false)
+}
+
+@MainActor
+@Test
 func selectingDOMNodeLoadsInlineAndAttributesStyleSections() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
@@ -10402,6 +10592,45 @@ private func enqueueCSSStyleReplies(on backend: WebInspectorTestBackend) async {
         ],
         for: "CSS",
         method: "getComputedStyleForNode"
+    )
+}
+
+private func cssMatchedStyles(_ styles: [CSS.Style]) -> CSS.MatchedStyles {
+    CSS.MatchedStyles(
+        matchedRules: styles.enumerated().map { index, style in
+            CSS.Rule(
+                id: CSS.Rule.ID("css-test-rule-\(index)"),
+                selectorList: CSS.Rule.SelectorList(
+                    selectors: [".css-test-\(index)"],
+                    text: ".css-test-\(index)"
+                ),
+                origin: CSS.Origin(rawValue: "author"),
+                style: style
+            )
+        }
+    )
+}
+
+private func cssBaselineStyle(
+    id: CSS.Style.ID,
+    properties: [(name: String, value: String)]
+) -> CSS.Style {
+    CSS.Style(
+        id: id,
+        properties: properties.enumerated().map { index, property in
+            CSS.Property(
+                id: CSS.Property.ID("\(id.rawValue)\u{1F}\(index)"),
+                name: property.name,
+                value: property.value,
+                text: "\(property.name): \(property.value);",
+                status: .active,
+                isEditable: true
+            )
+        },
+        cssText: properties
+            .map { "\($0.name): \($0.value);" }
+            .joined(separator: "\n"),
+        isEditable: true
     )
 }
 

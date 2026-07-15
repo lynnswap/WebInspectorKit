@@ -373,6 +373,7 @@ public final class WebInspectorContext {
     private var styleRefreshGeneration: Int
     private var isStyleHydrationActive: Bool
     private var styleToggleOperations: [CSSStyleProperty.ID: StyleToggleOperation]
+    let cssInspectorBaselineStore: CSSInspectorBaselineStore
     private var cssStyleSheetLifetimesByID: [CSS.StyleSheet.ID: CSSStyleSheetLifetime]
     private var styleTrackingTargets: [StyleTrackingKey: WebInspectorTarget]
     private var styleTrackingAcquisitions: [StyleTrackingKey: StyleTrackingAcquisition]
@@ -454,6 +455,7 @@ public final class WebInspectorContext {
         styleRefreshGeneration = 0
         isStyleHydrationActive = false
         styleToggleOperations = [:]
+        cssInspectorBaselineStore = CSSInspectorBaselineStore()
         cssStyleSheetLifetimesByID = [:]
         styleTrackingTargets = [:]
         styleTrackingAcquisitions = [:]
@@ -3175,6 +3177,11 @@ extension WebInspectorContext {
         let authorityTargetID = runtimeAuthorityTargetID(for: targetID)
         advanceTargetRevision(for: authorityTargetID)
         if authorityTargetID == currentPage?.id {
+            cssInspectorBaselineStore.reset()
+        } else {
+            cssInspectorBaselineStore.reset(targetID: authorityTargetID)
+        }
+        if authorityTargetID == currentPage?.id {
             invalidateAllCSSStyleSheets()
         } else {
             invalidateCSSStyleSheets(targetID: authorityTargetID)
@@ -3437,6 +3444,7 @@ extension WebInspectorContext {
     private func resetDOM(isolation: isolated (any Actor)) {
         invalidateElementPickerOperation()
         cancelStyleToggleOperations()
+        cssInspectorBaselineStore.reset()
         cssStyleSheetLifetimesByID = [:]
         inspectResolutionTask?.cancel()
         inspectResolutionTask = nil
