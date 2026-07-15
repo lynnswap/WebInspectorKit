@@ -483,6 +483,51 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func scrollingUsesTheViewportSurfacePassWithoutRebuildingAllDecorations()
+        async throws
+    {
+        let children = (0..<200).map { index in
+            WebInspectorDataKitTestRuntime.Node.element(
+                id: "row-\(index)",
+                name: "div",
+                attributes: ["data-row": "\(index)"]
+            )
+        }
+        let fixture = try await DOMTreeRuntimeFixture.start(
+            document: .init(children: [
+                .element(
+                    id: "html",
+                    name: "html",
+                    children: [
+                        .element(
+                            id: "body",
+                            name: "body",
+                            children: children
+                        )
+                    ]
+                )
+            ])
+        )
+        let view = await fixture.makeView()
+        let maximumOffset = view.contentSize.height - view.bounds.height
+        #expect(maximumOffset > view.rowHeightForTesting)
+        view.resetPerformanceCountersForTesting()
+
+        view.setContentOffset(
+            CGPoint(
+                x: 0,
+                y: min(maximumOffset, view.rowHeightForTesting * 20)
+            ),
+            animated: false
+        )
+        view.layoutSubviews()
+
+        #expect(view.fragmentSubviewCountForTesting > 0)
+        #expect(view.updateContentDecorationsCallCountForTesting == 0)
+        await fixture.close(view: view)
+    }
+
+    @Test
     func hiddenCanonicalDeltaRendersOnlyAfterRenderingResumes() async throws {
         let fixture = try await DOMTreeRuntimeFixture.start()
         let view = await fixture.makeView()

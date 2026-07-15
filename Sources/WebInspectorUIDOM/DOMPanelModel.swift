@@ -63,11 +63,11 @@ package final class DOMPanelModel {
     }
 
     package var selectedNodeID: DOMNode.ID? {
-        liveSelection?.nodeID
+        selection?.nodeID
     }
 
     package var selectedNode: DOMNode? {
-        liveSelection.flatMap { context.model(for: $0.nodeID) }
+        selection.flatMap { context.model(for: $0.nodeID) }
     }
 
     package func selectNode(
@@ -77,8 +77,7 @@ package final class DOMPanelModel {
         guard isActive else { return }
         pendingPickerSelectionID = nil
         guard let nodeID,
-              nodeIDs.contains(nodeID),
-              context.model(for: nodeID) != nil else {
+              hasPublishedNode(nodeID) else {
             publishSelection(nil, reveal: .none)
             return
         }
@@ -209,7 +208,8 @@ package final class DOMPanelModel {
     }
 
     private func hasPublishedNode(_ nodeID: DOMNode.ID) -> Bool {
-        nodeIDs.contains(nodeID) && context.model(for: nodeID) != nil
+        nodes.snapshot?.contains(nodeID) == true
+            && context.model(for: nodeID) != nil
     }
 
     private func publishSelection(
@@ -228,19 +228,6 @@ package final class DOMPanelModel {
                 revision: selectionRevision
             )
         }
-    }
-
-    private var liveSelection: DOMPanelSelection? {
-        guard let selection,
-              nodeIDs.contains(selection.nodeID),
-              context.model(for: selection.nodeID) != nil else {
-            return nil
-        }
-        return selection
-    }
-
-    private var nodeIDs: [DOMNode.ID] {
-        nodes.snapshot?.itemIDs ?? []
     }
 
     #if DEBUG

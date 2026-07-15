@@ -1832,7 +1832,6 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         if !textContainer.size.wiIsNearlyEqual(to: containerSize) {
             textContainer.size = containerSize
         }
-        updateContentDecorations()
     }
 
     private func resetTextFragmentViews() {
@@ -1916,7 +1915,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         guard !multiSelection.hasExplicitSelection else {
             return []
         }
-        guard let selectedNodeID = panelModel.selectedNodeID else {
+        guard let selectedNodeID = lastRoutedSelectedNodeID else {
             return []
         }
         return rowRects(for: selectedNodeID)
@@ -2115,6 +2114,9 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func updateContentDecorations() {
+#if DEBUG
+        performanceCounters.updateContentDecorationsCallCount += 1
+#endif
         hoverRowRects = hoverContentRowRects()
         selectedRowRects = selectedContentRowRects()
         multiSelectedRowRects = multiSelectionContentRowRects()
@@ -2148,7 +2150,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         let selectedRects = localRowBackgroundRects(
             for: fragmentRow,
             in: surfaceFrame,
-            matching: panelModel.selectedNodeID
+            matching: lastRoutedSelectedNodeID
         )
         let multiSelectedRects = localMultiSelectedRowBackgroundRects(for: fragmentRow, in: surfaceFrame)
         let hoverColor = hoverRects.isEmpty
@@ -2741,6 +2743,10 @@ extension DOMTreeTextView {
 
     var textSegmentRectsCallCountForTesting: Int {
         performanceCounters.textSegmentRectsCallCount
+    }
+
+    var updateContentDecorationsCallCountForTesting: Int {
+        performanceCounters.updateContentDecorationsCallCount
     }
 
     var rowDocumentAppliedTreeRevisionForTesting: UInt64 {

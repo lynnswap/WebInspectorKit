@@ -25,9 +25,15 @@ public struct WebInspectorFetchedResultsRevision:
 public struct WebInspectorFetchedResultsSnapshot<ItemID>: Sendable
 where ItemID: Hashable & Sendable {
     public let itemIDs: [ItemID]
+    private let membership: Set<ItemID>
 
     public init(itemIDs: [ItemID] = []) {
         self.itemIDs = itemIDs
+        membership = Set(itemIDs)
+    }
+
+    package func contains(_ itemID: ItemID) -> Bool {
+        membership.contains(itemID)
     }
 }
 
