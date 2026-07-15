@@ -7964,6 +7964,66 @@ func loadingFinishedClampsNegativeMetricTotals() async throws {
 
 @MainActor
 @Test
+func multipartContinuationPreservesFinishedLifecycleAcrossLaterParts() throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let requestID = Network.Request.ID("multipart-continuation")
+    let request = NetworkRequest(
+        request: Network.Request(
+            id: requestID,
+            url: "https://example.com/camera",
+            method: "GET"
+        ),
+        initiator: nil,
+        resourceType: .image,
+        timestamp: 1,
+        modelContext: context
+    )
+    let responseBody = request.responseBody
+
+    request.applyResponse(
+        Network.Response(
+            url: "https://example.com/camera",
+            status: 200,
+            mimeType: "MULTIPART/X-MIXED-REPLACE"
+        ),
+        resourceType: .image,
+        timestamp: 2
+    )
+    request.finish(timestamp: 3, sourceMapURL: nil, metrics: nil)
+    responseBody.load(Network.Body(data: "first part", base64Encoded: false))
+
+    request.applyResponse(
+        Network.Response(
+            url: "https://example.com/camera",
+            status: 200,
+            mimeType: "image/jpeg",
+            headers: ["X-Part": "2"]
+        ),
+        resourceType: .image,
+        timestamp: 4
+    )
+
+    #expect(request.responseBody === responseBody)
+    #expect(request.state == .finished)
+    #expect(request.finishedOrFailedTimestamp == 3)
+    #expect(request.responseReceivedTimestamp == 4)
+    #expect(request.mimeType == "image/jpeg")
+    #expect(request.responseHeaders["X-Part"] == "2")
+    #expect(responseBody.phase == .available)
+    #expect(responseBody.full == nil)
+    #expect(request.canFetchResponseBody)
+
+    request.applyDataReceived(dataLength: 12, encodedDataLength: 10, timestamp: 5)
+
+    #expect(request.state == .finished)
+    #expect(request.finishedOrFailedTimestamp == 3)
+    #expect(request.lastDataReceivedTimestamp == 5)
+    #expect(request.decodedDataLength == 12)
+    #expect(request.encodedDataLength == 10)
+}
+
+@MainActor
+@Test
 func repeatedRequestWillBeSentClearsStaleResponseFields() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)

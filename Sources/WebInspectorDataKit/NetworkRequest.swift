@@ -938,6 +938,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
 
     @ObservationIgnored weak var modelContext: WebInspectorContext?
     @ObservationIgnored private var currentRequest: Network.Request
+    @ObservationIgnored private var allowsMultipartContinuation: Bool
 
     var proxyID: Network.Request.ID {
         id.proxyID
@@ -997,6 +998,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         self.responseBody = responseBody
         self.modelContext = modelContext
         currentRequest = request
+        allowsMultipartContinuation = false
     }
 
     /// A Boolean value indicating whether the response body can be fetched now.
@@ -1158,6 +1160,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         webSocket = resourceType == .webSocket ? WebSocketState() : nil
         requestBody = NetworkBody.makeRequestBody(for: request)
         responseBody.resetForResponse(fallbackURL: currentRequest.url)
+        allowsMultipartContinuation = false
         state = .pending
     }
 
@@ -1195,6 +1198,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         metrics = nil
         requestBody = NetworkBody.makeRequestBody(for: request)
         responseBody.resetForResponse(fallbackURL: currentRequest.url)
+        allowsMultipartContinuation = false
         state = .pending
     }
 
@@ -1203,6 +1207,9 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         resourceType: Network.ResourceType?,
         timestamp: Double?
     ) {
+        // WebKit emits loadingFinished only for the first multipart part. Later
+        // response/data events update that same completed request.
+        let preservesFinishedState = state == .finished && allowsMultipartContinuation
         let resolvedResourceType = resourceType ?? self.resourceType
         self.resourceType = resolvedResourceType
         if resolvedResourceType == .webSocket {
@@ -1225,7 +1232,11 @@ public final class NetworkRequest: WebInspectorFetchableModel {
             responseReceivedTimestamp = timestamp
         }
         responseBody.resetForResponse(response, fallbackURL: currentRequest.url)
-        state = .responded
+        allowsMultipartContinuation = allowsMultipartContinuation
+            || Self.isMultipartMixedReplace(response.mimeType)
+        if preservesFinishedState == false {
+            state = .responded
+        }
     }
 
     func applyDataReceived(dataLength: Int, encodedDataLength: Int, timestamp: Double) {
@@ -1293,6 +1304,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         redirects = []
         requestBody = NetworkBody.makeRequestBody(for: currentRequest)
         responseBody.resetForResponse(response, fallbackURL: currentRequest.url)
+        allowsMultipartContinuation = false
         state = .finished
     }
 
@@ -1300,6 +1312,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         self.url = url
         currentRequest = requestWithURL(url)
         resourceType = .webSocket
+        allowsMultipartContinuation = false
         _ = ensureWebSocketState()
     }
 
@@ -1312,6 +1325,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         requestHeaders = request.headers
         requestBody = NetworkBody.makeRequestBody(for: request)
         responseBody.resetForResponse(fallbackURL: currentRequest.url)
+        allowsMultipartContinuation = false
         status = nil
         statusText = nil
         responseURL = nil
@@ -1512,6 +1526,19 @@ public final class NetworkRequest: WebInspectorFetchableModel {
             .first?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased() ?? ""
+    }
+
+    private static func isMultipartMixedReplace(_ mimeType: String?) -> Bool {
+        guard let mimeType else {
+            return false
+        }
+        return mimeType.utf8.elementsEqual(
+            "multipart/x-mixed-replace".utf8,
+            by: { lhs, rhs in
+                let folded = lhs >= 65 && lhs <= 90 ? lhs + 32 : lhs
+                return folded == rhs
+            }
+        )
     }
 
     private static func isPreviewableImage(mimeType: String, pathExtension: String) -> Bool {
