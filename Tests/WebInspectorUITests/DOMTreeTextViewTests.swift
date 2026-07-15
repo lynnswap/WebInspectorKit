@@ -31,6 +31,25 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func windowAttachmentActivatesLateInstalledDOMRendering() async throws {
+        let view = DOMTreeTextView(context: makeDOMTreeFixture().context)
+        configureTreeViewForDeterministicTesting(view)
+        view.setRenderingActive(false)
+
+        let host = UIViewController()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 360, height: 480))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+
+        host.view.addSubview(view)
+        #expect(view.isRenderingActiveForTesting)
+
+        view.removeFromSuperview()
+        #expect(!view.isRenderingActiveForTesting)
+        window.isHidden = true
+    }
+
+    @Test
     func collapsedDescendantMutationDoesNotRouteCollapsedSubtreeBuild() async throws {
         let session = makeDOMTreeFixture()
         let view = await makeTreeView(fixture: session)

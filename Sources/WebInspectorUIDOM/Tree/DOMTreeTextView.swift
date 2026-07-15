@@ -279,6 +279,11 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         ]
     }
 
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        setRenderingActive(window != nil)
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
         guard lastBoundsSize != bounds.size || textContentView.frame.isEmpty else {
@@ -2718,6 +2723,10 @@ extension DOMTreeTextView {
 
     var updateContentDecorationsCallCountForTesting: Int {
         performanceCounters.updateContentDecorationsCallCount
+    }
+
+    var isRenderingActiveForTesting: Bool {
+        isRenderingActive
     }
 
     var cachedMarkupKeysForTesting: Set<DOMTreeTextView.MarkupCacheKey> {
