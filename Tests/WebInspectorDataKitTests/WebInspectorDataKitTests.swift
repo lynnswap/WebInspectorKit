@@ -6605,6 +6605,162 @@ func requestSetCSSPropertyRefusesStaleAndNonEditableProperties() async throws {
 
 @MainActor
 @Test
+func lateCSSPropertyReplyDoesNotApplyToReplacementDocument() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let fixture = try await loadEditableCSSFixture(runtime: runtime, target: target, context: context)
+    let mutationGate = WebInspectorTestGate()
+    let replacementStyle = CSS.Style(
+        id: CSS.Style.ID("style-1"),
+        properties: [
+            CSS.Property(
+                id: CSS.Property.ID("property-1"),
+                name: "display",
+                value: "none",
+                text: "/* display: grid; */",
+                status: .disabled,
+                isEditable: true
+            )
+        ],
+        cssText: "/* display: grid; */",
+        isEditable: true
+    )
+
+    await runtime.backend.hold(domain: "CSS", method: "setStyleText", gate: mutationGate)
+    await runtime.backend.enqueue(replacementStyle, for: "CSS", method: "setStyleText")
+    await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
+    let mutationTask = Task { @MainActor in
+        try await context.css.setProperty(fixture.propertyID, enabled: false)
+    }
+    _ = await runtime.backend.waitForRecordedCommands(domain: "CSS", method: "setStyleText", count: 1)
+
+    let replacementDocumentID = DOM.Node.ID("replacement-after-property")
+    await runtime.backend.enqueue(
+        DOM.Node(id: replacementDocumentID, nodeType: 9, nodeName: "#document"),
+        for: "DOM",
+        method: "getDocument"
+    )
+    context.apply(DOM.Event.documentUpdated)
+    try await waitUntil { context.rootNode?.id == DOMNode.ID(replacementDocumentID) }
+    await mutationGate.open()
+
+    await #expect(throws: WebInspectorProxyError.disconnected("CSS mutation no longer belongs to the current document.")) {
+        try await mutationTask.value
+    }
+    #expect(context.selectedNode == nil)
+    #expect(fixture.styles.sections.first?.style.properties.first?.status == .active)
+    let commands = await runtime.backend.recordedCommands()
+    #expect(commands.contains(RecordedCommand(domain: "DOM", method: "markUndoableState")) == false)
+}
+
+@MainActor
+@Test
+func lateCSSDeclarationReplyDoesNotApplyToReplacementStyles() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let fixture = try await loadEditableCSSFixture(runtime: runtime, target: target, context: context)
+    let mutationGate = WebInspectorTestGate()
+    let replacementStyle = CSS.Style(
+        id: CSS.Style.ID("style-1"),
+        properties: [
+            CSS.Property(
+                id: CSS.Property.ID("property-1"),
+                name: "display",
+                value: "flex",
+                text: "display: flex;",
+                isEditable: true
+            )
+        ],
+        cssText: "display: flex;",
+        isEditable: true
+    )
+
+    await runtime.backend.hold(domain: "CSS", method: "setStyleText", gate: mutationGate)
+    await runtime.backend.enqueue(replacementStyle, for: "CSS", method: "setStyleText")
+    await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
+    let mutationTask = Task { @MainActor in
+        try await context.css.setDeclarationText("display: flex;", for: fixture.propertyID)
+    }
+    _ = await runtime.backend.waitForRecordedCommands(domain: "CSS", method: "setStyleText", count: 1)
+
+    context.select(nil)
+    await mutationGate.open()
+
+    await #expect(throws: WebInspectorProxyError.disconnected("CSS mutation no longer belongs to the current document.")) {
+        try await mutationTask.value
+    }
+    #expect(fixture.styles.sections.first?.style.properties.first?.value == "grid")
+    let commands = await runtime.backend.recordedCommands()
+    #expect(commands.contains(RecordedCommand(domain: "DOM", method: "markUndoableState")) == false)
+}
+
+@MainActor
+@Test
+func lateCSSRuleReplyDoesNotRecordUndoAfterDocumentReset() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (_, context) = try await startContext(runtime: runtime)
+    let ruleID = CSSStyleRule.ID("late-rule")
+    let mutationGate = WebInspectorTestGate()
+
+    await runtime.backend.hold(domain: "CSS", method: "setRuleSelector", gate: mutationGate)
+    await runtime.backend.enqueue(
+        CSS.Rule(
+            id: ruleID.proxyID,
+            selectorList: CSS.Rule.SelectorList(selectors: [".updated"], text: ".updated"),
+            origin: CSS.Origin(rawValue: "regular"),
+            style: CSS.Style(id: CSS.Style.ID("late-rule-style"))
+        ),
+        for: "CSS",
+        method: "setRuleSelector"
+    )
+    await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
+    let mutationTask = Task { @MainActor in
+        try await context.css.setRuleSelector(".updated", for: ruleID)
+    }
+    _ = await runtime.backend.waitForRecordedCommands(domain: "CSS", method: "setRuleSelector", count: 1)
+
+    context.apply(DOM.Event.documentUpdated)
+    await mutationGate.open()
+
+    await #expect(throws: WebInspectorProxyError.disconnected("CSS mutation no longer belongs to the current document.")) {
+        try await mutationTask.value
+    }
+    let commands = await runtime.backend.recordedCommands()
+    #expect(commands.contains(RecordedCommand(domain: "DOM", method: "markUndoableState")) == false)
+}
+
+@MainActor
+@Test
+func destroyedCSSTargetRejectsLateStyleSheetReply() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (_, context) = try await startContext(runtime: runtime)
+    let frameTargetID = WebInspectorTarget.ID("destroyed-css-frame")
+    let styleSheetID = CSS.StyleSheet.ID(
+        "destroyed-sheet",
+        scopedToTargetRawValue: frameTargetID.rawValue
+    )
+    let mutationGate = WebInspectorTestGate()
+
+    await runtime.backend.hold(domain: "CSS", method: "setStyleSheetText", gate: mutationGate)
+    await runtime.backend.enqueue((), for: "CSS", method: "setStyleSheetText")
+    await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
+    let mutationTask = Task { @MainActor in
+        try await context.css.setStyleSheetText("body { color: red; }", for: styleSheetID)
+    }
+    _ = await runtime.backend.waitForRecordedCommands(domain: "CSS", method: "setStyleSheetText", count: 1)
+
+    context.apply(.targetDestroyed(targetID: frameTargetID))
+    await mutationGate.open()
+
+    await #expect(throws: WebInspectorProxyError.disconnected("CSS mutation no longer belongs to the current document.")) {
+        try await mutationTask.value
+    }
+    let commands = await runtime.backend.recordedCommands()
+    #expect(commands.contains(RecordedCommand(domain: "DOM", method: "markUndoableState")) == false)
+}
+
+@MainActor
+@Test
 func removingLoadedChildPurgesDescendantsFromIdentityMap() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
@@ -9410,6 +9566,36 @@ private func enqueueCSSStyleReplies(on backend: WebInspectorTestBackend) async {
         for: "CSS",
         method: "getComputedStyleForNode"
     )
+}
+
+private struct EditableCSSFixture {
+    var styles: CSSStyles
+    var propertyID: CSSStyleProperty.ID
+}
+
+@MainActor
+private func loadEditableCSSFixture(
+    runtime: WebInspectorProxyTestRuntime,
+    target: WebInspectorTarget,
+    context: WebInspectorContext
+) async throws -> EditableCSSFixture {
+    let document = try #require(context.rootNode)
+    let elementID = DOM.Node.ID("authority-styled-node")
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
+        ]),
+        target: target
+    )
+    try await waitUntil { context.node(for: DOMNode.ID(elementID)) != nil }
+    let element = try #require(context.node(for: DOMNode.ID(elementID)))
+
+    await enqueueCSSStyleReplies(on: runtime.backend)
+    context.select(element)
+    let styles = try #require(element.elementStyles)
+    try await waitUntil { styles.phase == .loaded }
+    let propertyID = try #require(styles.sections.first?.style.properties.first?.id)
+    return EditableCSSFixture(styles: styles, propertyID: propertyID)
 }
 
 private func matchedStylesCommandCount(on backend: WebInspectorTestBackend) async -> Int {
