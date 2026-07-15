@@ -16,7 +16,7 @@ public struct Network: Sendable, WebInspectorEventDomainHandle {
     /// The first scope registers before `Network.enable` is sent. Scope
     /// completion waits for the final matching `Network.disable`.
     public func withEvents<Output>(
-        buffering: WebInspectorEventBufferingPolicy = .bounded(256),
+        buffering: WebInspectorEventBufferingPolicy = .unbounded,
         isolation: isolated (any Actor)? = #isolation,
         _ operation: (
             AsyncThrowingStream<WebInspectorPageEvent<Network.Event>, any Error>

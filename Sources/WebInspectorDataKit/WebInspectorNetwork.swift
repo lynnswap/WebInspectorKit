@@ -180,7 +180,7 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
         let previousScope = orderedScope
         let scope = try await connection.page.orderedScope(
             descriptor: descriptor,
-            buffering: .bounded(4_096)
+            buffering: .unbounded
         )
         if closeRequested {
             await scope.close()

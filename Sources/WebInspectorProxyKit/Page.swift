@@ -13,7 +13,7 @@ public struct Page: Sendable, WebInspectorEventDomainHandle {
 
     /// Runs an operation with an atomically registered Page event scope.
     public func withEvents<Output>(
-        buffering: WebInspectorEventBufferingPolicy = .bounded(256),
+        buffering: WebInspectorEventBufferingPolicy = .unbounded,
         isolation: isolated (any Actor)? = #isolation,
         _ operation: (
             AsyncThrowingStream<WebInspectorPageEvent<Page.Event>, any Error>

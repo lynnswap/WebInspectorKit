@@ -69,6 +69,122 @@ func DOMReattachmentAtomicallyReplacesThePreviousAttachmentRecords() async throw
 
 @MainActor
 @Test
+func DOMBootstrapPreservesEveryEventReceivedBeforeTheDocumentReply() async throws {
+    let container = WebInspectorModelContainer(
+        configuration: .init(enabledFeatures: [.dom])
+    )
+
+    do {
+        try await withDataKitTestRuntime { runtime in
+            await runtime.wire.respond(to: "Page.enable")
+            await runtime.wire.respond(to: "Inspector.enable")
+            await runtime.wire.respond(to: "Inspector.initialized")
+            await runtime.wire.respond(to: "CSS.enable")
+            let documentReply = await runtime.wire.deferReply(
+                to: "DOM.getDocument",
+                with: try domDocumentResult(
+                    DOM.Node(
+                        id: DOM.Node.ID("document"),
+                        nodeType: 9,
+                        nodeName: "#document",
+                        frameID: FrameID("main-frame"),
+                        childNodeCount: 1,
+                        children: [
+                            DOM.Node(
+                                id: DOM.Node.ID("body"),
+                                nodeType: 1,
+                                nodeName: "BODY",
+                                localName: "body"
+                            )
+                        ]
+                    )
+                )
+            )
+            await runtime.wire.respond(to: "CSS.disable")
+            await runtime.wire.respond(to: "Inspector.disable")
+            await runtime.wire.respond(to: "Page.disable")
+
+            try await container.attach(owning: runtime.proxy)
+            _ = await runtime.wire.observations.waitForCommands(
+                method: "DOM.getDocument",
+                count: 1
+            )
+
+            try await runtime.wire.emitTargetEvent(
+                targetID: "page-main",
+                method: "DOM.attributeModified",
+                parameters: try testJSONObject(
+                    #"{"nodeId":"body","name":"data-burst","value":"preserved"}"#
+                )
+            )
+            for index in 0..<2_049 {
+                try await runtime.wire.emitTargetEvent(
+                    targetID: "page-main",
+                    method: "DOM.futureBurstEvent",
+                    parameters: try testJSONObject(
+                        #"{"index":\#(index)}"#
+                    )
+                )
+            }
+            documentReply.open()
+
+            #expect(await waitForDOMReady(in: container))
+            if case .attached = container.state {
+                // Expected.
+            } else {
+                Issue.record("DOM bootstrap burst terminated the attachment.")
+            }
+            await container.close()
+        }
+    } catch {
+        await container.close()
+        throw error
+    }
+}
+
+@MainActor
+@Test
+func DOMEventForAnUnmaterializedNodeDoesNotTerminateTheAttachment() async throws {
+    let container = WebInspectorModelContainer(
+        configuration: .init(enabledFeatures: [.dom])
+    )
+
+    do {
+        try await withDataKitTestRuntime { runtime in
+            try await prepareDOMAttachment(runtime)
+            try await container.attach(owning: runtime.proxy)
+            #expect(await waitForDOMReady(in: container))
+            let initialRevision = try #require(domReadyRevision(container.dom.state))
+
+            try await runtime.wire.emitTargetEvent(
+                targetID: "page-main",
+                method: "DOM.willDestroyDOMNode",
+                parameters: try testJSONObject(#"{"nodeId":"unmaterialized"}"#)
+            )
+            try await runtime.wire.emitTargetEvent(
+                targetID: "page-main",
+                method: "DOM.attributeModified",
+                parameters: try testJSONObject(
+                    #"{"nodeId":"body","name":"data-after-unknown","value":"preserved"}"#
+                )
+            )
+
+            #expect(await waitForDOMRevision(after: initialRevision, in: container))
+            if case .attached = container.state {
+                // Expected.
+            } else {
+                Issue.record("An event for an unmaterialized DOM node terminated the attachment.")
+            }
+            await container.close()
+        }
+    } catch {
+        await container.close()
+        throw error
+    }
+}
+
+@MainActor
+@Test
 func ordinaryDocumentNavigationAdvancesOnlyTheDOMBindingEpoch() async throws {
     let container = WebInspectorModelContainer(
         configuration: .init(enabledFeatures: [.dom])
@@ -679,9 +795,12 @@ private func prepareDOMAttachment(
 private func waitForDOMReady(
     in container: WebInspectorModelContainer
 ) async -> Bool {
-    for _ in 0..<1_000 {
+    for _ in 0..<10_000 {
         if case .ready = container.dom.state {
             return true
+        }
+        if case .failed = container.state {
+            return false
         }
         await Task.yield()
     }

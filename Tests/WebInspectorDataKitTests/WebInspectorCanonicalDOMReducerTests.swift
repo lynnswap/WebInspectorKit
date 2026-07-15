@@ -567,10 +567,9 @@ func canonicalDOMRejectsInvalidDeltaWithStrongGuarantee() throws {
     #expect(throws: (any Error).self) {
         try reducer.apply(
             scope: fixture.scope,
-            event: .childNodeInserted(
+            event: .childNodeRemoved(
                 parent: DOM.Node.ID("parent"),
-                previous: DOM.Node.ID("missing"),
-                node: canonicalDOMNode(id: "never-inserted")
+                node: DOM.Node.ID("document")
             )
         )
     }
@@ -584,6 +583,71 @@ func canonicalDOMRejectsInvalidDeltaWithStrongGuarantee() throws {
     #expect(throws: WebInspectorCanonicalDOMError.documentUpdatedRequiresInvalidationBoundary) {
         try reducer.apply(scope: fixture.scope, event: .documentUpdated)
     }
+}
+
+@Test
+func canonicalDOMSkipsProtocolEventsForUnmaterializedNodes() throws {
+    let fixture = canonicalDOMReducerFixture()
+    var reducer = fixture.reducer
+    _ = try reducer.bootstrap(
+        scope: fixture.scope,
+        root: canonicalDOMNode(
+            id: "document",
+            type: 9,
+            name: "#document",
+            children: [canonicalDOMNode(id: "known")]
+        )
+    )
+    let before = reducer.snapshot()
+    let events: [DOM.Event] = [
+        .setChildNodes(parent: DOM.Node.ID("missing"), nodes: [canonicalDOMNode(id: "child")]),
+        .childNodeInserted(
+            parent: DOM.Node.ID("missing"),
+            previous: nil,
+            node: canonicalDOMNode(id: "child")
+        ),
+        .childNodeRemoved(parent: DOM.Node.ID("known"), node: DOM.Node.ID("missing")),
+        .childNodeCountUpdated(DOM.Node.ID("missing"), count: 1),
+        .attributeModified(DOM.Node.ID("missing"), name: "class", value: "value"),
+        .attributeRemoved(DOM.Node.ID("missing"), name: "class"),
+        .characterDataModified(DOM.Node.ID("missing"), value: "value"),
+        .shadowRootPushed(
+            host: DOM.Node.ID("missing"),
+            root: canonicalDOMNode(id: "shadow")
+        ),
+        .shadowRootPopped(host: DOM.Node.ID("known"), root: DOM.Node.ID("missing")),
+        .pseudoElementAdded(
+            parent: DOM.Node.ID("missing"),
+            element: canonicalDOMNode(id: "before", pseudoType: .before)
+        ),
+        .pseudoElementRemoved(parent: DOM.Node.ID("known"), element: DOM.Node.ID("missing")),
+        .willDestroyDOMNode(DOM.Node.ID("missing")),
+    ]
+
+    for event in events {
+        #expect(try reducer.apply(scope: fixture.scope, event: event).isEmpty)
+        #expect(reducer.snapshot() == before)
+    }
+
+    #expect(
+        try reducer.apply(
+            scope: fixture.scope,
+            event: .attributeRemoved(DOM.Node.ID("known"), name: "absent")
+        ).isEmpty
+    )
+    let documentScope = try canonicalDocumentScope(fixture, eventScope: fixture.scope)
+    let knownID = canonicalDOMID("known", scope: documentScope)
+    let inlineStyleInvalidation = try reducer.apply(
+        scope: fixture.scope,
+        event: .inlineStyleInvalidated([DOM.Node.ID("missing"), DOM.Node.ID("known")])
+    )
+    #expect(inlineStyleInvalidation.resourceInvalidations == [.subtree(knownID)])
+
+    let validMutation = try reducer.apply(
+        scope: fixture.scope,
+        event: .attributeModified(DOM.Node.ID("known"), name: "data-after-skip", value: "yes")
+    )
+    #expect(validMutation.queryValueUpserts[knownID]?.attributes == ["data-after-skip": "yes"])
 }
 
 @Test

@@ -476,7 +476,7 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         )
         let scope = try await connection.page.orderedScope(
             descriptor: descriptor,
-            buffering: .bounded(2_048)
+            buffering: .unbounded
         )
         orderedScope = scope
         try await bootstrapCurrentDocument(in: scope, store: store)

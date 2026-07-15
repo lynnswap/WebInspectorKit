@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import WebInspectorProxyKitTesting
+import WebInspectorTestSupport
 @testable import WebInspectorProxyKit
 
 private enum CompositeEvent: Sendable {
@@ -237,6 +238,42 @@ func cancelledEventWaitCannotRegisterAfterCancellation() async throws {
 }
 
 @Test
+func defaultDomainEventScopePreservesBurstsLargerThanTheFormerImplicitLimit() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    defer { Task { await runtime.close() } }
+    let operationStarted = WebInspectorTestGate()
+    let consumptionGate = WebInspectorTestGate()
+    let eventCount = 257
+    let eventsTask = Task {
+        try await runtime.page.dom.withEvents { events in
+            operationStarted.open()
+            await consumptionGate.waiter.wait()
+            var iterator = events.makeAsyncIterator()
+            var received = 0
+            while received < eventCount {
+                _ = try #require(try await iterator.next())
+                received += 1
+            }
+            return received
+        }
+    }
+    await operationStarted.waiter.wait()
+
+    for index in 0..<eventCount {
+        try await runtime.peer.emitTargetEvent(
+            targetID: "page-main",
+            method: "DOM.attributeModified",
+            parameters: try WebInspectorTestJSONObject(
+                json: #"{"nodeId":"node","name":"data-index","value":"\#(index)"}"#
+            )
+        )
+    }
+    consumptionGate.open()
+
+    #expect(try await eventsTask.value == eventCount)
+}
+
+@Test
 func networkOverflowStopsDeliveryButRetainsThePhysicalLease() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     defer { Task { await runtime.close() } }
@@ -399,6 +436,78 @@ func currentPageScopeIncludesFrameTargetsWithoutInventedFrameMetadata() async th
     #expect(event.semanticTarget?.id == .currentPage)
     #expect(event.agentTarget?.id.rawValue == "frame-one")
     #expect(event.agentTarget?.kind == .frame)
+    await scope.close()
+}
+
+@Test
+func descendantActivationDoesNotBlockCurrentPageCommand() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    defer { Task { await runtime.close() } }
+    let scope = try await runtime.page.orderedScope(
+        descriptor: WebInspectorOrderedScopeDescriptor(
+            selection: .descendants(of: .currentPage, kinds: [.frame]),
+            decoders: [DOMWireCoding.eventDecoder],
+            capabilities: [frameOnlyConsoleCapability]
+        ),
+        buffering: .bounded(4)
+    )
+
+    try await runtime.peer.createTarget(.init(id: "frame-one", type: "frame"))
+    let pendingActivation = try await runtime.peer.commands.next()
+    #expect(pendingActivation.method == "Console.enable")
+    #expect(pendingActivation.destination == .target("frame-one"))
+
+    let documentTask = Task { try await scope.command(DOMWireCoding.getDocument()) }
+    let documentCommand = try await nextCommand(
+        from: runtime.peer,
+        within: .seconds(1)
+    )
+    #expect(documentCommand.method == "DOM.getDocument")
+    #expect(documentCommand.destination == .target("page-main"))
+    try await runtime.peer.reply(
+        to: documentCommand,
+        with: try WebInspectorTestJSONObject(json: domDocumentResult)
+    )
+    try await runtime.peer.reply(to: pendingActivation)
+
+    let document = try await documentTask.value
+    #expect(try await scope.drain(through: document.boundary).isEmpty)
+    await scope.close()
+}
+
+@Test
+func disappearingInitialDescendantDoesNotFailScopeRegistration() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    defer { Task { await runtime.close() } }
+    try await runtime.peer.createTarget(.init(id: "frame-one", type: "frame"))
+
+    let scopeTask = Task {
+        try await runtime.page.orderedScope(
+            descriptor: WebInspectorOrderedScopeDescriptor(
+                selection: .descendants(of: .currentPage, kinds: [.frame]),
+                decoders: [DOMWireCoding.eventDecoder],
+                capabilities: [frameOnlyConsoleCapability]
+            ),
+            buffering: .bounded(4)
+        )
+    }
+    let pendingActivation = try await runtime.peer.commands.next()
+    #expect(pendingActivation.method == "Console.enable")
+    #expect(pendingActivation.destination == .target("frame-one"))
+
+    try await runtime.peer.destroyTarget(id: "frame-one")
+    let scope = try await scopeTask.value
+
+    let documentTask = Task { try await scope.command(DOMWireCoding.getDocument()) }
+    let documentCommand = try await runtime.peer.commands.next()
+    #expect(documentCommand.method == "DOM.getDocument")
+    #expect(documentCommand.destination == .target("page-main"))
+    try await runtime.peer.reply(
+        to: documentCommand,
+        with: try WebInspectorTestJSONObject(json: domDocumentResult)
+    )
+    let document = try await documentTask.value
+    #expect(try await scope.drain(through: document.boundary).isEmpty)
     await scope.close()
 }
 
@@ -659,6 +768,36 @@ private func replyNext(
     if let destination { #expect(command.destination == destination) }
     try await peer.reply(to: command)
 }
+
+private struct CommandDispatchTimeout: Error {}
+
+private func nextCommand(
+    from peer: WebInspectorTestPeer,
+    within timeout: Duration
+) async throws -> WebInspectorTestPeer.Command {
+    try await withThrowingTaskGroup(
+        of: WebInspectorTestPeer.Command.self
+    ) { group in
+        group.addTask { try await peer.commands.next() }
+        group.addTask {
+            try await Task.sleep(for: timeout)
+            throw CommandDispatchTimeout()
+        }
+        defer { group.cancelAll() }
+        guard let command = try await group.next() else {
+            throw CommandDispatchTimeout()
+        }
+        return command
+    }
+}
+
+private let frameOnlyConsoleCapability = WebInspectorDomainCapabilityDescriptor(
+    domain: ConsoleWireCoding.eventDomain,
+    configurationID: .init(rawValue: "frame-only-activation-test"),
+    enable: ConsoleWireCoding.capability.enable,
+    release: .retainEnabled,
+    mutationOwner: .init(rawValue: "frame-only-activation-test")
+)
 
 private let pageFrameParameters = #"""
 {

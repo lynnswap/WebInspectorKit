@@ -412,7 +412,7 @@ func canonicalRuntimeClearTombstonesEveryContextInOneAgent() throws {
 }
 
 @Test
-func canonicalRuntimeDestroyRejectsSameGenerationReuseButResetPermitsNewIdentity() throws {
+func canonicalRuntimeCoalescesNormalPageReplayButRejectsIdentityReuse() throws {
     var fixture = try CanonicalConsoleRuntimeFixture()
     let firstScope = fixture.scope(agentTargetID: "agent")
     let insertion = try #require(
@@ -426,16 +426,25 @@ func canonicalRuntimeDestroyRejectsSameGenerationReuseButResetPermitsNewIdentity
         return
     }
 
-    // Runtime.enable is idempotent in WebKit. A second create in the same
-    // model generation is therefore not replay; it is identity reuse.
-    let beforeDuplicate = fixture.store
-    #expect(throws: CanonicalConsoleRuntimeProtocolViolation.self) {
+    let beforeReplay = fixture.store
+    let duplicate = try #require(
         try fixture.store.reduceRuntime(
             .executionContextCreated(canonicalRuntimeContext(id: "replayed")),
             scope: firstScope
         )
+    )
+    #expect(duplicate.isEmpty)
+    #expect(fixture.store == beforeReplay)
+
+    #expect(throws: CanonicalConsoleRuntimeProtocolViolation.self) {
+        try fixture.store.reduceRuntime(
+            .executionContextCreated(
+                canonicalRuntimeContext(id: "replayed", name: "conflicting")
+            ),
+            scope: firstScope
+        )
     }
-    #expect(fixture.store == beforeDuplicate)
+    #expect(fixture.store == beforeReplay)
 
     _ = try fixture.store.reduceRuntime(
         .executionContextDestroyed(Runtime.ExecutionContext.ID("replayed")),

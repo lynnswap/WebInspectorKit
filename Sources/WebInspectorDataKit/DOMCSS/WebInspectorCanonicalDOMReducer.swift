@@ -640,32 +640,68 @@ package struct WebInspectorCanonicalDOMReducer: Sendable {
         case .documentUpdated:
             throw WebInspectorCanonicalDOMError.documentUpdatedRequiresInvalidationBoundary
         case let .setChildNodes(parent, nodes):
+            guard isMaterialized(parent, in: scope) else {
+                return WebInspectorCanonicalDOMTransaction()
+            }
             return try setChildNodes(parent, nodes: nodes, scope: scope)
         case let .detachedRoot(node):
             return try insertDetachedRoot(node, scope: scope)
         case let .childNodeInserted(parent, previous, node):
+            guard isMaterialized(parent, in: scope) else {
+                return WebInspectorCanonicalDOMTransaction()
+            }
             return try insertChild(node, parent: parent, previous: previous, scope: scope)
         case let .childNodeRemoved(parent, node):
+            guard isMaterialized(parent, in: scope), isMaterialized(node, in: scope) else {
+                return WebInspectorCanonicalDOMTransaction()
+            }
             return try removeChild(node, parent: parent, scope: scope)
         case let .childNodeCountUpdated(rawID, count):
+            guard isMaterialized(rawID, in: scope) else {
+                return WebInspectorCanonicalDOMTransaction()
+            }
             return try updateChildCount(rawID, count: count, scope: scope)
         case let .attributeModified(rawID, name, value):
+            guard isMaterialized(rawID, in: scope) else {
+                return WebInspectorCanonicalDOMTransaction()
+            }
             return try modifyAttribute(rawID, name: name, value: value, scope: scope)
         case let .attributeRemoved(rawID, name):
+            guard isMaterialized(rawID, in: scope) else {
+                return WebInspectorCanonicalDOMTransaction()
+            }
             return try removeAttribute(rawID, name: name, scope: scope)
         case let .inlineStyleInvalidated(rawIDs):
             return try invalidateInlineStyles(rawIDs, scope: scope)
         case let .characterDataModified(rawID, value):
+            guard isMaterialized(rawID, in: scope) else {
+                return WebInspectorCanonicalDOMTransaction()
+            }
             return try modifyCharacterData(rawID, value: value, scope: scope)
         case let .shadowRootPushed(host, root):
+            guard isMaterialized(host, in: scope) else {
+                return WebInspectorCanonicalDOMTransaction()
+            }
             return try pushShadowRoot(root, host: host, scope: scope)
         case let .shadowRootPopped(host, root):
+            guard isMaterialized(host, in: scope), isMaterialized(root, in: scope) else {
+                return WebInspectorCanonicalDOMTransaction()
+            }
             return try popShadowRoot(root, host: host, scope: scope)
         case let .pseudoElementAdded(parent, element):
+            guard isMaterialized(parent, in: scope) else {
+                return WebInspectorCanonicalDOMTransaction()
+            }
             return try addPseudoElement(element, parent: parent, scope: scope)
         case let .pseudoElementRemoved(parent, element):
+            guard isMaterialized(parent, in: scope), isMaterialized(element, in: scope) else {
+                return WebInspectorCanonicalDOMTransaction()
+            }
             return try removePseudoElement(element, parent: parent, scope: scope)
         case let .willDestroyDOMNode(rawID):
+            guard isMaterialized(rawID, in: scope) else {
+                return WebInspectorCanonicalDOMTransaction()
+            }
             return try destroyDetachedNode(rawID, scope: scope)
         case .inspect, .unknown:
             return WebInspectorCanonicalDOMTransaction()
@@ -1129,22 +1165,17 @@ private extension WebInspectorCanonicalDOMReducer {
         case let .loaded(loadedChildIDs):
             childIDs = loadedChildIDs
         case .unrequested(count: 0):
-            if let rawPreviousID {
-                throw WebInspectorCanonicalDOMError.invalidPreviousSibling(
-                    nodeID(rawPreviousID, in: scope)
-                )
-            }
             childIDs = []
-        case .unrequested:
-            throw WebInspectorCanonicalDOMError.invalidParent(parentID)
+        case let .unrequested(count):
+            parentRecord.children = .unrequested(count: count + 1)
+            var plan = singleRecordPlan(parentRecord)
+            plan.resourceInvalidations = [.target(scope)]
+            return try commit(plan)
         }
         let insertionIndex: Int
         if let rawPreviousID {
             let previousID = nodeID(rawPreviousID, in: scope)
-            guard let previousIndex = childIDs.firstIndex(of: previousID) else {
-                throw WebInspectorCanonicalDOMError.invalidPreviousSibling(previousID)
-            }
-            insertionIndex = previousIndex + 1
+            insertionIndex = childIDs.firstIndex(of: previousID).map { $0 + 1 } ?? 0
         } else {
             insertionIndex = 0
         }
@@ -1259,7 +1290,8 @@ private extension WebInspectorCanonicalDOMReducer {
             throw WebInspectorCanonicalDOMError.missingNode(id)
         }
         guard let index = record.attributes.firstIndex(where: { $0.name == name }) else {
-            throw WebInspectorCanonicalDOMError.invalidAttributes(id)
+            performanceCounters.incrementalNodeVisitCount += 1
+            return WebInspectorCanonicalDOMTransaction()
         }
         record.attributes.remove(at: index)
         var plan = singleRecordPlan(record)
@@ -1271,10 +1303,7 @@ private extension WebInspectorCanonicalDOMReducer {
         _ rawIDs: [DOM.Node.ID],
         scope: WebInspectorDOMDocumentScopeStorage
     ) throws -> WebInspectorCanonicalDOMTransaction {
-        let ids = rawIDs.map { nodeID($0, in: scope) }
-        for id in ids where recordsByID[id] == nil {
-            throw WebInspectorCanonicalDOMError.missingNode(id)
-        }
+        let ids = rawIDs.map { nodeID($0, in: scope) }.filter { recordsByID[$0] != nil }
         performanceCounters.incrementalNodeVisitCount += ids.count
         var transaction = WebInspectorCanonicalDOMTransaction()
         transaction.resourceInvalidations = Set(
@@ -1497,6 +1526,13 @@ private extension WebInspectorCanonicalDOMReducer {
         in scope: WebInspectorDOMDocumentScopeStorage
     ) -> WebInspectorDOMNodeIdentityStorage {
         WebInspectorDOMNodeIdentityStorage(documentScope: scope, rawNodeID: rawID)
+    }
+
+    func isMaterialized(
+        _ rawID: DOM.Node.ID,
+        in scope: WebInspectorDOMDocumentScopeStorage
+    ) -> Bool {
+        recordsByID[nodeID(rawID, in: scope)] != nil
     }
 
     func build(

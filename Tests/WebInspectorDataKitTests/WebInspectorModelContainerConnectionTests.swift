@@ -186,6 +186,58 @@ func unsupportedNetworkCapabilityDoesNotFailSiblingFeatures() async throws {
 
 @MainActor
 @Test
+func networkBootstrapRemainsAttachedAcrossALargePreBootstrapEventBurst() async throws {
+    let container = WebInspectorModelContainer(
+        configuration: .init(enabledFeatures: [.network])
+    )
+
+    try await withDataKitTestRuntime { runtime in
+        await runtime.wire.respond(to: "Page.enable")
+        await runtime.wire.respond(to: "Network.enable")
+        let resourceTreeReply = await runtime.wire.deferReply(
+            to: "Page.getResourceTree",
+            with: try connectionResourceTreeResult()
+        )
+        await runtime.wire.respond(to: "Network.disable")
+        await runtime.wire.respond(to: "Page.disable")
+
+        let attachment = Task {
+            try await container.attach(owning: runtime.proxy)
+        }
+        _ = await runtime.wire.observations.waitForCommands(
+            method: "Page.getResourceTree",
+            count: 1
+        )
+
+        for index in 0..<4_097 {
+            try await runtime.wire.emitTargetEvent(
+                targetID: "page-main",
+                method: "Page.loadEventFired",
+                parameters: try testJSONObject(
+                    #"{"timestamp":\#(index)}"#
+                )
+            )
+        }
+        resourceTreeReply.open()
+        try await attachment.value
+        #expect(
+            await featureBecameReady(
+                .network,
+                in: container
+            )
+        )
+
+        if case .attached = container.state {
+            // Expected.
+        } else {
+            Issue.record("Network bootstrap burst terminated the attachment.")
+        }
+        await container.close()
+    }
+}
+
+@MainActor
+@Test
 func detachJoinsConcurrentContainerCloseThroughContextRetirement()
     async
 {
@@ -401,6 +453,23 @@ private func waitForFeature(
         if case .ready = state { return }
     }
     preconditionFailure("The \(featureID.name) state stream closed before becoming ready.")
+}
+
+@MainActor
+private func featureBecameReady(
+    _ featureID: WebInspectorFeatureID,
+    in container: WebInspectorModelContainer
+) async -> Bool {
+    for _ in 0..<10_000 {
+        if case .ready = container.featureState(for: featureID) {
+            return true
+        }
+        if case .failed = container.state {
+            return false
+        }
+        await Task.yield()
+    }
+    return false
 }
 
 private func waitForFeatureToBecomeUnsupported(

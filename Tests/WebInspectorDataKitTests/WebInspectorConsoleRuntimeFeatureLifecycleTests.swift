@@ -66,6 +66,145 @@ func consoleRuntimeBootstrapAppliesNavigationPrefixInFIFOOrder() async throws {
 
 @MainActor
 @Test
+func consoleRuntimeBootstrapPreservesContextAcrossALargePageEventBurst() async throws {
+    let container = WebInspectorModelContainer(
+        configuration: .init(enabledFeatures: [.consoleRuntime])
+    )
+    let contexts = WebInspectorFetchedResultsController<RuntimeContext>(
+        modelContext: container.mainContext
+    )
+
+    do {
+        try await withDataKitTestRuntime { runtime in
+            await enqueueConsoleRuntimeCapabilityReplies(runtime)
+            let resourceTreeReply = await runtime.wire.deferReply(
+                to: "Page.getResourceTree",
+                with: try consoleRuntimeLifecycleResourceTreeResult(
+                    mainLoaderID: "loader-initial"
+                )
+            )
+            let attachment = Task {
+                try await container.attach(owning: runtime.proxy)
+            }
+            _ = await runtime.wire.observations.waitForCommands(
+                method: "Page.getResourceTree",
+                count: 1
+            )
+
+            try await emitRuntimeContext(
+                id: "main-context",
+                name: "main",
+                frameID: "main-frame",
+                through: runtime.wire
+            )
+            for index in 0..<2_049 {
+                try await runtime.wire.emitTargetEvent(
+                    targetID: "page-main",
+                    method: "Page.loadEventFired",
+                    parameters: try testJSONObject(
+                        #"{"timestamp":\#(index)}"#
+                    )
+                )
+            }
+            resourceTreeReply.open()
+            try await attachment.value
+            await enqueueConsoleRuntimeDisableReplies(runtime)
+            guard await waitForConsoleRuntimeReady(in: container) else {
+                Issue.record(
+                    "Console/Runtime bootstrap burst terminated the attachment."
+                )
+                await contexts.close()
+                await container.close()
+                return
+            }
+            try await contexts.performFetch()
+
+            #expect(contexts.fetchedObjects?.map(\.name) == ["main"])
+            if case .attached = container.state {
+                // Expected.
+            } else {
+                Issue.record("Console/Runtime bootstrap burst terminated the attachment.")
+            }
+
+            await contexts.close()
+            await container.close()
+        }
+    } catch {
+        await contexts.close()
+        await container.close()
+        throw error
+    }
+}
+
+@MainActor
+@Test
+func duplicateNormalPageContextDoesNotTerminateConsoleRuntimeFeature() async throws {
+    let container = WebInspectorModelContainer(
+        configuration: .init(enabledFeatures: [.consoleRuntime])
+    )
+    let contexts = WebInspectorFetchedResultsController<RuntimeContext>(
+        modelContext: container.mainContext
+    )
+
+    do {
+        try await withDataKitTestRuntime { runtime in
+            try await prepareConsoleRuntimeLifecycleAttachment(
+                container,
+                runtime: runtime
+            )
+            try await contexts.performFetch()
+
+            try await emitRuntimeContext(
+                id: "main-context",
+                name: "main",
+                frameID: "main-frame",
+                through: runtime.wire
+            )
+            #expect(await waitForRuntimeContextNames(["main"], in: contexts))
+
+            try await emitRuntimeContext(
+                id: "main-context",
+                name: "main",
+                frameID: "main-frame",
+                through: runtime.wire
+            )
+            try await emitRuntimeContext(
+                id: "second-context",
+                name: "second",
+                frameID: "main-frame",
+                through: runtime.wire
+            )
+
+            #expect(
+                await waitForRuntimeContextNames(
+                    ["main", "second"],
+                    in: contexts
+                )
+            )
+            if case .attached = container.state {
+                // Expected.
+            } else {
+                Issue.record("Container detached after a duplicate page context.")
+            }
+            if case .ready = container.runtime.state {
+                // Expected.
+            } else {
+                Issue.record("Console/Runtime feature terminated after a duplicate page context.")
+            }
+
+            await contexts.close()
+            await enqueueConsoleRuntimeDisableReplies(runtime)
+            await container.close()
+        }
+    } catch {
+        await contexts.close()
+        await container.close()
+        throw error
+    }
+}
+
+@MainActor
+@Test
 func consoleRuntimeInvalidatesHandlesBeforeAwaitingNavigationRelease() async throws {
     let container = WebInspectorModelContainer(
         configuration: .init(enabledFeatures: [.consoleRuntime])

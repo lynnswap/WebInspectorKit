@@ -386,7 +386,7 @@ package actor WebInspectorConsoleRuntimeFeature: WebInspectorModelFeature {
         )
         let scope = try await connection.page.orderedScope(
             descriptor: descriptor,
-            buffering: .bounded(2_048)
+            buffering: .unbounded
         )
         orderedScope = scope
         try await bootstrapCurrentTarget(in: scope, storeSink: storeSink)

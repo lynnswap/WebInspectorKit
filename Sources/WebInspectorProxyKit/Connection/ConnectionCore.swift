@@ -162,7 +162,11 @@ package actor ConnectionCore {
         route endpointRoute: WebInspectorRoute,
         scopeID: WebInspectorOrderedScopeID
     ) async throws -> WebInspectorScopedReply<Result> {
-        try await joinScopeActivations(scopeID)
+        try await joinCommandTargetActivation(
+            command,
+            route: endpointRoute,
+            scopeID: scopeID
+        )
         guard var scope = scopes.entries[scopeID], scope.deliveryIsActive else {
             throw WebInspectorProxyError.replyBoundaryUnavailable
         }
@@ -250,11 +254,21 @@ package actor ConnectionCore {
 
         do {
             for targetID in selectedTargets.sorted(by: { $0.rawValue < $1.rawValue }) {
-                try await acquireCapabilities(
-                    descriptor.capabilities,
-                    for: targetID,
-                    scopeID: id
-                )
+                do {
+                    try await acquireCapabilities(
+                        descriptor.capabilities,
+                        for: targetID,
+                        scopeID: id
+                    )
+                } catch {
+                    try Task.checkCancellation()
+                    guard shouldIgnoreInitialAcquisitionFailure(
+                        for: targetID,
+                        in: id
+                    ) else {
+                        throw error
+                    }
+                }
             }
             return WebInspectorOrderedEventScope(
                 id: id,
@@ -772,22 +786,55 @@ package actor ConnectionCore {
         scopeActivations.removeValue(forKey: id)
     }
 
-    private func joinScopeActivations(
-        _ scopeID: WebInspectorOrderedScopeID
+    private func joinCommandTargetActivation<Result: Sendable>(
+        _ command: WebInspectorWireCommand<Result>,
+        route endpointRoute: WebInspectorRoute,
+        scopeID: WebInspectorOrderedScopeID
     ) async throws {
         while true {
             try Task.checkCancellation()
             guard let scope = scopes.entries[scopeID], scope.deliveryIsActive else {
                 throw WebInspectorProxyError.replyBoundaryUnavailable
             }
+
+            let route = try resolve(command.target, endpoint: endpointRoute)
+            let targetID = targets.resolve(route)
+            if route != .root, targetID == nil {
+                throw WebInspectorProxyError.pageUnavailable
+            }
+            let expectedGeneration = generation
             let activations = scopeActivations.values
-                .filter { $0.scopeID == scopeID }
+                .filter {
+                    $0.scopeID == scopeID
+                        && $0.targetID == targetID
+                        && $0.generation == expectedGeneration
+                }
                 .map(\.task)
-            guard !activations.isEmpty else { return }
             for activation in activations {
                 await activation.value
             }
+
+            try Task.checkCancellation()
+            guard let scope = scopes.entries[scopeID], scope.deliveryIsActive else {
+                throw WebInspectorProxyError.replyBoundaryUnavailable
+            }
+            let currentRoute = try resolve(command.target, endpoint: endpointRoute)
+            if generation == expectedGeneration,
+               targets.resolve(currentRoute) == targetID {
+                return
+            }
         }
+    }
+
+    private func shouldIgnoreInitialAcquisitionFailure(
+        for targetID: ProtocolTarget.ID,
+        in scopeID: WebInspectorOrderedScopeID
+    ) -> Bool {
+        guard let scope = scopes.entries[scopeID], scope.deliveryIsActive else {
+            return false
+        }
+        return !scope.selectedTargets.contains(targetID)
+            || targets.record(for: targetID) == nil
     }
 
     private func activeScope(

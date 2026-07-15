@@ -747,13 +747,29 @@ private extension CanonicalConsoleRuntimeStore {
             rawContextID: context.id,
             scope: scope
         )
+        let membership = CanonicalRuntimeContextMembership(
+            semanticTargetID: scope.target.id,
+            navigationEpoch: scope.navigationEpoch,
+            runtimeBindingEpoch: runtimeBindingEpoch
+        )
         if runtimeContextTombstones.contains(id) {
             throw
                 CanonicalConsoleRuntimeProtocolViolation
                 .tombstonedRuntimeContextIdentityReuse(id)
         }
-        guard runtimeContextsByID[id] == nil else {
-            throw CanonicalConsoleRuntimeProtocolViolation.runtimeContextIdentityReuse(id)
+        if let existing = runtimeContextsByID[id] {
+            // WebInspectorUI coalesces duplicate Normal page contexts because
+            // some WebKit backends replay the current context after enable.
+            // Conflicting reuse remains a protocol violation.
+            guard scope.agentTarget.kind == .page,
+                  context.kind == .normal,
+                  existing.membership == membership,
+                  existing.name == context.name,
+                  existing.frameID == context.frameID,
+                  existing.kind == context.kind else {
+                throw CanonicalConsoleRuntimeProtocolViolation.runtimeContextIdentityReuse(id)
+            }
+            return CanonicalConsoleRuntimeTransaction()
         }
         let lookupKey = RuntimeLookupKey(
             agentTargetID: scope.agentTarget.id,
@@ -769,11 +785,7 @@ private extension CanonicalConsoleRuntimeStore {
         let record = CanonicalRuntimeContextRecord(
             id: id,
             insertionOrdinal: insertionOrdinal,
-            membership: CanonicalRuntimeContextMembership(
-                semanticTargetID: scope.target.id,
-                navigationEpoch: scope.navigationEpoch,
-                runtimeBindingEpoch: runtimeBindingEpoch
-            ),
+            membership: membership,
             name: context.name,
             frameID: context.frameID,
             kind: context.kind
