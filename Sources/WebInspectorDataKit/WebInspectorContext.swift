@@ -5388,6 +5388,15 @@ extension WebInspectorContext {
                 }
                 continue
             }
+            if inserted == false,
+               plan.requiresQuery == false,
+               results.sectionBy == nil {
+                guard let itemIndex = networkRequestOrderIndicesByID[request.id] else {
+                    preconditionFailure("An unfiltered Network request must have a registered order index.")
+                }
+                results.publishUnfilteredNetworkRequestUpdate(request, at: itemIndex)
+                continue
+            }
             let oldSnapshot = results.networkSnapshotForDelta
             let resultTopologyRevision = results.topologyRevision
             let indexSequence = networkRequestIndexSequence

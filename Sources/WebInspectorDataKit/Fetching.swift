@@ -321,6 +321,9 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
     @ObservationIgnored private var networkQueryPlan: NetworkRequestQueryPlan?
     @ObservationIgnored private var networkQueryState: NetworkRequestQueryState?
     @ObservationIgnored private var networkResultSnapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID>?
+#if DEBUG
+    @ObservationIgnored package private(set) var networkFullMembershipVisitCountForTesting = 0
+#endif
 
     init(
         fetchDescriptor: WebInspectorFetchDescriptor<Model>,
@@ -590,6 +593,9 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
         _ request: NetworkRequest,
         lookup: (NetworkRequest.ID) -> NetworkRequest?
     ) {
+#if DEBUG
+        networkFullMembershipVisitCountForTesting += items.count
+#endif
         guard var state = networkQueryState else {
             refreshAfterItemMutation(request)
             networkResultSnapshot = WebInspectorFetchedResultsSnapshot(sections: sections)
@@ -599,6 +605,38 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
         networkQueryState = state
         setItems(state.visibleRequests(lookup: lookup), updatedItemIDs: [request.id])
         networkResultSnapshot = WebInspectorFetchedResultsSnapshot(sections: sections)
+    }
+
+    func publishUnfilteredNetworkRequestUpdate(
+        _ request: NetworkRequest,
+        at itemIndex: Int
+    ) {
+        precondition(networkQueryState == nil, "An unfiltered Network update cannot have query state.")
+        precondition(sectionBy == nil, "An unfiltered Network update cannot have sections.")
+        precondition(
+            items.indices.contains(itemIndex) && items[itemIndex] === request,
+            "An unfiltered Network update must reference its registered item position."
+        )
+        let snapshot = networkSnapshotForDelta
+        precondition(
+            snapshot.sections.count == 1
+                && snapshot.sections[0].itemIDs.indices.contains(itemIndex)
+                && snapshot.sections[0].itemIDs[itemIndex] == request.id,
+            "An unfiltered Network update must preserve its existing snapshot position."
+        )
+        guard transactionRelay.hasContinuations else {
+            return
+        }
+        transactionRelay.yield(WebInspectorFetchedResultsTransaction<NetworkRequest>(
+            oldSnapshot: snapshot,
+            newSnapshot: snapshot,
+            itemChanges: [
+                .update(
+                    itemID: request.id,
+                    indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: itemIndex)
+                ),
+            ]
+        ))
     }
 
     func applyNetworkDelta(
