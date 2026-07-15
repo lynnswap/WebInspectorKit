@@ -13,7 +13,7 @@ package struct SentTargetMessage: Equatable, Sendable {
     }
 }
 
-package actor FakeTransportBackend: TransportBackend {
+package actor FakeTransportBackend: ConnectionBackend {
     private struct MessageWaiter: Sendable {
         var id: UInt64
         var ordinal: Int
