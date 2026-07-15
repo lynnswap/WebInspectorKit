@@ -1847,7 +1847,10 @@ public final class WebInspectorContext {
     }
 
     private func clearRuntimeObjects() {
-        runtimeObjectsByID = [:]
+        let objects = runtimeObjectsByID
+        for (id, object) in objects {
+            removeRuntimeObject(id: id, object: object)
+        }
         runtimeObjectIDsByProxyID = [:]
         runtimeObjectOwnersByID = [:]
         nextRuntimeObjectOrdinal = 0
@@ -1871,9 +1874,11 @@ public final class WebInspectorContext {
     }
 
     private func removeRuntimeObject(id: RuntimeObject.ID, object: RuntimeObject) {
+        let proxyID = object.proxyID
         runtimeObjectsByID[id] = nil
         runtimeObjectOwnersByID[id] = nil
-        if let proxyID = object.proxyID,
+        object.invalidateRemoteHandle()
+        if let proxyID,
            runtimeObjectIDsByProxyID[proxyID] == id {
             runtimeObjectIDsByProxyID.removeValue(forKey: proxyID)
         }
@@ -5407,8 +5412,7 @@ extension WebInspectorContext {
             applyExecutionContextDestroyed(id)
         case let .executionContextsCleared(eventTargetID):
             let resolvedTargetID = runtimeAuthorityTargetID(for: eventTargetID)
-            if resolvedTargetID == currentPage?.id
-                || resolvedTargetID == targetID.map({ runtimeAuthorityTargetID(for: $0) }) {
+            if resolvedTargetID == currentPage?.id {
                 clearExecutionContexts()
             } else {
                 clearExecutionContexts(targetID: resolvedTargetID)
@@ -5431,7 +5435,9 @@ extension WebInspectorContext {
            payload.frameID != nil,
            resolvedTargetID != currentPage?.id,
            runtimeContextsByID.values.contains(where: { context in
-               context.authority.targetID == resolvedTargetID && context.kind == .normal
+               context.id != id
+                   && context.authority.targetID == resolvedTargetID
+                   && context.kind == .normal
            }) {
             clearExecutionContexts(targetID: resolvedTargetID)
         }

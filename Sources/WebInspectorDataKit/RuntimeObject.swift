@@ -135,12 +135,12 @@ public final class RuntimeObject: WebInspectorPersistentModel {
     public private(set) var preview: Runtime.ObjectPreview?
 
     @ObservationIgnored weak var modelContext: WebInspectorContext?
-    @ObservationIgnored var proxyID: Runtime.RemoteObject.ID?
+    var proxyID: Runtime.RemoteObject.ID?
     @ObservationIgnored var authority: Authority
 
     /// A Boolean value indicating whether this object has a live remote handle.
     public var canRequestProperties: Bool {
-        proxyID != nil
+        proxyID != nil && modelContext != nil
     }
 
     init(
@@ -164,24 +164,29 @@ public final class RuntimeObject: WebInspectorPersistentModel {
 
     /// Requests own property values for this object.
     public func properties(isolation: isolated (any Actor) = #isolation) async throws -> [Property] {
+        guard let modelContext else {
+            throw WebInspectorProxyError.disconnected("RuntimeObject is not registered in this WebInspectorContext.")
+        }
         guard canRequestProperties else {
             return []
-        }
-        guard let modelContext else {
-            throw WebInspectorProxyError.disconnected("RuntimeObject is not registered in a WebInspectorContext.")
         }
         return try await modelContext.properties(for: self, isolation: isolation)
     }
 
     /// Requests collection entries for this object.
     public func collectionEntries(isolation: isolated (any Actor) = #isolation) async throws -> [Entry] {
+        guard let modelContext else {
+            throw WebInspectorProxyError.disconnected("RuntimeObject is not registered in this WebInspectorContext.")
+        }
         guard canRequestProperties else {
             return []
         }
-        guard let modelContext else {
-            throw WebInspectorProxyError.disconnected("RuntimeObject is not registered in a WebInspectorContext.")
-        }
         return try await modelContext.collectionEntries(for: self, isolation: isolation)
+    }
+
+    func invalidateRemoteHandle() {
+        proxyID = nil
+        modelContext = nil
     }
 
     func update(from remoteObject: Runtime.RemoteObject) {

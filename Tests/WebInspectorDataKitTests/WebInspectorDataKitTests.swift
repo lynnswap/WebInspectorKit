@@ -8924,6 +8924,7 @@ func consoleMessagesClearedInvalidatesRuntimeObjectsWithoutRuntimeCommand() asyn
     )
 
     try await waitUntil { results.items.isEmpty }
+    #expect(parameter.canRequestProperties == false)
     do {
         _ = try await parameter.properties()
         Issue.record("Expected cleared console RuntimeObject to be stale.")
@@ -9076,6 +9077,7 @@ func staleRuntimeObjectThrowsWithoutFailingContext() async throws {
     try await waitUntil {
         context.executionContexts.isEmpty && context.selectedContext == nil
     }
+    #expect(evaluation.object.canRequestProperties == false)
 
     do {
         _ = try await evaluation.object.properties()
@@ -9303,6 +9305,31 @@ func newNormalFrameContextReplacesPriorTargetContextsAndObjects() async throws {
     )
     let oldObject = try await context.evaluate("window", in: firstContext).object
 
+    await runtime.backend.enqueue(
+        [Runtime.PropertyDescriptor(name: "frameProperty")],
+        for: "Runtime",
+        method: "getProperties"
+    )
+    _ = try await oldObject.properties()
+
+    context.apply(
+        .executionContextCreated(Runtime.ExecutionContext(
+            id: firstContextID,
+            name: "First Updated",
+            frameID: frameID,
+            kind: .normal
+        )),
+        targetID: frameTargetID
+    )
+    #expect(context.executionContexts.first { $0.id == firstContext.id } === firstContext)
+    #expect(firstContext.name == "First Updated")
+    #expect(oldObject.canRequestProperties)
+
+    let frameCommands = await runtime.backend.recordedCommands()
+        .filter { $0.domain == "Runtime" }
+    #expect(frameCommands.first { $0.method == "evaluate" }?.targetID == frameTargetID)
+    #expect(frameCommands.first { $0.method == "getProperties" }?.targetID == frameTargetID)
+
     context.apply(
         .executionContextCreated(Runtime.ExecutionContext(
             id: replacementContextID,
@@ -9314,6 +9341,7 @@ func newNormalFrameContextReplacesPriorTargetContextsAndObjects() async throws {
     )
 
     #expect(context.executionContexts.map(\.id) == [RuntimeContext.ID(replacementContextID)])
+    #expect(oldObject.canRequestProperties == false)
     do {
         _ = try await oldObject.properties()
         Issue.record("Expected the replaced frame RuntimeObject to be stale.")
@@ -9388,16 +9416,95 @@ func destroyedTargetRejectsLateCollectionEntriesReply() async throws {
         method: "getCollectionEntries",
         count: 1
     )
+    let frameCommands = await runtime.backend.recordedCommands()
+        .filter { $0.domain == "Runtime" }
+    #expect(frameCommands.first { $0.method == "evaluate" }?.targetID == frameTargetID)
+    #expect(frameCommands.first { $0.method == "getCollectionEntries" }?.targetID == frameTargetID)
 
     let lifecycleBaseline = context.eventPumpAppliedSequenceForTesting
     await runtime.backend.emit(.targetDestroyed(targetID: frameTargetID), target: pageTarget)
     #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: lifecycleBaseline))
     #expect(context.executionContexts.isEmpty)
+    #expect(collection.canRequestProperties == false)
     await collectionGate.open()
 
     await entriesTask.value
     #expect(entriesError == .disconnected("Runtime command result is no longer current."))
     #expect(context.state == .attached)
+}
+
+@MainActor
+@Test
+func childScopedExecutionContextsClearedPreservesMainRuntimeAuthority() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (pageTarget, context) = try await startContext(runtime: runtime)
+    let mainContextID = Runtime.ExecutionContext.ID("main-clear-context")
+    let frameTargetID = WebInspectorTarget.ID("frame-clear-target")
+    let childContextID = Runtime.ExecutionContext.ID(
+        "child-clear-context",
+        scopedToTargetRawValue: frameTargetID.rawValue
+    )
+
+    context.apply(
+        .executionContextCreated(Runtime.ExecutionContext(
+            id: mainContextID,
+            name: "Main",
+            frameID: FrameID("main-frame"),
+            kind: .normal
+        )),
+        targetID: pageTarget.id
+    )
+    context.apply(
+        .executionContextCreated(Runtime.ExecutionContext(
+            id: childContextID,
+            name: "Child",
+            frameID: FrameID("child-frame"),
+            kind: .normal
+        )),
+        targetID: frameTargetID
+    )
+    let mainContext = try #require(context.executionContexts.first {
+        $0.id == RuntimeContext.ID(mainContextID)
+    })
+    let childContext = try #require(context.executionContexts.first {
+        $0.id == RuntimeContext.ID(childContextID)
+    })
+
+    await runtime.backend.enqueue(
+        Runtime.EvaluationResult(
+            object: Runtime.RemoteObject(
+                id: Runtime.RemoteObject.ID("main-clear-object"),
+                kind: .object
+            )
+        ),
+        for: "Runtime",
+        method: "evaluate"
+    )
+    let mainObject = try await context.evaluate("window", in: mainContext).object
+    await runtime.backend.enqueue(
+        Runtime.EvaluationResult(
+            object: Runtime.RemoteObject(
+                id: Runtime.RemoteObject.ID(
+                    "child-clear-object",
+                    scopedToTargetRawValue: frameTargetID.rawValue
+                ),
+                kind: .object
+            )
+        ),
+        for: "Runtime",
+        method: "evaluate"
+    )
+    let childObject = try await context.evaluate("window", in: childContext).object
+
+    context.apply(
+        .executionContextsCleared(target: frameTargetID),
+        targetID: pageTarget.id
+    )
+
+    #expect(context.executionContexts.map(\.id) == [RuntimeContext.ID(mainContextID)])
+    #expect(context.selectedContext === mainContext)
+    #expect(mainObject.canRequestProperties)
+    #expect(childObject.canRequestProperties == false)
 }
 
 @MainActor
