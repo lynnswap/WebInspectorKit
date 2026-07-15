@@ -3,11 +3,13 @@ import Foundation
 package actor TransportSession {
     package typealias TimeoutSleep = @Sendable (Duration) async throws -> Void
     package typealias ResponseTimeoutDidFire = @Sendable () async -> Void
+    package typealias MessageParser = @Sendable (String) async throws -> ParsedProtocolMessage
 
     private let backend: any TransportBackend
     private let responseTimeout: Duration?
     private let timeoutSleep: TimeoutSleep
     private let responseTimeoutDidFire: ResponseTimeoutDidFire
+    private let messageParser: MessageParser
     private var nextCommandID: UInt64
     private var eventSequences: TransportEventSequenceTracker
     private var replyStore: TransportReplyStore
@@ -24,12 +26,16 @@ package actor TransportSession {
         backend: any TransportBackend,
         responseTimeout: Duration? = nil,
         timeoutSleep: TimeoutSleep? = nil,
-        responseTimeoutDidFire: ResponseTimeoutDidFire? = nil
+        responseTimeoutDidFire: ResponseTimeoutDidFire? = nil,
+        messageParser: @escaping MessageParser = {
+            try await TransportMessageParser.parse($0)
+        }
     ) {
         self.backend = backend
         self.responseTimeout = responseTimeout
         self.timeoutSleep = timeoutSleep ?? { try await Task.sleep(for: $0) }
         self.responseTimeoutDidFire = responseTimeoutDidFire ?? {}
+        self.messageParser = messageParser
         nextCommandID = 0
         eventSequences = TransportEventSequenceTracker()
         replyStore = TransportReplyStore()
@@ -180,6 +186,12 @@ package actor TransportSession {
         )
     }
 
+    package func requireOpen() throws {
+        guard !closed else {
+            throw TransportSession.Error.transportClosed
+        }
+    }
+
     package func targetID(forExecutionContext key: RuntimeContext.Key) -> ProtocolTarget.ID? {
         runtimeContextRegistry.targetID(for: key)
     }
@@ -288,7 +300,7 @@ package actor TransportSession {
         }
 
         while let rawMessage = inboundMessageQueue.popNext() {
-            guard let parsed = try? await TransportMessageParser.parse(rawMessage) else {
+            guard let parsed = try? await messageParser(rawMessage) else {
                 continue
             }
             await handleRootMessage(parsed)
@@ -361,7 +373,7 @@ package actor TransportSession {
             guard let dispatch = try? TransportMessageParser.decode(TargetDispatchParams.self, from: parsed.paramsData) else {
                 return
             }
-            guard let targetMessage = try? await TransportMessageParser.parse(dispatch.message) else {
+            guard let targetMessage = try? await messageParser(dispatch.message) else {
                 return
             }
             await handleTargetMessage(targetMessage, targetID: dispatch.targetId)
@@ -412,7 +424,7 @@ package actor TransportSession {
 
         if method == "Target.dispatchMessageFromTarget" {
             guard let dispatch = try? TransportMessageParser.decode(TargetDispatchParams.self, from: parsed.paramsData),
-                  let targetMessage = try? await TransportMessageParser.parse(dispatch.message) else {
+                  let targetMessage = try? await messageParser(dispatch.message) else {
                 return
             }
             await handleTargetMessage(targetMessage, targetID: dispatch.targetId)
