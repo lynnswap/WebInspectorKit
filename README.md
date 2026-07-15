@@ -164,6 +164,20 @@ await nodes.close()
 await runtime.close()
 ```
 
+## Testing against real WebKit
+
+The repository includes a self-authored, loopback-only integration site for
+manual Monocly verification through a real `WKWebView` and WebKit protocol
+backend. It combines a large DOM, mutation burst, iframe, shadow/pseudo nodes,
+navigation, and representative Network traffic without third-party assets:
+
+```sh
+DEVICE_UDID=<booted-simulator-udid> Scripts/run-monocly-fixture.sh
+```
+
+See [Inspector Integration Fixture](Tools/InspectorFixture/README.md) for the
+verification matrix and deterministic fixture regression test.
+
 ## Documentation
 
 The DocC workflow publishes [package documentation](https://lynnswap.github.io/WebInspectorKit/documentation/)

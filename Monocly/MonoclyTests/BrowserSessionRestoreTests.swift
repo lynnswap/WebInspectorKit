@@ -159,6 +159,18 @@ struct BrowserSessionRestoreTests {
     }
 
     @Test
+    func diagnosticLaunchCanUseItsInitialURLWithoutReadingOrWritingTheSavedSession() throws {
+        let diagnosticURL = try #require(URL(string: "http://127.0.0.1:8765/a"))
+        let configuration = BrowserLaunchConfiguration.current(environment: [
+            "WEBSPECTOR_EPHEMERAL_SESSION": "1",
+            "WEBSPECTOR_INITIAL_URL": diagnosticURL.absoluteString,
+        ])
+
+        #expect(configuration.initialURL == diagnosticURL)
+        #expect(configuration.sessionPersistenceMode == .ephemeral)
+    }
+
+    @Test
     func ephemeralPersistenceDoesNotRestoreOrScheduleAutosave() throws {
         let scheduler = ManualDelayScheduler()
         let browserWindow = BrowserWindow(
