@@ -119,7 +119,7 @@ public final class NetworkEntry: WebInspectorPersistentModel {
     public private(set) var lifecycle: Lifecycle
 
     @ObservationIgnored weak var modelContext: WebInspectorModelContext?
-    @ObservationIgnored package private(set) var isInvalidated: Bool
+    package private(set) var isInvalidated: Bool
 
     package init(
         canonical record: CanonicalNetworkEntryRecord,

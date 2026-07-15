@@ -143,7 +143,7 @@ struct NetworkPanelModelTests {
 
     @MainActor
     @Test
-    func filteringOutSelectionReturnsToListAndClearDeletesCanonicalEntries() async throws {
+    func filteringKeepsCurrentDetailUntilClearInvalidatesCanonicalEntry() async throws {
         let fixture = try await NetworkPanelFixture(requests: [
             .init(
                 id: "script",
@@ -167,8 +167,8 @@ struct NetworkPanelModelTests {
         await model.waitForQueryUpdates()
 
         #expect(model.entries.snapshot?.itemIDs.isEmpty == true)
-        #expect(model.selectedEntryID == nil)
-        #expect(model.selectedRequests.isEmpty)
+        #expect(model.selectedEntryID == entry.id)
+        #expect(model.selectedRequests.map(\.id) == [request.id])
 
         model.clearRequests()
         _ = await allEntryUpdates.next()
@@ -177,6 +177,33 @@ struct NetworkPanelModelTests {
         #expect(model.selectedEntryID == nil)
         #expect(model.selectedRequests.isEmpty)
         await allEntries.close()
+        await model.retire()
+        await fixture.close()
+    }
+
+    @MainActor
+    @Test
+    func filteredEntryCannotBecomeNewSelection() async throws {
+        let fixture = try await NetworkPanelFixture(requests: [
+            .init(
+                id: "script",
+                url: "https://cdn.example.test/app.js",
+                resourceType: .script
+            )
+        ])
+        let request = try await fixture.request(
+            url: "https://cdn.example.test/app.js"
+        )
+        let entry = try await fixture.entry(containing: request.id)
+        let model = try await NetworkPanelModel.make(context: fixture.context)
+        model.setSearchText("does-not-match")
+        await model.waitForQueryUpdates()
+
+        model.selectEntry(entry.id)
+
+        #expect(model.route == .list)
+        #expect(model.selectedEntryID == nil)
+        #expect(model.selectedRequests.isEmpty)
         await model.retire()
         await fixture.close()
     }

@@ -33,7 +33,7 @@ final class CanonicalNetworkPanelFixture {
         await wire.respond(
             to: "Page.getResourceTree",
             with: try WebInspectorTestJSONObject(
-                json: networkResourceTreeBootstrapResult
+                json: blankPageNetworkResourceTreeBootstrapResult
             )
         )
         await wire.respond(to: "Network.disable")
@@ -151,12 +151,7 @@ final class CanonicalNetworkPanelFixture {
 
     func clear() async throws {
         try await container.network.clear()
-        var updates = requestUpdates
-        let update = await updates.next()
-        requestUpdates = updates
-        guard update != nil else {
-            throw NetworkFixtureError.queryEnded
-        }
+        try await waitForCanonicalUpdate()
     }
 
     func apply(_ event: Network.Event) async throws {
@@ -166,12 +161,7 @@ final class CanonicalNetworkPanelFixture {
             method: method,
             parameters: parameters
         )
-        var updates = requestUpdates
-        let update = await updates.next()
-        requestUpdates = updates
-        guard update != nil else {
-            throw NetworkFixtureError.queryEnded
-        }
+        try await waitForCanonicalUpdate()
     }
 
     func request(url: String) -> NetworkRequest? {
@@ -190,6 +180,15 @@ final class CanonicalNetworkPanelFixture {
             runtime: runtime,
             wire: wire
         )
+    }
+
+    private func waitForCanonicalUpdate() async throws {
+        var requestIterator = requestUpdates
+        let requestUpdate = await requestIterator.next()
+        requestUpdates = requestIterator
+        guard requestUpdate != nil else {
+            throw NetworkFixtureError.queryEnded
+        }
     }
 
     deinit {
@@ -240,14 +239,17 @@ private enum NetworkFixtureError: Error {
     case queryEnded
 }
 
-private let networkResourceTreeBootstrapResult = #"""
+// These tests assert only explicitly emitted Network events. A blank page keeps
+// bootstrap document membership out of that input; bootstrap coverage lives in
+// the DataKit lifecycle tests.
+private let blankPageNetworkResourceTreeBootstrapResult = #"""
 {
     "frameTree": {
         "frame": {
             "id": "main-frame",
             "loaderId": "main-frame-loader",
             "name": "",
-            "url": "https://example.test/",
+            "url": "",
             "mimeType": "text/html"
         },
         "resources": []
@@ -282,6 +284,8 @@ private struct NetworkFixtureLifecycle:
     TestTrait,
     TestScoping
 {
+    nonisolated var isRecursive: Bool { true }
+
     func provideScope(
         for test: Test,
         testCase: Test.Case?,
@@ -3607,13 +3611,17 @@ struct NetworkDetailViewControllerTests {
         )
         let model = try await NetworkPanelModel.make(context: fixture.context)
         let listViewController = NetworkListViewController(model: model)
-        let window = showInWindow(
-            listViewController,
-            useUIKitVisibility: true
-        )
+        let window = showInWindow(listViewController)
         defer { window.isHidden = true }
         await listViewController.flushPendingSnapshotUpdateForTesting()
         let firstEntryID = fixture.entryID(containing: firstRequestID)
+        let observedEntry: NetworkEntry = try #require(
+            fixture.context.model(for: firstEntryID)
+        )
+        let cell = NetworkListCell(frame: .zero)
+        cell.bind(entry: observedEntry, renderingActive: true)
+        let baselineRenderCount = cell.renderCountForTesting
+        let responseRevisionBaseline = try #require(model.entries.revision).rawValue
 
         try await fixture.receiveResponse(
             id: "first",
@@ -3622,31 +3630,30 @@ struct NetworkDetailViewControllerTests {
             resourceType: .fetch,
             timestamp: 2
         )
-        let responseRevision = try #require(model.entries.revision).rawValue
         #expect(
             await listViewController.waitForFetchedResultsRevisionForTesting(
-                responseRevision
+                after: responseRevisionBaseline
             )
         )
-        await listViewController.flushPendingSnapshotUpdateForTesting()
         #expect(
-            listViewController.lastAppliedReconfigureEntryIDsForTesting
+            listViewController.lastRequestedReconfigureEntryIDsForTesting
                 == [firstEntryID]
         )
+        #expect(cell.renderCountForTesting > baselineRenderCount)
+        #expect(cell.fileTypeLabelForTesting == "json")
 
+        let insertionRevisionBaseline = try #require(model.entries.revision).rawValue
         let secondRequestID = try await fixture.insert(
             id: "second",
             url: "https://example.test/second",
             resourceType: .fetch,
             timestamp: 3
         )
-        let insertionRevision = try #require(model.entries.revision).rawValue
         #expect(
             await listViewController.waitForFetchedResultsRevisionForTesting(
-                insertionRevision
+                after: insertionRevisionBaseline
             )
         )
-        await listViewController.flushPendingSnapshotUpdateForTesting()
         #expect(
             listViewController.displayedEntryIDsForTesting == [
                 fixture.entryID(containing: secondRequestID),

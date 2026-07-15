@@ -17,29 +17,115 @@ package enum NetworkRoute: Equatable {
 
 @MainActor
 private final class NetworkResponseBodyFetchCoordinator {
+    private struct Fetch {
+        let operationID: UUID
+        let body: NetworkBody
+        let revision: NetworkBody.ResponseFetchRevision
+        let task: Task<Void, Never>
+    }
+
     private let network: WebInspectorNetwork
-    private var fetchesInFlight: Set<NetworkRequest.ID> = []
+    private var fetchesInFlight: [NetworkRequest.ID: Fetch] = [:]
+    private var isActive = true
 
     init(network: WebInspectorNetwork) {
         self.network = network
     }
 
     func fetchIfNeeded(for request: NetworkRequest) {
-        guard request.canFetchResponseBody,
-              fetchesInFlight.insert(request.id).inserted else {
+        guard isActive,
+              request.canFetchResponseBody else {
             return
         }
         let requestID = request.id
-        Task { @MainActor [weak self, network] in
-            defer { self?.fetchesInFlight.remove(requestID) }
+        let body = request.responseBody
+        if let superseded = fetchesInFlight.removeValue(forKey: requestID) {
+            superseded.task.cancel()
+            superseded.body.cancelResponseFetch(for: superseded.revision)
+        }
+        guard let revision = body.beginResponseFetch() else { return }
+        let operationID = UUID()
+        let task = Task { @MainActor [weak self, network, body] in
+            defer {
+                self?.finish(requestID: requestID, operationID: operationID)
+            }
             do {
-                _ = try await network.responseBody(for: requestID)
+                let response = try await network.responseBody(for: requestID)
+                guard let self,
+                      self.isCurrent(requestID: requestID, operationID: operationID)
+                else { return }
+                guard Task.isCancelled == false else {
+                    body.cancelResponseFetch(for: revision)
+                    return
+                }
+                _ = body.finishResponseFetch(response, for: revision)
             } catch {
+                guard let self,
+                      self.isCurrent(requestID: requestID, operationID: operationID)
+                else { return }
+                if Task.isCancelled {
+                    body.cancelResponseFetch(for: revision)
+                    return
+                }
+                let commandError = webInspectorCommandError(
+                    error,
+                    featureID: .network,
+                    phase: "Network.responseBody"
+                )
+                _ = body.failResponseFetch(commandError, for: revision)
                 networkPanelLogger.error(
-                    "Response body request failed id=\(String(describing: requestID), privacy: .public) error=\(String(describing: error), privacy: .public)"
+                    "Response body request failed id=\(String(describing: requestID), privacy: .public) error=\(String(describing: commandError), privacy: .public)"
                 )
             }
         }
+        fetchesInFlight[requestID] = Fetch(
+            operationID: operationID,
+            body: body,
+            revision: revision,
+            task: task
+        )
+    }
+
+    func close() async {
+        guard isActive else { return }
+        isActive = false
+        let fetches = Array(fetchesInFlight.values)
+        fetchesInFlight.removeAll(keepingCapacity: false)
+        for fetch in fetches {
+            fetch.body.cancelResponseFetch(for: fetch.revision)
+            fetch.task.cancel()
+        }
+        for fetch in fetches {
+            await fetch.task.value
+        }
+    }
+
+    func synchronouslyCancel() {
+        guard isActive else { return }
+        isActive = false
+        let fetches = Array(fetchesInFlight.values)
+        fetchesInFlight.removeAll(keepingCapacity: false)
+        for fetch in fetches {
+            fetch.body.cancelResponseFetch(for: fetch.revision)
+            fetch.task.cancel()
+        }
+    }
+
+    private func isCurrent(
+        requestID: NetworkRequest.ID,
+        operationID: UUID
+    ) -> Bool {
+        isActive && fetchesInFlight[requestID]?.operationID == operationID
+    }
+
+    private func finish(
+        requestID: NetworkRequest.ID,
+        operationID: UUID
+    ) {
+        guard fetchesInFlight[requestID]?.operationID == operationID else {
+            return
+        }
+        fetchesInFlight[requestID] = nil
     }
 }
 
@@ -109,6 +195,7 @@ package final class NetworkPanelModel {
     }
 
     isolated deinit {
+        responseBodyFetchCoordinator.synchronouslyCancel()
         routeObservation?.cancel()
         queryUpdateTask?.cancel()
         retirementTask?.cancel()
@@ -117,8 +204,8 @@ package final class NetworkPanelModel {
 
     package var selectedEntryID: NetworkEntry.ID? {
         guard case let .detail(id) = route,
-              itemIDs.contains(id),
-              context.model(for: id) != nil else {
+              let entry = context.model(for: id),
+              entry.isInvalidated == false else {
             return nil
         }
         return id
@@ -154,7 +241,8 @@ package final class NetworkPanelModel {
         guard isActive else { return }
         guard let id,
               itemIDs.contains(id),
-              context.model(for: id) != nil else {
+              let entry = context.model(for: id),
+              entry.isInvalidated == false else {
             route = .list
             return
         }
@@ -246,7 +334,9 @@ package final class NetworkPanelModel {
         queryUpdateTask = nil
         queryTask?.cancel()
         let entries = entries
+        let responseBodyFetchCoordinator = responseBodyFetchCoordinator
         let task = Task { @MainActor in
+            await responseBodyFetchCoordinator.close()
             await queryTask?.value
             await entries.close()
         }
@@ -257,6 +347,7 @@ package final class NetworkPanelModel {
 
     package func synchronouslyCancelForOwnerDeinit() {
         isActive = false
+        responseBodyFetchCoordinator.synchronouslyCancel()
         routeObservation?.cancel()
         routeObservation = nil
         queryUpdateTask?.cancel()
@@ -282,8 +373,8 @@ package final class NetworkPanelModel {
 
     private func reconcileRoute() {
         guard case let .detail(id) = route,
-              itemIDs.contains(id),
-              context.model(for: id) != nil else {
+              let entry = context.model(for: id),
+              entry.isInvalidated == false else {
             if case .detail = route { route = .list }
             return
         }

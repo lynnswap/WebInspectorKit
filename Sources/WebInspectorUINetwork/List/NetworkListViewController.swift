@@ -86,7 +86,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private var entryIDsEvaluationCountStorageForTesting = 0
     private var snapshotApplyCountStorageForTesting = 0
     private var cellReconfigureCountStorageForTesting = 0
-    private var lastAppliedReconfigureEntryIDsStorageForTesting: Set<NetworkEntry.ID> = []
+    private var lastRequestedReconfigureEntryIDsStorageForTesting: Set<NetworkEntry.ID> = []
     private var filterMenuBuildCountStorageForTesting = 0
 #endif
     private lazy var filterHostingMenu = UIHostingMenu(
@@ -479,9 +479,11 @@ package final class NetworkListViewController: UICollectionViewController, UISea
             let entryIDsToRebind = update.requiresFullReconfigure
                 ? Set(update.snapshot.itemIdentifiers)
                 : update.reconfigureEntryIDs
+#if DEBUG
+            lastRequestedReconfigureEntryIDsStorageForTesting = entryIDsToRebind
+#endif
             let reboundEntryIDs = rebindVisibleCells(entryIDs: entryIDsToRebind)
 #if DEBUG
-            lastAppliedReconfigureEntryIDsStorageForTesting = reboundEntryIDs
             if reboundEntryIDs.isEmpty == false {
                 cellReconfigureCountStorageForTesting += 1
             }
@@ -507,9 +509,6 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         if reconfigureEntryIDs.isEmpty == false {
             snapshot.reconfigureItems(reconfigureEntryIDs)
         }
-#if DEBUG
-        lastAppliedReconfigureEntryIDsStorageForTesting = Set(reconfigureEntryIDs)
-#endif
         guard let generation = snapshotCoordinator.state.beginApplying() else {
             snapshotCoordinator.pendingUpdate = update
             return
@@ -813,12 +812,8 @@ extension NetworkListViewController {
         dataSource.snapshot().sectionIdentifiers.count
     }
 
-    package var lastAppliedReconfigureEntryIDsForTesting: Set<NetworkEntry.ID> {
-        lastAppliedReconfigureEntryIDsStorageForTesting
-    }
-
-    package func networkListCellForTesting(at indexPath: IndexPath) -> NetworkListCell? {
-        collectionView.cellForItem(at: indexPath) as? NetworkListCell
+    package var lastRequestedReconfigureEntryIDsForTesting: Set<NetworkEntry.ID> {
+        lastRequestedReconfigureEntryIDsStorageForTesting
     }
 
     package var hasPendingSnapshotUpdateForTesting: Bool {
@@ -924,6 +919,29 @@ extension NetworkListViewController {
             }
         }
         return true
+    }
+
+    package func waitForFetchedResultsRevisionForTesting(
+        after baselineRevision: UInt64,
+        timeout: Duration = .seconds(1)
+    ) async -> Bool {
+        let baselineRevision = WebInspectorFetchedResultsRevision(
+            rawValue: baselineRevision
+        )
+        while lastFetchedResultsUpdateRevisionStorageForTesting.map({
+            $0 > baselineRevision
+        }) != true {
+            let baselineCount = fetchedResultsUpdateDeliveryCountStorageForTesting
+            guard await waitForFetchedResultsUpdateDeliveryForTesting(
+                after: baselineCount,
+                timeout: timeout
+            ) else {
+                return false
+            }
+        }
+        await flushPendingSnapshotUpdateForTesting()
+        return snapshotCoordinator.state.isApplying == false
+            && snapshotCoordinator.pendingUpdate == nil
     }
 
     private func waitForSnapshotUpdateCompletionForTesting() async {

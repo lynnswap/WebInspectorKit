@@ -477,6 +477,10 @@ public final class WebSocketState {
 /// Observable request or response body state for a network request.
 @Observable
 public final class NetworkBody {
+    package struct ResponseFetchRevision: Hashable, Sendable {
+        fileprivate let rawValue: UInt64
+    }
+
     /// The body side represented by the model.
     public enum Role: CaseIterable, Hashable, Sendable {
         /// A request body.
@@ -644,6 +648,44 @@ public final class NetworkBody {
         case .fetching, .loaded, .failed:
             false
         }
+    }
+
+    package func beginResponseFetch() -> ResponseFetchRevision? {
+        guard needsFetch else { return nil }
+        phase = .fetching
+        return ResponseFetchRevision(rawValue: responseRevision)
+    }
+
+    @discardableResult
+    package func finishResponseFetch(
+        _ body: Network.Body,
+        for revision: ResponseFetchRevision
+    ) -> Bool {
+        guard responseRevision == revision.rawValue,
+              case .fetching = phase else {
+            return false
+        }
+        load(body)
+        return true
+    }
+
+    @discardableResult
+    package func failResponseFetch(
+        _ error: WebInspectorCommandError,
+        for revision: ResponseFetchRevision
+    ) -> Bool {
+        guard responseRevision == revision.rawValue,
+              case .fetching = phase else {
+            return false
+        }
+        fail(.command(error))
+        return true
+    }
+
+    package func cancelResponseFetch(for revision: ResponseFetchRevision) {
+        guard responseRevision == revision.rawValue,
+              case .fetching = phase else { return }
+        phase = .available
     }
 
     func updateHints(kind: Kind, sourceSyntaxKind: SyntaxKind) {
