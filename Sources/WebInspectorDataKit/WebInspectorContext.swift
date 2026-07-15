@@ -994,7 +994,7 @@ public final class WebInspectorContext {
 
     func fetchResponseBody(
         for request: NetworkRequest,
-        expectedBody: NetworkBody,
+        expectedResponseRevision: NetworkBody.ResponseRevision,
         isolation: isolated (any Actor) = #isolation
     ) async {
         requireOwner(isolation)
@@ -1002,7 +1002,7 @@ public final class WebInspectorContext {
             finishResponseBodyFetch(
                 .failure(.disconnected("WebInspectorDataKit has no current page target.")),
                 for: request,
-                expectedBody: expectedBody
+                expectedResponseRevision: expectedResponseRevision
             )
             return
         }
@@ -1012,9 +1012,17 @@ public final class WebInspectorContext {
                 for: request.proxyID,
                 backendResourceIdentifier: request.backendResourceIdentifier
             )
-            finishResponseBodyFetch(.success(body), for: request, expectedBody: expectedBody)
+            finishResponseBodyFetch(
+                .success(body),
+                for: request,
+                expectedResponseRevision: expectedResponseRevision
+            )
         } catch let error as WebInspectorProxyError {
-            finishResponseBodyFetch(.failure(error), for: request, expectedBody: expectedBody)
+            finishResponseBodyFetch(
+                .failure(error),
+                for: request,
+                expectedResponseRevision: expectedResponseRevision
+            )
         } catch {
             finishResponseBodyFetch(
                 .failure(.commandFailed(
@@ -1023,7 +1031,7 @@ public final class WebInspectorContext {
                     message: String(describing: error)
                 )),
                 for: request,
-                expectedBody: expectedBody
+                expectedResponseRevision: expectedResponseRevision
             )
         }
     }
@@ -1031,12 +1039,15 @@ public final class WebInspectorContext {
     private func finishResponseBodyFetch(
         _ result: Result<Network.Body, WebInspectorProxyError>,
         for request: NetworkRequest,
-        expectedBody: NetworkBody
+        expectedResponseRevision: NetworkBody.ResponseRevision
     ) {
         guard requestsByID[request.id] === request else {
             return
         }
-        request.finishResponseBodyFetch(result: result, expectedBody: expectedBody)
+        request.finishResponseBodyFetch(
+            result: result,
+            expectedResponseRevision: expectedResponseRevision
+        )
     }
 
     func requestChildren(

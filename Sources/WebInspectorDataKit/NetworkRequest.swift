@@ -275,6 +275,10 @@ public final class WebSocketState {
 /// Observable request or response body state for a network request.
 @Observable
 public final class NetworkBody {
+    struct ResponseRevision: Equatable, Sendable {
+        fileprivate let rawValue: UInt64
+    }
+
     /// The body side represented by the model.
     public enum Role: CaseIterable, Hashable, Sendable {
         /// A request body.
@@ -395,6 +399,7 @@ public final class NetworkBody {
     public private(set) var textRepresentationSyntaxKind: SyntaxKind
     @ObservationIgnored private var isBatchingTextRepresentationInvalidation: Bool
     @ObservationIgnored private var needsTextRepresentationInvalidation: Bool
+    @ObservationIgnored private var responseRevision: UInt64
 
     package init(
         role: Role = .response,
@@ -419,6 +424,7 @@ public final class NetworkBody {
         textRepresentationSyntaxKind = .plainText
         isBatchingTextRepresentationInvalidation = false
         needsTextRepresentationInvalidation = false
+        responseRevision = 0
         refreshTextRepresentation()
     }
 
@@ -438,8 +444,26 @@ public final class NetworkBody {
         }
     }
 
-    func markFetching() {
+    func beginResponseFetch() -> ResponseRevision {
+        precondition(role == .response, "Only a response NetworkBody can begin a response fetch.")
+        precondition(needsFetch, "A response body fetch can begin only while its body is available.")
         phase = .fetching
+        return ResponseRevision(rawValue: responseRevision)
+    }
+
+    func finishResponseFetch(
+        _ result: Result<Network.Body, WebInspectorProxyError>,
+        for revision: ResponseRevision
+    ) {
+        guard revision.rawValue == responseRevision else {
+            return
+        }
+        switch result {
+        case let .success(body):
+            load(body)
+        case let .failure(error):
+            fail(error)
+        }
     }
 
     func load(_ body: Network.Body) {
@@ -460,6 +484,36 @@ public final class NetworkBody {
         phase = .failed(error)
     }
 
+    func resetForResponse(
+        _ response: Network.Response? = nil,
+        fallbackURL: String = ""
+    ) {
+        precondition(
+            role == .response,
+            "Only a response NetworkBody can adopt response metadata."
+        )
+        precondition(
+            responseRevision < UInt64.max,
+            "A NetworkBody exhausted its response revision space."
+        )
+        responseRevision += 1
+        let hints = Self.bodyHints(
+            mimeType: response?.mimeType,
+            headers: response?.headers ?? [:],
+            url: response?.url ?? fallbackURL,
+            role: .response
+        )
+        withTextRepresentationInvalidationBatch {
+            kind = hints.kind
+            full = nil
+            isBase64Encoded = false
+            isTruncated = false
+            sourceSyntaxKind = hints.syntaxKind
+        }
+        size = nil
+        phase = .available
+    }
+
     static func makeRequestBody(for request: Network.Request) -> NetworkBody? {
         guard let postData = request.postData else {
             return nil
@@ -477,21 +531,6 @@ public final class NetworkBody {
             size: postData.utf8.count,
             sourceSyntaxKind: hints.syntaxKind,
             phase: .loaded
-        )
-    }
-
-    static func makeResponseBody(for response: Network.Response, fallbackURL: String = "") -> NetworkBody {
-        let hints = bodyHints(
-            mimeType: response.mimeType,
-            headers: response.headers,
-            url: response.url ?? fallbackURL,
-            role: .response
-        )
-        return NetworkBody(
-            role: .response,
-            kind: hints.kind,
-            sourceSyntaxKind: hints.syntaxKind,
-            phase: .available
         )
     }
 
@@ -771,8 +810,8 @@ public final class NetworkRequest: WebInspectorFetchableModel {
     /// Request body state, if the request has a body.
     public private(set) var requestBody: NetworkBody?
 
-    /// Response body state.
-    public private(set) var responseBody: NetworkBody
+    /// Response body state. Its identity is stable for this request model.
+    public let responseBody: NetworkBody
 
     @ObservationIgnored weak var modelContext: WebInspectorContext?
     @ObservationIgnored private var currentRequest: Network.Request
@@ -827,7 +866,9 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         redirects = []
         webSocket = resourceType == .webSocket ? WebSocketState() : nil
         requestBody = NetworkBody.makeRequestBody(for: request)
-        responseBody = NetworkBody()
+        let responseBody = NetworkBody()
+        responseBody.resetForResponse(fallbackURL: request.url)
+        self.responseBody = responseBody
         self.modelContext = modelContext
         currentRequest = request
     }
@@ -906,13 +947,19 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         guard canFetchResponseBody else {
             return
         }
-        let expectedBody = responseBody
-        expectedBody.markFetching()
+        let expectedResponseRevision = responseBody.beginResponseFetch()
         guard let modelContext else {
-            expectedBody.fail(.disconnected("NetworkRequest is not registered in a WebInspectorContext."))
+            responseBody.finishResponseFetch(
+                .failure(.disconnected("NetworkRequest is not registered in a WebInspectorContext.")),
+                for: expectedResponseRevision
+            )
             return
         }
-        await modelContext.fetchResponseBody(for: self, expectedBody: expectedBody, isolation: isolation)
+        await modelContext.fetchResponseBody(
+            for: self,
+            expectedResponseRevision: expectedResponseRevision,
+            isolation: isolation
+        )
     }
 
     func applyRequestWillBeSent(
@@ -944,7 +991,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         redirects = []
         webSocket = resourceType == .webSocket ? WebSocketState() : nil
         requestBody = NetworkBody.makeRequestBody(for: request)
-        responseBody = NetworkBody()
+        responseBody.resetForResponse(fallbackURL: currentRequest.url)
         state = .pending
     }
 
@@ -981,7 +1028,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         encodedDataLength = 0
         metrics = nil
         requestBody = NetworkBody.makeRequestBody(for: request)
-        responseBody = NetworkBody()
+        responseBody.resetForResponse(fallbackURL: currentRequest.url)
         state = .pending
     }
 
@@ -1011,7 +1058,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         if let timestamp {
             responseReceivedTimestamp = timestamp
         }
-        responseBody = NetworkBody.makeResponseBody(for: response, fallbackURL: currentRequest.url)
+        responseBody.resetForResponse(response, fallbackURL: currentRequest.url)
         state = .responded
     }
 
@@ -1079,20 +1126,15 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         metrics = nil
         redirects = []
         requestBody = NetworkBody.makeRequestBody(for: currentRequest)
-        responseBody = NetworkBody.makeResponseBody(for: response, fallbackURL: currentRequest.url)
+        responseBody.resetForResponse(response, fallbackURL: currentRequest.url)
         state = .finished
     }
 
-    func finishResponseBodyFetch(result: Result<Network.Body, WebInspectorProxyError>, expectedBody: NetworkBody) {
-        guard responseBody === expectedBody else {
-            return
-        }
-        switch result {
-        case let .success(body):
-            expectedBody.load(body)
-        case let .failure(error):
-            expectedBody.fail(error)
-        }
+    func finishResponseBodyFetch(
+        result: Result<Network.Body, WebInspectorProxyError>,
+        expectedResponseRevision: NetworkBody.ResponseRevision
+    ) {
+        responseBody.finishResponseFetch(result, for: expectedResponseRevision)
     }
 
     func applyWebSocketCreated(url: String) {
@@ -1110,7 +1152,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         resourceType = .webSocket
         requestHeaders = request.headers
         requestBody = NetworkBody.makeRequestBody(for: request)
-        responseBody = NetworkBody()
+        responseBody.resetForResponse(fallbackURL: currentRequest.url)
         status = nil
         statusText = nil
         responseURL = nil

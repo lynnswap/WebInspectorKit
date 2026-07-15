@@ -6278,9 +6278,159 @@ func responseRequestHeadersRefreshRequestBodyHints() async throws {
     )
 
     try await waitUntil { body.kind == .form }
+    #expect(request.requestBody === body)
     #expect(request.requestHeaders["Content-Type"] == "application/x-www-form-urlencoded")
     #expect(body.textRepresentation == "name=Jane Doe\ncity=Tokyo East")
     #expect(body.textRepresentationSyntaxKind == .plainText)
+}
+
+@MainActor
+@Test
+func responseMetadataAndRedirectPreserveResponseBodyIdentity() throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let requestID = Network.Request.ID("stable-response-body")
+    let request = NetworkRequest(
+        request: Network.Request(
+            id: requestID,
+            url: "https://example.com/start.txt",
+            method: "GET"
+        ),
+        initiator: nil,
+        resourceType: .fetch,
+        timestamp: 1,
+        modelContext: context
+    )
+    let body = request.responseBody
+
+    request.applyResponse(
+        Network.Response(
+            url: "https://example.com/start.txt",
+            status: 200,
+            mimeType: "text/plain"
+        ),
+        resourceType: .fetch,
+        timestamp: 2
+    )
+    body.load(Network.Body(data: "first payload", base64Encoded: false))
+
+    request.applyResponse(
+        Network.Response(
+            url: "https://example.com/video.mp4",
+            status: 206,
+            mimeType: "video/mp4"
+        ),
+        resourceType: .media,
+        timestamp: 3
+    )
+
+    #expect(request.responseBody === body)
+    #expect(body.phase == .available)
+    #expect(body.full == nil)
+    #expect(body.size == nil)
+    #expect(body.kind == .binary)
+
+    body.load(Network.Body(data: "second payload", base64Encoded: false))
+    request.applyRedirect(
+        to: Network.Request(
+            id: requestID,
+            url: "https://example.com/final.json",
+            method: "GET"
+        ),
+        redirectResponse: Network.Response(
+            url: "https://example.com/video.mp4",
+            status: 302,
+            mimeType: "video/mp4"
+        ),
+        timestamp: 4,
+        resourceType: .fetch
+    )
+
+    #expect(request.responseBody === body)
+    #expect(body.phase == .available)
+    #expect(body.full == nil)
+    #expect(body.size == nil)
+    #expect(body.kind == .text)
+    #expect(body.sourceSyntaxKind == .json)
+}
+
+enum StaleResponseBodyFetchCompletion: Sendable {
+    case success
+    case failure
+}
+
+@MainActor
+@Test(arguments: [
+    StaleResponseBodyFetchCompletion.success,
+    StaleResponseBodyFetchCompletion.failure,
+])
+func staleResponseBodyFetchCompletionCannotMutateNewerRevision(
+    completion: StaleResponseBodyFetchCompletion
+) async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let requestID = Network.Request.ID("stale-body-\(completion)")
+    let gate = WebInspectorTestGate()
+
+    await emitFinishedRequest(id: requestID, target: target, backend: runtime.backend)
+    try await waitUntil {
+        context.registeredRequest(for: NetworkRequest.ID(requestID))?.state == .finished
+    }
+    let request = try #require(context.registeredRequest(for: NetworkRequest.ID(requestID)))
+    let body = request.responseBody
+    await runtime.backend.hold(domain: "Network", method: "getResponseBody", gate: gate)
+
+    let fetchTask = Task {
+        await request.fetchResponseBody()
+    }
+    try await waitUntil {
+        await runtime.backend.recordedCommands().contains(
+            RecordedCommand(domain: "Network", method: "getResponseBody")
+        )
+    }
+
+    await runtime.backend.emit(
+        .responseReceived(
+            id: requestID,
+            response: Network.Response(
+                url: "https://example.com/replacement.mp4",
+                status: 206,
+                mimeType: "video/mp4"
+            ),
+            resourceType: .media,
+            timestamp: 4
+        ),
+        target: target
+    )
+    try await waitUntil {
+        request.responseBody.phase == .available && request.responseBody.kind == .binary
+    }
+
+    switch completion {
+    case .success:
+        await runtime.backend.enqueue(
+            Network.Body(data: "obsolete", base64Encoded: false),
+            for: "Network",
+            method: "getResponseBody"
+        )
+    case .failure:
+        await runtime.backend.enqueueFailure(
+            WebInspectorProxyError.commandFailed(
+                domain: "Network",
+                method: "getResponseBody",
+                message: "obsolete failure"
+            ),
+            for: "Network",
+            method: "getResponseBody"
+        )
+    }
+    await gate.open()
+    await fetchTask.value
+
+    #expect(request.responseBody === body)
+    #expect(body.phase == .available)
+    #expect(body.full == nil)
+    #expect(body.size == nil)
+    #expect(body.kind == .binary)
 }
 
 @MainActor
