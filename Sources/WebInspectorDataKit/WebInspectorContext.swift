@@ -192,7 +192,6 @@ public final class WebInspectorContext {
     private var runtimeObjectOwnersByID: [RuntimeObject.ID: Set<RuntimeObjectOwner>]
     private var nextRuntimeObjectOrdinal: Int
     private var pendingInspectedNodeID: DOMNode.ID?
-    private var consoleObjectGroupReleaseTasks: [WebInspectorTarget.ID: Task<Void, Never>]
     private var pageHighlightDocumentGeneration: Int?
 
     /// Creates a context owned by the supplied actor.
@@ -263,7 +262,6 @@ public final class WebInspectorContext {
         runtimeObjectOwnersByID = [:]
         nextRuntimeObjectOrdinal = 0
         pendingInspectedNodeID = nil
-        consoleObjectGroupReleaseTasks = [:]
         pageHighlightDocumentGeneration = nil
         WebInspectorDataKitLog.debug("context state=\(state.logDescription)")
     }
@@ -295,9 +293,6 @@ public final class WebInspectorContext {
             task.cancel()
         }
         stopEventPumps()
-        for task in consoleObjectGroupReleaseTasks.values {
-            task.cancel()
-        }
         resolveEventPumpAppliedWaitersForTesting(result: false)
     }
 
@@ -1419,7 +1414,6 @@ public final class WebInspectorContext {
         }
         styleToggleTasks = [:]
         stopEventPumps()
-        cancelConsoleObjectGroupReleaseTasks()
         pendingInspectedNodeID = nil
         isElementPickerEnabled = false
         currentPage = nil
@@ -2245,7 +2239,6 @@ extension WebInspectorContext {
         let generation = advanceCurrentPageGeneration(isolation: isolation)
         advanceDOMDocumentGeneration(isolation: isolation)
         resetCurrentPageLifecycleModels(isolation: isolation)
-        cancelConsoleObjectGroupReleaseTasks()
         for task in styleToggleTasks.values {
             task.cancel()
         }
@@ -2366,7 +2359,6 @@ extension WebInspectorContext {
             task.cancel()
         }
         styleToggleTasks = [:]
-        cancelConsoleObjectGroupReleaseTasks()
         invalidateElementPickerOperation()
         isElementPickerEnabled = false
         notifyStatusChanged()
@@ -4311,8 +4303,9 @@ extension WebInspectorContext {
             message.updateRepeatCount(count, timestamp: timestamp)
             refreshAllConsoleMessages(updatedItemIDs: [message.id])
         case .messagesCleared:
+            // WebKit releases its "console" Runtime object group before
+            // emitting this event. DataKit owns only the local registrations.
             clearConsoleMessages(targetID: targetID)
-            releaseConsoleRuntimeObjectGroup(targetID: targetID, isolation: isolation)
         case .unknown:
             break
         }
@@ -4347,42 +4340,6 @@ extension WebInspectorContext {
         }
         unregisterConsoleRuntimeObjectsIfUnreferenced(from: removedMessages)
         refreshAllConsoleMessages()
-    }
-
-    private func releaseConsoleRuntimeObjectGroup(
-        targetID: WebInspectorTarget.ID? = nil,
-        isolation: isolated (any Actor) = #isolation
-    ) {
-        let target: WebInspectorTarget
-        if let targetID {
-            target = proxy.frameTarget(id: targetID)
-        } else if let currentPage {
-            target = currentPage
-        } else {
-            skipEvent("Console.messagesCleared arrived without a current page target")
-            return
-        }
-        // Release tasks are tracked per target: a clear for one frame target
-        // must not cancel another target's still-pending release.
-        let key = targetID ?? .currentPage
-        consoleObjectGroupReleaseTasks[key]?.cancel()
-        consoleObjectGroupReleaseTasks[key] = Task { [weak self, target] in
-            _ = isolation
-            do {
-                try await target.runtime.releaseObjectGroup(.console)
-            } catch is CancellationError {
-                return
-            } catch {
-                self?.failIfTerminal(error, operation: "Runtime.releaseObjectGroup")
-            }
-        }
-    }
-
-    private func cancelConsoleObjectGroupReleaseTasks() {
-        for task in consoleObjectGroupReleaseTasks.values {
-            task.cancel()
-        }
-        consoleObjectGroupReleaseTasks = [:]
     }
 
     private func applyMessageAdded(_ payload: Console.Message, targetID: WebInspectorTarget.ID?) {

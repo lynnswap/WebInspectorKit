@@ -1709,11 +1709,10 @@ func transportBackedFrameRuntimeAndConsoleEventsKeepTargetScope() async throws {
 
 @MainActor
 @Test
-func consoleMessagesClearedForDistinctTargetsReleasesBothObjectGroups() async throws {
+func consoleMessagesClearedForDistinctTargetsDoNotSendRuntimeCommands() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (_, context) = try await startContext(runtime: runtime)
-    await runtime.backend.enqueue((), for: "Runtime", method: "releaseObjectGroup")
-    await runtime.backend.enqueue((), for: "Runtime", method: "releaseObjectGroup")
+    let commandCountBeforeClear = await runtime.backend.recordedCommands().count
 
     context.apply(
         Console.Event.messagesCleared(reason: Console.ClearReason(rawValue: "console-api")),
@@ -1724,11 +1723,8 @@ func consoleMessagesClearedForDistinctTargetsReleasesBothObjectGroups() async th
         targetID: WebInspectorTarget.ID("console-frame-b")
     )
 
-    try await waitUntil {
-        await runtime.backend.recordedCommands().filter {
-            $0 == RecordedCommand(domain: "Runtime", method: "releaseObjectGroup")
-        }.count == 2
-    }
+    let clearCommands = await runtime.backend.recordedCommands().dropFirst(commandCountBeforeClear)
+    #expect(!clearCommands.contains(RecordedCommand(domain: "Runtime", method: "releaseObjectGroup")))
 }
 
 @MainActor
@@ -6816,17 +6812,12 @@ func consoleEventsPopulateRepeatAndClearFetchedMessages() async throws {
     try await waitUntil { results.items.count == 2 }
     #expect(results.items.map(\.text) == ["hello", "second"])
 
-    await runtime.backend.enqueue((), for: "Runtime", method: "releaseObjectGroup")
     await runtime.backend.emit(
         .messagesCleared(reason: Console.ClearReason(rawValue: "console-api")),
         target: target
     )
     try await waitUntil { results.items.isEmpty }
     #expect(context.registeredMessage(for: message.id) == nil)
-    try await waitUntil {
-        await runtime.backend.recordedCommands()
-            .contains(RecordedCommand(domain: "Runtime", method: "releaseObjectGroup"))
-    }
 }
 
 @MainActor
@@ -6941,7 +6932,7 @@ func consoleMessageParametersRegisterRuntimeObjects() async throws {
 
 @MainActor
 @Test
-func consoleMessagesClearedReleasesConsoleRuntimeObjects() async throws {
+func consoleMessagesClearedInvalidatesRuntimeObjectsWithoutRuntimeCommand() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let objectID = Runtime.RemoteObject.ID("console-stale-object")
@@ -6962,16 +6953,12 @@ func consoleMessagesClearedReleasesConsoleRuntimeObjects() async throws {
     let message = try #require(results.items.first)
     let parameter = try #require(message.parameters.first)
 
-    await runtime.backend.enqueue((), for: "Runtime", method: "releaseObjectGroup")
+    let commandCountBeforeClear = await runtime.backend.recordedCommands().count
     await runtime.backend.emit(
         .messagesCleared(reason: Console.ClearReason(rawValue: "console-api")),
         target: target
     )
 
-    try await waitUntil {
-        await runtime.backend.recordedCommands()
-            .contains(RecordedCommand(domain: "Runtime", method: "releaseObjectGroup"))
-    }
     try await waitUntil { results.items.isEmpty }
     do {
         _ = try await parameter.properties()
@@ -6979,6 +6966,8 @@ func consoleMessagesClearedReleasesConsoleRuntimeObjects() async throws {
     } catch let error as WebInspectorProxyError {
         #expect(error == .disconnected("RuntimeObject is not registered in this WebInspectorContext."))
     }
+    let clearCommands = await runtime.backend.recordedCommands().dropFirst(commandCountBeforeClear)
+    #expect(!clearCommands.contains(RecordedCommand(domain: "Runtime", method: "releaseObjectGroup")))
     #expect(context.state == .attached)
 }
 
