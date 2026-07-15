@@ -20,22 +20,6 @@ func canonicalNetworkIdentityScopesCannotAlias() throws {
     )
     let targetA = fixture.scope(targetID: "target-a")
     let targetB = fixture.scope(targetID: "target-b")
-    let rawID = Network.Request.ID("request\u{1e}with-separator")
-    let targetAStorage = CanonicalNetworkRequestIDStorage(
-        storeID: fixture.storeID,
-        attachmentGeneration: fixture.attachmentGeneration,
-        pageGeneration: fixture.pageGeneration,
-        agentTargetID: WebInspectorTarget.ID("target-a"),
-        rawRequestID: rawID
-    )
-    let targetBStorage = CanonicalNetworkRequestIDStorage(
-        storeID: fixture.storeID,
-        attachmentGeneration: fixture.attachmentGeneration,
-        pageGeneration: fixture.pageGeneration,
-        agentTargetID: WebInspectorTarget.ID("target-b"),
-        rawRequestID: rawID
-    )
-    #expect(targetAStorage != targetBStorage)
 
     _ = try fixture.store.reduce(
         canonicalRequestWillBeSent(
@@ -56,11 +40,15 @@ func canonicalNetworkIdentityScopesCannotAlias() throws {
 
     let targetScopedIDs = fixture.store.requests.map(\.id)
     #expect(Set(targetScopedIDs).count == 2)
+    #expect(targetScopedIDs.map(\.ordinal) == [1, 2])
     #expect(
-        targetScopedIDs.map(\.rawRequestID) == [
-            Network.Request.ID("request\u{1e}with-separator"),
-            Network.Request.ID("different-request"),
-        ])
+        fixture.store.rawRequestAlias(for: targetScopedIDs[0])?.rawRequestID
+            == Network.Request.ID("request\u{1e}with-separator")
+    )
+    #expect(
+        fixture.store.rawRequestAlias(for: targetScopedIDs[1])?.rawRequestID
+            == Network.Request.ID("different-request")
+    )
 
     var otherStore = try CanonicalNetworkTestFixture(
         storeUUID: secondStoreUUID
@@ -113,10 +101,13 @@ func canonicalNetworkIdentityScopesCannotAlias() throws {
     )
     let pageScopedID = fixture.store.requests[0].id
     #expect(pageScopedID != attachmentScopedID)
-    #expect(pageScopedID.pageGeneration == .init(rawValue: 2))
+    #expect(
+        fixture.store.requests[0].membership.pageGeneration
+            == .init(rawValue: 2)
+    )
 }
 @Test
-func canonicalNetworkRawRequestLookupRejectsLiveAgentCollisions() throws {
+func canonicalNetworkRawRequestAliasesAreAgentScoped() throws {
     var fixture = try CanonicalNetworkTestFixture()
     let rawID = Network.Request.ID("console-reference")
     let firstScope = fixture.scope(
@@ -132,7 +123,7 @@ func canonicalNetworkRawRequestLookupRejectsLiveAgentCollisions() throws {
         scope: firstScope
     )
     let existingID = try #require(
-        fixture.store.requestID(forRawRequestID: rawID)
+        fixture.store.requestID(forRawRequestID: rawID, scope: firstScope)
     )
     #expect(fixture.store.request(for: existingID) != nil)
 
@@ -140,47 +131,30 @@ func canonicalNetworkRawRequestLookupRejectsLiveAgentCollisions() throws {
         targetID: "worker-b",
         agentTargetID: "agent-b"
     )
-    let proposedID = CanonicalNetworkRequestIDStorage(
-        storeID: fixture.storeID,
-        attachmentGeneration: fixture.attachmentGeneration,
-        pageGeneration: fixture.pageGeneration,
-        agentTargetID: WebInspectorTarget.ID("agent-b"),
-        rawRequestID: rawID
-    )
-    let beforeCollision = fixture.store
-    #expect(
-        throws:
-            CanonicalNetworkProtocolViolation
-            .rawRequestIdentifierCollision(
-                rawID: rawID,
-                existingID: existingID,
-                proposedID: proposedID
-            )
-    ) {
-        try fixture.store.reduce(
-            canonicalRequestWillBeSent(
-                id: "console-reference",
-                url: "https://example.test/b.js",
-                timestamp: 2
-            ),
-            scope: secondScope
-        )
-    }
-    #expect(fixture.store == beforeCollision)
-
-    _ = try fixture.store.targetWasLost(
-        WebInspectorTarget.ID("agent-a")
-    )
-    #expect(fixture.store.requestID(forRawRequestID: rawID) == nil)
     _ = try fixture.store.reduce(
         canonicalRequestWillBeSent(
             id: "console-reference",
             url: "https://example.test/b.js",
-            timestamp: 3
+            timestamp: 2
         ),
         scope: secondScope
     )
-    #expect(fixture.store.requestID(forRawRequestID: rawID) == proposedID)
+    let secondID = try #require(
+        fixture.store.requestID(forRawRequestID: rawID, scope: secondScope)
+    )
+    #expect(secondID != existingID)
+
+    _ = try fixture.store.targetWasLost(
+        WebInspectorTarget.ID("agent-a")
+    )
+    #expect(
+        fixture.store.requestID(forRawRequestID: rawID, scope: firstScope)
+            == nil
+    )
+    #expect(
+        fixture.store.requestID(forRawRequestID: rawID, scope: secondScope)
+            == secondID
+    )
 }
 
 @Test
@@ -296,7 +270,7 @@ func canonicalNetworkGroupingSeparatesAgentsAndKeepsInitialSemanticMembership() 
     #expect(fixture.store.entries.count == 2)
     let firstAgentRequest = try #require(
         fixture.store.requests.first {
-            $0.id.agentTargetID == WebInspectorTarget.ID("agent-a")
+            $0.membership.agentTargetID == WebInspectorTarget.ID("agent-a")
         }
     )
     let firstAgentEntry = try #require(
@@ -503,7 +477,9 @@ func canonicalNetworkGroupingUsesExactScopeAndChronology() throws {
     )
     let domEntry = try #require(fixture.store.entries.first)
     #expect(
-        domEntry.requestIDs.map(\.rawRequestID) == [
+        domEntry.requestIDs.compactMap {
+            fixture.store.rawRequestAlias(for: $0)?.rawRequestID
+        } == [
             Network.Request.ID("dom-early"),
             Network.Request.ID("dom-late"),
         ])
@@ -675,7 +651,8 @@ func canonicalNetworkTargetLossDeletesWholeTargetScopedGroups() throws {
     let targetAEntryID = try #require(
         fixture.store.entries.first(where: {
             $0.requestIDs.contains(where: {
-                $0.agentTargetID == WebInspectorTarget.ID("target-a")
+                fixture.store.request(for: $0)?.membership.agentTargetID
+                    == WebInspectorTarget.ID("target-a")
             })
         })?.id
     )
@@ -687,7 +664,7 @@ func canonicalNetworkTargetLossDeletesWholeTargetScopedGroups() throws {
     #expect(transaction.requestChanges.count == 2)
     #expect(transaction.entryChanges == [.delete(targetAEntryID)])
     #expect(
-        fixture.store.requests.map(\.id.agentTargetID) == [
+        fixture.store.requests.map(\.membership.agentTargetID) == [
             WebInspectorTarget.ID("target-b")
         ])
     #expect(fixture.store.entries.count == 1)
@@ -738,13 +715,16 @@ func canonicalNetworkTargetLossUsesSemanticAndAgentIndexesWithoutScanningAllRequ
     )
     #expect(transaction.requestChanges.count == 1)
     #expect(
-        fixture.store.requests.map(\.id.rawRequestID) == [
+        fixture.store.requests.compactMap {
+            fixture.store.rawRequestAlias(for: $0.id)?.rawRequestID
+        } == [
             Network.Request.ID("b-request")
         ]
     )
     #expect(
         fixture.store.requestID(
-            forRawRequestID: Network.Request.ID("a-socket")
+            forRawRequestID: Network.Request.ID("a-socket"),
+            scope: semanticA
         ) == nil
     )
     #expect(fixture.store.tombstonedRequestIDs.count == 2)

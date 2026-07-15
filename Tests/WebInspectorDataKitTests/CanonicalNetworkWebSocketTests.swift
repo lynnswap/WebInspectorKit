@@ -43,13 +43,15 @@ func canonicalNetworkWebSocketRetainsCreationMembershipThroughHandshake() throws
 
     let request = try #require(fixture.store.requests.first)
     #expect(
-        request.membership
-            == CanonicalNetworkRequestMembership(
-                semanticTargetID: WebInspectorTarget.ID("initial-frame"),
-                navigationEpoch: WebInspectorPageGeneration(rawValue: 2),
-                domBindingEpoch: WebInspectorDOMBindingScopeID(rawValue: 3)
-            )
+        request.membership.semanticTargetID
+            == WebInspectorTarget.ID("initial-frame")
     )
+    #expect(
+        request.membership.agentTargetID
+            == WebInspectorTarget.ID("page-agent")
+    )
+    #expect(request.membership.navigationEpoch?.rawValue == 2)
+    #expect(request.membership.domBindingEpoch?.rawValue == 3)
 }
 @Test
 func canonicalNetworkWebSocketUsesAppendPatchesAndPreservesChronology() throws {
@@ -67,40 +69,19 @@ func canonicalNetworkWebSocketUsesAppendPatchesAndPreservesChronology() throws {
     #expect(fixture.store.requests.isEmpty)
     #expect(fixture.store.entries.isEmpty)
     let reservedID = try #require(
-        fixture.store.requestID(forRawRequestID: rawID)
+        fixture.store.requestID(forRawRequestID: rawID, scope: scope)
     )
     #expect(fixture.store.request(for: reservedID) == nil)
     let conflictingScope = fixture.scope(
         targetID: "worker",
         agentTargetID: "other-agent"
     )
-    let conflictingID = CanonicalNetworkRequestIDStorage(
-        storeID: fixture.storeID,
-        attachmentGeneration: fixture.attachmentGeneration,
-        pageGeneration: fixture.pageGeneration,
-        agentTargetID: WebInspectorTarget.ID("other-agent"),
-        rawRequestID: rawID
-    )
-    let pending = fixture.store
     #expect(
-        throws:
-            CanonicalNetworkProtocolViolation
-            .rawRequestIdentifierCollision(
-                rawID: rawID,
-                existingID: reservedID,
-                proposedID: conflictingID
-            )
-    ) {
-        try fixture.store.reduce(
-            .webSocket(
-                .created(
-                    id: rawID,
-                    url: "wss://example.test/other"
-                )),
+        fixture.store.requestID(
+            forRawRequestID: rawID,
             scope: conflictingScope
-        )
-    }
-    #expect(fixture.store == pending)
+        ) == nil
+    )
     _ = try fixture.store.reduce(
         .webSocket(
             .handshakeRequest(

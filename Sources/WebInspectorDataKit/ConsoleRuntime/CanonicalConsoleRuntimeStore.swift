@@ -1156,14 +1156,6 @@ private extension CanonicalConsoleRuntimeStore {
     func validateNetworkResolutionAuthority(
         _ resolution: CanonicalConsoleNetworkRequestResolution
     ) throws {
-        guard resolution.requestID.rawRequestID == resolution.rawRequestID else {
-            throw
-                CanonicalConsoleRuntimeProtocolViolation
-                .networkResolutionRawIdentifierMismatch(
-                    referenced: resolution.rawRequestID,
-                    resolved: resolution.requestID.rawRequestID
-                )
-        }
         guard resolution.requestID.storeID == storeID else {
             throw CanonicalConsoleRuntimeProtocolViolation.networkResolutionStoreMismatch(
                 messageStoreID: storeID,
@@ -1188,10 +1180,10 @@ private extension CanonicalConsoleRuntimeStore {
                 "Canonical Console Network resolution requires active page authority."
             )
         }
-        guard resolution.requestID.pageGeneration == activePageGeneration else {
+        guard resolution.rawAlias.pageGeneration == activePageGeneration else {
             throw CanonicalConsoleRuntimeProtocolViolation.networkResolutionPageMismatch(
                 active: activePageGeneration,
-                resolved: resolution.requestID.pageGeneration
+                resolved: resolution.rawAlias.pageGeneration
             )
         }
     }

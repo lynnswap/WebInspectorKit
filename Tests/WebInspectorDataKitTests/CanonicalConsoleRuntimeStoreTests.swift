@@ -70,14 +70,19 @@ private struct CanonicalConsoleRuntimeFixture {
         agentTargetID: String = "network-agent"
     ) -> CanonicalConsoleNetworkRequestResolution {
         let rawRequestID = Network.Request.ID(rawID)
+        let ordinal = rawID.utf8.reduce(UInt64(1)) {
+            ($0 &* 1099511628211) ^ UInt64($1)
+        }
         return CanonicalConsoleNetworkRequestResolution(
-            rawRequestID: rawRequestID,
-            requestID: CanonicalNetworkRequestIDStorage(
-                storeID: storeID,
-                attachmentGeneration: attachmentGeneration,
+            rawAlias: CanonicalNetworkRawRequestAlias(
                 pageGeneration: pageGeneration,
                 agentTargetID: WebInspectorTarget.ID(agentTargetID),
                 rawRequestID: rawRequestID
+            ),
+            requestID: CanonicalNetworkRequestIDStorage(
+                storeID: storeID,
+                attachmentGeneration: attachmentGeneration,
+                ordinal: ordinal
             )
         )
     }
@@ -1135,13 +1140,15 @@ func canonicalReducerThrowingMutationsHaveStrongExceptionGuarantee() throws {
     #expect(fixture.store == before)
 
     let wrongResolution = CanonicalConsoleNetworkRequestResolution(
-        rawRequestID: Network.Request.ID("wrong"),
-        requestID: CanonicalNetworkRequestIDStorage(
-            storeID: fixture.storeID,
-            attachmentGeneration: fixture.attachmentGeneration,
+        rawAlias: CanonicalNetworkRawRequestAlias(
             pageGeneration: fixture.pageGeneration,
             agentTargetID: WebInspectorTarget.ID("network-agent"),
             rawRequestID: Network.Request.ID("different")
+        ),
+        requestID: CanonicalNetworkRequestIDStorage(
+            storeID: fixture.storeID,
+            attachmentGeneration: fixture.attachmentGeneration,
+            ordinal: 1
         )
     )
     #expect(throws: CanonicalConsoleRuntimeProtocolViolation.self) {

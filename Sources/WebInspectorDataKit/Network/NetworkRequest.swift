@@ -55,6 +55,23 @@ public struct NetworkRequestSnapshot: Equatable, Sendable {
             backendResourceIdentifier: request.backendResourceIdentifier
         )
     }
+
+    package init(_ request: CanonicalNetworkRequestPayload) {
+        self.init(
+            url: request.url,
+            method: request.method,
+            headers: request.headers,
+            postData: request.postData,
+            referrerPolicy: request.referrerPolicy,
+            integrity: request.integrity,
+            backendResourceIdentifier: request.backendResourceIdentifier.map {
+                Network.BackendResourceID(
+                    sourceProcessID: $0.sourceProcessID,
+                    resourceID: $0.resourceID
+                )
+            }
+        )
+    }
 }
 
 /// Immutable snapshot of the response side of a network load.
@@ -194,6 +211,15 @@ public final class WebSocketState {
         case closed
     }
 
+    /// Whether the observed frame history is known to be contiguous.
+    public enum Continuity: Equatable, Sendable {
+        /// No event-scope gap has been observed.
+        case continuous
+
+        /// A recovered event-scope gap may have omitted frames.
+        case unknownAfterGap
+    }
+
     /// Direction or error state for a WebSocket frame row.
     public enum FrameDirection: Equatable, Sendable {
         /// A frame sent by the inspected page.
@@ -252,6 +278,9 @@ public final class WebSocketState {
     /// The current WebSocket ready state.
     public private(set) var readyState: ReadyState
 
+    /// Continuity of the observed WebSocket event history.
+    public private(set) var continuity: Continuity
+
     /// The URL carried by the WebSocket creation event.
     public private(set) var creationURL: String?
 
@@ -278,6 +307,7 @@ public final class WebSocketState {
         creationURL: String? = nil
     ) {
         self.readyState = readyState
+        continuity = .continuous
         self.creationURL = creationURL
         handshakeRequest = nil
         handshakeResponse = nil
@@ -367,8 +397,9 @@ public final class WebSocketState {
     package func replace(with record: CanonicalNetworkWebSocketRecord) {
         creationURL = record.creationURL
         readyState = Self.readyState(record.readyState)
+        continuity = Self.continuity(record.continuity)
         handshakeRequest = record.handshakeRequest.map {
-            NetworkRequestSnapshot($0.request.proxyValue)
+            NetworkRequestSnapshot($0.request)
         }
         handshakeRequestTimestamp = record.handshakeRequest?.timestamp
         handshakeResponse = record.handshakeResponse.map {
@@ -399,6 +430,17 @@ public final class WebSocketState {
             .open
         case .closed:
             .closed
+        }
+    }
+
+    private static func continuity(
+        _ continuity: CanonicalNetworkWebSocketContinuity
+    ) -> Continuity {
+        switch continuity {
+        case .continuous:
+            .continuous
+        case .unknownAfterGap:
+            .unknownAfterGap
         }
     }
 
@@ -695,7 +737,9 @@ public final class NetworkBody {
         phase = .available
     }
 
-    static func makeRequestBody(for request: Network.Request) -> NetworkBody? {
+    static func makeRequestBody(
+        for request: CanonicalNetworkRequestPayload
+    ) -> NetworkBody? {
         guard let postData = request.postData else {
             return nil
         }
@@ -715,7 +759,7 @@ public final class NetworkBody {
         )
     }
 
-    func synchronizeRequest(_ request: Network.Request) {
+    func synchronizeRequest(_ request: CanonicalNetworkRequestPayload) {
         precondition(role == .request, "Only a request body can synchronize request payload state.")
         guard let postData = request.postData else {
             preconditionFailure("A request body cannot synchronize a request without post data.")
@@ -904,7 +948,7 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         /// The request identity.
         public let id: ID
 
-        /// The request's stable insertion position in its source generation.
+        /// The request's stable insertion position assigned by the Network owner.
         public let insertionIndex: Int
 
         /// The request URL.
@@ -1093,7 +1137,7 @@ public final class NetworkRequest: WebInspectorPersistentModel {
     /// Whether WebKit served the current response from its memory cache.
     public private(set) var wasServedFromMemoryCache: Bool
 
-    @ObservationIgnored private var currentRequest: Network.Request
+    @ObservationIgnored private var currentRequest: CanonicalNetworkRequestPayload
 
     var isActive: Bool {
         switch state {
@@ -1181,9 +1225,10 @@ public final class NetworkRequest: WebInspectorPersistentModel {
     ) {
         let hop = record.currentHop
         let response = hop.response?.proxyValue
-        let request = hop.request.proxyValue(
-            overridingHeaders: response?.requestHeaders
-        )
+        var request = hop.request
+        if let requestHeaders = response?.requestHeaders {
+            request.headers = requestHeaders
+        }
         id = ID(canonical: record.id)
         url = request.url
         method = request.method
@@ -1248,6 +1293,23 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         _ patch: CanonicalNetworkRequestPatch
     ) {
         switch patch {
+        case let .snapshotReconciled(
+            currentHop,
+            _,
+            lifecycle,
+            allowsMultipartContinuation,
+            responseBodyRevision
+        ):
+            applyCanonicalCurrentHop(currentHop)
+            self.allowsMultipartContinuation = allowsMultipartContinuation
+            responseBody.synchronizeCanonicalResponse(
+                revision: responseBodyRevision,
+                response: currentHop.response?.proxyValue,
+                fallbackURL: currentHop.request.url
+            )
+            state = Self.state(lifecycle)
+            applyCanonicalTerminalBodyState(lifecycle)
+
         case let .redirect(
             appendedHop,
             currentHop,
@@ -1310,7 +1372,7 @@ public final class NetworkRequest: WebInspectorPersistentModel {
             responseHeaders = response.headers
             if let headers = response.requestHeaders {
                 requestHeaders = headers
-                currentRequest = currentRequest.replacingHeaders(headers)
+                currentRequest.headers = headers
                 synchronizeRequestBody(for: currentRequest)
             }
             self.responseReceivedTimestamp = responseReceivedTimestamp
@@ -1348,9 +1410,10 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         _ hop: CanonicalNetworkCurrentHop
     ) {
         let response = hop.response?.proxyValue
-        let request = hop.request.proxyValue(
-            overridingHeaders: response?.requestHeaders
-        )
+        var request = hop.request
+        if let requestHeaders = response?.requestHeaders {
+            request.headers = requestHeaders
+        }
         currentRequest = request
         url = request.url
         method = request.method
@@ -1375,7 +1438,9 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         }
     }
 
-    private func synchronizeRequestBody(for request: Network.Request) {
+    private func synchronizeRequestBody(
+        for request: CanonicalNetworkRequestPayload
+    ) {
         guard request.postData != nil else {
             requestBody = nil
             return

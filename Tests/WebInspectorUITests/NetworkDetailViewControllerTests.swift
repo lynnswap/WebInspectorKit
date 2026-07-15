@@ -110,7 +110,7 @@ final class CanonicalNetworkPanelFixture {
             redirectResponse: nil,
             timestamp: timestamp
         ))
-        guard let id = request(rawID: Network.Request.ID(rawID))?.id else {
+        guard let id = request(url: url)?.id else {
             preconditionFailure(
                 "Canonical Network insertion lost its request."
             )
@@ -174,9 +174,9 @@ final class CanonicalNetworkPanelFixture {
         }
     }
 
-    func request(rawID: Network.Request.ID) -> NetworkRequest? {
+    func request(url: String) -> NetworkRequest? {
         requests.fetchedObjects?.first {
-            $0.id.canonicalStorage.rawRequestID == rawID
+            $0.url == url
         }
     }
 
@@ -878,7 +878,9 @@ struct NetworkDetailViewControllerTests {
             )
         )
 
-        let request = try #require(fixture.request(rawID: requestID))
+        let request = try #require(
+            fixture.request(url: "https://example.com/final")
+        )
         let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
@@ -2273,7 +2275,9 @@ struct NetworkDetailViewControllerTests {
             redirectResponse: nil,
             timestamp: 2
         ))
-        _ = try #require(fixture.request(rawID: segmentProxyID))
+        _ = try #require(
+            fixture.request(url: "https://media.example.com/segment-1.ts")
+        )
 
         let didRenderLaterMember = await waitUntilRendered(in: viewController) {
             let text = viewController.headersTextViewForTesting.renderedTextForTesting
@@ -3798,7 +3802,7 @@ struct NetworkDetailViewControllerTests {
                 )
             )
         }
-        return fixture.request(rawID: requestID)
+        return fixture.request(url: url)
     }
 
     private func applyRequestWithoutResponse(
@@ -3825,7 +3829,7 @@ struct NetworkDetailViewControllerTests {
                 timestamp: 1
             )
         )
-        return fixture.request(rawID: requestID)
+        return fixture.request(url: url)
     }
 
     private func applyResponseReceived(

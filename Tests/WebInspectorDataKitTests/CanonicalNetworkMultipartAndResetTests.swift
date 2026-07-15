@@ -352,7 +352,10 @@ func canonicalNetworkClearTombstonesLateEventsUntilGenerationReset() throws {
         scope: nextScope
     )
     #expect(fixture.store.entries[0].id.ordinal > oldMaxEntryOrdinal)
-    #expect(fixture.store.requests[0].id.pageGeneration == .init(rawValue: 2))
+    #expect(
+        fixture.store.requests[0].membership.pageGeneration
+            == .init(rawValue: 2)
+    )
 }
 
 @Test

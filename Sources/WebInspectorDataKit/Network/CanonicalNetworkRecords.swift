@@ -11,9 +11,40 @@ package struct CanonicalNetworkBackendResourceIdentifier: Equatable, Sendable {
     }
 }
 
+/// One resource-tree record staged by the Network bootstrap owner.
+package struct CanonicalNetworkSnapshotResource: Equatable, Sendable {
+    package let frameID: FrameID
+    package let loaderID: String?
+    package let url: String
+    package let type: Network.ResourceType
+    package let mimeType: String
+    package let failed: Bool
+    package let canceled: Bool
+    package let sourceMapURL: String?
+
+    package init(
+        frameID: FrameID,
+        loaderID: String?,
+        url: String,
+        type: Network.ResourceType,
+        mimeType: String,
+        failed: Bool,
+        canceled: Bool,
+        sourceMapURL: String?
+    ) {
+        self.frameID = frameID
+        self.loaderID = loaderID
+        self.url = url
+        self.type = type
+        self.mimeType = mimeType
+        self.failed = failed
+        self.canceled = canceled
+        self.sourceMapURL = sourceMapURL
+    }
+}
+
 /// Immutable normalized storage for every field in `Network.Request`.
 package struct CanonicalNetworkRequestPayload: Equatable, Sendable {
-    package let rawID: Network.Request.ID
     package var url: String
     package let method: String
     package var headers: [String: String]
@@ -23,7 +54,6 @@ package struct CanonicalNetworkRequestPayload: Equatable, Sendable {
     package let backendResourceIdentifier: CanonicalNetworkBackendResourceIdentifier?
 
     package init(_ request: Network.Request) {
-        rawID = request.id
         url = request.url
         method = request.method
         headers = request.headers
@@ -36,12 +66,10 @@ package struct CanonicalNetworkRequestPayload: Equatable, Sendable {
     }
 
     package init(
-        rawID: Network.Request.ID,
         url: String,
         method: String,
         headers: [String: String] = [:]
     ) {
-        self.rawID = rawID
         self.url = url
         self.method = method
         self.headers = headers
@@ -72,6 +100,26 @@ package struct CanonicalNetworkResponsePayload: Equatable, Sendable {
         source = response.source?.rawValue
         requestHeaders = response.requestHeaders
         bodySize = response.bodySize
+    }
+
+    package init(
+        url: String?,
+        status: Int? = nil,
+        statusText: String? = nil,
+        mimeType: String? = nil,
+        headers: [String: String] = [:],
+        source: String? = nil,
+        requestHeaders: [String: String]? = nil,
+        bodySize: Int? = nil
+    ) {
+        self.url = url
+        self.status = status
+        self.statusText = statusText
+        self.mimeType = mimeType
+        self.headers = headers
+        self.source = source
+        self.requestHeaders = requestHeaders
+        self.bodySize = bodySize
     }
 
     /// WebKit compares the parsed MIME type exactly with
@@ -220,10 +268,21 @@ package enum CanonicalNetworkLifecycle: Equatable, Sendable {
     }
 }
 
+package enum CanonicalNetworkRequestProvenance: Equatable, Sendable {
+    case authoritativeRequest
+    case responseFirst
+    case resourceTreeSnapshot
+}
+
 package enum CanonicalNetworkWebSocketReadyState: Equatable, Sendable {
     case connecting
     case open
     case closed
+}
+
+package enum CanonicalNetworkWebSocketContinuity: Equatable, Sendable {
+    case continuous
+    case unknownAfterGap
 }
 
 package struct CanonicalNetworkWebSocketHandshakeRequest: Equatable, Sendable {
@@ -256,6 +315,7 @@ package enum CanonicalNetworkWebSocketContent: Equatable, Sendable {
 package struct CanonicalNetworkWebSocketRecord: Equatable, Sendable {
     package var creationURL: String
     package var readyState: CanonicalNetworkWebSocketReadyState
+    package var continuity: CanonicalNetworkWebSocketContinuity
     package var handshakeRequest: CanonicalNetworkWebSocketHandshakeRequest?
     package var handshakeResponse: CanonicalNetworkWebSocketHandshakeResponse?
     package var contents: [CanonicalNetworkWebSocketContent]
@@ -264,6 +324,7 @@ package struct CanonicalNetworkWebSocketRecord: Equatable, Sendable {
     package init(creationURL: String) {
         self.creationURL = creationURL
         readyState = .connecting
+        continuity = .continuous
         handshakeRequest = nil
         handshakeResponse = nil
         contents = []
@@ -271,9 +332,11 @@ package struct CanonicalNetworkWebSocketRecord: Equatable, Sendable {
     }
 }
 
-/// Immutable semantic membership captured by the first authoritative event
-/// for a Network request.
+/// Immutable semantic membership captured when a request first enters the
+/// canonical store. A later raw alias does not rewrite this scope authority.
 package struct CanonicalNetworkRequestMembership: Equatable, Sendable {
+    package let pageGeneration: WebInspectorPageGeneration
+    package let agentTargetID: WebInspectorTarget.ID
     package let origin: CanonicalNetworkRequestOrigin
     package let targetAuthority: CanonicalNetworkRegisteredTargetAuthority?
     package let frameID: FrameID?
@@ -292,6 +355,8 @@ package struct CanonicalNetworkRequestMembership: Equatable, Sendable {
     }
 
     package init(
+        pageGeneration: WebInspectorPageGeneration,
+        agentTargetID: WebInspectorTarget.ID,
         origin: CanonicalNetworkRequestOrigin,
         targetAuthority: CanonicalNetworkRegisteredTargetAuthority?,
         frameID: FrameID?,
@@ -302,6 +367,8 @@ package struct CanonicalNetworkRequestMembership: Equatable, Sendable {
                 || targetAuthority?.targetID == origin.semanticTargetID,
             "Canonical Network target authority does not own its request membership."
         )
+        self.pageGeneration = pageGeneration
+        self.agentTargetID = agentTargetID
         self.origin = origin
         self.targetAuthority = targetAuthority
         self.frameID = frameID
@@ -310,10 +377,13 @@ package struct CanonicalNetworkRequestMembership: Equatable, Sendable {
 
     package init(
         semanticTargetID: WebInspectorTarget.ID,
+        agentTargetID: WebInspectorTarget.ID,
         navigationEpoch: WebInspectorPageGeneration,
         domBindingEpoch: WebInspectorDOMBindingScopeID?
     ) {
         self.init(
+            pageGeneration: navigationEpoch,
+            agentTargetID: agentTargetID,
             origin: .eventTarget(semanticTargetID),
             targetAuthority: CanonicalNetworkRegisteredTargetAuthority(
                 targetID: semanticTargetID,
@@ -331,6 +401,7 @@ package struct CanonicalNetworkRequestRecord: Equatable, Sendable {
     package let id: CanonicalNetworkRequestIDStorage
     package let insertionOrdinal: UInt64
     package let membership: CanonicalNetworkRequestMembership
+    package var requestProvenance: CanonicalNetworkRequestProvenance
     package let initialInitiator: CanonicalNetworkInitiator?
     package var logicalStartTimestamp: Double?
     package var currentHop: CanonicalNetworkCurrentHop
@@ -344,6 +415,7 @@ package struct CanonicalNetworkRequestRecord: Equatable, Sendable {
         id: CanonicalNetworkRequestIDStorage,
         insertionOrdinal: UInt64,
         membership: CanonicalNetworkRequestMembership,
+        requestProvenance: CanonicalNetworkRequestProvenance = .authoritativeRequest,
         initialInitiator: CanonicalNetworkInitiator?,
         logicalStartTimestamp: Double?,
         currentHop: CanonicalNetworkCurrentHop,
@@ -356,6 +428,7 @@ package struct CanonicalNetworkRequestRecord: Equatable, Sendable {
         self.id = id
         self.insertionOrdinal = insertionOrdinal
         self.membership = membership
+        self.requestProvenance = requestProvenance
         self.initialInitiator = initialInitiator
         self.logicalStartTimestamp = logicalStartTimestamp
         self.currentHop = currentHop
@@ -430,6 +503,7 @@ package enum CanonicalNetworkEntryStatusSeverity: Int, Equatable, Hashable, Send
 
 package struct CanonicalNetworkEntrySummary: Equatable, Sendable {
     package let primaryRequestID: CanonicalNetworkRequestIDStorage
+    package let initialMediaPreviewRequestID: CanonicalNetworkRequestIDStorage?
     package let requestCount: Int
     package let url: String
     package let method: String
@@ -474,6 +548,13 @@ package struct CanonicalNetworkResponseBodyLease: Hashable, Sendable {
 /// An authoritative update that a context projection can apply without
 /// repeating protocol semantics.
 package enum CanonicalNetworkRequestPatch: Equatable, Sendable {
+    case snapshotReconciled(
+        currentHop: CanonicalNetworkCurrentHop,
+        requestProvenance: CanonicalNetworkRequestProvenance,
+        lifecycle: CanonicalNetworkLifecycle,
+        allowsMultipartContinuation: Bool,
+        responseBodyRevision: UInt64
+    )
     case redirect(
         appendedHop: CanonicalNetworkRedirectHop,
         currentHop: CanonicalNetworkCurrentHop,
@@ -516,6 +597,18 @@ package enum CanonicalNetworkRequestPatch: Equatable, Sendable {
 package extension CanonicalNetworkRequestRecord {
     mutating func apply(_ patch: CanonicalNetworkRequestPatch) {
         switch patch {
+        case let .snapshotReconciled(
+            currentHop,
+            requestProvenance,
+            lifecycle,
+            allowsMultipartContinuation,
+            responseBodyRevision
+        ):
+            self.currentHop = currentHop
+            self.requestProvenance = requestProvenance
+            self.lifecycle = lifecycle
+            self.allowsMultipartContinuation = allowsMultipartContinuation
+            self.responseBodyRevision = responseBodyRevision
         case let .redirect(
             appendedHop,
             currentHop,

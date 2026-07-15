@@ -203,7 +203,6 @@ func canonicalNetworkRedirectPreservesLogicalStartAndInvalidatesBodyLease() thro
         logicalStartTimestamp: afterResponse.logicalStartTimestamp,
         currentHop: CanonicalNetworkCurrentHop(
             request: CanonicalNetworkRequestPayload(
-                rawID: rawID,
                 url: "https://example.test/start",
                 method: "POST"
             ),
@@ -369,7 +368,8 @@ func canonicalNetworkAttachRacesAreNoOpsAndResponseFirstSynthesizesGET() throws 
     )
     let responseFirst = try #require(
         fixture.store.requests.first(where: {
-            $0.id.rawRequestID == responseFirstID
+            fixture.store.rawRequestAlias(for: $0.id)?.rawRequestID
+                == responseFirstID
         })
     )
     #expect(responseFirst.currentHop.request.method == "GET")

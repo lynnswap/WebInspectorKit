@@ -174,32 +174,6 @@ package extension CanonicalNetworkResourceCategory {
     }
 }
 
-package extension CanonicalNetworkRequestPayload {
-    var proxyValue: Network.Request {
-        proxyValue(overridingHeaders: nil)
-    }
-
-    func proxyValue(
-        overridingHeaders: [String: String]?
-    ) -> Network.Request {
-        Network.Request(
-            id: rawID,
-            url: url,
-            method: method,
-            headers: overridingHeaders ?? headers,
-            postData: postData,
-            referrerPolicy: referrerPolicy.map(Network.ReferrerPolicy.init(rawValue:)),
-            integrity: integrity,
-            backendResourceIdentifier: backendResourceIdentifier.map {
-                Network.BackendResourceID(
-                    sourceProcessID: $0.sourceProcessID,
-                    resourceID: $0.resourceID
-                )
-            }
-        )
-    }
-}
-
 package extension CanonicalNetworkResponsePayload {
     var proxyValue: Network.Response {
         Network.Response(
@@ -242,7 +216,7 @@ package extension CanonicalNetworkInitiator {
 package extension CanonicalNetworkRedirectHop {
     var publicValue: RedirectHop {
         RedirectHop(
-            request: NetworkRequestSnapshot(request.proxyValue),
+            request: NetworkRequestSnapshot(request),
             response: NetworkResponseSnapshot(response.proxyValue),
             timestamp: redirectTimestamp,
             resourceType: resourceType.map(Network.ResourceType.init(rawValue:)),
@@ -251,21 +225,6 @@ package extension CanonicalNetworkRedirectHop {
             lastDataReceivedTimestamp: lastDataReceivedTimestamp,
             decodedDataLength: decodedDataLength,
             encodedDataLength: encodedDataLength
-        )
-    }
-}
-
-package extension Network.Request {
-    func replacingHeaders(_ headers: [String: String]) -> Self {
-        Self(
-            id: id,
-            url: url,
-            method: method,
-            headers: headers,
-            postData: postData,
-            referrerPolicy: referrerPolicy,
-            integrity: integrity,
-            backendResourceIdentifier: backendResourceIdentifier
         )
     }
 }

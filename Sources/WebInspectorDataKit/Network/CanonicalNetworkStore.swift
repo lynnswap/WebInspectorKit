@@ -27,11 +27,6 @@ package enum CanonicalNetworkProtocolViolation: Error, Equatable, Sendable {
         event: String,
         id: CanonicalNetworkRequestIDStorage
     )
-    case rawRequestIdentifierCollision(
-        rawID: Network.Request.ID,
-        existingID: CanonicalNetworkRequestIDStorage,
-        proposedID: CanonicalNetworkRequestIDStorage
-    )
     case invalidRedirect(
         id: CanonicalNetworkRequestIDStorage,
         lifecycle: CanonicalNetworkLifecycle
@@ -97,6 +92,48 @@ package enum CanonicalNetworkStoreError: Error, Equatable, Sendable {
 /// Contexts consume its complete snapshots and authoritative transactions;
 /// they never repeat Network protocol semantics.
 package struct CanonicalNetworkStore: Equatable, Sendable {
+    private struct SnapshotExactMatchKey: Hashable, Sendable {
+        let pageGeneration: WebInspectorPageGeneration
+        let semanticTargetID: WebInspectorTarget.ID
+        let agentTargetID: WebInspectorTarget.ID
+        let frameID: FrameID
+        let loaderID: String
+        let url: String
+    }
+
+    private struct SnapshotLooseMatchKey: Hashable, Sendable {
+        let pageGeneration: WebInspectorPageGeneration
+        let semanticTargetID: WebInspectorTarget.ID
+        let agentTargetID: WebInspectorTarget.ID
+        let url: String
+    }
+
+    private enum RawIdentityResolution {
+        case existing(
+            id: CanonicalNetworkRequestIDStorage,
+            alias: CanonicalNetworkRawRequestAlias
+        )
+        case unaliasedSnapshot(
+            id: CanonicalNetworkRequestIDStorage,
+            alias: CanonicalNetworkRawRequestAlias
+        )
+        case new(
+            id: CanonicalNetworkRequestIDStorage,
+            alias: CanonicalNetworkRawRequestAlias
+        )
+        case tombstoned(CanonicalNetworkRequestIDStorage)
+
+        var id: CanonicalNetworkRequestIDStorage {
+            switch self {
+            case let .existing(id, _),
+                let .unaliasedSnapshot(id, _),
+                let .new(id, _),
+                let .tombstoned(id):
+                id
+            }
+        }
+    }
+
     private struct PendingWebSocket: Equatable, Sendable {
         let creationURL: String
         let membership: CanonicalNetworkRequestMembership
@@ -154,7 +191,18 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
     private var entryIDByRequestID: [CanonicalNetworkRequestIDStorage: CanonicalNetworkEntryIDStorage]
     private var memberIndexByRequestID: [CanonicalNetworkRequestIDStorage: Int]
     private var groupKeyByRequestID: [CanonicalNetworkRequestIDStorage: CanonicalNetworkGroupKey]
-    private var scopedRequestIDByRawRequestID: [Network.Request.ID: CanonicalNetworkRequestIDStorage]
+    private var requestIDByRawAlias:
+        [CanonicalNetworkRawRequestAlias: CanonicalNetworkRequestIDStorage]
+    private var rawAliasByRequestID:
+        [CanonicalNetworkRequestIDStorage: CanonicalNetworkRawRequestAlias]
+    private var tombstonedRequestIDByRawAlias:
+        [CanonicalNetworkRawRequestAlias: CanonicalNetworkRequestIDStorage]
+    private var unaliasedSnapshotRequestIDsByExactKey:
+        [SnapshotExactMatchKey: Set<CanonicalNetworkRequestIDStorage>]
+    private var unaliasedSnapshotRequestIDsByLooseKey:
+        [SnapshotLooseMatchKey: Set<CanonicalNetworkRequestIDStorage>]
+    private var bootstrapReconciledRequestIDs:
+        Set<CanonicalNetworkRequestIDStorage>
     private var requestIDsByAgentTargetID: [WebInspectorTarget.ID: Set<CanonicalNetworkRequestIDStorage>]
     private var requestIDsBySemanticTargetID: [WebInspectorTarget.ID: Set<CanonicalNetworkRequestIDStorage>]
     private var pendingWebSocketByID: [CanonicalNetworkRequestIDStorage: PendingWebSocket]
@@ -187,7 +235,12 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
         entryIDByRequestID = [:]
         memberIndexByRequestID = [:]
         groupKeyByRequestID = [:]
-        scopedRequestIDByRawRequestID = [:]
+        requestIDByRawAlias = [:]
+        rawAliasByRequestID = [:]
+        tombstonedRequestIDByRawAlias = [:]
+        unaliasedSnapshotRequestIDsByExactKey = [:]
+        unaliasedSnapshotRequestIDsByLooseKey = [:]
+        bootstrapReconciledRequestIDs = []
         requestIDsByAgentTargetID = [:]
         requestIDsBySemanticTargetID = [:]
         pendingWebSocketByID = [:]
@@ -279,23 +332,40 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
     /// The returned identity may be reserved by `webSocketCreated` before its
     /// handshake inserts a request record.
     package func requestID(
-        forRawRequestID rawID: Network.Request.ID
+        forRawRequestID rawID: Network.Request.ID,
+        scope: WebInspectorCanonicalNetworkEventScope
     ) -> CanonicalNetworkRequestIDStorage? {
-        scopedRequestIDByRawRequestID[rawID]
+        requestIDByRawAlias[
+            CanonicalNetworkRawRequestAlias(
+                rawRequestID: rawID,
+                scope: scope
+            )
+        ]
+    }
+
+    package func rawRequestAlias(
+        for requestID: CanonicalNetworkRequestIDStorage
+    ) -> CanonicalNetworkRawRequestAlias? {
+        rawAliasByRequestID[requestID]
     }
 
     package func requestOriginResolution(
         forRawRequestID rawID: Network.Request.ID,
         scope: WebInspectorCanonicalNetworkEventScope
     ) -> CanonicalNetworkRequestOriginResolution {
-        if let id = scopedRequestIDByRawRequestID[rawID] {
+        let alias = CanonicalNetworkRawRequestAlias(
+            rawRequestID: rawID,
+            scope: scope
+        )
+        if let id = requestIDByRawAlias[alias] {
             if let membership = requestsByID[id]?.membership {
                 return .existing(membership)
             }
             return .notRequired
         }
-        let id = canonicalID(rawID: rawID, scope: scope)
-        return tombstones.contains(id) ? .notRequired : .required
+        return tombstonedRequestIDByRawAlias[alias] == nil
+            ? .required
+            : .notRequired
     }
 
     package func entry(
@@ -341,6 +411,149 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
             == lease.responseRevision
     }
 
+    /// Begins one lossless bootstrap attempt. A same-generation attempt keeps
+    /// the last successful HTTP and WebSocket baseline; a generation change
+    /// replaces membership while preserving never-reused feature ordinals.
+    package mutating func prepareBootstrap(
+        attachmentGeneration: WebInspectorAttachmentGeneration,
+        pageGeneration: WebInspectorPageGeneration
+    ) throws {
+        bootstrapReconciledRequestIDs.removeAll(keepingCapacity: true)
+        guard activeAttachmentGeneration == attachmentGeneration,
+            activePageGeneration == pageGeneration
+        else {
+            _ = try reset(
+                attachmentGeneration: attachmentGeneration,
+                pageGeneration: pageGeneration
+            )
+            return
+        }
+
+        for id in requestsByID.keys {
+            guard var record = requestsByID[id],
+                record.webSocket?.readyState != .closed
+            else { continue }
+            record.webSocket?.continuity = .unknownAfterGap
+            requestsByID[id] = record
+        }
+    }
+
+    package mutating func finishBootstrap() {
+        bootstrapReconciledRequestIDs.removeAll(keepingCapacity: true)
+    }
+
+    /// Reconciles one Page resource-tree member without manufacturing a raw
+    /// Network request identifier. Exact loader identity wins; an incomplete
+    /// origin can bind only when its scoped URL candidate is unique. Semantic
+    /// and agent scope authority is never inferred across targets.
+    @discardableResult
+    package mutating func reconcileSnapshotResource(
+        _ resource: CanonicalNetworkSnapshotResource,
+        scope: WebInspectorCanonicalNetworkEventScope
+    ) throws -> (
+        requestID: CanonicalNetworkRequestIDStorage,
+        transaction: CanonicalNetworkTransaction?
+    ) {
+        precondition(
+            scope.generation == activePageGeneration,
+            "A Network snapshot resource must belong to the active page generation."
+        )
+        if let id = snapshotRequestID(matching: resource, scope: scope) {
+            bootstrapReconciledRequestIDs.insert(id)
+            guard let existing = requestsByID[id] else {
+                preconditionFailure(
+                    "Canonical Network snapshot matching lost its request record."
+                )
+            }
+            var currentHop = existing.currentHop
+            let snapshotResponse = CanonicalNetworkResponsePayload(
+                url: resource.url,
+                mimeType: resource.mimeType
+            )
+            let mergedResponse = mergeSnapshotResponse(
+                snapshotResponse,
+                into: currentHop.response
+            )
+            let responseChanged = mergedResponse != currentHop.response
+            currentHop.response = mergedResponse
+            currentHop.resourceType = currentHop.resourceType ?? resource.type.rawValue
+            currentHop.sourceMapURL = currentHop.sourceMapURL ?? resource.sourceMapURL
+            let lifecycle: CanonicalNetworkLifecycle
+            if existing.lifecycle.isTerminal {
+                lifecycle = existing.lifecycle
+            } else {
+                switch existing.requestProvenance {
+                case .authoritativeRequest, .responseFirst:
+                    lifecycle = existing.lifecycle
+                case .resourceTreeSnapshot:
+                    lifecycle = resource.failed || resource.canceled
+                        ? .failed(
+                            errorText: "Page.getResourceTree reported an unavailable resource.",
+                            canceled: resource.canceled
+                        )
+                        : .finished
+                }
+            }
+            let responseRevision = responseChanged
+                ? try incrementedResponseRevision(existing.responseBodyRevision)
+                : existing.responseBodyRevision
+            let patch = CanonicalNetworkRequestPatch.snapshotReconciled(
+                currentHop: currentHop,
+                requestProvenance: existing.requestProvenance,
+                lifecycle: lifecycle,
+                allowsMultipartContinuation: existing.allowsMultipartContinuation
+                    || mergedResponse.isMultipartMixedReplace,
+                responseBodyRevision: responseRevision
+            )
+            var replacement = existing
+            replacement.apply(patch)
+            let transaction: CanonicalNetworkTransaction?
+            if replacement == existing {
+                transaction = nil
+            } else {
+                transaction = commit(
+                    try prepareUpdate(replacement, patch: patch)
+                )
+            }
+            if rawAliasByRequestID[id] == nil {
+                registerUnaliasedSnapshotCandidate(id)
+            }
+            return (id, transaction)
+        }
+
+        let id = try allocateRequestID()
+        let response = CanonicalNetworkResponsePayload(
+            url: resource.url,
+            mimeType: resource.mimeType
+        )
+        let lifecycle: CanonicalNetworkLifecycle =
+            resource.failed || resource.canceled
+            ? .failed(
+                errorText: "Page.getResourceTree reported an unavailable resource.",
+                canceled: resource.canceled
+            )
+            : .finished
+        let insertion = try prepareNewRequest(
+            id: id,
+            request: CanonicalNetworkRequestPayload(
+                url: resource.url,
+                method: "GET"
+            ),
+            initiator: nil,
+            resourceType: resource.type.rawValue,
+            timestamp: nil,
+            scope: scope,
+            response: response,
+            lifecycle: lifecycle,
+            requestProvenance: .resourceTreeSnapshot,
+            sourceMapURL: resource.sourceMapURL
+        )
+        let transaction = commit(insertion)
+        bootstrapReconciledRequestIDs.insert(id)
+        registerUnaliasedSnapshotCandidate(id)
+        return (id, transaction)
+    }
+
     /// Replaces attachment/page authority while preserving never-reused
     /// request and entry ordinal allocation.
     @discardableResult
@@ -366,7 +579,12 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
         entryIDByRequestID.removeAll(keepingCapacity: true)
         memberIndexByRequestID.removeAll(keepingCapacity: true)
         groupKeyByRequestID.removeAll(keepingCapacity: true)
-        scopedRequestIDByRawRequestID.removeAll(keepingCapacity: true)
+        requestIDByRawAlias.removeAll(keepingCapacity: true)
+        rawAliasByRequestID.removeAll(keepingCapacity: true)
+        tombstonedRequestIDByRawAlias.removeAll(keepingCapacity: true)
+        unaliasedSnapshotRequestIDsByExactKey.removeAll(keepingCapacity: true)
+        unaliasedSnapshotRequestIDsByLooseKey.removeAll(keepingCapacity: true)
+        bootstrapReconciledRequestIDs.removeAll(keepingCapacity: true)
         requestIDsByAgentTargetID.removeAll(keepingCapacity: true)
         requestIDsBySemanticTargetID.removeAll(keepingCapacity: true)
         pendingWebSocketByID.removeAll(keepingCapacity: true)
@@ -382,6 +600,9 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
         let transaction = deletionTransaction(requestIDs: removedIDs)
         tombstones.formUnion(removedIDs)
         tombstones.formUnion(pendingWebSocketByID.keys)
+        for (alias, requestID) in requestIDByRawAlias {
+            tombstonedRequestIDByRawAlias[alias] = requestID
+        }
         requestsByID.removeAll(keepingCapacity: true)
         requestQueriesByID.removeAll(keepingCapacity: true)
         entriesByID.removeAll(keepingCapacity: true)
@@ -391,7 +612,11 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
         entryIDByRequestID.removeAll(keepingCapacity: true)
         memberIndexByRequestID.removeAll(keepingCapacity: true)
         groupKeyByRequestID.removeAll(keepingCapacity: true)
-        scopedRequestIDByRawRequestID.removeAll(keepingCapacity: true)
+        requestIDByRawAlias.removeAll(keepingCapacity: true)
+        rawAliasByRequestID.removeAll(keepingCapacity: true)
+        unaliasedSnapshotRequestIDsByExactKey.removeAll(keepingCapacity: true)
+        unaliasedSnapshotRequestIDsByLooseKey.removeAll(keepingCapacity: true)
+        bootstrapReconciledRequestIDs.removeAll(keepingCapacity: true)
         requestIDsByAgentTargetID.removeAll(keepingCapacity: true)
         requestIDsBySemanticTargetID.removeAll(keepingCapacity: true)
         pendingWebSocketByID.removeAll(keepingCapacity: true)
@@ -437,15 +662,19 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
         tombstones.formUnion(removedIDs)
         tombstones.formUnion(removedPendingWebSocketIDs)
         for requestID in removedIDs.union(removedPendingWebSocketIDs) {
-            guard
-                scopedRequestIDByRawRequestID[requestID.rawRequestID]
-                    == requestID
-            else {
-                preconditionFailure(
-                    "Canonical Network raw request lookup lost target authority."
-                )
+            if let alias = rawAliasByRequestID.removeValue(
+                forKey: requestID
+            ) {
+                guard requestIDByRawAlias.removeValue(forKey: alias)
+                        == requestID
+                else {
+                    preconditionFailure(
+                        "Canonical Network raw request lookup lost target authority."
+                    )
+                }
+                tombstonedRequestIDByRawAlias[alias] = requestID
             }
-            scopedRequestIDByRawRequestID[requestID.rawRequestID] = nil
+            removeUnaliasedSnapshotCandidate(requestID)
         }
         for requestID in removedPendingWebSocketIDs {
             guard let pending = pendingWebSocketByID.removeValue(forKey: requestID) else {
@@ -614,28 +843,251 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
         }
     }
 
-    private func canonicalID(
+    private mutating func resolveRawIdentity(
         rawID: Network.Request.ID,
+        matchingURL url: String?,
         scope: WebInspectorCanonicalNetworkEventScope
-    ) -> CanonicalNetworkRequestIDStorage {
+    ) throws -> RawIdentityResolution {
+        let alias = CanonicalNetworkRawRequestAlias(
+            rawRequestID: rawID,
+            scope: scope
+        )
+        if let id = requestIDByRawAlias[alias] {
+            return .existing(id: id, alias: alias)
+        }
+        if let id = tombstonedRequestIDByRawAlias[alias] {
+            return .tombstoned(id)
+        }
+        if let url,
+            let id = uniqueUnaliasedSnapshotRequestID(
+                matchingURL: url,
+                scope: scope
+            )
+        {
+            return .unaliasedSnapshot(id: id, alias: alias)
+        }
         guard let attachmentGeneration = activeAttachmentGeneration else {
             preconditionFailure(
                 "Canonical Network reduction requires active attachment authority."
             )
         }
+        return .new(
+            id: try allocateRequestID(
+                attachmentGeneration: attachmentGeneration
+            ),
+            alias: alias
+        )
+    }
+
+    private mutating func allocateRequestID(
+        attachmentGeneration: WebInspectorAttachmentGeneration? = nil
+    ) throws -> CanonicalNetworkRequestIDStorage {
+        guard let attachmentGeneration = attachmentGeneration
+            ?? activeAttachmentGeneration
+        else {
+            preconditionFailure(
+                "Canonical Network identity allocation requires attachment authority."
+            )
+        }
+        let ordinal = try nextRequestOrdinal()
+        lastRequestOrdinal = ordinal
         return CanonicalNetworkRequestIDStorage(
             storeID: storeID,
             attachmentGeneration: attachmentGeneration,
-            pageGeneration: scope.generation,
-            agentTargetID: scope.agentTargetID,
-            rawRequestID: rawID
+            ordinal: ordinal
         )
+    }
+
+    private func existingRequestID(
+        rawID: Network.Request.ID,
+        scope: WebInspectorCanonicalNetworkEventScope
+    ) -> CanonicalNetworkRequestIDStorage? {
+        requestIDByRawAlias[
+            CanonicalNetworkRawRequestAlias(
+                rawRequestID: rawID,
+                scope: scope
+            )
+        ]
+    }
+
+    private func snapshotRequestID(
+        matching resource: CanonicalNetworkSnapshotResource,
+        scope: WebInspectorCanonicalNetworkEventScope
+    ) -> CanonicalNetworkRequestIDStorage? {
+        let candidates = requestsByID.values.filter { record in
+            !bootstrapReconciledRequestIDs.contains(record.id)
+                && record.webSocket == nil
+                && record.membership.pageGeneration == scope.generation
+                && record.membership.semanticTargetID == scope.semanticTargetID
+                && record.membership.agentTargetID == scope.agentTargetID
+                && snapshotURL(for: record) == resource.url
+        }
+        if let loaderID = resource.loaderID {
+            let exact = candidates.filter {
+                $0.membership.frameID == resource.frameID
+                    && $0.membership.loaderID == loaderID
+            }
+            if !exact.isEmpty {
+                return exact.count == 1 ? exact[0].id : nil
+            }
+            let incomplete = candidates.filter {
+                ($0.membership.frameID == nil
+                    || $0.membership.frameID == resource.frameID)
+                    && $0.membership.loaderID == nil
+            }
+            return incomplete.count == 1 ? incomplete[0].id : nil
+        }
+        let loaderUnknown = candidates.filter {
+            $0.membership.frameID == nil
+                || $0.membership.frameID == resource.frameID
+        }
+        return loaderUnknown.count == 1 ? loaderUnknown[0].id : nil
+    }
+
+    private func snapshotURL(
+        for record: CanonicalNetworkRequestRecord
+    ) -> String {
+        record.currentHop.response?.url ?? record.currentHop.request.url
+    }
+
+    private func mergeSnapshotResponse(
+        _ snapshot: CanonicalNetworkResponsePayload,
+        into existing: CanonicalNetworkResponsePayload?
+    ) -> CanonicalNetworkResponsePayload {
+        guard let existing else { return snapshot }
+        return CanonicalNetworkResponsePayload(
+            url: existing.url ?? snapshot.url,
+            status: existing.status,
+            statusText: existing.statusText,
+            mimeType: normalizedMIMEType(existing.mimeType).isEmpty
+                ? snapshot.mimeType
+                : existing.mimeType,
+            headers: existing.headers,
+            source: existing.source,
+            requestHeaders: existing.requestHeaders,
+            bodySize: existing.bodySize
+        )
+    }
+
+    private func uniqueUnaliasedSnapshotRequestID(
+        matchingURL url: String,
+        scope: WebInspectorCanonicalNetworkEventScope
+    ) -> CanonicalNetworkRequestIDStorage? {
+        let looseKey = SnapshotLooseMatchKey(
+            pageGeneration: scope.generation,
+            semanticTargetID: scope.semanticTargetID,
+            agentTargetID: scope.agentTargetID,
+            url: url
+        )
+        guard let frameID = scope.frameID,
+            let loaderID = scope.loaderID
+        else {
+            let candidates = unaliasedSnapshotRequestIDsByLooseKey[looseKey]
+                ?? []
+            return candidates.count == 1 ? candidates.first : nil
+        }
+
+        let exactKey = SnapshotExactMatchKey(
+            pageGeneration: scope.generation,
+            semanticTargetID: scope.semanticTargetID,
+            agentTargetID: scope.agentTargetID,
+            frameID: frameID,
+            loaderID: loaderID,
+            url: url
+        )
+        let exact = unaliasedSnapshotRequestIDsByExactKey[exactKey] ?? []
+        if !exact.isEmpty {
+            return exact.count == 1 ? exact.first : nil
+        }
+        let incomplete = (unaliasedSnapshotRequestIDsByLooseKey[looseKey] ?? [])
+            .filter { id in
+                guard let membership = requestsByID[id]?.membership else {
+                    preconditionFailure(
+                        "Canonical Network snapshot alias index lost membership."
+                    )
+                }
+                return (membership.frameID == nil
+                    || membership.frameID == frameID)
+                    && membership.loaderID == nil
+            }
+        return incomplete.count == 1 ? incomplete.first : nil
+    }
+
+    private mutating func registerUnaliasedSnapshotCandidate(
+        _ id: CanonicalNetworkRequestIDStorage
+    ) {
+        guard rawAliasByRequestID[id] == nil,
+            let record = requestsByID[id]
+        else { return }
+        let membership = record.membership
+        let url = snapshotURL(for: record)
+        let looseKey = SnapshotLooseMatchKey(
+            pageGeneration: membership.pageGeneration,
+            semanticTargetID: membership.semanticTargetID,
+            agentTargetID: membership.agentTargetID,
+            url: url
+        )
+        unaliasedSnapshotRequestIDsByLooseKey[looseKey, default: []]
+            .insert(id)
+        if let frameID = membership.frameID,
+            let loaderID = membership.loaderID
+        {
+            let exactKey = SnapshotExactMatchKey(
+                pageGeneration: membership.pageGeneration,
+                semanticTargetID: membership.semanticTargetID,
+                agentTargetID: membership.agentTargetID,
+                frameID: frameID,
+                loaderID: loaderID,
+                url: url
+            )
+            unaliasedSnapshotRequestIDsByExactKey[exactKey, default: []]
+                .insert(id)
+        }
+    }
+
+    private mutating func removeUnaliasedSnapshotCandidate(
+        _ id: CanonicalNetworkRequestIDStorage
+    ) {
+        guard let record = requestsByID[id] else { return }
+        let membership = record.membership
+        let url = snapshotURL(for: record)
+        let looseKey = SnapshotLooseMatchKey(
+            pageGeneration: membership.pageGeneration,
+            semanticTargetID: membership.semanticTargetID,
+            agentTargetID: membership.agentTargetID,
+            url: url
+        )
+        if var ids = unaliasedSnapshotRequestIDsByLooseKey[looseKey] {
+            ids.remove(id)
+            unaliasedSnapshotRequestIDsByLooseKey[looseKey] = ids.isEmpty
+                ? nil
+                : ids
+        }
+        guard let frameID = membership.frameID,
+            let loaderID = membership.loaderID
+        else { return }
+        let exactKey = SnapshotExactMatchKey(
+            pageGeneration: membership.pageGeneration,
+            semanticTargetID: membership.semanticTargetID,
+            agentTargetID: membership.agentTargetID,
+            frameID: frameID,
+            loaderID: loaderID,
+            url: url
+        )
+        if var ids = unaliasedSnapshotRequestIDsByExactKey[exactKey] {
+            ids.remove(id)
+            unaliasedSnapshotRequestIDsByExactKey[exactKey] = ids.isEmpty
+                ? nil
+                : ids
+        }
     }
 
     private func requestMembership(
         for scope: WebInspectorCanonicalNetworkEventScope
     ) -> CanonicalNetworkRequestMembership {
         CanonicalNetworkRequestMembership(
+            pageGeneration: scope.generation,
+            agentTargetID: scope.agentTargetID,
             origin: scope.origin,
             targetAuthority: scope.targetAuthority,
             frameID: scope.frameID,
@@ -643,25 +1095,36 @@ package struct CanonicalNetworkStore: Equatable, Sendable {
         )
     }
 
-    private func validateRawRequestIDReservation(
-        _ id: CanonicalNetworkRequestIDStorage
-    ) throws {
-        guard
-            let existingID = scopedRequestIDByRawRequestID[
-                id.rawRequestID
-            ]
-        else {
+    private mutating func bindRawAlias(
+        from resolution: RawIdentityResolution
+    ) {
+        let id: CanonicalNetworkRequestIDStorage
+        let alias: CanonicalNetworkRawRequestAlias
+        switch resolution {
+        case .existing, .tombstoned:
+            return
+        case let .unaliasedSnapshot(resolvedID, resolvedAlias),
+            let .new(resolvedID, resolvedAlias):
+            id = resolvedID
+            alias = resolvedAlias
+        }
+        if let existingID = requestIDByRawAlias[alias] {
+            precondition(
+                existingID == id,
+                "Canonical Network raw alias changed during synchronous reduction."
+            )
             return
         }
-        guard existingID == id else {
-            throw
-                CanonicalNetworkProtocolViolation
-                .rawRequestIdentifierCollision(
-                    rawID: id.rawRequestID,
-                    existingID: existingID,
-                    proposedID: id
-                )
+        if let existingAlias = rawAliasByRequestID[id] {
+            precondition(
+                existingAlias == alias,
+                "Canonical Network request acquired a second raw alias."
+            )
+            return
         }
+        requestIDByRawAlias[alias] = id
+        rawAliasByRequestID[id] = alias
+        removeUnaliasedSnapshotCandidate(id)
     }
 }
 
@@ -684,8 +1147,13 @@ private extension CanonicalNetworkStore {
                     payloadID: request.id
                 )
         }
-        let id = canonicalID(rawID: rawID, scope: scope)
-        if tombstones.contains(id) {
+        let resolution = try resolveRawIdentity(
+            rawID: rawID,
+            matchingURL: redirectResponse == nil ? request.url : nil,
+            scope: scope
+        )
+        let id = resolution.id
+        if case .tombstoned = resolution {
             if redirectResponse != nil {
                 return nil
             }
@@ -701,7 +1169,60 @@ private extension CanonicalNetworkStore {
             )
         }
 
+        if case .unaliasedSnapshot = resolution {
+            guard let existing = requestsByID[id] else {
+                preconditionFailure(
+                    "A matched Network snapshot identity lost its request record."
+                )
+            }
+            var currentHop = existing.currentHop
+            currentHop.request = CanonicalNetworkRequestPayload(request)
+            currentHop.resourceType =
+                resourceType?.rawValue
+                ?? currentHop.resourceType
+            currentHop.requestSentTimestamp = timestamp
+            let patch = CanonicalNetworkRequestPatch.snapshotReconciled(
+                currentHop: currentHop,
+                requestProvenance: .authoritativeRequest,
+                lifecycle: existing.lifecycle,
+                allowsMultipartContinuation: existing.allowsMultipartContinuation,
+                responseBodyRevision: existing.responseBodyRevision
+            )
+            var replacement = existing
+            replacement.apply(patch)
+            let transaction = commit(
+                try prepareUpdate(replacement, patch: patch)
+            )
+            bindRawAlias(from: resolution)
+            return transaction
+        }
+
         if let existing = requestsByID[id] {
+            if redirectResponse == nil,
+                existing.requestProvenance == .responseFirst
+            {
+                var currentHop = existing.currentHop
+                currentHop.request = CanonicalNetworkRequestPayload(request)
+                if let requestHeaders = currentHop.response?.requestHeaders {
+                    currentHop.request.headers = requestHeaders
+                }
+                currentHop.resourceType = resourceType?.rawValue
+                    ?? currentHop.resourceType
+                currentHop.requestSentTimestamp = timestamp
+                let patch = CanonicalNetworkRequestPatch.snapshotReconciled(
+                    currentHop: currentHop,
+                    requestProvenance: .authoritativeRequest,
+                    lifecycle: existing.lifecycle,
+                    allowsMultipartContinuation:
+                        existing.allowsMultipartContinuation,
+                    responseBodyRevision: existing.responseBodyRevision
+                )
+                var replacement = existing
+                replacement.apply(patch)
+                return commit(
+                    try prepareUpdate(replacement, patch: patch)
+                )
+            }
             guard let redirectResponse else {
                 throw CanonicalNetworkProtocolViolation.identityReuse(
                     event: "Network.requestWillBeSent",
@@ -761,7 +1282,9 @@ private extension CanonicalNetworkStore {
             timestamp: timestamp,
             scope: scope
         )
-        return commit(insertion)
+        let transaction = commit(insertion)
+        bindRawAlias(from: resolution)
+        return transaction
     }
 
     mutating func reduceResponseReceived(
@@ -771,7 +1294,33 @@ private extension CanonicalNetworkStore {
         timestamp: Double,
         scope: WebInspectorCanonicalNetworkEventScope
     ) throws -> CanonicalNetworkTransaction? {
-        let id = canonicalID(rawID: rawID, scope: scope)
+        let resolution = try resolveRawIdentity(
+            rawID: rawID,
+            matchingURL: response.url,
+            scope: scope
+        )
+        let id = resolution.id
+        guard case .tombstoned = resolution else {
+            return try reduceResolvedResponse(
+                id: id,
+                resolution: resolution,
+                response: response,
+                resourceType: resourceType,
+                timestamp: timestamp,
+                scope: scope
+            )
+        }
+        return nil
+    }
+
+    private mutating func reduceResolvedResponse(
+        id: CanonicalNetworkRequestIDStorage,
+        resolution: RawIdentityResolution,
+        response: Network.Response,
+        resourceType: Network.ResourceType?,
+        timestamp: Double,
+        scope: WebInspectorCanonicalNetworkEventScope
+    ) throws -> CanonicalNetworkTransaction? {
         guard !tombstones.contains(id) else {
             return nil
         }
@@ -795,7 +1344,6 @@ private extension CanonicalNetworkStore {
                 )
             }
             let request = CanonicalNetworkRequestPayload(
-                rawID: rawID,
                 url: url,
                 method: "GET",
                 headers: normalizedResponse.requestHeaders ?? [:]
@@ -807,9 +1355,42 @@ private extension CanonicalNetworkStore {
                 resourceType: resourceType?.rawValue,
                 timestamp: timestamp,
                 scope: scope,
-                response: normalizedResponse
+                response: normalizedResponse,
+                requestProvenance: .responseFirst
             )
-            return commit(insertion)
+            let transaction = commit(insertion)
+            bindRawAlias(from: resolution)
+            return transaction
+        }
+
+        if case .unaliasedSnapshot = resolution {
+            let revision = try incrementedResponseRevision(
+                existing.responseBodyRevision
+            )
+            var currentHop = existing.currentHop
+            currentHop.resourceType =
+                resourceType?.rawValue
+                ?? currentHop.resourceType
+            currentHop.response = normalizedResponse
+            currentHop.responseReceivedTimestamp = timestamp
+            if let requestHeaders = normalizedResponse.requestHeaders {
+                currentHop.request.headers = requestHeaders
+            }
+            let patch = CanonicalNetworkRequestPatch.snapshotReconciled(
+                currentHop: currentHop,
+                requestProvenance: existing.requestProvenance,
+                lifecycle: existing.lifecycle,
+                allowsMultipartContinuation: existing.allowsMultipartContinuation
+                    || normalizedResponse.isMultipartMixedReplace,
+                responseBodyRevision: revision
+            )
+            var replacement = existing
+            replacement.apply(patch)
+            let transaction = commit(
+                try prepareUpdate(replacement, patch: patch)
+            )
+            bindRawAlias(from: resolution)
+            return transaction
         }
 
         if existing.lifecycle.isTerminal {
@@ -860,8 +1441,8 @@ private extension CanonicalNetworkStore {
         timestamp: Double,
         scope: WebInspectorCanonicalNetworkEventScope
     ) throws -> CanonicalNetworkTransaction? {
-        let id = canonicalID(rawID: rawID, scope: scope)
-        guard !tombstones.contains(id),
+        guard let id = existingRequestID(rawID: rawID, scope: scope),
+            !tombstones.contains(id),
             let existing = requestsByID[id]
         else {
             return nil
@@ -923,8 +1504,8 @@ private extension CanonicalNetworkStore {
         metrics: Network.Metrics?,
         scope: WebInspectorCanonicalNetworkEventScope
     ) throws -> CanonicalNetworkTransaction? {
-        let id = canonicalID(rawID: rawID, scope: scope)
-        guard !tombstones.contains(id),
+        guard let id = existingRequestID(rawID: rawID, scope: scope),
+            !tombstones.contains(id),
             let existing = requestsByID[id]
         else {
             return nil
@@ -971,8 +1552,8 @@ private extension CanonicalNetworkStore {
         timestamp: Double,
         scope: WebInspectorCanonicalNetworkEventScope
     ) throws -> CanonicalNetworkTransaction? {
-        let id = canonicalID(rawID: rawID, scope: scope)
-        guard !tombstones.contains(id),
+        guard let id = existingRequestID(rawID: rawID, scope: scope),
+            !tombstones.contains(id),
             let existing = requestsByID[id]
         else {
             return nil
@@ -1007,21 +1588,6 @@ private extension CanonicalNetworkStore {
         timestamp: Double,
         scope: WebInspectorCanonicalNetworkEventScope
     ) throws -> CanonicalNetworkTransaction? {
-        let id = canonicalID(rawID: rawID, scope: scope)
-        if tombstones.contains(id) {
-            throw CanonicalNetworkProtocolViolation.tombstonedIdentityReuse(
-                event: "Network.requestServedFromMemoryCache",
-                id: id
-            )
-        }
-        guard requestsByID[id] == nil,
-            pendingWebSocketByID[id] == nil
-        else {
-            throw CanonicalNetworkProtocolViolation.identityReuse(
-                event: "Network.requestServedFromMemoryCache",
-                id: id
-            )
-        }
         guard response.url != nil else {
             return nil
         }
@@ -1034,9 +1600,67 @@ private extension CanonicalNetworkStore {
                 "A URL-bearing memory-cache response lost its normalized URL."
             )
         }
-        let bodySize = response.bodySize ?? 0
-        let request = CanonicalNetworkRequestPayload(
+        let resolution = try resolveRawIdentity(
             rawID: rawID,
+            matchingURL: url,
+            scope: scope
+        )
+        let id = resolution.id
+        if case .tombstoned = resolution {
+            throw CanonicalNetworkProtocolViolation.tombstonedIdentityReuse(
+                event: "Network.requestServedFromMemoryCache",
+                id: id
+            )
+        }
+        if case .existing = resolution {
+            throw CanonicalNetworkProtocolViolation.identityReuse(
+                event: "Network.requestServedFromMemoryCache",
+                id: id
+            )
+        }
+        guard pendingWebSocketByID[id] == nil else {
+            throw CanonicalNetworkProtocolViolation.identityReuse(
+                event: "Network.requestServedFromMemoryCache",
+                id: id
+            )
+        }
+        let bodySize = response.bodySize ?? 0
+        if case .unaliasedSnapshot = resolution {
+            guard let existing = requestsByID[id] else {
+                preconditionFailure(
+                    "A matched Network snapshot identity lost its request record."
+                )
+            }
+            var currentHop = existing.currentHop
+            currentHop.response = response
+            currentHop.resourceType = resourceType?.rawValue
+                ?? currentHop.resourceType
+            currentHop.transfer = CanonicalNetworkTransfer(
+                decodedDataLength: bodySize,
+                encodedDataLength: bodySize
+            )
+            currentHop.terminalTimestamp = timestamp
+            currentHop.servedFromMemoryCache = true
+            let revision = response == existing.currentHop.response
+                ? existing.responseBodyRevision
+                : try incrementedResponseRevision(existing.responseBodyRevision)
+            let patch = CanonicalNetworkRequestPatch.snapshotReconciled(
+                currentHop: currentHop,
+                requestProvenance: existing.requestProvenance,
+                lifecycle: .finished,
+                allowsMultipartContinuation: existing.allowsMultipartContinuation
+                    || response.isMultipartMixedReplace,
+                responseBodyRevision: revision
+            )
+            var replacement = existing
+            replacement.apply(patch)
+            let transaction = commit(
+                try prepareUpdate(replacement, patch: patch)
+            )
+            bindRawAlias(from: resolution)
+            return transaction
+        }
+        let request = CanonicalNetworkRequestPayload(
             url: url,
             method: "GET",
             headers: response.requestHeaders ?? [:]
@@ -1057,7 +1681,9 @@ private extension CanonicalNetworkStore {
             terminalTimestamp: timestamp,
             servedFromMemoryCache: true
         )
-        return commit(insertion)
+        let transaction = commit(insertion)
+        bindRawAlias(from: resolution)
+        return transaction
     }
 }
 
@@ -1361,7 +1987,8 @@ private extension CanonicalNetworkStore {
 private extension CanonicalNetworkRequestPatch {
     var affectsQueryProjection: Bool {
         switch self {
-        case .redirect, .response, .webSocketHandshakeResponse:
+        case .snapshotReconciled, .redirect, .response,
+            .webSocketHandshakeResponse:
             true
         case .transfer, .terminal, .webSocketContentAppended,
             .webSocketClosed:
@@ -1441,8 +2068,13 @@ private extension CanonicalNetworkStore {
         scope: WebInspectorCanonicalNetworkEventScope,
         origin: CanonicalNetworkEventOrigin
     ) throws -> CanonicalNetworkTransaction? {
-        let id = canonicalID(rawID: rawID, scope: scope)
-        if tombstones.contains(id) {
+        let resolution = try resolveRawIdentity(
+            rawID: rawID,
+            matchingURL: nil,
+            scope: scope
+        )
+        let id = resolution.id
+        if case .tombstoned = resolution {
             throw CanonicalNetworkProtocolViolation.tombstonedIdentityReuse(
                 event: "Network.webSocketCreated",
                 id: id
@@ -1489,14 +2121,13 @@ private extension CanonicalNetworkStore {
             return nil
         }
 
-        try validateRawRequestIDReservation(id)
-        scopedRequestIDByRawRequestID[rawID] = id
         let pending = PendingWebSocket(
             creationURL: url,
             membership: requestMembership(for: scope)
         )
         pendingWebSocketByID[id] = pending
         insertIntoTargetIndexes(id, membership: pending.membership)
+        bindRawAlias(from: resolution)
         return nil
     }
 
@@ -1507,8 +2138,9 @@ private extension CanonicalNetworkStore {
         scope: WebInspectorCanonicalNetworkEventScope,
         origin: CanonicalNetworkEventOrigin
     ) throws -> CanonicalNetworkTransaction? {
-        let id = canonicalID(rawID: rawID, scope: scope)
-        guard !tombstones.contains(id) else {
+        guard let id = existingRequestID(rawID: rawID, scope: scope),
+            !tombstones.contains(id)
+        else {
             return nil
         }
         let existing = requestsByID[id]
@@ -1614,8 +2246,8 @@ private extension CanonicalNetworkStore {
         scope: WebInspectorCanonicalNetworkEventScope,
         origin: CanonicalNetworkEventOrigin
     ) throws -> CanonicalNetworkTransaction? {
-        let id = canonicalID(rawID: rawID, scope: scope)
-        guard !tombstones.contains(id),
+        guard let id = existingRequestID(rawID: rawID, scope: scope),
+            !tombstones.contains(id),
             let existing = requestsByID[id]
         else {
             return nil
@@ -1699,8 +2331,8 @@ private extension CanonicalNetworkStore {
         timestamp: Double,
         scope: WebInspectorCanonicalNetworkEventScope
     ) throws -> CanonicalNetworkTransaction? {
-        let id = canonicalID(rawID: rawID, scope: scope)
-        guard !tombstones.contains(id),
+        guard let id = existingRequestID(rawID: rawID, scope: scope),
+            !tombstones.contains(id),
             let existing = requestsByID[id]
         else {
             return nil
@@ -1755,8 +2387,8 @@ private extension CanonicalNetworkStore {
         timestamp: Double,
         scope: WebInspectorCanonicalNetworkEventScope
     ) throws -> CanonicalNetworkTransaction? {
-        let id = canonicalID(rawID: rawID, scope: scope)
-        guard !tombstones.contains(id),
+        guard let id = existingRequestID(rawID: rawID, scope: scope),
+            !tombstones.contains(id),
             let existing = requestsByID[id]
         else {
             return nil
@@ -1797,8 +2429,8 @@ private extension CanonicalNetworkStore {
         scope: WebInspectorCanonicalNetworkEventScope,
         origin: CanonicalNetworkEventOrigin
     ) throws -> CanonicalNetworkTransaction? {
-        let id = canonicalID(rawID: rawID, scope: scope)
-        guard !tombstones.contains(id),
+        guard let id = existingRequestID(rawID: rawID, scope: scope),
+            !tombstones.contains(id),
             let existing = requestsByID[id]
         else {
             return nil
@@ -1842,14 +2474,15 @@ private extension CanonicalNetworkStore {
         membership: CanonicalNetworkRequestMembership? = nil,
         response: CanonicalNetworkResponsePayload? = nil,
         lifecycle: CanonicalNetworkLifecycle? = nil,
+        requestProvenance: CanonicalNetworkRequestProvenance = .authoritativeRequest,
         transfer: CanonicalNetworkTransfer = .init(),
+        sourceMapURL: String? = nil,
         terminalTimestamp: Double? = nil,
         servedFromMemoryCache: Bool = false,
         webSocket: CanonicalNetworkWebSocketRecord? = nil
     ) throws -> PreparedInsertion {
         precondition(requestsByID[id] == nil)
-        try validateRawRequestIDReservation(id)
-        let requestOrdinal = try nextRequestOrdinal()
+        let requestOrdinal = id.ordinal
         let resolvedLifecycle =
             lifecycle
             ?? (response == nil ? .pending : .responded)
@@ -1861,6 +2494,7 @@ private extension CanonicalNetworkStore {
             response: response,
             responseReceivedTimestamp: response == nil ? nil : timestamp,
             transfer: transfer,
+            sourceMapURL: sourceMapURL,
             terminalTimestamp: terminalTimestamp,
             servedFromMemoryCache: servedFromMemoryCache
         )
@@ -1869,6 +2503,7 @@ private extension CanonicalNetworkStore {
             id: id,
             insertionOrdinal: requestOrdinal,
             membership: membership,
+            requestProvenance: requestProvenance,
             initialInitiator: initiator,
             logicalStartTimestamp: timestamp,
             currentHop: currentHop,
@@ -1929,6 +2564,11 @@ private extension CanonicalNetworkStore {
                 requestIDs: requestIDs,
                 summary: entrySummary(
                     primary: primary,
+                    initialMediaPreviewRequestID:
+                        initialMediaPreviewRequestID(
+                            in: requestIDs,
+                            replacing: record
+                        ),
                     requestCount: requestIDs.count,
                     aggregate: newEntryAggregate
                 )
@@ -2091,6 +2731,11 @@ private extension CanonicalNetworkStore {
             requestIDs: requestIDs,
             summary: entrySummary(
                 primary: primary,
+                initialMediaPreviewRequestID:
+                    initialMediaPreviewRequestID(
+                        in: requestIDs,
+                        replacing: replacement
+                    ),
                 requestCount: requestIDs.count,
                 aggregate: newAggregate
             )
@@ -2138,8 +2783,7 @@ private extension CanonicalNetworkStore {
     private mutating func commit(
         _ insertion: PreparedInsertion
     ) -> CanonicalNetworkTransaction {
-        precondition(lastRequestOrdinal < insertion.requestOrdinal)
-        lastRequestOrdinal = insertion.requestOrdinal
+        precondition(insertion.requestOrdinal <= lastRequestOrdinal)
         if let entryOrdinal = insertion.entryOrdinal {
             precondition(lastEntryOrdinal < entryOrdinal)
             lastEntryOrdinal = entryOrdinal
@@ -2149,9 +2793,6 @@ private extension CanonicalNetworkStore {
             insertion.request.id,
             membership: insertion.request.membership
         )
-        scopedRequestIDByRawRequestID[
-            insertion.request.id.rawRequestID
-        ] = insertion.request.id
         requestQueriesByID[insertion.request.id] = insertion.requestQuery
         groupKeyByRequestID[insertion.request.id] = insertion.groupKey
         entryIDByRequestID[insertion.request.id] = insertion.entry.record.id
@@ -2197,7 +2838,10 @@ private extension CanonicalNetworkStore {
         _ id: CanonicalNetworkRequestIDStorage,
         membership: CanonicalNetworkRequestMembership
     ) {
-        requestIDsByAgentTargetID[id.agentTargetID, default: []].insert(id)
+        requestIDsByAgentTargetID[
+            membership.agentTargetID,
+            default: []
+        ].insert(id)
         requestIDsBySemanticTargetID[
             membership.semanticTargetID,
             default: []
@@ -2211,7 +2855,7 @@ private extension CanonicalNetworkStore {
         remove(
             id,
             from: &requestIDsByAgentTargetID,
-            targetID: id.agentTargetID
+            targetID: membership.agentTargetID
         )
         remove(
             id,
@@ -2304,9 +2948,9 @@ private extension CanonicalNetworkStore {
                     documentScope: WebInspectorDOMDocumentScopeStorage(
                         storeID: requestID.storeID,
                         attachmentGeneration: requestID.attachmentGeneration,
-                        pageGeneration: requestID.pageGeneration,
+                        pageGeneration: membership.pageGeneration,
                         semanticTargetID: membership.semanticTargetID,
-                        agentTargetID: requestID.agentTargetID,
+                        agentTargetID: membership.agentTargetID,
                         domBindingEpoch: domBindingEpoch
                     ),
                     rawNodeID: rawNodeID
@@ -2316,9 +2960,9 @@ private extension CanonicalNetworkStore {
             CanonicalNetworkOpaqueInitiatorKey(
                 storeID: requestID.storeID,
                 attachmentGeneration: requestID.attachmentGeneration,
-                pageGeneration: requestID.pageGeneration,
+                pageGeneration: membership.pageGeneration,
                 semanticTargetID: membership.semanticTargetID,
-                agentTargetID: requestID.agentTargetID,
+                agentTargetID: membership.agentTargetID,
                 targetAuthority: membership.targetAuthority,
                 rawNodeID: rawNodeID
             ))
@@ -2391,6 +3035,8 @@ private extension CanonicalNetworkStore {
                 requestIDs: orderedIDs,
                 summary: entrySummary(
                     primary: primary,
+                    initialMediaPreviewRequestID:
+                        records.first(where: isSuccessfulPlayableFinalHop)?.id,
                     requestCount: records.count,
                     aggregate: aggregate
                 )
@@ -2579,6 +3225,7 @@ private extension CanonicalNetworkStore {
 
     private func entrySummary(
         primary: CanonicalNetworkRequestRecord,
+        initialMediaPreviewRequestID: CanonicalNetworkRequestIDStorage?,
         requestCount: Int,
         aggregate: EntryAggregateState
     ) -> CanonicalNetworkEntrySummary {
@@ -2592,6 +3239,7 @@ private extension CanonicalNetworkStore {
         }
         return CanonicalNetworkEntrySummary(
             primaryRequestID: primary.id,
+            initialMediaPreviewRequestID: initialMediaPreviewRequestID,
             requestCount: requestCount,
             url: primary.currentHop.request.url,
             method: primary.currentHop.request.method,
@@ -2603,6 +3251,58 @@ private extension CanonicalNetworkStore {
             encodedDataLength: aggregate.encodedDataLength,
             lifecycle: lifecycle
         )
+    }
+
+    private func initialMediaPreviewRequestID(
+        in requestIDs: [CanonicalNetworkRequestIDStorage],
+        replacing replacement: CanonicalNetworkRequestRecord
+    ) -> CanonicalNetworkRequestIDStorage? {
+        for id in requestIDs {
+            let record: CanonicalNetworkRequestRecord
+            if id == replacement.id {
+                record = replacement
+            } else {
+                guard let existing = requestsByID[id] else {
+                    preconditionFailure(
+                        "Canonical Network entry lost a preview candidate."
+                    )
+                }
+                record = existing
+            }
+            if isSuccessfulPlayableFinalHop(record) {
+                return id
+            }
+        }
+        return nil
+    }
+
+    private func isSuccessfulPlayableFinalHop(
+        _ record: CanonicalNetworkRequestRecord
+    ) -> Bool {
+        guard record.lifecycle == .finished,
+            record.webSocket == nil,
+            record.currentHop.request.method.caseInsensitiveCompare("HEAD")
+                != .orderedSame,
+            let response = record.currentHop.response
+        else { return false }
+        if let status = response.status,
+            !(200..<300).contains(status)
+                || status == 204
+                || status == 205
+        {
+            return false
+        }
+        let url = response.url ?? record.currentHop.request.url
+        return !url.isEmpty
+            && isPreviewableMedia(
+                mimeType: normalizedMIMEType(
+                    effectiveMIMEType(
+                        mimeType: response.mimeType,
+                        headers: response.headers
+                    )
+                ),
+                pathExtension: pathExtension(in: url)
+            )
     }
 
     func makeEntryQuery(

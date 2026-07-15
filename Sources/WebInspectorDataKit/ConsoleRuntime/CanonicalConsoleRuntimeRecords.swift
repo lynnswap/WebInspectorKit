@@ -211,14 +211,18 @@ package enum CanonicalConsoleNetworkRequestReference: Equatable, Sendable {
 
 /// Typed handoff from the canonical Network owner to the Console reducer.
 package struct CanonicalConsoleNetworkRequestResolution: Equatable, Sendable {
-    package let rawRequestID: Network.Request.ID
+    package let rawAlias: CanonicalNetworkRawRequestAlias
     package let requestID: CanonicalNetworkRequestIDStorage
 
+    package var rawRequestID: Network.Request.ID {
+        rawAlias.rawRequestID
+    }
+
     package init(
-        rawRequestID: Network.Request.ID,
+        rawAlias: CanonicalNetworkRawRequestAlias,
         requestID: CanonicalNetworkRequestIDStorage
     ) {
-        self.rawRequestID = rawRequestID
+        self.rawAlias = rawAlias
         self.requestID = requestID
     }
 }

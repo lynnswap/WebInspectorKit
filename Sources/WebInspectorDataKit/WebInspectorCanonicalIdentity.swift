@@ -328,30 +328,51 @@ package struct WebInspectorCSSStyleSheetIdentityStorage: Hashable, Sendable {
     }
 }
 
-/// Canonical storage wrapped by `NetworkRequest.ID`.
-///
-/// Raw protocol IDs remain opaque. In particular, this type never parses the
-/// target-prefixed compatibility representation used by ProxyKit's direct
-/// event API.
+/// Feature-assigned canonical storage wrapped by `NetworkRequest.ID`.
 package struct CanonicalNetworkRequestIDStorage: Hashable, Sendable {
     package let storeID: WebInspectorContainerStoreID
     package let attachmentGeneration: WebInspectorAttachmentGeneration
+    package let ordinal: UInt64
+
+    package init(
+        storeID: WebInspectorContainerStoreID,
+        attachmentGeneration: WebInspectorAttachmentGeneration,
+        ordinal: UInt64
+    ) {
+        self.storeID = storeID
+        self.attachmentGeneration = attachmentGeneration
+        self.ordinal = ordinal
+    }
+}
+
+/// Generation-scoped routing authority for one raw backend request ID.
+///
+/// This value is an actor-owned lookup key. It is never exposed as persistent
+/// model identity and is discarded on page or attachment replacement.
+package struct CanonicalNetworkRawRequestAlias: Hashable, Sendable {
     package let pageGeneration: WebInspectorPageGeneration
     package let agentTargetID: WebInspectorTarget.ID
     package let rawRequestID: Network.Request.ID
 
     package init(
-        storeID: WebInspectorContainerStoreID,
-        attachmentGeneration: WebInspectorAttachmentGeneration,
         pageGeneration: WebInspectorPageGeneration,
         agentTargetID: WebInspectorTarget.ID,
         rawRequestID: Network.Request.ID
     ) {
-        self.storeID = storeID
-        self.attachmentGeneration = attachmentGeneration
         self.pageGeneration = pageGeneration
         self.agentTargetID = agentTargetID
         self.rawRequestID = rawRequestID
+    }
+
+    package init(
+        rawRequestID: Network.Request.ID,
+        scope: WebInspectorCanonicalNetworkEventScope
+    ) {
+        self.init(
+            pageGeneration: scope.generation,
+            agentTargetID: scope.agentTargetID,
+            rawRequestID: rawRequestID
+        )
     }
 }
 

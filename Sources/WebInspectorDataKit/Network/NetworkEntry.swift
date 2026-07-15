@@ -84,6 +84,10 @@ public final class NetworkEntry: WebInspectorPersistentModel {
     /// The request that supplies the entry's primary display metadata.
     public private(set) var primaryRequestID: NetworkRequest.ID
 
+    /// The oldest successful playable final-hop request in canonical
+    /// chronology, if one exists.
+    public private(set) var initialMediaPreviewRequestID: NetworkRequest.ID?
+
     /// Member requests in canonical chronology.
     public private(set) var requestIDs: [NetworkRequest.ID]
 
@@ -130,6 +134,9 @@ public final class NetworkEntry: WebInspectorPersistentModel {
         primaryRequestID = NetworkRequest.ID(
             canonical: record.summary.primaryRequestID
         )
+        initialMediaPreviewRequestID = record.summary
+            .initialMediaPreviewRequestID
+            .map(NetworkRequest.ID.init(canonical:))
         self.requestIDs = requestIDs
         url = record.summary.url
         method = record.summary.method
@@ -174,6 +181,9 @@ public final class NetworkEntry: WebInspectorPersistentModel {
         primaryRequestID = NetworkRequest.ID(
             canonical: patch.summary.primaryRequestID
         )
+        initialMediaPreviewRequestID = patch.summary
+            .initialMediaPreviewRequestID
+            .map(NetworkRequest.ID.init(canonical:))
         self.requestIDs = requestIDs
         url = patch.summary.url
         method = patch.summary.method
